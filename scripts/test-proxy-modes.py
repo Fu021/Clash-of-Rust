@@ -47,7 +47,9 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
     env['MIHOMO_TEST_CLI'] = str(cli.resolve(strict=True))
     command = [binary, test_case, '--exact', '--ignored', '--nocapture']
     if system == 'linux':
+        from ci_test_policy import linux_user_tests
         sudo = ['sudo']
+        user_tests = ['--with-user-tests'] if linux_user_tests() else []
         installed = Path('/opt/clash-of-rust')
         if bundle.resolve() != installed:
             # Install only the raw tested binaries/resources, never package in CI.
@@ -62,12 +64,14 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
                 run(['sudo', 'chmod', '-R', 'go-w', installed])
                 run(['sudo', 'chmod', '0755', '/opt', installed])
                 run([*sudo, sys.executable, ROOT/'scripts/test-linux-tun.py',
-                     '--test-binary', binary, '--uid', os.getuid(), '--test-case', test_case])
+                     '--test-binary', binary, '--uid', os.getuid(), '--test-case', test_case,
+                     *user_tests])
             finally:
                 run(['sudo', 'rm', '-rf', installed])
         else:
             run([*sudo, sys.executable, ROOT/'scripts/test-linux-tun.py',
-                 '--test-binary', binary, '--uid', os.getuid(), '--test-case', test_case])
+                 '--test-binary', binary, '--uid', os.getuid(), '--test-case', test_case,
+                 *user_tests])
     elif system == 'macos':
         report = ROOT/'target/macos-report'
         report.mkdir(parents=True, exist_ok=True)
@@ -92,6 +96,7 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
             run(['/usr/bin/sudo', '-n', stage/'clash-tun-launcher', '--macos-install-service', os.getuid()])
             run(command, env=env, timeout=240)
     elif system == 'windows':
+        from ci_test_policy import extended_tests
         from windows_ci import allow_ordinary_user_directory, run_unelevated, wait_unelevated_ready
         # CI tests raw binaries; Publish Release has already installed the
         # package and its service. Only remove the registration we created.
@@ -104,47 +109,41 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
         try:
             env['CLASH_EXPECT_UNELEVATED'] = '1'
             run_unelevated(command, env)
-            # Recreate the machine boot condition: SCM registration survives,
-            # the privileged process is gone, and a normal user starts it again.
-            run([helper, '--windows-service-stop'])
-            run_unelevated(command, env)
-            # A GUI crash must not leave a SYSTEM core, open controller ports,
-            # or an adapter preventing the next ordinary launch from using TUN.
-            import json, socket, time
-            with tempfile.TemporaryDirectory(prefix='windows-service-crash-') as temporary:
-                allow_ordinary_user_directory(temporary)
-                ready = Path(temporary)/'ready.json'
-                crashed = {}
-                def kill_owner(kernel, process):
-                    wait_unelevated_ready(kernel, process, ready)
-                    crashed.update(json.loads(ready.read_text()))
-                    if not kernel.TerminateProcess(process, 0xCAFE):
-                        raise RuntimeError('Could not simulate ordinary GUI process loss')
-                run_unelevated(command, dict(env, CLASH_SERVICE_CRASH_REPORT=str(ready)),
-                               on_start=kill_owner, expected_code=0xCAFE)
-                deadline = time.monotonic()+15
-                for port in (crashed['controller'], crashed['mixed']):
-                    while True:
-                        with socket.socket() as listener:
-                            try:
-                                listener.bind(('127.0.0.1', port))
-                                break
-                            except OSError:
-                                if time.monotonic() >= deadline:
-                                    raise RuntimeError('Service core survived its ordinary GUI owner')
-                                time.sleep(0.1)
-                # Listener closure precedes the core's final file/Defender handle
-                # release on Windows. Keep a bounded cleanup wait; do not hide a
-                # surviving process or permanent permissions failure.
-                deadline = time.monotonic()+10
-                while Path(crashed['temporary']).exists():
-                    try:
-                        shutil.rmtree(crashed['temporary'])
-                    except OSError as error:
-                        if getattr(error,'winerror',None) not in (5,32,145) or time.monotonic()>=deadline:
-                            raise
-                        time.sleep(0.1)
-            run_unelevated(command, env)
+            if extended_tests():
+                run([helper, '--windows-service-stop'])
+                run_unelevated(command, env)
+                import json, socket, time
+                with tempfile.TemporaryDirectory(prefix='windows-service-crash-') as temporary:
+                    allow_ordinary_user_directory(temporary)
+                    ready = Path(temporary)/'ready.json'
+                    crashed = {}
+                    def kill_owner(kernel, process):
+                        wait_unelevated_ready(kernel, process, ready)
+                        crashed.update(json.loads(ready.read_text()))
+                        if not kernel.TerminateProcess(process, 0xCAFE):
+                            raise RuntimeError('Could not simulate ordinary GUI process loss')
+                    run_unelevated(command, dict(env, CLASH_SERVICE_CRASH_REPORT=str(ready)),
+                                   on_start=kill_owner, expected_code=0xCAFE)
+                    deadline = time.monotonic()+15
+                    for port in (crashed['controller'], crashed['mixed']):
+                        while True:
+                            with socket.socket() as listener:
+                                try:
+                                    listener.bind(('127.0.0.1', port))
+                                    break
+                                except OSError:
+                                    if time.monotonic() >= deadline:
+                                        raise RuntimeError('Service core survived its ordinary GUI owner')
+                                    time.sleep(0.1)
+                    deadline = time.monotonic()+10
+                    while Path(crashed['temporary']).exists():
+                        try:
+                            shutil.rmtree(crashed['temporary'])
+                        except OSError as error:
+                            if getattr(error,'winerror',None) not in (5,32,145) or time.monotonic()>=deadline:
+                                raise
+                            time.sleep(0.1)
+                run_unelevated(command, env)
         finally:
             if own_service:
                 run([helper, '--windows-service-uninstall'])

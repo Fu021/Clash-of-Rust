@@ -260,7 +260,8 @@ def container(command):
                  '--env', 'GITHUB_ACTIONS=true', '--env', 'PYTHONDONTWRITEBYTECODE=1',
                  '--env', 'COR_LINUX_BASELINE='+BASELINE]
     for key in ('BUILD_INPUTS_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY',
-                'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'RUST_BACKTRACE'):
+                'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'RUST_BACKTRACE',
+                'COR_CI_EXTENDED_TESTS', 'COR_CI_LINUX_USER_TESTS'):
         if key in os.environ:
             # Runner summary files live outside the source mount.
             if key in ('GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY'):
@@ -384,6 +385,10 @@ class VmGuest:
                             'BUILD_INPUTS_DIR=dependency-snapshot RUNNER_TEMP=/home/ubuntu/cor-runner-temp '
                             'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
                             'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
+        from ci_test_policy import extended_tests, linux_user_tests
+        self.environment += (
+            f'COR_CI_EXTENDED_TESTS={str(extended_tests()).lower()} '
+            f'COR_CI_LINUX_USER_TESTS={str(linux_user_tests()).lower()} ')
         try:
             self.console = (REPORT / ('focal-console-' + label + '.log')).open('w')
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT)

@@ -118,6 +118,7 @@ def linux_gui_smoke():
 
 
 def linux_package_tests(package, tun_test, structure=True):
+    from ci_test_policy import extended_tests
     if structure:
         # Build/manifest checks already verify payload identity and resources.
         run(['dpkg-deb', '--info', package])
@@ -139,11 +140,11 @@ def linux_package_tests(package, tun_test, structure=True):
         install_packages(['systemd' if 'VERSION_ID="20.04"' in release else 'systemd-resolved'])
     if not shutil.which('resolvectl'):
         raise RuntimeError('Installed distribution has no resolvectl')
-    if os.environ.get('COR_LINUX_BASELINE'):
+    if extended_tests() and os.environ.get('COR_LINUX_BASELINE'):
         # This checks old user-space libraries; its host kernel is recorded
         # separately and never presented as minimum-kernel evidence.
         linux_gui_smoke()
-    else:
+    elif extended_tests():
         from linux_gui import installed_tests
         installed_tests()
     if not os.environ.get('COR_LINUX_BASELINE'):

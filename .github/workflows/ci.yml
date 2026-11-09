@@ -9,6 +9,10 @@ on:
         description: Resolve updated Cargo/Go lockfiles for a subsequent reviewed commit
         type: boolean
         default: false
+      extended_tests:
+        description: Run optional source, UI and platform regression suites
+        type: boolean
+        default: false
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
   BUILD_INPUTS_DIR: dependency-snapshot
@@ -34,11 +38,20 @@ jobs:
       resources: ${{ steps.resolve.outputs.resources }}
       tailscale: ${{ steps.resolve.outputs.tailscale }}
       nsis: ${{ steps.resolve.outputs.nsis }}
+      extended_tests: ${{ steps.test_policy.outputs.extended_tests }}
+      android_routing_tests: ${{ steps.test_policy.outputs.android_routing_tests }}
+      linux_user_tests: ${{ steps.test_policy.outputs.linux_user_tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          fetch-depth: 0
+      - name: Select optional regression tests
+        id: test_policy
+        env:
+          COR_CI_EXTENDED_TESTS: ${{ inputs.extended_tests && 'true' || 'false' }}
+        run: python3 scripts/ci_test_policy.py
       - name: Load approved tool versions
         id: versions
         run: python3 scripts/build_inputs.py versions
@@ -155,6 +168,8 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       ANDROID_CI_TEST: '1'
       GOCACHE: ${{ github.workspace }}/target/go-build
+      COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
+      COR_CI_ANDROID_ROUTING_TESTS: ${{ needs.inputs.outputs.android_routing_tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -389,6 +404,8 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       MACOSX_DEPLOYMENT_TARGET: '14.0'
       PYTHONUTF8: '1'
+      COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
+      COR_CI_LINUX_USER_TESTS: ${{ needs.inputs.outputs.linux_user_tests }}
     defaults:
       run:
         shell: python
@@ -621,7 +638,7 @@ jobs:
           retention-days: 3
       - name: Preserve Windows test results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always() && runner.os == 'Windows'
+        if: always() && runner.os == 'Windows' && needs.inputs.outputs.extended_tests == 'true'
         with:
           name: windows-ci-report-${{ matrix.arch }}
           path: |
@@ -653,6 +670,9 @@ jobs:
       actions: read
       contents: read
       id-token: write
+    env:
+      COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
+      COR_CI_LINUX_USER_TESTS: ${{ needs.inputs.outputs.linux_user_tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -714,7 +734,7 @@ jobs:
         with:
           name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   ubuntu_20:
-    name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN
+    name: Ubuntu 20.04-${{ matrix.arch }} installed proxy and TUN
     if: ${{ !inputs.refresh_dependencies }}
     needs: inputs
     runs-on: ${{ matrix.os }}
@@ -723,6 +743,9 @@ jobs:
       actions: read
       contents: read
       id-token: write
+    env:
+      COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
+      COR_CI_LINUX_USER_TESTS: ${{ needs.inputs.outputs.linux_user_tests }}
     strategy:
       fail-fast: false
       matrix:

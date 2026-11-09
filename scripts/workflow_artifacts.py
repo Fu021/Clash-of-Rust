@@ -43,7 +43,7 @@ def safe_name(name):
 
 
 def test_binaries(messages):
-    """Units run in CI; packaging needs only the native proxy/TUN executable."""
+    """Packaging needs only the native proxy/TUN integration executable."""
     result = {}
     for line in messages.splitlines():
         entry = json.loads(line)

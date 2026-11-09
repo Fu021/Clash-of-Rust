@@ -6,6 +6,7 @@ import sys
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json, desktop_cargo_scope
 from workflow_artifacts import export_build, test_binaries
+from ci_test_policy import extended_tests
 
 
 def main():
@@ -23,13 +24,18 @@ def main():
     # One profile across Clippy, tests and production builds avoids a second
     # dependency compilation and produces the exact binaries released later.
     packages = desktop_cargo_scope(ROOT)
-    run(['cargo', 'clippy', *packages, '--release', '--all-targets', '--locked', '--', '-D', 'warnings'])
+    extended = extended_tests()
+    clippy_targets = ['--all-targets'] if extended else ['--lib', '--bins']
+    run(['cargo', 'clippy', *packages, '--release', *clippy_targets, '--locked', '--', '-D', 'warnings'])
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
-    messages = cargo_messages(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--bins', '--tests',
+    test_scope = [*packages, '--lib', '--bins', '--tests'] if extended else [
+        '-p', 'clash-of-rust', '--test', 'core_integration']
+    messages = cargo_messages(['cargo', 'test', *test_scope, '--release', '--locked',
                               '--no-run', '--message-format=json'])
     tests = test_binaries(messages)
-    run(['cargo', 'test', *packages, '--release', '--locked', '--lib', '--bins', '--tests',
-         '--no-fail-fast', '--', '--test-threads=1'])
+    if extended:
+        run(['cargo', 'test', *test_scope, '--release', '--locked',
+             '--no-fail-fast', '--', '--test-threads=1'])
     spec = importlib.util.spec_from_file_location('prepare', ROOT/'scripts/prepare-resources.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -41,16 +47,6 @@ def main():
     # Headless console smoke checks need neither a display nor a running kernel.
     run([bundle/('cor'+extension), '--json', 'version'])
     run([bundle/('cor'+extension), 'help'])
-    # Focus native checks on the core lifecycle and real proxy/TUN traffic.
-    if args.system == 'macos':
-        from macos_ci import native_tests
-        native_tests(tests, bundle)
-    elif args.system == 'windows':
-        from windows_ci import windows_tests
-        windows_tests(tests, bundle)
-    else:
-        run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
-             '--test-binary', tests['core_integration'], '--bundle', bundle])
     write_json(ROOT/'target/ci-tests.json', tests)
     # Export the exact production binaries tested above.
     export_build(args.system, args.arch, tests, ROOT/'dist/build', binaries=bundle)

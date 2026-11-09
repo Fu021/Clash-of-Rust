@@ -1024,6 +1024,13 @@ public class ProxyTunTest {
         String self = context.getPackageName();
         String other = "com.android.shell";
         context.getPackageManager().getApplicationInfo(other, 0);
+        String removed = "org.clashofrust.uninstalled.regression";
+        try {
+            context.getPackageManager().getApplicationInfo(removed, 0);
+            fail("The removed-application fixture must not be installed");
+        } catch (android.content.pm.PackageManager.NameNotFoundException expected) {
+            assertNotNull(expected);
+        }
         try {
             assertTrue(migration.edit().clear().commit());
             assertEquals(ApplicationRouting.ALL, ApplicationRouting.load(migration).mode);
@@ -1056,7 +1063,7 @@ public class ProxyTunTest {
             for (int index = 0; index < modes.length; index++) {
                 String mode = modes[index];
                 java.util.Set<String> selected = new java.util.HashSet<>(java.util.Collections.singleton(packages[index]));
-                selected.add("org.clashofrust.uninstalled.regression");
+                selected.add(removed);
                 new ApplicationRouting(mode, selected).save(context);
                 assertEquals(mode, ApplicationRouting.load(context).mode);
                 boolean throughVpn = captured[index];
@@ -1074,8 +1081,12 @@ public class ProxyTunTest {
                     noTunRoute();
                 }
                 ApplicationRouting cleaned = ApplicationRouting.load(context);
-                if (!ApplicationRouting.ALL.equals(mode))
-                    assertFalse("Uninstalled applications must be pruned", cleaned.packages.contains("org.clashofrust.uninstalled.regression"));
+                if (!ApplicationRouting.ALL.equals(mode)) {
+                    assertFalse("Uninstalled applications must be pruned for " + mode,
+                        cleaned.packages.contains(removed));
+                    assertEquals("Installed applications must remain selected for " + mode,
+                        java.util.Collections.singleton(packages[index]), cleaned.packages);
+                }
                 new ApplicationRouting(ApplicationRouting.ALL, java.util.Collections.emptySet()).save(context);
                 assertEquals("Saving preferences must not change the live VPN", throughVpn, vpnActive(connectivity));
                 TunnelService.stop(context);
@@ -1083,7 +1094,7 @@ public class ProxyTunTest {
                 awaitDirectRecovery(connectivity);
             }
             new ApplicationRouting(ApplicationRouting.ONLY,
-                java.util.Collections.singleton("org.clashofrust.uninstalled.regression")).save(context);
+                java.util.Collections.singleton(removed)).save(context);
             TunnelService.start(context, false);
             await("An entirely uninstalled allowlist was not rejected", () -> !TunnelService.error().isEmpty());
             assertFalse(TunnelService.connected());
@@ -1095,6 +1106,45 @@ public class ProxyTunTest {
             original.persist(preferences);
             assertTrue(migration.edit().clear().commit());
         }
+    }
+
+    @Test public void basicSystemProxyAndTun() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        persistNetworkProfile(context);
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("Native UI did not start its core", CoreBridge::ready);
+        await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        waitForAppWindow();
+        String raw = CoreBridge.config();
+        assertNetworkProfile(raw);
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        assertNotNull("Test must start without pre-granted VPN consent", VpnService.prepare(context));
+        activity.request("{\"op\":\"authorize-vpn\",\"request\":103}");
+        authorization(103, "pending");
+        consent(true);
+        authorization(103, "granted");
+        assertNull(VpnService.prepare(context));
+        String secret = value(raw, "secret");
+        String controller = value(raw, "external-controller");
+        int mixed = Integer.parseInt(value(raw, "mixed-port"));
+        java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", mixed));
+        assertEquals("cor-android-network-ok", read(URI.create("http://10.0.2.2:18081/probe").toURL(), proxy, null));
+        noTunRoute();
+        ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+        try {
+            TunnelService.start(context, false);
+            await("VPN did not connect", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected();
+            });
+            await("Android did not make VPN its active network", () -> vpnActive(connectivity));
+            tunCarriesSocket(controller, secret);
+            tunResolvesAndCarriesHttp();
+        } finally {
+            TunnelService.stop(context);
+        }
+        awaitDirectRecovery(connectivity);
     }
 
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {

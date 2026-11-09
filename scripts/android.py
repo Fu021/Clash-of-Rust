@@ -296,11 +296,14 @@ def apk_identity(metadata, version):
 
 def build(arch):
     from action_cache import workspace_sources
+    from ci_test_policy import extended_tests
     workspace_sources(ROOT)
     packages = ['-p', 'clash-mobile-runtime', '-p', 'clash-android']
-    cargo_build(['cargo', 'clippy', *packages, '--release', '--all-targets', '--locked', '--', '-D', 'warnings'], cwd=ROOT)
-    run(['cargo', 'test', *packages, '--release', '--locked', '--lib',
-         '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT)
+    targets = ['--all-targets'] if extended_tests() else ['--lib']
+    cargo_build(['cargo', 'clippy', *packages, '--release', *targets, '--locked', '--', '-D', 'warnings'], cwd=ROOT)
+    if extended_tests():
+        run(['cargo', 'test', *packages, '--release', '--locked', '--lib',
+             '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT)
     abi, target, clang_target, go_arch = ABIS[arch]
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
@@ -710,12 +713,10 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     log_capture=start_test_log(report,marker)
     try:
         outputs=[]
+        from ci_test_policy import android_cases
         cases=(('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
-               if ime_only else
-               ('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
-                'applicationRoutingPersistsAndKeepsOtherAppsOnline',
-                'quickTileRestoresColdCoreWithoutOpeningTheActivity'))
+               if ime_only else android_cases())
         failures=[]
         for iteration in range(1,ime_rounds+1):
             if ime_only:

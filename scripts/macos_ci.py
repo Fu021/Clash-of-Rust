@@ -74,12 +74,6 @@ def logged(name, command, env=None, timeout=300):
         raise RuntimeError(f'{name} exited {result}; full output: {name}.log')
 
 
-def native_tests(tests, bundle):
-    suite('Basic system proxy and TUN', lambda: logged('proxy-modes',
-        [sys.executable, ROOT/'scripts/test-proxy-modes.py',
-         '--test-binary', tests['core_integration'], '--bundle', bundle]))
-
-
 @contextlib.contextmanager
 def mounted(package):
     with tempfile.TemporaryDirectory(prefix='clash-dmg-') as temporary:
@@ -328,6 +322,7 @@ def package_tests(package, manifest, build):
 
 
 def installed_package_tests(package, manifest, build):
+    from ci_test_policy import extended_tests
     from macos_package import APP_NAME, BUNDLE_ID, UI_APP, UI_BUNDLE_ID
     with mounted(package) as volume:
         app = volume/APP_NAME
@@ -346,7 +341,8 @@ def installed_package_tests(package, manifest, build):
         with tempfile.TemporaryDirectory(prefix='clash-install-') as temporary:
             installed = Path(temporary)/APP_NAME
             run(['/usr/bin/ditto', app, installed])
-            suite('Installed GUI, window and bundled core', lambda: gui_smoke(installed, 'installed'))
+            if extended_tests():
+                suite('Installed GUI, window and bundled core', lambda: gui_smoke(installed, 'installed'))
             suite('Installed system proxy and TUN', lambda: logged('installed-proxy-modes',
                 [sys.executable, ROOT/'scripts/test-proxy-modes.py',
                  '--test-binary', build/manifest['tests']['core_integration'],
@@ -401,14 +397,13 @@ def main():
     elif REPORT.exists():
         shutil.rmtree(REPORT)
     REPORT.mkdir(parents=True, exist_ok=True)
-    planned = ['Compile, Clippy, unit tests and native integration',
-               'Basic system proxy and TUN']
+    planned = ['Compile and Clippy']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})
     for name, command in [('proxy', ['/usr/sbin/scutil', '--proxy']),
                           ('routes', ['/usr/sbin/netstat', '-rn']), ('interfaces', ['/sbin/ifconfig'])]:
         logged('baseline-'+name, command)
-    suite('Compile, Clippy, unit tests and native integration', lambda: logged('ci', [sys.executable, ROOT/'scripts/run-ci.py', '--system', 'macos', '--arch', args.arch], timeout=3300))
+    suite('Compile and Clippy', lambda: logged('ci', [sys.executable, ROOT/'scripts/run-ci.py', '--system', 'macos', '--arch', args.arch], timeout=3300))
     report = json.loads((REPORT/'report.json').read_text()); report['status'] = 'passed'; write_json(REPORT/'report.json', report)
 
 

@@ -63,6 +63,7 @@ final class ApplicationRouting {
         Set<String> valid = new HashSet<>();
         for (String name : routing.packages) {
             try {
+                context.getPackageManager().getApplicationInfo(name, 0);
                 if (ONLY.equals(routing.mode)) builder.addAllowedApplication(name);
                 else builder.addDisallowedApplication(name);
                 valid.add(name);

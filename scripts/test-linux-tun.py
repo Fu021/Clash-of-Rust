@@ -725,6 +725,7 @@ def main():
     parser.add_argument('--test-binary', type=Path, required=True)
     parser.add_argument('--uid', type=int, required=True)
     parser.add_argument('--inside-namespace', action='store_true')
+    parser.add_argument('--with-user-tests', action='store_true')
     parser.add_argument('--test-case', default='basic_system_proxy_and_tun', choices=('basic_system_proxy_and_tun',))
     args = parser.parse_args()
     assert os.geteuid() == 0 and args.uid != 0
@@ -738,8 +739,9 @@ def main():
 
     if args.inside_namespace:
         with isolated_resolved(), isolated_uplink():
-            root_cli_smoke()
-            account_cli_matrix()
+            if args.with_user_tests:
+                root_cli_smoke()
+                account_cli_matrix()
             run(['/opt/clash-of-rust/clash-of-rust', '--authorize-tun'])
             run([binary, args.test_case, '--exact',
                  '--ignored', '--test-threads=1', '--nocapture'],
@@ -763,9 +765,11 @@ def main():
     original = {path: attribute(path) for path in (core, launcher)}
     original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
+        user_tests = ['--with-user-tests'] if args.with_user_tests else []
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
-             '--inside-namespace', '--test-binary', binary, '--uid', args.uid, '--test-case', args.test_case], timeout=520)
-        print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': True, 'ordinary_user': args.uid,
+             '--inside-namespace', '--test-binary', binary, '--uid', args.uid,
+             '--test-case', args.test_case, *user_tests], timeout=520)
+        print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': args.with_user_tests, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))
     finally:

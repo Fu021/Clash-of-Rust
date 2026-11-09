@@ -28,6 +28,7 @@ import prepared_vm
 import prepared_vm_environment
 import tun_dns_fixture
 import build_inputs
+import ci_test_policy
 import os
 import copy
 import importlib.util
@@ -898,6 +899,52 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_ci_policy_keeps_real_network_smoke_and_selects_changed_specialties(self):
+        basic = 'basicSystemProxyAndTun'
+        routing = 'applicationRoutingPersistsAndKeepsOtherAppsOnline'
+        lifecycle = 'localProxyAndRealTunCarryTrafficAndDisconnectCleanly'
+        tile = 'quickTileRestoresColdCoreWithoutOpeningTheActivity'
+        source = (build.ROOT/'apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java').read_text()
+        for name in (basic, routing, lifecycle, tile):
+            self.assertRegex(source, r'@Test\s+public\s+void\s+'+name+r'\s*\(')
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_ANDROID_ROUTING_TESTS': 'false',
+                                     'COR_CI_LINUX_USER_TESTS': 'false'}):
+            self.assertEqual(ci_test_policy.android_cases(), (basic,))
+            self.assertFalse(ci_test_policy.linux_user_tests())
+            self.assertEqual(ci_test_policy.select([]), {
+                'extended_tests': False, 'android_routing_tests': False, 'linux_user_tests': False})
+            self.assertTrue(ci_test_policy.select([
+                'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
+            ])['android_routing_tests'])
+            self.assertTrue(ci_test_policy.select([
+                'crates/client-runtime/src/platform/host_network/linux.rs'
+            ])['linux_user_tests'])
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_ANDROID_ROUTING_TESTS': 'true'}):
+            self.assertEqual(ci_test_policy.android_cases(), (basic, routing))
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}):
+            self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile))
+            self.assertTrue(ci_test_policy.linux_user_tests())
+
+    def test_linux_network_selection_survives_sudo(self):
+        specification = importlib.util.spec_from_file_location(
+            'proxy_modes', build.ROOT/'scripts/test-proxy-modes.py')
+        proxy_modes = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(proxy_modes)
+        for selected in (False, True):
+            with self.subTest(selected=selected), \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                            'COR_CI_EXTENDED_TESTS': 'false',
+                                            'COR_CI_LINUX_USER_TESTS': str(selected).lower()}), \
+                    patch.object(proxy_modes, 'host_system', return_value='linux'), \
+                    patch.object(proxy_modes.Path, 'resolve', autospec=True,
+                                 side_effect=lambda path, **kwargs: path), \
+                    patch.object(proxy_modes, 'run') as invoke:
+                proxy_modes.check(Path('/test/core_integration'), Path('/opt/clash-of-rust'))
+            command = invoke.call_args.args[0]
+            self.assertEqual('--with-user-tests' in command, selected)
+
     def test_previews_reject_a_viewer_without_color_font_support(self):
         for version, supported in [('slint-viewer 1.18.1', False),
                                    ('slint-viewer 1.19.0', True)]:
@@ -939,28 +986,30 @@ class BuildTests(unittest.TestCase):
 
         def capture(command, **kwargs):
             commands.append(command)
-            if command[:2] == ['cargo', 'test']:
-                raise RuntimeError('source checks completed')
+        def capture_test(command, **kwargs):
+            commands.append(command)
+            raise RuntimeError('source checks completed')
 
-        with patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
                 patch.object(native_ci, 'host_system', return_value='linux'), \
                 patch.object(native_ci, 'host_arch', return_value='x64'), \
                 patch.object(local_cache, 'workspace_sources'), \
                 patch.object(native_ci, 'run', side_effect=capture), \
-                patch.object(native_ci, 'cargo_messages', return_value=[]), \
-                patch.object(native_ci, 'test_binaries', return_value={}):
+                patch.object(native_ci, 'cargo_messages', side_effect=capture_test):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
-        for command in commands:
-            if command[1] == 'fmt':
-                continue
+        for command in commands[1:3]:
             excluded = [command[index + 1] for index, value in enumerate(command) if value == '--exclude']
             self.assertEqual(set(excluded), {'clash-mobile-runtime', 'clash-android'})
             self.assertIn('--workspace', command)
         self.assertEqual([command[1] for command in commands], ['fmt', 'clippy', 'build', 'test'])
+        self.assertEqual(commands[-1][2:6], ['-p', 'clash-of-rust', '--test', 'core_integration'])
+        self.assertIn('--no-run', commands[-1])
 
     def test_android_build_runs_mobile_unit_tests_before_preparing_target_tools(self):
-        with patch.object(local_cache, 'workspace_sources'), \
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
+                patch.object(local_cache, 'workspace_sources'), \
                 patch.object(android_build, 'cargo_build') as clippy, \
                 patch.object(android_build, 'run', side_effect=RuntimeError('mobile tests executed')) as tests:
             with self.assertRaisesRegex(RuntimeError, 'mobile tests executed'):
@@ -2815,6 +2864,7 @@ runpy.run_path(str(script), run_name='__main__')
                 (None,RuntimeError('Android test log end marker is missing'),'partial log'),
                 (None,None,'Mobile runtime stopped: core failure')):
             with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \
+                    patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
                     tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary)
                 cases=[]
@@ -3649,7 +3699,7 @@ runpy.run_path(str(script), run_name='__main__')
         workflow = (build.ROOT/'.github/workflows/ci.yml').read_text()
         for name in release.CI_JOBS:
             if name.startswith('Ubuntu 20.04-'):
-                self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN\n', workflow)
+                self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed proxy and TUN\n', workflow)
                 arch = name.removeprefix('Ubuntu 20.04-').split(' ', 1)[0]
                 self.assertIn('            arch: '+arch+'\n', workflow)
             elif name.startswith('Ubuntu latest-'):
