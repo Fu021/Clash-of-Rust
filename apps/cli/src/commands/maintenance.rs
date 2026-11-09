@@ -205,6 +205,28 @@ async fn update(args: &Args) -> Result<()> {
         if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
             eprintln!("正在检查更新、下载安装包并校验 SHA256…");
         }
+        #[cfg(target_os = "linux")]
+        if clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none() {
+            let prepared: Value = backend::request(args, Command::UpdatePrepareTerminal)
+                .await
+                .context("终端安装准备失败；旧版后台请先退出后重试")?;
+            let directory = std::path::PathBuf::from(
+                prepared["installer"]
+                    .as_str()
+                    .context("后台没有返回终端安装目录")?,
+            );
+            let result = tokio::task::spawn_blocking(move || {
+                clash_client_runtime::update::run_terminal_install(&directory)
+            })
+            .await??;
+            if result.error {
+                bail!("{}", result.message);
+            }
+            return output::emit(
+                args,
+                json!({"state":result.state,"version":result.version,"message":result.message,"error":false}),
+            );
+        }
         return output::emit(args, backend::request(args, Command::UpdateInstall).await?);
     }
     let available =

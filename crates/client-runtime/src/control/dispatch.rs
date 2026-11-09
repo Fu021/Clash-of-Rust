@@ -114,7 +114,10 @@ pub(super) async fn execute(
         return Ok(Value::Null);
     }
     if matches!(&operation, Command::UpdateInstall) {
-        return install_update(shared, disconnected).await;
+        return install_update(shared, disconnected, false).await;
+    }
+    if matches!(&operation, Command::UpdatePrepareTerminal) {
+        return install_update(shared, disconnected, true).await;
     }
     if let Command::Import {
         name,
@@ -315,6 +318,19 @@ pub(super) async fn execute(
             return Ok(json!({"enabled":crate::platform::autostart_enabled()?}));
         }
         Command::UpdateInstall => unreachable!("handled before locking the owner"),
+        Command::UpdatePrepareTerminal => unreachable!("handled before locking the owner"),
+        Command::UpdateCommitTerminal { directory } => {
+            #[cfg(target_os = "linux")]
+            {
+                crate::update::commit_terminal_install(&directory, &mut engine).await?;
+                return Ok(json!({"shutdown":true}));
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = directory;
+                anyhow::bail!("当前平台不支持 Linux 终端安装交接");
+            }
+        }
     }
     Ok(Value::Null)
 }
@@ -322,7 +338,10 @@ pub(super) async fn execute(
 async fn install_update(
     shared: &Arc<Mutex<Engine>>,
     mut disconnected: Option<watch::Receiver<bool>>,
+    terminal: bool,
 ) -> Result<Value> {
+    #[cfg(not(target_os = "linux"))]
+    anyhow::ensure!(!terminal, "当前平台不支持 Linux 终端安装交接");
     crate::update::ensure_installable()?;
     let (job, download, prereleases) = Engine::download_app_update_with(
         shared,
@@ -335,6 +354,17 @@ async fn install_update(
         },
     )
     .await?;
+    #[cfg(target_os = "linux")]
+    if terminal {
+        let engine = shared.lock().await;
+        job.ensure_current(&disconnected)?;
+        anyhow::ensure!(
+            engine.settings.update_prereleases == prereleases,
+            "更新通道已改变，请重新检查更新"
+        );
+        let directory = crate::update::prepare_terminal_install(Arc::new(download), &engine)?;
+        return Ok(json!({"installer":directory,"shutdown":false}));
+    }
     // macOS may wait for DMG verification or authorization. The helper is
     // gated until the owner rechecks the GUI and explicitly commits the swap.
     #[cfg(target_os = "macos")]

@@ -24,6 +24,7 @@
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择。 |
 | `ci_test_policy.py` | CLI / 模块 | 选择基础网络、相关变更专项和手动扩展回归，并向 CI 各平台传递选择结果。 |
+| `test-cli-update.py` | 隔离安装测试 | 仅在 Actions 的已安装 Linux 环境运行，以临时普通账户验证无桌面的 sudo 拒绝、真实 dpkg 失败恢复和候选 DEB 重装，保存逐项结果。 |
 | `android_previews.py` | CLI / 模块 | 为独立应用列表截图工作流核验成功 CI、同提交附件并生成已固定镜像的 Android 版本矩阵；不构建或运行网络测试。 |
 | `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和旧内核虚拟机；容器及 VM 必须运行在可丢弃 Actions 环境。 |
 | `prepared_vm.py` | 共享模块 | 私网专用 VM 协议、严格元数据、能力门禁、有界完整下载及流式上传；不写 GitHub 缓存、不发 DELETE。 |

@@ -37,6 +37,10 @@ def desktop_ui_tests():
     return extended_tests() or enabled('COR_CI_DESKTOP_UI_TESTS')
 
 
+def update_tests():
+    return extended_tests() or enabled('COR_CI_UPDATE_TESTS')
+
+
 def proxy_benchmark():
     return enabled('COR_CI_PROXY_BENCHMARK')
 
@@ -76,9 +80,15 @@ def select(paths, extended=False):
                     'crates/client-core/src/subscription/routes.rs')
         for path in paths
     )
+    update = any(
+        path.startswith(('crates/client-runtime/src/update/', 'apps/cli/src/commands/maintenance.rs',
+                         'crates/client-runtime/src/control/', 'apps/cli/src/backend.rs'))
+        or path in ('scripts/test-cli-update.py', 'scripts/ci_test_policy.py')
+        for path in paths
+    )
     return {'extended_tests': extended, 'android_routing_tests': extended or android,
             'linux_user_tests': extended or linux, 'desktop_ui_tests': extended or desktop_ui,
-            'proxy_benchmark': benchmark}
+            'proxy_benchmark': benchmark, 'update_tests': extended or update}
 
 
 def changed_paths():
@@ -103,7 +113,7 @@ def main():
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             for key in ('extended_tests', 'android_routing_tests', 'linux_user_tests',
-                        'desktop_ui_tests', 'proxy_benchmark'):
+                        'desktop_ui_tests', 'proxy_benchmark', 'update_tests'):
                 stream.write(f'{key}={str(plan[key]).lower()}\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a') as stream:

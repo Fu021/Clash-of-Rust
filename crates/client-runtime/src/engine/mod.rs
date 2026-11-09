@@ -218,6 +218,11 @@ struct RestartState {
 }
 
 impl Engine {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn resource_directory(&self) -> &std::path::Path {
+        &self.resources
+    }
+
     pub fn new(store: Store) -> Result<Self> {
         Self::with_resources(store, assets::discover()?)
     }

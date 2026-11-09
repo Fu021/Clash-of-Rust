@@ -230,6 +230,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 message(out, "当前更新通道没有可安装的版本")
             }
         }
+        "update install" if value["state"] == "succeeded" => message(out, &text(value, "message")),
         "update install" => message(
             out,
             "安装包已校验，安装助手已启动，尚未确认安装完成。\n查看结果：cor update status（沿用原账户和 --data-dir 参数）\n安装成功后可用 cor start 启动后台。",

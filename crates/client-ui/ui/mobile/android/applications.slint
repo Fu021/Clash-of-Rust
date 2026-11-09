@@ -3,7 +3,7 @@ import { Theme } from "../../theme/palette.slint";
 import { MobileTypography } from "../shared/typography.slint";
 import { MobileData, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidData, AndroidActions, AndroidIntent, ApplicationItem } from "state.slint";
-import { MText, MSmall, MParagraph, MButton, MField, MSelect, MSwitch, ListHeader, ListView } from "../shared/controls.slint";
+import { MText, MSmall, MParagraph, MButton, MField, MSelect, MSwitch, MScroll } from "../shared/controls.slint";
 
 component ApplicationRow inherits Rectangle {
     in property <ApplicationItem> item;
@@ -32,21 +32,10 @@ export component AndroidApplications inherits PageSurface {
     init => { AndroidData.applications-scroll-y = 0px; }
     Rectangle {
         clip: true;
-        apps := ListView {
+        apps := MScroll {
             width: parent.width; height: parent.height;
             content-key: AndroidData.applications-query + (AndroidData.applications-system ? "/system" : "/apps");
             content-y <=> AndroidData.applications-scroll-y;
-            for index in AndroidData.applications.length + 1: Rectangle {
-                height: index == 0 ? header.header-height : content.preferred-height + 8px;
-                content := VerticalLayout {
-                    x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
-                    if index > 0: ApplicationRow { item: AndroidData.applications[index - 1]; editable: root.editable; }
-                }
-            }
-        }
-        header := ListHeader {
-            x: 0px; y: 0px; width: apps.visible-width;
-            list-height: apps.visible-height; list-content-height: apps.content-height; content-y <=> apps.content-y;
             VerticalLayout { alignment: start; spacing: 8px;
                 HorizontalLayout { spacing: 8px;
                     MSelect {
@@ -87,6 +76,7 @@ export component AndroidApplications inherits PageSurface {
                     text: AndroidData.applications-total == 0 ? "未读取到应用，请刷新重试" : "没有匹配的应用，可调整搜索或显示系统组件";
                     color: Theme.secondary;
                 }
+                for application in AndroidData.applications: ApplicationRow { item: application; editable: root.editable; }
             }
         }
     }

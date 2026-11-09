@@ -427,7 +427,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "update install",
-        "下载并交给系统安装更新，完成后退出后台",
+        "下载安装更新；Linux 终端等待结果，失败尝试恢复后台",
         "update install [--yes]",
         0,
         0,

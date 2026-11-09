@@ -115,6 +115,12 @@ mod tests {
         let handed_off = render(&["update", "install"], json!({"shutdown":true}));
         assert!(handed_off.contains("尚未确认安装完成"));
         assert!(handed_off.contains("cor update status"));
+        let completed_install = render(
+            &["update", "install"],
+            json!({"state":"succeeded","version":"0.6.7","message":"已更新至 0.6.7；可用 cor start 启动后台","error":false}),
+        );
+        assert!(completed_install.contains("已更新至 0.6.7"));
+        assert!(!completed_install.contains("尚未确认安装完成"));
         let finished = render(
             &["update", "status"],
             json!({"state":"succeeded","version":"0.6.7","message":"已更新至 0.6.7","error":false}),

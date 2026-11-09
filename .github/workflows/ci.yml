@@ -47,6 +47,7 @@ jobs:
       linux_user_tests: ${{ steps.test_policy.outputs.linux_user_tests }}
       desktop_ui_tests: ${{ steps.test_policy.outputs.desktop_ui_tests }}
       proxy_benchmark: ${{ steps.test_policy.outputs.proxy_benchmark }}
+      update_tests: ${{ steps.test_policy.outputs.update_tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -415,6 +416,7 @@ jobs:
       COR_CI_LINUX_USER_TESTS: ${{ needs.inputs.outputs.linux_user_tests }}
       COR_CI_DESKTOP_UI_TESTS: ${{ needs.inputs.outputs.desktop_ui_tests }}
       COR_CI_PROXY_BENCHMARK: ${{ needs.inputs.outputs.proxy_benchmark }}
+      COR_CI_UPDATE_TESTS: ${{ needs.inputs.outputs.update_tests }}
     defaults:
       run:
         shell: python

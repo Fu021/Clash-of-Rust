@@ -55,6 +55,11 @@ _release_package_spec = importlib.util.spec_from_file_location(
 release_package = importlib.util.module_from_spec(_release_package_spec)
 _release_package_spec.loader.exec_module(release_package)
 
+_cli_update_spec = importlib.util.spec_from_file_location(
+    'cli_update', build.ROOT/'scripts/test-cli-update.py')
+cli_update = importlib.util.module_from_spec(_cli_update_spec)
+_cli_update_spec.loader.exec_module(cli_update)
+
 _preview_spec = importlib.util.spec_from_file_location(
     'preview_slint', build.ROOT/'scripts/preview-slint.py')
 preview_slint = importlib.util.module_from_spec(_preview_spec)
@@ -901,6 +906,29 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_terminal_update_result_requires_helper_exit_and_a_persisted_terminal_state(self):
+        for code, state, accepted in ((0, 'succeeded', True), (0, 'failed', True),
+                                      (0, 'preparing', False), (0, 'installing', False),
+                                      (1, 'succeeded', False)):
+            with self.subTest(code=code, state=state), \
+                    patch.object(cli_update.subprocess, 'run',
+                                 return_value=subprocess.CompletedProcess([], code, '', 'helper error')), \
+                    patch.object(cli_update, 'cli', return_value={'state': state}):
+                if accepted:
+                    self.assertEqual(cli_update.run_helper(Path('/fixture/update'), Path('/fixture/data')),
+                                     {'state': state})
+                else:
+                    with self.assertRaisesRegex(AssertionError, 'terminal result'):
+                        cli_update.run_helper(Path('/fixture/update'), Path('/fixture/data'))
+
+    def test_installed_terminal_update_is_not_run_in_a_development_environment(self):
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), \
+                patch.object(sys, 'argv', ['test-cli-update.py', '--package', '/candidate.deb']), \
+                patch.object(cli_update.subprocess, 'run') as commands:
+            with self.assertRaisesRegex(RuntimeError, 'disposable Actions'):
+                cli_update.main()
+            commands.assert_not_called()
+
     def test_ci_policy_keeps_real_network_smoke_and_selects_changed_specialties(self):
         basic = 'basicSystemProxyAndTun'
         routing = 'applicationRoutingPersistsAndKeepsOtherAppsOnline'
@@ -912,13 +940,15 @@ class BuildTests(unittest.TestCase):
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
                                      'COR_CI_ANDROID_ROUTING_TESTS': 'false',
                                      'COR_CI_LINUX_USER_TESTS': 'false',
+                                     'COR_CI_UPDATE_TESTS': 'false',
                                      'COR_CI_DESKTOP_UI_TESTS': 'false'}):
             self.assertEqual(ci_test_policy.android_cases(), (basic,))
             self.assertFalse(ci_test_policy.linux_user_tests())
             self.assertFalse(ci_test_policy.desktop_ui_tests())
+            self.assertFalse(ci_test_policy.update_tests())
             self.assertEqual(ci_test_policy.select([]), {
                 'extended_tests': False, 'android_routing_tests': False, 'linux_user_tests': False,
-                'desktop_ui_tests': False, 'proxy_benchmark': False})
+                'desktop_ui_tests': False, 'proxy_benchmark': False, 'update_tests': False})
             self.assertTrue(ci_test_policy.select([
                 'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
             ])['android_routing_tests'])
@@ -928,6 +958,9 @@ class BuildTests(unittest.TestCase):
             self.assertTrue(ci_test_policy.select([
                 'crates/client-ui/ui/pages/proxies.slint'
             ])['desktop_ui_tests'])
+            for path in ('crates/client-runtime/src/update/install/terminal.rs',
+                         'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py'):
+                self.assertTrue(ci_test_policy.select([path])['update_tests'])
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
                                      'COR_CI_ANDROID_ROUTING_TESTS': 'true'}):
             self.assertEqual(ci_test_policy.android_cases(), (basic, routing))
@@ -935,6 +968,7 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile))
             self.assertTrue(ci_test_policy.linux_user_tests())
             self.assertTrue(ci_test_policy.desktop_ui_tests())
+            self.assertTrue(ci_test_policy.update_tests())
 
     def test_linux_network_selection_survives_sudo(self):
         specification = importlib.util.spec_from_file_location(

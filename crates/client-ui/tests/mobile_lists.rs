@@ -74,6 +74,7 @@ slint::slint! {
         in-out property <[ApplicationItem]> applications <=> AndroidData.applications;
         in-out property <length> offset <=> AndroidData.applications-scroll-y;
         in-out property <string> query <=> AndroidData.applications-query;
+        in-out property <float> text-scale <=> Theme.text-scale;
         AndroidApplications { width: parent.width; height: parent.height; }
         init => { AndroidData.applications-loaded = true; }
     }
@@ -409,6 +410,35 @@ fn applications_scroll_across_phone_and_tablet_viewports() {
         advance(&clock, Duration::from_secs(1));
         frame(&adapter, width as usize, height as usize);
         assert_eq!(probe.get_offset(), 0.);
+        let drag_start = LogicalPosition::new(width as f32 / 2., height as f32 - 24.);
+        probe.window().dispatch_event(WindowEvent::PointerPressed {
+            position: drag_start,
+            button: PointerEventButton::Left,
+        });
+        for step in 1..=6 {
+            advance(&clock, Duration::from_millis(16));
+            probe.window().dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(drag_start.x, drag_start.y - step as f32 * 24.),
+            });
+            frame(&adapter, width as usize, height as usize);
+        }
+        probe.window().dispatch_event(WindowEvent::PointerReleased {
+            position: LogicalPosition::new(drag_start.x, drag_start.y - 144.),
+            button: PointerEventButton::Left,
+        });
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, width as usize, height as usize);
+        assert!(
+            probe.get_offset() < 0.,
+            "application rows must scroll under a drag gesture at {width}x{height}"
+        );
+        probe.set_text_scale(1.3);
+        frame(&adapter, width as usize, height as usize);
+        assert!(
+            probe.get_offset().is_finite(),
+            "changing the system font size must not invalidate the application viewport"
+        );
+        probe.set_text_scale(1.);
     }
     scroll(-160.);
     advance(&clock, Duration::from_secs(1));

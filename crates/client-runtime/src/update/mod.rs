@@ -7,10 +7,14 @@ pub use clash_client_core::update::channel;
 use futures_util::future::{AbortHandle, AbortRegistration};
 #[cfg(target_os = "macos")]
 pub(crate) use install::handoff_owner_deferred_at;
+#[cfg(target_os = "linux")]
+pub use install::run_terminal_install;
 pub use install::{
     InstallSession, InstallationStatus, cleanup, ensure_installable, handoff, handoff_at,
     handoff_owner, handoff_owner_at, helper_main, installation_status, startup_outcome,
 };
+#[cfg(target_os = "linux")]
+pub(crate) use install::{commit_terminal_install, prepare_terminal_install};
 use reqwest::{Client, StatusCode, Url};
 use semver::Version;
 use serde::Deserialize;

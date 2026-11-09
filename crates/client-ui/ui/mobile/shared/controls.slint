@@ -398,16 +398,25 @@ export component MNotice inherits Rectangle {
     property <bool> can-restart: MobileView.notice-modal && !MobileData.core-running && !MobileData.protected && !MobileData.protection-pending;
     property <bool> has-recovery: root.can-restart || root.can-recover;
     property <int> action-count: root.has-recovery ? 4 : 3;
-    property <int> action-columns: root.width / Theme.text-scale < 220px ? 1 : root.has-recovery || root.width / Theme.text-scale < 300px ? 2 : 3;
+    property <length> horizontal-padding: (MobileView.notice-modal ? 16px : 12px) * MobileTypography.density;
+    property <length> vertical-padding: (root.error ? MobileView.notice-modal ? 14px : 12px : 10px) * MobileTypography.density;
+    property <length> gap: 6px * MobileTypography.density;
+    property <length> action-min-width: max(96px, MobileTypography.font-size(13) * 7 + 12px);
+    property <length> action-space: root.width - 2 * root.horizontal-padding;
+    property <int> action-columns: root.action-space >= root.action-count * root.action-min-width + (root.action-count - 1) * root.gap ? root.action-count
+        : root.action-space >= 2 * root.action-min-width + root.gap ? 2 : 1;
     in-out property <[length]> close-target;
     callback dismissed();
     height: min(content.preferred-height, max(72px, root.available-height));
     border-radius: MobileView.notice-modal ? 18px : 14px; border-width: 1px; border-color: Theme.line; background: root.error ? Theme.surface : Theme.ink;
     drop-shadow-blur: 16px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
     TouchArea { mouse-cursor: root.error ? default : pointer; clicked => { if !root.error { root.dismissed(); } } }
-    content := VerticalLayout { padding: MobileView.notice-modal ? Theme.card-padding : 12px; spacing: MobileTypography.small-gap; alignment: start;
+    content := VerticalLayout {
+        padding-left: root.horizontal-padding; padding-right: root.horizontal-padding;
+        padding-top: root.vertical-padding; padding-bottom: root.vertical-padding;
+        spacing: root.gap; alignment: start;
         if root.error: HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
-            Rectangle { width: 28px; height: 28px; border-radius: 8px; background: Theme.danger-wash;
+            Rectangle { width: 26px; height: 26px; border-radius: 8px; background: Theme.danger-wash;
                 MHeading { text: "!"; width: parent.width; height: parent.height; color: Theme.danger; horizontal-alignment: center; }
             }
             MHeading { text: MobileView.notice-modal ? "需要处理" : "操作未完成"; font-size: MobileTypography.font-size(MobileView.notice-modal ? 18 : 14); }
@@ -431,7 +440,7 @@ export component MNotice inherits Rectangle {
             }
         }
         if root.error: actions := Rectangle {
-            property <length> gap: MobileTypography.small-gap;
+            property <length> gap: root.gap;
             property <length> row-height: max(48px, MobileTypography.font-size(13) * 1.5 + 16px);
             property <length> button-width: max(0px, (self.width - (root.action-columns - 1) * self.gap) / root.action-columns);
             height: ceil(root.action-count / root.action-columns) * (self.row-height + self.gap) - self.gap;

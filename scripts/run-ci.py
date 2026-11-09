@@ -6,7 +6,7 @@ import sys
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json, desktop_cargo_scope
 from workflow_artifacts import export_build, test_binaries
-from ci_test_policy import desktop_ui_tests, extended_tests
+from ci_test_policy import desktop_ui_tests, extended_tests, update_tests
 
 
 def main():
@@ -28,6 +28,9 @@ def main():
     clippy_targets = ['--all-targets'] if extended else ['--lib', '--bins']
     run(['cargo', 'clippy', *packages, '--release', *clippy_targets, '--locked', '--', '-D', 'warnings'])
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
+    if not extended and update_tests() and args.system == 'linux':
+        run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
+             'update::', '--', '--test-threads=1'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for case in ('resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions',
                      'shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release',

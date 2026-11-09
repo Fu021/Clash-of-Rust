@@ -155,6 +155,10 @@ pub enum Command {
         enabled: Option<bool>,
     },
     UpdateInstall,
+    UpdatePrepareTerminal,
+    UpdateCommitTerminal {
+        directory: PathBuf,
+    },
 }
 
 impl Command {
@@ -260,6 +264,10 @@ mod tests {
                 path: "/tmp/geo".into(),
             },
             Command::UpdateInstall,
+            Command::UpdatePrepareTerminal,
+            Command::UpdateCommitTerminal {
+                directory: "/tmp/update".into(),
+            },
             Command::RuleOverrides {
                 overrides: crate::config::RuleOverrides::default(),
             },

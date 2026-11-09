@@ -118,7 +118,7 @@ def linux_gui_smoke():
 
 
 def linux_package_tests(package, tun_test, structure=True):
-    from ci_test_policy import extended_tests
+    from ci_test_policy import extended_tests, update_tests
     if structure:
         # Build/manifest checks already verify payload identity and resources.
         run(['dpkg-deb', '--info', package])
@@ -150,6 +150,8 @@ def linux_package_tests(package, tun_test, structure=True):
     if not os.environ.get('COR_LINUX_BASELINE'):
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', tun_test, '--bundle', '/opt/clash-of-rust'])
+        if update_tests():
+            run([sys.executable, ROOT/'scripts/test-cli-update.py', '--package', package], timeout=900)
 
 
 def compatibility_dependencies():

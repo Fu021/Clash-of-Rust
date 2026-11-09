@@ -111,6 +111,9 @@ struct Plan {
     require_commit: bool,
     #[serde(default)]
     data_dir: Option<PathBuf>,
+    #[cfg(target_os = "linux")]
+    #[serde(default)]
+    terminal: Option<terminal::Recovery>,
 }
 fn default_restart() -> bool {
     true
@@ -250,32 +253,14 @@ fn handoff_with_commit(
     require_commit: bool,
     data_dir: Option<PathBuf>,
 ) -> Result<InstallSession> {
-    let directory = download.directory().to_owned();
-    for name in ["ready", "cancel", "commit", "outcome.json", "stage.json"] {
-        let path = directory.join(name);
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
-    }
-    let executable = ensure_installable()?;
-    let plan = Plan {
-        package: download.package.clone(),
-        executable,
-        sha256: download.sha256.clone(),
-        version: download.version.clone(),
-        parent,
-        restart,
-        require_commit,
-        data_dir,
-    };
+    let (plan, directory) =
+        prepare_plan(download.as_ref(), parent, restart, require_commit, data_dir)?;
     let helper = directory.join(if cfg!(windows) {
         "update-helper.exe"
     } else {
         "update-helper"
     });
     fs::copy(&plan.executable, &helper).context("无法准备安装助手，请检查磁盘空间或安全软件")?;
-    fs::write(directory.join("plan.json"), serde_json::to_vec(&plan)?)
-        .context("无法保存更新信息")?;
     record_installation(
         &plan,
         &directory,
@@ -326,6 +311,38 @@ fn handoff_with_commit(
     }
 }
 
+fn prepare_plan(
+    download: &Downloaded,
+    parent: u32,
+    restart: bool,
+    require_commit: bool,
+    data_dir: Option<PathBuf>,
+) -> Result<(Plan, PathBuf)> {
+    let directory = download.directory().to_owned();
+    for name in ["ready", "cancel", "commit", "outcome.json", "stage.json"] {
+        let path = directory.join(name);
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+    }
+    let executable = ensure_installable()?;
+    let plan = Plan {
+        package: download.package.clone(),
+        executable,
+        sha256: download.sha256.clone(),
+        version: download.version.clone(),
+        parent,
+        restart,
+        require_commit,
+        data_dir,
+        #[cfg(target_os = "linux")]
+        terminal: None,
+    };
+    fs::write(directory.join("plan.json"), serde_json::to_vec(&plan)?)
+        .context("无法保存更新信息")?;
+    Ok((plan, directory))
+}
+
 pub fn ensure_installable() -> Result<PathBuf> {
     let executable = crate::platform::autostart_executable().context("无法定位当前客户端")?;
     #[cfg(windows)]
@@ -336,10 +353,6 @@ pub fn ensure_installable() -> Result<PathBuf> {
     if executable != Path::new("/opt/clash-of-rust/clash-of-rust") {
         bail!("请先使用 DEB 安装客户端，再使用自动更新");
     }
-    #[cfg(target_os = "linux")]
-    if !crate::platform::is_elevated() && !Path::new("/usr/bin/pkexec").is_file() {
-        bail!("缺少 pkexec，无法请求安装授权");
-    }
     #[cfg(target_os = "macos")]
     macos::ensure_installable(&executable)?;
     Ok(executable)
@@ -348,12 +361,27 @@ pub fn ensure_installable() -> Result<PathBuf> {
 #[cfg(target_os = "macos")]
 #[path = "install/macos.rs"]
 mod macos;
+#[cfg(target_os = "linux")]
+#[path = "install/terminal.rs"]
+mod terminal;
+#[cfg(target_os = "linux")]
+pub use terminal::run_terminal_install;
+#[cfg(target_os = "linux")]
+pub(crate) use terminal::{commit_terminal_install, prepare_terminal_install};
 
 /// Called before application locks, GUI libraries, or any Tokio runtime.
 pub fn helper_main() -> bool {
     let mut args = std::env::args_os();
     let _ = args.next();
-    if args.next().as_deref() != Some(std::ffi::OsStr::new("--install-update")) {
+    let mode = args.next();
+    #[cfg(target_os = "linux")]
+    if mode.as_deref() == Some(std::ffi::OsStr::new("--install-update-terminal")) {
+        if let Some(directory) = args.next() {
+            terminal::helper(Path::new(&directory));
+        }
+        return true;
+    }
+    if mode.as_deref() != Some(std::ffi::OsStr::new("--install-update")) {
         return false;
     }
     let Some(directory) = args.next().map(PathBuf::from) else {
@@ -587,6 +615,8 @@ mod tests {
             restart: false,
             require_commit: false,
             data_dir: Some(data_dir.into()),
+            #[cfg(target_os = "linux")]
+            terminal: None,
         }
     }
 
@@ -669,6 +699,8 @@ mod tests {
             restart: true,
             require_commit: false,
             data_dir: Some(std::env::current_dir().unwrap()),
+            #[cfg(target_os = "linux")]
+            terminal: None,
         };
         let mut legacy = serde_json::to_value(&plan).unwrap();
         legacy.as_object_mut().unwrap().remove("restart");
