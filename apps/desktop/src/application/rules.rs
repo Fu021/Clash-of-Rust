@@ -6,7 +6,7 @@ use rule_manager::{CustomRule, Document, Row, Source};
 pub(super) use rule_manager::FORM_TYPES as TYPES;
 pub(super) const SHORTCUT_LABELS: [&str; 5] = [
     "拦截广告",
-    "本地域名直连",
+    "私有域名直连",
     "私有 IP 直连",
     "国内域名直连",
     "国内 IP 直连",
@@ -56,7 +56,6 @@ pub enum Event {
     Profile(ProfileChoice),
     ConfirmProfile,
     CancelProfile,
-    Collapse,
     Toggle(usize, bool),
     Filter(SourceFilter),
     Select(String),
@@ -200,7 +199,6 @@ pub struct State {
     pub(super) warnings: Vec<String>,
     pub(super) selected: Option<String>,
     pub(super) filter: SourceFilter,
-    pub(super) expanded: bool,
     pub(super) editor: Option<Editor>,
     pub(super) move_open: bool,
     pub(super) move_position: String,
@@ -392,7 +390,6 @@ impl App {
                 }
             }
             Event::CancelProfile => state.pending_profile = None,
-            Event::Collapse => state.expanded = !state.expanded,
             Event::Filter(filter) => {
                 state.filter = filter;
                 state.selected = None;

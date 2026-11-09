@@ -52,7 +52,7 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-sites-report <=> UiData.sites-report;
     in-out property <int> preview-claude-filter <=> UiData.claude-filter;
     in-out property <int> dialog;
-    in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
+    in-out property <bool> preview-shortcuts <=> root.rule-shortcuts-open;
     in-out property <length> preview-rules-scroll <=> UiData.scroll-rules;
     in-out property <length> preview-home-scroll <=> UiData.scroll-home;
     in-out property <length> preview-proxies-scroll <=> UiData.scroll-proxies;
@@ -94,7 +94,7 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.6.7-fix.7.settings-storage";
+        UiData.version = "0.6.7-fix.8.rules-shortcuts";
         UiData.ready = true; UiData.running = true;
         UiData.profile = root.preview-long-names ? root.long-name : "我的订阅"; UiData.node = root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";

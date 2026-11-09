@@ -6,7 +6,7 @@ export enum Intent {
     profile-name, profile-source, import-profile, pick-file, open-profiles,
     activate-profile, update-profile, delete-profile, edit-profile, add-profile,
     edit-name, edit-source, save-profile, close-profile,
-    rule-profile, rule-confirm-profile, rule-cancel-profile, rule-collapse,
+    rule-profile, rule-confirm-profile, rule-cancel-profile,
     rule-toggle, rule-filter, rule-select, rule-add, rule-edit, rule-delete,
     rule-enable, rule-move, rule-move-open, rule-move-input, rule-move-to,
     rule-move-edge, rule-restore, rule-discard, rule-apply, rule-close-editor,
@@ -115,7 +115,6 @@ export global UiData {
     in-out property <[string]> shortcuts;
     in-out property <[bool]> shortcut-values;
     in-out property <[bool]> shortcut-available;
-    in-out property <bool> shortcuts-open;
     in-out property <[Choice]> rule-profiles;
     in-out property <[string]> rule-profile-options;
     in-out property <string> rule-profile;

@@ -138,7 +138,10 @@ def emulator_image(legacy=False, api=None):
             selected = versions['ime_system_images'].get(str(api))
             if selected is None:
                 raise ValueError('No approved Android test image for API '+str(api))
-            return 'system-images;android-'+str(api)+';google_apis;x86_64', selected['revision'], selected['source_revision']
+            tag = selected.get('tag', 'google_apis')
+            if tag not in ('default', 'google_apis'):
+                raise ValueError('Unsupported Android test image tag: '+str(tag))
+            return 'system-images;android-'+str(api)+';'+tag+';x86_64', selected['revision'], selected['source_revision']
     return (versions[image_key], versions[image_key+'_revision'],
             versions.get(image_key+'_source_revision', versions[image_key+'_revision']))
 

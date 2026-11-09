@@ -2,7 +2,7 @@ use super::{AndroidData, AndroidIntent, AndroidWindow, ApplicationItem, MobileDa
 use anyhow::{Context, Result, bail};
 use clash_mobile_runtime::NativeHost;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
     collections::BTreeSet,

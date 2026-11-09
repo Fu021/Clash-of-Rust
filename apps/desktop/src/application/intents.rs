@@ -210,7 +210,6 @@ impl App {
             Intent::CloseProfile => Message::CloseProfileEdit,
             Intent::RuleConfirmProfile => Message::Rules(R::ConfirmProfile),
             Intent::RuleCancelProfile => Message::Rules(R::CancelProfile),
-            Intent::RuleCollapse => Message::Rules(R::Collapse),
             Intent::RuleFilter => Message::Rules(R::Filter(match a {
                 "1" => rules_view::SourceFilter::Custom,
                 "2" => rules_view::SourceFilter::Shortcut,

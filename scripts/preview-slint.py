@@ -37,7 +37,6 @@ DIALOGS = {
     "ai-risks": ("风险项目详情", "ai-check", 7),
     "ai-normal": ("正常项目详情", "ai-check", 8),
     "ai-clues": ("其他线索详情", "ai-check", 9),
-    "accent-picker": ("强调色选择", "settings", 10),
     "connection-details": ("连接详情", "connections", 11),
     "preview-update": ("预发布安装确认", "settings", 12),
     "log-detail": ("日志全文", "logs", 13),
@@ -118,6 +117,7 @@ def mobile_preview(args) -> None:
             values = {'preview-page': page, 'preview-dark': dark, 'preview-detail': detail,
                       'preview-long-names': args.long_names,
                       'preview-list-view': args.list_view,
+                      'preview-shortcuts': args.shortcuts,
                       'inset-top': 0 if short else 24 if width >= 640 else 54 if platform == 'ios' else 28,
                       'inset-bottom': 21 if short else 30 if platform == 'ios' else 24,
                       'inset-left': 44 if short and platform == 'ios' else 0,
@@ -176,7 +176,6 @@ def mobile_preview(args) -> None:
                 ('delete-confirm', '删除确认', '393x852', 2, False, 4, 1),
                 ('draft-confirm', '草稿保护', '393x852', 4, False, 12, 1),
                 ('protection', '保护确认', '393x852', 8, True, 8, 1),
-                ('accent-picker', '强调色', '393x852', 9, False, 11, 1),
             ]:
                 render(name, label, size, page, dark, detail, scale)
             render('disconnected', '连接前状态', connected=False)
@@ -186,8 +185,8 @@ def mobile_preview(args) -> None:
             render('protection-pending', '切换期间进度', page=8,
                    **{'preview-protection-pending': True, 'preview-protection-health': 2})
             render('notice', '通知与消退进度', **{'preview-notice': '配置已更新，当前连接保持运行。', 'preview-notice-elapsed': 3})
-            render('notice-over-modal', '通知位于弹窗上方', page=9, detail=11,
-                   **{'preview-notice': '强调色已保存。', 'preview-notice-elapsed': 3})
+            render('notice-over-modal', '通知位于弹窗上方', page=4, detail=12,
+                   **{'preview-notice': '配置已保存。', 'preview-notice-elapsed': 3})
             render('sparse-subscriptions', '少量内容置顶', page=2, **{'preview-sparse': True})
         (output / 'manifest.json').write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding='utf-8')
         (output / 'preview-viewer.json').write_text(json.dumps(args.rendering, indent=2)+'\n', encoding='utf-8')
@@ -202,7 +201,7 @@ def mobile_preview(args) -> None:
             ('phone-reports', ['ip-check-light', 'ai-check-light', 'settings-light', 'risk-detail']),
             ('phone-dark', ['home-dark', 'ai-check-dark', 'settings-dark', 'logs-dark']),
             ('phone-details', ['connection-details', 'log-detail', 'rule-editor', 'ip-category']),
-            ('phone-confirmations', ['delete-confirm', 'draft-confirm', 'accent-picker', 'rule-keyboard']),
+            ('phone-confirmations', ['delete-confirm', 'draft-confirm', 'protection', 'rule-keyboard']),
         ]:
             items = [e for filename in selected for e in entries if e['file'] == filename + '.png']
             if len(items) < 2:
@@ -372,6 +371,7 @@ def main() -> None:
     parser.add_argument("--long-names", action="store_true", help="preview long configuration, group and node names")
     parser.add_argument("--sidebar-collapsed", action="store_true", help="preview the desktop's manually collapsed sidebar")
     parser.add_argument("--list-view", action="store_true", help="preview proxies and subscriptions as lists")
+    parser.add_argument("--shortcuts", action="store_true", help="show the rule shortcut selection dialog")
     parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
     parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")
     parser.add_argument("--notice-critical", action="store_true", help="show the error in a centered blocking dialog")
@@ -426,6 +426,7 @@ def main() -> None:
         values = {"preview-page": list(PAGES).index(pages[0]), "preview-motion": True,
                   "preview-sidebar-collapsed": args.sidebar_collapsed,
                   "preview-list-view": args.list_view,
+                  "preview-shortcuts": args.shortcuts,
                   "preview-text-scale": round(args.text_scale * 100),
                   **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
@@ -448,6 +449,7 @@ def main() -> None:
                                            "preview-home-scroll": args.scroll_y,
                                            "preview-sidebar-collapsed": args.sidebar_collapsed,
                                            "preview-list-view": args.list_view,
+                                           "preview-shortcuts": args.shortcuts,
                                            **{f"preview-{name}-scroll": args.scroll_y for name in (
                                                "proxies", "profiles", "connections", "logs", "network", "sites", "claude", "settings")},
                                            "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,

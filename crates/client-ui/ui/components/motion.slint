@@ -102,18 +102,13 @@ export component NoticeCountdown inherits ProgressTrack {
     in property <float> elapsed;
     property <duration> started;
     smooth: false;
+    value: clamp(1 - (animation-tick() - root.started) / 5s, 0, 1);
     function reset() {
         self.started = animation-tick() - root.elapsed * 1s;
-        self.value = clamp(1 - root.elapsed / 5, 0, 1);
     }
     init => { self.reset(); }
     changed revision => { self.reset(); }
     changed elapsed => { self.reset(); }
-    Timer {
-        interval: 100ms;
-        running: root.visible && root.value > 0;
-        triggered => { root.value = clamp(1 - (animation-tick() - root.started) / 5s, 0, 1); }
-    }
 }
 
 // Acknowledgements come from the native clipboard, never from the click itself.

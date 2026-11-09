@@ -16,7 +16,7 @@ export component MobileFixture inherits Rectangle {
     }
     width: 0px; height: 0px;
     init => {
-        MobileData.version = "0.6.7-fix.7.settings-storage";
+        MobileData.version = "0.6.7-fix.8.rules-shortcuts";
         MobileData.site-summary = "确认可用 74 · 网页可达 20 · 受限 36";
         MobileData.core-running = true;
         MobileData.dns-override = true; MobileData.fake-ip = true;
@@ -84,6 +84,7 @@ export component MobileFixture inherits Rectangle {
         ];
         MobileData.shortcuts = ["拦截广告", "私有域名直连", "私有 IP 直连", "国内域名直连", "国内 IP 直连"];
         MobileData.shortcut-values = [false, false, false, false, false];
+        MobileData.shortcut-available = [true, true, true, true, true];
         MobileData.rule-profile = "我的订阅";
         MobileData.rule-profiles = ["我的订阅", "备用订阅"];
         MobileData.rule-policies = ["DIRECT", "REJECT", "Proxy", "自动选择"];

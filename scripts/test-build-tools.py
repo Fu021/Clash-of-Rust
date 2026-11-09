@@ -910,23 +910,30 @@ class BuildTests(unittest.TestCase):
             self.assertRegex(source, r'@Test\s+public\s+void\s+'+name+r'\s*\(')
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
                                      'COR_CI_ANDROID_ROUTING_TESTS': 'false',
-                                     'COR_CI_LINUX_USER_TESTS': 'false'}):
+                                     'COR_CI_LINUX_USER_TESTS': 'false',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'false'}):
             self.assertEqual(ci_test_policy.android_cases(), (basic,))
             self.assertFalse(ci_test_policy.linux_user_tests())
+            self.assertFalse(ci_test_policy.desktop_ui_tests())
             self.assertEqual(ci_test_policy.select([]), {
-                'extended_tests': False, 'android_routing_tests': False, 'linux_user_tests': False})
+                'extended_tests': False, 'android_routing_tests': False, 'linux_user_tests': False,
+                'desktop_ui_tests': False})
             self.assertTrue(ci_test_policy.select([
                 'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
             ])['android_routing_tests'])
             self.assertTrue(ci_test_policy.select([
                 'crates/client-runtime/src/platform/host_network/linux.rs'
             ])['linux_user_tests'])
+            self.assertTrue(ci_test_policy.select([
+                'crates/client-ui/ui/pages/proxies.slint'
+            ])['desktop_ui_tests'])
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
                                      'COR_CI_ANDROID_ROUTING_TESTS': 'true'}):
             self.assertEqual(ci_test_policy.android_cases(), (basic, routing))
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}):
             self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile))
             self.assertTrue(ci_test_policy.linux_user_tests())
+            self.assertTrue(ci_test_policy.desktop_ui_tests())
 
     def test_linux_network_selection_survives_sudo(self):
         specification = importlib.util.spec_from_file_location(
@@ -1007,6 +1014,40 @@ class BuildTests(unittest.TestCase):
         self.assertEqual([command[1] for command in commands], ['fmt', 'clippy', 'build', 'test'])
         self.assertEqual(commands[-1][2:6], ['-p', 'clash-of-rust', '--test', 'core_integration'])
         self.assertIn('--no-run', commands[-1])
+
+    def test_desktop_ui_changes_run_targeted_checks_in_linux_container(self):
+        specification = importlib.util.spec_from_file_location('native_ui_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'true'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        ui_checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        self.assertEqual(len(ui_checks), 4)
+        self.assertTrue(any('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions'
+                            in command for command in ui_checks))
+        self.assertTrue(any('application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release'
+                            in command for command in ui_checks))
+        self.assertTrue(any('application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it'
+                            in command for command in ui_checks))
+        self.assertTrue(any('notice_countdown_restarts_and_expires_after_five_seconds'
+                            in command for command in ui_checks))
+        self.assertTrue(all('--exact' in command for command in ui_checks))
+        with patch.dict(os.environ, {'COR_CI_DESKTOP_UI_TESTS': 'true'}), \
+                patch.object(linux_ci, 'build_image', return_value='test-image'), \
+                patch.object(linux_ci, 'run') as run:
+            linux_ci.container(['true'])
+        arguments = run.call_args.args[0]
+        index = arguments.index('COR_CI_DESKTOP_UI_TESTS')
+        self.assertEqual(arguments[index - 1], '--env')
 
     def test_android_build_runs_mobile_unit_tests_before_preparing_target_tools(self):
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
@@ -2783,11 +2824,12 @@ runpy.run_path(str(script), run_name='__main__')
                     android_build.verify_emulator_versions(sdk,legacy=True)
 
     def test_historical_android_probe_images_keep_archive_and_embedded_identity_separate(self):
-        for api in (26,28,29,30,31,32,33,34,35,36):
+        for api in (26,27,28,29,30,31,32,33,34,35,36):
             with self.subTest(api=api), tempfile.TemporaryDirectory() as temporary:
                 sdk=Path(temporary)
                 image,archive_revision,source_revision=android_build.emulator_image(api=api)
-                self.assertEqual(image,f'system-images;android-{api};google_apis;x86_64')
+                tag = 'default' if api == 27 else 'google_apis'
+                self.assertEqual(image,f'system-images;android-{api};{tag};x86_64')
                 self.assertTrue(archive_revision.isdigit())
                 emulator=sdk/'emulator'
                 emulator.mkdir()
@@ -2801,7 +2843,7 @@ runpy.run_path(str(script), run_name='__main__')
                     with self.assertRaisesRegex(ValueError,'revision differs'):
                         android_build.verify_emulator_versions(sdk,api=api)
         with self.assertRaisesRegex(ValueError,'No approved'):
-            android_build.emulator_image(api=27)
+            android_build.emulator_image(api=25)
 
     def test_ime_export_retries_permission_failure_only_on_a_debuggable_emulator(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -2936,6 +2978,7 @@ runpy.run_path(str(script), run_name='__main__')
                     for name in ('system_image', 'legacy_system_image'))
         matrix = android_previews.matrix()['include']
         self.assertEqual([item['api'] for item in matrix], sorted(apis))
+        self.assertEqual(next(item['android'] for item in matrix if item['api'] == 27), '8.1')
         self.assertEqual(next(item['android'] for item in matrix if item['api'] == 31), '12')
         self.assertEqual(next(item['android'] for item in matrix if item['api'] == 32), '12L')
 

@@ -41,6 +41,7 @@
       "legacy_system_image_source_revision": "12",
       "ime_system_images": {
         "26": {"revision": "16", "source_revision": "16"},
+        "27": {"revision": "1", "source_revision": "1", "tag": "default"},
         "28": {"revision": "11", "source_revision": "11"},
         "29": {"revision": "13", "source_revision": "13"},
         "30": {"revision": "16", "source_revision": "16"},

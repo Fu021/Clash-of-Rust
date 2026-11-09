@@ -1,0 +1,112 @@
+import { Theme } from "../theme/palette.slint";
+import { Presence } from "motion.slint";
+import { GeometryTarget } from "geometry.slint";
+import { PageScroll, Heading, Caption, Label, Panel, ActionButton, Toggle } from "controls.slint";
+
+export component RuleShortcutsDialog inherits Rectangle {
+    in-out property <bool> opened;
+    in property <[string]> labels;
+    in property <[bool]> values;
+    in property <[bool]> available;
+    in property <bool> editable;
+    in property <bool> blocked;
+    in property <string> hint: "修改保留为草稿，请在规则页应用。";
+    in property <length> row-height: 40px;
+    property <int> focus-index: -1;
+    callback toggled(int, bool);
+    changed blocked => { if root.blocked { root.opened = false; } }
+    presence := Presence { open: root.opened; }
+    visible: presence.mounted;
+    if presence.mounted: Rectangle {
+        opacity: presence.progress;
+        background: #00000065;
+        TouchArea { clicked => { root.opened = false; } }
+        keyboard := FocusScope {
+            width: parent.width; height: parent.height;
+            enabled: root.opened;
+            property <bool> active: root.opened;
+            changed active => { if self.active { root.focus-index = -1; self.focus(); } }
+            init => { self.focus(); }
+            capture-key-pressed(event) => {
+                if event.text == Key.Escape || event.text == Key.Back {
+                    root.opened = false;
+                    return accept;
+                }
+                if event.text == Key.Tab {
+                    root.focus-index = root.focus-index < 0 ? (event.modifiers.shift ? root.labels.length : 0)
+                        : mod(root.focus-index + (event.modifiers.shift ? -1 : 1) + root.labels.length + 1, root.labels.length + 1);
+                    return accept;
+                }
+                if event.text == Key.Return || event.text == " " {
+                    if root.focus-index == root.labels.length { root.opened = false; }
+                    else if root.focus-index >= 0 && root.editable
+                        && root.focus-index < root.available.length && root.available[root.focus-index] {
+                        root.toggled(root.focus-index, !root.values[root.focus-index]);
+                    }
+                    return accept;
+                }
+                return reject;
+            }
+            key-pressed(event) => { return accept; }
+        panel := Panel {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + (1 - presence.progress) * 8px;
+            width: min(parent.width - 32px, 440px * Theme.text-scale);
+            height: min(parent.height - 24px, contents.preferred-height);
+            border-radius: 18px;
+            drop-shadow-blur: 32px; drop-shadow-offset-y: 8px;
+            TouchArea { }
+            contents := VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Heading { text: "快捷规则"; font-size: 20px * Theme.text-scale; }
+                Caption { text: root.hint; wrap: word-wrap; }
+                PageScroll {
+                    min-height: 0px; preferred-height: options.preferred-height;
+                    options := VerticalLayout {
+                        alignment: start; spacing: 4px;
+                        for title[index] in root.labels: option-row := Rectangle {
+                            property <bool> focus-requested: root.focus-index == index;
+                            changed focus-requested => { if self.focus-requested { option-switch.focus(); } }
+                            height: max(root.row-height, option-label.preferred-height);
+                            property <bool> interactive: root.opened && root.editable && index < root.available.length && root.available[index];
+                            accessible-role: button;
+                            accessible-label: (root.values[index] ? "关闭" : "开启") + title;
+                            accessible-action-default => { if self.interactive { root.toggled(index, !root.values[index]); } }
+                            TouchArea {
+                                enabled: parent.interactive; mouse-cursor: pointer;
+                                clicked => { root.focus-index = index; root.toggled(index, !root.values[index]); }
+                            }
+                            HorizontalLayout {
+                                cross-axis-alignment: center; spacing: 12px;
+                                option-label := Label { text: title; font-size: Theme.body-size; wrap: word-wrap; }
+                                option-switch := Toggle {
+                                    modal-control: true;
+                                    checked: root.values[index];
+                                    enabled: option-row.interactive;
+                                    toggled(value) => { root.focus-index = index; root.toggled(index, value); }
+                                    GeometryTarget {
+                                        key: "rule-shortcut:" + index;
+                                        bounds: [option-switch.absolute-position.x, option-switch.absolute-position.y, option-switch.width, option-switch.height];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    ActionButton {
+                        property <bool> focus-requested: root.focus-index == root.labels.length;
+                        changed focus-requested => { if self.focus-requested { self.focus(); } }
+                        geometry-key: "rule-shortcuts-close";
+                        modal-control: true; text: "完成"; compact: true;
+                        width: max(64px, Theme.detail-size * 2 + 16px);
+                        height: max(root.row-height, Theme.control-height);
+                        clicked => { root.opened = false; }
+                    }
+                }
+            }
+        }
+        }
+    }
+}

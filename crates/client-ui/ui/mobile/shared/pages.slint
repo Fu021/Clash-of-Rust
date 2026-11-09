@@ -357,19 +357,6 @@ component RulesToolbar inherits VerticalLayout {
         MSelect { enabled: !MobileData.protected && !MobileData.protection-pending; options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
         MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 4; }
     }
-    Flickable {
-        height: 48px; content-height: self.height; content-width: shortcuts.preferred-width;
-        mouse-drag-pan-enabled: true;
-        shortcuts := HorizontalLayout { height: parent.height; width: self.preferred-width; spacing: 6px;
-            for title[index] in MobileData.shortcuts: MButton {
-                text: (MobileData.shortcut-values[index] ? "✓ " : "") + title;
-                width: max(144px, MobileTypography.font-size(14) * 9); horizontal-stretch: 0;
-                selected: MobileData.shortcut-values[index]; quiet: true;
-                enabled: !MobileData.protected && !MobileData.protection-pending && !MobileData.working;
-                clicked => { MobileActions.request(MobileIntent.rule-shortcut, "" + index, MobileData.shortcut-values[index] ? "false" : "true"); }
-            }
-        }
-    }
     GridLayout { spacing: MobileTypography.small-gap;
         property <bool> narrow: root.width < 420px || Theme.text-scale > 1.25;
         MField { enabled: !MobileData.protected && !MobileData.protection-pending; col: 0; row: 0; colspan: parent.narrow ? 2 : 1;

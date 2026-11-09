@@ -915,7 +915,12 @@ fn notice_countdown_restarts_and_expires_after_five_seconds() {
     let (adapter, clock) = headless(300, 80);
     let countdown = CountdownProbe::new().unwrap();
     countdown.show().unwrap();
-    advance(&clock, Duration::from_millis(2500));
+    advance(&clock, Duration::from_millis(30));
+    assert!(
+        (0.98..1.).contains(&countdown.get_remaining()),
+        "the countdown must move before the old 100 ms timer would tick"
+    );
+    advance(&clock, Duration::from_millis(2470));
     assert!((countdown.get_remaining() - 0.5).abs() < 0.03);
     countdown.set_revision(1);
     advance(&clock, Duration::ZERO);

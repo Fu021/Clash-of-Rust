@@ -660,7 +660,6 @@ impl App {
 
     fn present_rules(&self, data: &UiData, models: &ViewModels, query: &str) {
         let state = &self.rule_state;
-        data.set_shortcuts_open(state.expanded);
         data.set_rule_dirty(state.dirty());
         data.set_rule_selected(state.selected.is_some());
         data.set_rule_custom(state.selected_custom().is_some());
@@ -705,34 +704,38 @@ impl App {
                 &[]
             },
         ));
-        if let Some(doc) = &state.document {
-            data.set_rule_policies(strings(data.get_rule_policies(), &doc.policies));
-            data.set_shortcuts(strings(
-                data.get_shortcuts(),
-                rules_view::SHORTCUT_LABELS
-                    .iter()
-                    .enumerate()
-                    .map(|(index, label)| {
-                        if doc.included[index] {
-                            format!("{label} · 订阅已包含")
-                        } else {
-                            (*label).into()
-                        }
-                    }),
-            ));
-            data.set_shortcut_available(model(
-                data.get_shortcut_available(),
-                (0..5)
-                    .map(|index| !doc.builtin && !doc.included[index])
-                    .collect(),
-            ));
-            data.set_shortcut_values(model(
-                data.get_shortcut_values(),
-                (0..5)
-                    .map(|index| doc.included[index] || state.draft.enabled[index])
-                    .collect(),
-            ));
-        }
+        let document = state.document.as_deref();
+        data.set_rule_policies(strings(
+            data.get_rule_policies(),
+            document.map_or(&[][..], |doc| doc.policies.as_slice()),
+        ));
+        data.set_shortcuts(strings(
+            data.get_shortcuts(),
+            rules_view::SHORTCUT_LABELS
+                .iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    if document.is_some_and(|doc| doc.included[index]) {
+                        format!("{label} · 订阅已包含")
+                    } else {
+                        (*label).into()
+                    }
+                }),
+        ));
+        data.set_shortcut_available(model(
+            data.get_shortcut_available(),
+            (0..rules_view::SHORTCUT_LABELS.len())
+                .map(|index| document.is_some_and(|doc| !doc.builtin && !doc.included[index]))
+                .collect(),
+        ));
+        data.set_shortcut_values(model(
+            data.get_shortcut_values(),
+            (0..rules_view::SHORTCUT_LABELS.len())
+                .map(|index| {
+                    document.is_some_and(|doc| doc.included[index] || state.draft.enabled[index])
+                })
+                .collect(),
+        ));
         let rows: Vec<_> = state
             .rows
             .iter()

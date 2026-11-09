@@ -1,4 +1,4 @@
-import { PageSurface, Disclosure } from "../components/motion.slint";
+import { PageSurface } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, RuleItem } from "../state.slint";
 import { RuleDragHandle } from "../components/rule-drag.slint";
@@ -114,27 +114,6 @@ export component RulesPage inherits PageSurface {
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Select { geometry-key: "rule-profile"; enabled: !UiData.protected && !UiData.protection-pending; options: UiData.rule-profile-options; value: UiData.rule-profile; selected(index, value) => { UiActions.dispatch(Intent.rule-profile, UiData.rule-profiles[index].id, ""); } }
                         Badge { text: UiData.rule-dirty ? "尚未应用" : "已载入"; tone: UiData.rule-dirty ? 2 : 1; }
-                    }
-                    ContentPanel {
-                        vertical-padding: Theme.content-gap;
-                        gap: Theme.content-gap * shortcuts.opacity;
-                        HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                            Label { text: "快捷规则"; }
-                            ActionButton { enabled: !UiData.protected && !UiData.protection-pending; text: UiData.shortcuts-open ? "收起" : "展开"; dropdown: true; expanded: UiData.shortcuts-open; clicked => { UiActions.dispatch(Intent.rule-collapse, "", ""); } }
-                        }
-                        shortcuts := Disclosure { expanded: UiData.shortcuts-open;
-                            if shortcuts.mounted: GridLayout {
-                                spacing: Theme.content-gap;
-                                for title[i] in UiData.shortcuts: ActionButton {
-                                    col: mod(i, root.width > 780px ? 3 : 2); row: floor(i / (root.width > 780px ? 3 : 2));
-                                    width: 0px; horizontal-stretch: 1; compact: true;
-                                    text: (UiData.shortcut-values[i] ? "✓ " : "") + title;
-                                    selected: UiData.shortcut-values[i];
-                                    enabled: !UiData.protected && !UiData.protection-pending && UiData.shortcut-available[i] && !UiData.working;
-                                    clicked => { UiActions.dispatch(Intent.rule-toggle, "" + i, UiData.shortcut-values[i] ? "false" : "true"); }
-                                }
-                            }
-                        }
                     }
                     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                         Field { enabled: !UiData.protected && !UiData.protection-pending; placeholder: "搜索规则类型、内容或策略"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }

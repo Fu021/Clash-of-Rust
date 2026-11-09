@@ -6,7 +6,7 @@ import sys
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json, desktop_cargo_scope
 from workflow_artifacts import export_build, test_binaries
-from ci_test_policy import extended_tests
+from ci_test_policy import desktop_ui_tests, extended_tests
 
 
 def main():
@@ -28,6 +28,15 @@ def main():
     clippy_targets = ['--all-targets'] if extended else ['--lib', '--bins']
     run(['cargo', 'clippy', *packages, '--release', *clippy_targets, '--locked', '--', '-D', 'warnings'])
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
+    if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
+        for case in ('resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions',
+                     'shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release',
+                     'appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it'):
+            run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
+                 '--locked', 'application::ui_tests::' + case, '--', '--exact', '--test-threads=1'])
+        run(['cargo', 'test', '-p', 'clash-client-ui', '--test', 'mobile_lists', '--release',
+             '--locked', 'notice_countdown_restarts_and_expires_after_five_seconds',
+             '--', '--exact', '--test-threads=1'])
     test_scope = [*packages, '--lib', '--bins', '--tests'] if extended else [
         '-p', 'clash-of-rust', '--test', 'core_integration']
     messages = cargo_messages(['cargo', 'test', *test_scope, '--release', '--locked',

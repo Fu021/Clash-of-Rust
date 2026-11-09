@@ -2001,6 +2001,15 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         }
         MobileIntent::RuleShortcut => {
             let index: usize = a.parse()?;
+            ensure!(!session.document().builtin, "默认直连配置不支持修改规则");
+            ensure!(
+                !*session
+                    .document()
+                    .included
+                    .get(index)
+                    .context("快捷规则不存在")?,
+                "订阅已包含此规则"
+            );
             *session
                 .draft
                 .enabled
@@ -2400,6 +2409,7 @@ struct Projection {
     rules: Vec<(usize, rule_manager::Row)>,
     policies: Vec<String>,
     shortcuts: [bool; 5],
+    shortcut_available: [bool; 5],
     dirty: bool,
     logs: Vec<(String, String)>,
     details: Vec<(String, String)>,
@@ -2861,7 +2871,12 @@ fn project(state: &State) -> Projection {
             )),
         ),
         policies: document.map(|d| d.policies.clone()).unwrap_or_default(),
-        shortcuts: s.draft.enabled,
+        shortcuts: std::array::from_fn(|index| {
+            document.is_some_and(|doc| doc.included[index] || s.draft.enabled[index])
+        }),
+        shortcut_available: std::array::from_fn(|index| {
+            document.is_some_and(|doc| !doc.builtin && !doc.included[index])
+        }),
         dirty: s.draft != *saved,
         logs: state
             .logs
@@ -3218,6 +3233,10 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         ),
     ));
     data.set_shortcut_values(stable(data.get_shortcut_values(), rows(p.shortcuts.into())));
+    data.set_shortcut_available(stable(
+        data.get_shortcut_available(),
+        rows(p.shortcut_available.into()),
+    ));
     data.set_rule_profiles(stable(
         data.get_rule_profiles(),
         rows(p.profiles.iter().map(|p| p.name.clone().into()).collect()),
@@ -3487,5 +3506,5 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "applications_loaded":android.get_applications_loaded(),
             "applications_total":android.get_applications_total(),
             "applications_visible":android.get_applications().row_count(),
-            "applications_error":android.get_applications_error()})
+            "applications_error":android.get_applications_error().as_str()})
 }

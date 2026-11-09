@@ -116,7 +116,6 @@ export component SettingsPage inherits PageSurface {
                         Divider { }
                         FormRow { title: "强调色";
                             AccentSwatches { selected: UiData.accent; enabled: !UiData.exiting && !UiData.protected && !UiData.protection-pending; chosen(index) => { UiActions.dispatch(Intent.accent-color, "" + index, ""); } }
-                            ActionButton { text: "⋯"; geometry-key: "accent-picker"; width: 32px; quiet: true; compact: true; enabled: !UiData.exiting && !UiData.protected && !UiData.protection-pending; accessible-label: "选择强调色"; clicked => { UiActions.dispatch(Intent.accent-picker, "", ""); } }
                         }
                         Divider { }
                         FormRow { title: "字号";
@@ -155,6 +154,8 @@ export component SettingsPage inherits PageSurface {
                 schedule-section := SettingsSection {
                     title: "计划任务";
                     ListPanel {
+                        FormRow { title: "自动检查更新"; hint: "启动后检查，之后每 6 小时检查；Claude 保护期间暂停。"; }
+                        Divider { }
                         FormRow { title: "订阅自动更新"; hint: "仅远程订阅；0 关闭，默认 360 分钟。失败保留原配置；Claude 保护期间全部暂停。";
                             Field { text <=> UiData.subscription-interval; width: 76px; horizontal-stretch: 0; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.subscription-interval-input, value, ""); } }
                             Caption { text: "分钟"; horizontal-stretch: 0; }

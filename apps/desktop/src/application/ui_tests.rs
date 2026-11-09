@@ -1604,22 +1604,14 @@ fn appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_canno
     let _ = window.window().take_snapshot().unwrap();
     click_target(&window, "settings-section:2");
     let _ = window.window().take_snapshot().unwrap();
-    click_target(&window, "accent-picker");
-    assert_eq!(events.borrow_mut().pop().unwrap().0, Intent::AccentPicker);
-    let _ = app.ui_intent(Intent::AccentPicker, "", "");
-    app.present_slint(&data, &mut models);
-    assert_eq!(data.get_modal(), 12);
-    assert!(data.get_modal_can_accept());
-    let _ = window.window().take_snapshot().unwrap();
-    click_target(&window, "accent:1");
-    let _ = window.window().take_snapshot().unwrap();
-    click_target(&window, "button:完成");
+    click_target(&window, "accent-inline:1");
     let chosen = events
         .borrow_mut()
         .pop()
-        .expect("busy Geo must not disable appearance confirmation");
+        .expect("busy Geo must not disable inline appearance controls");
     assert_eq!(chosen.0, Intent::AccentColor);
     assert_eq!(chosen.1, "1");
+    assert_eq!(data.get_modal(), 0);
     let _ = app.ui_intent(chosen.0, &chosen.1, &chosen.2);
     app.present_slint(&data, &mut models);
     assert_eq!(data.get_accent(), 1);
@@ -1696,6 +1688,43 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
     slint::platform::update_timers_and_animations();
     let _ = window.window().take_snapshot().unwrap();
     assert!((window.global::<Theme>().get_body_size() - before).abs() < 0.01);
+    window.hide().unwrap();
+}
+
+#[test]
+fn shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Rules);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    click_target(&window, "rule-shortcuts-open");
+    let _ = window.window().take_snapshot().unwrap();
+    assert!(window.get_rule_shortcuts_open());
+    click_target(&window, "rule-shortcut:0");
+    let event = events.borrow_mut().pop().unwrap();
+    assert_eq!(event, (Intent::RuleToggle, "0".into(), "true".into()));
+    let _ = app.ui_intent(event.0, &event.1, &event.2);
+    app.present_slint(&data, &mut models);
+    assert!(app.rule_state.draft.enabled[0]);
+    assert!(!app.rule_state.saved.enabled[0]);
+    assert!(data.get_rule_dirty());
+    let _ = window.window().take_snapshot().unwrap();
+    click_target(&window, "rule-shortcuts-close");
+    assert!(!window.get_rule_shortcuts_open());
+    assert!(app.rule_state.dirty());
+    assert!(events.borrow().is_empty());
+    app.rule_state.release_document();
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_shortcuts().row_count(), 5);
+    assert!(data.get_shortcut_available().iter().all(|value| !value));
+    assert!(data.get_shortcut_values().iter().all(|value| !value));
+    assert_eq!(data.get_rule_policies().row_count(), 0);
     window.hide().unwrap();
 }
 
@@ -2940,7 +2969,6 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
         Intent::RuleDiscard,
         Intent::RuleSelect,
         Intent::RuleProfile,
-        Intent::RuleCollapse,
         Intent::Query,
         Intent::ListPage,
     ] {

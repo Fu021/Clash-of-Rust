@@ -33,6 +33,10 @@ def linux_user_tests():
     return extended_tests() or enabled('COR_CI_LINUX_USER_TESTS')
 
 
+def desktop_ui_tests():
+    return extended_tests() or enabled('COR_CI_DESKTOP_UI_TESTS')
+
+
 def select(paths, extended=False):
     android = any(
         path.startswith(('apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting',
@@ -51,8 +55,13 @@ def select(paths, extended=False):
         or path == 'scripts/test-linux-tun.py'
         for path in paths
     )
+    desktop_ui = any(
+        path.startswith(('crates/client-ui/', 'apps/desktop-ui/src/',
+                         'apps/desktop/src/application/'))
+        for path in paths
+    )
     return {'extended_tests': extended, 'android_routing_tests': extended or android,
-            'linux_user_tests': extended or linux}
+            'linux_user_tests': extended or linux, 'desktop_ui_tests': extended or desktop_ui}
 
 
 def changed_paths():
@@ -75,7 +84,7 @@ def main():
     print(json.dumps(plan))
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
-            for key in ('extended_tests', 'android_routing_tests', 'linux_user_tests'):
+            for key in ('extended_tests', 'android_routing_tests', 'linux_user_tests', 'desktop_ui_tests'):
                 stream.write(f'{key}={str(plan[key]).lower()}\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a') as stream:

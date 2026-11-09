@@ -12,6 +12,7 @@ import { NavigationItem } from "components/navigation.slint";
 import { Wordmark, ConnectionPower } from "components/brand.slint";
 import { WindowControl } from "components/window-control.slint";
 import { GeometryTarget } from "components/geometry.slint";
+import { RuleShortcutsDialog } from "components/rule-shortcuts.slint";
 import { ProtectionBadge, ProtectionAlert } from "components/protection-status.slint";
 import { HomePage } from "pages/home.slint";
 import { ProxiesPage } from "pages/proxies.slint";
@@ -63,6 +64,13 @@ export component AppWindow inherits Window {
     property <bool> settings-header-navigation: content-area.width - 48px >= (600px + (UiData.protection-health > 0 ? 160px : 0px)) * Theme.text-scale;
     property <int> settings-active-section;
     property <int> settings-navigation-request: -1;
+    in-out property <bool> rule-shortcuts-open;
+    property <string> rule-profile: UiData.rule-profile;
+    property <string> previous-rule-profile;
+    changed rule-profile => {
+        if root.previous-rule-profile != "" { root.rule-shortcuts-open = false; }
+        root.previous-rule-profile = root.rule-profile;
+    }
     function toggle-window-maximized() {
         if root.full-screen { root.full-screen = false; }
         else { root.maximized = !root.maximized; }
@@ -76,6 +84,9 @@ export component AppWindow inherits Window {
     keys := FocusScope {
         width: parent.width; height: parent.height;
         capture-key-pressed(event) => {
+            if root.rule-shortcuts-open && event.text == Key.Escape {
+                root.rule-shortcuts-open = false; return accept;
+            }
             if root.error-active && event.text == Key.Escape {
                 UiActions.dispatch(Intent.dismiss-notice, "", ""); return accept;
             }
@@ -146,7 +157,6 @@ export component AppWindow inherits Window {
                     Rectangle { horizontal-stretch: 1; }
                     if UiData.page == 2: ActionButton { text: "打开目录"; quiet: true; compact: true; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
                     if UiData.page == 3: ActionButton { text: "关闭全部"; quiet: true; compact: true; danger: true; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-all, "", ""); } }
-                    if UiData.page == 4: ActionButton { text: "+ 新建规则"; primary: true; compact: true; enabled: !UiData.protected && !UiData.protection-pending && UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
                     if UiData.page == 5: ActionButton { text: "导出"; quiet: true; compact: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.export-logs, "", ""); } }
                     if UiData.page == 5: ActionButton { text: "清空"; quiet: true; compact: true; enabled: UiData.ready && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.clear-logs, "", ""); } }
                     if UiData.page == 7: ActionButton { text: UiData.sites-busy ? "取消" : UiData.sites-started ? "重测" : "一键检测"; compact: true; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(UiData.sites-busy ? Intent.site-cancel : Intent.site-all, "", ""); } }
@@ -156,6 +166,12 @@ export component AppWindow inherits Window {
                         health: UiData.protection-health;
                         enabled: UiData.modal == 0 && !UiData.notice-modal;
                         clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
+                    }
+                    if UiData.page == 4: ActionButton {
+                        geometry-key: "rule-shortcuts-open";
+                        text: "快捷规则"; compact: true; quiet: true;
+                        enabled: !UiData.protected && !UiData.protection-pending && !UiData.working;
+                        clicked => { root.rule-shortcuts-open = true; }
                     }
                     Badge { text: UiData.running ? "● 内核运行中" : UiData.ready ? "● 内核未启动" : "● 正在初始化"; tone: UiData.running ? 1 : 4; }
                 }
@@ -288,6 +304,17 @@ export component AppWindow inherits Window {
             }
             WindowControl { action: 2; clicked => { root.close(); } }
         }
+    }
+    RuleShortcutsDialog {
+        x: 0px; y: 44px; width: root.width; height: root.height - self.y;
+        opened <=> root.rule-shortcuts-open;
+        labels: UiData.shortcuts; values: UiData.shortcut-values; available: UiData.shortcut-available;
+        editable: !UiData.working && !UiData.protected && !UiData.protection-pending;
+        blocked: UiData.page != 4 || UiData.modal != 0 || UiData.notice-modal || UiData.protected || UiData.protection-pending;
+        hint: UiData.rule-profile == "选择订阅" ? "请先选择并载入订阅。"
+            : UiData.rule-types.length == 0 ? "默认直连配置不支持修改规则。"
+            : "修改保留为草稿，请在规则页应用。";
+        toggled(index, value) => { UiActions.dispatch(Intent.rule-toggle, "" + index, value ? "true" : "false"); }
     }
     }
 }
