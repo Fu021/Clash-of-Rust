@@ -23,6 +23,8 @@ slint::slint! {
     import { MobileView } from "../ui/mobile/shared/state.slint";
     import { MobileData } from "../ui/mobile/shared/state.slint";
     import { MobileSubscriptions } from "../ui/mobile/shared/pages.slint";
+    import { AndroidSurface } from "../ui/mobile/android/app.slint";
+    import { IosSurface } from "../ui/mobile/ios/app.slint";
     import { PageViews } from "../ui/components/view-toggle.slint";
     import { NoticeCountdown } from "../ui/components/motion.slint";
     export { ProfileItem } from "../ui/state.slint";
@@ -59,7 +61,19 @@ slint::slint! {
         in-out property <bool> list-view <=> PageViews.profiles-list;
         in-out property <string> selected-id <=> MobileView.selected-id;
         in-out property <int> detail <=> MobileView.detail;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> busy <=> MobileData.profile-busy;
         MobileSubscriptions { width: parent.width; height: parent.height; }
+    }
+
+    export component MobileStartupProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in property <bool> use-ios;
+        in-out property <int> page <=> MobileView.page;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <bool> core-running <=> MobileData.core-running;
+        if !root.use-ios: AndroidSurface { width: parent.width; height: parent.height; }
+        if root.use-ios: IosSurface { width: parent.width; height: parent.height; }
     }
 
     export component SettingsScrollProbe inherits Window {
@@ -1043,6 +1057,7 @@ fn settings_navigation_tracks_scroll_and_preserves_drafts() {
                 .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
         });
     let geometry = settings.global::<UiGeometry>();
+    geometry.set_enabled(true);
     geometry.set_revision(geometry.get_revision().wrapping_add(1));
     settings.show().unwrap();
     frame(&adapter, 740, 360);
@@ -1146,6 +1161,41 @@ fn compact_mobile_buttons_keep_their_touch_targets() {
 }
 
 #[test]
+fn mobile_pages_start_cold_without_geometry_observers() {
+    let (adapter, clock) = headless(393, 852);
+    for use_ios in [false, true] {
+        let startup = MobileStartupProbe::new().unwrap();
+        startup.set_use_ios(use_ios);
+        let observations = Rc::new(Cell::new(0));
+        let reported = observations.clone();
+        startup
+            .global::<UiGeometry>()
+            .on_measured(move |_, _| reported.set(reported.get() + 1));
+        assert!(!startup.global::<UiGeometry>().get_enabled());
+        startup.show().unwrap();
+        for (width, height, scale) in [(393, 852, 1.), (320, 640, 2.), (1100, 740, 1.)] {
+            adapter.set_size(slint::PhysicalSize::new(width, height));
+            startup.set_text_scale(scale);
+            for core_running in [false, true] {
+                startup.set_core_running(core_running);
+                for page in 0..=10 {
+                    startup.set_page(page);
+                    advance(&clock, Duration::from_millis(250));
+                    frame(&adapter, width as usize, height as usize);
+                }
+            }
+        }
+        assert_eq!(observations.get(), 0);
+        startup.set_page(0);
+        startup.global::<UiGeometry>().set_enabled(true);
+        advance(&clock, Duration::from_millis(250));
+        frame(&adapter, 1100, 740);
+        assert!(observations.get() > 0);
+        startup.hide().unwrap();
+    }
+}
+
+#[test]
 fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     let (adapter, clock) = headless(740, 1100);
     let profiles = MobileProfilesProbe::new().unwrap();
@@ -1176,6 +1226,7 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
                 .borrow_mut()
                 .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
         });
+    profiles.global::<UiGeometry>().set_enabled(true);
     let events = Rc::new(RefCell::new(Vec::new()));
     let recorded = events.clone();
     profiles
@@ -1184,8 +1235,15 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
             recorded.borrow_mut().push((intent, first, second))
         });
     profiles.show().unwrap();
+    let render = || {
+        targets.borrow_mut().clear();
+        let geometry = profiles.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision() + 1);
+        let size = profiles.window().size();
+        frame(&adapter, size.width as usize, size.height as usize);
+    };
     advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 740, 1100);
+    render();
     let mut renamed = profile_items.row_data(0).unwrap();
     renamed.name = "Renamed imported file".into();
     profile_items.set_row_data(0, renamed);
@@ -1195,7 +1253,7 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
         ..Default::default()
     });
     advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 740, 1100);
+    render();
     {
         let targets = targets.borrow();
         let first = &targets["profile:imported"];
@@ -1207,15 +1265,15 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     let restored = profile_items.iter().collect::<Vec<_>>();
     profile_items.set_vec(Vec::new());
     advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 740, 1100);
+    render();
     profile_items.set_vec(restored);
     advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 740, 1100);
+    render();
     let bounds = |key: &str| targets.borrow()[key].clone();
     for width in [320, 740] {
         adapter.set_size(slint::PhysicalSize::new(width, 1100));
         advance(&clock, Duration::from_secs(1));
-        frame(&adapter, width as usize, 1100);
+        render();
         let first = bounds("profile:imported");
         let second = bounds("profile:builtin");
         assert!(first[0] >= 0. && first[0] + first[2] <= width as f32 + 1.);
@@ -1243,40 +1301,59 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
                 button: PointerEventButton::Left,
             });
         advance(&clock, Duration::from_secs(1));
-        frame(&adapter, 740, 1100);
+        render();
     };
     assert!((bounds("profile:imported")[1] - bounds("profile:builtin")[1]).abs() < 1.);
-    for key in [
-        "profile-use:imported",
-        "profile-update:imported",
-        "profile-update:builtin",
-        "profile-edit:builtin",
-    ] {
-        click(key);
+    for profile in ["imported", "builtin"] {
+        for action in ["update", "edit", "delete"] {
+            assert!(
+                !targets
+                    .borrow()
+                    .contains_key(&format!("profile-{action}:{profile}")),
+                "{action} must stay inside the subscription details"
+            );
+        }
     }
+    click("profile-use:imported");
     assert!(events.borrow().is_empty());
     assert_eq!(profiles.get_detail(), 0);
+    click("profile-detail:imported");
+    click("profile-update:imported");
+    assert!(events.borrow().is_empty());
     click("profile-edit:imported");
     assert_eq!(profiles.get_detail(), 3);
     assert_eq!(profiles.get_selected_id(), "imported");
     profiles.set_detail(0);
     profiles.set_selected_id("".into());
+    click("profile-detail:imported");
     click("profiles-view");
     assert!(profiles.get_list_view());
+    let mut renamed = profile_items.row_data(0).unwrap();
+    renamed.name = "A very long subscription name ".repeat(8).into();
+    profile_items.set_row_data(0, renamed);
     for width in [320, 740] {
         adapter.set_size(slint::PhysicalSize::new(width, 1100));
         advance(&clock, Duration::from_secs(1));
-        frame(&adapter, width as usize, 1100);
+        render();
         let first = bounds("profile:imported");
         let second = bounds("profile:builtin");
         assert!(first[0] >= 0. && first[0] + first[2] <= width as f32 + 1.);
         assert!((first[0] - second[0]).abs() < 1.);
         assert!(second[1] >= first[1] + first[3]);
+        assert!(
+            first[3] < 110.,
+            "{width}px mobile list rows must stay compact: {first:?}"
+        );
+        let use_action = bounds("profile-use:imported");
+        let detail_action = bounds("profile-detail:imported");
+        assert!(detail_action[0] >= use_action[0] + use_action[2]);
+        assert!(detail_action[0] + detail_action[2] <= first[0] + first[2]);
+        assert!(use_action[3] >= 48. && detail_action[3] >= 48.);
     }
     let imported = bounds("profile:imported");
     let builtin = bounds("profile:builtin");
     assert!(
-        imported[3] < 130.,
+        imported[3] < 110.,
         "mobile list rows must stay compact: {imported:?}"
     );
     assert!((imported[0] - builtin[0]).abs() < 1.);
@@ -1284,8 +1361,12 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     click("profile-detail:imported");
     assert!(targets.borrow().contains_key("profile-delete:imported"));
     click("profile-detail:builtin");
+    assert!(!targets.borrow().contains_key("profile-edit:imported"));
+    assert!(!targets.borrow().contains_key("profile-update:imported"));
     assert!(targets.borrow().contains_key("profile-delete:builtin"));
-    click("profile-delete:builtin");
+    for action in ["update", "edit", "delete"] {
+        click(&format!("profile-{action}:builtin"));
+    }
     assert_eq!(profiles.get_detail(), 0);
     assert!(profiles.get_selected_id().is_empty());
     assert!(events.borrow().is_empty());
@@ -1293,5 +1374,39 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     click("profile-delete:imported");
     assert_eq!(profiles.get_detail(), 4);
     assert_eq!(profiles.get_selected_id(), "imported");
+    profiles.set_detail(0);
+    profiles.set_selected_id("".into());
+    click("profile-detail:imported");
+    profile_items.push(ProfileItem {
+        id: "remote".into(),
+        name: "Remote subscription".into(),
+        source: "https://example.com/subscription.yaml".into(),
+        ..Default::default()
+    });
+    advance(&clock, Duration::from_secs(1));
+    render();
+    assert!(!targets.borrow().contains_key("profile-update:remote"));
+    click("profile-detail:remote");
+    click("profile-update:remote");
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(MobileIntent::UpdateProfile, "remote".into(), "".into())]
+    );
+    events.borrow_mut().clear();
+    for protected in [true, false] {
+        profiles.set_protected(protected);
+        profiles.set_busy(!protected);
+        render();
+        for action in ["update", "edit", "delete"] {
+            click(&format!("profile-{action}:remote"));
+        }
+        assert!(events.borrow().is_empty());
+        assert_eq!(profiles.get_detail(), 0);
+        assert!(profiles.get_selected_id().is_empty());
+    }
+    profiles.set_busy(false);
+    click("profile-edit:remote");
+    assert_eq!(profiles.get_detail(), 3);
+    assert_eq!(profiles.get_selected_id(), "remote");
     profiles.hide().unwrap();
 }

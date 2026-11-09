@@ -1,4 +1,5 @@
 export global UiGeometry {
+    in-out property <bool> enabled: false;
     in-out property <int> revision: 0;
     callback measured(string, [length]);
 }
@@ -6,9 +7,10 @@ export global UiGeometry {
 export component GeometryTarget {
     in property <string> key;
     in property <[length]> bounds;
+    property <[length]> observed-bounds: UiGeometry.enabled && root.key != "" ? root.bounds : [];
     property <int> revision: UiGeometry.revision;
-    changed revision => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
-    changed bounds => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
-    changed key => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
-    init => { if root.key != "" { UiGeometry.measured(root.key, root.bounds); } }
+    changed revision => { if root.observed-bounds.length == 4 { UiGeometry.measured(root.key, root.observed-bounds); } }
+    changed observed-bounds => { if root.observed-bounds.length == 4 { UiGeometry.measured(root.key, root.observed-bounds); } }
+    changed key => { if root.observed-bounds.length == 4 { UiGeometry.measured(root.key, root.observed-bounds); } }
+    init => { if root.observed-bounds.length == 4 { UiGeometry.measured(root.key, root.observed-bounds); } }
 }

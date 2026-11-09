@@ -249,17 +249,12 @@ export component MobileSubscriptions inherits PageSurface {
                 MSmall { text: profile.source; font-size: MobileTypography.font-size(12); }
                 MSmall { text: profile.detail; wrap: word-wrap; font-size: MobileTypography.font-size(12); }
             }
-            actions := GridLayout {
-                property <int> columns: (root.width - MobileTypography.gap * (profile-grid.columns - 1)) / profile-grid.columns - 32px < 272px * Theme.text-scale ? 2 : 4;
+            HorizontalLayout {
                 spacing: MobileTypography.small-gap;
-                MButton { col: 0; row: 0; geometry-key: "profile-use:" + profile.id; text: profile.active ? "使用中" : "使用"; compact: true; primary: !profile.active; selected: profile.active; opacity: profile.active || self.enabled ? 1 : 0.5; enabled: !profile.active && card.mutable;
+                MButton { geometry-key: "profile-use:" + profile.id; text: profile.active ? "使用中" : "使用"; compact: true; primary: !profile.active; selected: profile.active; opacity: profile.active || self.enabled ? 1 : 0.5; enabled: !profile.active && card.mutable;
                     clicked => { MobileActions.request(MobileIntent.activate-profile, profile.id, ""); }
                 }
-                MButton { col: 1; row: 0; geometry-key: "profile-update:" + profile.id; text: "更新"; compact: true; quiet: true; enabled: !profile.local && !profile.builtin && card.mutable;
-                    clicked => { MobileActions.request(MobileIntent.update-profile, profile.id, ""); }
-                }
-                MButton { col: mod(2, actions.columns); row: floor(2 / actions.columns); geometry-key: "profile-edit:" + profile.id; text: "编辑"; compact: true; quiet: true; enabled: !profile.builtin && card.mutable; clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; } }
-                MButton { col: mod(3, actions.columns); row: floor(3 / actions.columns); geometry-key: "profile-detail:" + profile.id; text: card.detailed ? "收起" : "详情"; compact: true; quiet: true;
+                MButton { geometry-key: "profile-detail:" + profile.id; text: card.detailed ? "收起" : "详情"; compact: true; quiet: true;
                     clicked => { root.expanded-id = card.detailed ? "" : profile.id; }
                 }
             }
@@ -268,6 +263,12 @@ export component MobileSubscriptions inherits PageSurface {
                 MSmall { text: profile.detail; wrap: word-wrap; }
                 MSmall { text: "来源：" + profile.source; wrap: word-wrap; }
                 HorizontalLayout { spacing: MobileTypography.small-gap;
+                    MButton { geometry-key: "profile-update:" + profile.id; text: "更新"; compact: true; quiet: true; enabled: !profile.local && !profile.builtin && card.mutable;
+                        clicked => { MobileActions.request(MobileIntent.update-profile, profile.id, ""); }
+                    }
+                    MButton { geometry-key: "profile-edit:" + profile.id; text: "编辑"; compact: true; quiet: true; enabled: !profile.builtin && card.mutable;
+                        clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-source = profile.source; MobileView.detail = 3; }
+                    }
                     MButton { geometry-key: "profile-delete:" + profile.id; text: "删除"; compact: true; danger: !profile.builtin; enabled: !profile.builtin && card.mutable;
                         clicked => { MobileView.selected-id = profile.id; MobileView.profile-name = profile.name; MobileView.profile-active = profile.active; MobileView.detail = 4; } }
                 }

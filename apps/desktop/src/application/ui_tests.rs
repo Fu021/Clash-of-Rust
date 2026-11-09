@@ -900,7 +900,11 @@ fn resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions() {
         surface.set_size(slint::PhysicalSize::new(width, height));
         motion_frame(&window, 0);
         let expected_sidebar = if width < 880 { 60. } else { 216. };
-        assert!((target_bounds("content")[0] - expected_sidebar).abs() < 1.);
+        let content = target_bounds("content");
+        assert!(
+            (content[0] - expected_sidebar - 24.).abs() < 1.,
+            "{width}x{height}: content must retain its page padding after sidebar reflow: {content:?}"
+        );
         let initial_bounds: Vec<_> = (0..5)
             .map(|index| target_bounds(&format!("node:node-{index}")))
             .collect();
@@ -1356,6 +1360,7 @@ thread_local! {
 
 fn track_targets(window: &AppWindow) {
     TARGETS.with(|targets| targets.borrow_mut().clear());
+    window.global::<UiGeometry>().set_enabled(true);
     window.global::<UiGeometry>().on_measured(|key, bounds| {
         let bounds: Vec<f32> = bounds.iter().collect();
         if let [horizontal, vertical, width, height] = bounds.as_slice()
