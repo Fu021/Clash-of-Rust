@@ -103,6 +103,10 @@ slint::slint! {
         in-out property <string> notice <=> MobileView.notice;
         in-out property <bool> notice-error <=> MobileView.notice-error;
         in-out property <bool> notice-critical <=> MobileView.notice-critical;
+        in-out property <bool> recover-network <=> MobileView.notice-recover-network;
+        in-out property <bool> vpn-connected <=> MobileData.vpn-connected;
+        in-out property <bool> core-running <=> MobileData.core-running;
+        out property <[length]> close-target <=> surface.notice-close-target;
         in-out property <int> detail <=> MobileView.detail;
         in-out property <string> draft <=> MobileView.profile-name;
         public function notify(message: string) { MobileView.notify(message); }
@@ -905,6 +909,23 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
         notice.set_notice_critical(critical);
         notice.set_notice("A recoverable or critical error".into());
         frame(&adapter, 393, 852);
+        for recovery in [true, false, true] {
+            notice.set_recover_network(recovery);
+            notice.set_vpn_connected(recovery);
+            notice.set_core_running(recovery);
+            for width in [320, 740, 393] {
+                adapter.set_size(slint::PhysicalSize::new(width, 852));
+                advance(&clock, Duration::from_millis(250));
+                frame(&adapter, width as usize, 852);
+                let close = notice.get_close_target();
+                assert_eq!(close.row_count(), 4);
+                let coordinates = close.iter().collect::<Vec<f32>>();
+                assert!(coordinates[2] > 0. && coordinates[3] >= 48.);
+                assert!(coordinates[0] >= 0. && coordinates[1] >= 0.);
+                assert!(coordinates[0] + coordinates[2] <= width as f32 + 1.);
+                assert!(coordinates[1] + coordinates[3] <= 853.);
+            }
+        }
         advance(&clock, Duration::from_secs(6));
         assert!(!notice.get_notice().is_empty());
         let pressed = notice

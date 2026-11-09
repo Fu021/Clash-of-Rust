@@ -6,6 +6,8 @@
 | [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 候选包；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 
+普通 CI 共 14 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu 兼容 3、缓存预算 1。Publish Release 的 `check_only` 仅执行来源解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布则执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不执行完整 CI 矩阵，不能作为发布来源。
+
 桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。自 0.6.6 起 Ubuntu 构建基线为 20.04，安装验证覆盖 20.04、22.04 和最新版，架构与旧内核边界见[打包验证](workflows/release.md#publish-release)。iOS 仅有宿主占位与 UI 原型，不参与构建。
 
 新工作流和 `.github/` 变更按[贡献要求](../.github/CONTRIBUTING.md)审核；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。

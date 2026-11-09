@@ -424,12 +424,19 @@ export component MNotice inherits Rectangle {
                 }
             }
         }
-        if root.error: GridLayout { spacing: MobileTypography.small-gap;
+        if root.error: actions := Rectangle {
+            property <length> gap: MobileTypography.small-gap;
+            property <length> row-height: max(48px, MobileTypography.font-size(13) * 1.5 + 16px);
+            property <length> button-width: max(0px, (self.width - (root.action-columns - 1) * self.gap) / root.action-columns);
+            height: ceil(root.action-count / root.action-columns) * (self.row-height + self.gap) - self.gap;
+            vertical-stretch: 0;
             for index in root.action-count: MButton {
                 property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                 changed target => { if index == root.action-count - 1 { root.close-target = self.target; } }
                 init => { if index == root.action-count - 1 { root.close-target = self.target; } }
-                col: mod(index, root.action-columns); row: floor(index / root.action-columns);
+                x: mod(index, root.action-columns) * (actions.button-width + actions.gap);
+                y: floor(index / root.action-columns) * (actions.row-height + actions.gap);
+                width: actions.button-width; height: actions.row-height;
                 modal-control: true; notice-control: true; quiet: true; compact: true;
                 text: index == root.action-count - 1 ? "关闭" : index == 0 ? "导出诊断" : index == 1 ? "新建 Issue" : root.can-restart ? "重启内核" : "关闭代理";
                 enabled: index != 2 || !root.has-recovery || !MobileData.working;

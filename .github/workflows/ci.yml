@@ -12,6 +12,7 @@ on:
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
   BUILD_INPUTS_DIR: dependency-snapshot
+  RUST_BACKTRACE: '1'
 permissions:
   contents: read
 concurrency:

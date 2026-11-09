@@ -260,7 +260,7 @@ def container(command):
                  '--env', 'GITHUB_ACTIONS=true', '--env', 'PYTHONDONTWRITEBYTECODE=1',
                  '--env', 'COR_LINUX_BASELINE='+BASELINE]
     for key in ('BUILD_INPUTS_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY',
-                'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'):
+                'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'RUST_BACKTRACE'):
         if key in os.environ:
             # Runner summary files live outside the source mount.
             if key in ('GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY'):
