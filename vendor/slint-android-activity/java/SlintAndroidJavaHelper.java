@@ -679,6 +679,10 @@ public class SlintAndroidJavaHelper {
         return mActivity.getResources().getConfiguration().fontScale;
     }
 
+    public float display_density() {
+        return mActivity.getResources().getDisplayMetrics().density;
+    }
+
     public int accent_color() {
         TypedValue typedValue = new TypedValue();
         if (mActivity.getTheme().resolveAttribute(android.R.attr.colorAccent, typedValue, true)) {

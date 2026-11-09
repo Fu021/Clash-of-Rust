@@ -3199,7 +3199,7 @@ runpy.run_path(str(script), run_name='__main__')
                 'applications_loaded': True, 'applications_loading': False,
                 'applications_error': '', 'applications_total': 15, 'applications_visible': 7,
                 'applications_system': False, 'applications_mode': 0,
-                'nodes_list': False, 'profiles_list': False}
+                'nodes_list': False, 'profiles_list': False, 'scale': 1.0}
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             cases = []
@@ -3237,6 +3237,16 @@ runpy.run_path(str(script), run_name='__main__')
                 (directory / 'manifest.json').write_text(json.dumps(manifest))
             write()
             android_build.validate_application_preview(directory, 31)
+            tablet = next(case for case in cases if case['name'] == 'tablet-portrait-home')
+            for scale in (None, 0, -1, 2.75, True, float('nan'), float('inf')):
+                with self.subTest(scale=scale):
+                    original = tablet['state']
+                    tablet['state'] = original | {'scale': scale}
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'display scale'):
+                        android_build.validate_application_preview(directory, 31)
+                    tablet['state'] = original
+            write()
             application = next(case for case in cases if case['name'] == 'phone-applications-default')
             for changes in ({'detail': 9}, {'live': False}, {'applications_loading': True},
                             {'applications_loaded': False}, {'applications_error': 'access denied'},

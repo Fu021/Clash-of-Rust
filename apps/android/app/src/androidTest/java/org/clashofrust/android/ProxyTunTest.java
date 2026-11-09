@@ -290,9 +290,13 @@ public class ProxyTunTest {
         assertTrue("Android rejected touch input",tryTapTarget(name));
     }
     private static void dismissErrorDialogIfPresent() throws Exception {
+        dismissErrorDialogIfPresent(true);
+    }
+    private static void dismissErrorDialogIfPresent(boolean imeEvidence) throws Exception {
         JSONObject ui=MainActivity.diagnostics();
         if (!ui.optBoolean("notice_active") || !ui.optBoolean("notice_error")) return;
-        captureIme("background-error");
+        if (imeEvidence) captureIme("background-error");
+        else assertFalse("Screenshot encountered a blocking error: "+ui,ui.optBoolean("notice_modal"));
         await("The error dialog close button has no layout",()-> {
             JSONArray target=MainActivity.diagnostics().optJSONArray("notice_close_target");
             return target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
@@ -1027,6 +1031,7 @@ public class ProxyTunTest {
         return targets == null ? null : targets.optJSONArray(name);
     }
     private static boolean tryPreviewTarget(String name) throws Exception {
+        dismissErrorDialogIfPresent(false);
         JSONObject ui = MainActivity.diagnostics();
         JSONArray bounds = previewBounds(ui, name);
         if (!ui.optBoolean("live") || bounds == null || bounds.length() != 4
@@ -1042,6 +1047,7 @@ public class ProxyTunTest {
         await("Screenshot control was unavailable: " + name, () -> tryPreviewTarget(name));
     }
     private static void previewSwipe(boolean forward) throws Exception {
+        dismissErrorDialogIfPresent(false);
         JSONObject ui = MainActivity.diagnostics();
         JSONArray bounds = previewBounds(ui, "preview-content");
         assertNotNull("Screenshot content has no measured bounds", bounds);
@@ -1238,8 +1244,7 @@ public class ProxyTunTest {
             waitForAppWindow();
             if (MainActivity.diagnostics().optBoolean("notice_error")) {
                 capturePreview(directory, cases, "startup-error");
-                tapTarget("notice_close_target");
-                await("Startup error did not close", () -> !MainActivity.diagnostics().optBoolean("notice_active"));
+                dismissErrorDialogIfPresent(false);
             }
             previewApplications(context, directory, cases, "phone", true);
             previewPrimaryPages(directory, cases, "phone");
@@ -1276,7 +1281,8 @@ public class ProxyTunTest {
             shell("wm density 160");
             await("Tablet portrait viewport was not applied", () -> {
                 JSONObject ui = MainActivity.diagnostics();
-                return ui.optDouble("width") >= 760 && ui.optDouble("height") > ui.optDouble("width");
+                return Math.abs(ui.optDouble("scale") - 1.0) < 0.001
+                    && ui.optDouble("width") >= 760 && ui.optDouble("height") > ui.optDouble("width");
             });
             previewPrimaryPages(directory, cases, "tablet-portrait");
             previewSettings(directory, cases, "tablet-portrait");
@@ -1284,7 +1290,8 @@ public class ProxyTunTest {
             assertTrue("Window manager rejected tablet rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
             await("Tablet landscape viewport was not applied", () -> {
                 JSONObject ui = MainActivity.diagnostics();
-                return ui.optDouble("width") >= 1024 && ui.optDouble("width") > ui.optDouble("height");
+                return Math.abs(ui.optDouble("scale") - 1.0) < 0.001
+                    && ui.optDouble("width") >= 1024 && ui.optDouble("width") > ui.optDouble("height");
             });
             previewPrimaryPages(directory, cases, "tablet-landscape");
             previewSettings(directory, cases, "tablet-landscape");

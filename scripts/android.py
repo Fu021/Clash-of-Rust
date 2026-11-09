@@ -3,6 +3,7 @@ import argparse
 from collections import deque
 import io
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -876,6 +877,10 @@ def validate_application_preview(directory, api):
                 or state.get('vpn') is not False or state.get('vpn_pending') is not False:
             raise ValueError('Android preview did not capture the live UI without VPN: ' + name)
         width, height = state.get('width'), state.get('height')
+        scale = state.get('scale')
+        if (type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0
+                or (name.startswith('tablet-') and abs(scale - 1.0) >= .001)):
+            raise ValueError('Android preview did not use the intended display scale: ' + name)
         if type(width) not in (int, float) or type(height) not in (int, float) or width <= 0 or height <= 0:
             raise ValueError('Android preview has invalid logical dimensions: ' + name)
         if ((name.startswith(('phone-', 'tablet-portrait-')) and width >= height)

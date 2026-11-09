@@ -59,7 +59,7 @@ Actions 已覆盖基础安装、系统代理和 TUN；同提交的打包结果�
 
 更新路径中的下载取消与重试、校验失败不安装、安装失败恢复旧版及升级后保留订阅和个人设置，只有在同提交自动化覆盖时才按结果声明；未覆盖的设备组合不在每次发布后重复全量手工验收，按具体 issue 跟踪。
 
-Windows 更新需要完成 UAC，Linux 需要 `pkexec` 与桌面授权服务；DEB 推荐安装 `pkexec` 或旧系统中的 `policykit-1`。macOS 数据保存在用户 Application Support，系统代理与 TUN 共用 launchd 网络助手，GUI 以普通用户运行；已有助手可供后台自启复用，退出恢复不应重新索取授权。首次下载后的 Gatekeeper 提示按 [Apple 说明](https://support.apple.com/zh-cn/102445)处理。
+Windows 更新需要完成 UAC；Linux GUI 使用 `pkexec` 与桌面授权服务，纯终端更新使用前台 `sudo` 授权并等待安装结果，授权拒绝不停止后台，安装失败尝试恢复原运行状态。DEB 推荐安装 `pkexec` 或旧系统中的 `policykit-1`。macOS 数据保存在用户 Application Support，系统代理与 TUN 共用 launchd 网络助手，GUI 以普通用户运行；已有助手可供后台自启复用，退出恢复不应重新索取授权。首次下载后的 Gatekeeper 提示按 [Apple 说明](https://support.apple.com/zh-cn/102445)处理。
 
 Windows 安装完成页调用原生普通用户启动入口，优先使用当前桌面身份，无桌面时只接受当前账户的非提权关联身份；不能取得时不启动管理员 GUI。下载、安装助手和用户设置使用该用户环境，只有安装程序与网络服务取得系统权限；更新后显式保留原数据目录。普通用户窗口、可写下载/配置及写入失败回滚归扩展安装测试。Linux 的 DEB 写入由 `dpkg`/`pkexec` 完成，macOS 按应用目录权限选择原子替换或授权，Android 使用私有缓存及只读 URI 授权交给系统安装器；不能把它们概括为需要给应用目录开放普通用户写权限。
 

@@ -17,6 +17,16 @@ The pinned Skia swap-buffer error `[300d]` suspends the invalid surface and wait
 for `InitWindow`; unrelated rendering errors still propagate. Foreground input
 and rotation tests must prove recovery, not just that the process survived.
 
+Display density is read from the current Activity's `Resources` at window
+creation, configuration changes and resizes, with NDK configuration as a
+fallback for unavailable or invalid Activity metrics. Preview run `42685691467`
+observed the native window resize to 800×1280 while Slint retained a scale of
+2.75 on Android 8.0 and 9–16; this prevented the expected tablet layout. Density,
+logical size and safe-area conversion must update together. This local repair
+still requires same-commit Actions validation. Android documents that the
+Activity's resources reflect the new configuration when its callback runs:
+https://developer.android.com/reference/android/app/NativeActivity#onConfigurationChanged(android.content.res.Configuration)
+
 The Java helper also carries local IME compatibility changes:
 
 - Remove the application `WindowInsetsAnimation.Callback`; API 31/32 screenshot
@@ -48,5 +58,5 @@ pending; historical multi-version results do not prove all-device compatibility.
 The upstream crate license files remain authoritative.
 
 Remove this override after updating Slint to a release containing equivalent
-window and IME fixes and verifying Activity recreation, VPN continuity and
+window, density and IME fixes and verifying Activity recreation, VPN continuity and
 multi-version keyboard behavior.

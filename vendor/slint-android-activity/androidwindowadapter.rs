@@ -216,8 +216,7 @@ impl AndroidWindowAdapter {
                 if let Some(w) = self.app.native_window() {
                     let size = PhysicalSize { width: w.width() as u32, height: w.height() as u32 };
 
-                    let scale_factor =
-                        self.app.config().density().map(|dpi| dpi as f32 / 160.0).unwrap_or(1.0);
+                    let scale_factor = self.display_scale();
 
                     if (scale_factor - self.window.scale_factor()).abs() > f32::EPSILON {
                         self.window.dispatch_event_with_result(
@@ -272,22 +271,8 @@ impl AndroidWindowAdapter {
                 self.pending_redraw.set(false);
             }
             PollEvent::Main(MainEvent::ConfigChanged { .. }) => {
-                let scale_factor =
-                    self.app.config().density().map(|dpi| dpi as f32 / 160.0).unwrap_or(1.0);
-
-                if (scale_factor - self.window.scale_factor()).abs() > f32::EPSILON {
-                    self.window.dispatch_event_with_result(WindowEvent::ScaleFactorChanged {
-                        scale_factor,
-                    })?;
-                    self.window.dispatch_event_with_result(WindowEvent::Resized {
-                        size: self.size().to_logical(scale_factor),
-                    })?;
-                    WindowInner::from_pub(&self.window).set_window_item_safe_area(
-                        self.internal(i_slint_core::InternalToken)
-                            .map(|internal| internal.safe_area_inset().to_logical(scale_factor))
-                            .unwrap_or_default(),
-                    );
-                }
+                self.resize()?;
+                self.request_redraw();
             }
             PollEvent::Main(MainEvent::Destroy) => {
                 return Ok(ControlFlow::Break(()));
@@ -517,11 +502,26 @@ impl AndroidWindowAdapter {
         }
     }
 
+    fn display_scale(&self) -> f32 {
+        self.java_helper
+            .display_density()
+            .ok()
+            .filter(|density| density.is_finite() && *density > 0.0)
+            .unwrap_or_else(|| {
+                self.app.config().density().map(|dpi| dpi as f32 / 160.0).unwrap_or(1.0)
+            })
+    }
+
     fn resize(&self) -> Result<(), PlatformError> {
         let Some(win) = self.app.native_window() else { return Ok(()) };
         let size = PhysicalSize { width: win.width() as u32, height: win.height() as u32 };
 
-        let scale_factor = self.window.scale_factor();
+        let scale_factor = self.display_scale();
+        if (scale_factor - self.window.scale_factor()).abs() > f32::EPSILON {
+            self.window.dispatch_event_with_result(WindowEvent::ScaleFactorChanged {
+                scale_factor,
+            })?;
+        }
         self.window.dispatch_event_with_result(WindowEvent::Resized {
             size: size.to_logical(scale_factor),
         })?;

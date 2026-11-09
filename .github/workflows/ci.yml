@@ -667,7 +667,7 @@ jobs:
           retention-days: 3
       - name: Preserve Linux package diagnostics
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always() && runner.os == 'Linux'
+        if: always() && runner.os == 'Linux' && hashFiles('target/linux-report/**') != ''
         with:
           name: linux-package-report-${{ matrix.arch }}
           path: target/linux-report
@@ -740,7 +740,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/test-release-package.py --linux-compat
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
+        if: always() && hashFiles('target/linux-report/**') != ''
         with:
           name: linux-package-report-latest
           path: target/linux-report
@@ -847,7 +847,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/linux_ci.py vm --package-run-id '${{ github.run_id }}'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
+        if: always() && hashFiles('target/linux-report/**') != ''
         with:
           name: linux-package-report-ubuntu20-${{ matrix.arch }}
           path: target/linux-report
