@@ -10,6 +10,7 @@
 | 使用 `cor` 命令行 | [CLI 入口](cli.md)，按需查[运行与诊断](cli/runtime.md)、[订阅与规则](cli/profiles-and-rules.md)、[维护与更新](cli/maintenance.md) |
 | 确认 Linux 用户、sudo、root 与 TUN 归属 | [Linux 用户与授权](cli/linux-users.md) |
 | 导入或更新订阅、了解自动更新与失败保留 | [订阅说明](subscriptions.md) |
+| 选择哪些 Android 应用进入 VPN | [Android 应用分流](android-application-routing.md) |
 | 使用 Claude 保护、了解接管与恢复 | [保护说明](claude-protection.md) |
 | 理解 A÷检测的项目、结果和边界 | [地区检测](claude-region-detection.md) |
 | 遇到错误，导出诊断或新建 Issue | [故障反馈与诊断报告](cli/runtime.md#故障反馈与诊断报告)；GUI 入口及错误分级见[通知与故障反馈](../crates/client-ui/README.md#通知与故障反馈) |

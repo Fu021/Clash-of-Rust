@@ -13,7 +13,7 @@ use std::{
 };
 
 slint::slint! {
-    import { ListView, ListHeader, MField, MDragHandle } from "../ui/mobile/shared/controls.slint";
+    import { ListView, ListHeader, MField, MDragHandle, MButton } from "../ui/mobile/shared/controls.slint";
     import { Field, PageScroll } from "../ui/components/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
@@ -30,6 +30,19 @@ slint::slint! {
     import { UiData, ProfileItem } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
     export { UiGeometry } from "../ui/components/geometry.slint";
+
+    export component CompactButtonProbe inherits Window {
+        preferred-width: 200px; preferred-height: 100px;
+        background: #010203;
+        in-out property <bool> enabled: true;
+        out property <int> clicks;
+        out property <length> target-height: action.height;
+        action := MButton {
+            x: 20px; y: 20px; width: 80px; text: "使用中";
+            compact: true; primary: true; enabled: root.enabled;
+            clicked => { root.clicks += 1; }
+        }
+    }
 
     export component CountdownProbe inherits Window {
         preferred-width: 300px; preferred-height: 80px;
@@ -1038,6 +1051,32 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(settings.get_draft(), "7897");
     settings.hide().unwrap();
     drop(settings);
+
+    adapter.set_size(slint::PhysicalSize::new(200, 100));
+    let compact = CompactButtonProbe::new().unwrap();
+    compact.show().unwrap();
+    let pixels = frame(&adapter, 200, 100);
+    assert!(compact.get_target_height() >= 48.);
+    assert_eq!(pixels[21 * 200 + 60], slint::Rgb8Pixel::new(1, 2, 3));
+    assert_ne!(pixels[26 * 200 + 60], slint::Rgb8Pixel::new(1, 2, 3));
+    for enabled in [true, false] {
+        compact.set_enabled(enabled);
+        for event in [
+            WindowEvent::PointerPressed {
+                position: LogicalPosition::new(60., 21.),
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position: LogicalPosition::new(60., 21.),
+                button: PointerEventButton::Left,
+            },
+        ] {
+            compact.window().dispatch_event(event);
+        }
+        assert_eq!(compact.get_clicks(), 1);
+    }
+    compact.hide().unwrap();
+    drop(compact);
 
     adapter.set_size(slint::PhysicalSize::new(740, 1100));
     let profiles = MobileProfilesProbe::new().unwrap();

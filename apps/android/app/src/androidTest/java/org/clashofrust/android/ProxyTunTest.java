@@ -971,6 +971,89 @@ public class ProxyTunTest {
         assertNotNull("An HTTP error must fail without a readiness retry",rejected);
         assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx")));
     }
+    @Test public void applicationRoutingPersistsAndKeepsOtherAppsOnline() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("Native core did not restore for application routing", CoreBridge::ready);
+        assertNull("Application routing requires the consent granted by the preceding VPN test", VpnService.prepare(context));
+        android.content.SharedPreferences preferences = context.getSharedPreferences("vpn", Context.MODE_PRIVATE);
+        ApplicationRouting original = ApplicationRouting.load(preferences);
+        android.content.SharedPreferences migration = context.getSharedPreferences("routing-regression", Context.MODE_PRIVATE);
+        String self = context.getPackageName();
+        String other = "com.android.shell";
+        context.getPackageManager().getApplicationInfo(other, 0);
+        try {
+            assertTrue(migration.edit().clear().commit());
+            assertEquals(ApplicationRouting.ALL, ApplicationRouting.load(migration).mode);
+            assertTrue(migration.edit().putStringSet("excluded", java.util.Collections.singleton(self)).commit());
+            ApplicationRouting legacy = ApplicationRouting.load(migration);
+            assertEquals(ApplicationRouting.EXCLUDE, legacy.mode);
+            assertEquals(java.util.Collections.singleton(self), legacy.packages);
+            legacy.persist(migration);
+            assertEquals(ApplicationRouting.EXCLUDE, ApplicationRouting.load(migration).mode);
+            assertEquals(java.util.Collections.singleton(self), ApplicationRouting.load(migration).packages);
+            ApplicationRouting protectedRouting = ApplicationRouting.effective(legacy, true);
+            assertEquals(ApplicationRouting.ALL, protectedRouting.mode);
+            assertTrue(protectedRouting.packages.isEmpty());
+            assertEquals(java.util.Collections.singleton(self), legacy.packages);
+            try {
+                new ApplicationRouting(ApplicationRouting.ONLY, java.util.Collections.emptySet()).save(context);
+                fail("An empty allowlist must never capture every application");
+            } catch (IllegalArgumentException expected) {
+                assertEquals("请至少选择一个应用", expected.getMessage());
+            }
+            String raw = CoreBridge.config();
+            String controller = value(raw, "external-controller");
+            String secret = value(raw, "secret");
+            ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+            String[] modes = {ApplicationRouting.ALL, ApplicationRouting.ONLY, ApplicationRouting.ONLY,
+                ApplicationRouting.EXCLUDE, ApplicationRouting.EXCLUDE};
+            String[] packages = {self, self, other, self, other};
+            boolean[] captured = {true, true, false, false, true};
+            for (int index = 0; index < modes.length; index++) {
+                String mode = modes[index];
+                java.util.Set<String> selected = new java.util.HashSet<>(java.util.Collections.singleton(packages[index]));
+                selected.add("org.clashofrust.uninstalled.regression");
+                new ApplicationRouting(mode, selected).save(context);
+                assertEquals(mode, ApplicationRouting.load(context).mode);
+                boolean throughVpn = captured[index];
+                TunnelService.start(context, false);
+                await("Application routing did not establish VPN for " + mode, () -> {
+                    if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                    return TunnelService.connected();
+                });
+                await("The application's selected route did not match " + mode,
+                    () -> vpnActive(connectivity) == throughVpn);
+                if (throughVpn) tunCarriesSocket(controller, secret);
+                else {
+                    assertEquals("An app outside the VPN must retain direct access", "cor-android-network-ok",
+                        read(new URL("http://10.0.2.2:18081/probe"), java.net.Proxy.NO_PROXY, null));
+                    noTunRoute();
+                }
+                ApplicationRouting cleaned = ApplicationRouting.load(context);
+                if (!ApplicationRouting.ALL.equals(mode))
+                    assertFalse("Uninstalled applications must be pruned", cleaned.packages.contains("org.clashofrust.uninstalled.regression"));
+                new ApplicationRouting(ApplicationRouting.ALL, java.util.Collections.emptySet()).save(context);
+                assertEquals("Saving preferences must not change the live VPN", throughVpn, vpnActive(connectivity));
+                TunnelService.stop(context);
+                await("Application routing left VPN connected", () -> !TunnelService.connected());
+                awaitDirectRecovery(connectivity);
+            }
+            new ApplicationRouting(ApplicationRouting.ONLY,
+                java.util.Collections.singleton("org.clashofrust.uninstalled.regression")).save(context);
+            TunnelService.start(context, false);
+            await("An entirely uninstalled allowlist was not rejected", () -> !TunnelService.error().isEmpty());
+            assertFalse(TunnelService.connected());
+            assertTrue(ApplicationRouting.load(context).packages.isEmpty());
+            assertFalse("A rejected allowlist must not capture all apps", vpnActive(connectivity));
+        } finally {
+            TunnelService.stop(context);
+            await("Application routing cleanup did not stop VPN", () -> !TunnelService.connected() && !TunnelService.pending());
+            original.persist(preferences);
+            assertTrue(migration.edit().clear().commit());
+        }
+    }
+
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));

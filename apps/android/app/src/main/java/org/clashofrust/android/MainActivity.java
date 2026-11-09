@@ -122,7 +122,7 @@ public final class MainActivity extends NativeActivity {
                     .put("font_sizes",systemFontSizes())
                     .put("dark", Appearance.systemDark(this))
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
-                    .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
+                    .put("application_scope",ApplicationRouting.load(this).summary()).toString();
                 case "network-info": {
                     NetworkOverview current = networkOverview;
                     if (current == null) throw new IOException("系统网络信息尚未就绪");
@@ -390,29 +390,7 @@ public final class MainActivity extends NativeActivity {
                 emit("notice", "请先关闭 Claude 保护，再修改应用分流"); return;
             }
         } catch (Exception error) { emit("error", error.toString()); return; }
-        if (TunnelService.connected()) {
-            new AlertDialog.Builder(this).setMessage("请先断开 VPN，再修改应用分流。")
-                .setPositiveButton("知道了", null).show(); return;
-        }
-        List<android.content.pm.ResolveInfo> apps = getPackageManager().queryIntentActivities(
-            new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
-        apps.sort(Comparator.comparing(item -> item.loadLabel(getPackageManager()).toString()));
-        Set<String> exclusions = new HashSet<>(getSharedPreferences("vpn", MODE_PRIVATE)
-            .getStringSet("excluded", Collections.emptySet()));
-        String[] labels = new String[apps.size()];
-        boolean[] checked = new boolean[apps.size()];
-        for (int i=0; i<apps.size(); i++) {
-            labels[i] = apps.get(i).loadLabel(getPackageManager()).toString();
-            checked[i] = exclusions.contains(apps.get(i).activityInfo.packageName);
-        }
-        new AlertDialog.Builder(this).setTitle("选择不经过 VPN 的应用")
-            .setMultiChoiceItems(labels, checked, (dialog, which, selected) -> {
-                String id = apps.get(which).activityInfo.packageName;
-                if (selected) exclusions.add(id); else exclusions.remove(id);
-            }).setNegativeButton("取消", null).setPositiveButton("保存", (dialog, which) -> {
-                getSharedPreferences("vpn", MODE_PRIVATE).edit().putStringSet("excluded", exclusions).apply();
-                emit("notice", "应用分流已保存，下次连接时生效");
-            }).show();
+        startActivity(new Intent(this, ApplicationRoutingActivity.class));
     }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);

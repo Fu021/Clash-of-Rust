@@ -2669,11 +2669,13 @@ runpy.run_path(str(script), run_name='__main__')
 
     def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
         network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                       'applicationRoutingPersistsAndKeepsOtherAppsOnline',
                        'quickTileRestoresColdCoreWithoutOpeningTheActivity')
         for failed_case, log_error, captured_log in (
                 (None,None,'network test complete'),
                 (network_cases[0],None,'network test failed'),
-                (network_cases[1],None,'tile test failed'),
+                (network_cases[1],None,'application routing test failed'),
+                (network_cases[2],None,'tile test failed'),
                 (None,RuntimeError('Android test log end marker is missing'),'partial log'),
                 (None,None,'Mobile runtime stopped: core failure')):
             with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \

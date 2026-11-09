@@ -231,8 +231,7 @@ mod tests {
             sidebar_collapsed: true,
             ..Default::default()
         };
-        let HostPacket::Close(decoded) =
-            decode(&encode(&HostPacket::Close(state)).unwrap()).unwrap()
+        let UiEvent::Close(decoded) = decode(&encode(&UiEvent::Close(state)).unwrap()).unwrap()
         else {
             panic!("wrong packet")
         };

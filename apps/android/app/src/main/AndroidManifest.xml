@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <queries>
         <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
     </queries>
@@ -25,6 +26,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".ApplicationRoutingActivity" android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
         <service android:name=".TunnelService" android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="true" android:foregroundServiceType="specialUse" android:stopWithTask="false">
             <intent-filter><action android:name="android.net.VpnService" /></intent-filter>

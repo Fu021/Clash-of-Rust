@@ -53,7 +53,7 @@ Python 和原始云镜像使用官方优先、原包私网回退，全部新导�
 - main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
 - 桌面后台、界面程序、`cor` 和网络助手一起导出，并在同一 runner 生成安装包，执行[安装验收](install-validation.md)。构建附件上传后用实际 id/digest 和本地归档校验暂存，不再次下载，也不额外申请 macOS runner。Android 在候选 APK 上执行代理/TUN 集成，不对同一开发签名包重复测试。九组候选包、SHA256、安装收据与源码附件保留 3 天，全部必需 job 成功才能发布。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带必要的 `core_integration` 测试程序，不上传源码单元测试程序。桌面构建产物采用 schema 3，只与同一提交配套使用。
 
-Android x86_64 使用 Android 16（API 36）模拟器运行真实代理/TUN 流量测试，验证系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开、Activity 重建和路由恢复。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
+Android x86_64 使用 Android 16（API 36）模拟器运行真实代理/TUN 流量测试，验证系统 VPN 授权、DNS、套接字保护、快捷磁贴连接/断开、Activity 重建和路由恢复；[应用分流](../android-application-routing.md#范围与验证)另核对三种模式及未经过 VPN 的应用仍可直连，失败不能因后续磁贴通过而被掩盖。取消后到达的普通授权、过期服务启动与排队连接不得重新开启 VPN，连接中必须提供取消入口；ARM64/ARMv7 完成实际编译、Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
 
 常规测试、输入法专项及打包共用模拟器准备入口。当前[模拟器实现](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)会将首次启动的 API 24+ userdata 提高到至少 6 GiB，并要求分区大小的 1.2 倍空闲；因此配置显式使用 6144 MiB，再为测试留出 1 GiB，启动前合计要求约 8.2 GiB。此前 3072 MiB / 4 GiB 的预检遗漏了这一最低值，`1139dcc` 的 x64 仍在约 5255 MiB 空闲时被模拟器要求 7372.8 MiB 而拒绝，不能把配置写入或较宽裕 runner 的偶然成功当作修复。
 

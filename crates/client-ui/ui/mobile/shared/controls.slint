@@ -163,16 +163,21 @@ export component MButton inherits Rectangle {
     accessible-action-default => { if root.interactive { root.clicked(); } }
     forward-focus: keys;
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
-    height: max(48px, label.preferred-height + 24px); vertical-stretch: 0;
-    background: root.primary ? (area.pressed && root.enabled ? Theme.primary.darker(0.15) : Theme.primary)
-        : root.success ? Theme.success-wash : root.selected || (area.pressed && root.enabled) ? Theme.accent-wash
-        : area.has-hover && root.enabled ? Theme.inset : root.quiet ? transparent : Theme.surface;
-    border-width: 1px; border-radius: 10px;
-    border-color: root.enabled && root.keyboard-focus && keys.has-focus ? Theme.ink
-        : root.primary ? Theme.primary : root.selected || (area.pressed && root.enabled) ? Theme.accent : root.quiet ? transparent : Theme.line;
+    height: max(48px, label.preferred-height + (root.compact ? 16px : 24px)); vertical-stretch: 0;
     opacity: root.enabled || root.busy ? 1 : 0.5;
-    animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
-    if root.busy: ProgressTrack { y: parent.height - 3px; width: parent.width; indeterminate: true; track: transparent; fill: root.primary ? #ffffff : Theme.accent; }
+    animate opacity { duration: Motion.fast; enabled: Motion.active; }
+    surface := Rectangle {
+        x: 0px; y: root.compact ? 4px : 0px;
+        width: root.width; height: root.height - 2 * self.y;
+        background: root.primary ? (area.pressed && root.enabled ? Theme.primary.darker(0.15) : Theme.primary)
+            : root.success ? Theme.success-wash : root.selected || (area.pressed && root.enabled) ? Theme.accent-wash
+            : area.has-hover && root.enabled ? Theme.inset : root.quiet ? transparent : Theme.surface;
+        border-width: 1px; border-radius: root.compact ? 8px : 10px;
+        border-color: root.enabled && root.keyboard-focus && keys.has-focus ? Theme.ink
+            : root.primary ? Theme.primary : root.selected || (area.pressed && root.enabled) ? Theme.accent : root.quiet ? transparent : Theme.line;
+        animate background, border-color { duration: Motion.fast; enabled: Motion.active; }
+        if root.busy: ProgressTrack { y: parent.height - 3px; width: parent.width; indeterminate: true; track: transparent; fill: root.primary ? #ffffff : Theme.accent; }
+    }
     if root.show-swatch: Rectangle {
         x: 12px; y: (parent.height - 16px) / 2 + root.press-offset; width: 16px; height: 16px;
         border-radius: 8px; background: root.swatch;

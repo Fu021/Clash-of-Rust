@@ -161,7 +161,7 @@ impl View<'_> {
                 Ok(address) => {
                     let country = crate::countries::country_text(&result.country);
                     let flag = crate::countries::flag_emoji(&result.country);
-                    let mut entry = item("exit", "出口 IP", &self.address(address), &country, 1)
+                    let mut entry = item("exit", "出口 IP", &self.address(address), country, 1)
                         .with_delay(result.millis);
                     entry.flag = flag.unwrap_or_default();
                     entry.fogged = self.hidden;

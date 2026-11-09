@@ -3048,10 +3048,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         "查看授权".into()
     });
     android.set_notification_speeds(p.platform["notification_speeds"].as_bool().unwrap_or(true));
-    android.set_application_scope(match p.platform["excluded_apps"].as_u64().unwrap_or(0) {
-        0 => "所有应用".into(),
-        n => format!("已排除 {n} 个应用").into(),
-    });
+    android.set_application_scope(
+        p.platform["application_scope"]
+            .as_str()
+            .unwrap_or("全部应用")
+            .into(),
+    );
     if p.completed == Some(MobileIntent::SavePorts) {
         android.set_ports_dirty(false);
     }

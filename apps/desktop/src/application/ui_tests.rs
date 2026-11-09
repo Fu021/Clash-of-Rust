@@ -271,15 +271,15 @@ fn long_subscription_names_preserve_visible_actions_and_the_full_model() {
         window.show().unwrap();
         let _ = window.window().take_snapshot().unwrap();
         let mut previous_right = 0.0;
-        for label in ["更新", "编辑", "详情"] {
-            let bounds = target_bounds(&format!("button:{label}"));
+        for action in ["update", "edit", "detail"] {
+            let bounds = target_bounds(&format!("profile-{action}:fixture"));
             assert!(bounds[0] >= previous_right);
             assert!(bounds[0] + bounds[2] <= width as f32);
             assert!(bounds[1] >= 0.0 && bounds[1] + bounds[3] <= height as f32);
             previous_right = bounds[0] + bounds[2];
         }
         assert_eq!(models.profiles.row_data(0).unwrap().name.as_str(), name);
-        click_target(&window, "button:更新");
+        click_target(&window, "profile-update:fixture");
         assert_eq!(events.borrow()[0].0, Intent::UpdateProfile);
         assert_eq!(events.borrow()[0].1.as_str(), "fixture");
         window.hide().unwrap();
@@ -2223,7 +2223,7 @@ fn a_new_log_detail_resets_the_previous_dialog_scroll_and_shows_what_it_copies()
         reference, reopened,
         "the short log must remain visibly identical to a fresh detail"
     );
-    click_target(&window, "button:复制全文");
+    click_target(&window, "dialog-copy");
     assert_eq!(
         events.borrow().last(),
         Some(&(Intent::Copy, short.into(), "".into()))

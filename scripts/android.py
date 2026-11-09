@@ -713,6 +713,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
                if ime_only else
                ('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                'applicationRoutingPersistsAndKeepsOtherAppsOnline',
                 'quickTileRestoresColdCoreWithoutOpeningTheActivity'))
         failures=[]
         for iteration in range(1,ime_rounds+1):
