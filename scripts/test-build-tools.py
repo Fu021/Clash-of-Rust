@@ -906,6 +906,15 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_installed_update_driver_runs_outside_the_runner_checkout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            driver = cli_update.stage_test_driver(directory)
+            result = subprocess.run([sys.executable, '-B', driver, '--help'], cwd=directory,
+                                    text=True, capture_output=True, check=True)
+            self.assertIn('--phase', result.stdout)
+            self.assertEqual(driver.stat().st_mode & 0o777, 0o644)
+
     def test_terminal_update_result_requires_helper_exit_and_a_persisted_terminal_state(self):
         for code, state, accepted in ((0, 'succeeded', True), (0, 'failed', True),
                                       (0, 'preparing', False), (0, 'installing', False),

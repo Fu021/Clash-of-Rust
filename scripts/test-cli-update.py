@@ -22,8 +22,12 @@ REPORT = ROOT/'target/linux-report'
 
 
 def invoke(command, **kwargs):
-    return subprocess.run(list(map(str, command)), check=True, timeout=120,
-                          text=True, capture_output=True, **kwargs)
+    result = subprocess.run(list(map(str, command)), timeout=120,
+                            text=True, capture_output=True, **kwargs)
+    if result.returncode:
+        print((result.stdout+result.stderr)[-8000:], file=sys.stderr, flush=True)
+    result.check_returncode()
+    return result
 
 
 def wait_for(probe, description, timeout=45):
@@ -84,6 +88,14 @@ def run_helper(directory, data):
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def stage_test_driver(directory):
+    for name in ('test-cli-update.py', 'build_support.py'):
+        target = directory/name
+        shutil.copy2(Path(__file__).with_name(name), target)
+        target.chmod(0o644)
+    return directory/'test-cli-update.py'
 
 
 def exercise(package, report, phase):
@@ -185,6 +197,7 @@ def main():
         staged = staging/package.name
         shutil.copy2(package, staged)
         staged.chmod(0o644)
+        driver = stage_test_driver(staging)
         args.report.mkdir(parents=True, exist_ok=True)
         try:
             invoke(['sudo', '-n', 'useradd', '--create-home', '--user-group', '--shell', '/bin/bash', user])
@@ -198,10 +211,11 @@ def main():
                     invoke(['sudo', '-n', 'visudo', '-cf', sudoers])
                 command = [
                     'sudo', '-n', '-u', user, '-H', 'env', 'GITHUB_ACTIONS=true',
-                    'PYTHONDONTWRITEBYTECODE=1', sys.executable, Path(__file__).resolve(),
+                    'PYTHONDONTWRITEBYTECODE=1', sys.executable, driver,
                     '--package', staged, '--phase', phase, '--report', output,
                 ]
-                result = subprocess.run(list(map(str, command)), capture_output=True, text=True, timeout=600)
+                result = subprocess.run(list(map(str, command)), cwd=staging,
+                                        capture_output=True, text=True, timeout=600)
                 (args.report/f'{phase}-output.log').write_text(result.stdout+result.stderr)
                 for name in (f'{phase}-result.json', f'{phase}-daemon.log'):
                     source = output/name
@@ -209,6 +223,8 @@ def main():
                     if present.returncode == 0:
                         invoke(['sudo', '-n', 'install', '-m', '0644', '-o', str(os.getuid()),
                                 '-g', str(os.getgid()), source, args.report/name])
+                if result.returncode:
+                    print((result.stdout+result.stderr)[-8000:], file=sys.stderr, flush=True)
                 result.check_returncode()
             print('Installed terminal update: sudo denial, real dpkg failures, recovery and reinstall passed',
                   flush=True)
