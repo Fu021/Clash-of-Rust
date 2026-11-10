@@ -1047,19 +1047,25 @@ public class ProxyTunTest {
                 .getBytes(StandardCharsets.US_ASCII));
             BufferedReader stream=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.US_ASCII));
             assertHeldResponse(stream);
-            JSONObject records=new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
-            JSONArray connections=records.getJSONArray("connections");
-            boolean observed=false;
-            for (int i=0;i<connections.length();i++) {
-                JSONObject record=connections.getJSONObject(i);
-                JSONObject metadata=record.getJSONObject("metadata");
-                if (metadata.optString("type").equalsIgnoreCase("Tun")
-                    && metadata.optInt("sourcePort")==connection.getLocalPort()
-                    && metadata.optInt("destinationPort")==18081
-                    && record.getJSONArray("chains").toString().contains("CI-TUN-origin")) observed=true;
-            }
-            assertTrue("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
-                +"; a direct-only test must fail; records="+records,observed);
+            long deadline=SystemClock.elapsedRealtime()+5000;
+            JSONObject records;
+            do {
+                records=new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
+                JSONArray connections=records.getJSONArray("connections");
+                for (int index=0;index<connections.length();index++) {
+                    JSONObject record=connections.getJSONObject(index);
+                    JSONObject metadata=record.getJSONObject("metadata");
+                    JSONArray chains=record.getJSONArray("chains");
+                    for (int chain=0;chain<chains.length();chain++)
+                        if (metadata.optString("type").equalsIgnoreCase("Tun")
+                            && metadata.optInt("sourcePort")==connection.getLocalPort()
+                            && metadata.optInt("destinationPort")==18081
+                            && "CI-TUN-origin".equals(chains.optString(chain))) return;
+                }
+                SystemClock.sleep(100);
+            } while (SystemClock.elapsedRealtime()<deadline);
+            fail("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
+                +"; a direct-only test must fail; records="+records);
         }
     }
     private static void assertHeldResponse(BufferedReader stream) throws IOException {

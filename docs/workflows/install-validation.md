@@ -32,6 +32,7 @@ Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 gues
 - Android 收据用 `distribution_signed=false` 标识开发签名候选包。公开发布只接受签名后重新验证并记录 `distribution_signed=true` 的 APK；测试包不能混入正式附件。
 - 最终发布核对 CI 全部必需 job、原附件外层 digest、内部完整成员、构建身份和包摘要。不发布模式读取九份 CI 候选包；公开模式读取六份 CI 桌面包和本次发布的三份发行签名 APK。
 - `macos-ci-report-*`、`linux-package-report-*` 与 `android-report-*` 保留对应运行的证据和失败诊断，Windows 扩展窗口报告按需保存；常规 Windows 代理/TUN 结果见 job 日志。包及源码附件保留 3 天。证据过期则重新运行 CI，不悄悄重建另一份包。
+- Ubuntu 20.04 的 `focal-guest-report-status.json` 区分 guest 报告已保存、未生成及传输失败；只有完整传输成功才保留归档，安装和网络测试结果仍以实际任务及收据为准。
 
 ## 资源与权限
 
