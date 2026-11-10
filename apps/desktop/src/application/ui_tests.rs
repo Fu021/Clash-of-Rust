@@ -888,6 +888,18 @@ fn resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions() {
     window.show().unwrap();
     window.global::<clash_client_ui::Motion>().set_enabled(true);
     motion_frame(&window, 250);
+    let geometry = window.global::<UiGeometry>();
+    geometry.set_enabled(false);
+    motion_frame(&window, 0);
+    TARGETS.with(|targets| targets.borrow_mut().clear());
+    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+    motion_frame(&window, 0);
+    assert!(TARGETS.with(|targets| targets.borrow().is_empty()));
+    geometry.set_enabled(true);
+    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+    motion_frame(&window, 0);
+    assert!(target_bounds("node:node-0")[2] > 0.);
+    assert!(target_bounds("node-delay:node-0")[2] > 0.);
     for (width, height) in [
         (1600, 900),
         (950, 700),

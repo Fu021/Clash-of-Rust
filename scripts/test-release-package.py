@@ -117,6 +117,12 @@ def linux_gui_smoke():
                         process.wait(timeout=5)
 
 
+def require_linux_polkit_tools():
+    for tool in ('pkexec', 'pkttyagent'):
+        if not shutil.which(tool):
+            raise RuntimeError('The installed package did not provide the polkit tool: ' + tool)
+
+
 def linux_package_tests(package, tun_test, structure=True):
     from ci_test_policy import extended_tests, update_tests
     if structure:
@@ -132,8 +138,8 @@ def linux_package_tests(package, tun_test, structure=True):
             timeout=300)
     package_argument = './'+str(package.relative_to(ROOT))
     install_packages([package_argument])
-    if os.environ.get('COR_LINUX_BASELINE') and not shutil.which('pkexec'):
-        raise RuntimeError('The installed package did not provide the polkit authorization helper')
+    if os.environ.get('COR_LINUX_BASELINE'):
+        require_linux_polkit_tools()
     if not any(Path(path).is_file() for path in (
             '/usr/lib/systemd/systemd-resolved', '/lib/systemd/systemd-resolved')):
         release = Path('/etc/os-release').read_text()

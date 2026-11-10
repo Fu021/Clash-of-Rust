@@ -19,6 +19,8 @@
 
 **用户目录与无显示环境：** `sudo cor` 应在解析用户配置前降权并复用原用户后台；直接 root 保留独立目录。跨用户总览只读索引，不启动后台。polkit 的 SSH/非活动会话仍需 `auth_admin`，只授权固定安装助手；不能让用户 YAML 在 root 后台运行。回归需覆盖两用户同名订阅、环境白名单与管理员凭据隔离、sudo/指定用户操作、stdin/原样参数、文件 UID、后台复用、前台信号及退出恢复，见[用户与授权](../cli/linux-users.md)。Wayland compositor 错误来自桌面入口，服务器使用 `cor`，不通过为 root 配置显示服务器规避。
 
+**终端认证 cookie：** polkit 服务 active 和密码正确不代表 `pkexec` 内置代理可用。Ubuntu polkit 124 上以 `pkexec true` 复现 `No session for cookie`，普通用户 `pkcheck` 认证成功；同一终端独立注册 `pkttyagent` 后，`pkexec --disable-internal-agent true` 认证成功。与上游[代理 UID 修复](https://github.com/polkit-org/polkit/pull/423)一致，不能改成免密策略或把应用后台整体提权。交互 CLI 在原用户身份为当前 PID/启动时间注册短生命周期代理，通过 notify-fd 等待就绪，失败时不执行助手，退出时清理；授权后复核实际权限。启动和重启都在停止现有 TUN 前准备授权，避免升级覆盖助手后先停掉可用网络才发现认证失败。
+
 **安装后 GUI 验证：** `sudo -u` 不创建 logind 登录会话，图形 polkit 代理会因 `No session for pid` 注册失败。测试使用隔离的临时 PAM 登录会话，验证进程归属、真实授权的取消与接受，并隔离用户和 D-Bus 配置；不注入批准规则。模拟环境中代理进程存活不等于已注册，仅对明确的 `No authentication agent found` 有限重试授权请求。GNOME 42 的 `--unsafe-mode` 是隐藏选项，不能仅凭 `--help` 判断；旧版需启用 `development-tools`，窗口结果也只能编码一次。GNOME 3.36 的 `get_pid()` 对 Wayland 不返回客户端 PID，隔离会话只能在恰好一个原生 Wayland 窗口和一个渲染进程时回退匹配，并以窗口稳定序号关闭；新版本仍核对客户端 PID。[打包 40827251291](https://github.com/Fu021/Clash-of-Rust/actions/runs/40827251291) 的 20.04 x64 窗口识别、ARM64 授权代理注册失败；修复后 `9f92c5f` 的[打包 40845419892](https://github.com/Fu021/Clash-of-Rust/actions/runs/40845419892)通过两架构验证。
 
 **典型症状**

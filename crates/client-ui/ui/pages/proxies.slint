@@ -3,12 +3,12 @@ import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
 import { CardGrid } from "../components/card-grid.slint";
 import { PageViews, ViewToggle } from "../components/view-toggle.slint";
-import { GeometryTarget } from "../components/geometry.slint";
+import { GeometryTarget, UiGeometry } from "../components/geometry.slint";
 import { PageScroll, Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
-    GeometryTarget { key: "node:" + root.node.name; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
+    if UiGeometry.enabled: GeometryTarget { key: "node:" + root.node.name; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> detailed;
     in property <bool> list-view;
     callback detail-requested();
@@ -16,6 +16,8 @@ component NodeCard inherits ContentPanel {
     vertical-padding: root.list-view ? 4px : 10px;
     horizontal-padding: root.list-view ? 10px : 16px;
     gap: root.list-view ? 2px : 4px;
+    drop-shadow-blur: 0px;
+    drop-shadow-offset-y: 0px;
     interactive: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
     clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); }
     border-color: node.selected ? Theme.accent : Theme.line;

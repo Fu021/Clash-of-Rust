@@ -30,7 +30,7 @@ Clash-of-Rust/
 ├── docs/                          使用、开发、工作流、发布说明与失败复盘
 ├── vendor/                        带来源、许可证及移除条件的 Slint 局部修复
 ├── .github/
-│   ├── workflows/                 CI、发布、内存基准和按需 Android 应用列表截图
+│   ├── workflows/                 CI、发布、内存基准和按需 Android 多版本验证
 │   ├── actions/                   工作流共用的下载与缓存操作
 │   ├── cache-server/              缓存服务运行配置；服务实现由另一仓库维护
 │   └── build-versions.json         工作流工具与资源版本基线

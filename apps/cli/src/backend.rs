@@ -143,13 +143,20 @@ pub async fn live(args: &Args) -> Result<Meta> {
 }
 pub async fn prepare_start(args: &Args) -> Result<()> {
     let state = meta(args).await?;
-    if !state.running
-        && (state.settings.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
-            || state.settings.claude_protection.is_some())
-    {
+    if start_requires_authorization(state.running, args.path == "restart", &state.settings) {
         authorize_tun(args).await?;
     }
     Ok(())
+}
+
+fn start_requires_authorization(
+    running: bool,
+    restarting: bool,
+    settings: &clash_client_runtime::config::Settings,
+) -> bool {
+    (!running || restarting)
+        && (settings.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
+            || settings.claude_protection.is_some())
 }
 pub async fn authorize_tun(args: &Args) -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -278,4 +285,29 @@ pub async fn interrupted() -> Result<()> {
         std::future::pending::<()>().await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clash_client_runtime::{config::Settings, engine::ProxyMode};
+
+    #[test]
+    fn restart_authorizes_before_stopping_a_running_tun_but_start_reuses_it() {
+        for mode in [ProxyMode::Off, ProxyMode::System, ProxyMode::Tun] {
+            let settings = Settings {
+                proxy_mode: mode,
+                ..Default::default()
+            };
+            for (running, restarting) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                assert_eq!(
+                    start_requires_authorization(running, restarting, &settings),
+                    mode == ProxyMode::Tun && (!running || restarting),
+                    "{mode:?}, running={running}, restarting={restarting}"
+                );
+            }
+        }
+    }
 }

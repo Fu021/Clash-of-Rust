@@ -18,14 +18,14 @@
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
-| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认只运行基础代理/TUN，分流和生命周期由 CI 策略按需选择。`application-preview --arch x64 --api LEVEL --build DIRECTORY` 校验设备版本及本轮归档，再采集主要页面和实际应用列表截图，不启动 VPN；版本范围与入口见[Android 界面预览](../docs/workflows/ci.md#android-界面预览)。输入法调查仍需明确要求，使用 `emulator --legacy` / `--api` 和 `test --ime-only`。 |
+| `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认只运行基础代理/TUN，分流和生命周期由 CI 策略按需选择。`application-preview --arch x64 --api LEVEL --build DIRECTORY` 校验设备版本及本轮归档，再采集主要页面和实际应用列表截图；可显式加 `--verify-routing` 验证模拟器内的 VPN 分流。版本范围与入口见[Android 界面预览](../docs/workflows/ci.md#android-界面预览)。输入法调查仍需明确要求，使用 `emulator --legacy` / `--api` 和 `test --ime-only`。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择。 |
 | `ci_test_policy.py` | CLI / 模块 | 选择基础网络、相关变更专项和手动扩展回归，并向 CI 各平台传递选择结果。 |
 | `test-cli-update.py` | 隔离安装测试 | 仅在 Actions 的已安装 Linux 环境运行，以临时普通账户验证无桌面的 sudo 拒绝、真实 dpkg 失败恢复和候选 DEB 重装，保存逐项结果。 |
-| `android_previews.py` | CLI / 模块 | 为独立应用列表截图工作流核验成功 CI、同提交附件并生成已固定镜像的 Android 版本矩阵；不构建或运行网络测试。 |
+| `android_previews.py` | CLI / 模块 | 为 Android 多版本工作流核验成功 CI、同提交附件并生成已固定镜像的版本矩阵；该解析入口不构建或运行网络测试。 |
 | `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和旧内核虚拟机；容器及 VM 必须运行在可丢弃 Actions 环境。 |
 | `prepared_vm.py` | 共享模块 | 私网专用 VM 协议、严格元数据、能力门禁、有界完整下载及流式上传；不写 GitHub 缓存、不发 DELETE。 |
 | `prepared_vm_environment.py` | 共享模块 | 冻结隔离 APT 环境、独立配方、guest 包清单和模板清理；由输入解析和 Linux VM 入口调用，不在开发服务器准备环境。 |

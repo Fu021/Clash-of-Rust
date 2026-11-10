@@ -1241,6 +1241,33 @@ class BuildTests(unittest.TestCase):
         index = arguments.index('COR_CI_DESKTOP_UI_TESTS')
         self.assertEqual(arguments[index - 1], '--env')
 
+    def test_linux_tun_changes_run_agent_and_restart_checks_without_full_suite(self):
+        specification = importlib.util.spec_from_file_location('native_tun_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_LINUX_USER_TESTS': 'true',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'false',
+                                     'COR_CI_UPDATE_TESTS': 'false'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        self.assertEqual(len(checks), 2)
+        for package, case in (('clash-client-runtime', 'platform::linux_tun::'),
+                              ('clash-cli', 'backend::tests::')):
+            self.assertTrue(any(command[command.index('-p')+1] == package and case in command
+                                for command in checks), (package, case))
+        self.assertTrue(ci_test_policy.select([
+            'crates/client-runtime/src/platform/linux/tun/terminal_agent.rs'
+        ])['linux_user_tests'])
+
     def test_android_build_runs_mobile_unit_tests_before_preparing_target_tools(self):
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
                 patch.object(local_cache, 'workspace_sources'), \
@@ -3379,6 +3406,44 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertFalse((report/'input-method-status.json').exists())
                 self.assertTrue((report/'instrumentation.txt').is_file())
 
+    def test_android_preview_routing_requires_both_real_network_cases(self):
+        cases = ('basicSystemProxyAndTun', 'applicationRoutingPersistsAndKeepsOtherAppsOnline')
+        for failed in (None, *cases):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                observed = []
+                def invoke(command, **kwargs):
+                    if 'instrument' in command:
+                        case = command[command.index('class') + 1].split('#')[1]
+                        observed.append(case)
+                        result = 'FAILURES!!!' if case == failed else 'OK (1 test)'
+                        return subprocess.CompletedProcess(command, 0, result, '')
+                    return subprocess.CompletedProcess(command, 0, '', '')
+                with patch.object(android_build, 'ROOT', root), \
+                        patch.object(android_build, 'run'), \
+                        patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
+                        patch.object(android_build.subprocess, 'run', side_effect=invoke), \
+                        patch('http.server.ThreadingHTTPServer') as origin, \
+                        patch('threading.Thread'), \
+                        patch.object(android_build, 'start_test_log'), \
+                        patch.object(android_build, 'finish_test_log', return_value=('', None)):
+                    if failed:
+                        with self.assertRaisesRegex(RuntimeError, 'Android integration test failed'):
+                            android_build.test('x64', root/'app.apk', root/'test.apk', routing_only=True)
+                    else:
+                        android_build.test('x64', root/'app.apk', root/'test.apk', routing_only=True)
+                    self.assertEqual(observed, list(cases))
+                    origin.return_value.shutdown.assert_called_once()
+                report = root/'target/android-report/x64/routing-api-31'
+                self.assertTrue((report/'instrumentation.txt').is_file())
+                self.assertTrue((report/'runtime-status.json').is_file())
+                result = report/'routing-verification.json'
+                self.assertEqual(result.exists(), failed is None)
+                if not failed:
+                    self.assertEqual(json.loads(result.read_text()), {
+                        'schema': 1, 'android_api': 31, 'cases': list(cases), 'routing_verified': True,
+                    })
+
     def test_android_ime_runs_remain_explicit_and_require_screenshot_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
@@ -3599,6 +3664,28 @@ runpy.run_path(str(script), run_name='__main__')
             with self.assertRaisesRegex(ValueError, 'selected Android version'):
                 android_build.application_preview(Path('/missing-build'), 31)
             run_test.assert_not_called()
+
+    def test_application_preview_runs_real_routing_only_when_requested(self):
+        for verify in (False, True):
+            with self.subTest(verify=verify), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root/'build'
+                source.mkdir()
+                (source/'build.tar.gz').write_bytes(b'archive')
+                (source/'build.tar.gz.sha256').write_text('a' * 64)
+                with patch.object(android_build, 'ROOT', root), \
+                        patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
+                        patch.object(android_build, 'sha256', return_value='a' * 64), \
+                        patch('workflow_artifacts.extract_build'), \
+                        patch.object(android_build, 'prepare_sdk'), \
+                        patch.object(android_build, 'verify_build'), \
+                        patch.object(android_build, 'commit', return_value='b' * 40), \
+                        patch.object(android_build, 'test') as run_test:
+                    android_build.application_preview(source, 31, verify_routing=verify)
+                self.assertEqual(run_test.call_count, 2 if verify else 1)
+                self.assertTrue(run_test.call_args_list[0].kwargs['applications_only'])
+                if verify:
+                    self.assertTrue(run_test.call_args_list[1].kwargs['routing_only'])
 
     def test_application_preview_never_starts_network_tests_and_requires_exported_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4825,6 +4912,17 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual(annotations['org.freedesktop.policykit.exec.path'], '/opt/clash-of-rust/clash-of-rust')
         self.assertEqual(annotations['org.freedesktop.policykit.exec.argv1'], '--authorize-tun')
         self.assertNotIn('org.freedesktop.policykit.exec.allow_gui', annotations)
+
+    def test_linux_package_validation_requires_the_terminal_agent_and_pkexec(self):
+        for missing in (None, 'pkexec', 'pkttyagent'):
+            with self.subTest(missing=missing), \
+                    patch.object(release_package.shutil, 'which',
+                                 side_effect=lambda name: None if name == missing else '/usr/bin/' + name):
+                if missing:
+                    with self.assertRaisesRegex(RuntimeError, missing):
+                        release_package.require_linux_polkit_tools()
+                else:
+                    release_package.require_linux_polkit_tools()
 
     def test_arm64_bundles_are_separate_and_native_architecture_is_detected(self):
         self.assertEqual(build.bundle_directory('windows','x64'),build.ROOT/'bundle')

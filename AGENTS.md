@@ -36,7 +36,7 @@
 - 推送后跟进最终提交 CI，失败则修复并跟进新运行；通过后完成不发布打包及安装验证。正式版发布流程完成同提交验证后，不再重复不发布打包。不以运行中收尾，按[历史耗时](docs/workflows.md#actions-跟进节奏)低频查询：CI 约 10 分钟首查、之后 5 分钟；打包约 7 分钟首查、之后 2～3 分钟，排队或长步骤延长。runner 未分配导致失败时自动重试失败 job，无需再次确认。
 - 最终合并前按[脚本说明](scripts/README.md)核对全仓调用关系，合并重复入口、删除弃用脚本并同步调用者。
 - [Publish Release](docs/workflows/release.md)默认用 `check_only=true`，复用同提交成功 CI 与依赖快照，核验附件及 Release 未变；流程结束前不推进来源分支。公开发布、签名、额外工作流、现有 Actions 之外的私网访问及分支规则外的版本调整须用户明确授权。
-- 常驻 **CI、Publish Release、Memory Benchmark**；维护者另已授权手动 [Android Application Previews](docs/workflows/android-previews.md)，只复用成功 CI 的 APK 采集多版本应用列表截图，不测试 VPN/流量。新增其他含临时工作流仍须维护者同意。源码、候选安装包及安装后验证归 CI，真实集成聚焦代理/TUN；发布复用验收结果，仅保留发行签名后的必要验证与公开发布。
+- 常驻 **CI、Publish Release、Memory Benchmark**；维护者另已授权手动 [Android Application Previews](docs/workflows/android-previews.md)，复用成功 CI 的 APK 采集多版本应用列表截图，可显式开启模拟器内的 VPN 分流与流量验证。新增其他含临时工作流仍须维护者同意。源码、候选安装包及安装后验证归 CI，真实集成聚焦代理/TUN；发布复用验收结果，仅保留发行签名后的必要验证与公开发布。
 - `.github/` 变更及外部 fork 每次运行须维护者审核；不绕过隔离、网络、Secrets 限制或索取私网凭据，不擅自取消他人运行、删除历史或附件。弃用工作流须删除文件并由维护者在 GitHub 禁用。
 - 工作流不修改或上传 `.github/cache-server/README.txt`，不发送 agent 协作请求或读取 agent 反馈。仅在需要用户介入或转达时汇报必要的问题、证据及验收条件，不传达常规状态；服务实现、部署及文档由服务端 agent 维护，见[缓存服务边界](docs/workflows/cache-server.md)。
 

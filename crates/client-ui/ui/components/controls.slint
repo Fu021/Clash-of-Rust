@@ -1,7 +1,7 @@
 import { Motion, Entrance, ProgressTrack, CopyFeedback } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { GeometryTarget } from "geometry.slint";
+import { GeometryTarget, UiGeometry } from "geometry.slint";
 
 // Reset on navigation, not on each model refresh. Clamp after content shrinks
 // (including a shorter detail) so a previous offset cannot hide the new body.
@@ -162,7 +162,7 @@ export component Chevron inherits Path {
 
 export component ActionButton inherits Rectangle {
     in property <string> geometry-key: "button:" + root.text;
-    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
+    if UiGeometry.enabled && root.geometry-key != "": GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> modal-control: false;
     in property <string> text;
     in property <bool> primary: false;

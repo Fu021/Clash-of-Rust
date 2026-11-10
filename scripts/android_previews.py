@@ -73,6 +73,7 @@ def resolve(client, repository, expected_commit, run_id=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-id', type=int)
+    parser.add_argument('--verify-routing', action='store_true')
     args = parser.parse_args()
     module = release_module()
     repository = module.repository()
@@ -85,8 +86,10 @@ def main():
                 stream.write(name + '=' + (json.dumps(value) if isinstance(value, dict) else str(value)) + '\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(summary).open('a') as stream:
+            coverage = ('Real VPN application-routing checks requested.'
+                        if args.verify_routing else 'No VPN or traffic-routing checks.')
             stream.write(f'\nAndroid UI screenshots. Source CI: {plan["ci_run_id"]}; '
-                         f'commit: `{plan["commit"]}`. No VPN or traffic-routing checks.\n')
+                         f'commit: `{plan["commit"]}`. {coverage}\n')
 
 
 if __name__ == '__main__':

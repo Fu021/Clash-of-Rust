@@ -10,6 +10,7 @@ use std::{
     process::Command,
 };
 
+mod terminal_agent;
 mod trusted;
 use std::os::unix::fs::MetadataExt;
 use trusted::{CORE, LAUNCHER, NETWORK_CAPABILITIES, installed_resources, open_at};
@@ -241,10 +242,13 @@ fn authorize(core: &Path, terminal: bool) -> Result<()> {
         Path::new("/usr/bin/pkexec").is_file(),
         "缺少 pkexec，请安装 pkexec 后重新开启 TUN"
     );
+    let _agent = if terminal {
+        terminal_agent::TerminalAgent::start()?
+    } else {
+        None
+    };
     let mut command = Command::new("/usr/bin/pkexec");
-    if !terminal {
-        command.arg("--disable-internal-agent");
-    }
+    command.arg("--disable-internal-agent");
     let status = command
         .args([EXECUTABLE, HELPER_ARGUMENT])
         .stdin(if terminal {
@@ -261,11 +265,15 @@ fn authorize(core: &Path, terminal: bool) -> Result<()> {
         .output()
         .context("无法启动 TUN 授权助手")?;
     match status.status.code() {
-        Some(0) => Ok(()),
+        Some(0) => {
+            ensure!(
+                installed_authorized()?,
+                "TUN 授权未生效，请检查安装助手的网络权限与 DNS 助手"
+            );
+            Ok(())
+        }
         Some(126) => bail!("TUN 授权已取消，当前代理模式保持不变"),
-        Some(127) if terminal => bail!(
-            "无法获得 TUN 管理员授权，请检查 polkit 服务及终端认证；也可先执行 sudo /opt/clash-of-rust/clash-of-rust --authorize-tun，再以普通用户运行 cor proxy tun"
-        ),
+        Some(127) if terminal => bail!("无法获得 TUN 管理员授权，请检查 polkit 服务及终端认证"),
         Some(127) => bail!("无法获得 TUN 授权，请检查 polkit 与桌面认证代理"),
         _ => {
             // This fixed helper emits only local installation diagnostics.
