@@ -44,7 +44,7 @@ macOS x64 上一轮构建全部测试程序耗时 20 分 32 秒，本轮只准�
 
 ### Android 工具与原包
 
-Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按冻结快照中的版本及已提交的官方 SHA256 准备 Gradle ZIP，官方下载失败后回退私网原包，校验并解压后加入 PATH。编译前执行 `build_inputs.py check-tools --tools go java gradle` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。Gradle 不再由独立 setup action 另行下载，SDK 准备结束后提交原包清单检查点。
+Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按冻结快照中的版本及已提交的官方 SHA256 准备 Gradle ZIP，官方下载失败后回退私网原包，校验并解压后加入 PATH。编译前执行 `build_inputs.py check-tools --tools go java gradle` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。Gradle 不再由独立 setup action 另行下载，SDK 准备结束后提交原包清单检查点。Android 编译脚本将同一冻结 NDK 版本传给 Gradle，避免原生库编译和 APK 符号剥离各自选择工具链；`RUNNER_DEBUG=1` 时保留 Gradle 详细诊断及弃用栈。
 
 共享 Go 下载在矩阵启动前执行 `go mod tidy -diff`，先拒绝未规范化的锁文件，避免三种 Android ABI 完成 Rust 编译后才发现同一问题。
 

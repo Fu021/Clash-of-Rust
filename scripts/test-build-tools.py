@@ -3892,6 +3892,19 @@ runpy.run_path(str(script), run_name='__main__')
                                                        'ndk/' + versions['ndk']])
                     self.assertEqual(output.read_text(), 'ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
 
+    def test_android_gradle_uses_the_approved_ndk_for_each_architecture(self):
+        for arch, (abi, _, _, _) in android_build.ABIS.items():
+            for debug in ('0', '1'):
+                with self.subTest(arch=arch, debug=debug), \
+                        patch.dict(os.environ, {'GITHUB_RUN_NUMBER': '42', 'RUNNER_DEBUG': debug}), \
+                        patch.object(android_build, 'android_versions', return_value={'ndk': '30.0.12345678'}):
+                    command = android_build.gradle('assembleRelease', arch=arch)
+                self.assertIn('-PappNdkVersion=30.0.12345678', command)
+                self.assertIn('-PappAbi=' + abi, command)
+                self.assertEqual('--info' in command, debug == '1')
+                self.assertEqual('-Dorg.gradle.deprecation.trace=true' in command, debug == '1')
+                self.assertEqual(command[-1], 'assembleRelease')
+
     def test_android_sdk_bootstrap_prefers_the_native_cli_and_reuses_the_pinned_install(self):
         versions = build_inputs.android_versions()
         with tempfile.TemporaryDirectory() as temporary:
