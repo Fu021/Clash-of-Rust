@@ -25,6 +25,7 @@
 - 所有离线脚本测试类须隔离 `RUNNER_TEMP`、原包配置及 Actions 的 env/output/state/summary 文件。共享 Go 下载测试也会登记原包，须验证记录只进入测试目录；检查真实下载清单没有混入测试 URL 或模拟结果，测试通过不能代替副作用检查。
 - 引导读取工具版本时不能提前导入 `tomllib` 等待安装解释器才提供的模块；固定 Python 须核对各 OS/架构实际提供的二进制，见[运行依赖缓存](../workflows/cache-coverage.md)，不能直接推广 Linux 的安全维护补丁号。
 - 绿色 CI 仍检查实际日志：Slint `viewport-y/height` 迁移为 `content-y/height`；Android 后端明确传入已选择的 SDK/build-tools，不能自动探测 runner 上的预览版；Gradle 显示完整弃用来源，Java 保留细粒度诊断。NativeActivity 的旧系统回退仅在必需方法上标注兼容，不能全局屏蔽。
+- 独立 Python 的 `ssl.get_default_verify_paths().cafile` 可能为空或不存在，不能直接据此认定 runner 缺少 CA。Linux 容器引导先查解释器默认路径，再查 runner 的 `/etc/ssl/certs/ca-certificates.crt`；两者都不存在才拒绝冷构建，不关闭 TLS 校验。CI `42768224908` 的两个 Linux 编译任务因此在构建前失败，三个安装验证任务只因缺候选包连带失败；本地回归覆盖默认路径、系统回退和全部缺失。
 
 **防回归**
 

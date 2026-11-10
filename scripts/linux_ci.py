@@ -224,6 +224,13 @@ def guest_receipts(ssh):
               + type(error).__name__, flush=True)
 
 
+def system_ca_bundle():
+    for candidate in (ssl.get_default_verify_paths().cafile, '/etc/ssl/certs/ca-certificates.crt'):
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    raise RuntimeError('Ubuntu build requires the runner system CA bundle')
+
+
 def build_image():
     require_actions()
     value = inputs()
@@ -238,9 +245,7 @@ def build_image():
         return tag
     with tempfile.TemporaryDirectory(prefix='cor-build-image-') as temporary:
         directory = Path(temporary)
-        certificates = ssl.get_default_verify_paths().cafile
-        if not certificates or not Path(certificates).is_file():
-            raise RuntimeError('Ubuntu build requires the runner system CA bundle')
+        certificates = system_ca_bundle()
         shutil.copyfile(certificates, directory/'bootstrap-ca.crt')
         shutil.copy2(dockerfile, directory/'Dockerfile')
         shutil.copy2(archive, directory/'python.tar.gz')

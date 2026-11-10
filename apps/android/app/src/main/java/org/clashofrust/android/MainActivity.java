@@ -216,6 +216,14 @@ public final class MainActivity extends NativeActivity {
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;
                 case "applications-list": return ApplicationCatalog.read(this).toString();
                 case "applications-save": return ApplicationCatalog.save(this, data).toString();
+                case "applications-permissions":
+                    runOnUiThread(() -> {
+                        try {
+                            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:" + getPackageName())));
+                        } catch (RuntimeException error) { emit("error", "无法打开应用权限设置：" + error); }
+                    });
+                    break;
                 case "notification-speeds":
                     getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("notification-speeds", data.getBoolean("value")).apply(); break;
                 case "notify": {

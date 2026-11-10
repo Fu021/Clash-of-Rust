@@ -972,6 +972,9 @@ class BuildTests(unittest.TestCase):
                 'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
             ])['android_routing_tests'])
             self.assertTrue(ci_test_policy.select([
+                'apps/android/native/src/application_routing_mode.rs'
+            ])['android_routing_tests'])
+            self.assertTrue(ci_test_policy.select([
                 'crates/client-runtime/src/platform/host_network/linux.rs'
             ])['linux_user_tests'])
             self.assertTrue(ci_test_policy.select([
@@ -1437,22 +1440,37 @@ class BuildTests(unittest.TestCase):
                     patch.object(linux_ci, 'download', return_value=archive), \
                     patch.object(linux_ci, 'tools_directory', return_value=root), \
                     patch.object(linux_ci.subprocess, 'run') as inspect, \
-                    patch.object(linux_ci.ssl, 'get_default_verify_paths') as trust, \
+                    patch.object(linux_ci, 'system_ca_bundle') as trust, \
                     patch.object(linux_ci, 'run', side_effect=build_image) as execute:
                 inspect.return_value.returncode = 0
                 linux_ci.build_image()
                 trust.assert_not_called()
                 execute.assert_not_called()
                 inspect.return_value.returncode = 1
-                trust.return_value.cafile = None
+                trust.side_effect = RuntimeError('Ubuntu build requires the runner system CA bundle')
                 with self.assertRaisesRegex(RuntimeError, 'system CA bundle'):
                     linux_ci.build_image()
                 execute.assert_not_called()
-                trust.return_value.cafile = str(certificates)
+                trust.side_effect = None
+                trust.return_value = certificates
                 linux_ci.build_image()
                 execute.assert_called_once()
             self.assertEqual(len(contexts), 1)
             self.assertFalse(contexts[0].exists())
+
+    def test_linux_build_uses_runner_ca_when_standalone_python_has_no_default(self):
+        with patch.object(linux_ci.ssl, 'get_default_verify_paths') as trust, \
+                patch.object(Path, 'is_file', autospec=True) as exists:
+            trust.return_value.cafile = None
+            exists.side_effect = lambda path: str(path) == '/etc/ssl/certs/ca-certificates.crt'
+            self.assertEqual(linux_ci.system_ca_bundle(), Path('/etc/ssl/certs/ca-certificates.crt'))
+            trust.return_value.cafile = '/custom/runner-ca.crt'
+            exists.side_effect = lambda path: str(path) == '/custom/runner-ca.crt'
+            self.assertEqual(linux_ci.system_ca_bundle(), Path('/custom/runner-ca.crt'))
+            exists.return_value = False
+            exists.side_effect = None
+            with self.assertRaisesRegex(RuntimeError, 'system CA bundle'):
+                linux_ci.system_ca_bundle()
 
     def test_linux_download_revalidates_cached_bytes_and_uses_frozen_digest(self):
         data = b'verified upstream archive'
@@ -1510,8 +1528,8 @@ class BuildTests(unittest.TestCase):
                          storage.lineage('action-setup-tailscale/1.104.1/macOS-arm64'))
         native = 'native-release-v2-macos-26-arm64-build-' + 'a'*8 + '-' + 'b'*8
         bootstrap = 'action-setup-tailscale/' + '1.104.5/' + 'macOS-arm64'
-        self.assertGreater(storage.priority({'key': native}),
-                           storage.priority({'key': bootstrap}))
+        self.assertGreater(storage.priority({'key': bootstrap}),
+                           storage.priority({'key': native}))
 
     def test_guest_original_receipts_replace_slow_archive_exports_and_reject_bad_sources(self):
         record = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
@@ -3277,7 +3295,10 @@ runpy.run_path(str(script), run_name='__main__')
         base = {'live': True, 'vpn': False, 'vpn_pending': False, 'detail': 0,
                 'applications_loaded': True, 'applications_loading': False,
                 'applications_error': '', 'applications_total': 15, 'applications_visible': 7,
-                'applications_system': False, 'applications_mode': 0,
+                'applications_system': False, 'applications_mode': 1, 'applications_selected': 15,
+                'applications_icons': 7, 'applications_icon_failures': 0,
+                'applications_visibility_limited': False, 'applications_query_permission': True,
+                'applications_saved_summary': '全部应用',
                 'nodes_list': False, 'profiles_list': False, 'scale': 1.0}
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -3300,6 +3321,8 @@ runpy.run_path(str(script), run_name='__main__')
                         ('home', 0, {}), ('proxies-grid', 1, {}), ('proxies-list', 1, {'nodes_list': True}),
                         ('subscriptions-grid', 2, {}), ('subscriptions-list', 2, {'profiles_list': True}),
                         ('settings-top', 9, {}), ('settings-middle', 9, {}), ('settings-bottom', 9, {}),
+                        ('applications-all', 9, {'detail': 18, 'applications_mode': 0,
+                                                 'applications_visible': 0, 'applications_icons': 0}),
                         ('applications-default', 9, {'detail': 18}),
                         ('applications-scrolled', 9, {'detail': 18, 'applications_scroll_y': -120})):
                     add(layout, name, page, **state)
@@ -3308,9 +3331,9 @@ runpy.run_path(str(script), run_name='__main__')
                     ('connections', 3, {}), ('rules', 4, {}), ('rule-shortcuts', 4, {'shortcuts_open': True}),
                     ('logs', 5, {}), ('network', 6, {}), ('ip', 7, {}), ('ai', 8, {}),
                     ('applications-system', 9, {'detail': 18, 'applications_system': True}),
-                    ('applications-menu', 9, {'detail': 18}),
                     ('applications-only', 9, {'detail': 18, 'applications_mode': 1}),
-                    ('applications-exclude', 9, {'detail': 18, 'applications_mode': 2}),
+                    ('applications-exclude', 9, {'detail': 18, 'applications_mode': 2,
+                                                'applications_selected': 0}),
                     ('applications-unsaved', 9, {'detail': 12})):
                 add('phone', name, page, **state)
             manifest = {'schema': 3, 'scope': 'android-ui-preview', 'android_api': 31,
@@ -3319,6 +3342,35 @@ runpy.run_path(str(script), run_name='__main__')
                 (directory / 'manifest.json').write_text(json.dumps(manifest))
             write()
             android_build.validate_application_preview(directory, 31)
+            for name, changes, message in (
+                    ('phone-applications-all', {'applications_visible': 7}, 'application list'),
+                    ('phone-applications-all', {'applications_icons': 1}, 'application icons'),
+                    ('phone-applications-default', {'applications_mode': 0}, 'routing mode'),
+                    ('phone-applications-exclude', {'applications_selected': 1}, 'invert'),
+                    ('phone-applications-only', {'applications_selected': True}, 'selection'),
+                    ('phone-applications-only', {'applications_selected': 16}, 'selection')):
+                with self.subTest(name=name, changes=changes):
+                    changed = next(case for case in cases if case['name'] == name)
+                    original = changed['state']
+                    changed['state'] = original | changes
+                    write()
+                    with self.assertRaisesRegex(ValueError, message):
+                        android_build.validate_application_preview(directory, 31)
+                    changed['state'] = original
+            write()
+            application = next(case for case in cases if case['name'] == 'phone-applications-default')
+            for change in ({'applications_icons': 0}, {'applications_icons': True},
+                           {'applications_icons': 8}, {'applications_icon_failures': -1},
+                           {'applications_visibility_limited': True},
+                           {'applications_query_permission': False},
+                           {'applications_saved_summary': ''}):
+                with self.subTest(application=change):
+                    original = application['state']
+                    application['state'] = original | change
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'application (icons|visibility)'):
+                        android_build.validate_application_preview(directory, 31)
+                    application['state'] = original
             manifest['schema'] = 2
             write()
             with self.assertRaisesRegex(ValueError, 'identity'):
@@ -5635,21 +5687,22 @@ if(mode==='main'){
         removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
         self.assertEqual({value['id'] for value in removed}, {3, 4, 5})
 
-    def test_rust_cache_budget_preserves_arm_mac_then_measured_platform_order(self):
+    def test_cache_budget_preserves_small_bootstrap_then_measured_ci_bottlenecks(self):
         native_prefix = 'native-release-'+'v2-'
         keys = [
+            'action-setup-tailscale/1.104.5/macOS-arm64',
             native_prefix+'macos-latest',
             native_prefix+'macos-15-intel',
-            native_prefix+'windows-11-arm',
-            native_prefix+'windows-2025',
             'android-v2-arm64',
-            'android-v2-x64',
             'android-v2-armv7',
+            'android-v2-x64',
+            native_prefix+'windows-11-arm',
             'native-release-ubuntu20-v1-ubuntu-22.04',
+            native_prefix+'windows-2025',
             'native-release-ubuntu20-v1-ubuntu-22.04-arm',
             'memory-ubuntu22-v2-release',
         ]
-        entries = [{'id':index,'key':key+'-13131313-11223344','ref':'refs/heads/main',
+        entries = [{'id':index,'key':key if key.startswith('action-setup-tailscale/') else key+'-13131313-11223344','ref':'refs/heads/main',
                     'size_in_bytes':100,'last_accessed_at':f'{index:02d}','created_at':f'{index:02d}'}
                    for index,key in enumerate(keys)]
         for count in range(1,len(entries)+1):
@@ -5658,6 +5711,10 @@ if(mode==='main'){
                 retained = {entry['id'] for entry in entries}-{entry['id'] for entry in removed}
                 self.assertEqual(retained,set(range(count)))
         self.assertEqual(storage.priority({'key':native_prefix+'macos-13-check-13131313-11223344'}),8)
+        self.assertGreater(storage.priority({'key': keys[0]}),
+                           storage.priority({'key': keys[-1]}))
+        self.assertEqual(storage.priority({'key': keys[0]}),
+                         storage.priority({'key': 'action-setup-tailscale/' + '1.104.5/macOS-amd64'}))
 
 
 class AptCacheTests(unittest.TestCase):

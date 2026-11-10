@@ -27,6 +27,7 @@ slint::slint! {
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
     import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
     export { ApplicationItem } from "../ui/mobile/android/state.slint";
+    export { AndroidActions, AndroidIntent } from "../ui/mobile/android/state.slint";
     import { IosSurface } from "../ui/mobile/ios/app.slint";
     import { PageViews } from "../ui/components/view-toggle.slint";
     import { NoticeCountdown } from "../ui/components/motion.slint";
@@ -75,6 +76,11 @@ slint::slint! {
         in-out property <length> offset <=> AndroidData.applications-scroll-y;
         in-out property <string> query <=> AndroidData.applications-query;
         in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> protection-pending <=> MobileData.protection-pending;
+        in-out property <bool> dirty <=> MobileView.draft-dirty;
+        in-out property <int> mode <=> AndroidData.applications-mode;
+        in-out property <int> filter <=> AndroidData.applications-filter;
         AndroidApplications { width: parent.width; height: parent.height; }
         init => { AndroidData.applications-loaded = true; }
     }
@@ -134,6 +140,14 @@ slint::slint! {
         in-out property <bool> recover-network <=> MobileView.notice-recover-network;
         in-out property <bool> vpn-connected <=> MobileData.vpn-connected;
         in-out property <bool> core-running <=> MobileData.core-running;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> protection-pending <=> MobileData.protection-pending;
+        in-out property <bool> update-available <=> surface.update-available;
+        in-out property <bool> update-downloading <=> surface.update-downloading;
+        in-out property <string> update-status <=> surface.update-status;
+        in-out property <float> update-progress <=> surface.update-progress;
+        out property <length> update-height: surface.update-banner-height;
+        in-out property <int> page <=> MobileView.page;
         out property <[length]> close-target <=> surface.notice-close-target;
         in-out property <int> detail <=> MobileView.detail;
         in-out property <string> draft <=> MobileView.profile-name;
@@ -371,6 +385,107 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
 }
 
 #[test]
+fn application_controls_distinguish_scope_filter_save_and_protection() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = ApplicationsProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    probe
+        .global::<AndroidActions>()
+        .on_request(move |intent, value| {
+            captured.borrow_mut().push((intent, value.to_string()));
+        });
+    probe.set_mode(1);
+    probe.show().unwrap();
+    let click = |key: &str| {
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision() + 1);
+        frame(&adapter, 393, 852);
+        advance(&clock, Duration::ZERO);
+        let bounds = targets.borrow()[key].clone();
+        assert!(bounds[2] > 0. && bounds[3] >= 48.);
+        assert!(bounds[0] >= 0. && bounds[0] + bounds[2] <= 394.);
+        assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= 853.);
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            probe.window().dispatch_event(event);
+        }
+        advance(&clock, Duration::from_millis(50));
+    };
+    click("preview-applications-save");
+    assert!(requests.borrow().is_empty());
+    probe.set_dirty(true);
+    click("preview-applications-save");
+    assert_eq!(
+        requests.borrow().last().unwrap().0,
+        AndroidIntent::ApplicationSave
+    );
+    click("preview-applications-revert");
+    assert_eq!(
+        requests.borrow().last().unwrap().0,
+        AndroidIntent::ApplicationRevert
+    );
+    click("preview-applications-mode:2");
+    assert_eq!(
+        requests.borrow().last().unwrap(),
+        &(AndroidIntent::ApplicationMode, "2".to_string())
+    );
+    click("preview-applications-filter:1");
+    assert_eq!(
+        requests.borrow().last().unwrap(),
+        &(AndroidIntent::ApplicationFilter, "1".to_string())
+    );
+    probe.set_mode(0);
+    let before = requests.borrow().len();
+    targets.borrow_mut().clear();
+    let geometry = probe.global::<UiGeometry>();
+    geometry.set_revision(geometry.get_revision() + 1);
+    frame(&adapter, 393, 852);
+    advance(&clock, Duration::ZERO);
+    assert!(
+        !targets
+            .borrow()
+            .contains_key("preview-applications-filter:1")
+    );
+    assert_eq!(requests.borrow().len(), before);
+    probe.set_mode(1);
+    for pending in [false, true] {
+        probe.set_protected(!pending);
+        probe.set_protection_pending(pending);
+        for key in [
+            "preview-applications-save",
+            "preview-applications-mode:1",
+            "preview-applications-filter:0",
+        ] {
+            click(key);
+        }
+        assert_eq!(requests.borrow().len(), before);
+    }
+    probe.hide().unwrap();
+}
+
+#[test]
 fn applications_scroll_across_phone_and_tablet_viewports() {
     let (adapter, clock) = headless(393, 852);
     let probe = ApplicationsProbe::new().unwrap();
@@ -380,14 +495,17 @@ fn applications_scroll_across_phone_and_tablet_viewports() {
                 name: format!("Application {index}").into(),
                 package: format!("org.example.application{index}").into(),
                 selected: false,
+                icon: Default::default(),
+                has_icon: false,
             })
             .collect::<Vec<_>>(),
     ));
     probe.set_applications(applications.clone().into());
+    probe.set_mode(1);
     probe.show().unwrap();
     let scroll = |delta_y| {
         probe.window().dispatch_event(WindowEvent::PointerScrolled {
-            position: LogicalPosition::new(24., 24.),
+            position: LogicalPosition::new(24., probe.window().size().height as f32 - 24.),
             delta_x: 0.,
             delta_y,
         });
@@ -439,6 +557,27 @@ fn applications_scroll_across_phone_and_tablet_viewports() {
             "changing the system font size must not invalidate the application viewport"
         );
         probe.set_text_scale(1.);
+    }
+    for mode in [0, 2, 0, 1, 0, 2, 1] {
+        probe.set_mode(mode);
+        advance(&clock, Duration::from_millis(50));
+        frame(&adapter, 1280, 650);
+        assert_eq!(probe.get_offset(), 0.);
+        scroll(-160.);
+        advance(&clock, Duration::from_secs(1));
+        frame(&adapter, 1280, 650);
+        if mode == 0 {
+            assert_eq!(
+                probe.get_offset(),
+                0.,
+                "all applications must hide the list"
+            );
+        } else {
+            assert!(
+                probe.get_offset() < 0.,
+                "selection modes must show the list"
+            );
+        }
     }
     scroll(-160.);
     advance(&clock, Duration::from_secs(1));
@@ -1027,6 +1166,45 @@ fn notice_countdown_restarts_and_expires_after_five_seconds() {
     assert_eq!(countdown.get_remaining(), 0.);
     countdown.hide().unwrap();
     drop(countdown);
+}
+
+#[test]
+fn mobile_update_banner_survives_notice_expiry_and_respects_protection() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = MobileNoticeProbe::new().unwrap();
+    probe.set_update_available(true);
+    probe.set_update_status("发现新版本 0.6.8".into());
+    probe.show().unwrap();
+    for (width, height) in [(393, 852), (800, 1280), (852, 393)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        for page in [0, 1, 2, 9] {
+            probe.set_page(page);
+            frame(&adapter, width as usize, height as usize);
+            assert!(probe.get_update_height() >= 48.);
+        }
+        probe.invoke_notify("已完成检查".into());
+        advance(&clock, Duration::from_millis(5100));
+        frame(&adapter, width as usize, height as usize);
+        assert!(probe.get_notice().is_empty());
+        assert!(probe.get_update_height() >= 48.);
+        probe.set_protected(true);
+        frame(&adapter, width as usize, height as usize);
+        assert_eq!(probe.get_update_height(), 0.);
+        probe.set_protected(false);
+        probe.set_protection_pending(true);
+        frame(&adapter, width as usize, height as usize);
+        assert_eq!(probe.get_update_height(), 0.);
+        probe.set_protection_pending(false);
+        probe.set_update_downloading(true);
+        probe.set_update_progress(0.5);
+        frame(&adapter, width as usize, height as usize);
+        assert!(probe.get_update_height() >= 48.);
+        probe.set_update_downloading(false);
+    }
+    probe.set_update_available(false);
+    frame(&adapter, 852, 393);
+    assert_eq!(probe.get_update_height(), 0.);
+    probe.hide().unwrap();
 }
 
 #[test]

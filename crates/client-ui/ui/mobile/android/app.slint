@@ -1,4 +1,5 @@
-import { MobileView } from "../shared/state.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+import { AndroidData } from "state.slint";
 import { MobileFrame } from "../shared/frame.slint";
 import { MobileHome, MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileLogs, MobileNetwork, MobileIpCheck, MobileAiCheck, MobileTools } from "../shared/pages.slint";
 import { AndroidSettings } from "settings.slint";
@@ -15,6 +16,17 @@ export component AndroidSurface inherits MobileFrame {
     standalone-detail: MobileView.detail == 18 || (MobileView.detail == 12 && MobileView.pending-detail == 18);
     standalone-title: "应用分流";
     centered-modal: false;
+    update-available: AndroidData.update-available;
+    update-busy: AndroidData.update-busy;
+    update-downloading: AndroidData.update-downloading;
+    update-status: AndroidData.update-status;
+    update-progress: AndroidData.update-progress;
+    install-update => {
+        if MobileData.update-preview {
+            MobileActions.request(MobileIntent.install-update, "", "prepare");
+            MobileView.detail = 13;
+        } else { MobileActions.request(MobileIntent.install-update, "", ""); }
+    }
     if MobileView.page == 0: MobileHome { }
     if MobileView.page == 1: MobileProxies { }
     if MobileView.page == 2: MobileSubscriptions { }

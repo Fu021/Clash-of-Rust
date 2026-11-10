@@ -3,7 +3,7 @@ import { MobileTypography } from "typography.slint";
 // Responsive chrome only. Each platform supplies its own routes and pages.
 import { Theme } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
-import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNotice, MAppIcon, MProtectionLock } from "controls.slint";
+import { MText, MSmall, MHeading, MButton, MBackButton, MTag, MNav, MScroll, MNotice, MAppIcon, MProtectionLock, MProgress } from "controls.slint";
 import { MobileDetails, MobileModal } from "details.slint";
 import { ProtectionBadge, ProtectionAlert } from "../../components/protection-status.slint";
 import { Wordmark, ConnectionPower } from "../../components/brand.slint";
@@ -57,6 +57,13 @@ export component MobileFrame inherits Rectangle {
     in property <bool> compact-system-insets;
     in property <bool> standalone-detail;
     in property <string> standalone-title;
+    in property <bool> update-available;
+    in property <bool> update-busy;
+    in property <bool> update-downloading;
+    in property <string> update-status;
+    in property <float> update-progress;
+    callback install-update();
+    out property <length> update-banner-height: update-banner.height;
     in property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置", "工具"];
     property <[image]> icons: [@image-url("../../icons/home.svg"), @image-url("../../icons/proxies.svg"), @image-url("../../icons/subscriptions.svg"), @image-url("../../icons/connections.svg"), @image-url("../../icons/rules.svg"), @image-url("../../icons/logs.svg"), @image-url("../../icons/network.svg"), @image-url("../../icons/ip.svg"), @image-url("../../icons/ai.svg"), @image-url("../../icons/settings.svg"), @image-url("../../icons/network.svg")];
     property <length> usable-width: root.width - MobileView.safe-left - MobileView.safe-right;
@@ -211,8 +218,35 @@ export component MobileFrame inherits Rectangle {
             pending: MobileData.protection-pending;
             enabled: !MobileData.working && !MobileView.modal && !MobileView.notice-modal;
         }
+        update-banner := Rectangle {
+            visible: (root.update-available || root.update-downloading) && !MobileData.protected && !MobileData.protection-pending;
+            x: header.x; y: protection-lock.y + protection-lock.height + (protection-lock.visible ? 8px : 0px);
+            width: header.width; height: self.visible ? update-content.preferred-height : 0px;
+            background: Theme.accent-wash; border-radius: 12px;
+            update-content := VerticalLayout {
+                padding: 10px; spacing: 6px;
+                HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+                    VerticalLayout { horizontal-stretch: 1; min-width: 0px; spacing: 2px;
+                        MSmall { text: root.update-downloading ? "正在下载更新" : "发现新版本"; font-weight: 600; color: Theme.accent; }
+                        MSmall { text: !root.update-downloading && MobileView.draft-dirty ? "请先保存或放弃当前修改" : root.update-status; wrap: word-wrap; }
+                    }
+                    if root.update-downloading: MButton {
+                        text: "取消"; compact: true; enabled: !MobileView.modal && !MobileView.notice-modal;
+                        width: max(64px, MobileTypography.font-size(13) * 2 + 20px); horizontal-stretch: 0;
+                        clicked => { MobileActions.request(MobileIntent.cancel-update, "", ""); }
+                    }
+                    if root.update-available && !root.update-downloading: MButton {
+                        geometry-key: "mobile-update-install"; text: "下载安装"; compact: true; primary: true;
+                        width: max(84px, MobileTypography.font-size(13) * 4 + 20px); horizontal-stretch: 0;
+                        enabled: !root.update-busy && !MobileView.draft-dirty && !MobileData.profile-busy && !MobileView.modal && !MobileView.notice-modal;
+                        clicked => { root.install-update(); }
+                    }
+                }
+                if root.update-downloading: MProgress { value: root.update-progress; }
+            }
+        }
         body := Rectangle {
-            x: header.x; y: protection-lock.y + protection-lock.height + (protection-lock.visible ? 8px : 0px); width: header.width;
+            x: header.x; y: update-banner.y + update-banner.height + (update-banner.visible ? 8px : 0px); width: header.width;
             height: max(0px, root.usable-height - (self.y - MobileView.safe-top) - (root.bottom ? root.bottom-height - MobileView.safe-bottom : 0px));
             HorizontalLayout { spacing: MobileTypography.padding;
                 Rectangle {

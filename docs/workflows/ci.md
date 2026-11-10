@@ -54,7 +54,7 @@ Ubuntu 20.04 构建容器使用官方 HTTPS APT 源，首次安装证书包前�
 
 每轮 loop 执行只读依赖审计，CI 在最后的缓存 job 中输出 `dependency-audit` 附件及 summary，避免候选查询阻塞平台矩阵启动。报告覆盖 Cargo 锁定包、Go 模块、Android Maven 声明、Actions、已确认工具及 Linux/资源元数据，标出撤回、弃用和上游归档信号；查询失败与未检查项单列。按[loop 更新约定](../loop-workflow.md#每轮怎么做)修改声明、锁文件、工具基线及 Actions SHA 并验证。第三方 Actions 固定官方不可变提交，版本标签保存在工具基线中供审计，不随上游标签移动自动更新。
 
-GitHub 缓存预算为 9 GiB，按[慢平台优先级](cache-coverage.md#编译对象只用-github)保留，取消运行不执行预算清理。macOS/Windows 先尝试包含源码身份的缓存，未恢复有效对象时再尝试同平台旧 GitHub workspace；精确键未命中不代表冷编译。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。测试报告和安装包不进入编译缓存。
+GitHub 仓库缓存上限为 35 GB，工作流保留预算为 30 GiB，按[实际耗时与编译优先级](cache-coverage.md#编译对象只用-github)保留：优先保留很小但能避免源码构建的 macOS Tailscale 工具，Rust 中 macOS ARM64 最高，其余按近期 CI 耗时排序，Memory 最先让出空间，取消运行不执行预算清理。macOS/Windows 先尝试包含源码身份的缓存，未恢复有效对象时再尝试同平台旧 GitHub workspace；精确键未命中不代表冷编译。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。测试报告和安装包不进入编译缓存；两个预装 VM 仅存私网。
 
 Go 审计只查询声明的模块路径，不执行更新。Android 公共任务一次准备已校验的模块下载包和绑定工具，经本轮附件分发给三个 ABI；Go 编译与 Gradle 转换在 runner 完成，不再镜像这些目录。已验证的 Go 原始 ZIP/MOD 单独登记来源，不能用本轮分发的 runner tar 代替原始下载。
 

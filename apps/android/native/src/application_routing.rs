@@ -1,4 +1,5 @@
 use super::{AndroidData, AndroidIntent, AndroidWindow, ApplicationItem, MobileData, MobileView};
+use crate::application_routing_mode::selection_after_mode_change;
 use anyhow::{Context, Result, bail};
 use clash_mobile_runtime::NativeHost;
 use serde::Deserialize;
@@ -15,6 +16,8 @@ struct Application {
     package: String,
     system: bool,
     launchable: bool,
+    #[serde(default)]
+    icon: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -22,6 +25,14 @@ struct Catalog {
     applications: Vec<Application>,
     mode: String,
     selected: BTreeSet<String>,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    visibility_limited: bool,
+    #[serde(default)]
+    query_permission: bool,
+    #[serde(default)]
+    icon_failures: usize,
 }
 
 #[derive(Default)]
@@ -29,6 +40,9 @@ pub(super) struct Editor {
     catalog: Catalog,
     query: String,
     show_system: bool,
+    filter: usize,
+    saved_mode: String,
+    saved_selected: BTreeSet<String>,
     generation: u64,
     loaded: bool,
 }
@@ -36,10 +50,10 @@ pub(super) struct Editor {
 impl Editor {
     fn visible(&self, item: &Application) -> bool {
         let query = self.query.trim().to_lowercase();
-        (self.show_system
-            || item.launchable
-            || !item.system
-            || self.catalog.selected.contains(&item.package))
+        let selected = self.catalog.selected.contains(&item.package);
+        (self.filter != 1 || selected)
+            && (self.filter != 2 || !selected)
+            && (self.show_system || item.launchable || !item.system || selected)
             && (query.is_empty()
                 || item.name.to_lowercase().contains(&query)
                 || item.package.to_lowercase().contains(&query))
@@ -51,17 +65,30 @@ impl Editor {
             .catalog
             .applications
             .iter()
-            .filter(|item| self.visible(item))
-            .map(|item| ApplicationItem {
-                name: item.name.as_str().into(),
-                package: item.package.as_str().into(),
-                selected: self.catalog.selected.contains(&item.package),
+            .filter(|item| self.catalog.mode != "all" && self.visible(item))
+            .map(|item| {
+                let icon = if item.icon.is_empty() {
+                    None
+                } else {
+                    slint::Image::load_from_path(std::path::Path::new(&item.icon)).ok()
+                };
+                ApplicationItem {
+                    name: item.name.as_str().into(),
+                    package: item.package.as_str().into(),
+                    selected: self.catalog.selected.contains(&item.package),
+                    has_icon: icon.is_some(),
+                    icon: icon.unwrap_or_default(),
+                }
             })
             .collect::<Vec<_>>();
         data.set_applications(ModelRc::new(VecModel::from(items)));
         data.set_applications_loaded(self.loaded);
         data.set_applications_total(self.catalog.applications.len() as i32);
         data.set_applications_selected(self.catalog.selected.len() as i32);
+        data.set_applications_saved_summary(self.catalog.summary.as_str().into());
+        data.set_applications_visibility_limited(self.catalog.visibility_limited);
+        data.set_applications_query_permission(self.catalog.query_permission);
+        data.set_applications_icon_failures(self.catalog.icon_failures as i32);
         data.set_applications_mode(match self.catalog.mode.as_str() {
             "only" => 1,
             "exclude" => 2,
@@ -69,6 +96,13 @@ impl Editor {
         });
         data.set_applications_query(self.query.as_str().into());
         data.set_applications_system(self.show_system);
+        data.set_applications_filter(self.filter as i32);
+        if self.loaded && ui.global::<MobileView>().get_detail() == 18 {
+            ui.global::<MobileView>().set_draft_dirty(
+                self.catalog.mode != self.saved_mode
+                    || self.catalog.selected != self.saved_selected,
+            );
+        }
     }
 }
 
@@ -78,11 +112,14 @@ pub(super) fn handles(intent: AndroidIntent) -> bool {
         AndroidIntent::ApplicationRouting
             | AndroidIntent::ApplicationQuery
             | AndroidIntent::ApplicationSystem
+            | AndroidIntent::ApplicationFilter
             | AndroidIntent::ApplicationMode
             | AndroidIntent::ApplicationToggle
             | AndroidIntent::ApplicationSelect
+            | AndroidIntent::ApplicationRevert
             | AndroidIntent::ApplicationSave
             | AndroidIntent::ApplicationRefresh
+            | AndroidIntent::ApplicationPermissions
     )
 }
 
@@ -103,6 +140,10 @@ pub(super) fn request(
         return Ok(());
     }
     let mut state = editor.lock().map_err(|_| anyhow::anyhow!("应用列表忙碌"))?;
+    if intent == AndroidIntent::ApplicationPermissions {
+        host.request(json!({"op":"applications-permissions"}))?;
+        return Ok(());
+    }
     let opening = intent == AndroidIntent::ApplicationRouting;
     if opening || intent == AndroidIntent::ApplicationRefresh {
         if opening {
@@ -140,10 +181,16 @@ pub(super) fn request(
                     data.set_applications_loading(false);
                     match result {
                         Ok(catalog) => {
+                            state.saved_mode = catalog.mode.clone();
+                            state.saved_selected = catalog.selected.clone();
                             if !state.loaded {
                                 state.catalog = catalog;
                             } else {
                                 state.catalog.applications = catalog.applications;
+                                state.catalog.summary = catalog.summary;
+                                state.catalog.visibility_limited = catalog.visibility_limited;
+                                state.catalog.query_permission = catalog.query_permission;
+                                state.catalog.icon_failures = catalog.icon_failures;
                             }
                             state.loaded = true;
                         }
@@ -181,7 +228,7 @@ pub(super) fn request(
                     let Some(ui) = weak.upgrade() else {
                         return;
                     };
-                    let Ok(state) = editor.lock() else {
+                    let Ok(mut state) = editor.lock() else {
                         return;
                     };
                     if state.generation != generation {
@@ -191,17 +238,27 @@ pub(super) fn request(
                     data.set_applications_saving(false);
                     match result {
                         Ok(result) => {
+                            state.catalog.summary =
+                                result["summary"].as_str().unwrap_or("已保存").to_string();
+                            state.saved_mode = state.catalog.mode.clone();
+                            state.saved_selected = state.catalog.selected.clone();
+                            state.present(&ui);
                             data.set_application_scope(
                                 result["summary"].as_str().unwrap_or("已保存").into(),
                             );
                             let view = ui.global::<MobileView>();
-                            view.set_draft_dirty(false);
+                            if let Some(error) = result["reconnect_error"].as_str().filter(|value| !value.is_empty()) {
+                                data.set_applications_error(
+                                    format!("应用分流已保存，但 VPN 重连失败：{error}。请重新连接或导出诊断").into(),
+                                );
+                                return;
+                            }
                             if !view.get_notice_error() || view.get_notice().is_empty() {
                                 view.set_notice_error(false);
                                 view.set_notice_critical(false);
                                 ui.invoke_notify(
-                                    if result["connected"].as_bool().unwrap_or(false) {
-                                        "应用分流已保存，重新连接 VPN 后生效"
+                                    if result["reconnecting"].as_bool().unwrap_or(false) {
+                                        "应用分流已保存，正在重新连接 VPN"
                                     } else {
                                         "应用分流已保存，下次连接时生效"
                                     }
@@ -219,6 +276,14 @@ pub(super) fn request(
         return Ok(());
     }
     let changes_selection = match intent {
+        AndroidIntent::ApplicationRevert => {
+            state.catalog.mode = state.saved_mode.clone();
+            state.catalog.selected = state.saved_selected.clone();
+            if state.catalog.mode == "all" {
+                state.filter = 0;
+            }
+            true
+        }
         AndroidIntent::ApplicationQuery => {
             state.query = value.into();
             false
@@ -227,14 +292,42 @@ pub(super) fn request(
             state.show_system = value == "true";
             false
         }
+        AndroidIntent::ApplicationFilter => {
+            let filter = value.parse::<usize>()?;
+            if filter > 2 {
+                bail!("无法识别应用筛选条件");
+            }
+            state.filter = filter;
+            false
+        }
         AndroidIntent::ApplicationMode => {
-            state.catalog.mode = ["all", "only", "exclude"]
+            let next = *["all", "only", "exclude"]
                 .get(value.parse::<usize>()?)
-                .context("无法识别应用分流模式")?
-                .to_string();
+                .context("无法识别应用分流模式")?;
+            let current = state.catalog.mode.as_str();
+            let needs_complete_catalog = current != next
+                && (next == "only" || matches!((current, next), ("only", "exclude")));
+            if needs_complete_catalog
+                && (state.catalog.visibility_limited || !state.catalog.query_permission)
+            {
+                bail!("应用列表不完整，无法自动反选；请检查应用信息中的权限或设备限制，再刷新列表");
+            }
+            let available = state
+                .catalog
+                .applications
+                .iter()
+                .map(|item| item.package.clone())
+                .collect();
+            state.catalog.selected =
+                selection_after_mode_change(current, next, &state.catalog.selected, &available);
+            state.catalog.mode = next.to_string();
+            state.filter = 0;
             true
         }
         AndroidIntent::ApplicationToggle => {
+            if state.catalog.mode == "all" {
+                bail!("全部应用模式无需勾选；请先选择仅选中或排除选中");
+            }
             if !state
                 .catalog
                 .applications
@@ -249,6 +342,12 @@ pub(super) fn request(
             true
         }
         AndroidIntent::ApplicationSelect => {
+            if state.catalog.mode == "all" {
+                bail!("全部应用模式无需勾选；请先选择仅选中或排除选中");
+            }
+            if !["all", "invert", "clear"].contains(&value) {
+                bail!("无法识别应用选择操作");
+            }
             if value == "clear" {
                 state.catalog.selected.clear();
             } else {

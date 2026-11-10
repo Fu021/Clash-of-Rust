@@ -867,13 +867,13 @@ def validate_application_preview(directory, api):
             3, 'android-ui-preview', api) or not manifest.get('android_release'):
         raise ValueError('Android preview identity differs from the selected Android version')
     primary = ('home', 'proxies-grid', 'proxies-list', 'subscriptions-grid', 'subscriptions-list',
-               'settings-top', 'settings-middle', 'settings-bottom', 'applications-default',
+               'settings-top', 'settings-middle', 'settings-bottom', 'applications-all', 'applications-default',
                'applications-scrolled')
     expected = {f'{layout}-{case}' for layout in ('phone', 'landscape', 'tablet-portrait', 'tablet-landscape')
                 for case in primary}
     expected.update('phone-' + case for case in (
         'subscription-editor', 'tools', 'connections', 'rules', 'rule-shortcuts', 'logs', 'network', 'ip', 'ai',
-        'applications-system', 'applications-menu', 'applications-only', 'applications-exclude',
+        'applications-system', 'applications-only', 'applications-exclude',
         'applications-unsaved'))
     cases = manifest.get('cases')
     if not isinstance(cases, list):
@@ -943,19 +943,37 @@ def validate_application_preview(directory, api):
                 raise ValueError('Android preview captured the wrong list mode: ' + name)
         if suffix.startswith('applications-') and suffix != 'applications-unsaved':
             total, visible = state.get('applications_total'), state.get('applications_visible')
+            all_applications = suffix == 'applications-all'
             if (state.get('applications_loaded') is not True or state.get('applications_loading') is not False
                     or state.get('applications_error') != '' or type(total) is not int or type(visible) is not int
-                    or not 1 < visible <= total):
+                    or total <= 1 or not (visible == 0 if all_applications else 1 < visible <= total)):
                 raise ValueError('Android preview did not show a completed application list: ' + name)
+            icons, icon_failures = state.get('applications_icons'), state.get('applications_icon_failures')
+            if (type(icons) is not int or not (icons == 0 if all_applications else 0 < icons <= visible)
+                    or type(icon_failures) is not int or icon_failures < 0):
+                raise ValueError('Android preview did not load application icons: ' + name)
+            if (state.get('applications_visibility_limited') is not False
+                    or state.get('applications_query_permission') is not True
+                    or not isinstance(state.get('applications_saved_summary'), str)
+                    or not state['applications_saved_summary'].strip()):
+                raise ValueError('Android preview application visibility or saved state is unavailable: ' + name)
             if suffix == 'applications-system' and state.get('applications_system') is not True:
                 raise ValueError('Android preview did not show system applications')
-            if suffix in ('applications-only', 'applications-exclude') and state.get('applications_mode') != (
-                    1 if suffix == 'applications-only' else 2):
+            mode = 0 if all_applications else 2 if suffix == 'applications-exclude' else 1
+            if type(state.get('applications_mode')) is not int or state['applications_mode'] != mode:
                 raise ValueError('Android preview captured the wrong application routing mode')
+            selected = state.get('applications_selected')
+            if type(selected) is not int or not 0 <= selected <= total:
+                raise ValueError('Android preview application selection is invalid: ' + name)
             if suffix == 'applications-scrolled':
                 offset = state.get('applications_scroll_y')
                 if type(offset) not in (int, float) or not offset < -1:
                     raise ValueError('Android preview application list did not scroll: ' + name)
+    only = indexed['phone-applications-only']['state']
+    exclude = indexed['phone-applications-exclude']['state']
+    if (only['applications_total'] != exclude['applications_total']
+            or only['applications_selected'] + exclude['applications_selected'] != only['applications_total']):
+        raise ValueError('Android preview application modes did not invert the full selection')
 
 
 def application_preview(build, api):

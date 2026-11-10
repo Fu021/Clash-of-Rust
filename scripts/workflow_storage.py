@@ -1,4 +1,4 @@
-"""Keep Rust compilation caches below 9 GiB, favoring slow native targets."""
+"""Keep compilation caches below 30 GiB, favoring measured CI bottlenecks."""
 import argparse
 import os
 from pathlib import Path
@@ -8,7 +8,7 @@ import urllib.error
 
 from workflow_artifacts import release_module
 
-BUDGET = 9 * 1024**3
+BUDGET = 30 * 1024**3
 
 
 def caches(client):
@@ -59,23 +59,23 @@ def lineage(key):
 def priority(entry):
     key = entry['key']
     if re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key):
-        return 8
+        return 10
     if key.startswith('native-release-'):
         if 'macos' in key:
             return 8 if 'macos-13-' in key or 'intel' in key else 9
         if 'windows' in key and 'arm' in key:
-            return 7
+            return 4
         if 'windows' in key:
-            return 6
+            return 2
         if 'linux' in key or 'ubuntu' in key:
-            return 1 if 'arm' in key else 2
+            return 1 if 'arm' in key else 3
         return 1
     if key.startswith('android-v2-arm64-'):
-        return 5
+        return 7
     if key.startswith('android-v2-x64-'):
-        return 4
+        return 5
     if key.startswith('android-v2-armv7-'):
-        return 3
+        return 6
     if key.startswith('android-v2-'):
         return 1
     if key.startswith('memory-'):

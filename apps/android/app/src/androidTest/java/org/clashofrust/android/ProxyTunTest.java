@@ -1215,7 +1215,7 @@ public class ProxyTunTest {
         JSONObject catalog = ApplicationCatalog.read(context);
         JSONArray entries = catalog.getJSONArray("applications");
         java.util.Set<String> selected = ApplicationRouting.load(context).packages;
-        int expected = 0, other = 0;
+        int expected = 0, other = 0, icons = 0;
         for (int index = 0; index < entries.length(); index++) {
             JSONObject item = entries.getJSONObject(index);
             boolean visible = item.getBoolean("launchable") || !item.getBoolean("system")
@@ -1223,16 +1223,23 @@ public class ProxyTunTest {
             if (visible) {
                 expected++;
                 if (!context.getPackageName().equals(item.getString("package"))) other++;
+                String icon = item.getString("icon");
+                if (!icon.isEmpty() && new File(icon).isFile()) icons++;
             }
         }
         JSONObject ui = MainActivity.diagnostics();
         assertEquals("Application enumeration failed: " + ui, "", ui.getString("applications_error"));
         assertEquals(entries.length(), ui.getInt("applications_total"));
-        assertEquals(expected, ui.getInt("applications_visible"));
+        boolean all = ui.getInt("applications_mode") == 0;
+        assertEquals(all ? 0 : expected, ui.getInt("applications_visible"));
         assertTrue("The emulator has no other visible applications", other > 0);
+        assertFalse("Application visibility was incorrectly reported as restricted", catalog.getBoolean("visibility_limited"));
+        assertTrue("No installed application icon was loaded", icons > 0);
+        if (all) assertEquals("All applications must hide the list and icons", 0, ui.getInt("applications_icons"));
+        else assertTrue("Slint did not receive application icons", ui.getInt("applications_icons") > 0);
+        assertEquals("Saved routing summary is missing", catalog.getString("summary"), ui.getString("applications_saved_summary"));
     }
-    private static void previewApplications(Context context, File directory, JSONArray cases,
-            String prefix, boolean modes) throws Exception {
+    private static void openApplicationRouting() throws Exception {
         previewNavigate(9);
         previewSettingsTop();
         await("Application routing entry was not laid out", () -> {
@@ -1245,7 +1252,33 @@ public class ProxyTunTest {
             return ui.optInt("detail") == 18 && !ui.optBoolean("applications_loading")
                 && (ui.optBoolean("applications_loaded") || !ui.optString("applications_error").isEmpty());
         });
+    }
+    private static void applicationMode(int mode) throws Exception {
+        JSONObject before = MainActivity.diagnostics();
+        int previous = before.getInt("applications_mode");
+        int total = before.getInt("applications_total");
+        int selected = before.getInt("applications_selected");
+        int expected = previous == mode || mode == 0 ? selected
+            : previous == 0 ? (mode == 1 ? total : 0) : total - selected;
+        previewTarget("preview-applications-mode:" + mode);
+        await("Application routing mode or automatic inversion did not apply: " + mode, () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            if (!ui.optString("applications_error").isEmpty())
+                throw new IOException(ui.getString("applications_error"));
+            return ui.optInt("applications_mode", -1) == mode
+                && ui.optInt("applications_selected", -1) == expected;
+        });
+        if (mode == 0)
+            assertEquals("All applications must remove the selection list", 0,
+                MainActivity.diagnostics().getInt("applications_visible"));
+    }
+    private static void previewApplications(Context context, File directory, JSONArray cases,
+            String prefix, boolean modes) throws Exception {
+        openApplicationRouting();
         previewApplicationCatalog(context);
+        applicationMode(0);
+        capturePreview(directory, cases, prefix + "-applications-all");
+        applicationMode(1);
         capturePreview(directory, cases, prefix + "-applications-default");
         if (modes) {
             previewTarget("preview-applications-system");
@@ -1255,34 +1288,24 @@ public class ProxyTunTest {
             previewTarget("preview-applications-system");
             await("System component filter did not return",
                 () -> !MainActivity.diagnostics().optBoolean("applications_system"));
-            for (int mode = 1; mode <= 2; mode++) {
-                previewTarget("preview-applications-mode");
-                if (mode == 1) capturePreview(directory, cases, prefix + "-applications-menu");
-                else SystemClock.sleep(400);
-                JSONObject ui = MainActivity.diagnostics();
-                JSONArray bounds = previewBounds(ui, "preview-applications-mode");
-                assertNotNull("Application mode control is missing", bounds);
-                float scale = (float)ui.getDouble("scale");
-                int[] origin = windowOrigin();
-                float x = origin[0] + (float)(bounds.getDouble(0) + bounds.getDouble(2) / 2) * scale;
-                float y = origin[1] + (float)(bounds.getDouble(1) + bounds.getDouble(3) + 4 + 8 + 24 + mode * 52) * scale;
-                tap(x, y);
-                final int expected = mode;
-                await("Application routing mode did not change to " + mode,
-                    () -> MainActivity.diagnostics().optInt("applications_mode", -1) == expected);
-                capturePreview(directory, cases, prefix + (mode == 1 ? "-applications-only" : "-applications-exclude"));
+            for (int round = 0; round < 3; round++) {
+                applicationMode(2);
+                if (round == 0) capturePreview(directory, cases, prefix + "-applications-exclude");
+                applicationMode(1);
             }
+            capturePreview(directory, cases, prefix + "-applications-only");
         }
         double beforeScroll = MainActivity.diagnostics().getDouble("applications_scroll_y");
         previewSwipe(true);
         await("Application list did not scroll",
             () -> MainActivity.diagnostics().getDouble("applications_scroll_y") < beforeScroll - 1);
         capturePreview(directory, cases, prefix + "-applications-scrolled");
+        boolean dirty = MainActivity.diagnostics().getBoolean("applications_dirty");
         shell("input keyevent KEYCODE_BACK");
-        if (modes) {
+        if (dirty) {
             await("Unsaved application changes did not request confirmation",
                 () -> MainActivity.diagnostics().optInt("detail") == 12);
-            capturePreview(directory, cases, prefix + "-applications-unsaved");
+            if (modes) capturePreview(directory, cases, prefix + "-applications-unsaved");
             previewTarget("preview-discard");
         }
         await("Application routing did not return to settings",
@@ -1447,6 +1470,71 @@ public class ProxyTunTest {
             String controller = value(raw, "external-controller");
             String secret = value(raw, "secret");
             ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+            new ApplicationRouting(ApplicationRouting.ONLY, java.util.Collections.singleton(self)).save(context);
+            openApplicationRouting();
+            previewApplicationCatalog(context);
+            java.util.Set<String> available = new java.util.HashSet<>();
+            JSONArray catalog = ApplicationCatalog.read(context).getJSONArray("applications");
+            for (int index = 0; index < catalog.length(); index++)
+                available.add(catalog.getJSONObject(index).getString("package"));
+            java.util.Set<String> complement = new java.util.HashSet<>(available);
+            complement.remove(self);
+            for (int round = 0; round < 3; round++) {
+                applicationMode(2);
+                assertTrue("Mode changes must remain drafts", MainActivity.diagnostics().getBoolean("applications_dirty"));
+                assertEquals(java.util.Collections.singleton(self), ApplicationRouting.load(context).packages);
+                applicationMode(1);
+                assertFalse("A full round trip must restore the saved state",
+                    MainActivity.diagnostics().getBoolean("applications_dirty"));
+            }
+            applicationMode(2);
+            previewTarget("preview-applications-save");
+            await("UI save did not persist the inverted selection", () -> {
+                ApplicationRouting saved = ApplicationRouting.load(context);
+                return ApplicationRouting.EXCLUDE.equals(saved.mode) && complement.equals(saved.packages)
+                    && !MainActivity.diagnostics().optBoolean("applications_dirty", true);
+            });
+            TunnelService.start(context, false);
+            await("The inverted exclusion must keep this application inside VPN", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected() && vpnActive(connectivity);
+            });
+            tunCarriesSocket(controller, secret);
+            shell("input keyevent KEYCODE_BACK");
+            await("Saved editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            openApplicationRouting();
+            assertEquals(2, MainActivity.diagnostics().getInt("applications_mode"));
+            assertEquals(complement.size(), MainActivity.diagnostics().getInt("applications_selected"));
+            applicationMode(1);
+            long invertedGeneration = TunnelService.generation();
+            previewTarget("preview-applications-save");
+            await("Returning to only-selected must save and reconnect automatically", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                ApplicationRouting saved = ApplicationRouting.load(context);
+                return ApplicationRouting.ONLY.equals(saved.mode)
+                    && java.util.Collections.singleton(self).equals(saved.packages)
+                    && TunnelService.generation() > invertedGeneration
+                    && TunnelService.connected() && vpnActive(connectivity)
+                    && !MainActivity.diagnostics().optBoolean("applications_dirty", true);
+            });
+            tunCarriesSocket(controller, secret);
+            applicationMode(0);
+            applicationMode(2);
+            assertEquals(0, MainActivity.diagnostics().getInt("applications_selected"));
+            applicationMode(0);
+            applicationMode(1);
+            assertEquals(available.size(), MainActivity.diagnostics().getInt("applications_selected"));
+            previewTarget("preview-applications-revert");
+            await("Revert must restore the saved mode and selection", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optInt("applications_mode", -1) == 1 && ui.optInt("applications_selected", -1) == 1
+                    && !ui.optBoolean("applications_dirty", true);
+            });
+            shell("input keyevent KEYCODE_BACK");
+            await("Reverted editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            TunnelService.stop(context);
+            await("UI routing regression did not disconnect VPN", () -> !TunnelService.connected() && !TunnelService.pending());
+            awaitDirectRecovery(connectivity);
             String[] modes = {ApplicationRouting.ALL, ApplicationRouting.ONLY, ApplicationRouting.ONLY,
                 ApplicationRouting.EXCLUDE, ApplicationRouting.EXCLUDE};
             String[] packages = {self, self, other, self, other};
@@ -1479,7 +1567,19 @@ public class ProxyTunTest {
                         java.util.Collections.singleton(packages[index]), cleaned.packages);
                 }
                 new ApplicationRouting(ApplicationRouting.ALL, java.util.Collections.emptySet()).save(context);
-                assertEquals("Saving preferences must not change the live VPN", throughVpn, vpnActive(connectivity));
+                assertEquals("Saving preferences alone must not change the live VPN", throughVpn, vpnActive(connectivity));
+                long previousGeneration = TunnelService.generation();
+                JSONObject saved = ApplicationCatalog.save(context, new JSONObject()
+                    .put("mode", ApplicationRouting.ALL).put("selected", new JSONArray()));
+                assertTrue("Saving while connected must request a VPN reconfiguration", saved.getBoolean("reconnecting"));
+                assertEquals("", saved.getString("reconnect_error"));
+                await("Saved application routing was not applied without a manual reconnect", () -> {
+                    if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                    return TunnelService.generation() > previousGeneration
+                        && TunnelService.connected() && vpnActive(connectivity);
+                });
+                assertEquals(ApplicationRouting.ALL, ApplicationRouting.load(context).mode);
+                tunCarriesSocket(controller, secret);
                 TunnelService.stop(context);
                 await("Application routing left VPN connected", () -> !TunnelService.connected());
                 awaitDirectRecovery(connectivity);

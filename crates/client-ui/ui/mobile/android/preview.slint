@@ -38,6 +38,12 @@ export component AndroidPreview inherits Window {
     in-out property <string> preview-update-version <=> MobileData.update-version;
     in-out property <bool> preview-update-available <=> AndroidData.update-available;
     in-out property <string> preview-update-status <=> AndroidData.update-status;
+    in-out property <bool> preview-update-downloading <=> AndroidData.update-downloading;
+    in-out property <float> preview-update-progress <=> AndroidData.update-progress;
+    in-out property <int> preview-applications-mode <=> AndroidData.applications-mode;
+    in-out property <int> preview-applications-filter <=> AndroidData.applications-filter;
+    in-out property <bool> preview-applications-limited <=> AndroidData.applications-visibility-limited;
+    in-out property <bool> preview-applications-dirty <=> MobileView.draft-dirty;
     in-out property <length> preview-settings-scroll <=> MobileView.settings-scroll-y;
     in-out property <length> preview-rules-scroll <=> MobileView.rules-scroll-y;
     in-out property <length> preview-home-scroll <=> MobileView.home-scroll-y;
@@ -52,13 +58,15 @@ export component AndroidPreview inherits Window {
         AndroidData.applications-total = 6;
         AndroidData.applications-selected = 2;
         AndroidData.applications-mode = 1;
+        AndroidData.applications-saved-summary = "仅选中 2 个应用";
+        AndroidData.applications-query-permission = true;
         AndroidData.applications = [
-            {name: "浏览器", package: "org.example.browser", selected: true},
-            {name: "地图", package: "org.example.maps", selected: false},
-            {name: "邮件", package: "org.example.mail", selected: true},
-            {name: "音乐", package: "org.example.music", selected: false},
-            {name: "很长的应用名称用于检查操作控件是否始终可见", package: "org.example.long.application.name", selected: false},
-            {name: "Clash of Rust", package: "org.clashofrust.android", selected: false},
+            {name: "浏览器", package: "org.example.browser", selected: true, icon: @image-url("../../icons/network.svg"), has-icon: true},
+            {name: "地图", package: "org.example.maps", selected: false, icon: @image-url("../../icons/ip.svg"), has-icon: true},
+            {name: "邮件", package: "org.example.mail", selected: true, icon: @image-url("../../icons/subscriptions.svg"), has-icon: true},
+            {name: "音乐", package: "org.example.music", selected: false, icon: @image-url("../../icons/proxies.svg"), has-icon: true},
+            {name: "很长的应用名称用于检查操作控件是否始终可见", package: "org.example.long.application.name", selected: false, icon: @image-url("../../icons/home.svg"), has-icon: true},
+            {name: "Clash of Rust", package: "org.clashofrust.android", selected: false, icon: @image-url("../../icons/settings.svg"), has-icon: true},
         ];
     }
 }

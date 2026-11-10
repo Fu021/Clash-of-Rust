@@ -49,7 +49,7 @@ def select(paths, extended=False):
     android = any(
         path.startswith(('apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting',
                          'apps/android/app/src/main/java/org/clashofrust/android/ApplicationCatalog.java',
-                         'apps/android/native/src/application_routing.rs',
+                         'apps/android/native/src/application_routing',
                          'crates/client-ui/ui/mobile/android/applications.slint',
                          'apps/android/app/src/main/java/org/clashofrust/android/TunnelService.java',
                          'apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java'))

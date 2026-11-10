@@ -888,7 +888,7 @@ jobs:
           path: target/dependency-audit
           retention-days: 3
           if-no-files-found: error
-      - name: Prioritize slow Rust compilation within the 9 GiB cache budget
+      - name: Prioritize CI compilation within the 30 GiB cache budget
         shell: python
         env:
           GH_TOKEN: ${{ github.token }}

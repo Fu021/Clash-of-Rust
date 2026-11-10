@@ -8,28 +8,36 @@
 
 CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache；未命中正常编译，不查询私网 Rust 索引或分片，也不在 job 结束后镜像对象。Publish Release 继续复用同提交成功 CI 的构建附件，不重新编译 Rust。
 
-GitHub 热缓存预算为 9 GiB。CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台的新编译缓存；Memory Benchmark 不再限定主分支保存。精确键已存在时由不可变缓存规则复用，未命中正常编译；fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。macOS ARM64 按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失；缓存不会缩短 runner 排队。其余按最近六次成功完整 CI 的“Rust 缓存恢复＋编译/测试”中位耗时排序：
+仓库缓存上限已设为 **35 GB**（GitHub 按 GiB 计量），工作流热缓存保留预算为 **30 GiB**，给保存期间的新旧对象交替留出 5 GiB 空间。仓库上限与账户每月预算分别设置；预算不是缓存预留容量，GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及计费依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
 
-| 保留优先级 | 平台 | 中位耗时（分钟） |
+CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台的新编译缓存；Memory Benchmark 不再限定主分支保存。精确键已存在时由不可变缓存规则复用，未命中正常编译；fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。优先缩短 CI 的实际关键路径：macOS Tailscale 二进制很小且能省去源码编译，因此优先保留；Rust 对象中 macOS ARM64 仍按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失。其余编译目标按最近六次成功完整 CI 的恢复与编译耗时保留：
+
+| 保留优先级 | 平台或工具 | 恢复／编译耗时依据 |
 | --- | --- | --- |
-| 1 | macOS ARM64 | 9.2 |
-| 2 | macOS Intel | 16.6 |
-| 3 | Windows ARM64 | 12.3 |
-| 4 | Windows x64 | 11.9 |
-| 5 | Android ARM64 | 7.3 |
-| 6 | Android x64 | 7.0 |
-| 7 | Android ARMv7 | 6.7 |
-| 8 | Linux x64 | 5.8 |
-| 9 | Linux ARM64 | 5.3 |
-| 10 | Memory Benchmark | 最先让出空间 |
+| 1 | macOS Tailscale 引导工具（两架构） | 共约 63 MiB；ARM64 冷构建一次 166 秒，命中后接入中位数 5.5／7 秒 |
+| 2 | macOS ARM64 Rust | 恢复 20 秒、编译 213.5 秒；维护者指定最高 Rust 优先级 |
+| 3 | macOS Intel Rust | 恢复 138 秒、编译 479.5 秒 |
+| 4 | Android ARM64 Rust | 恢复 13 秒、应用及内核编译 446.5 秒 |
+| 5 | Android ARMv7 Rust | 恢复 8 秒、应用及内核编译 432 秒 |
+| 6 | Android x64 Rust | 恢复 14 秒、应用及内核编译 420 秒 |
+| 7 | Windows ARM64 Rust | 恢复 150.5 秒、编译 268 秒 |
+| 8 | Linux x64 Rust | 恢复 4.5 秒、编译 296.5 秒 |
+| 9 | Windows x64 Rust | 恢复 43.5 秒、编译 239.5 秒 |
+| 10 | Linux ARM64 Rust | 恢复 8.5 秒、编译 221.5 秒 |
+| 11 | Memory Benchmark | 最先让出空间 |
 
-2026-11-06 核对的来源为 `42063675832`、`42044579484`、`42031368400`、`41979081254`、`41973243758`、`41966802804`。桌面计 Rust 恢复、兼容 workspace 恢复及编译/测试，Android 计 Rust 恢复和应用/内核编译；排除排队、私网接入、模拟器测试与清单收尾。它们并非纯 Rust 编译或冷/热对照，不能当作缓存净节约。策略经审阅后固定，不随每轮数据自动变化。
+2026-11-10 按六轮完整成功 CI 核对，恢复与编译分别取中位数，策略不随每轮数据自动变化。采样来源、Tailscale 冷暖对照及测量边界见[耗时依据](cache-capacity.md#近期-ci-耗时依据)。
 
 同一逻辑键组/分支只留最近一代；Windows/macOS 不同源码的 workspace 键归入同一平台族，保留最新兼容对象并共享总预算。容量不足可以淘汰，不向私网复制。`rust-cache` 自带的 Cargo registry/Git 数据与 Rust 对象一起管理，不再另建下载缓存。测试报告和安装包仅使用短期 artifact。
 
-仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管。macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此只在 macOS 开启该 Action 自带的 GitHub 二进制缓存，避免每个 CI、打包和内存 job 重编；其他平台保持关闭。此引导缓存按架构/分支保留最近版本，与 Intel Rust 同级、低于 ARM64 Rust，仍计入 9 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
+仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管。macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS job 开启该 Action 自带的 GitHub 二进制缓存；当前内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存按架构/分支保留最近版本，计入 30 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
-性能分析须将私网接入与 Rust 恢复分开：[CI 41973243758](https://github.com/Fu021/Clash-of-Rust/actions/runs/41973243758) 的 macOS Intel 分别用时 376 秒接入 Tailscale、74 秒恢复 GitHub 对象、269 秒编译与测试；ARM64 分别为 135、28、172 秒。两种架构均恢复有效 workspace，对 452 个源码/目录时间戳完成核验且没有变化的 crate；官方 action 在 macOS 从源码构建 Tailscale 的行为见[上游问题](https://github.com/tailscale/github-action/issues/287)。这些单次结果不能据总 job 时间认定 Rust 缓存无效，也不能代替冷编译对照。
+| 工作流 | GitHub 编译缓存与收尾 | 私网预装镜像 |
+| --- | --- | --- |
+| CI | 六种桌面与三个 Android ABI 恢复/保存 Rust；按 30 GiB 统一清理 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
+| Memory Benchmark | 恢复/保存本次 profile 的 Rust；使用同一预算，优先让出空间 | 不使用 |
+| Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 复用 CI 验收结果，不下载或上传 VM |
+| Android UI Previews（按需） | 复用成功 CI 的 APK，只留截图 artifact | 不使用 |
 
 ## 原始下载：官方优先，私网回退
 
