@@ -7,8 +7,6 @@ pub fn reconcile<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<
     let length = rows.len();
     if length == 0 {
         if model.row_count() != 0 {
-            // Removing rows retains Vec's backing allocation. An inactive page
-            // has no rows to reuse; replace the Vec while keeping model identity.
             model.set_vec(Vec::new());
         }
         return;
@@ -18,6 +16,33 @@ pub fn reconcile<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<
             model.push(row);
         } else if model.row_data(index).as_ref() != Some(&row) {
             model.set_row_data(index, row);
+        }
+    }
+    while model.row_count() > length {
+        model.remove(model.row_count() - 1);
+    }
+}
+
+pub fn reconcile_with<T: Clone + 'static, Source>(
+    model: &VecModel<T>,
+    rows: &[Source],
+    equal: impl Fn(&T, &Source) -> bool,
+    convert: impl Fn(&Source) -> T,
+) {
+    let length = rows.len();
+    if length == 0 {
+        if model.row_count() != 0 {
+            // Removing rows retains Vec's backing allocation. An inactive page
+            // has no rows to reuse; replace the Vec while keeping model identity.
+            model.set_vec(Vec::new());
+        }
+        return;
+    }
+    for (index, row) in rows.iter().enumerate() {
+        if index >= model.row_count() {
+            model.push(convert(row));
+        } else if !model.row_data(index).is_some_and(|old| equal(&old, row)) {
+            model.set_row_data(index, convert(row));
         }
     }
     while model.row_count() > length {
@@ -49,23 +74,36 @@ impl ViewModels {
         data.set_claude_results(self.claude_results.clone().into());
     }
     pub fn set_groups(&mut self, groups: Vec<(GroupItem, Vec<NodePair>)>) {
-        self.nodes
-            .retain(|key, _| groups.iter().any(|(group, _)| group.id.as_str() == key));
         let mut rows = Vec::with_capacity(groups.len());
         for (mut group, nodes) in groups {
-            if nodes.is_empty() {
-                // A closing disclosure can own the old model for its short
-                // fade. Drop the backend reference immediately, without
-                // mutating the rows still being drawn by that disclosure.
-                self.nodes.remove(group.id.as_str());
-                group.nodes = Default::default();
-            } else {
-                let model = self.nodes.entry(group.id.to_string()).or_default();
-                reconcile(model, nodes);
-                group.nodes = model.clone().into();
-            }
+            group.nodes =
+                self.group_nodes_with(group.id.as_str(), &nodes, PartialEq::eq, Clone::clone);
             rows.push(group);
         }
+        self.set_group_rows(rows);
+    }
+    pub fn group_nodes_with<Source>(
+        &mut self,
+        id: &str,
+        rows: &[Source],
+        equal: impl Fn(&NodePair, &Source) -> bool,
+        convert: impl Fn(&Source) -> NodePair,
+    ) -> slint::ModelRc<NodePair> {
+        if rows.is_empty() {
+            self.nodes.remove(id);
+            return Default::default();
+        }
+        let model = self.nodes.get(id).cloned().unwrap_or_else(|| {
+            let model = Rc::new(VecModel::default());
+            self.nodes.insert(id.to_owned(), model.clone());
+            model
+        });
+        reconcile_with(&model, rows, equal, convert);
+        model.into()
+    }
+    pub fn set_group_rows(&mut self, rows: Vec<GroupItem>) {
+        self.nodes
+            .retain(|key, _| rows.iter().any(|group| group.id.as_str() == key));
         reconcile(&self.groups, rows);
     }
     pub fn clear(&mut self) {

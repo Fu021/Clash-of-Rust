@@ -1211,7 +1211,7 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         ui_checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
-        self.assertEqual(len(ui_checks), 5)
+        self.assertEqual(len(ui_checks), 9)
         self.assertTrue(any('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions'
                             in command for command in ui_checks))
         self.assertTrue(any('application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release'
@@ -1222,7 +1222,17 @@ class BuildTests(unittest.TestCase):
                             in command for command in ui_checks))
         self.assertTrue(any('applications_scroll_across_phone_and_tablet_viewports'
                             in command for command in ui_checks))
-        self.assertTrue(all('--exact' in command for command in ui_checks))
+        focused = [command for command in ui_checks if
+                   command[command.index('-p')+1] == 'clash-of-rust'
+                   or 'mobile_lists' in command]
+        self.assertEqual(len(focused), 5)
+        self.assertTrue(all('--exact' in command for command in focused))
+        for package, target in (('clash-client-ui', 'ui_models'),
+                                ('clash-desktop-ui', '--lib'),
+                                ('clash-client-core', 'api::tests::'),
+                                ('clash-client-core', 'overview::tests::')):
+            self.assertTrue(any(command[command.index('-p')+1] == package and target in command
+                                for command in ui_checks), (package, target))
         with patch.dict(os.environ, {'COR_CI_DESKTOP_UI_TESTS': 'true'}), \
                 patch.object(linux_ci, 'build_image', return_value='test-image'), \
                 patch.object(linux_ci, 'run') as run:

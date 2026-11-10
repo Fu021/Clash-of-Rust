@@ -52,6 +52,13 @@ def main():
                      'applications_scroll_across_phone_and_tablet_viewports'):
             run(['cargo', 'test', '-p', 'clash-client-ui', '--test', 'mobile_lists', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])
+        for package, target, cases in (
+                ('clash-client-ui', ['--test', 'ui_models'], ['']),
+                ('clash-desktop-ui', ['--lib'], ['']),
+                ('clash-client-core', ['--lib'], ['api::tests::', 'overview::tests::'])):
+            for case in cases:
+                run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
+                     *([case] if case else []), '--', '--test-threads=1'])
     test_scope = [*packages, '--lib', '--bins', '--tests'] if extended else [
         '-p', 'clash-of-rust', '--test', 'core_integration']
     messages = cargo_messages(['cargo', 'test', *test_scope, '--release', '--locked',

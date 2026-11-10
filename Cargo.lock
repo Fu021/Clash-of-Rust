@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "clash-android"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -677,7 +677,7 @@ dependencies = [
 
 [[package]]
 name = "clash-cli"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "anyhow",
  "chrono",
@@ -695,10 +695,11 @@ dependencies = [
 
 [[package]]
 name = "clash-client-core"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "anyhow",
  "base64",
+ "bytes",
  "chrono",
  "directories",
  "futures-util",
@@ -723,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "clash-client-runtime"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "anyhow",
  "base64",
@@ -757,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "clash-client-ui"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "i-slint-core",
  "slint",
@@ -766,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "clash-desktop-protocol"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "postcard",
  "serde",
@@ -774,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "clash-desktop-shell"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -799,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "clash-desktop-ui"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "anyhow",
  "clash-client-core",
@@ -818,7 +819,7 @@ dependencies = [
 
 [[package]]
 name = "clash-mobile-runtime"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "anyhow",
  "clash-client-core",
@@ -833,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "clash-of-rust"
-version = "0.6.7-fix.9.session-lifecycle"
+version = "0.6.7-fix.10.memory-projection"
 dependencies = [
  "anyhow",
  "arboard",

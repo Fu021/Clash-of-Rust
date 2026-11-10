@@ -4,6 +4,7 @@ use super::presentation::model;
 use super::*;
 use clash_desktop_protocol::{OverviewItem, Text as SharedString, UiData};
 use clash_of_rust::overview as probes;
+use futures_util::FutureExt;
 
 /// Resolved with the system resolver to show whether DNS works and how fast.
 const DNS_HOST: &str = "github.com";
@@ -130,10 +131,20 @@ impl App {
                 },
                 move |result| Message::OverviewExit(generation, result),
             ));
+            let checker =
+                async move { probes::Checker::new(port).map_err(|error| error.to_string()) }
+                    .shared();
             for (index, target) in probes::TARGETS.iter().enumerate() {
                 let url = target.url;
+                let checker = checker.clone();
                 tasks.push(Task::perform(
-                    async move { probes::check(url, port).await.map_err(|e| e.to_string()) },
+                    async move {
+                        checker
+                            .await?
+                            .check(url)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
                     move |result| Message::OverviewService(generation, index, result),
                 ));
             }

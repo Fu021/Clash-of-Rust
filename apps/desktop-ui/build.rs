@@ -24,6 +24,34 @@ fn convert(kind: &str, value: &str) -> String {
         kind => format!("convert_{}(&{value})", rust_name(kind)),
     }
 }
+fn equal(kind: &str, left: &str, right: &str) -> String {
+    match kind {
+        "string" => format!("{left}.as_str()=={right}.as_str()"),
+        "int" | "bool" | "float" | "length" => format!("{left}=={right}"),
+        kind if kind.starts_with('[') => {
+            let inner = &kind[1..kind.len() - 1];
+            format!(
+                "{right}.with_rows(|rows|equal_rows(&{left},rows,{}))",
+                equal_row(inner)
+            )
+        }
+        kind => format!("same_{}(&{left},&{right})", rust_name(kind)),
+    }
+}
+fn equal_row(kind: &str) -> String {
+    match kind {
+        "int" | "bool" | "float" | "length" => "PartialEq::eq".into(),
+        "string" => "|left,right|left.as_str()==right.as_str()".into(),
+        kind => format!("same_{}", rust_name(kind)),
+    }
+}
+fn convert_row(kind: &str) -> String {
+    match kind {
+        "int" | "bool" | "float" | "length" => "Clone::clone".into(),
+        "string" => "|value|value.as_str().into()".into(),
+        kind => format!("convert_{}", rust_name(kind)),
+    }
+}
 fn main() {
     let path = "../../crates/client-ui/ui/state.slint";
     println!("cargo:rerun-if-changed={path}");
@@ -45,6 +73,19 @@ fn main() {
             code += &format!("{field}:{converted},");
         }
         code += "}}\n";
+        let comparisons: Vec<_> = fields
+            .iter()
+            .filter(|(field, _)| struct_name != "GroupItem" || field != "nodes")
+            .map(|(name, kind)| {
+                let field = rust_name(name);
+                equal(kind, &format!("left.{field}"), &format!("right.{field}"))
+            })
+            .collect();
+        code += &format!(
+            "#[allow(non_snake_case)]fn same_{}(left:&ui::{struct_name},right:&wire::{struct_name})->bool{{{}}}\n",
+            rust_name(struct_name),
+            comparisons.join("&&")
+        );
     }
     code += "pub fn intent(value:ui::Intent)->wire::Intent {match value{";
     for name in &schema.intents {
@@ -70,19 +111,20 @@ fn main() {
         let field = rust_name(name);
         if roots.contains(&name.as_str()) {
             if name == "groups" {
-                code += "frame.groups.with_rows(|rows|models.set_groups(rows.iter().map(|g|{let row=convert_GroupItem(g);(row,g.nodes.with_rows(|rows|rows.iter().map(convert_NodePair).collect()))}).collect()));";
+                code += "frame.groups.with_rows(|rows|groups(models,rows));";
             } else {
                 let row_type = &kind[1..kind.len() - 1];
                 code += &format!(
-                    "frame.{field}.with_rows(|rows|ui::models::reconcile(&models.{field},rows.iter().map(convert_{}).collect()));",
-                    rust_name(row_type)
+                    "frame.{field}.with_rows(|rows|ui::models::reconcile_with(&models.{field},rows,same_{kind},convert_{kind}));",
+                    kind = rust_name(row_type)
                 );
             }
         } else if kind.starts_with('[') {
             let inner = &kind[1..kind.len() - 1];
-            let rows = mapped_rows(inner);
             code += &format!(
-                "frame.{field}.with_rows(|rows|data.set_{field}(list(data.get_{field}(),{rows})));\n"
+                "frame.{field}.with_rows(|rows|data.set_{field}(list(data.get_{field}(),rows,{},{})));\n",
+                equal_row(inner),
+                convert_row(inner)
             );
         } else if kind == "string" {
             code += &format!(

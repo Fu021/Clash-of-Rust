@@ -98,24 +98,38 @@ fn failure(error: reqwest::Error) -> anyhow::Error {
 /// Time the first response through the local mixed port. Redirects are not
 /// followed so the figure is the target's own response time.
 pub async fn check(url: &str, port: u16) -> Result<Status> {
-    let url = validate_url(url)?;
-    let client = crate::network::client_builder()
+    Checker::new(port)?.check(url).await
+}
+
+#[derive(Clone)]
+pub struct Checker(reqwest::Client);
+
+impl Checker {
+    pub fn new(port: u16) -> Result<Self> {
+        let client = crate::network::client_builder()
         .no_proxy()
         .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
+        .pool_max_idle_per_host(0)
         .build()?;
-    let started = Instant::now();
-    let response = client.get(url).send().await.map_err(failure)?;
-    let millis = started.elapsed().as_millis();
-    let status = response.status().as_u16();
-    Ok(Status {
-        health: classify(status),
-        status,
-        millis,
-    })
+        Ok(Self(client))
+    }
+
+    pub async fn check(&self, url: &str) -> Result<Status> {
+        let url = validate_url(url)?;
+        let started = Instant::now();
+        let response = self.0.get(url).send().await.map_err(failure)?;
+        let millis = started.elapsed().as_millis();
+        let status = response.status().as_u16();
+        Ok(Status {
+            health: classify(status),
+            status,
+            millis,
+        })
+    }
 }
 
 /// Resolve one name with the system resolver and report how long it took.
@@ -193,5 +207,46 @@ mod tests {
         drop(listener);
         let error = check("http://site.example/", port).await.unwrap_err();
         assert_eq!(error.to_string(), "无法连接");
+    }
+
+    #[tokio::test]
+    async fn shared_checker_keeps_its_proxy_for_concurrent_probes() {
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let checker = Checker::new(proxy.local_addr().unwrap().port()).unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = proxy.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0; 1024];
+                    let length = socket.read(&mut buffer).await.unwrap();
+                    assert!(length > 0);
+                    request.extend_from_slice(&buffer[..length]);
+                    if request.windows(4).any(|part| part == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                assert!(
+                    String::from_utf8_lossy(&request).starts_with("GET http://site.example/ HTTP")
+                );
+                socket
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
+        let cloned = checker.clone();
+        let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                checker.check("http://site.example/"),
+                cloned.check("http://site.example/")
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(first.unwrap().status, 204);
+        assert_eq!(second.unwrap().status, 204);
+        server.await.unwrap();
+        assert!(checker.check("file:///etc/hosts").await.is_err());
     }
 }

@@ -8,7 +8,7 @@ use clash_desktop_protocol::{
 };
 
 pub(super) fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
-    if old.rows() == values {
+    if old.with_rows(|rows| rows == values.as_slice()) {
         old
     } else {
         values.into()

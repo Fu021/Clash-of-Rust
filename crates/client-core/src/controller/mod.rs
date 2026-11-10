@@ -13,8 +13,8 @@ const JSON_LIMIT: usize = 32 * 1024 * 1024;
 // Backpressure bounds queued response chunks. Dropping the request closes the
 // sender, so a cancelled request also wakes the blocking JSON parser.
 struct JsonReader {
-    receiver: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
-    chunk: std::io::Cursor<Vec<u8>>,
+    receiver: tokio::sync::mpsc::Receiver<std::io::Result<bytes::Bytes>>,
+    chunk: std::io::Cursor<bytes::Bytes>,
 }
 
 impl Read for JsonReader {
@@ -27,6 +27,7 @@ impl Read for JsonReader {
             if count > 0 {
                 return Ok(count);
             }
+            self.chunk = std::io::Cursor::new(bytes::Bytes::new());
             match self.receiver.blocking_recv() {
                 Some(chunk) => self.chunk = std::io::Cursor::new(chunk?),
                 None => return Ok(0),
@@ -57,7 +58,7 @@ async fn decode_json_with<T: Send + 'static>(
             64 * 1024,
             JsonReader {
                 receiver,
-                chunk: std::io::Cursor::new(Vec::new()),
+                chunk: std::io::Cursor::new(bytes::Bytes::new()),
             },
         ))
     });
@@ -72,8 +73,9 @@ async fn decode_json_with<T: Send + 'static>(
                         .await;
                     break;
                 }
-                for bytes in chunk.chunks(16 * 1024) {
-                    if sender.send(Ok(bytes.to_vec())).await.is_err() {
+                for start in (0..chunk.len()).step_by(16 * 1024) {
+                    let end = (start + 16 * 1024).min(chunk.len());
+                    if sender.send(Ok(chunk.slice(start..end))).await.is_err() {
                         break 'response;
                     }
                 }
@@ -1617,7 +1619,7 @@ rules: ['MATCH,group']\n";
         let parser = tokio::task::spawn_blocking(move || {
             let mut reader = JsonReader {
                 receiver,
-                chunk: std::io::Cursor::new(Vec::new()),
+                chunk: std::io::Cursor::new(bytes::Bytes::new()),
             };
             reader.read(&mut [0; 1]).unwrap()
         });

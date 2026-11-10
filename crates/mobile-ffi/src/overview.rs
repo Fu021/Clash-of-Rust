@@ -147,13 +147,19 @@ impl Monitor {
                             .map_err(|error| error.to_string()),
                     )
                 });
+                let checker = core::overview::Checker::new(port).map_err(|error| error.to_string());
                 for (index, target) in core::overview::TARGETS.iter().enumerate() {
+                    let checker = checker.clone();
                     tasks.spawn(async move {
                         ResultEvent::Service(
                             index,
-                            core::overview::check(target.url, port)
-                                .await
-                                .map_err(|error| error.to_string()),
+                            match checker {
+                                Ok(checker) => checker
+                                    .check(target.url)
+                                    .await
+                                    .map_err(|error| error.to_string()),
+                                Err(error) => Err(error),
+                            },
                         )
                     });
                 }

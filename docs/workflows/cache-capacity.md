@@ -31,13 +31,15 @@ Rust 行包含其 Cargo registry/Git 数据和相关原生依赖构建结果，�
 
 ## 当前上限与保留预算
 
-维护者最新授权为每月 **1 美元**；2026-11-10 仓库 `max_cache_size_gb` 从 15 调整为 **24 GB**，设置 API 已读回确认。按当前 10 GiB 免费额及超出部分每 GiB 月 0.07 美元计算，本仓库满额整月约 0.98 美元；实际按存储时间累计，账户其他仓库和已产生费用须一并计入预算。账户预算不自动提高仓库上限，两个设置均需配置，见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
+维护者最新授权为每月 **1 美元**；2026-11-10 仓库 `max_cache_size_gb` 从 15 调整为 **24 GB**，设置 API 已读回确认。GitHub 此处的 GB 按 2³⁰ 字节计算，即 GiB。10 GiB 免费，超出部分每 GiB 月 0.07 美元；本仓库满额整月约 0.98 美元，账户其他仓库和已产生费用须一并计入预算。账户预算不自动提高仓库上限，两个设置均需配置，见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
+
+缓存按每小时占用峰值累计，不按配置上限包月。以 30 天、720 小时计算，费用为 `Σ max(每小时峰值 GiB − 10, 0) × 0.07 ÷ 720`。24 GiB 只出现一个计费小时约 0.00136 美元；每天一个小时、其余时间不超过 10 GiB，整月约 0.041 美元。若常驻 10.91 GiB、每天一个小时升到 24 GiB，约 0.102 美元。短于一小时也按该小时峰值计，跨两个计费小时可能同时计入；这些是假设估算，实际以账单为准。
 
 北京时间 2026-11-10 16:27 的逐项清单为 **11 条、10.09 GiB**：九个平台 Rust 缓存和两份 macOS Tailscale 工具；这是已保存部分的压缩大小，没有 Memory profile、Go 或 Gradle 缓存，不能替代上表全覆盖估算。
 
-CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **20 GiB** 保留预算，低于仓库 **24 GB** 配置上限；两处沿用各自标示单位，余量不保证容纳任何完整归档。全仓同一逻辑目标仅保留按创建时间选出的最新一代，访问旧记录不改变代际顺序，容量不足再按[编译优先级](cache-coverage.md#编译对象只用-github)淘汰。GitHub 的分支读取作用域仍然生效，不将这个保留策略描述为跨分支共享存储；费用以 GitHub 实际账单为准。
+CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **20 GiB** 保留预算，低于仓库 **24 GB** 配置上限；余量不保证容纳任何完整归档。全仓同一逻辑目标仅保留按创建时间选出的最新一代，访问旧记录不改变代际顺序，容量不足再按[编译优先级](cache-coverage.md#编译对象只用-github)淘汰。GitHub 的分支读取作用域仍然生效，不将这个保留策略描述为跨分支共享存储；费用以 GitHub 实际账单为准。
 
-本轮新增 Android Go 编译缓存和 Linux 编译环境缓存，继续保留 macOS Tailscale；未新增 Gradle 转换缓存。上表保留全平台容量规划，新增 Docker 编译容器需另按实际归档计量，不能把估算总量写成已经覆盖。Ubuntu 20.04 两种预装 VM 继续仅存私网，不占此额度。优化后的首轮保存和下一轮暖恢复必须分别记录，不能在尚未运行时宣称提速。
+本轮新增 Android Go 编译缓存和 Linux 编译环境缓存，继续保留 macOS Tailscale；未新增 Gradle 转换缓存。上表保留全平台容量规划，新增 Docker 编译容器需另按实际归档计量，不能把估算总量写成已经覆盖。Ubuntu 20.04 两种预装 VM 继续仅存私网，不占此额度。首次填充与暖恢复的实际结果分别见下文。
 
 ## 近期 CI 耗时依据
 
@@ -86,3 +88,35 @@ Tailscale 同样影响 CI：macOS ARM64 的 `42679544543` 日志记录从源码�
 本轮完整执行跨度为 18 分 56 秒，旧策略为 22 分 58 秒。Windows ARM64 保存从旧轮超时的 300 秒降到 38 秒；macOS Intel 首次迁移仍恢复旧归档并重新保存，用时 165／162 秒，下一轮才可核对新增 vendor 对象的暖恢复。Linux 两架构的 Docker 环境恢复核验用时 27／21 秒。新清单 16 条、10.91 GiB，包含九平台 Rust、三份 Go、两份编译容器及两份 macOS Tailscale；临时交替峰值为 20.04 GiB，收尾删除旧代后回落，不代表需要长期保留峰值容量。
 
 两轮应用源码、vendor 及资源相同，但脚本和缓存状态不同，不是严格同提交冷暖实验；首次填充也不能代表以后每轮的净收益。后续暖恢复保持同一 PR 读取作用域：手动在开发分支派发 CI 不能读取该 PR merge ref 的缓存，不能拿这种冷运行冒充暖对照。
+
+### 相同应用源码的暖恢复
+
+`85699d4` 的 CI `42807697835` 14/14 成功，继续使用同一 PR merge ref，九个目标均恢复经摘要核对的本地 Slint 对象，518 个源码／目录时间戳核对后无变化 crate 失效；macOS Intel 未重新编译软件渲染库。Linux 两个编译容器、Android 三份 Go 缓存均命中，Rust 精确命中后跳过重复保存。
+
+| 目标 | 旧策略 | 首次填充 | 暖恢复 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 | 320 | 368 | 95 |
+| macOS Intel | 893 | 701 | 291 |
+| Windows x64 | 265 | 304 | 194 |
+| Windows ARM64 | 766 | 356 | 354 |
+| Linux x64 | 834 | 140 | 46 |
+| Linux ARM64 | 234 | 188 | 40 |
+| Android ARM64 | 456 | 323 | 286 |
+| Android ARMv7 | 357 | 357 | 247 |
+| Android x64 | 407 | 253 | 234 |
+
+表内单位为秒，仍合计恢复、编译／测试及 Rust 保存；暖态另有 Linux 编译容器恢复 33／25 秒、Android Go 恢复 5／4／3 秒。完整 CI 跨度从旧策略 22 分 58 秒、首次填充 18 分 56 秒降至本轮 16 分 19 秒，相对旧轮缩短约 29%；Ubuntu 20.04 ARM64 安装验证仍占关键路径。最终缓存 16 条／10.906 GiB，未发生旧代重复积累；未发现缓存超时、vendor 校验回退、私网 502／503／507 或连接重置。上游 JNI、AGP 和 artifact 的弃用提示仍保留。
+
+安装报告进一步区分执行阶段：Ubuntu 20.04 ARM64 的镜像查找／下载／校验 79 秒、纯 guest 启动 222 秒、候选包等待／传输 36 秒、安装及回归 319 秒，另含源码拷入和环境核对。日志中从 VM 启动到 `warm_verified` 的约 361 秒不能全部当成纯开机时间。x64 对应为 135／17／58／52 秒；两种架构均恢复预装镜像，guest 只补装一份约 1.5 MiB 字体原包。ARM64 实际使用 TCG，x64 使用 KVM，不能把这些执行时间全部归因于下载或等待编译包。
+
+随后同提交 Memory Benchmark `42810646529` 的 release／light 运行 2/2 成功，新增约 590 MiB 的独立 profile 缓存后总量为 17 条／11.482 GiB，按逻辑目标核对无重复。两份 Tailscale 同版本二进制分别对应 macOS amd64／arm64，约 32.61／30.32 MiB，不是重复副本。若这一总量整月不变且无其他超额峰值，单仓库缓存费约 0.104 美元，不把配置上限当成常驻占用。
+
+这是同一应用及依赖源码、相同验证范围的连续运行，脚本有可选回执异常输入修复，且 runner 性能仍会波动；不能当作严格同提交的受控实验或今后每轮的保证。Windows ARM64 仍会重建 workspace，macOS Intel 与 Windows x64 的归档恢复仍较贵。容量已足以覆盖本轮对象；后续先减少重复归档和恢复成本，不据此继续扩容。
+
+## 后续方案：main 基线与分支差异包
+
+目前尚未启用。维护者提出保留 main 基线，并只保存开发分支相对基线的差异，以减少重复归档。GitHub 允许开发分支读取默认分支缓存；工作流可以先恢复明确身份的 main 基线，再把当前分支的差异包应用到构建目录。单次 Cache Action 的命中选择不会自动合并两份缓存，需分别恢复并校验。
+
+真正的差异包需要基线文件清单与内容摘要，只保存新增或变化的对象，并记录旧文件删除项。差异键须绑定基线身份、平台架构、工具链、依赖和编译参数；基线缺失、身份不符或差异损坏时正常重编，不能把不完整叠加标成精确命中。Cargo 自身的源码失效检查仍保留。仅把两份完整 workspace 改名不算实现差异存储。
+
+后续实现须同步修改保留规则，保护 main 兼容基线、限制活跃分支差异包，并为新旧交替留空间；当前“全仓每目标最新一代”规则不能与此方案混用。main 基线由可信 main 构建产生，不提升 PR 权限或把 PR 对象直接当作可信 main 基线。先测量差异生成、校验、恢复及重编的总时间，再决定启用范围；两种预装 VM 继续仅存私网。
