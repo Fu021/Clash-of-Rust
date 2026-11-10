@@ -23,7 +23,8 @@ def caches(client):
 
 
 def lineage(key):
-    key = re.sub(r'-workspace-[0-9a-f]{64}', '', key)
+    key = re.sub(r'-(?:workspace|vendor)-[0-9a-f]{64}', '', key)
+    key = re.sub(r'-local-deps-v\d+', '', key)
     if key.startswith('linux-build-linux-image-ubuntu20-'):
         return re.sub(r'-[0-9a-f]{64}$', '', key)
     if key.startswith('android-go-build-v1-'):

@@ -155,8 +155,11 @@ def linux_package_tests(package, tun_test, structure=True):
 
 
 def compatibility_dependencies():
+    from ci_test_policy import extended_tests
     from prepared_vm_environment import TEST_PACKAGES
-    return list(TEST_PACKAGES)
+    if extended_tests() or os.environ.get('COR_LINUX_GUEST') == 'true':
+        return list(TEST_PACKAGES)
+    return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']
 
 
 def compatibility_download_dependencies():

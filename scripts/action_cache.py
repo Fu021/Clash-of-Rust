@@ -155,6 +155,85 @@ def rust_environment_key(compiler, environment):
     return f'v{SCHEMA}-' + value.hexdigest() + '-'
 
 
+def workspace_vendor_objects(source, cache, packages, save=False):
+    target = source/'target'
+    directory = cache/'vendor-objects'
+    receipt = cache/'vendor-objects.json'
+    names = {name for path, name in packages.items() if path.startswith('vendor/')}
+    prefixes = {prefix for name in names for prefix in (name, name.replace('-', '_'),
+                                                       'lib'+name.replace('-', '_'))}
+
+    def allowed(relative):
+        path = PurePosixPath(relative)
+        parts = path.parts
+        if path.is_absolute() or '..' in parts or '\\' in relative or str(path) != relative:
+            return False
+        position = 0 if parts and parts[0] == 'release' else 1
+        if len(parts) < position+3 or parts[position:position+2] not in (
+                ('release', 'deps'), ('release', 'build'), ('release', '.fingerprint')):
+            return False
+        name = parts[position+2]
+        return any(name == prefix or name.startswith(prefix+'-') for prefix in prefixes)
+
+    if save:
+        if directory.is_symlink():
+            directory.unlink()
+        elif directory.exists():
+            shutil.rmtree(directory)
+        records = {}
+        for profile in [target/'release', *target.glob('*/release')]:
+            for group in ('deps', 'build', '.fingerprint'):
+                root = profile/group
+                if not root.is_dir():
+                    continue
+                for entry in root.iterdir():
+                    if not allowed(entry.relative_to(target).as_posix()) or entry.is_symlink():
+                        continue
+                    for path in ([entry] if entry.is_file() else entry.rglob('*')):
+                        if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(target.resolve()):
+                            continue
+                        relative = path.relative_to(target).as_posix()
+                        destination = directory/relative
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            os.link(path, destination)
+                        except OSError:
+                            shutil.copy2(path, destination)
+                        records[relative] = {'size': path.stat().st_size, 'sha256': digest(path)}
+                        if len(records) > 10000:
+                            raise ValueError('Vendor artifact limit exceeded')
+        write_json(receipt, {'schema': 1, 'files': records})
+        if records:
+            print(f'Workspace cache: preserved {len(records)} local vendor artifacts', flush=True)
+        return
+    if not receipt.is_file():
+        return
+    try:
+        if receipt.is_symlink() or receipt.stat().st_size > 8*1024**2:
+            raise ValueError('Invalid vendor artifact receipt')
+        value = json.loads(receipt.read_text())
+        if not isinstance(value, dict) or value.get('schema') != 1 or not isinstance(value.get('files'), dict):
+            raise ValueError('Invalid vendor artifact receipt')
+        records = value['files']
+        if len(records) > 10000:
+            raise ValueError('Vendor artifact limit exceeded')
+        for relative, record in records.items():
+            path = directory/relative
+            if (not allowed(relative) or not isinstance(record, dict) or path.is_symlink()
+                    or not path.resolve().is_relative_to(directory.resolve())
+                    or not (target/relative).resolve().is_relative_to(target.resolve())
+                    or path.stat().st_size != record.get('size') or digest(path) != record.get('sha256')):
+                raise ValueError('Vendor artifact identity mismatch')
+        for relative in records:
+            destination = target/relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(directory/relative, destination)
+        if records:
+            print(f'Workspace cache: restored {len(records)} verified local vendor artifacts', flush=True)
+    except (OSError, ValueError):
+        print('Workspace cache: incomplete local vendor artifacts ignored; Cargo will rebuild them', flush=True)
+
+
 def workspace_sources(source, save=False):
     """Reuse unchanged workspace objects without trusting checkout timestamps.
 
@@ -197,6 +276,10 @@ def workspace_sources(source, save=False):
             # Keep its source receipt outside target; the private mirror uses
             # the copy inside target without duplicating compiler objects.
             external.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                workspace_vendor_objects(source, external.parent, packages, save=True)
+            except (OSError, ValueError):
+                print('::warning::Local vendor cache save failed; compiled binaries remain usable', flush=True)
             write_json(external, value)
         return
     if external and external.is_file():
@@ -212,6 +295,8 @@ def workspace_sources(source, save=False):
             return
     except (ValueError, OSError):
         return
+    if external:
+        workspace_vendor_objects(source, external.parent, packages)
     now = time.time_ns()
     changed = {name for name in set(files) | set(previous['files'])
                if files.get(name, {}).get('sha256') != previous['files'].get(name, {}).get('sha256')}

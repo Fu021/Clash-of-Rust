@@ -1648,6 +1648,21 @@ class BuildTests(unittest.TestCase):
         self.assertIn(package_font, release_package.compatibility_download_dependencies())
         self.assertNotIn(package_font, release_package.compatibility_dependencies())
 
+    def test_basic_hosted_network_checks_do_not_install_an_unused_desktop_session(self):
+        for extended, guest in (('false', ''), ('true', ''), ('false', 'true')):
+            with self.subTest(extended=extended, guest=guest), patch.dict(os.environ, {
+                    'COR_CI_EXTENDED_TESTS': extended, 'COR_LINUX_GUEST': guest}):
+                packages = release_package.compatibility_dependencies()
+                self.assertTrue({'git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin'}
+                                .issubset(packages))
+                if extended == 'true' or guest:
+                    self.assertEqual(packages, list(prepared_vm_environment.TEST_PACKAGES))
+                else:
+                    self.assertTrue({'gnome-shell', 'openbox', 'xwayland', 'policykit-1-gnome'}
+                                    .isdisjoint(packages))
+                    self.assertIn('gsettings-desktop-schemas',
+                                  release_package.compatibility_download_dependencies())
+
     @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
     def test_linux_gui_finds_only_wayland_sockets(self):
         import linux_gui
@@ -1951,6 +1966,74 @@ Private_Clean: 2 kB
             self.assertEqual(first,local_cache.rust_keys(root,b'compiler',{})[1])
             version('0.6.1','new')
             self.assertNotEqual(first,local_cache.rust_keys(root,b'compiler',{})[1])
+
+    def test_local_vendor_artifacts_survive_cache_cleanup_without_saving_other_workspace_objects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target, cache = root/'target', root/'external'
+            packages = {'vendor/renderer': 'renderer-patch', 'crates/core': 'clash-core'}
+            objects = {
+                'release/deps/librenderer_patch-first.rlib': b'compiled library',
+                'release/deps/renderer_patch-first.d': b'dependency paths',
+                'release/.fingerprint/renderer-patch-first/lib-renderer_patch.json': b'fingerprint',
+                'aarch64-linux-android/release/build/renderer-patch/second/output': b'generated bindings',
+            }
+            for relative, data in {**objects, 'release/deps/libclash_core-first.rlib': b'application'}.items():
+                path = target/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            local_cache.workspace_vendor_objects(root, cache, packages, save=True)
+            shutil.rmtree(target)
+            local_cache.workspace_vendor_objects(root, cache, packages)
+            for relative, data in objects.items():
+                self.assertEqual((target/relative).read_bytes(), data)
+            self.assertFalse((target/'release/deps/libclash_core-first.rlib').exists())
+
+    def test_incomplete_or_escaping_vendor_receipts_restore_no_partial_compiler_objects(self):
+        for corruption in ('changed', 'missing', 'escape'):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                target, cache = root/'target', root/'external'
+                packages = {'vendor/renderer': 'renderer-patch'}
+                for name in ('first', 'second'):
+                    path = target/f'release/deps/librenderer_patch-{name}.rlib'
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(name.encode())
+                local_cache.workspace_vendor_objects(root, cache, packages, save=True)
+                shutil.rmtree(target)
+                path = cache/'vendor-objects/release/deps/librenderer_patch-second.rlib'
+                if corruption == 'changed':
+                    path.write_bytes(b'wrong')
+                elif corruption == 'missing':
+                    path.unlink()
+                else:
+                    receipt = cache/'vendor-objects.json'
+                    value = json.loads(receipt.read_text())
+                    value['files']['../../outside'] = {'size': 1, 'sha256': 'a'*64}
+                    receipt.write_text(json.dumps(value))
+                local_cache.workspace_vendor_objects(root, cache, packages)
+                self.assertFalse(target.exists())
+                self.assertFalse((root.parent/'outside').exists())
+
+    def test_changed_vendor_source_invalidates_restored_fingerprints_before_cargo_runs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vendor = root/'vendor/renderer'
+            vendor.mkdir(parents=True)
+            (vendor/'Cargo.toml').write_text('[package]\nname="renderer-patch"\nversion="1.0.0"\n')
+            code = vendor/'lib.rs'
+            code.write_text('old source')
+            fingerprint = root/'target/release/.fingerprint/renderer-patch-first/lib-renderer_patch.json'
+            fingerprint.parent.mkdir(parents=True)
+            fingerprint.write_text('old fingerprint')
+            tracked = b'vendor/renderer/Cargo.toml\0vendor/renderer/lib.rs\0'
+            with patch.object(local_cache.subprocess, 'check_output', return_value=tracked), \
+                    patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': str(root/'external/source.json')}):
+                local_cache.workspace_sources(root, save=True)
+                shutil.rmtree(root/'target')
+                code.write_text('changed source')
+                local_cache.workspace_sources(root)
+            self.assertFalse(fingerprint.exists())
 
     def test_workspace_cache_verifies_contents_before_restoring_times_and_invalidates_changed_crates(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4289,6 +4372,10 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertEqual(storage.eviction_plan([previous, latest, other], 100), [previous])
         self.assertGreater(storage.priority(entry(1, 'action-setup-tailscale/1.104.5/macOS-arm64')),
                            storage.priority(entry(2, 'linux-build-linux-image-ubuntu20-v1-arm64-'+'a'*64)))
+        previous = entry(1, 'native-release-v2-windows-11-arm-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb')
+        latest = entry(2, 'native-release-v2-windows-11-arm-vendor-'+'a'*64
+                       +'-local-deps-v1-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb')
+        self.assertEqual(storage.eviction_plan([previous, latest], 100), [previous])
 
     def test_cache_cleanup_rechecks_size_and_fork_report_never_deletes(self):
         entries = [{'id': 1, 'key': 'tool-one', 'ref': 'refs/heads/main', 'size_in_bytes': 30,

@@ -177,6 +177,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       ANDROID_CI_TEST: '1'
       GOCACHE: ${{ github.workspace }}/.go-build
+      WORKSPACE_SOURCE_CACHE: ${{ github.workspace }}/.workspace-sources/source.json
       COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
       COR_CI_ANDROID_ROUTING_TESTS: ${{ needs.inputs.outputs.android_routing_tests }}
     steps:
@@ -243,12 +244,47 @@ jobs:
         id: rust_github
         with:
           prefix-key: android-v2-${{ matrix.arch }}
+          key: workspace-${{ hashFiles('.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**') }}
           cache-on-failure: false
           cache-bin: false
-          cache-workspace-crates: false
+          cache-workspace-crates: true
+          cache-directories: ${{ github.workspace }}/.workspace-sources
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
+        shell: python
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import discard_restore
+          discard_restore({'kind': 'rust', 'source': '.'})
+      - name: Identify Android dependency cache paths
+        id: android_paths
+        shell: python
+        run: |
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import github_restored
+          cargo = pathlib.Path(os.environ.get('CARGO_HOME', str(pathlib.Path.home()/'.cargo')))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('needed=' + str(not github_restored({'kind': 'rust', 'source': '.', 'github_hit': 'false'})).lower() + '\n')
+              for name, path in [('registry', cargo/'registry'), ('git', cargo/'git'), ('target', pathlib.Path('target').absolute())]:
+                  output.write(name + '=' + str(path) + '\n')
+      - name: Restore previous Android dependency archives
+        id: android_legacy
+        if: steps.android_paths.outputs.needed == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          path: |
+            ${{ steps.android_paths.outputs.registry }}
+            ${{ steps.android_paths.outputs.git }}
+            ${{ steps.android_paths.outputs.target }}
+          key: android-v2-${{ matrix.arch }}-migration-${{ github.run_id }}
+          restore-keys: android-v2-${{ matrix.arch }}-
+      - name: Discard interrupted previous Android restore
+        if: steps.android_legacy.outcome == 'failure'
         shell: python
         run: |
           import sys
@@ -514,7 +550,7 @@ jobs:
         id: rust_github
         with:
           prefix-key: ${{ runner.os == 'Linux' && 'native-release-ubuntu20-v1-' || 'native-release-v2-' }}${{ matrix.os }}
-          key: ${{ matrix.os != 'windows-11-arm' && format('workspace-{0}', hashFiles('apps/**', 'crates/**', 'vendor/**', 'resources/**')) || '' }}
+          key: ${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
           cache-on-failure: false
           cache-bin: false
           # Source hashes are checked before restoring workspace mtimes; changed
@@ -544,7 +580,7 @@ jobs:
                   output.write(name + '=' + str(path) + '\n')
       - name: Restore compatible GitHub workspace compilation
         id: rust_fallback
-        if: steps.rust_paths.outputs.needed == 'true' && matrix.os != 'windows-11-arm'
+        if: steps.rust_paths.outputs.needed == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
