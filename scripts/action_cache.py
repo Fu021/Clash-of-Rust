@@ -288,7 +288,7 @@ def workspace_sources(source, save=False):
         return
     try:
         previous = json.loads(snapshot.read_text())
-        if (previous.get('schema') != 1 or not isinstance(previous.get('files'), dict)
+        if (not isinstance(previous, dict) or previous.get('schema') != 1 or not isinstance(previous.get('files'), dict)
                 or not isinstance(previous.get('directories'), dict)
                 or any(not isinstance(record, dict) for record in previous['files'].values())
                 or any(not isinstance(record, dict) for record in previous['directories'].values())):

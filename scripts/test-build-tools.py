@@ -2035,6 +2035,27 @@ Private_Clean: 2 kB
                 local_cache.workspace_sources(root)
             self.assertFalse(fingerprint.exists())
 
+    def test_malformed_workspace_receipt_preserves_sources_and_existing_compiler_objects(self):
+        for value in ([], None, 'invalid', 1):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root/'crates/core/lib.rs'
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b'current source')
+                stamp = source.stat().st_mtime_ns
+                artifact = root/'target/release/deps/libcore-current.rlib'
+                artifact.parent.mkdir(parents=True)
+                artifact.write_bytes(b'existing compiler object')
+                receipt = root/'external/source.json'
+                receipt.parent.mkdir()
+                receipt.write_text(json.dumps(value))
+                with patch.object(local_cache.subprocess, 'check_output', return_value=b'crates/core/lib.rs\0'), \
+                        patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': str(receipt)}):
+                    local_cache.workspace_sources(root)
+                self.assertEqual(source.read_bytes(), b'current source')
+                self.assertEqual(source.stat().st_mtime_ns, stamp)
+                self.assertEqual(artifact.read_bytes(), b'existing compiler object')
+
     def test_workspace_cache_verifies_contents_before_restoring_times_and_invalidates_changed_crates(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)

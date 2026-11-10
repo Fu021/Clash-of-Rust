@@ -32,6 +32,8 @@ CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台�
 
 这是保留规则，不会改变 GitHub 的[缓存读取作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)：PR 的 merge ref 缓存仍不能被 main 或其他 PR 读取，切换运行分支可能冷编译。不能通过同名 key 将 PR 缓存迁移到主分支，也不扩大不可信 PR 的写权限。
 
+共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。受信任的 main CI 可生成公共基线，但当前“全仓每目标只留最新一代”会在 PR 保存新代后删除旧 main 基线，不保证多个并行 PR 长期共享；改为保留 main 基线及 PR 热缓存会增加副本，须另行调整保留约定和预算。当前不通过切换触发事件或提升 PR 权限绕过作用域。
+
 Linux 和 Android 保留 workspace 编译结果及经过内容核对的源码时间戳，不再精确命中旧依赖缓存后永久跳过新对象保存；Linux 容器同时挂载源码回执，避免宿主和容器读取不同位置。Windows ARM64 保留依赖缓存，只在本地 vendor 源码变化时更新键，不因每次业务源码变动重压整个 workspace；其他桌面端继续保留 workspace。全部使用 zstd 快速压缩级别 1，缓存仍不可变，首次填充和后续暖恢复需分别测量。
 
 缓存 Action 默认会删除 workspace 根目录内、却不属于成员的 path 依赖，两个本地 Slint 修复库因此曾每轮重编并连带重建 UI。现在按包名把这两库的编译对象、构建输出及指纹保留在现有源码回执目录内；恢复先核对完整文件清单及摘要，缺失、损坏或越界时整体忽略，源码改变后仍失效相应 crate。不会把第三方库加入项目测试成员或关闭其告警；迁移首次仍可恢复旧归档中的兼容依赖。
