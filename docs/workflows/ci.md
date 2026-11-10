@@ -54,9 +54,9 @@ Ubuntu 20.04 构建容器使用官方 HTTPS APT 源，首次安装证书包前�
 
 每轮 loop 执行只读依赖审计，CI 在最后的缓存 job 中输出 `dependency-audit` 附件及 summary，避免候选查询阻塞平台矩阵启动。报告覆盖 Cargo 锁定包、Go 模块、Android Maven 声明、Actions、已确认工具及 Linux/资源元数据，标出撤回、弃用和上游归档信号；查询失败与未检查项单列。按[loop 更新约定](../loop-workflow.md#每轮怎么做)修改声明、锁文件、工具基线及 Actions SHA 并验证。第三方 Actions 固定官方不可变提交，版本标签保存在工具基线中供审计，不随上游标签移动自动更新。
 
-GitHub 仓库缓存上限为 15 GB，工作流保留预算为 13 GiB，全仓每个平台只留最新成功保存的一代，不另为 main 或 PR 留存；GitHub 分支读取隔离仍有效，跨分支运行可能冷编译。按[实际耗时与编译优先级](cache-coverage.md#编译对象只用-github)保留：优先保留很小但能避免源码构建的 macOS Tailscale 工具，Rust 中 macOS ARM64 最高，其余按近期 CI 耗时排序，Memory 最先让出空间，取消运行不执行预算清理。macOS/Windows 先尝试包含源码身份的缓存，未恢复有效对象时再尝试同平台旧 GitHub workspace；精确键未命中不代表冷编译。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。测试报告和安装包不进入编译缓存；两个预装 VM 仅存私网。
+缓存容量、逐平台保留范围、优先级和费用统一见[缓存分工](cache-coverage.md#编译对象只用-github)，不在各工作流重复列数值。Linux、macOS 和 Windows x64 保存 workspace 并尝试兼容恢复；Windows ARM64 保留依赖缓存，避免每次业务源码变化都重压大归档。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。Linux 容器挂载同一源码回执；测试报告和安装包不进入编译缓存，两个预装 VM 仅存私网。
 
-Go 审计只查询声明的模块路径，不执行更新。Android 公共任务一次准备已校验的模块下载包和绑定工具，经本轮附件分发给三个 ABI；Go 编译与 Gradle 转换在 runner 完成，不再镜像这些目录。已验证的 Go 原始 ZIP/MOD 单独登记来源，不能用本轮分发的 runner tar 代替原始下载。
+Go 审计只查询声明的模块路径，不执行更新。Android 公共任务一次准备已校验的模块下载包和绑定工具，经本轮附件分发给三个 ABI；各 ABI 的 `GOCACHE` 只存 GitHub，Gradle 转换仍在 runner 重新完成。已验证的 Go 原始 ZIP/MOD 单独登记来源，不能用本轮分发的 runner tar 代替原始下载。
 
 私网服务使用独立访问令牌；配置仅写 runner 临时文件，不进入下载清单。CI 的输入解析和各平台 job 输出原包清单 artifact 与 summary，其他工作流的报告范围见[清单提交](cache-coverage.md#尽早提交完整清单收尾保留回执)。最终 `private-cache-inventory` 仅盘点，未删除旧缓存不代表新工作流仍在使用它们。
 
@@ -66,7 +66,7 @@ Go 审计只查询声明的模块路径，不执行更新。Android 公共任务
 
 ### Ubuntu 20.04 环境下载缓存
 
-CI 的 Linux 编译和 Ubuntu 兼容 job 通过 `.github/actions/linux-download-cache` 准备独立 Python 与原始云镜像，冻结上游校验值；Publish Release 不再重复准备这些环境。Linux CI 在宿主先准备并校验内核与 Geo 文件，再将工作区挂载给不含私网凭据的构建容器；容器再次核验已有资源。容器从固定基础 digest 在 runner 构建，不导出 Docker 镜像缓存；本 job 已构建的镜像可复用。详细类别及边界见[覆盖清单](cache-coverage.md)。
+CI 的 Linux 编译和 Ubuntu 兼容 job 通过 `.github/actions/linux-download-cache` 准备独立 Python 与原始云镜像，冻结上游校验值；Publish Release 不再重复准备这些环境。Linux CI 在宿主先准备并校验内核与 Geo 文件，再将工作区挂载给不含私网凭据的构建容器；容器再次核验已有资源。`.github/actions/linux-build-cache` 在编译前校验或冷构建固定 digest 的 Docker 编译环境，并单独保存 GitHub 缓存；不包含 VM、应用或运行状态。详细身份、校验和保留边界见[覆盖清单](cache-coverage.md)。
 
 共享输入阶段还会分别冻结 [Ubuntu 20.04 ARM64 和 x64 预装镜像环境](prepared-vm-images.md)的包版本、原包和签名索引，供同提交安装验证复用。此阶段只解析官方环境，不依赖私网能力，不启动 VM 或制作镜像；CI 的 VM job 再按 health 的 `vm_limits` 检查本机架构，未就绪时冷准备。镜像始终只存私网，不计入 GitHub 编译缓存；历史模板就绪不能替代本提交的恢复和安装验证。
 

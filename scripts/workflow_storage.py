@@ -1,4 +1,4 @@
-"""Keep the latest cache per target across refs within 13 GiB."""
+"""Keep the latest cache per target across refs within 20 GiB."""
 import argparse
 import os
 from pathlib import Path
@@ -8,7 +8,7 @@ import urllib.error
 
 from workflow_artifacts import release_module
 
-BUDGET = 13 * 1024**3
+BUDGET = 20 * 1024**3
 
 
 def caches(client):
@@ -24,6 +24,10 @@ def caches(client):
 
 def lineage(key):
     key = re.sub(r'-workspace-[0-9a-f]{64}', '', key)
+    if key.startswith('linux-build-linux-image-ubuntu20-'):
+        return re.sub(r'-[0-9a-f]{64}$', '', key)
+    if key.startswith('android-go-build-v1-'):
+        return re.sub(r'-[0-9a-f]{64}$', '', key)
     if key.startswith(('linux-python-ubuntu20-', 'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-')):
         return re.sub(r'^(linux-(?:python|cloud|apt|image)-ubuntu20-v\d+-(?:x64|arm64))-.+$',
                       r'\1', key)
@@ -60,6 +64,10 @@ def priority(entry):
     key = entry['key']
     if re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key):
         return 10
+    if key.startswith('linux-build-linux-image-ubuntu20-'):
+        return 8
+    if key.startswith('android-go-build-v1-'):
+        return 0
     if key.startswith('native-release-'):
         if 'macos' in key:
             return 8 if 'macos-13-' in key or 'intel' in key else 9
@@ -86,6 +94,8 @@ def priority(entry):
 def retired(key):
     if key.startswith('action-setup-tailscale/'):
         return re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key) is None
+    if key.startswith('android-go-build-v1-'):
+        return False
     return key.startswith((
         'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
         'gradle-', 'tools-nsis-', 'skia-source-', 'linux-python-ubuntu20-',

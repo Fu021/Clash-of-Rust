@@ -8,7 +8,7 @@
 
 CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache；未命中正常编译，不查询私网 Rust 索引或分片，也不在 job 结束后镜像对象。Publish Release 继续复用同提交成功 CI 的构建附件，不重新编译 Rust。
 
-仓库缓存上限为 **15 GB**（API 字段 `max_cache_size_gb=15`），工作流热缓存保留预算为 **13 GiB**，为保存期间的新旧对象交替留余量。仓库上限与账户每月预算分别设置；预算不是缓存预留容量，GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及设置依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
+仓库缓存上限为 **24 GB**（API 字段 `max_cache_size_gb=24`），工作流热缓存保留预算为 **20 GiB**，为保存期间的新旧对象交替留余量。维护者本轮授权的每月缓存预算为 **1 美元**；账户预算、仓库上限和工作流保留预算分别设置。GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及设置依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
 
 CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台的新编译缓存；Memory Benchmark 不再限定主分支保存。精确键已存在时由不可变缓存规则复用，未命中正常编译；fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。优先缩短 CI 的实际关键路径：macOS Tailscale 二进制很小且能省去源码编译，因此优先保留；Rust 对象中 macOS ARM64 仍按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失。其余编译目标按最近六次成功完整 CI 的恢复与编译耗时保留：
 
@@ -32,11 +32,15 @@ CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台�
 
 这是保留规则，不会改变 GitHub 的[缓存读取作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)：PR 的 merge ref 缓存仍不能被 main 或其他 PR 读取，切换运行分支可能冷编译。不能通过同名 key 将 PR 缓存迁移到主分支，也不扩大不可信 PR 的写权限。
 
-仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管。macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS job 开启该 Action 自带的 GitHub 二进制缓存；当前内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存在全仓按架构保留最近版本，计入 13 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
+Linux 现在保留 workspace 编译结果及经过内容核对的源码时间戳，不再精确命中旧依赖缓存后永久跳过新对象保存；容器同时挂载源码回执，避免宿主和容器读取不同位置。Windows ARM64 改为依赖缓存，不因每次业务源码变动重压整个 workspace；其他桌面端继续保留 workspace。全部使用 zstd 快速压缩级别 1，缓存仍不可变，首次填充和后续暖恢复需分别测量。
+
+新增两类 GitHub 编译辅助缓存，均按架构只保留最新代：Android `GOCACHE` 按工具版本、Go 源码及锁文件分键；Linux 编译容器按官方基础 digest、Python 摘要、Dockerfile 和构建 UID/GID 分键。容器归档只含编译环境，不含应用、测试写入层或 VM；恢复先校验归档长度、SHA256 和环境身份，再核对 Docker 加载结果，失效则冷准备。Gradle 转换、工具安装目录及资源目录仍不缓存。
+
+macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS job 开启该 Action 自带的 GitHub 二进制缓存；内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存按架构保留最近版本，计入 20 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
 | 工作流 | GitHub 编译缓存与收尾 | 私网预装镜像 |
 | --- | --- | --- |
-| CI | 六种桌面与三个 Android ABI 恢复/保存 Rust；全仓按平台保留最新一代，按 13 GiB 统一清理 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
+| CI | 六种桌面与三个 Android ABI 的 Rust，加 Linux 编译容器与 Android Go；全仓按目标保留最新一代，按 20 GiB 统一清理 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
 | Memory Benchmark | 恢复/保存本次 profile 的 Rust；使用同一预算，优先让出空间 | 不使用 |
 | Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 复用 CI 验收结果，不下载或上传 VM |
 | Android UI Previews（按需） | 复用成功 CI 的 APK，只留截图 artifact | 不使用 |
@@ -52,7 +56,7 @@ CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台�
 | Android Geo 原始文件 | 同一共享下载器；不镜像 `offline-assets` 目录 |
 | NSIS 原始安装程序 | 同一共享下载器；不镜像安装后的 NSIS 目录 |
 | Gradle 分发 ZIP | CI 三个 Android ABI job 使用 `build_inputs.py prepare-gradle`，按快照版本和已提交官方 SHA256 走共享下载及私网回退；解压到 runner 临时目录，不保存安装目录或转换缓存。发布只重签 APK，内存基准不使用 Gradle |
-| Ubuntu 20.04 独立 Python 与原始云镜像 | `linux_ci.download` 共用上述下载器；不保存构建容器、VM 系统盘或运行状态 |
+| Ubuntu 20.04 独立 Python 与原始云镜像 | `linux_ci.download` 共用上述下载器；编译容器另走 GitHub，预装 VM 仅走私网，不保存运行状态 |
 | Go 模块原始 ZIP/MOD | `go mod verify` 后登记公开 Go proxy URL；仍由原生 Go 工具下载、校验并在本轮 artifact 内分发 |
 | 宿主 APT 原始 DEB | 当轮签名索引确认 URL、大小及 SHA256；APT 先正常下载，失败后整批最多用 120 秒尝试私网，再交 APT 复核 |
 | 容器和 guest 的 APT | 沿用签名索引校验；不向其传入私网凭据，不能据此声称已接入私网恢复 |

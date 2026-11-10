@@ -1472,6 +1472,50 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'system CA bundle'):
                 linux_ci.system_ca_bundle()
 
+    def test_compiler_container_restore_verifies_bytes_environment_and_loaded_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root/'image.tar'
+            image.write_bytes(b'compiler environment without applications or VM disks')
+            receipt = {
+                'schema': 1, 'identity': 'a'*64, 'id': 'sha256:'+'b'*64,
+                'size': image.stat().st_size, 'sha256': build.sha256(image),
+            }
+            inspect = ['docker', 'image', 'inspect', '--format={{.Id}}', 'fixture']
+            for replacement in (None, [], dict(receipt, identity='c'*64),
+                                dict(receipt, sha256='0'*64), dict(receipt, size=1),
+                                dict(receipt, id=['invalid'])):
+                with self.subTest(replacement=replacement):
+                    (root/'image.json').write_text(json.dumps(replacement))
+                    with patch.object(linux_ci, 'run') as execute:
+                        self.assertFalse(linux_ci.restore_build_image(root, 'a'*64, inspect))
+                    execute.assert_not_called()
+            (root/'image.json').write_text(json.dumps(receipt))
+            with patch.object(linux_ci, 'run') as execute, \
+                    patch.object(linux_ci.subprocess, 'check_output', return_value=receipt['id']+'\n'):
+                self.assertTrue(linux_ci.restore_build_image(root, 'a'*64, inspect))
+            execute.assert_called_once_with(['docker', 'image', 'load', '--input', image], timeout=120)
+            with patch.object(linux_ci, 'run'), \
+                    patch.object(linux_ci.subprocess, 'check_output', return_value='sha256:'+'c'*64):
+                self.assertFalse(linux_ci.restore_build_image(root, 'a'*64, inspect))
+            image.write_bytes(b'corrupt')
+            with patch.object(linux_ci, 'run') as execute:
+                self.assertFalse(linux_ci.restore_build_image(root, 'a'*64, inspect))
+            execute.assert_not_called()
+
+    def test_linux_container_mounts_checked_workspace_receipt_for_both_restore_and_save(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = str(Path(temporary)/'sources/source.json')
+            with patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': snapshot}), \
+                    patch.object(linux_ci, 'build_image', return_value='fixture'), \
+                    patch.object(linux_ci, 'run') as execute:
+                linux_ci.container(['true'])
+            arguments = execute.call_args.args[0]
+            self.assertIn('WORKSPACE_SOURCE_CACHE', arguments)
+            directory = Path(snapshot).parent
+            self.assertIn(f'{directory}:{directory}', arguments)
+            self.assertTrue(directory.is_dir())
+
     def test_linux_download_revalidates_cached_bytes_and_uses_frozen_digest(self):
         data = b'verified upstream archive'
         record = {'url': 'https://example.invalid/archive',
@@ -4231,6 +4275,20 @@ runpy.run_path(str(script), run_name='__main__')
         release = entry(3, 'memory-ubuntu22-v2-release-build-aaaaaaaa-bbbbbbbb', 'refs/heads/main')
         dev = entry(4, 'memory-ubuntu22-v2-dev-build-aaaaaaaa-bbbbbbbb', 'refs/pull/34/merge')
         self.assertEqual(storage.eviction_plan([release, dev], 20), [])
+
+    def test_compiler_environments_and_android_go_keep_one_generation_per_architecture(self):
+        def entry(number, key):
+            return {'id': number, 'key': key, 'ref': 'refs/pull/34/merge', 'size_in_bytes': 10,
+                    'created_at': f'2026-11-10T00:00:0{number}Z',
+                    'last_accessed_at': f'2026-11-10T00:00:0{number}Z'}
+        for prefix in ('linux-build-linux-image-ubuntu20-v1-', 'android-go-build-v1-'):
+            previous = entry(1, prefix+'arm64-'+'a'*64)
+            latest = entry(2, prefix+'arm64-'+'b'*64)
+            other = entry(3, prefix+'x64-'+'c'*64)
+            self.assertFalse(storage.retired(latest['key']))
+            self.assertEqual(storage.eviction_plan([previous, latest, other], 100), [previous])
+        self.assertGreater(storage.priority(entry(1, 'action-setup-tailscale/1.104.5/macOS-arm64')),
+                           storage.priority(entry(2, 'linux-build-linux-image-ubuntu20-v1-arm64-'+'a'*64)))
 
     def test_cache_cleanup_rechecks_size_and_fork_report_never_deletes(self):
         entries = [{'id': 1, 'key': 'tool-one', 'ref': 'refs/heads/main', 'size_in_bytes': 30,

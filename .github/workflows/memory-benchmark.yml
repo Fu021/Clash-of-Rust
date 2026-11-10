@@ -30,6 +30,7 @@ on:
         default: '10'
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+  ZSTD_CLEVEL: '1'
 permissions:
   contents: read
 jobs:
@@ -198,7 +199,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Keep the latest cache per target within 13 GiB across branches
+      - name: Keep the latest cache per target within 20 GiB across branches
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'

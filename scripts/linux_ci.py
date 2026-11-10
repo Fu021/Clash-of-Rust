@@ -234,8 +234,6 @@ def system_ca_bundle():
 def build_image():
     require_actions()
     value = inputs()
-    archive = download(value['architectures'][host_arch()]['python'],
-                       tools_directory()/'python.tar.gz')
     dockerfile = ROOT/'resources/linux/ubuntu20.Dockerfile'
     identity = image_identity(value, host_arch())
     tag = 'cor-ubuntu20:' + identity[:20]
@@ -243,6 +241,11 @@ def build_image():
     present = subprocess.run(inspect, capture_output=True, text=True)
     if present.returncode == 0:
         return tag
+    cache = Path(os.environ['COR_LINUX_BUILD_CACHE']) if os.environ.get('COR_LINUX_BUILD_CACHE') else None
+    if cache and restore_build_image(cache, identity, inspect):
+        return tag
+    archive = download(value['architectures'][host_arch()]['python'],
+                       tools_directory()/'python.tar.gz')
     with tempfile.TemporaryDirectory(prefix='cor-build-image-') as temporary:
         directory = Path(temporary)
         certificates = system_ca_bundle()
@@ -252,7 +255,48 @@ def build_image():
         run(['docker', 'build', '--build-arg', 'BASE_IMAGE='+value['image'],
              '--build-arg', 'USER_ID='+str(os.getuid()), '--build-arg', 'GROUP_ID='+str(os.getgid()),
              '--tag', tag, directory], timeout=900)
+    if cache:
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            image = cache/'image.tar'
+            temporary = cache/'image.partial'
+            run(['docker', 'image', 'save', '--output', temporary, tag], timeout=120)
+            temporary.replace(image)
+            identifier = subprocess.check_output(inspect, text=True).strip()
+            write_json(cache/'image.json', {
+                'schema': 1, 'identity': identity, 'id': identifier,
+                'size': image.stat().st_size, 'sha256': sha256(image),
+            })
+            print(f'Ubuntu compiler container: archived {image.stat().st_size/1024**2:.1f} MiB', flush=True)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            (cache/'image.json').unlink(missing_ok=True)
+            print('::warning::Ubuntu compiler container archive failed; the prepared build remains usable',
+                  flush=True)
     return tag
+
+
+def restore_build_image(cache, identity, inspect):
+    try:
+        image, receipt = cache/'image.tar', cache/'image.json'
+        if receipt.stat().st_size > 1024**2:
+            raise ValueError('Build image receipt exceeds limit')
+        value = json.loads(receipt.read_text())
+        if (not isinstance(value, dict) or value.get('schema') != 1 or value.get('identity') != identity
+                or not isinstance(value.get('id'), str)
+                or not re.fullmatch(r'sha256:[0-9a-f]{64}', value['id'])
+                or image.is_symlink() or receipt.is_symlink()
+                or image.stat().st_size != value.get('size')
+                or sha256(image) != value.get('sha256')):
+            raise ValueError('Build image identity mismatch')
+        run(['docker', 'image', 'load', '--input', image], timeout=120)
+        actual = subprocess.check_output(inspect, text=True).strip()
+        if actual != value['id']:
+            raise ValueError('Loaded Docker image identity mismatch')
+        print('Ubuntu build environment: verified GitHub cache; no VM or application data', flush=True)
+        return True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        print('Ubuntu build environment cache unavailable; preparing the frozen environment', flush=True)
+        return False
 
 
 def container(command):
@@ -282,6 +326,10 @@ def container(command):
     if cache := os.environ.get('COR_LINUX_APT_CACHE'):
         Path(cache).mkdir(parents=True, exist_ok=True)
         arguments.extend(['--volume', cache + ':' + cache, '--env', 'COR_LINUX_APT_CACHE=' + cache])
+    if snapshot := os.environ.get('WORKSPACE_SOURCE_CACHE'):
+        directory = Path(snapshot).parent
+        directory.mkdir(parents=True, exist_ok=True)
+        arguments.extend(['--volume', f'{directory}:{directory}', '--env', 'WORKSPACE_SOURCE_CACHE'])
     run([*arguments, tag, *command], timeout=3300)
 
 
@@ -716,6 +764,9 @@ def main():
         if extra:
             parser.error('cache-image takes no additional arguments')
         build_image()
+        if (cache := os.environ.get('COR_LINUX_BUILD_CACHE')) and (output := os.environ.get('GITHUB_OUTPUT')):
+            with Path(output).open('a') as stream:
+                stream.write('ready=' + str((Path(cache)/'image.json').is_file()).lower() + '\n')
     elif args.operation == 'vm':
         if extra:
             parser.error('vm takes no additional arguments')

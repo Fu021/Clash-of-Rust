@@ -31,13 +31,13 @@ Rust 行包含其 Cargo registry/Git 数据和相关原生依赖构建结果，�
 
 ## 当前上限与保留预算
 
-维护者已设置每月 2 美元的账户预算；2026-11-10 按实际清单收紧容量，仓库 `max_cache_size_gb` 设为 **15 GB**，设置 API 读回已确认。账户预算不自动提高仓库上限，两个设置均需配置，见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)。
+维护者最新授权为每月 **1 美元**；2026-11-10 仓库 `max_cache_size_gb` 从 15 调整为 **24 GB**，设置 API 已读回确认。按当前 10 GiB 免费额及超出部分每 GiB 月 0.07 美元计算，本仓库满额整月约 0.98 美元；实际按存储时间累计，账户其他仓库和已产生费用须一并计入预算。账户预算不自动提高仓库上限，两个设置均需配置，见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
 
 北京时间 2026-11-10 16:27 的逐项清单为 **11 条、10.09 GiB**：九个平台 Rust 缓存和两份 macOS Tailscale 工具；这是已保存部分的压缩大小，没有 Memory profile、Go 或 Gradle 缓存，不能替代上表全覆盖估算。
 
-CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **13 GiB** 保留预算，低于仓库 **15 GB** 配置上限；两处沿用各自标示单位，余量不保证容纳任何完整归档。全仓同一逻辑目标仅保留按创建时间选出的最新一代，访问旧记录不改变代际顺序，容量不足再按[编译优先级](cache-coverage.md#编译对象只用-github)淘汰。GitHub 的分支读取作用域仍然生效，不将这个保留策略描述为跨分支共享存储；费用以 GitHub 实际[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)为准。
+CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **20 GiB** 保留预算，低于仓库 **24 GB** 配置上限；两处沿用各自标示单位，余量不保证容纳任何完整归档。全仓同一逻辑目标仅保留按创建时间选出的最新一代，访问旧记录不改变代际顺序，容量不足再按[编译优先级](cache-coverage.md#编译对象只用-github)淘汰。GitHub 的分支读取作用域仍然生效，不将这个保留策略描述为跨分支共享存储；费用以 GitHub 实际账单为准。
 
-本次未新增 Go/Gradle 编译缓存；上表仍保留全平台容量规划，不能把估算总量写成已经覆盖。Ubuntu 20.04 两种预装镜像继续仅存私网，不占此额度。
+本轮新增 Android Go 编译缓存和 Linux 编译环境缓存，继续保留 macOS Tailscale；未新增 Gradle 转换缓存。上表保留全平台容量规划，新增 Docker 编译容器需另按实际归档计量，不能把估算总量写成已经覆盖。Ubuntu 20.04 两种预装 VM 继续仅存私网，不占此额度。优化后的首轮保存和下一轮暖恢复必须分别记录，不能在尚未运行时宣称提速。
 
 ## 近期 CI 耗时依据
 
@@ -46,3 +46,23 @@ CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **13 GiB** 保留预算�
 恢复包含兼容 workspace，桌面编译包含检查与测试，Android 编译包含应用、Go 内核和 Rust，不是纯 Rust 耗时。排队、安装验证、模拟器及清单收尾不用于排序，也不将中位数当作缓存净节约。macOS Intel 整个 job 中位数约 16.6 分钟，其中恢复约 2.3 分钟、编译约 8 分钟；Ubuntu 20.04 ARM64 约 15.8 分钟，包含 TCG 启动、候选包等待及安装验证。它们是主要耗时项，但 VM 继续走私网预装模板，不能因耗时较长就加入 GitHub Cache。
 
 Tailscale 同样影响 CI：macOS ARM64 的 `42679544543` 日志记录从源码安装，接入步骤 166 秒；`42712647995` 两架构命中 31,794,999／34,199,007 字节缓存，接入步骤分别为 3／7 秒。六轮接入中位数为 5.5／7 秒；热态数字短恰好说明小工具缓存有效，不能反过来作为淘汰依据。这不是同一提交的严格冷暖实验，但足以保留约 63 MiB 的两架构工具，避免重复编译。上游源码构建行为见 [Tailscale Action 问题](https://github.com/tailscale/github-action/issues/287)。
+
+### 扩容后的首轮完整成功对照
+
+提交 `8312c60` 的 CI `42785818645` 必需 14 项均成功。将它与上方六轮成功 CI 的逐平台中位数比较，只合计恢复、编译／测试及 Rust 缓存收尾保存，不含单独的安装验证、模拟器和排队；这不是纯 Rust 编译耗时，也不是同提交冷暖实验。
+
+| 目标 | 扩容前中位数 | 扩容后本轮 | 本轮变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 | 4 分 17 秒 | 5 分 20 秒 | 慢约 25% |
+| macOS Intel | 10 分 19 秒 | 14 分 53 秒 | 慢约 44% |
+| Windows x64 | 5 分 7 秒 | 4 分 25 秒 | 快约 14% |
+| Windows ARM64 | 7 分 18 秒 | 12 分 46 秒 | 慢约 75% |
+| Linux x64 | 5 分 8 秒 | 13 分 54 秒 | 慢约 171% |
+| Linux ARM64 | 3 分 52 秒 | 3 分 54 秒 | 慢约 1% |
+| Android ARM64 | 7 分 47 秒 | 7 分 36 秒 | 快约 2% |
+| Android ARMv7 | 7 分 20 秒 | 5 分 57 秒 | 快约 19% |
+| Android x64 | 7 分 15 秒 | 6 分 47 秒 | 快约 6% |
+
+没有观察到整体稳定提速。macOS Intel 本轮恢复约 150 秒、保存约 199 秒；Windows ARM64 恢复约 174 秒，保存达到 300 秒后日志明确报超时，尽管 API 将 job 与该步骤结论列为成功，因此不能称其最新缓存已保存。Linux x64 精确恢复约 750 MiB 后，编译／测试步骤仍用时 814 秒，其中一段 Slint 测试构建约 331 秒；容量和命中不代表源码、测试及链接结果全部可复用。扩容前也已有缓存，不能把本表解读为有缓存与无缓存的差异，或据此断言扩容本身使运行变慢。
+
+从首个 job 开始到最后一个 job 结束，扩容前六轮中位数 20 分 10 秒，本轮 22 分 58 秒；该整体跨度包含后续 runner 和依赖等待，不能当成缓存净耗时。应先优化大归档的压缩、恢复和重编收益，再用相同提交及验证范围的重复运行评估容量收益；不能仅延长保存超时便宣称提速。
