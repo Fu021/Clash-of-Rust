@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -237,6 +238,10 @@ def build_image():
         return tag
     with tempfile.TemporaryDirectory(prefix='cor-build-image-') as temporary:
         directory = Path(temporary)
+        certificates = ssl.get_default_verify_paths().cafile
+        if not certificates or not Path(certificates).is_file():
+            raise RuntimeError('Ubuntu build requires the runner system CA bundle')
+        shutil.copyfile(certificates, directory/'bootstrap-ca.crt')
         shutil.copy2(dockerfile, directory/'Dockerfile')
         shutil.copy2(archive, directory/'python.tar.gz')
         run(['docker', 'build', '--build-arg', 'BASE_IMAGE='+value['image'],

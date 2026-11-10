@@ -1412,6 +1412,48 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             linux_ci.cache_keys(value, 'x64')
 
+    def test_linux_build_bootstraps_https_with_runner_trust_and_removes_it_from_context(self):
+        value = {'image': 'ubuntu@sha256:' + 'c'*64, 'architectures': {
+            'x64': {'python': {'sha256': 'a'*64}}}}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root/'python.tar.gz'
+            archive.write_bytes(b'portable Python')
+            certificates = root/'ca.crt'
+            certificates.write_bytes(b'runner trust bundle')
+            contexts = []
+
+            def build_image(command, **kwargs):
+                context = Path(command[-1])
+                contexts.append(context)
+                self.assertEqual((context/'bootstrap-ca.crt').read_bytes(), certificates.read_bytes())
+                self.assertEqual((context/'python.tar.gz').read_bytes(), archive.read_bytes())
+                self.assertEqual((context/'Dockerfile').read_bytes(),
+                                 (build.ROOT/'resources/linux/ubuntu20.Dockerfile').read_bytes())
+
+            with patch.object(linux_ci, 'require_actions'), \
+                    patch.object(linux_ci, 'inputs', return_value=value), \
+                    patch.object(linux_ci, 'host_arch', return_value='x64'), \
+                    patch.object(linux_ci, 'download', return_value=archive), \
+                    patch.object(linux_ci, 'tools_directory', return_value=root), \
+                    patch.object(linux_ci.subprocess, 'run') as inspect, \
+                    patch.object(linux_ci.ssl, 'get_default_verify_paths') as trust, \
+                    patch.object(linux_ci, 'run', side_effect=build_image) as execute:
+                inspect.return_value.returncode = 0
+                linux_ci.build_image()
+                trust.assert_not_called()
+                execute.assert_not_called()
+                inspect.return_value.returncode = 1
+                trust.return_value.cafile = None
+                with self.assertRaisesRegex(RuntimeError, 'system CA bundle'):
+                    linux_ci.build_image()
+                execute.assert_not_called()
+                trust.return_value.cafile = str(certificates)
+                linux_ci.build_image()
+                execute.assert_called_once()
+            self.assertEqual(len(contexts), 1)
+            self.assertFalse(contexts[0].exists())
+
     def test_linux_download_revalidates_cached_bytes_and_uses_frozen_digest(self):
         data = b'verified upstream archive'
         record = {'url': 'https://example.invalid/archive',

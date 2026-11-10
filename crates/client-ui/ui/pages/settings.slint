@@ -160,7 +160,7 @@ export component SettingsPage inherits PageSurface {
                             ActionButton { text: "保存"; compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-update-interval, "", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "订阅自动更新"; hint: "仅远程订阅；0 关闭，默认 360 分钟。失败保留原配置；Claude 保护期间全部暂停。";
+                        FormRow { title: "订阅自动更新"; hint: "0 关闭，默认 360 分钟；Claude 保护期间暂停。";
                             Field { text <=> UiData.subscription-interval; width: 76px; horizontal-stretch: 0; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.subscription-interval-input, value, ""); } }
                             Caption { text: "分钟"; horizontal-stretch: 0; }
                             ActionButton { text: "保存"; compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-subscription-interval, "", ""); } }

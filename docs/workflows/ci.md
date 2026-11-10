@@ -50,6 +50,8 @@ Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按�
 
 CI 与 Memory 的 Rust 编译缓存仅使用 GitHub，未命中直接编译；Publish Release 复用同提交 CI 附件。原始下载优先官方外网，失败后才取私网，准备完成后尽早提交已验证的 URL 清单，末尾追加及查询持久回执。私网不再保存编译对象、安装目录、Gradle 转换缓存或已构建容器；当前逐项覆盖及未接入的原生包管理器见[缓存分工](cache-coverage.md)，服务端接口和[可保留白名单](cache-retention.md)独立维护。工作流不删除私网条目。
 
+Ubuntu 20.04 构建容器使用官方 HTTPS APT 源，首次安装证书包前临时使用 runner 的系统 CA；安装后删除引导证书与专用配置，继续使用容器自己的证书包。下载连接/读取限时 30 秒、最多重试两次，保留 APT 签名及 TLS 校验和既有容器构建总预算。官方源不可用仍会失败；这不代表原生 APT 下载已接入私网回退。
+
 每轮 loop 执行只读依赖审计，CI 在最后的缓存 job 中输出 `dependency-audit` 附件及 summary，避免候选查询阻塞平台矩阵启动。报告覆盖 Cargo 锁定包、Go 模块、Android Maven 声明、Actions、已确认工具及 Linux/资源元数据，标出撤回、弃用和上游归档信号；查询失败与未检查项单列。按[loop 更新约定](../loop-workflow.md#每轮怎么做)修改声明、锁文件、工具基线及 Actions SHA 并验证。第三方 Actions 固定官方不可变提交，版本标签保存在工具基线中供审计，不随上游标签移动自动更新。
 
 GitHub 缓存预算为 9 GiB，按[慢平台优先级](cache-coverage.md#编译对象只用-github)保留，取消运行不执行预算清理。macOS/Windows 先尝试包含源码身份的缓存，未恢复有效对象时再尝试同平台旧 GitHub workspace；精确键未命中不代表冷编译。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。测试报告和安装包不进入编译缓存。

@@ -88,7 +88,7 @@ export component ScheduleSettings inherits VerticalLayout {
             MField { text <=> MobileData.subscription-interval; enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending; edited(value) => { MobileView.subscription-interval-dirty = true; } }
             MButton { text: "保存"; enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.subscription-interval, MobileData.subscription-interval, ""); } }
         }
-        MSmall { text: "仅更新远程订阅；失败保留原配置；Claude 保护期间全部暂停。"; wrap: word-wrap; }
+        MSmall { text: "仅远程订阅；Claude 保护期间暂停。"; wrap: word-wrap; }
         MDivider { }
         MText { text: "定时测速"; }
         MSmall { text: "分钟 · 0 关闭"; wrap: word-wrap; }
