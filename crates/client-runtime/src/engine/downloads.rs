@@ -578,12 +578,12 @@ mod tests {
         assert!(shared.lock().await.app_updates.begin("busy").is_ok());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     #[tokio::test]
     async fn update_preparation_releases_owner_and_rechecks_changes_before_commit() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        for scenario in 0..5 {
+        for scenario in 0..6 {
             let root = tempfile::tempdir().unwrap();
             let shared = Arc::new(tokio::sync::Mutex::new(fixture(
                 Store::at(root.path().to_owned()).unwrap(),
@@ -641,6 +641,18 @@ mod tests {
                         )
                         .unwrap();
                         gui_lock = Some(lock);
+                    }
+                    5 => {
+                        use crate::claude_check::protection::{Previous, Protection};
+                        owner.settings.claude_protection = Some(Arc::new(Protection::new(
+                            "fixture".into(),
+                            "node".into(),
+                            Previous {
+                                mode: "rule".into(),
+                                proxy_mode: ProxyMode::Off,
+                                selectors: Default::default(),
+                            },
+                        )));
                     }
                     _ => {}
                 }

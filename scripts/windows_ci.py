@@ -285,6 +285,49 @@ def _verify_failed_update(package, installed):
             renderer.write_bytes(original)
 
 
+def _update_handoff_command(package, gate, parent, installed):
+    if any('"' in str(path) for path in (gate, installed)):
+        raise ValueError('Invalid update handoff path')
+    return (subprocess.list2cmdline([str(package)]) +
+            f' /S /UPDATE /CORWAITDIR="{gate}" /CORWAITPID={parent} /D={installed}')
+
+
+def _verify_deferred_update(package, installed):
+    original = {name: sha256(installed/name) for name in
+                ('clash-of-rust.exe', 'clash-desktop-ui.exe')}
+    with tempfile.TemporaryDirectory(prefix='cor update gate ') as directory:
+        gate = Path(directory)
+        (gate/'plan.json').write_text('{}', encoding='utf-8')
+        for committed in (False, True):
+            (gate/'cancel').unlink(missing_ok=True)
+            if committed:
+                (gate/'commit').touch()
+            with subprocess.Popen(
+                _update_handoff_command(package, gate, os.getpid(), installed),
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            ) as process:
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    raise RuntimeError('Installer did not wait for the owner handoff')
+                (gate/'cancel').touch()
+                if process.wait(timeout=30) != 2:
+                    raise RuntimeError('Cancelled installer did not preserve the old version')
+            assert {name: sha256(installed/name) for name in original} == original
+        (gate/'cancel').unlink()
+        with subprocess.Popen([sys.executable, '-c', 'pass']) as parent:
+            parent.wait(timeout=30)
+        with subprocess.Popen(
+            _update_handoff_command(package, gate, parent.pid, installed),
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ) as process:
+            if process.wait(timeout=60) != 0:
+                raise RuntimeError('Committed installer failed after the owner exited')
+        assert {name: sha256(installed/name) for name in original} == original
+
+
 def installed_gui_smoke(installed, root):
     """Check the installed window and shared CLI with a non-admin token."""
     import ctypes as c
@@ -428,6 +471,9 @@ def _verify_installed_package(package, binary, root, smoke):
         user_file.write_text('Preserve this unrelated file', encoding='utf-8')
         if extended_tests():
             installed_gui_smoke(installed, root)
+        from ci_test_policy import update_tests
+        if update_tests():
+            _verify_deferred_update(package, installed)
             _verify_failed_update(package, installed)
             _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
             assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))

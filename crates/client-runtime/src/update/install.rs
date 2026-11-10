@@ -137,8 +137,15 @@ impl InstallSession {
     pub fn cancel(&self) {
         let _ = fs::write(self.directory.join("cancel"), b"");
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     pub(crate) fn commit(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.directory.is_dir() && !self.directory.join("cancel").exists(),
+            "安装交接已取消，已保留旧版本"
+        );
+        if let Some((message, _)) = self.outcome() {
+            bail!("安装交接已结束：{message}");
+        }
         fs::write(self.directory.join("commit"), b"").context("无法确认更新交接")
     }
     pub fn outcome(&self) -> Option<(String, bool)> {
@@ -236,7 +243,14 @@ pub fn handoff_owner_at(
     handoff_with_commit(download, parent, restart, false, data_dir)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos", test))]
+pub(crate) fn supports_deferred_install(version: &str) -> bool {
+    semver::Version::parse(version).is_ok_and(|version| {
+        version >= semver::Version::parse("0.6.7-fix.9.session-lifecycle").expect("valid version")
+    })
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn handoff_owner_deferred_at(
     download: Arc<Downloaded>,
     parent: u32,
@@ -521,7 +535,14 @@ pub fn cleanup(directory: &Path) {
 
 #[cfg(windows)]
 fn install(plan: &Plan, directory: &Path) -> Result<()> {
-    let mut installer = crate::platform::launch_update_installer(&plan.package)?;
+    anyhow::ensure!(
+        !plan.require_commit || supports_deferred_install(&plan.version),
+        "旧安装包不支持延迟安装交接"
+    );
+    let mut installer = crate::platform::launch_update_installer(
+        &plan.package,
+        plan.require_commit.then_some((directory, plan.parent)),
+    )?;
     fs::write(directory.join("ready"), b"")?;
     match installer.wait()? {
         0 => Ok(()),
@@ -533,6 +554,7 @@ fn install(plan: &Plan, directory: &Path) -> Result<()> {
         64 => bail!("无法写入卸载程序：文件被占用或安装目录不可写，已恢复旧版本"),
         65 => bail!("Windows 网络助手安装失败，已恢复旧版主程序与界面"),
         66 => bail!("无法写入安装登记信息，已恢复旧版主程序与界面"),
+        67 => bail!("安装交接未确认或已超时，已保留旧版本"),
         code => bail!("安装程序失败（代码 {code}），请重试"),
     }
 }
@@ -605,6 +627,50 @@ fn parent_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn cancelled_or_finished_handoff_cannot_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = InstallSession {
+            directory: directory.path().into(),
+            helper_pid: std::process::id(),
+        };
+        fs::write(directory.path().join("cancel"), b"").unwrap();
+        assert!(session.commit().is_err());
+        assert!(!directory.path().join("commit").exists());
+        fs::remove_file(directory.path().join("cancel")).unwrap();
+        fs::write(
+            directory.path().join("outcome.json"),
+            serde_json::to_vec(&Outcome {
+                message: "交接已超时".into(),
+                error: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(session.commit().is_err());
+        assert!(!directory.path().join("commit").exists());
+        fs::remove_file(directory.path().join("outcome.json")).unwrap();
+        session.commit().unwrap();
+        assert!(directory.path().join("commit").is_file());
+    }
+
+    #[test]
+    fn deferred_install_requires_a_version_with_the_installer_gate() {
+        for version in ["0.6.6", "0.6.7-fix.8.rules-shortcuts", "invalid"] {
+            assert!(!supports_deferred_install(version));
+        }
+        for version in [
+            "0.6.7-fix.9.session-lifecycle",
+            "0.6.7-fix.10.next",
+            "0.6.7",
+            "0.6.8",
+        ] {
+            assert!(supports_deferred_install(version));
+        }
+    }
+
     fn status_plan(data_dir: &Path, directory: &Path) -> Plan {
         Plan {
             package: directory.join("package"),

@@ -906,6 +906,16 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_windows_update_gate_handles_spaces_without_quoting_the_option_name(self):
+        command = windows._update_handoff_command(
+            r'C:\Downloads\COR setup.exe', r'C:\Users\Test User\cor update', 123,
+            r'C:\Program Files\Clash of Rust')
+        self.assertIn('/CORWAITDIR="C:\\Users\\Test User\\cor update"', command)
+        self.assertNotIn('"/CORWAITDIR=', command)
+        self.assertTrue(command.endswith('/D=C:\\Program Files\\Clash of Rust'))
+        with self.assertRaises(ValueError):
+            windows._update_handoff_command('setup.exe', 'bad"path', 123, 'installed')
+
     def test_installed_update_driver_runs_outside_the_runner_checkout(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

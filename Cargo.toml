@@ -9,7 +9,7 @@ i-slint-backend-android-activity = { path = "vendor/slint-android-activity" }
 i-slint-renderer-software = { path = "vendor/slint-renderer-software" }
 
 [workspace.package]
-version = "0.6.7-fix.8.rules-shortcuts"
+version = "0.6.7-fix.9.session-lifecycle"
 edition = "2024"
 license = "GPL-3.0-only"
 

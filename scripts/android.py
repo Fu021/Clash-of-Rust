@@ -308,6 +308,9 @@ def build(arch):
     if extended_tests():
         run(['cargo', 'test', *packages, '--release', '--locked', '--lib',
              '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT)
+    else:
+        run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--lib',
+             '--', '--test-threads=1'], cwd=ROOT)
     abi, target, clang_target, go_arch = ABIS[arch]
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'

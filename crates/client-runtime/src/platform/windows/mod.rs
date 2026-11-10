@@ -70,7 +70,10 @@ impl Drop for UpdateInstaller {
     }
 }
 
-pub fn launch_update_installer(package: &Path) -> Result<UpdateInstaller> {
+pub fn launch_update_installer(
+    package: &Path,
+    handoff: Option<(&Path, u32)>,
+) -> Result<UpdateInstaller> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::{
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
@@ -81,7 +84,16 @@ pub fn launch_update_installer(package: &Path) -> Result<UpdateInstaller> {
     };
     let file: Vec<u16> = package.as_os_str().encode_wide().chain([0]).collect();
     let verb: Vec<u16> = "runas".encode_utf16().chain([0]).collect();
-    let parameters: Vec<u16> = "/S /UPDATE".encode_utf16().chain([0]).collect();
+    let mut parameters = "/S /UPDATE".to_owned();
+    if let Some((directory, parent)) = handoff {
+        anyhow::ensure!(directory.is_absolute() && parent > 1, "安装交接参数无效");
+        let directory = directory.to_str().context("安装交接路径无效")?;
+        anyhow::ensure!(!directory.contains('"'), "安装交接路径无效");
+        parameters.push_str(&format!(
+            " /CORWAITDIR=\"{directory}\" /CORWAITPID={parent}"
+        ));
+    }
+    let parameters: Vec<u16> = parameters.encode_utf16().chain([0]).collect();
     let initialized =
         unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };

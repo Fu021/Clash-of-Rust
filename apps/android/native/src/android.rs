@@ -455,29 +455,38 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
             }
         });
     let weak = window.as_weak();
-    std::thread::Builder::new()
-        .name("mobile-runtime".into())
-        .spawn(move || {
-            let result = (|| -> Result<()> {
-                let runtime = tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
-                    .enable_all()
-                    .build()?;
-                runtime.block_on(run_loop(
-                    root,
-                    update_path,
-                    native,
-                    receive,
-                    native_events,
-                    weak,
-                    profile_gate,
-                ))
-            })();
-            if let Err(error) = result {
-                log::error!("Mobile runtime stopped: {error:#}");
-            }
-        })?;
-    window.run()?;
+    let worker = crate::session_worker::SessionWorker::spawn(move |stopped| {
+        let result = (|| -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = stopped => Ok(()),
+                    result = run_loop(
+                        root,
+                        update_path,
+                        native,
+                        receive,
+                        native_events,
+                        weak,
+                        profile_gate,
+                    ) => result,
+                }
+            })
+        })();
+        if let Err(error) = result {
+            log::error!("Mobile runtime stopped: {error:#}");
+        }
+    })?;
+    let result = window.run();
+    if let Ok(mut sender) = EVENTS.lock() {
+        *sender = None;
+    }
+    drop(worker);
+    result?;
     Ok(())
 }
 

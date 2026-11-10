@@ -61,6 +61,8 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 完整安装更新需要正式安装目录：Linux DEB、Windows 安装程序或 macOS `.app`。便携目录可下载后手动安装。更新前退出其他长时间运行的 CLI 查询进程，避免 Windows 可执行文件被占用。Windows/macOS 的系统授权仍可能需要图形会话；无人值守环境可使用 `update download`。
 
+新版 Windows 客户端更新支持交接闸门的安装包时，等待 UAC 不占用后台状态锁；授权后还会核对任务与窗口身份，再提交停机。旧安装包仍采用兼容交接，不能保证授权等待期间的状态查询立即返回，范围见[Windows 更新交接](../agent-failures/downloads.md)。
+
 ### Linux 纯命令行安装
 
 没有桌面窗口时，`cor update install` 在当前终端通过 `sudo` 授权，不依赖桌面 polkit 授权代理。授权失败、取消或安装交接已过期时保留原后台；只有授权通过且后台、设置与数据目录仍匹配本次请求，才停止后台并安装。root 不再提权；普通账户缺少 sudo 时明确报错，可用 `cor update download --output cor-update.deb` 下载后交管理员安装，不要把整个更新命令切换到另一账户来绕过授权。

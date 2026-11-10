@@ -4,3 +4,5 @@ mod android;
 mod protection_service;
 #[cfg(any(target_os = "android", test))]
 mod request_gate;
+#[cfg(any(target_os = "android", test))]
+mod session_worker;

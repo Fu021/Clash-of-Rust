@@ -70,6 +70,8 @@ Var KeepAutostart
 Var UpdateMode
 Var UpdateBackup
 Var UpdateUiBackup
+Var WaitDirectory
+Var WaitPid
 Var DeleteUserData
 Var UserDataDir
 Var DataOptionsDialog
@@ -128,6 +130,12 @@ Function .onInit
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
   ${EndIf}
+  StrCpy $WaitDirectory ""
+  StrCpy $WaitPid ""
+  ${GetOptions} $0 "/CORWAITDIR=" $WaitDirectory
+  ${GetOptions} $0 "/CORWAITPID=" $WaitPid
+  ClearErrors
+  Call WaitForHandoff
   ReadRegStr $ExistingDir ${PRODUCT_HIVE} "${PRODUCT_KEY}" "InstallLocation"
     ${If} $ExistingDir == ""
       ReadRegStr $ExistingDir HKCU "${LEGACY_KEY}" "InstallLocation"
@@ -176,6 +184,52 @@ Function .onInit
   ${EndIf}
   !insertmacro CheckRunning init_
   init_done:
+FunctionEnd
+
+Function WaitForHandoff
+  ${If} $WaitDirectory == ""
+  ${AndIf} $WaitPid == ""
+    Return
+  ${EndIf}
+  ${If} $UpdateMode != 1
+  ${OrIf} $WaitDirectory == ""
+  ${OrIf} $WaitPid < 2
+    Goto handoff_failed
+  ${EndIf}
+  StrCpy $2 0
+  handoff_wait:
+    IfFileExists "$WaitDirectory\plan.json" 0 handoff_failed
+    IfFileExists "$WaitDirectory\cancel" handoff_cancelled 0
+    IfFileExists "$WaitDirectory\commit" 0 handoff_pending
+    System::Call 'kernel32::OpenProcess(i 0x100000, i 0, i $WaitPid) p.r0 ?e'
+    Pop $1
+    ${If} $0 == 0
+      ${If} $1 == 87
+        Return
+      ${EndIf}
+      Goto handoff_failed
+    ${EndIf}
+    System::Call 'kernel32::WaitForSingleObject(p r0, i 0) i.r1'
+    System::Call 'kernel32::CloseHandle(p r0)'
+    ${If} $1 == 0
+      Return
+    ${EndIf}
+    ${If} $1 != 258
+      Goto handoff_failed
+    ${EndIf}
+  handoff_pending:
+    IntOp $2 $2 + 1
+    ${If} $2 >= 450
+      Goto handoff_failed
+    ${EndIf}
+    Sleep 100
+    Goto handoff_wait
+  handoff_cancelled:
+    SetErrorLevel 2
+    Abort
+  handoff_failed:
+    SetErrorLevel 67
+    Abort
 FunctionEnd
 
 Function ShutdownExisting

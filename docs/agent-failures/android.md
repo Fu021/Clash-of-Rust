@@ -57,6 +57,7 @@
 - 覆盖首次授权、拒绝、取消后的迟到授权、已授权、VPN 重建和关闭清理。
 - 关闭界面不得停止 VPN；套接字必须绕过自身 TUN。
 - Activity 重建须在旧窗口终止时释放 EGL surface，再初始化新界面并附加现有内核，避免重复重载；验证新界面实际渲染及 VPN 配置未变。[CI 40745218037](https://github.com/Fu021/Clash-of-Rust/actions/runs/40745218037) 出现 `EGL_BAD_ALLOC`；当前 Slint 1.18.1 Android 后端回移了[上游生命周期修复](../../vendor/slint-android-activity/PATCHES.md)，修复须由后续模拟器与设备复验。
+- 不能只串行化渲染线程而放任旧移动运行时退出：旧手动下载及已排队结果仍可能在新会话开局后写盘。NativeActivity 的会话工作线程现在由退出守卫持有，窗口正常退出或错误返回均先发取消信号、丢弃会话 future，再等待运行时和阻塞写入清理完毕，最后释放旧 UI 生命周期；VPN 服务独立保留。源码回归覆盖未完成写入的取消、下一会话打开前的清理及已退出线程再次关闭；真实旋转、后台重建和厂商 ROM 仍须按当前提交证据验收。
 - [打包 40813504181](https://github.com/Fu021/Clash-of-Rust/actions/runs/40813504181) 的 x64 模拟器第二次 VPN 重建后，系统仍报告路由与 TUN 描述符存在，但真实 TCP 连接超时；同任务单独复验通过，具体原因尚未确认。不能用控制面状态或延长等待替代流量验证，失败时保留接口计数及原始诊断。
 - 测试辅助状态必须有稳定来源，等待状态变化而不是固定 sleep。
 - 应用分流先通过公开 `PackageManager.getApplicationInfo` 核对安装状态，再交给 VPN Builder；不能只依赖 Builder 的 `NameNotFoundException`。[CI 42587460890](https://github.com/Fu021/Clash-of-Rust/actions/runs/42587460890) 在仅选中模式建立 VPN 后仍保留不存在的包名；[AOSP 的 `verifyApp`](https://android.googlesource.com/platform/frameworks/base/+/master/core/java/android/net/VpnService.java#785) 未处理 Binder 查询返回空值，可能不抛文档所述异常。回归核对三种模式的真实路由、卸载清理、有效选择保留，以及全部选中项失效时拒绝建立 VPN。

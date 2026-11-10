@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) async fn prepare_update_handoff<'a, S, F, Fut, C>(
     shared: &'a Arc<Mutex<Engine>>,
     job: &crate::engine::downloads::UpdateJob,
@@ -23,6 +23,7 @@ where
     let (gui, parent, data_dir) = {
         let engine = shared.lock().await;
         job.ensure_current(disconnected)?;
+        engine.settings.require_mutable()?;
         anyhow::ensure!(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
@@ -38,6 +39,7 @@ where
     let engine = shared.lock().await;
     if let Err(error) = (|| -> Result<()> {
         job.ensure_current(disconnected)?;
+        engine.settings.require_mutable()?;
         anyhow::ensure!(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
@@ -358,6 +360,7 @@ async fn install_update(
     if terminal {
         let engine = shared.lock().await;
         job.ensure_current(&disconnected)?;
+        engine.settings.require_mutable()?;
         anyhow::ensure!(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
@@ -365,32 +368,34 @@ async fn install_update(
         let directory = crate::update::prepare_terminal_install(Arc::new(download), &engine)?;
         return Ok(json!({"installer":directory,"shutdown":false}));
     }
-    // macOS may wait for DMG verification or authorization. The helper is
-    // gated until the owner rechecks the GUI and explicitly commits the swap.
-    #[cfg(target_os = "macos")]
-    let (mut engine, session) = prepare_update_handoff(
-        shared,
-        &job,
-        &disconnected,
-        prereleases,
-        |parent, gui, data_dir| async move {
-            tokio::task::spawn_blocking(move || {
-                crate::update::handoff_owner_deferred_at(
-                    Arc::new(download),
-                    parent,
-                    gui,
-                    Some(data_dir),
-                )
-            })
-            .await?
-        },
-        |session| session.cancel(),
-    )
-    .await?;
-    #[cfg(not(target_os = "macos"))]
-    let (mut engine, session) = {
+    #[cfg(any(windows, target_os = "macos"))]
+    let deferred =
+        cfg!(target_os = "macos") || crate::update::supports_deferred_install(&download.version);
+    #[cfg(any(windows, target_os = "macos"))]
+    let (mut engine, session) = if deferred {
+        prepare_update_handoff(
+            shared,
+            &job,
+            &disconnected,
+            prereleases,
+            |parent, gui, data_dir| async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::update::handoff_owner_deferred_at(
+                        Arc::new(download),
+                        parent,
+                        gui,
+                        Some(data_dir),
+                    )
+                })
+                .await?
+            },
+            |session| session.cancel(),
+        )
+        .await?
+    } else {
         let engine = shared.lock().await;
         job.ensure_current(&disconnected)?;
+        engine.settings.require_mutable()?;
         anyhow::ensure!(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
@@ -409,20 +414,42 @@ async fn install_update(
         .await??;
         (engine, session)
     };
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let (mut engine, session) = {
+        let engine = shared.lock().await;
+        job.ensure_current(&disconnected)?;
+        engine.settings.require_mutable()?;
+        anyhow::ensure!(
+            engine.settings.update_prereleases == prereleases,
+            "更新通道已改变，请重新检查更新"
+        );
+        let gui = super::gui_pid(&engine.store)?;
+        let parent = gui.unwrap_or_else(std::process::id);
+        let data_dir = engine.store.root.clone();
+        let session = tokio::task::spawn_blocking(move || {
+            crate::update::handoff_owner_at(
+                Arc::new(download),
+                parent,
+                gui.is_some(),
+                Some(data_dir),
+            )
+        })
+        .await??;
+        (engine, session)
+    };
+    #[cfg(any(windows, target_os = "macos"))]
     let was_running = engine.running();
     if let Err(error) = engine.stop().await {
         session.cancel();
         return Err(error);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     if let Err(error) = super::request_gui_exit(&engine.store) {
         session.cancel();
         return Err(error);
     }
-    #[cfg(target_os = "macos")]
-    if let Err(error) = session
-        .commit()
+    #[cfg(any(windows, target_os = "macos"))]
+    if let Err(error) = (if deferred { session.commit() } else { Ok(()) })
         .and_then(|()| super::request_gui_exit(&engine.store))
     {
         session.cancel();

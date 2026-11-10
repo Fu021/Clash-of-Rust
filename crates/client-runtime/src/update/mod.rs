@@ -5,8 +5,6 @@ use anyhow::{Context, Result, bail};
 pub use clash_client_core::update::Progress;
 pub use clash_client_core::update::channel;
 use futures_util::future::{AbortHandle, AbortRegistration};
-#[cfg(target_os = "macos")]
-pub(crate) use install::handoff_owner_deferred_at;
 #[cfg(target_os = "linux")]
 pub use install::run_terminal_install;
 pub use install::{
@@ -15,6 +13,8 @@ pub use install::{
 };
 #[cfg(target_os = "linux")]
 pub(crate) use install::{commit_terminal_install, prepare_terminal_install};
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) use install::{handoff_owner_deferred_at, supports_deferred_install};
 use reqwest::{Client, StatusCode, Url};
 use semver::Version;
 use serde::Deserialize;

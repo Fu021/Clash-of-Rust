@@ -2,6 +2,8 @@
 
 [返回 CI](ci.md)。缓存用于缩短关键路径；实际恢复、编译和收尾耗时分别记录，绿色 job 不等于私网已完整保存。
 
+独立于现行保留预算的全平台编译对象容量规划见[容量估算](cache-capacity.md)；估算不会自动启用新缓存或扩大预算。
+
 ## 编译对象只用 GitHub
 
 CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache；未命中正常编译，不查询私网 Rust 索引或分片，也不在 job 结束后镜像对象。Publish Release 继续复用同提交成功 CI 的构建附件，不重新编译 Rust。
