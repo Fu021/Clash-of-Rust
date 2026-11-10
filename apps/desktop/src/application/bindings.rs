@@ -245,7 +245,14 @@ impl DesktopHost {
             }
         }
         let tick = matches!(message, Message::Tick);
+        let page = self.app.page;
+        let overview_busy = self.app.overview.busy();
         let task = self.app.update(message);
+        if (page != self.app.page || (overview_busy && !self.app.overview.busy()))
+            && let Some(window) = self.window.as_mut()
+        {
+            window.reclaim_pending = true;
+        }
         self.spawn(task);
         self.finish_retirement();
         self.sync();
@@ -278,8 +285,6 @@ impl DesktopHost {
                     .as_mut()
                     .filter(|window| window.reclaim_pending && window.closing.is_none())
             {
-                // Return startup parser/model allocation caches once per
-                // renderer lifetime, after initialization has become idle.
                 window.reclaim_pending = false;
                 platform::memory::release_unused_heap();
             }

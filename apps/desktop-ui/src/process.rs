@@ -3,7 +3,7 @@ use crate::{activation, apply, apply_if_current, intent, repaint, view_state};
 use clash_client_ui::{AppWindow, Motion, Theme, UiActions, UiData, models::ViewModels};
 use clash_desktop_protocol::{self as wire, HostPacket, UiEvent, WindowCommand};
 use slint::{
-    ComponentHandle, Timer,
+    ComponentHandle, Model, Timer,
     winit_030::{EventResult, WinitWindowAccessor, winit},
 };
 use std::{
@@ -20,6 +20,7 @@ struct Frontend {
     pending_view: Option<wire::ViewState>,
     output: mpsc::Sender<UiEvent>,
     revision: Rc<Cell<u64>>,
+    reclaim: Timer,
 }
 fn send(output: &mpsc::Sender<UiEvent>, event: UiEvent) {
     let _ = output.send(event);
@@ -365,6 +366,7 @@ pub fn run() -> anyhow::Result<()> {
             pending_view: if view_ready { None } else { view },
             output: output.clone(),
             revision,
+            reclaim: Timer::default(),
         })
     });
     let opened = output.clone();
@@ -445,6 +447,13 @@ fn packet(bytes: &[u8]) {
                 view_ready,
                 accepted,
             } => {
+                let old_page = front.window.global::<UiData>().get_page();
+                let old_nodes: usize = front
+                    .models
+                    .groups
+                    .iter()
+                    .map(|group| group.nodes.row_count())
+                    .sum();
                 if !apply_if_current(
                     &data,
                     &front.window.global::<UiData>(),
@@ -453,6 +462,19 @@ fn packet(bytes: &[u8]) {
                     front.revision.get(),
                 ) {
                     return;
+                }
+                let nodes: usize = front
+                    .models
+                    .groups
+                    .iter()
+                    .map(|group| group.nodes.row_count())
+                    .sum();
+                if old_page != data.page || nodes < old_nodes {
+                    front.reclaim.start(
+                        slint::TimerMode::SingleShot,
+                        Duration::from_millis(350),
+                        clash_desktop_shell::platform::memory::release_unused_heap,
+                    );
                 }
                 appearance(&data, &front.window);
                 repaint::invalidate(front.window.window());

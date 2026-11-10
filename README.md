@@ -70,7 +70,7 @@ Windows、Linux、macOS 安装包均附带无界面的 `cor`，与窗口共用�
 | 关闭窗口、驻留托盘 | 21.10 MiB | 16.00 MiB | 61.46 MiB |
 | 纯 CLI 后台运行 | 14.56 MiB | 10.82 MiB | 54.26 MiB |
 
-搜索后关闭窗口，客户端 RSS 为 21.39 MiB、PSS 为 16.29 MiB；连续开关窗口 20 次通过。五项快捷规则全开时，首页客户端 RSS 为 48.95 MiB，合计 PSS 为 101.86 MiB。每场景采样 10 秒、间隔 250 ms，表中为观测峰值；RSS 含共享页，PSS 按比例分摊。实际占用随系统、配置和流量变化。[完整基准与原始数据](https://github.com/Fu021/Clash-of-Rust/actions/runs/41584464922)。
+搜索后关闭窗口，客户端 RSS 为 21.39 MiB、PSS 为 16.29 MiB；连续开关窗口 20 次通过。五项快捷规则全开时，首页客户端 RSS 为 48.95 MiB，合计 PSS 为 101.86 MiB。每场景采样 10 秒、间隔 250 ms，表中为观测峰值；RSS 含共享页，PSS 按比例分摊。实际占用随系统、配置和流量变化。[完整基准与原始数据](https://github.com/Fu021/Clash-of-Rust/actions/runs/41584464922)；开发版本的变化见[内存对照](docs/workflows/memory.md#最近一次与正式版对照)。
 
 ## 编译与打包
 
