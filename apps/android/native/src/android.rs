@@ -3567,7 +3567,6 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "applications_query_permission":android.get_applications_query_permission(),
             "applications_icon_failures":android.get_applications_icon_failures(),
             "applications_icons":android.get_applications().iter().filter(|item| item.has_icon).count(),
-            "applications_target":android.get_applications_target().iter().collect::<Vec<_>>(),
             "applications_loading":android.get_applications_loading(),
             "applications_loaded":android.get_applications_loaded(),
             "applications_total":android.get_applications_total(),

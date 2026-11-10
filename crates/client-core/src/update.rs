@@ -128,6 +128,12 @@ fn select_channel(
         (&release.tag_name, release.draft, release.prerelease)
     });
     if let Some((version, release)) = release {
+        if suffix.starts_with("android-")
+            && suffix.ends_with(".apk")
+            && version.cmp_precedence(&current).is_lt()
+        {
+            return Ok(None);
+        }
         let name = format!("Clash-of-Rust-{version}-{suffix}");
         let matches = release
             .assets
@@ -454,7 +460,7 @@ mod tests {
         );
     }
     #[test]
-    fn android_channels_offer_previews_and_return_to_the_newest_complete_stable_package() {
+    fn android_channels_offer_newer_versions_without_returning_to_older_stable_packages() {
         let releases = serde_json::json!([
             {"tag_name":"v0.6.4-dev.2","draft":false,"prerelease":true,"assets":[
                 {"name":"Clash-of-Rust-0.6.4-dev.2-android-arm64.apk","size":42},
@@ -472,12 +478,19 @@ mod tests {
             .unwrap();
         assert_eq!(preview.version, "0.6.4-dev.2");
         assert!(preview.preview);
+        let stable = select_channel(parse(), "0.6.3-dev.1", "android-arm64.apk", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stable.version, "0.6.3");
+        assert!(!stable.preview);
         for current in ["0.6.4-dev.1", "0.999.0", "0.999.0-fix.1.local"] {
-            let stable = select_channel(parse(), current, "android-arm64.apk", false)
-                .unwrap()
-                .unwrap();
-            assert_eq!(stable.version, "0.6.3");
-            assert!(!stable.preview);
+            for suffix in ["android-arm64.apk", "android-armv7.apk", "android-x64.apk"] {
+                assert!(
+                    select_channel(parse(), current, suffix, false)
+                        .unwrap()
+                        .is_none()
+                );
+            }
         }
         for current in ["0.999.0", "0.999.0-fix.1.local"] {
             assert!(
@@ -486,7 +499,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert!(select_channel(parse(), "0.6.4-dev.1", "android-x64.apk", false).is_err());
+        assert!(select_channel(parse(), "0.6.2", "android-x64.apk", false).is_err());
         assert!(
             select_channel(parse(), "0.6.3", "android-arm64.apk", false)
                 .unwrap()

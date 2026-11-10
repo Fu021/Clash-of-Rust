@@ -1225,6 +1225,71 @@ fn notice_countdown_restarts_and_expires_after_five_seconds() {
 }
 
 #[test]
+fn android_application_entry_tracks_update_banner_layout_and_opens_the_correct_page() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = MobileStartupProbe::new().unwrap();
+    probe.set_page(9);
+    probe.set_core_running(true);
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    probe
+        .global::<AndroidActions>()
+        .on_request(move |intent, _| captured.borrow_mut().push(intent));
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.show().unwrap();
+    for (width, height) in [(393, 852), (800, 1280), (1280, 800)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        for available in [false, true, false] {
+            probe
+                .global::<AndroidData>()
+                .set_update_available(available);
+            advance(&clock, Duration::from_millis(300));
+            frame(&adapter, width as usize, height as usize);
+            let geometry = probe.global::<UiGeometry>();
+            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+            advance(&clock, Duration::ZERO);
+            frame(&adapter, width as usize, height as usize);
+            let bounds = targets.borrow()["preview-application-routing"].clone();
+            assert!(bounds[2] > 0. && bounds[3] >= 48.);
+            let position =
+                LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+            assert!(position.x >= 0. && position.x < width as f32);
+            assert!(position.y >= 0. && position.y < height as f32);
+            requests.borrow_mut().clear();
+            for event in [
+                WindowEvent::PointerPressed {
+                    position,
+                    button: PointerEventButton::Left,
+                },
+                WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                },
+            ] {
+                probe.window().dispatch_event(event);
+            }
+            advance(&clock, Duration::from_millis(50));
+            assert_eq!(
+                requests.borrow().as_slice(),
+                &[AndroidIntent::ApplicationRouting]
+            );
+        }
+    }
+    probe.hide().unwrap();
+}
+
+#[test]
 fn mobile_update_banner_survives_notice_expiry_and_respects_protection() {
     let (adapter, clock) = headless(393, 852);
     let probe = MobileNoticeProbe::new().unwrap();

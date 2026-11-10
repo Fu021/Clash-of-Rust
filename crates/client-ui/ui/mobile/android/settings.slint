@@ -24,10 +24,7 @@ component AndroidConnection inherits VerticalLayout {
     MCard {
         MRow { title: "VPN 设置"; value: AndroidData.authorization-status; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
         MDivider { }
-        MRow { title: "应用分流"; value: AndroidData.application-scope; interactive: !MobileData.protected && !MobileData.protection-pending;
-            property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
-            changed target => { AndroidData.applications-target = self.target; }
-            init => { AndroidData.applications-target = self.target; }
+        MRow { geometry-key: "preview-application-routing"; title: "应用分流"; value: AndroidData.application-scope; interactive: !MobileData.protected && !MobileData.protection-pending;
             clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); }
         }
         MDivider { }

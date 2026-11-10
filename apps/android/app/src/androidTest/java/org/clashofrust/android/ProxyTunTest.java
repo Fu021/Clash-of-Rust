@@ -743,6 +743,8 @@ public class ProxyTunTest {
     private static String read(URL url, java.net.Proxy proxy, String secret) throws Exception {
         HttpURLConnection connection = (HttpURLConnection)url.openConnection(proxy);
         connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
+        connection.setUseCaches(false);
+        connection.setRequestProperty("Cache-Control", "no-store");
         connection.setRequestProperty("Connection", "close");
         if (secret != null) connection.setRequestProperty("Authorization", "Bearer " + secret);
         try (InputStream in = connection.getInputStream()) {
@@ -1043,10 +1045,9 @@ public class ProxyTunTest {
         try (Socket connection=new Socket(java.net.Proxy.NO_PROXY)) {
             connection.connect(new InetSocketAddress("198.51.100.1",18081),5000);
             connection.setSoTimeout(5000);
-            connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\n\r\n")
+            connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\nContent-Length: 1\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
-            BufferedReader stream=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.US_ASCII));
-            assertHeldResponse(stream);
+            assertHeldResponse(connection.getInputStream());
             long deadline=SystemClock.elapsedRealtime()+5000;
             JSONObject records;
             do {
@@ -1060,7 +1061,10 @@ public class ProxyTunTest {
                         if (metadata.optString("type").equalsIgnoreCase("Tun")
                             && metadata.optInt("sourcePort")==connection.getLocalPort()
                             && metadata.optInt("destinationPort")==18081
-                            && "CI-TUN-origin".equals(chains.optString(chain))) return;
+                            && "CI-TUN-origin".equals(chains.optString(chain))) {
+                            connection.getOutputStream().write('!');
+                            return;
+                        }
                 }
                 SystemClock.sleep(100);
             } while (SystemClock.elapsedRealtime()<deadline);
@@ -1068,31 +1072,33 @@ public class ProxyTunTest {
                 +"; a direct-only test must fail; records="+records);
         }
     }
-    private static void assertHeldResponse(BufferedReader stream) throws IOException {
-        String status=stream.readLine();
-        if (status==null) throw new EOFException("Held TUN request returned no HTTP response");
-        assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
-        boolean headersComplete=false;
-        for (int header=0;header<100;header++) {
-            String line=stream.readLine();
-            if (line==null) throw new EOFException("Held HTTP headers were truncated");
-            if (line.isEmpty()) {headersComplete=true;break;}
+    private static void assertHeldResponse(InputStream stream) throws IOException {
+        ByteArrayOutputStream header=new ByteArrayOutputStream();
+        int ending=0;
+        while (ending<4 && header.size()<8192) {
+            int value=stream.read();
+            if (value<0) throw new EOFException("Held HTTP headers were truncated");
+            header.write(value);
+            int expected=ending%2==0 ? '\r' : '\n';
+            ending=value==expected ? ending+1 : value=='\r' ? 1 : 0;
         }
-        assertTrue("Too many held HTTP headers",headersComplete);
+        assertEquals("Held HTTP headers exceed the size limit",4,ending);
+        String status=header.toString(StandardCharsets.US_ASCII.name()).split("\r\n",2)[0];
+        assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
         if (stream.read()<0) throw new EOFException("Held HTTP response returned no body");
     }
     @Test public void heldResponseClassifiesTruncationAsTransportFailure() throws Exception {
         for (String raw:new String[]{"", "HTTP/1.1 200 OK\r\nX-Test: 1\r\n", "HTTP/1.1 200 OK\r\n\r\n"}) {
             try {
-                assertHeldResponse(new BufferedReader(new StringReader(raw)));
+                assertHeldResponse(new ByteArrayInputStream(raw.getBytes(StandardCharsets.US_ASCII)));
                 fail("Truncated HTTP response must fail");
             } catch (EOFException expected) { /* The existing readiness loop may open a fresh connection. */ }
         }
         AssertionError rejected=null;
-        try {assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 403 Forbidden\r\n\r\nx")));}
+        try {assertHeldResponse(new ByteArrayInputStream("HTTP/1.1 403 Forbidden\r\n\r\nx".getBytes(StandardCharsets.US_ASCII)));}
         catch (AssertionError error) {rejected=error;}
         assertNotNull("An HTTP error must fail without a readiness retry",rejected);
-        assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx")));
+        assertHeldResponse(new ByteArrayInputStream("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx".getBytes(StandardCharsets.US_ASCII)));
     }
     private static JSONArray previewBounds(JSONObject ui, String name) {
         JSONObject targets = ui.optJSONObject("targets");
@@ -1307,11 +1313,19 @@ public class ProxyTunTest {
     private static void openApplicationRouting() throws Exception {
         previewNavigate(9);
         previewSettingsTop();
-        await("Application routing entry was not laid out", () -> {
-            JSONArray target = MainActivity.diagnostics().optJSONArray("applications_target");
-            return target != null && target.length() == 4 && target.optDouble(2) > 0 && target.optDouble(3) > 0;
+        waitForAppWindow();
+        java.util.concurrent.atomic.AtomicReference<String> previous = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince = new java.util.concurrent.atomic.AtomicLong();
+        await("Application routing entry layout did not settle", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            JSONArray bounds = previewBounds(ui, "preview-application-routing");
+            if (bounds == null || bounds.length() != 4 || bounds.optDouble(2) <= 0 || bounds.optDouble(3) <= 0) return false;
+            String geometry = bounds.toString() + "/" + ui.optDouble("width") + "/" + ui.optDouble("height");
+            long now = SystemClock.uptimeMillis();
+            if (!geometry.equals(previous.getAndSet(geometry))) stableSince.set(now);
+            return now - stableSince.get() >= 250;
         });
-        tapTarget("applications_target");
+        previewTarget("preview-application-routing");
         await("Application enumeration did not finish", () -> {
             JSONObject ui = MainActivity.diagnostics();
             return ui.optInt("detail") == 18 && !ui.optBoolean("applications_loading")

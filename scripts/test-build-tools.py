@@ -3394,6 +3394,52 @@ runpy.run_path(str(script), run_name='__main__')
                                               required=True,required_pattern='state.json')
             self.assertTrue((report/'ime-report/state.json').is_file())
 
+    def test_android_tun_origin_keeps_the_probe_live_until_controller_verification(self):
+        for path, acknowledgement in (('/probe', None), ('/hold', b'!'), ('/hold', b'?')):
+            with self.subTest(path=path, acknowledgement=acknowledgement):
+                server, client = socket.socketpair()
+                client.settimeout(1)
+                errors = []
+                def serve():
+                    try:
+                        with server:
+                            android_build.network_origin_handler()(server, ('127.0.0.1', 0), None)
+                    except Exception as error:
+                        errors.append(error)
+                worker = threading.Thread(target=serve, daemon=True)
+                worker.start()
+                try:
+                    client.sendall(
+                        f'GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\nContent-Length: 1\r\n\r\n'.encode()
+                    )
+                    headers = bytearray()
+                    while not headers.endswith(b'\r\n\r\n'):
+                        fragment = client.recv(1)
+                        self.assertTrue(fragment, 'Origin closed before sending HTTP headers')
+                        headers.extend(fragment)
+                    self.assertTrue(headers.startswith(b'HTTP/1.1 200 '))
+                    expected = b'cor-android-network-ok'
+                    body = bytearray()
+                    while len(body) < len(expected):
+                        fragment = client.recv(len(expected) - len(body))
+                        self.assertTrue(fragment, 'Origin truncated the body')
+                        body.extend(fragment)
+                    self.assertEqual(body, expected)
+                    if acknowledgement is not None:
+                        self.assertIn(f'Content-Length: {len(expected) + 1}\r\n'.encode(), headers)
+                        client.settimeout(0.05)
+                        with self.assertRaises(socket.timeout):
+                            client.recv(1)
+                        client.settimeout(1)
+                        client.sendall(acknowledgement)
+                        self.assertEqual(client.recv(1), b'\n' if acknowledgement == b'!' else b'')
+                    self.assertEqual(client.recv(1), b'')
+                finally:
+                    client.close()
+                    worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+
     def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
         network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
                        'applicationRoutingPersistsAndKeepsOtherAppsOnline',

@@ -704,6 +704,49 @@ def platform_ime_control(report, ime_service):
                   'input method crash(es); original regression remains failed.',flush=True)
 
 
+def network_origin_handler():
+    import http.server
+
+    class Origin(http.server.BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+
+        def do_CONNECT(self):
+            if self.path != '198.51.100.1:18081':
+                self.send_error(403)
+                return
+            self.send_response(200, 'Connection established')
+            self.end_headers()
+            self.wfile.flush()
+            self.close_connection = False
+            self.handle_one_request()
+
+        def do_GET(self):
+            held = self.path == '/hold'
+            if held and self.headers.get('Content-Length') != '1':
+                self.send_error(400)
+                return
+            body = b'cor-android-network-ok'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body) + int(held)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            if held:
+                self.connection.settimeout(10)
+                try:
+                    if self.rfile.read(1) == b'!':
+                        self.wfile.write(b'\n')
+                        self.wfile.flush()
+                except OSError:
+                    pass
+                self.close_connection = True
+
+        def log_message(self, *args):
+            pass
+
+    return Origin
+
+
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
          ime_rounds=1, applications_only=False, routing_only=False):
     if not 1 <= ime_rounds <= 3 or ((ime_probe or ime_rounds != 1) and not ime_only):
@@ -719,27 +762,9 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     run([ADB,'install','-r',test_apk])
     import http.server
     import threading
-    class Origin(http.server.BaseHTTPRequestHandler):
-        protocol_version = 'HTTP/1.1'
-        def do_CONNECT(self):
-            # Only the test core can reach this origin for the reserved target.
-            # The emulator's directly reachable host alias cannot prove TUN
-            # capture: use a negative control and a real HTTP proxy handshake.
-            if self.path != '198.51.100.1:18081':
-                self.send_error(403)
-                return
-            self.send_response(200, 'Connection established'); self.end_headers(); self.wfile.flush()
-            self.close_connection = False
-            self.handle_one_request()
-        def do_GET(self):
-            body=b'cor-android-network-ok'
-            self.send_response(200); self.send_header('Content-Length',str(4096 if self.path=='/hold' else len(body))); self.end_headers()
-            self.wfile.write(body); self.wfile.flush()
-            if self.path=='/hold': time.sleep(15)
-        def log_message(self,*args): pass
     server=None
     if network_tests:
-        server=http.server.ThreadingHTTPServer(('0.0.0.0',18081),Origin)
+        server=http.server.ThreadingHTTPServer(('0.0.0.0',18081),network_origin_handler())
         threading.Thread(target=server.serve_forever,daemon=True).start()
     # Exercise Android's real first-use dialog; pre-granting consent hides
     # ordering bugs between authorization, protection DNS and VPN startup.
