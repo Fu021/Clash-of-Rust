@@ -27,7 +27,7 @@ slint::slint! {
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
     import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
     export { ApplicationItem } from "../ui/mobile/android/state.slint";
-    export { AndroidActions, AndroidIntent } from "../ui/mobile/android/state.slint";
+    export { AndroidData, AndroidActions, AndroidIntent } from "../ui/mobile/android/state.slint";
     import { IosSurface } from "../ui/mobile/ios/app.slint";
     import { PageViews } from "../ui/components/view-toggle.slint";
     import { NoticeCountdown } from "../ui/components/motion.slint";
