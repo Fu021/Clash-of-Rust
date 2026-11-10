@@ -36,10 +36,22 @@ Claude 保护期间锁定编辑并临时覆盖为全部应用，不修改用户�
 
 ## 范围与验证
 
-系统按 UID 分流，共享 UID 的应用不能保证独立选择；仅列出当前 Android 用户可见的应用，不代管工作资料或其他用户。[issue #37](https://github.com/Fu021/Clash-of-Rust/issues/37) 进阶的“按应用指定节点/策略组”尚未实现。当前 `VpnService.Builder` 只配置允许／排除应用，Go 桥接只传 TUN 描述符和套接字保护，尚未接入连接 UID／包名解析及逐应用策略持久化，不能把勾选当作节点绑定。后续需接通 mihomo 连接归属回调、独立的应用策略及保护锁定，并验证 TCP／UDP、共享 UID 与 Android 8/9 兼容；Android 10 起可评估官方 [getConnectionOwnerUid](https://developer.android.com/reference/android/net/ConnectivityManager#getConnectionOwnerUid(int,%20java.net.InetSocketAddress,%20java.net.InetSocketAddress))，不能据此声称旧版本也能可靠识别。
+系统按 UID 分流，共享 UID 的应用不能保证独立选择；仅列出当前 Android 用户可见的应用，不代管工作资料或其他用户。[issue #37](https://github.com/Fu021/Clash-of-Rust/issues/37) 进阶的按应用指定节点尚未实现，方案见下节。当前 `VpnService.Builder` 只配置允许／排除应用，Go 桥接只传 TUN 描述符和套接字保护，不能把勾选当作节点绑定。
 
 `ProxyTunTest.applicationRoutingPersistsAndKeepsOtherAppsOnline` 沿用现有 Android x64 网络集成入口，覆盖旧设置迁移、三种模式、本应用被允许/未选中/被排除的实际路由、直连请求、保存后自动重连及卸载清理。新增实际分段按钮连续三轮往返、完整补集保存及重新打开、切回后自动重连、全部模式隐藏和撤销；自动重连同时核对服务代次递增和真实 TUN 请求，避免把旧连接仍可用误认作已应用。纯函数回归遍历全部选择组合及多次反选，软件窗口检查列表显示／收起、滚动重置、范围／筛选／保存独立动作、无改动禁止保存及保护锁定。该网络专项先由普通 CI 验证，再用多版本截图检查页面；截图工作流不执行网络测试，也不重复键盘专项。
 
 新增源码须取得同提交 Actions 结果才算模拟器验证通过。真机、厂商 ROM、多用户、IPv6/UDP/DNS 专项仍需独立验收，不能据 IPv4 模拟器结果认定完整兼容性。
 
 维护者可按需运行独立 [Android 界面预览](workflows/android-previews.md)，复用成功 CI 的 x64 APK，在已固定身份的模拟器版本上打开实际 Slint 页面，核对非本应用可见、真实图标加载、已保存摘要及模式切换；清单保留图标失败数量、权限与可见性状态。模式截图点击实际分段按钮，不再按旧下拉菜单坐标定位。该流程只在模拟器里预览并放弃分流编辑，不启动 VPN、不保存设置、不做流量测试，也不重跑键盘专项；截图不代表实际分流已验收。
+
+## 按应用指定节点（待实施）
+
+应用范围继续只决定是否进入 VPN，另设“应用策略”管理每个应用的出站，沿用规则页的新增、编辑、保存和已保存清单；不把额外选项塞进范围分段按钮。
+
+- 每项选择应用和“跟随规则／直连／策略组或节点”。默认跟随规则；VPN 外的应用不能设置节点，保留原策略但标明当前不生效。
+- 按包名独立持久化，目标关联来源订阅和策略名，不改写原订阅。保存检查目标存在；切换订阅或目标删除后显示失效项，不能悄悄绑定同序号的其他节点。Claude 保护期间只读，保留原记录。
+- 首版在规则模式将应用策略置于普通域名规则前；全局／直连模式明确显示该层未启用。保存后自动重连，重新建立的连接按新策略处理。
+- 先接通连接原始五元组 → UID → 包名 → mihomo 元数据，确保 Fake-IP 改写前仍能准确识别 TCP／UDP、IPv4／IPv6。现有 [mihomo 包名回调](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/component/process/process.go) 是接入点，仍须核对触发时序，不能仅注入回调就宣称所有连接可识别。
+- Android 10 起可评估官方 [getConnectionOwnerUid](https://developer.android.com/reference/android/net/ConnectivityManager#getConnectionOwnerUid(int,%20java.net.InetSocketAddress,%20java.net.InetSocketAddress))；Android 8／9、共享 UID、隔离进程及识别失败的策略须另行验证。不能把不可靠的归属显示为已指定节点；旧版本未通过能力验收前仍保留当前范围分流。
+
+验收需对两个应用配置不同可观测出站，核对真实请求、内核规则命中、重连与持久化，再覆盖模式切换、目标失效及保护锁定。界面截图只能验证入口和状态，不能证明选路生效。本轮不提供尚未接通的节点选择入口。

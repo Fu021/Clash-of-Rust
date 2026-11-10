@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn reversing_modes_preserves_application_routes_and_includes_system_components() {
-        let available = BTreeSet::from([
+        let available: BTreeSet<String> = BTreeSet::from([
             "org.example.browser".into(),
             "org.example.mail".into(),
             "org.example.hidden.system".into(),
@@ -60,7 +60,8 @@ mod tests {
 
     #[test]
     fn leaving_all_apps_preserves_full_capture_in_either_representation() {
-        let available = BTreeSet::from(["org.example.browser".into(), "org.example.mail".into()]);
+        let available: BTreeSet<String> =
+            BTreeSet::from(["org.example.browser".into(), "org.example.mail".into()]);
         let previous = BTreeSet::from(["org.example.browser".into()]);
         for next in ["only", "exclude"] {
             let selected = selection_after_mode_change("all", next, &previous, &available);
@@ -78,7 +79,7 @@ mod tests {
 
     #[test]
     fn repeated_mode_changes_preserve_routes_for_every_selection() {
-        let available = BTreeSet::from([
+        let available: BTreeSet<String> = BTreeSet::from([
             "org.example.browser".into(),
             "org.example.mail".into(),
             "org.example.system".into(),

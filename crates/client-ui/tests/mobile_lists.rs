@@ -79,6 +79,8 @@ slint::slint! {
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> protection-pending <=> MobileData.protection-pending;
         in-out property <bool> dirty <=> MobileView.draft-dirty;
+        in-out property <bool> loaded <=> AndroidData.applications-loaded;
+        in-out property <string> error <=> AndroidData.applications-error;
         in-out property <int> mode <=> AndroidData.applications-mode;
         in-out property <int> filter <=> AndroidData.applications-filter;
         AndroidApplications { width: parent.width; height: parent.height; }
@@ -469,7 +471,17 @@ fn application_controls_distinguish_scope_filter_save_and_protection() {
             .contains_key("preview-applications-filter:1")
     );
     assert_eq!(requests.borrow().len(), before);
+    probe.set_loaded(false);
+    probe.set_error("读取应用列表失败".into());
+    click("preview-applications-retry");
+    assert_eq!(
+        requests.borrow().last().unwrap().0,
+        AndroidIntent::ApplicationRefresh
+    );
+    probe.set_error("".into());
+    probe.set_loaded(true);
     probe.set_mode(1);
+    let before = requests.borrow().len();
     for pending in [false, true] {
         probe.set_protected(!pending);
         probe.set_protection_pending(pending);

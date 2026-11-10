@@ -91,11 +91,9 @@ export component AndroidApplications inherits PageSurface {
                         }
                     }
                     MParagraph { text: AndroidData.applications-mode == 1 ? "选中的应用进入 VPN，其余应用直连。"
-                        : AndroidData.applications-mode == 2 ? "选中的应用直连，其余应用进入 VPN。" : "所有应用进入 VPN，无需勾选。";
+                        : AndroidData.applications-mode == 2 ? "选中的应用直连，其余应用进入 VPN。" : "所有应用进入 VPN。";
                         font-size: MobileTypography.font-size(13); color: Theme.secondary;
                     }
-                    MSmall { text: "仅选中与排除选中互切会反选，保存后生效。"; wrap: word-wrap; }
-                    MSmall { text: "进入 VPN 后仍按当前规则选路。"; wrap: word-wrap; }
                 }
                 if AndroidData.applications-visibility-limited || (AndroidData.applications-loaded && !AndroidData.applications-query-permission): MCard {
                     vertical-padding: 8px; horizontal-padding: 12px; gap: 4px;
@@ -108,7 +106,7 @@ export component AndroidApplications inherits PageSurface {
                     MButton { text: "应用信息"; compact: true; enabled: !root.protection-locked;
                         clicked => { AndroidActions.request(AndroidIntent.application-permissions, ""); }
                     }
-                    MButton { text: "刷新"; compact: true; busy: AndroidData.applications-loading;
+                    if AndroidData.applications-error == "": MButton { text: "刷新"; compact: true; busy: AndroidData.applications-loading;
                         enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
                         clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
                     }
@@ -150,8 +148,15 @@ export component AndroidApplications inherits PageSurface {
                 for application in AndroidData.applications: ApplicationRow { item: application; editable: root.selectable; }
                 }
                 if AndroidData.applications-error != "": MParagraph { text: AndroidData.applications-error; color: Theme.danger; }
-                if AndroidData.applications-error != "": MButton { text: "导出诊断"; compact: true;
-                    clicked => { MobileActions.request(MobileIntent.export-diagnostics, AndroidData.applications-error, ""); }
+                if AndroidData.applications-error != "": HorizontalLayout { spacing: 6px;
+                    MButton { geometry-key: "preview-applications-retry"; text: "重试"; compact: true;
+                        busy: AndroidData.applications-loading;
+                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
+                        clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
+                    }
+                    MButton { text: "导出诊断"; compact: true;
+                        clicked => { MobileActions.request(MobileIntent.export-diagnostics, AndroidData.applications-error, ""); }
+                    }
                 }
             }
         }

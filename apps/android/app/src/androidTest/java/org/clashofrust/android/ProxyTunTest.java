@@ -1290,7 +1290,9 @@ public class ProxyTunTest {
                 () -> !MainActivity.diagnostics().optBoolean("applications_system"));
             for (int round = 0; round < 3; round++) {
                 applicationMode(2);
+                applicationMode(2);
                 if (round == 0) capturePreview(directory, cases, prefix + "-applications-exclude");
+                applicationMode(1);
                 applicationMode(1);
             }
             capturePreview(directory, cases, prefix + "-applications-only");
@@ -1481,8 +1483,10 @@ public class ProxyTunTest {
             complement.remove(self);
             for (int round = 0; round < 3; round++) {
                 applicationMode(2);
+                applicationMode(2);
                 assertTrue("Mode changes must remain drafts", MainActivity.diagnostics().getBoolean("applications_dirty"));
                 assertEquals(java.util.Collections.singleton(self), ApplicationRouting.load(context).packages);
+                applicationMode(1);
                 applicationMode(1);
                 assertFalse("A full round trip must restore the saved state",
                     MainActivity.diagnostics().getBoolean("applications_dirty"));
@@ -1530,8 +1534,24 @@ public class ProxyTunTest {
                 return ui.optInt("applications_mode", -1) == 1 && ui.optInt("applications_selected", -1) == 1
                     && !ui.optBoolean("applications_dirty", true);
             });
+            applicationMode(0);
+            long allGeneration = TunnelService.generation();
+            previewTarget("preview-applications-save");
+            await("All-applications mode must save and reconnect automatically", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return ApplicationRouting.ALL.equals(ApplicationRouting.load(context).mode)
+                    && TunnelService.generation() > allGeneration
+                    && TunnelService.connected() && vpnActive(connectivity)
+                    && !MainActivity.diagnostics().optBoolean("applications_dirty", true);
+            });
+            tunCarriesSocket(controller, secret);
             shell("input keyevent KEYCODE_BACK");
-            await("Reverted editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            await("Saved all-applications editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            openApplicationRouting();
+            assertEquals(0, MainActivity.diagnostics().getInt("applications_mode"));
+            assertEquals(0, MainActivity.diagnostics().getInt("applications_visible"));
+            shell("input keyevent KEYCODE_BACK");
+            await("All-applications editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
             TunnelService.stop(context);
             await("UI routing regression did not disconnect VPN", () -> !TunnelService.connected() && !TunnelService.pending());
             awaitDirectRecovery(connectivity);

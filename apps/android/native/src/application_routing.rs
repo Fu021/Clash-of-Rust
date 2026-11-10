@@ -305,8 +305,11 @@ pub(super) fn request(
                 .get(value.parse::<usize>()?)
                 .context("无法识别应用分流模式")?;
             let current = state.catalog.mode.as_str();
-            let needs_complete_catalog = current != next
-                && (next == "only" || matches!((current, next), ("only", "exclude")));
+            if current == next {
+                return Ok(());
+            }
+            let needs_complete_catalog =
+                next == "only" || matches!((current, next), ("only", "exclude"));
             if needs_complete_catalog
                 && (state.catalog.visibility_limited || !state.catalog.query_permission)
             {
