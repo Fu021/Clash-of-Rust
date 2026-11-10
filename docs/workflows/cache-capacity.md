@@ -18,7 +18,7 @@
 
 Rust 行包含其 Cargo registry/Git 数据和相关原生依赖构建结果，不再另加一份 Skia、HarfBuzz 或同一目录；不同平台或独立缓存归档之间实际重复的内容仍会占用空间。现有两套 macOS Tailscale 二进制合计约 63 MiB，工具行另为生成的 Android 绑定工具留余量。Go、Gradle 与本地 crate 的完整对象尚未全量留存，相应增量需要在实际启用后测量。
 
-单开发线保留当前一代并允许新旧交替，建议按 **40～50 GiB** 规划；两代完整对象约 **33.8～58.2 GiB**，可先按约 **60 GiB** 规划；主线与 PR 并行且保留交替余量，建议 **70～90 GiB**。这些值是容量建议，不保证缓存收益，也不会自动更改现行预算或启用新缓存类型。
+若未来启用表中全部缓存类型，单开发线一代含交替余量可按 **40～50 GiB** 估算，两代完整对象约 **33.8～58.2 GiB**。这些是假设扩展覆盖后的容量估算，不是现行配置建议，也不会自动启用新缓存类型。当前只保留全仓各目标最新一代，按下方实测设置容量，不为 main 与 PR 另留整套空间。
 
 ## 计入与排除
 
@@ -31,11 +31,13 @@ Rust 行包含其 Cargo registry/Git 数据和相关原生依赖构建结果，�
 
 ## 当前上限与保留预算
 
-维护者已设置每月 2 美元的账户预算；2026-11-10 通过仓库设置 API 将本仓库 `max_cache_size_gb` 从 10 提高到 **35 GB**，读回确认生效。账户预算不自动提高仓库上限，两个设置均需配置，见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)。
+维护者已设置每月 2 美元的账户预算；2026-11-10 按实际清单收紧容量，仓库 `max_cache_size_gb` 设为 **15 GB**，设置 API 读回已确认。账户预算不自动提高仓库上限，两个设置均需配置，见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)。
 
-CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **30 GiB** 保留预算，低于仓库 **35 GB** 配置上限，为保存期间的新旧交替留余量；两处沿用各自标示单位，不保证余量能容纳任何单个完整归档。优先顺序见[缓存分工](cache-coverage.md#编译对象只用-github)。按 GitHub 当前每月每 GB 0.07 美元、每仓库免费 10 GB 的[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)，35 GB 持续满用的额外缓存费用估算为每月 1.75 美元；这不含账户内其他仓库或其他计费项目，也不是最终账单承诺。
+北京时间 2026-11-10 16:27 的逐项清单为 **11 条、10.09 GiB**：九个平台 Rust 缓存和两份 macOS Tailscale 工具；这是已保存部分的压缩大小，没有 Memory profile、Go 或 Gradle 缓存，不能替代上表全覆盖估算。
 
-此次只扩大现有 Rust 编译及 macOS Tailscale 引导缓存的保留空间，尚未新增 Go/Gradle 编译缓存；上表仍保留全平台容量规划，不能把估算总量写成已经覆盖。Ubuntu 20.04 两种预装镜像继续仅存私网，不占此额度。
+CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **13 GiB** 保留预算，低于仓库 **15 GB** 配置上限；两处沿用各自标示单位，余量不保证容纳任何完整归档。全仓同一逻辑目标仅保留按创建时间选出的最新一代，访问旧记录不改变代际顺序，容量不足再按[编译优先级](cache-coverage.md#编译对象只用-github)淘汰。GitHub 的分支读取作用域仍然生效，不将这个保留策略描述为跨分支共享存储；费用以 GitHub 实际[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)为准。
+
+本次未新增 Go/Gradle 编译缓存；上表仍保留全平台容量规划，不能把估算总量写成已经覆盖。Ubuntu 20.04 两种预装镜像继续仅存私网，不占此额度。
 
 ## 近期 CI 耗时依据
 

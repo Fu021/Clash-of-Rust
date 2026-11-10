@@ -8,7 +8,7 @@
 
 CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache；未命中正常编译，不查询私网 Rust 索引或分片，也不在 job 结束后镜像对象。Publish Release 继续复用同提交成功 CI 的构建附件，不重新编译 Rust。
 
-仓库缓存上限已设为 **35 GB**（GitHub 按 GiB 计量），工作流热缓存保留预算为 **30 GiB**，给保存期间的新旧对象交替留出 5 GiB 空间。仓库上限与账户每月预算分别设置；预算不是缓存预留容量，GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及计费依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
+仓库缓存上限为 **15 GB**（API 字段 `max_cache_size_gb=15`），工作流热缓存保留预算为 **13 GiB**，为保存期间的新旧对象交替留余量。仓库上限与账户每月预算分别设置；预算不是缓存预留容量，GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及设置依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
 
 CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台的新编译缓存；Memory Benchmark 不再限定主分支保存。精确键已存在时由不可变缓存规则复用，未命中正常编译；fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。优先缩短 CI 的实际关键路径：macOS Tailscale 二进制很小且能省去源码编译，因此优先保留；Rust 对象中 macOS ARM64 仍按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失。其余编译目标按最近六次成功完整 CI 的恢复与编译耗时保留：
 
@@ -28,13 +28,15 @@ CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台�
 
 2026-11-10 按六轮完整成功 CI 核对，恢复与编译分别取中位数，策略不随每轮数据自动变化。采样来源、Tailscale 冷暖对照及测量边界见[耗时依据](cache-capacity.md#近期-ci-耗时依据)。
 
-同一逻辑键组/分支只留最近一代；Windows/macOS 不同源码的 workspace 键归入同一平台族，保留最新兼容对象并共享总预算。容量不足可以淘汰，不向私网复制。`rust-cache` 自带的 Cargo registry/Git 数据与 Rust 对象一起管理，不再另建下载缓存。测试报告和安装包仅使用短期 artifact。
+全仓同一平台/架构的逻辑键组只留最新成功保存的一代，不为 main、开发分支及 PR 分别保留；内存基准按 profile 区分。Windows/macOS 不同源码的 workspace 键归入同一平台族，编译器或依赖摘要变化也不额外保留旧代。按创建时间选择最新缓存，同时间按缓存 ID 决定；访问旧缓存不会让它取代新代。尚未保存成功的新缓存不替换已有记录，容量不足仍按上表淘汰，不向私网复制。`rust-cache` 自带的 Cargo registry/Git 数据与 Rust 对象一起管理，不再另建下载缓存。测试报告和安装包仅使用短期 artifact。
 
-仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管。macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS job 开启该 Action 自带的 GitHub 二进制缓存；当前内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存按架构/分支保留最近版本，计入 30 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
+这是保留规则，不会改变 GitHub 的[缓存读取作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)：PR 的 merge ref 缓存仍不能被 main 或其他 PR 读取，切换运行分支可能冷编译。不能通过同名 key 将 PR 缓存迁移到主分支，也不扩大不可信 PR 的写权限。
+
+仓库自行管理的 Go 编译、Gradle 转换、工具安装目录、资源目录和 Docker 构建镜像不再占用 GitHub 缓存。官方 Actions 的引导及托管 runner 镜像不由本仓库接管。macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS job 开启该 Action 自带的 GitHub 二进制缓存；当前内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存在全仓按架构保留最近版本，计入 13 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
 | 工作流 | GitHub 编译缓存与收尾 | 私网预装镜像 |
 | --- | --- | --- |
-| CI | 六种桌面与三个 Android ABI 恢复/保存 Rust；按 30 GiB 统一清理 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
+| CI | 六种桌面与三个 Android ABI 恢复/保存 Rust；全仓按平台保留最新一代，按 13 GiB 统一清理 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
 | Memory Benchmark | 恢复/保存本次 profile 的 Rust；使用同一预算，优先让出空间 | 不使用 |
 | Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 复用 CI 验收结果，不下载或上传 VM |
 | Android UI Previews（按需） | 复用成功 CI 的 APK，只留截图 artifact | 不使用 |

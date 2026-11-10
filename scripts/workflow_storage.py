@@ -1,4 +1,4 @@
-"""Keep compilation caches below 30 GiB, favoring measured CI bottlenecks."""
+"""Keep the latest cache per target across refs within 13 GiB."""
 import argparse
 import os
 from pathlib import Path
@@ -8,7 +8,7 @@ import urllib.error
 
 from workflow_artifacts import release_module
 
-BUDGET = 30 * 1024**3
+BUDGET = 13 * 1024**3
 
 
 def caches(client):
@@ -38,7 +38,7 @@ def lineage(key):
     if key.startswith('action-setup-tailscale/'):
         return 'tailscale/' + key.rsplit('/', 1)[-1]
     # Rust caches differ by compiler/dependency hashes. Keep the newest revision
-    # per native target and branch; obsolete lockfiles must not accumulate.
+    # per native target across branches; obsolete lockfiles must not accumulate.
     if key.startswith(('native-release-', 'android-', 'memory-ubuntu22-')):
         return re.sub(r'-[0-9a-f]{8,}-[0-9a-f]{8,}$', '', key)
     if key.startswith('macos-compiler-'):
@@ -96,7 +96,7 @@ def retired(key):
 def eviction_plan(entries, budget=BUDGET):
     if budget <= 0:
         raise ValueError('Cache budget must be positive')
-    recent = sorted(entries, key=lambda c: (c['last_accessed_at'], c['created_at'], c['id']), reverse=True)
+    recent = sorted(entries, key=lambda c: (c['created_at'], c['id']), reverse=True)
     seen = set()
     keep = []
     remove = []
@@ -104,15 +104,15 @@ def eviction_plan(entries, budget=BUDGET):
         if retired(entry['key']):
             remove.append(entry)
             continue
-        family = (entry['ref'], lineage(entry['key']))
+        family = lineage(entry['key'])
         if family in seen:
             remove.append(entry)
         else:
             seen.add(family)
             keep.append(entry)
     size = sum(c['size_in_bytes'] for c in keep)
-    for entry in sorted(keep, key=lambda c: (priority(c), c['ref'] == 'refs/heads/main',
-                                           c['last_accessed_at'], c['created_at'], c['id'])):
+    for entry in sorted(keep, key=lambda c: (priority(c), c['last_accessed_at'],
+                                           c['created_at'], c['id'])):
         if size <= budget:
             break
         remove.append(entry)

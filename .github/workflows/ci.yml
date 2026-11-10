@@ -888,7 +888,7 @@ jobs:
           path: target/dependency-audit
           retention-days: 3
           if-no-files-found: error
-      - name: Prioritize CI compilation within the 30 GiB cache budget
+      - name: Keep the latest cache per target within 13 GiB across branches
         shell: python
         env:
           GH_TOKEN: ${{ github.token }}

@@ -83,7 +83,8 @@ slint::slint! {
         in-out property <string> error <=> AndroidData.applications-error;
         in-out property <int> mode <=> AndroidData.applications-mode;
         in-out property <int> filter <=> AndroidData.applications-filter;
-        AndroidApplications { width: parent.width; height: parent.height; }
+        in-out property <bool> opened: true;
+        if root.opened: AndroidApplications { width: parent.width; height: parent.height; }
         init => { AndroidData.applications-loaded = true; }
     }
 
@@ -493,6 +494,49 @@ fn application_controls_distinguish_scope_filter_save_and_protection() {
             click(key);
         }
         assert_eq!(requests.borrow().len(), before);
+    }
+    probe.hide().unwrap();
+}
+
+#[test]
+fn applications_reopen_with_active_geometry_observers_across_modes_and_sizes() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = ApplicationsProbe::new().unwrap();
+    probe.set_opened(false);
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.show().unwrap();
+    for (width, height, scale) in [(393, 852, 1.), (320, 640, 1.6), (1100, 740, 1.)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        for mode in [0, 1, 2, 1, 0] {
+            probe.set_opened(false);
+            advance(&clock, Duration::from_millis(50));
+            frame(&adapter, width as usize, height as usize);
+            targets.borrow_mut().clear();
+            probe.set_mode(mode);
+            probe.set_opened(true);
+            advance(&clock, Duration::from_millis(250));
+            frame(&adapter, width as usize, height as usize);
+            for button in 0..3 {
+                let measured = targets.borrow();
+                let bounds = &measured[&format!("preview-applications-mode:{button}")];
+                assert_eq!(bounds.len(), 4);
+                assert!(bounds[2] > 0. && bounds[3] >= 48.);
+                assert!(bounds[0] >= 0. && bounds[0] + bounds[2] <= width as f32 + 1.);
+                assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= height as f32 + 1.);
+            }
+        }
     }
     probe.hide().unwrap();
 }

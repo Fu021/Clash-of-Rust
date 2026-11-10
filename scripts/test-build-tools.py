@@ -3492,6 +3492,18 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertFalse(android_build.runtime_crash_status(log,False)['log_scoped'])
         self.assertEqual(android_build.runtime_crash_status('ordinary log')['application_crashes'],[])
 
+    def test_android_runtime_report_includes_native_panics_without_a_java_exception(self):
+        log = (
+            '11-10 08:36:18.681 3904 3969 E GoLog: thread panicked at layout.rs:567\n'
+            '11-10 08:36:18.692 3904 3953 E RustPanic: index out of bounds: the len is 4 but the index is 4\n'
+        )
+        report = android_build.runtime_crash_status(log)
+        self.assertEqual(report['application_crashes'],
+                         [{'process': 'org.clashofrust.android',
+                           'exception': 'RustPanic: index out of bounds: the len is 4 but the index is 4'}])
+        self.assertEqual(report['system_ui_crashes'], [])
+        self.assertEqual(android_build.runtime_crash_status('I RustPanic: tag example')['application_crashes'], [])
+
     def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
         crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
                'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
@@ -4145,7 +4157,7 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 200)], [4, 3, 1])
         self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 60)], [4, 3, 1])
         other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
-        self.assertEqual(storage.eviction_plan([new, other_branch], 100), [])
+        self.assertEqual(storage.eviction_plan([new, other_branch], 100), [new])
         compiler_old = entry(6, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'b'*64, 20)
         compiler_new = entry(7, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'c'*64, 20)
         self.assertEqual(storage.eviction_plan([compiler_old, compiler_new], 100), [compiler_new,compiler_old])
@@ -4169,6 +4181,56 @@ runpy.run_path(str(script), run_name='__main__')
                 ('action-setup-tailscale/1.94.2/Linux-amd64','action-setup-tailscale/1.104.1/Linux-amd64')):
             self.assertEqual(storage.lineage(older),storage.lineage(newer))
         with self.assertRaises(ValueError): storage.eviction_plan([], 0)
+
+    def test_cache_retains_latest_created_target_across_refs_despite_old_cache_reads(self):
+        older = {
+            'id': 1, 'key': 'native-release-v2-macos-26-arm64-build-aaaaaaaa-bbbbbbbb',
+            'ref': 'refs/heads/main', 'size_in_bytes': 30,
+            'created_at': '2026-11-09T00:00:00Z', 'last_accessed_at': '2026-11-10T12:00:00Z',
+        }
+        newer = dict(older, id=2, ref='refs/pull/34/merge',
+                     key='native-release-v2-macos-26-arm64-build-cccccccc-dddddddd',
+                     created_at='2026-11-10T00:00:00Z', last_accessed_at='2026-11-10T00:00:00Z')
+        for old_ref, new_ref in (
+                ('refs/heads/main', 'refs/pull/34/merge'),
+                ('refs/pull/34/merge', 'refs/heads/main'),
+                ('refs/pull/34/merge', 'refs/pull/35/merge')):
+            with self.subTest(old_ref=old_ref, new_ref=new_ref):
+                previous = dict(older, ref=old_ref)
+                latest = dict(newer, ref=new_ref)
+                self.assertEqual(storage.eviction_plan([previous, latest], 100), [previous])
+                self.assertEqual(storage.eviction_plan([previous], 100), [])
+
+    def test_cache_deduplicates_workspace_sources_and_tailscale_versions_globally(self):
+        def entry(number, key, ref):
+            return {'id': number, 'key': key, 'ref': ref, 'size_in_bytes': 10,
+                    'created_at': f'2026-11-10T00:00:0{number}Z',
+                    'last_accessed_at': f'2026-11-10T00:00:0{number}Z'}
+
+        workspace = 'native-release-v2-windows-arm64-build-workspace-'
+        previous = entry(1, workspace + 'a'*64 + '-aaaaaaaa-bbbbbbbb', 'refs/heads/main')
+        latest = entry(2, workspace + 'b'*64 + '-cccccccc-dddddddd', 'refs/pull/34/merge')
+        tools_previous = entry(3, 'action-setup-tailscale/1.104.1/macOS-arm64', 'refs/heads/main')
+        tools_latest = entry(4, 'action-setup-tailscale/1.104.5/macOS-arm64', 'refs/pull/34/merge')
+        tools_other_arch = entry(5, 'action-setup-tailscale/1.104.5/macOS-amd64', 'refs/heads/main')
+        self.assertEqual(storage.eviction_plan(
+            [previous, latest, tools_previous, tools_latest, tools_other_arch], 100),
+            [tools_previous, previous])
+        tied = dict(latest, id=6, ref='refs/heads/main')
+        self.assertEqual(storage.eviction_plan([latest, tied], 100), [latest])
+
+    def test_cache_budget_does_not_prefer_main_and_keeps_profiles_separate(self):
+        def entry(number, key, ref):
+            return {'id': number, 'key': key, 'ref': ref, 'size_in_bytes': 10,
+                    'created_at': f'2026-11-10T00:00:0{number}Z',
+                    'last_accessed_at': f'2026-11-10T00:00:0{number}Z'}
+
+        main = entry(1, 'unknown-main-tool', 'refs/heads/main')
+        pull = entry(2, 'unknown-pull-tool', 'refs/pull/34/merge')
+        self.assertEqual(storage.eviction_plan([main, pull], 10), [main])
+        release = entry(3, 'memory-ubuntu22-v2-release-build-aaaaaaaa-bbbbbbbb', 'refs/heads/main')
+        dev = entry(4, 'memory-ubuntu22-v2-dev-build-aaaaaaaa-bbbbbbbb', 'refs/pull/34/merge')
+        self.assertEqual(storage.eviction_plan([release, dev], 20), [])
 
     def test_cache_cleanup_rechecks_size_and_fork_report_never_deletes(self):
         entries = [{'id': 1, 'key': 'tool-one', 'ref': 'refs/heads/main', 'size_in_bytes': 30,

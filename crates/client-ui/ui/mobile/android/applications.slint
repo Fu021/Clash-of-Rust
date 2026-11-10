@@ -65,6 +65,16 @@ component ApplicationSaveCard inherits MCard {
     }
 }
 
+component ApplicationModeButton inherits MButton {
+    in property <int> mode;
+    geometry-key: "preview-applications-mode:" + root.mode;
+    text: root.mode == 0 ? "全部应用" : root.mode == 1 ? "仅选中" : "排除选中";
+    compact: true;
+    quiet: true;
+    selected: AndroidData.applications-mode == root.mode;
+    clicked => { AndroidActions.request(AndroidIntent.application-mode, "" + root.mode); }
+}
+
 export component AndroidApplications inherits PageSurface {
     property <bool> protection-locked: MobileData.protected || MobileData.protection-pending;
     property <bool> editable: AndroidData.applications-loaded && !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked && !MobileView.modal && !MobileView.notice-modal;
@@ -82,13 +92,9 @@ export component AndroidApplications inherits PageSurface {
                 MCard { vertical-padding: 10px; horizontal-padding: 12px; gap: 6px;
                     MText { text: "哪些应用进入 VPN"; font-size: MobileTypography.font-size(14); font-weight: 600; }
                     GridLayout { spacing: 4px;
-                        for label[index] in ["全部应用", "仅选中", "排除选中"]: MButton {
-                            col: Theme.text-scale > 1.25 ? 0 : index; row: Theme.text-scale > 1.25 ? index : 0;
-                            geometry-key: "preview-applications-mode:" + index;
-                            text: label; compact: true; quiet: true; selected: AndroidData.applications-mode == index;
-                            enabled: root.editable;
-                            clicked => { AndroidActions.request(AndroidIntent.application-mode, "" + index); }
-                        }
+                        ApplicationModeButton { mode: 0; col: 0; row: 0; enabled: root.editable; }
+                        ApplicationModeButton { mode: 1; col: Theme.text-scale > 1.25 ? 0 : 1; row: Theme.text-scale > 1.25 ? 1 : 0; enabled: root.editable; }
+                        ApplicationModeButton { mode: 2; col: Theme.text-scale > 1.25 ? 0 : 2; row: Theme.text-scale > 1.25 ? 2 : 0; enabled: root.editable; }
                     }
                     MParagraph { text: AndroidData.applications-mode == 1 ? "选中的应用进入 VPN，其余应用直连。"
                         : AndroidData.applications-mode == 2 ? "选中的应用直连，其余应用进入 VPN。" : "所有应用进入 VPN。";

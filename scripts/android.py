@@ -562,8 +562,12 @@ def input_method_crashes(log, package):
 
 
 def runtime_crash_status(log, scoped=True):
+    native_crashes = [
+        {'process': 'org.clashofrust.android', 'exception': 'RustPanic: ' + match.group(1)[:500]}
+        for match in re.finditer(r'\bE\s+RustPanic\s*:\s*([^\r\n]+)', log)
+    ]
     return {'schema': 1, 'log_scoped': scoped,
-            'application_crashes': process_crashes(log, 'org.clashofrust.android'),
+            'application_crashes': process_crashes(log, 'org.clashofrust.android') + native_crashes,
             'system_ui_crashes': process_crashes(log, 'com.android.systemui')}
 
 
