@@ -1165,6 +1165,33 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(commands[-1][2:6], ['-p', 'clash-of-rust', '--test', 'core_integration'])
         self.assertIn('--no-run', commands[-1])
 
+    def test_update_changes_run_shared_schedule_config_cli_and_gui_regressions(self):
+        specification = importlib.util.spec_from_file_location('native_update_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'false',
+                                     'COR_CI_UPDATE_TESTS': 'true'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        for package, case in (('clash-client-core', 'update'),
+                              ('clash-client-runtime', 'update_check_interval'),
+                              ('clash-cli', 'update_interval'),
+                              ('clash-of-rust', 'update_')):
+            self.assertTrue(any(command[command.index('-p')+1] == package and case in command
+                                for command in checks), (package, case, checks))
+        for path in ('crates/client-core/src/config/mod.rs',
+                     'crates/client-core/src/update/schedule.rs'):
+            self.assertTrue(ci_test_policy.select([path])['update_tests'])
+
     def test_desktop_ui_changes_run_targeted_checks_in_linux_container(self):
         specification = importlib.util.spec_from_file_location('native_ui_ci', build.ROOT/'scripts/run-ci.py')
         native_ci = importlib.util.module_from_spec(specification)

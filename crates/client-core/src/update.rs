@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt;
 pub mod channel;
 mod retry;
 mod route;
+pub mod schedule;
 pub use retry::check as retry_check;
 pub use route::Observer as RouteObserver;
 

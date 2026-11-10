@@ -462,6 +462,11 @@ impl App {
             set_subscription_interval,
             &self.subscription_interval_input
         );
+        text!(
+            get_update_interval,
+            set_update_interval,
+            &self.update_interval_input
+        );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
         text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
         text!(get_geo_status, set_geo_status, &self.geo_status);

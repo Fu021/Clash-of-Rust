@@ -25,6 +25,7 @@ pub(super) enum Action {
     Autostart(bool),
     DelayInterval(u32),
     SubscriptionInterval(u32),
+    UpdateInterval(u32),
     NodeSort(NodeSort),
     Import(String, String),
     EditProfile(String, String, String),
@@ -379,6 +380,14 @@ pub(super) async fn execute(
                 engine.save_settings(settings).await?;
                 Ok("订阅自动更新间隔已保存".into())
             }
+            Action::UpdateInterval(minutes) => {
+                let settings = Settings {
+                    update_check_interval_minutes: minutes,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("自动检查更新间隔已保存".into())
+            }
             Action::NodeSort(node_sort) => {
                 let settings = Settings {
                     node_sort,
@@ -558,6 +567,7 @@ mod synchronization_tests {
             Action::Autostart(true),
             Action::DelayInterval(30),
             Action::SubscriptionInterval(360),
+            Action::UpdateInterval(360),
             Action::NodeSort(proxy_order::NodeSort::Name),
             Action::Mode("rule".into()),
             Action::ProxyMode(ProxyMode::Tun),

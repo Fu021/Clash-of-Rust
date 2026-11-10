@@ -343,6 +343,8 @@ impl App {
             Intent::SaveInterval => Message::SaveInterval,
             Intent::SubscriptionIntervalInput => Message::SubscriptionIntervalInput(a.into()),
             Intent::SaveSubscriptionInterval => Message::SaveSubscriptionInterval,
+            Intent::UpdateIntervalInput => Message::UpdateIntervalInput(a.into()),
+            Intent::SaveUpdateInterval => Message::SaveUpdateInterval,
             Intent::UpdateGeo => Message::UpdateGeo,
             Intent::CheckUpdate => Message::CheckUpdate,
             Intent::UpdatePrereleases => Message::Action(Action::UpdatePrereleases(boolean(a))),

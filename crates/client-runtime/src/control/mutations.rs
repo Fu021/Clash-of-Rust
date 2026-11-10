@@ -152,6 +152,35 @@ pub(super) fn rule(
 mod tests {
     use super::*;
     #[test]
+    fn update_check_interval_accepts_zero_and_rejects_invalid_patches() {
+        let settings = Settings::default();
+        for minutes in [0, 1, 360, 10080] {
+            let next = setting(
+                &settings,
+                "update_check_interval_minutes",
+                serde_json::json!(minutes),
+            )
+            .unwrap();
+            assert_eq!(next.update_check_interval_minutes, minutes);
+            assert_eq!(
+                next.subscription_update_interval_minutes,
+                settings.subscription_update_interval_minutes
+            );
+            assert_eq!(next.update_prereleases, settings.update_prereleases);
+        }
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(10081),
+            serde_json::json!(1.5),
+            serde_json::json!("abc"),
+            serde_json::Value::Null,
+        ] {
+            assert!(setting(&settings, "update_check_interval_minutes", value).is_err());
+        }
+        assert_eq!(settings.update_check_interval_minutes, 360);
+    }
+
+    #[test]
     fn subscription_interval_preserves_preferences_and_rejects_invalid_values() {
         let settings = Settings::default();
         assert_eq!(settings.subscription_update_interval_minutes, 360);

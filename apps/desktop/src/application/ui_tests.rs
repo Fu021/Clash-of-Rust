@@ -2930,31 +2930,88 @@ fn background_subscription_update_invalidates_network_results_without_overwritin
 }
 
 #[test]
+fn update_interval_saves_zero_and_keeps_invalid_or_failed_drafts() {
+    let mut app = fixture(Page::Settings);
+    app.busy = true;
+    for value in ["0", " 30 ", "10080"] {
+        let _ = app.ui_intent(Intent::UpdateIntervalInput, value, "");
+        let _ = app.ui_intent(Intent::SaveUpdateInterval, "", "");
+        assert!(matches!(
+            app.queued_actions.pop_back(),
+            Some(Action::UpdateInterval(minutes)) if minutes == value.trim().parse::<u32>().unwrap()
+        ));
+    }
+    for value in ["", "-1", "1.5", "10081", "酒店里点炒饭"] {
+        let _ = app.ui_intent(Intent::UpdateIntervalInput, value, "");
+        let _ = app.ui_intent(Intent::SaveUpdateInterval, "", "");
+        assert!(app.queued_actions.is_empty());
+        assert_eq!(app.update_interval_input, value);
+        assert!(app.error);
+    }
+    let _ = app.ui_intent(Intent::UpdateIntervalInput, "0", "");
+    let mut failed = synchronized_reply(&app);
+    failed.notice = Err("设置目录不可写".into());
+    let _ = app.update(Message::Finished(Box::new(failed)));
+    assert_eq!(app.update_interval_input, "0");
+    assert_eq!(app.settings.update_check_interval_minutes, 360);
+    assert!(app.notice.contains("设置目录不可写"));
+}
+
+#[test]
+fn disabling_automatic_update_checks_keeps_manual_checks_available() {
+    let mut app = fixture(Page::Settings);
+    app.settings.update_check_interval_minutes = 0;
+    let _ = app.auto_check_update();
+    assert!(!app.updates.started);
+    let reply = synchronized_reply(&app);
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(!app.updates.started);
+    let _ = app.ui_intent(Intent::CheckUpdate, "", "");
+    assert!(app.updates.checking);
+    let check_id = app.updates.check_id;
+    let _ = app.ui_intent(Intent::CheckUpdate, "", "");
+    assert_eq!(app.updates.check_id, check_id);
+
+    let mut enabled = fixture(Page::Settings);
+    enabled.claude.protection_pending = Some(true);
+    let _ = enabled.auto_check_update();
+    assert!(!enabled.updates.started);
+    enabled.claude.protection_pending = None;
+    let _ = enabled.auto_check_update();
+    assert!(enabled.updates.checking);
+}
+
+#[test]
 fn console_changes_refresh_profiles_and_clean_inputs_but_preserve_typed_drafts() {
     let mut app = fixture(Page::Settings);
     let mut reply = synchronized_reply(&app);
     reply.settings.mixed_port = 12345;
     reply.settings.delay_interval_minutes = 17;
     reply.settings.subscription_update_interval_minutes = 720;
+    reply.settings.update_check_interval_minutes = 60;
     reply.profiles.as_mut().unwrap()[0].name = "Renamed by CLI".into();
     let _ = app.update(Message::Finished(Box::new(reply)));
     assert_eq!(app.mixed_port, "12345");
     assert_eq!(app.interval_input, "17");
     assert_eq!(app.subscription_interval_input, "720");
+    assert_eq!(app.update_interval_input, "60");
     assert_eq!(app.profiles[0].name, "Renamed by CLI");
     assert!(app.backend_remote);
 
     app.mixed_port = "12346".into();
     app.interval_input = "25".into();
     app.subscription_interval_input = "90".into();
+    app.update_interval_input = "0".into();
     let mut reply = synchronized_reply(&app);
     reply.settings.mixed_port = 12347;
     reply.settings.delay_interval_minutes = 30;
     reply.settings.subscription_update_interval_minutes = 180;
+    reply.settings.update_check_interval_minutes = 120;
     let _ = app.update(Message::Finished(Box::new(reply)));
     assert_eq!(app.mixed_port, "12346");
     assert_eq!(app.interval_input, "25");
     assert_eq!(app.subscription_interval_input, "90");
+    assert_eq!(app.update_interval_input, "0");
     assert_eq!(app.settings.mixed_port, 12347);
 }
 
@@ -3004,6 +3061,8 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
         Intent::Mode,
         Intent::SubscriptionIntervalInput,
         Intent::SaveSubscriptionInterval,
+        Intent::UpdateIntervalInput,
+        Intent::SaveUpdateInterval,
     ] {
         let _ = app.ui_intent(intent, "false", "blocked.test");
     }

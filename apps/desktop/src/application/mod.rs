@@ -266,6 +266,8 @@ enum Message {
     SaveInterval,
     SubscriptionIntervalInput(String),
     SaveSubscriptionInterval,
+    UpdateIntervalInput(String),
+    SaveUpdateInterval,
     FakeIpEditor(bool),
     FakeIpInput(String),
     FakeIpAdd,
@@ -342,6 +344,8 @@ struct App {
     site_queue: VecDeque<String>,
     interval_input: String,
     subscription_interval_input: String,
+    update_interval_input: String,
+    update_schedule: update::schedule::Schedule,
     fake_ip_editor: bool,
     fake_ip_input: String,
     fake_ip_error: String,
@@ -497,6 +501,8 @@ impl App {
             node_sort: settings.node_sort,
             interval_input: settings.delay_interval_minutes.to_string(),
             subscription_interval_input: settings.subscription_update_interval_minutes.to_string(),
+            update_interval_input: settings.update_check_interval_minutes.to_string(),
+            update_schedule: update::schedule::Schedule::default(),
             fake_ip_editor: false,
             fake_ip_input: String::new(),
             fake_ip_error: String::new(),
@@ -603,6 +609,19 @@ impl App {
             && !self.updates.busy()
     }
 
+    fn auto_check_update(&mut self) -> Task<Message> {
+        if self.update_schedule.due(
+            self.settings.update_check_interval_minutes,
+            std::time::Instant::now(),
+        ) && !self.busy
+            && !self.working
+        {
+            self.check_update()
+        } else {
+            Task::none()
+        }
+    }
+
     fn check_update(&mut self) -> Task<Message> {
         if self.exiting
             || self.settings.claude_protection.is_some()
@@ -611,6 +630,7 @@ impl App {
         {
             return Task::none();
         }
+        self.update_schedule.checked(std::time::Instant::now());
         let proxy_port = self
             .snapshot
             .running
@@ -1005,6 +1025,8 @@ impl App {
                                 .settings
                                 .subscription_update_interval_minutes
                                 .to_string();
+                            self.update_interval_input =
+                                self.settings.update_check_interval_minutes.to_string();
                             self.node_sort = self.settings.node_sort;
                         }
                         self.engine = Some(engine);
@@ -1013,7 +1035,7 @@ impl App {
                     Err(error) => {
                         self.core_failure = Some(error.clone());
                         self.show_critical(error);
-                        return self.check_update();
+                        return self.auto_check_update();
                     }
                 }
             }
@@ -1631,6 +1653,13 @@ impl App {
             }
             Message::IntervalInput(value) => self.interval_input = value,
             Message::SubscriptionIntervalInput(value) => self.subscription_interval_input = value,
+            Message::UpdateIntervalInput(value) => self.update_interval_input = value,
+            Message::SaveUpdateInterval => match self.update_interval_input.trim().parse::<u32>() {
+                Ok(minutes) if minutes <= 10080 => {
+                    return self.dispatch(Action::UpdateInterval(minutes));
+                }
+                _ => self.show_notice("请输入 0–10080 分钟，0 表示关闭自动检查更新".into(), true),
+            },
             Message::SaveSubscriptionInterval => {
                 match self.subscription_interval_input.trim().parse::<u32>() {
                     Ok(minutes) if minutes <= 10080 => {
@@ -2075,6 +2104,12 @@ impl App {
                         .subscription_update_interval_minutes
                         .to_string();
                 }
+                if self.update_interval_input.trim().parse::<u32>()
+                    == Ok(self.settings.update_check_interval_minutes)
+                {
+                    self.update_interval_input =
+                        reply.settings.update_check_interval_minutes.to_string();
+                }
                 let update_channel_changed =
                     self.settings.update_prereleases != reply.settings.update_prereleases;
                 self.settings = reply.settings;
@@ -2272,7 +2307,7 @@ impl App {
                 }
                 // Start checking after core startup, so its mixed-port proxy is ready.
                 let update_task = if !self.updates.started {
-                    self.check_update()
+                    self.auto_check_update()
                 } else {
                     Task::none()
                 };

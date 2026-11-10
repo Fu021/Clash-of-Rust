@@ -4,6 +4,7 @@ mod install;
 use anyhow::{Context, Result, bail};
 pub use clash_client_core::update::Progress;
 pub use clash_client_core::update::channel;
+pub use clash_client_core::update::schedule;
 use futures_util::future::{AbortHandle, AbortRegistration};
 #[cfg(target_os = "linux")]
 pub use install::run_terminal_install;
@@ -27,7 +28,6 @@ use std::{
 use tokio::io::AsyncWriteExt;
 
 pub const RELEASES_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases";
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const API_URL: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per_page=100";
 
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
@@ -57,6 +57,11 @@ pub struct Downloaded {
 }
 
 impl Downloaded {
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
     pub fn package_path(&self) -> &Path {
         &self.package
     }

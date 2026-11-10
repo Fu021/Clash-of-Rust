@@ -135,6 +135,25 @@ mod tests {
     }
 
     #[test]
+    fn update_interval_output_uses_minutes_or_disabled_while_json_keeps_the_number() {
+        for (minutes, expected) in [(0, "已关闭"), (360, "360 分钟")] {
+            let value = json!({"update_check_interval_minutes": minutes});
+            let text = render(
+                &["config", "get", "update_check_interval_minutes"],
+                value.clone(),
+            );
+            assert!(text.contains("自动检查更新间隔"));
+            assert!(text.contains(expected));
+            let json = render(
+                &["config", "get", "update_check_interval_minutes", "--json"],
+                value.clone(),
+            );
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed["data"], value);
+        }
+    }
+
+    #[test]
     fn failed_group_tests_offer_network_recovery_without_changing_json() {
         let all_failed = json!({"节点 A": 0, "节点 B": 0});
         let human = render(&["node", "test", "--all"], all_failed.clone());

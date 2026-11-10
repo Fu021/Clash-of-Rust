@@ -81,7 +81,8 @@ def select(paths, extended=False):
         for path in paths
     )
     update = any(
-        path.startswith(('crates/client-runtime/src/update/', 'apps/cli/src/commands/maintenance.rs',
+        path.startswith(('crates/client-core/src/update', 'crates/client-core/src/config/',
+                         'crates/client-runtime/src/update/', 'apps/cli/src/commands/maintenance.rs',
                          'crates/client-runtime/src/control/', 'apps/cli/src/backend.rs'))
         or path in ('scripts/test-cli-update.py', 'scripts/ci_test_policy.py')
         for path in paths

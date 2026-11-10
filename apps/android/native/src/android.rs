@@ -658,7 +658,7 @@ async fn run_loop(
     let mut last_frame = std::time::Instant::now() - Duration::from_secs(1);
     let mut system_bars_state = None;
     let mut update_job: Option<tokio::task::JoinHandle<()>> = None;
-    let mut last_update_check = std::time::Instant::now() - Duration::from_secs(6 * 60 * 60);
+    let mut update_schedule = core::update::schedule::Schedule::default();
     loop {
         let mut immediate = false;
         let mut refresh_requested = false;
@@ -768,7 +768,7 @@ async fn run_loop(
                 } else if intent==MobileIntent::CheckUpdate {
                     if !blocked_during_protection(&mut state) && !state.update_busy {
                         state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();state.update_progress=0.0;
-                        last_update_check=std::time::Instant::now();
+                        update_schedule.checked(std::time::Instant::now());
                         state.update_generation = state.update_generation.wrapping_add(1);
                         state.update_confirmation = None;
                         update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
@@ -1183,15 +1183,13 @@ async fn run_loop(
                         }
                     }
                 }
-                if state.session.running && !state.update_busy && last_update_check.elapsed()>=Duration::from_secs(6*60*60) {
-                    if state.session.settings.claude_protection.is_some() || state.protection_change.is_some() {
-                        last_update_check=std::time::Instant::now();
-                    } else {
-                    last_update_check=std::time::Instant::now();state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
+                if update_schedule.due(state.session.settings.update_check_interval_minutes, std::time::Instant::now())
+                    && state.session.running && !state.update_busy
+                    && state.session.settings.claude_protection.is_none() && state.protection_change.is_none() {
+                    update_schedule.checked(std::time::Instant::now());state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
                     state.update_generation = state.update_generation.wrapping_add(1);
                     state.update_confirmation = None;
                     update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
-                    }
                 }
                 let minutes=state.session.settings.delay_interval_minutes;
                 if state.session.running && state.protection_change.is_none() && minutes>0
@@ -2193,6 +2191,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.store.save_settings(&next)?;
             session.settings = next;
             state.notice = "订阅自动更新间隔已保存".into();
+        }
+        MobileIntent::UpdateInterval => {
+            let mut next = session.settings.clone();
+            next.update_check_interval_minutes = a.trim().parse()?;
+            session.store.save_settings(&next)?;
+            session.settings = next;
+            state.notice = "自动检查更新间隔已保存".into();
         }
         MobileIntent::Probe => {
             let result = core::probe::website(a, session.settings.mixed_port, false).await?;
@@ -3238,6 +3243,15 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     if p.completed == Some(MobileIntent::SubscriptionInterval) {
         ui.global::<MobileView>()
             .set_subscription_interval_dirty(false);
+    }
+    let update_interval_saved = p.completed == Some(MobileIntent::UpdateInterval)
+        && data.get_update_interval().trim().parse::<u32>()
+            == Ok(p.settings.update_check_interval_minutes);
+    if !ui.global::<MobileView>().get_update_interval_dirty() || update_interval_saved {
+        data.set_update_interval(p.settings.update_check_interval_minutes.to_string().into());
+    }
+    if update_interval_saved {
+        ui.global::<MobileView>().set_update_interval_dirty(false);
     }
     data.set_mode(
         match p

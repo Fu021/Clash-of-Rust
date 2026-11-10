@@ -31,6 +31,14 @@ def main():
     if not extended and update_tests():
         run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
              'update::', '--', '--test-threads=1'])
+        if (args.system, args.arch) == ('linux', 'x64'):
+            for package, target, case in (
+                    ('clash-client-core', ['--lib'], 'update'),
+                    ('clash-client-runtime', ['--lib'], 'update_check_interval'),
+                    ('clash-cli', ['--bin', 'cor'], 'update_interval'),
+                    ('clash-of-rust', ['--bin', 'clash-of-rust'], 'update_')):
+                run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
+                     case, '--', '--test-threads=1'])
         if args.system in ('windows', 'macos'):
             run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
                  'update_preparation_releases_owner', '--', '--test-threads=1'])

@@ -1230,6 +1230,12 @@ mod tests {
         assert_eq!(complete(&["node", "list", "--sort", ""]), "latency\nname\n");
         assert_eq!(complete(&["env", "--shell", "p"]), "powershell\n");
         assert!(complete(&["config", "get", ""]).contains("update_prereleases\n"));
+        assert!(
+            complete(&["config", "get", "update_"]).contains("update_check_interval_minutes\n")
+        );
+        assert!(
+            complete(&["config", "set", "update_"]).contains("update_check_interval_minutes\n")
+        );
         assert!(!complete(&["config", "get", ""]).contains("controller_port\n"));
         assert!(!complete(&["config", "set", ""]).contains("active_profile\n"));
     }

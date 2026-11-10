@@ -88,7 +88,6 @@ struct DesktopHost {
     last_frame: Option<Arc<[u8]>>,
     clipboard: Option<arboard::Clipboard>,
     tray_listening: bool,
-    next_update: Instant,
     last_delay: Instant,
     saved_view: Option<wire::ViewState>,
     position_save_at: Option<Instant>,
@@ -135,7 +134,6 @@ pub(super) fn run(
         last_frame: None,
         clipboard: None,
         tray_listening: false,
-        next_update: Instant::now() + update::CHECK_INTERVAL,
         last_delay: Instant::now(),
         saved_view,
         position_save_at: None,
@@ -289,10 +287,8 @@ impl DesktopHost {
                 self.message(Message::Claude(claude_view::Event::Tick));
             }
             let now = Instant::now();
-            if now >= self.next_update {
-                self.next_update = now + update::CHECK_INTERVAL;
-                self.message(Message::CheckUpdate);
-            }
+            let task = self.app.auto_check_update();
+            self.spawn(task);
             let interval = self.app.settings.delay_interval_minutes;
             if interval > 0
                 && now.duration_since(self.last_delay)

@@ -94,10 +94,16 @@ pub(super) fn scalar(key: &str, value: &Value) -> String {
                                 .to_string()
                         })
                         .unwrap_or_else(|| n.to_string()),
-                    "delay_interval_minutes" | "subscription_update_interval_minutes" if n == 0 => {
+                    "delay_interval_minutes"
+                    | "subscription_update_interval_minutes"
+                    | "update_check_interval_minutes"
+                        if n == 0 =>
+                    {
                         "已关闭".into()
                     }
-                    "delay_interval_minutes" | "subscription_update_interval_minutes" => {
+                    "delay_interval_minutes"
+                    | "subscription_update_interval_minutes"
+                    | "update_check_interval_minutes" => {
                         format!("{n} 分钟")
                     }
                     "text_scale" => format!("{n}%"),
@@ -230,6 +236,7 @@ pub(super) fn label(key: &str) -> &str {
         "ip_reputation_key" => "IP 信誉服务密钥",
         "delay_interval_minutes" => "自动测速间隔",
         "subscription_update_interval_minutes" => "订阅自动更新间隔",
+        "update_check_interval_minutes" => "自动检查更新间隔",
         "active_profile" => "当前订阅 ID",
         "node_sort" => "节点排序",
         "rule_overrides" => "快捷规则",

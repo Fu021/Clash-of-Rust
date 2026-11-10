@@ -32,6 +32,7 @@ pub const READABLE_SETTINGS: &[&str] = &[
     "text_scale",
     "tray_speed",
     "update_prereleases",
+    "update_check_interval_minutes",
     "dns_override",
     "fake_ip",
     "fake_ip_exclusions",
@@ -61,6 +62,7 @@ pub const MUTABLE_SETTINGS: &[&str] = &[
     "text_scale",
     "tray_speed",
     "update_prereleases",
+    "update_check_interval_minutes",
     "dns_override",
     "fake_ip",
     "fake_ip_exclusions",
@@ -179,6 +181,7 @@ pub struct Settings {
     pub text_scale: u16,
     pub tray_speed: bool,
     pub update_prereleases: bool,
+    pub update_check_interval_minutes: u32,
     pub dns_override: bool,
     pub fake_ip: bool,
     pub fake_ip_exclusions: Vec<String>,
@@ -222,6 +225,7 @@ impl Default for Settings {
             text_scale: 100,
             tray_speed: false,
             update_prereleases: false,
+            update_check_interval_minutes: 360,
             dns_override: true,
             fake_ip: true,
             fake_ip_exclusions: Vec::new(),
@@ -420,6 +424,10 @@ impl Settings {
         if self.delay_interval_minutes > 1440 {
             bail!("定时测速间隔应为 0–1440 分钟，0 表示关闭");
         }
+        ensure!(
+            self.update_check_interval_minutes <= 10080,
+            "更新检查间隔应为 0–10080 分钟，0 表示关闭"
+        );
         ensure!(
             self.subscription_update_interval_minutes <= 10080,
             "订阅更新间隔应为 0–10080 分钟，0 表示关闭"
@@ -975,6 +983,38 @@ mod tests {
         };
         store.save_settings(&selected).unwrap();
         assert!(store.load_settings().unwrap().update_prereleases);
+    }
+
+    #[test]
+    fn update_check_interval_survives_reload_and_legacy_settings_keep_the_default() {
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.update_check_interval_minutes, 360);
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::at(root.path().to_owned()).unwrap();
+        for minutes in [0, 1, 360, 10080] {
+            let settings = Settings {
+                update_check_interval_minutes: minutes,
+                update_prereleases: true,
+                ..legacy.clone()
+            };
+            store.save_settings(&settings).unwrap();
+            let loaded = store.load_settings().unwrap();
+            assert_eq!(loaded.update_check_interval_minutes, minutes);
+            assert!(loaded.update_prereleases);
+            assert_eq!(
+                loaded.subscription_update_interval_minutes,
+                legacy.subscription_update_interval_minutes
+            );
+        }
+        let invalid = Settings {
+            update_check_interval_minutes: 10081,
+            ..legacy
+        };
+        assert!(store.save_settings(&invalid).is_err());
+        assert_eq!(
+            store.load_settings().unwrap().update_check_interval_minutes,
+            10080
+        );
     }
 
     #[test]

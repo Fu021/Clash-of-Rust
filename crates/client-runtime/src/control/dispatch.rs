@@ -370,7 +370,7 @@ async fn install_update(
     }
     #[cfg(any(windows, target_os = "macos"))]
     let deferred =
-        cfg!(target_os = "macos") || crate::update::supports_deferred_install(&download.version);
+        cfg!(target_os = "macos") || crate::update::supports_deferred_install(download.version());
     #[cfg(any(windows, target_os = "macos"))]
     let (mut engine, session) = if deferred {
         prepare_update_handoff(
