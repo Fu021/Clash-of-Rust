@@ -3489,7 +3489,7 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertFalse((report/'input-method-status.json').exists())
                 self.assertTrue((report/'instrumentation.txt').is_file())
 
-    def test_android_preview_routing_requires_both_real_network_cases(self):
+    def test_android_routing_policy_requires_both_real_network_cases(self):
         cases = ('basicSystemProxyAndTun', 'applicationRoutingPersistsAndKeepsOtherAppsOnline')
         for failed in (None, *cases):
             with self.subTest(failed=failed), tempfile.TemporaryDirectory() as temporary:
@@ -3502,7 +3502,11 @@ runpy.run_path(str(script), run_name='__main__')
                         result = 'FAILURES!!!' if case == failed else 'OK (1 test)'
                         return subprocess.CompletedProcess(command, 0, result, '')
                     return subprocess.CompletedProcess(command, 0, '', '')
-                with patch.object(android_build, 'ROOT', root), \
+                with patch.dict(os.environ, {
+                        'COR_CI_EXTENDED_TESTS': 'false',
+                        'COR_CI_ANDROID_ROUTING_TESTS': 'true',
+                    }), \
+                        patch.object(android_build, 'ROOT', root), \
                         patch.object(android_build, 'run'), \
                         patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
                         patch.object(android_build.subprocess, 'run', side_effect=invoke), \
@@ -3512,20 +3516,14 @@ runpy.run_path(str(script), run_name='__main__')
                         patch.object(android_build, 'finish_test_log', return_value=('', None)):
                     if failed:
                         with self.assertRaisesRegex(RuntimeError, 'Android integration test failed'):
-                            android_build.test('x64', root/'app.apk', root/'test.apk', routing_only=True)
+                            android_build.test('x64', root/'app.apk', root/'test.apk')
                     else:
-                        android_build.test('x64', root/'app.apk', root/'test.apk', routing_only=True)
+                        android_build.test('x64', root/'app.apk', root/'test.apk')
                     self.assertEqual(observed, list(cases))
                     origin.return_value.shutdown.assert_called_once()
-                report = root/'target/android-report/x64/routing-api-31'
+                report = root/'target/android-report/x64'
                 self.assertTrue((report/'instrumentation.txt').is_file())
                 self.assertTrue((report/'runtime-status.json').is_file())
-                receipt = report/'routing-verification.json'
-                self.assertEqual(receipt.exists(), failed is None)
-                if not failed:
-                    self.assertEqual(json.loads(receipt.read_text()), {
-                        'schema': 1, 'android_api': 31, 'cases': list(cases), 'routing_verified': True,
-                    })
 
     def test_device_properties_retry_only_transient_adb_errors_and_keep_terminal_failure(self):
         command = [android_build.ADB, 'shell', 'getprop', 'ro.product.manufacturer']
@@ -3788,27 +3786,6 @@ runpy.run_path(str(script), run_name='__main__')
                 android_build.application_preview(source, 31)
             prepare.assert_not_called()
             self.assertTrue(run_test.call_args.kwargs['applications_only'])
-
-    def test_application_preview_runs_real_routing_only_when_requested(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root/'build'
-            source.mkdir()
-            (source/'build.tar.gz').write_bytes(b'archive')
-            (source/'build.tar.gz.sha256').write_text('a' * 64)
-            with patch.object(android_build, 'ROOT', root), \
-                    patch.object(android_build, 'device_property', return_value='31'), \
-                    patch.object(android_build, 'sdk_tools', return_value=root), \
-                    patch.object(Path, 'is_file', return_value=True), \
-                    patch.object(android_build, 'sha256', return_value='a' * 64), \
-                    patch('workflow_artifacts.extract_build'), \
-                    patch.object(android_build, 'verify_build'), \
-                    patch.object(android_build, 'commit', return_value='b' * 40), \
-                    patch.object(android_build, 'test') as run_test:
-                android_build.application_preview(source, 31, verify_routing=True)
-            self.assertEqual(run_test.call_count, 2)
-            self.assertTrue(run_test.call_args_list[0].kwargs['applications_only'])
-            self.assertTrue(run_test.call_args_list[1].kwargs['routing_only'])
 
     def test_application_preview_never_starts_network_tests_and_requires_exported_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:

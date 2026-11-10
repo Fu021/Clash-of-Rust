@@ -47,7 +47,7 @@ macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两�
 | CI | 六种桌面与三个 Android ABI 的 Rust，加 Linux 编译容器与 Android Go；全仓按目标保留最新一代，按 20 GiB 统一清理 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
 | Memory Benchmark | 恢复/保存本次 profile 的 Rust；使用同一预算，优先让出空间 | 不使用 |
 | Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 复用 CI 验收结果，不下载或上传 VM |
-| Android UI Previews（按需） | 复用成功 CI 的 APK，保留截图及可选分流验证证据 | 不使用 |
+| Android UI Previews（按需） | 复用成功 CI 的 APK，只留截图 artifact | 不使用 |
 
 ## 原始下载：官方优先，私网回退
 

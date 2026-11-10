@@ -748,11 +748,11 @@ def network_origin_handler():
 
 
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
-         ime_rounds=1, applications_only=False, routing_only=False):
+         ime_rounds=1, applications_only=False):
     if not 1 <= ime_rounds <= 3 or ((ime_probe or ime_rounds != 1) and not ime_only):
         raise ValueError('IME probe options require IME-only testing and one to three rounds')
-    if sum((ime_only, applications_only, routing_only)) > 1:
-        raise ValueError('Application screenshots, routing and input-method tests are separate')
+    if ime_only and applications_only:
+        raise ValueError('Application screenshots and input-method tests are separate')
     network_tests = not (ime_only or applications_only)
     if arch != 'x64':
         return
@@ -782,11 +782,6 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         if not api.isdigit():
             raise ValueError('Could not identify the Android application preview version')
         report = report / ('applications-api-' + api)
-    if routing_only:
-        api = device_property('ro.build.version.sdk')
-        if not api.isdigit():
-            raise ValueError('Could not identify the Android routing test version')
-        report = report / ('routing-api-' + api)
     report.mkdir(parents=True,exist_ok=True)
     properties={}
     for name in ('ro.build.version.sdk','ro.build.version.release','ro.build.fingerprint',
@@ -808,8 +803,6 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         outputs=[]
         from ci_test_policy import android_cases
         cases=(('androidUiPreviewCapturesPagesAndApplications',) if applications_only else
-               ('basicSystemProxyAndTun', 'applicationRoutingPersistsAndKeepsOtherAppsOnline')
-               if routing_only else
                ('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
                if ime_only else android_cases())
@@ -831,8 +824,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                 outputs.append(f'Round {iteration}: '+case+'\n'+result.stdout+result.stderr)
                 (report/'instrumentation.txt').write_text('\n\n'.join(outputs))
                 print(result.stdout,flush=True)
-                expected = 'OK (1 test)' if routing_only else 'OK ('
-                if result.returncode or 'FAILURES!!!' in result.stdout or expected not in result.stdout:
+                if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (1 test)' not in result.stdout:
                     failures.append(f'{case} round {iteration}')
         if failures:
             raise RuntimeError('Android integration test failed: '+', '.join(failures))
@@ -924,15 +916,6 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     if any(marker in captured_log for marker in
            ('Android startup:', 'Mobile runtime stopped:', 'Recursion detected', 'E RustPanic')):
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
-    if routing_only:
-        write_json(report/'routing-verification.json', {
-            'schema': 1, 'android_api': int(api), 'cases': list(cases), 'routing_verified': True,
-        })
-        if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
-            with open(summary, 'a') as stream:
-                stream.write(f'\nAndroid {properties["ro.build.version.release"]}: '
-                             'real VPN application routing, persistence, reconfiguration and '
-                             'selected/unselected traffic checks passed on the emulator.\n')
 
 
 def validate_application_preview(directory, api):
@@ -1050,7 +1033,7 @@ def validate_application_preview(directory, api):
         raise ValueError('Android preview application modes did not invert the full selection')
 
 
-def application_preview(build, api, verify_routing=False):
+def application_preview(build, api):
     from workflow_artifacts import extract_build
     actual_api = device_property('ro.build.version.sdk')
     if actual_api != str(api):
@@ -1067,9 +1050,6 @@ def application_preview(build, api, verify_routing=False):
     verify_build(root, 'x64', commit())
     test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
          applications_only=True)
-    if verify_routing:
-        test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
-             routing_only=True)
 
 
 def package(arch, run_id, check_only, build=None):
@@ -1127,8 +1107,6 @@ def main():
     parser.add_argument('--build',type=Path,help='CI candidate input for package --check or application-preview')
     parser.add_argument('--legacy',action='store_true',help='Use the approved Android 12 IME regression image')
     parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
-    parser.add_argument('--verify-routing',action='store_true',
-                        help='Also verify real VPN application routing on the disposable preview emulator')
     parser.add_argument('--api',type=int,help='Use an approved Android test image')
     args=parser.parse_args()
     if args.build is not None and args.operation != 'application-preview' and (args.operation!='package' or not args.check):
@@ -1141,8 +1119,6 @@ def main():
         parser.error('--api applies only to emulator preparation or application-preview and cannot be combined with --legacy')
     if args.ime_only and args.operation!='test':
         parser.error('--ime-only applies only to test')
-    if args.verify_routing and args.operation!='application-preview':
-        parser.error('--verify-routing applies only to application-preview')
     if args.operation=='emulator':
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=prepare_sdk_manager()
@@ -1191,7 +1167,7 @@ def main():
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
-    elif args.operation=='application-preview': application_preview(args.build, args.api, args.verify_routing)
+    elif args.operation=='application-preview': application_preview(args.build, args.api)
     else: package(args.arch,args.run_id,args.check,args.build)
 
 
