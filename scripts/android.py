@@ -85,6 +85,24 @@ def commit():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
 
 
+def device_property(name):
+    command = [ADB, 'shell', 'getprop', name]
+    for attempt in range(3):
+        try:
+            return subprocess.check_output(command, text=True, stderr=subprocess.PIPE, timeout=15).strip()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, subprocess.CalledProcessError):
+                detail = error.stderr or ''
+                if error.returncode != 255 and not re.search(
+                        r'device offline|device not found|no devices|device .* not found|connection.*closed',
+                        detail, re.I):
+                    raise
+            if attempt == 2:
+                raise
+            print(f'Transient ADB property read failure ({name}); retrying', flush=True)
+            time.sleep(attempt + 1)
+
+
 def sdk_tools():
     return Path(os.environ['ANDROID_HOME']) / 'build-tools' / android_versions()['build_tools']
 
@@ -145,6 +163,15 @@ def emulator_image(legacy=False, api=None):
             return 'system-images;android-'+str(api)+';'+tag+';x86_64', selected['revision'], selected['source_revision']
     return (versions[image_key], versions[image_key+'_revision'],
             versions.get(image_key+'_source_revision', versions[image_key+'_revision']))
+
+
+def emulator_sdk_packages(image, image_revision, preview=False):
+    versions = android_versions()
+    packages = ['platform-tools@'+versions['platform_tools'], 'emulator@'+versions['emulator'],
+                image+'@'+image_revision]
+    if preview:
+        packages.append('build-tools;'+versions['build_tools'])
+    return packages
 
 
 def verify_emulator_versions(sdk, legacy=False, api=None):
@@ -720,20 +747,18 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','default'])
     report=ROOT/'target/android-report'/arch
     if ime_only:
-        api=subprocess.check_output([ADB,'shell','getprop','ro.build.version.sdk'],text=True,timeout=15).strip()
+        api=device_property('ro.build.version.sdk')
         if not api.isdigit():
             raise ValueError('Could not identify the Android IME test API level')
         report=report/('ime-api-'+api)
         report=report/('production' if ime_probe else 'regression')
     if applications_only:
-        api = subprocess.check_output([ADB, 'shell', 'getprop', 'ro.build.version.sdk'],
-                                      text=True, timeout=15).strip()
+        api = device_property('ro.build.version.sdk')
         if not api.isdigit():
             raise ValueError('Could not identify the Android application preview version')
         report = report / ('applications-api-' + api)
     if routing_only:
-        api = subprocess.check_output([ADB, 'shell', 'getprop', 'ro.build.version.sdk'],
-                                      text=True, timeout=15).strip()
+        api = device_property('ro.build.version.sdk')
         if not api.isdigit():
             raise ValueError('Could not identify the Android routing test version')
         report = report / ('routing-api-' + api)
@@ -741,7 +766,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     properties={}
     for name in ('ro.build.version.sdk','ro.build.version.release','ro.build.fingerprint',
                  'ro.product.manufacturer','ro.product.model','ro.product.cpu.abi'):
-        properties[name]=subprocess.check_output([ADB,'shell','getprop',name],text=True,timeout=15).strip()
+        properties[name]=device_property(name)
     ime_service=''
     ime_package=''
     if ime_only:
@@ -1002,10 +1027,11 @@ def validate_application_preview(directory, api):
 
 def application_preview(build, api, verify_routing=False):
     from workflow_artifacts import extract_build
-    actual_api = subprocess.check_output([ADB, 'shell', 'getprop', 'ro.build.version.sdk'],
-                                         text=True, timeout=15).strip()
+    actual_api = device_property('ro.build.version.sdk')
     if actual_api != str(api):
         raise ValueError('Application preview device differs from the selected Android version')
+    if not (sdk_tools()/'aapt2').is_file():
+        raise RuntimeError('Android preview build tools are missing; prepare the selected emulator first')
     archive = build / 'build.tar.gz'
     expected = (build / 'build.tar.gz.sha256').read_text().strip()
     if not re.fullmatch('[a-f0-9]{64}', expected) or sha256(archive) != expected:
@@ -1013,7 +1039,6 @@ def application_preview(build, api, verify_routing=False):
     root = ROOT / 'target/android-application-preview-build'
     root.mkdir(parents=True, exist_ok=False)
     extract_build(archive, root)
-    prepare_sdk(package_only=True)
     verify_build(root, 'x64', commit())
     test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
          applications_only=True)
@@ -1097,11 +1122,9 @@ def main():
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=prepare_sdk_manager()
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
-        versions=android_versions()
         image,image_revision,_=emulator_image(args.legacy,args.api)
-        install_sdk_packages(sdk_install_command(manager, [
-            'platform-tools@'+versions['platform_tools'], 'emulator@'+versions['emulator'],
-            image+'@'+image_revision]), device_root)
+        packages=emulator_sdk_packages(image,image_revision,preview=args.api is not None)
+        install_sdk_packages(sdk_install_command(manager,packages), device_root)
         verify_emulator_versions(sdk,legacy=args.legacy,api=args.api)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)

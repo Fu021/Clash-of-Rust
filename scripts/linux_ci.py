@@ -487,10 +487,25 @@ class VmGuest:
                                       + shlex.quote("import sys; sys.path.insert(0,'scripts'); " + script)))
 
     def preserve(self):
-        with contextlib.suppress(OSError, subprocess.SubprocessError):
-            with (REPORT/'focal-guest-report.tar.gz').open('wb') as output:
-                subprocess.run([*self.ssh, 'cd ~/cor-source && tar czf - target/linux-report'],
-                               stdout=output, timeout=60)
+        state = 'not_generated'
+        try:
+            with tempfile.TemporaryDirectory(prefix='guest-report-', dir=REPORT) as temporary:
+                archive = Path(temporary)/'report.tar.gz'
+                with archive.open('wb') as output:
+                    result = subprocess.run(
+                        [*self.ssh, 'cd ~/cor-source && if test -d target/linux-report; '
+                                    'then tar czf - target/linux-report; fi'],
+                        stdout=output, stderr=subprocess.PIPE, timeout=60)
+                if result.returncode:
+                    state = 'transfer_failed'
+                    print(f'::warning::Guest diagnostic transfer failed (exit {result.returncode})', flush=True)
+                elif archive.stat().st_size:
+                    archive.replace(REPORT/'focal-guest-report.tar.gz')
+                    state = 'saved'
+        except (OSError, subprocess.SubprocessError) as error:
+            state = 'transfer_failed'
+            print(f'::warning::Guest diagnostic transfer failed ({type(error).__name__})', flush=True)
+        write_json(REPORT/'focal-guest-report-status.json', {'schema': 1, 'state': state})
         guest_receipts(self.ssh)
 
     def shutdown(self):

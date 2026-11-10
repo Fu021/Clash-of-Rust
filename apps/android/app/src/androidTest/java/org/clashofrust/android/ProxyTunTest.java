@@ -263,13 +263,22 @@ public class ProxyTunTest {
         });
         return result.get();
     }
-    private static int[] windowOrigin() {
-        MainActivity activity=resumedActivity();
-        assertNotNull("Slint activity is not focused",activity);
-        int[] origin=new int[2];
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(
-            () -> activity.getWindow().getDecorView().getLocationOnScreen(origin));
-        return origin;
+    private static int[] windowOrigin() throws Exception {
+        java.util.concurrent.atomic.AtomicReference<int[]> origin=new java.util.concurrent.atomic.AtomicReference<>();
+        await("Slint activity did not regain focus",()-> {
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View decor=activity.getWindow().getDecorView();
+                if (activity.hasWindowFocus() && decor.isAttachedToWindow() && decor.isShown()) {
+                    int[] position=new int[2];
+                    decor.getLocationOnScreen(position);
+                    origin.set(position);
+                }
+            });
+            return origin.get()!=null;
+        });
+        return origin.get();
     }
     private static boolean tryTapTarget(String name) throws Exception {
         JSONObject ui=MainActivity.diagnostics();
@@ -769,26 +778,72 @@ public class ProxyTunTest {
             return node.getChecked() == android.view.accessibility.AccessibilityNodeInfo.CHECKED_STATE_TRUE;
         return node.isChecked();
     }
+    private static void logConsentNode(android.view.accessibility.AccessibilityNodeInfo node,
+            int depth, StringBuilder details) {
+        if (node==null || depth>5 || details.length()>4000) return;
+        details.append('\n').append(depth).append(' ')
+            .append(node.getPackageName()).append(' ').append(node.getClassName()).append(' ')
+            .append(node.getViewIdResourceName()).append(" enabled=").append(node.isEnabled())
+            .append(" clickable=").append(node.isClickable());
+        for (int index=0;index<node.getChildCount();index++)
+            logConsentNode(node.getChild(index),depth+1,details);
+    }
+    private static android.view.accessibility.AccessibilityNodeInfo consentRoot(android.app.UiAutomation automation) {
+        android.view.accessibility.AccessibilityNodeInfo active=automation.getRootInActiveWindow();
+        if (active!=null && "com.android.vpndialogs".contentEquals(active.getPackageName())) return active;
+        for (android.view.accessibility.AccessibilityWindowInfo window:automation.getWindows()) {
+            if (!window.isActive() && !window.isFocused()) continue;
+            android.view.accessibility.AccessibilityNodeInfo root=window.getRoot();
+            if (root!=null && "com.android.vpndialogs".contentEquals(root.getPackageName())) return root;
+        }
+        return null;
+    }
     private static void consent(boolean allow) throws Exception {
-        java.util.concurrent.atomic.AtomicBoolean clicked=new java.util.concurrent.atomic.AtomicBoolean();
-        await("Android VPN consent did not return to the app",()-> {
-            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation()
-                .getUiAutomation().getRootInActiveWindow();
-            if (root==null) return false;
-            if ("org.clashofrust.android".contentEquals(root.getPackageName()))
-                return clicked.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
-            if (!"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
-            for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
-                if (check.isCheckable() && !checked(check))
-                    check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
-            // Accessibility can accept an action against a closing window.
-            // Wait for the actual return so the next consent uses its own dialog.
-            for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
-                allow ? "android:id/button1" : "android:id/button2"))
-                if (button.isEnabled() && button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
-                    clicked.set(true);
-            return false;
-        });
+        android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        android.accessibilityservice.AccessibilityServiceInfo service=automation.getServiceInfo();
+        if (service==null) throw new IOException("Android accessibility automation is unavailable");
+        int originalFlags=service.flags;
+        service.flags |= android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            | android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        automation.setServiceInfo(service);
+        java.util.concurrent.atomic.AtomicBoolean attempted=new java.util.concurrent.atomic.AtomicBoolean();
+        try {
+            await("Android VPN consent did not return to the app",()-> {
+                if (attempted.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true))
+                    return true;
+                android.view.accessibility.AccessibilityNodeInfo root=consentRoot(automation);
+                if (root==null) return false;
+                for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
+                    if (check.isCheckable() && !checked(check))
+                        check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
+                    allow ? "android:id/button1" : "android:id/button2")) {
+                    if (button.isEnabled()) {
+                        attempted.set(true);
+                        button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                    }
+                }
+                return false;
+            });
+        } catch (AssertionError error) {
+            try {
+                StringBuilder details=new StringBuilder("VPN consent accessibility tree; attempted=")
+                    .append(attempted.get());
+                logConsentNode(automation.getRootInActiveWindow(),0,details);
+                for (android.view.accessibility.AccessibilityWindowInfo window:automation.getWindows()) {
+                    details.append("\nwindow active=").append(window.isActive())
+                        .append(" focused=").append(window.isFocused());
+                    logConsentNode(window.getRoot(),0,details);
+                }
+                android.util.Log.w("ClashOfRustTest",details.toString());
+            } catch (RuntimeException failure) {
+                error.addSuppressed(failure);
+            }
+            throw error;
+        } finally {
+            service.flags=originalFlags;
+            automation.setServiceInfo(service);
+        }
     }
     private static void authorization(long request,String status) throws Exception {
         await("VPN authorization did not reach "+status,()-> {
@@ -1117,8 +1172,12 @@ public class ProxyTunTest {
         fail("Tool is outside the screenshot viewport: " + page);
     }
     private static android.graphics.Bitmap previewWindowBitmap() throws Exception {
-        MainActivity activity = resumedActivity();
-        assertNotNull("Screenshot activity is not focused", activity);
+        java.util.concurrent.atomic.AtomicReference<MainActivity> focused = new java.util.concurrent.atomic.AtomicReference<>();
+        await("Screenshot activity did not regain focus", () -> {
+            focused.set(resumedActivity());
+            return focused.get() != null;
+        });
+        MainActivity activity = focused.get();
         java.util.concurrent.atomic.AtomicReference<android.graphics.Bitmap> bitmap =
             new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.atomic.AtomicReference<RuntimeException> failure =
@@ -1265,8 +1324,13 @@ public class ProxyTunTest {
             JSONObject ui = MainActivity.diagnostics();
             if (!ui.optString("applications_error").isEmpty())
                 throw new IOException(ui.getString("applications_error"));
-            return ui.optInt("applications_mode", -1) == mode
-                && ui.optInt("applications_selected", -1) == expected;
+            if (ui.optInt("applications_mode", -1) == mode
+                    && ui.optInt("applications_selected", -1) == expected) return true;
+            if (ui.optInt("applications_mode", -1) == previous && previous != mode) {
+                tryPreviewTarget("preview-applications-mode:" + mode);
+                SystemClock.sleep(350);
+            }
+            return false;
         });
         if (mode == 0)
             assertEquals("All applications must remove the selection list", 0,

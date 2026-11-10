@@ -367,6 +367,35 @@ class PreparedVmTests(unittest.TestCase):
                 linux_ci.wait_vm_ssh(process, ['ssh', 'guest'])
             self.assertEqual(commands.call_count, 1)
 
+    def test_guest_report_preserves_only_complete_generated_archives(self):
+        for result, body, state in ((0, b'', 'not_generated'),
+                                    (0, b'complete report', 'saved'),
+                                    (1, b'partial report', 'transfer_failed'),
+                                    ('timeout', b'partial report', 'transfer_failed')):
+            with self.subTest(result=result, state=state), tempfile.TemporaryDirectory() as temporary:
+                report = Path(temporary)
+                guest = object.__new__(linux_ci.VmGuest)
+                guest.ssh = ['ssh', 'guest']
+
+                def transfer(command, **kwargs):
+                    kwargs['stdout'].write(body)
+                    if result == 'timeout':
+                        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+                    return subprocess.CompletedProcess(command, result, stderr=b'fixture failure')
+
+                with patch.object(linux_ci, 'REPORT', report), \
+                        patch.object(linux_ci, 'guest_receipts') as receipts, \
+                        patch.object(linux_ci.subprocess, 'run', side_effect=transfer):
+                    guest.preserve()
+                self.assertEqual(json.loads((report/'focal-guest-report-status.json').read_text()),
+                                 {'schema': 1, 'state': state})
+                archive = report/'focal-guest-report.tar.gz'
+                self.assertEqual(archive.exists(), state == 'saved')
+                if state == 'saved':
+                    self.assertEqual(archive.read_bytes(), body)
+                receipts.assert_called_once_with(guest.ssh)
+                self.assertFalse(list(report.glob('guest-report-*')))
+
     def test_private_restore_is_atomic_and_preserves_existing_file_on_bad_bytes(self):
         record = self.manifest()
         for body, result in ((b'prepared-system-disk', True), (b'damaged-system-disk!', False)):
@@ -3253,6 +3282,14 @@ runpy.run_path(str(script), run_name='__main__')
             report = json.loads((root/'report/storage.json').read_text())
             self.assertEqual(report['free_bytes'], 6 * 1024**3)
 
+    def test_preview_installs_apk_inspection_tools_before_starting_the_emulator(self):
+        versions = build_inputs.android_versions()
+        image, revision, _ = android_build.emulator_image(api=31)
+        regular = android_build.emulator_sdk_packages(image, revision)
+        preview = android_build.emulator_sdk_packages(image, revision, preview=True)
+        self.assertEqual(preview, regular + ['build-tools;' + versions['build_tools']])
+        self.assertIn('platform-tools@' + versions['platform_tools'], preview)
+
     def test_emulator_rejects_revisions_that_differ_from_the_cache_identity(self):
         versions = build_inputs.android_versions()
         with tempfile.TemporaryDirectory() as temporary:
@@ -3437,12 +3474,29 @@ runpy.run_path(str(script), run_name='__main__')
                 report = root/'target/android-report/x64/routing-api-31'
                 self.assertTrue((report/'instrumentation.txt').is_file())
                 self.assertTrue((report/'runtime-status.json').is_file())
-                result = report/'routing-verification.json'
-                self.assertEqual(result.exists(), failed is None)
+                receipt = report/'routing-verification.json'
+                self.assertEqual(receipt.exists(), failed is None)
                 if not failed:
-                    self.assertEqual(json.loads(result.read_text()), {
+                    self.assertEqual(json.loads(receipt.read_text()), {
                         'schema': 1, 'android_api': 31, 'cases': list(cases), 'routing_verified': True,
                     })
+
+    def test_device_properties_retry_only_transient_adb_errors_and_keep_terminal_failure(self):
+        command = [android_build.ADB, 'shell', 'getprop', 'ro.product.manufacturer']
+        transient = subprocess.CalledProcessError(255, command, stderr='device offline')
+        permanent = subprocess.CalledProcessError(1, command, stderr='permission denied')
+        for failures in ([transient, 'Google\n'], [subprocess.TimeoutExpired(command, 15), 'Google\n'],
+                         [transient] * 3, [permanent]):
+            with self.subTest(failures=failures), \
+                    patch.object(android_build.subprocess, 'check_output', side_effect=failures) as read, \
+                    patch.object(android_build.time, 'sleep') as delay:
+                if isinstance(failures[-1], str):
+                    self.assertEqual(android_build.device_property('ro.product.manufacturer'), 'Google')
+                else:
+                    with self.assertRaises(type(failures[-1])):
+                        android_build.device_property('ro.product.manufacturer')
+                self.assertEqual(read.call_count, len(failures))
+                self.assertEqual(delay.call_count, len(failures) - 1)
 
     def test_android_ime_runs_remain_explicit_and_require_screenshot_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3665,27 +3719,50 @@ runpy.run_path(str(script), run_name='__main__')
                 android_build.application_preview(Path('/missing-build'), 31)
             run_test.assert_not_called()
 
+    def test_application_preview_keeps_the_live_adb_installation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root/'sdk'
+            tool = sdk/'build-tools'/build_inputs.android_versions()['build_tools']/'aapt2'
+            tool.parent.mkdir(parents=True)
+            tool.touch()
+            source = root/'build'
+            source.mkdir()
+            (source/'build.tar.gz').write_bytes(b'archive')
+            (source/'build.tar.gz.sha256').write_text('a' * 64)
+            with patch.dict(os.environ, {'ANDROID_HOME': str(sdk)}), \
+                    patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
+                    patch.object(android_build, 'sha256', return_value='a' * 64), \
+                    patch('workflow_artifacts.extract_build'), \
+                    patch.object(android_build, 'prepare_sdk') as prepare, \
+                    patch.object(android_build, 'verify_build'), \
+                    patch.object(android_build, 'commit', return_value='b' * 40), \
+                    patch.object(android_build, 'test') as run_test:
+                android_build.application_preview(source, 31)
+            prepare.assert_not_called()
+            self.assertTrue(run_test.call_args.kwargs['applications_only'])
+
     def test_application_preview_runs_real_routing_only_when_requested(self):
-        for verify in (False, True):
-            with self.subTest(verify=verify), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                source = root/'build'
-                source.mkdir()
-                (source/'build.tar.gz').write_bytes(b'archive')
-                (source/'build.tar.gz.sha256').write_text('a' * 64)
-                with patch.object(android_build, 'ROOT', root), \
-                        patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
-                        patch.object(android_build, 'sha256', return_value='a' * 64), \
-                        patch('workflow_artifacts.extract_build'), \
-                        patch.object(android_build, 'prepare_sdk'), \
-                        patch.object(android_build, 'verify_build'), \
-                        patch.object(android_build, 'commit', return_value='b' * 40), \
-                        patch.object(android_build, 'test') as run_test:
-                    android_build.application_preview(source, 31, verify_routing=verify)
-                self.assertEqual(run_test.call_count, 2 if verify else 1)
-                self.assertTrue(run_test.call_args_list[0].kwargs['applications_only'])
-                if verify:
-                    self.assertTrue(run_test.call_args_list[1].kwargs['routing_only'])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root/'build'
+            source.mkdir()
+            (source/'build.tar.gz').write_bytes(b'archive')
+            (source/'build.tar.gz.sha256').write_text('a' * 64)
+            with patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build, 'device_property', return_value='31'), \
+                    patch.object(android_build, 'sdk_tools', return_value=root), \
+                    patch.object(Path, 'is_file', return_value=True), \
+                    patch.object(android_build, 'sha256', return_value='a' * 64), \
+                    patch('workflow_artifacts.extract_build'), \
+                    patch.object(android_build, 'verify_build'), \
+                    patch.object(android_build, 'commit', return_value='b' * 40), \
+                    patch.object(android_build, 'test') as run_test:
+                android_build.application_preview(source, 31, verify_routing=True)
+            self.assertEqual(run_test.call_count, 2)
+            self.assertTrue(run_test.call_args_list[0].kwargs['applications_only'])
+            self.assertTrue(run_test.call_args_list[1].kwargs['routing_only'])
 
     def test_application_preview_never_starts_network_tests_and_requires_exported_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
