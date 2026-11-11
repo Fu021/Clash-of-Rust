@@ -243,38 +243,6 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
                 kernel.LocalFree(sid)
 
 
-def windows_tests(tests, bundle):
-    report_path = ROOT/'target/windows-ci-report.json'
-    report = {'schema': 1, 'system': 'windows', 'arch': host_arch(),
-              'status': 'running', 'suites': []}
-    suites = [
-        ('system-proxy-and-tun', [sys.executable, ROOT/'scripts/test-proxy-modes.py',
-                                  '--test-binary', tests['core_integration'], '--bundle', bundle]),
-    ]
-    report['suites'] = [{'name': name, 'status': 'not_run'} for name, _ in suites]
-    write_json(report_path, report)
-    for entry, (_, command) in zip(report['suites'], suites):
-        started = time.monotonic()
-        entry['status'] = 'running'
-        write_json(report_path, report)
-        print('::group::Windows basic: ' + entry['name'], flush=True)
-        try:
-            run(command)
-            entry['status'] = 'passed'
-        except BaseException as error:
-            entry['status'] = 'failed'
-            entry['error'] = str(error)
-            report['status'] = 'failed'
-            raise
-        finally:
-            entry['duration_seconds'] = round(time.monotonic() - started, 3)
-            write_json(report_path, report)
-            print('::endgroup::', flush=True)
-    report['status'] = 'passed'
-    write_json(report_path, report)
-    print('PASS: all Windows basic suites; report: ' + str(report_path), flush=True)
-
-
 def _installer_exit(executable,args,code,timeout=60):
     with subprocess.Popen([str(executable),*map(str,args)],
                           creationflags=subprocess.CREATE_NO_WINDOW) as process:
@@ -307,7 +275,7 @@ def _verify_failed_update(package, installed):
         try:
             # Read sharing permits verification, but denies WriteUninstaller.
             # Extraction has already replaced both executables at this point.
-            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],6)
+            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],64)
             assert sha256(installed/'clash-of-rust.exe') == owner_hash
             if legacy: assert not renderer.exists()
             else: assert sha256(renderer) == expected
@@ -315,6 +283,49 @@ def _verify_failed_update(package, installed):
         finally:
             kernel.CloseHandle(handle)
             renderer.write_bytes(original)
+
+
+def _update_handoff_command(package, gate, parent, installed):
+    if any('"' in str(path) for path in (gate, installed)):
+        raise ValueError('Invalid update handoff path')
+    return (subprocess.list2cmdline([str(package)]) +
+            f' /S /UPDATE /CORWAITDIR="{gate}" /CORWAITPID={parent} /D={installed}')
+
+
+def _verify_deferred_update(package, installed):
+    original = {name: sha256(installed/name) for name in
+                ('clash-of-rust.exe', 'clash-desktop-ui.exe')}
+    with tempfile.TemporaryDirectory(prefix='cor update gate ') as directory:
+        gate = Path(directory)
+        (gate/'plan.json').write_text('{}', encoding='utf-8')
+        for committed in (False, True):
+            (gate/'cancel').unlink(missing_ok=True)
+            if committed:
+                (gate/'commit').touch()
+            with subprocess.Popen(
+                _update_handoff_command(package, gate, os.getpid(), installed),
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            ) as process:
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    raise RuntimeError('Installer did not wait for the owner handoff')
+                (gate/'cancel').touch()
+                if process.wait(timeout=30) != 2:
+                    raise RuntimeError('Cancelled installer did not preserve the old version')
+            assert {name: sha256(installed/name) for name in original} == original
+        (gate/'cancel').unlink()
+        with subprocess.Popen([sys.executable, '-c', 'pass']) as parent:
+            parent.wait(timeout=30)
+        with subprocess.Popen(
+            _update_handoff_command(package, gate, parent.pid, installed),
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ) as process:
+            if process.wait(timeout=60) != 0:
+                raise RuntimeError('Committed installer failed after the owner exited')
+        assert {name: sha256(installed/name) for name in original} == original
 
 
 def installed_gui_smoke(installed, root):
@@ -333,6 +344,9 @@ def installed_gui_smoke(installed, root):
     profile = root/'gui-profile'
     profile.mkdir()
     allow_ordinary_user_directory(profile)
+    exports = root/'gui-exports'
+    exports.mkdir()
+    allow_ordinary_user_directory(exports)
     env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(profile), PYTHONUTF8='1')
     command = [installed/'cor.exe', '--data-dir', profile, '--json']
 
@@ -385,6 +399,19 @@ def installed_gui_smoke(installed, root):
                 if time.monotonic() >= deadline:
                     raise TimeoutError('Windows GUI did not start its shared core')
                 time.sleep(.5)
+            run_unelevated([*command, 'config', 'set', 'update_prereleases', 'true'], env)
+            assert json.loads((profile/'settings.json').read_text())['update_prereleases'] is True
+            source = profile/'ordinary-subscription.yaml'
+            source.write_text('proxies: []\nrules: ["MATCH,DIRECT"]\n', encoding='utf-8')
+            run_unelevated([*command, 'profile', 'import', source, '--name', 'Ordinary user'], env)
+            assert any(item['name'] == 'Ordinary user'
+                       for item in json.loads((profile/'profiles.json').read_text()))
+            for arguments, path in (
+                (['logs', 'export'], exports/'exported.log'),
+                (['diagnose', '--offline'], exports/'diagnostics.json'),
+            ):
+                run_unelevated([*command, *arguments, '--output', path], env)
+                assert path.is_file() and path.stat().st_size > 0
             cli('mode', 'global')
             user32.ShowWindow(hwnd, 6)  # Minimize, then restore the real window.
             user32.ShowWindow(hwnd, 9)
@@ -399,7 +426,8 @@ def installed_gui_smoke(installed, root):
                 time.sleep(.25)
             write_json(ROOT/'target/windows-gui-report.json',
                        {'status': 'passed', 'ordinary_user': True, 'visible_window': True,
-                        'window_restore': True, 'shared_cli_mode': True})
+                        'window_restore': True, 'shared_cli_mode': True,
+                        'user_storage': ['settings', 'subscription', 'log_export', 'diagnostics']})
         finally:
             try:
                 cli('stop')
@@ -413,6 +441,7 @@ def installed_gui_smoke(installed, root):
 
 
 def _verify_installed_package(package, binary, root, smoke):
+    from ci_test_policy import extended_tests
     import winreg
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Production package tests require a disposable Actions runner')
@@ -438,18 +467,18 @@ def _verify_installed_package(package, binary, root, smoke):
         validate_resources(installed/'resources', 'windows')
         assert (installed/'clash-tun-launcher.exe').is_file()
         run(['sc.exe', 'query', 'ClashOfRust.Network'])
-        installed_gui_smoke(installed, root)
-        run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
-             '--test-binary', smoke, '--bundle', installed])
         user_file = installed/'unrelated-user-file.txt'
         user_file.write_text('Preserve this unrelated file', encoding='utf-8')
-        _verify_failed_update(package, installed)
-        # Exercise the same explicit update mode used by the client. Service
-        # replacement must finish before installation reports success.
-        _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
-        assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
-        assert not list(installed.glob('*.update-backup.exe'))
-        assert user_file.read_text(encoding='utf-8') == 'Preserve this unrelated file'
+        if extended_tests():
+            installed_gui_smoke(installed, root)
+        from ci_test_policy import update_tests
+        if update_tests():
+            _verify_deferred_update(package, installed)
+            _verify_failed_update(package, installed)
+            _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+            assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
+            assert not list(installed.glob('*.update-backup.exe'))
+            assert user_file.read_text(encoding='utf-8') == 'Preserve this unrelated file'
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', smoke, '--bundle', installed])
     finally:

@@ -35,9 +35,11 @@ GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。
 
 ## 帮助、脚本与输出
 
-所有命令都支持 `--help`；`cor help profile`、`cor profile help` 和 `cor profile --help` 列出该组命令，节点组同样可用 `cor node help`。帮助与解析、补全来自同一份命令表。
+默认 `cor help` 只列出日常启停、状态、代理、诊断及订阅/节点入口；`cor help all` 查看完整命令和通用选项。所有命令都支持 `--help`；`cor help profile`、`cor profile help` 和 `cor profile --help` 列出该组命令，节点组同样可用 `cor node help`。`profile import` 仍兼容原脚本，分组帮助优先展示同时支持 URL、文件和标准输入的 `profile add`。帮助与解析、补全来自同一份命令表。
 
 默认使用中文状态说明和表格；节点列表区分策略组、节点与内置出站，空延迟显示“未测速”，测速失败显示“超时”。速度和流量按 B、KiB、MiB 等单位显示，时间使用运行机器的本地时区。较窄终端会改用分条显示，保留完整名称和 ID；可通过 `COLUMNS` 指定显示宽度。脚本请使用 `--json` / `--jsonl`，字段与原有结构保持一致。
+
+`status` 将运行状态和流量合并为几行摘要，不堆叠路由采样及多用户说明。实际观察到外部 TUN 时才单独显示网络提醒和下一步；Linux root 可用 `cor status --all-users` 显式读取跨用户 TUN 持有进程。完整证据用 `cor diagnose --output cor-diagnose.json` 保存，见[运行状态与故障反馈](cli/runtime.md)。
 
 | 通用选项 | 作用 |
 | --- | --- |

@@ -50,6 +50,10 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 
 `--protection-state off|active|checking|error` 可预览全局保护徽标与异常原因，桌面和 `--mobile --platform android` 共用；仅注入演示状态，不连接内核或改变网络。
 
+`--notice "订阅更新失败：连接超时" --notice-error` 预览错误通知及诊断按钮，不设置 `--notice-error` 则为正常通知。正式诊断采集与原生文件保存仍需在各端验证；iOS 预览没有可用原生导出宿主。
+
+整体界面的三种架构、几何字标、浅深主题及警告样式见[界面设计与审阅](../ui-design.md)。`--pages-only` 跳过自动附加的移动情境矩阵，适合只预览本次选定的页面；仍须显式设置工作区外的 `--output`。维护者明确要求全量截图时串行渲染，不并行占用受限服务器。
+
 使用仓库期间遵循[占用锁协议](../development.md#仓库占用锁)。静态检查与预览不等于编译、测试或真实交互验证。
 
-图标、国旗及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `flags`。图标源图保留于 `resources/icon-concepts`，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留 `vendor` 或 Shell 生成工具。
+图标、字体、国家名称及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `countries`，不再生成国旗图集。图标源图保留于 `resources/icon-concepts`，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留旧平台检测 `vendor` 或 Shell 生成工具。

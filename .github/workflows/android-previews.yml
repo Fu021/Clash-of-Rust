@@ -1,0 +1,134 @@
+name: Android UI Previews
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful CI run for the selected branch commit
+        required: true
+        type: string
+  pull_request:
+    types: [labeled]
+env:
+  BUILD_INPUTS_DIR: dependency-snapshot
+  PYTHONDONTWRITEBYTECODE: '1'
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: android-previews-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  resolve:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'android-previews' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    name: Resolve screenshot inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      ci_run_id: ${{ steps.source.outputs.ci_run_id }}
+      matrix: ${{ steps.source.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Resolve the verified CI source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+        run: |
+          args=()
+          if [[ -n "$SOURCE_RUN" ]]; then args+=(--run-id "$SOURCE_RUN"); fi
+          python3 scripts/android_previews.py "${args[@]}"
+  screenshots:
+    name: Android ${{ matrix.android }} UI screenshots
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          persist-credentials: false
+      - name: Load approved tool versions
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ env.COR_PYTHON }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+          run-id: ${{ needs.resolve.outputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      - name: Apply frozen inputs
+        run: python3 scripts/build_inputs.py apply
+      - name: Connect for original-download fallback
+        id: tailnet
+        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:github-action-cache
+          version: ${{ env.COR_TAILSCALE }}
+          use-cache: 'false'
+          retry: '1'
+          timeout: 45s
+          args: --accept-dns=false
+          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
+      - name: Preserve host routing
+        if: steps.tailnet.outcome == 'success'
+        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
+      - uses: ./.github/actions/upstream-cache
+        with:
+          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
+          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
+        with:
+          distribution: temurin
+          java-version: ${{ env.COR_JAVA }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: build-android-x64
+          path: android-preview-input
+          run-id: ${{ needs.resolve.outputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      - name: Start Android ${{ matrix.android }} preview device
+        run: |
+          sudo chmod a+rw /dev/kvm
+          python3 scripts/android.py emulator --arch x64 --api ${{ matrix.api }}
+      - name: Submit verified emulator downloads
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          checkpoint: 'true'
+      - name: Capture Slint pages and application routing UI
+        run: python3 scripts/android.py application-preview --arch x64 --api '${{ matrix.api }}' --build android-preview-input
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: android-${{ matrix.android }}-ui-screenshots
+          path: target/android-report
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve original download inventory
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/upstream-report
+        with:
+          name: upstream-downloads-applications-${{ matrix.api }}

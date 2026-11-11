@@ -7,8 +7,8 @@ use clash_desktop_protocol::{
     *,
 };
 
-fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
-    if old.rows() == values {
+pub(super) fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
+    if old.with_rows(|rows| rows == values.as_slice()) {
         old
     } else {
         values.into()
@@ -269,7 +269,7 @@ impl App {
                 let source = $value;
                 let value: &str = source.as_ref();
                 if data.$get().as_str() != value {
-                    data.$put(SharedString::from(value));
+                    data.$put(value.into());
                 }
             }};
         }
@@ -277,6 +277,11 @@ impl App {
         set!(get_page, set_page, self.page as i32);
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
+        text!(
+            get_network_alert,
+            set_network_alert,
+            self.network_watch.notice()
+        );
         self.present_protection(data);
         set!(get_working, set_working, self.working);
         set!(get_geo_updating, set_geo_updating, self.geo_updating);
@@ -350,6 +355,17 @@ impl App {
         set!(get_ports_dirty, set_ports_dirty, self.ports_dirty());
         set!(get_retry_core, set_retry_core, self.ready_to_retry());
         set!(get_notice_error, set_notice_error, self.error);
+        set!(
+            get_notice_recover_network,
+            set_notice_recover_network,
+            self.notice_network_recovery
+        );
+        set!(
+            get_notice_critical,
+            set_notice_critical,
+            self.notice_critical
+        );
+        set!(get_diagnosing, set_diagnosing, self.diagnosing);
         set!(
             get_notice_revision,
             set_notice_revision,
@@ -446,6 +462,11 @@ impl App {
             set_subscription_interval,
             &self.subscription_interval_input
         );
+        text!(
+            get_update_interval,
+            set_update_interval,
+            &self.update_interval_input
+        );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
         text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
         text!(get_geo_status, set_geo_status, &self.geo_status);
@@ -533,6 +554,7 @@ impl App {
                 .unwrap_or(&self.updates.status)
         );
         data.set_network_results(strings(data.get_network_results(), &self.test_results));
+        self.present_overview(data);
         if !self.visible {
             models.clear();
             return;
@@ -546,7 +568,13 @@ impl App {
             models.set_groups(Vec::new());
         }
         if self.page == Page::Profiles {
-            let profiles: Vec<_> = self.profiles.iter().collect();
+            let profiles: Vec<_> = self
+                .profiles
+                .iter()
+                .filter(|profile| {
+                    contains_query(&profile.name, &query) || contains_query(&profile.source, &query)
+                })
+                .collect();
             self.pager(data, profiles.len(), PAGE_SIZE);
             reconcile(
                 &models.profiles,
@@ -559,8 +587,9 @@ impl App {
                         name: profile.name.as_str().into(),
                         source: profile.source.as_str().into(),
                         active: self.settings.active_profile.as_deref() == Some(&profile.id),
-                        local: profile.is_default(),
-                        detail: if profile.is_default() {
+                        local: profile.is_local(),
+                        builtin: profile.is_default(),
+                        detail: if profile.is_local() {
                             "本地配置".into()
                         } else {
                             clash_client_core::subscription::summary(
@@ -575,9 +604,11 @@ impl App {
         } else {
             reconcile(&models.profiles, Vec::new());
         }
-        if self.page == Page::Connections {
+        if matches!(self.page, Page::Home | Page::Connections) {
             let (total, rows) = self.connection_rows();
-            self.pager(data, total, PAGE_SIZE);
+            if self.page == Page::Connections {
+                self.pager(data, total, PAGE_SIZE);
+            }
             reconcile(&models.connections, rows);
         } else {
             reconcile(&models.connections, Vec::new());
@@ -634,7 +665,6 @@ impl App {
 
     fn present_rules(&self, data: &UiData, models: &ViewModels, query: &str) {
         let state = &self.rule_state;
-        data.set_shortcuts_open(state.expanded);
         data.set_rule_dirty(state.dirty());
         data.set_rule_selected(state.selected.is_some());
         data.set_rule_custom(state.selected_custom().is_some());
@@ -679,34 +709,38 @@ impl App {
                 &[]
             },
         ));
-        if let Some(doc) = &state.document {
-            data.set_rule_policies(strings(data.get_rule_policies(), &doc.policies));
-            data.set_shortcuts(strings(
-                data.get_shortcuts(),
-                rules_view::SHORTCUT_LABELS
-                    .iter()
-                    .enumerate()
-                    .map(|(index, label)| {
-                        if doc.included[index] {
-                            format!("{label} · 订阅已包含")
-                        } else {
-                            (*label).into()
-                        }
-                    }),
-            ));
-            data.set_shortcut_available(model(
-                data.get_shortcut_available(),
-                (0..5)
-                    .map(|index| !doc.builtin && !doc.included[index])
-                    .collect(),
-            ));
-            data.set_shortcut_values(model(
-                data.get_shortcut_values(),
-                (0..5)
-                    .map(|index| doc.included[index] || state.draft.enabled[index])
-                    .collect(),
-            ));
-        }
+        let document = state.document.as_deref();
+        data.set_rule_policies(strings(
+            data.get_rule_policies(),
+            document.map_or(&[][..], |doc| doc.policies.as_slice()),
+        ));
+        data.set_shortcuts(strings(
+            data.get_shortcuts(),
+            rules_view::SHORTCUT_LABELS
+                .iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    if document.is_some_and(|doc| doc.included[index]) {
+                        format!("{label} · 订阅已包含")
+                    } else {
+                        (*label).into()
+                    }
+                }),
+        ));
+        data.set_shortcut_available(model(
+            data.get_shortcut_available(),
+            (0..rules_view::SHORTCUT_LABELS.len())
+                .map(|index| document.is_some_and(|doc| !doc.builtin && !doc.included[index]))
+                .collect(),
+        ));
+        data.set_shortcut_values(model(
+            data.get_shortcut_values(),
+            (0..rules_view::SHORTCUT_LABELS.len())
+                .map(|index| {
+                    document.is_some_and(|doc| doc.included[index] || state.draft.enabled[index])
+                })
+                .collect(),
+        ));
         let rows: Vec<_> = state
             .rows
             .iter()
@@ -809,7 +843,7 @@ impl App {
             clash_of_rust::flags::label(exit.map_or("", |exit| exit.country.as_str()));
         data.set_site_exit_country(country.into());
         data.set_site_exit_flagged(flag.is_some());
-        data.set_site_exit_flag(flag.unwrap_or_default());
+        data.set_site_exit_flag(flag.unwrap_or_default().into());
         let categories: Vec<_> = report
             .categories
             .into_iter()
@@ -867,7 +901,7 @@ impl App {
                         });
                     ReportItem {
                         country: String::new().into(),
-                        flag: flag.clone().unwrap_or_default(),
+                        flag: flag.clone().unwrap_or_default().into(),
                         flagged: flag.is_some(),
                         id: service.id.as_str().into(),
                         title: service.name.as_str().into(),
@@ -883,11 +917,16 @@ impl App {
                             .into(),
                         source: result
                             .and_then(|result| result.as_ref().ok())
-                            .map_or("".into(), |result| {
-                                format!("{} · {} ms", country, result.millis)
-                            })
+                            .map_or("", |_| country)
                             .into(),
                         tone: tone(status),
+                        delay: result
+                            .and_then(|result| result.as_ref().ok())
+                            .map_or(String::new(), |result| format!("{} ms", result.millis))
+                            .into(),
+                        delay_tone: result
+                            .and_then(|result| result.as_ref().ok())
+                            .map_or(4, |result| proxy_order::response_tone(result.millis)),
                     }
                 })
                 .collect(),
@@ -1053,13 +1092,15 @@ impl App {
                     ReportItem {
                         country: country.into(),
                         flagged: flag.is_some(),
-                        flag: flag.unwrap_or_default(),
+                        flag: flag.unwrap_or_default().into(),
                         id: "".into(),
                         title: title.into(),
                         value: value.into(),
                         detail: detail.into(),
                         source: source.into(),
                         tone,
+                        delay: "".into(),
+                        delay_tone: 4,
                     }
                 })
                 .collect(),
@@ -1072,9 +1113,10 @@ impl App {
             || self.claude.protection_pending.is_some();
         data.set_modal_error("".into());
         data.set_modal_copy("".into());
+        data.set_connection_selected_id("".into());
         data.set_modal_country("".into());
         data.set_modal_flagged(false);
-        data.set_modal_flag(String::new());
+        data.set_modal_flag(String::new().into());
         data.set_modal_description("".into());
         data.set_modal_accept("".into());
         data.set_modal_danger(false);
@@ -1169,6 +1211,7 @@ impl App {
             }
         } else if let Some(id) = &self.connection_detail {
             kind = 10;
+            data.set_connection_selected_id(id.as_str().into());
             data.set_modal_title("连接详情".into());
             let connection = self
                 .snapshot
@@ -1206,7 +1249,7 @@ impl App {
                         let (country, flag) = clash_of_rust::flags::label(&result.country);
                         data.set_modal_country(country.into());
                         data.set_modal_flagged(flag.is_some());
-                        data.set_modal_flag(flag.unwrap_or_default());
+                        data.set_modal_flag(flag.unwrap_or_default().into());
                         format!(
                             "{}\n{} ms\n\n{}",
                             result.summary, result.millis, result.detail

@@ -3,13 +3,37 @@
 //! https://github.com/slint-ui/slint/pull/13568. The Slint version is pinned.
 use slint::private_unstable_api::re_exports::{LogicalRect, WindowInner};
 
+#[derive(Default)]
+pub(super) struct RepaintState {
+    size: Option<(u32, u32, u32)>,
+}
+
+impl RepaintState {
+    pub(super) fn before_draw(&mut self, window: &slint::Window) {
+        let size = window.size();
+        let scale = window.scale_factor();
+        let next = (size.width, size.height, scale.to_bits());
+        if size.width > 0 && size.height > 0 && self.size != Some(next) {
+            self.size = Some(next);
+            let logical = size.to_logical(scale);
+            mark_size_dirty(window, logical.width, logical.height);
+        }
+        #[cfg(windows)]
+        windows::before_draw(window);
+    }
+}
+
+fn mark_size_dirty(window: &slint::Window, width: f32, height: f32) {
+    let region = LogicalRect::new(Default::default(), [width, height].into());
+    WindowInner::from_pub(window)
+        .window_adapter()
+        .renderer()
+        .mark_dirty_region(region.into());
+}
+
 pub(super) fn invalidate_size(window: &slint::Window, width: f32, height: f32) {
     if width > 0.0 && height > 0.0 {
-        let region = LogicalRect::new(Default::default(), [width, height].into());
-        WindowInner::from_pub(window)
-            .window_adapter()
-            .renderer()
-            .mark_dirty_region(region.into());
+        mark_size_dirty(window, width, height);
         window.request_redraw();
     }
 }
@@ -17,11 +41,6 @@ pub(super) fn invalidate(window: &slint::Window) {
     let size = window.size().to_logical(window.scale_factor());
     invalidate_size(window, size.width, size.height);
 }
-pub(super) fn before_draw(_window: &slint::Window) {
-    #[cfg(windows)]
-    windows::before_draw(_window);
-}
-
 #[cfg(windows)]
 mod windows {
     use super::*;

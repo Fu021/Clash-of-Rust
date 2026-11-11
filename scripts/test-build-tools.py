@@ -5,6 +5,7 @@ import logging
 import re
 from pathlib import Path
 import socket
+import shlex
 import tempfile
 import threading
 import tomllib
@@ -16,13 +17,20 @@ from unittest.mock import MagicMock, patch
 import build_support as build
 import android as android_build
 import windows_ci as windows
+import macos_ci as macos
 import workflow_storage as storage
 import action_cache as local_cache
 import upstream_cache
 import cache_shards
 import linux_apt
 import linux_ci
+import prepared_vm
+import prepared_vm_environment
+import tun_dns_fixture
 import build_inputs
+import ci_test_policy
+import proxy_benchmark
+import android_previews
 import os
 import copy
 import importlib.util
@@ -32,7 +40,7 @@ import urllib.error
 import urllib.parse
 import zipfile
 import tarfile
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'scripts/publish-release.py')
 release = importlib.util.module_from_spec(_spec)
@@ -47,9 +55,1262 @@ _release_package_spec = importlib.util.spec_from_file_location(
 release_package = importlib.util.module_from_spec(_release_package_spec)
 _release_package_spec.loader.exec_module(release_package)
 
+_cli_update_spec = importlib.util.spec_from_file_location(
+    'cli_update', build.ROOT/'scripts/test-cli-update.py')
+cli_update = importlib.util.module_from_spec(_cli_update_spec)
+_cli_update_spec.loader.exec_module(cli_update)
+
+_preview_spec = importlib.util.spec_from_file_location(
+    'preview_slint', build.ROOT/'scripts/preview-slint.py')
+preview_slint = importlib.util.module_from_spec(_preview_spec)
+_preview_spec.loader.exec_module(preview_slint)
+
+_linux_tun_spec = importlib.util.spec_from_file_location(
+    'linux_tun_test', build.ROOT/'scripts/test-linux-tun.py')
+linux_tun_test = importlib.util.module_from_spec(_linux_tun_spec)
+_linux_tun_spec.loader.exec_module(linux_tun_test)
+
+
+class TunDnsFixtureTests(unittest.TestCase):
+    def query(self, name, kind):
+        labels = b''.join(bytes([len(label)]) + label.encode('ascii') for label in name.split('.'))
+        return struct.pack('!HHHHHH', 1, 0x0100, 1, 0, 0, 0) + labels + b'\0' + struct.pack('!HH', kind, 1)
+
+    def test_update_addresses_stay_outside_tun_traffic_targets(self):
+        import ipaddress
+        for kind, offset in ((1, 0), (28, 1)):
+            with self.subTest(kind=kind):
+                query = self.query('updates.fixture.test', kind)
+                answer = tun_dns_fixture.dns_response(query, False)
+                length = 16 if kind == 28 else 4
+                self.assertEqual(str(ipaddress.ip_address(answer[-length:])),
+                                 tun_dns_fixture.UPDATES[offset])
+                query = self.query('web.fixture.test', kind)
+                answer = tun_dns_fixture.dns_response(query, False)
+                self.assertEqual(str(ipaddress.ip_address(answer[-length:])),
+                                 tun_dns_fixture.WEBSITE[offset])
+                if kind == 1:
+                    self.assertNotIn(ipaddress.ip_address(tun_dns_fixture.UPDATES[offset]),
+                                     ipaddress.ip_network('203.0.113.0/24'))
+
+    def test_update_lookup_is_not_allowed_through_private_bootstrap(self):
+        with patch.dict(tun_dns_fixture.METRICS, tun_dns_fixture.METRICS.copy()):
+            for kind in (1, 28):
+                answer = tun_dns_fixture.dns_response(self.query('updates.fixture.test', kind), True)
+                self.assertEqual(struct.unpack_from('!H', answer, 6)[0], 0)
+
+    def test_managed_direct_probe_delegates_dns_and_preserves_http_target(self):
+        for bound_type, bound in ((1, b'\x7f\x00\x00\x01'),
+                                  (4, b'\0'*16),
+                                  (3, b'\x09localhost')):
+            with self.subTest(bound_type=bound_type):
+                connection = MagicMock()
+                connection.recv.side_effect = [
+                    b'\x05', b'\x00', bytes([5, 0, 0, bound_type]),
+                    *([bound[:1], bound[1:]+b'\0\0'] if bound_type == 3 else [bound+b'\0\0']),
+                ]
+                connection.makefile.return_value = io.BytesIO(
+                    b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok')
+                with patch.object(linux_tun_test.socket, 'create_connection') as connect:
+                    connect.return_value.__enter__.return_value = connection
+                    self.assertEqual(linux_tun_test.socks_http(
+                        '127.0.0.1', 7898, 'http://updates.fixture.test:8080/subscription.yaml?test=1'), b'ok')
+                self.assertEqual(connection.sendall.call_args_list[0].args[0], b'\x05\x01\x00')
+                self.assertEqual(connection.sendall.call_args_list[1].args[0],
+                                 b'\x05\x01\x00\x03\x14updates.fixture.test\x1f\x90')
+                self.assertEqual(connection.sendall.call_args_list[2].args[0],
+                                 b'GET /subscription.yaml?test=1 HTTP/1.1\r\n'
+                                 b'Host: updates.fixture.test:8080\r\nConnection: close\r\n\r\n')
+
+    def test_managed_direct_probe_rejects_refused_and_truncated_tunnels(self):
+        for fragments, expected in (([b'\x05\xff'], RuntimeError),
+                                    ([b'\x05\x00', b'\x05\x05\x00\x01'], RuntimeError),
+                                    ([b'\x05\x00', b''], EOFError)):
+            with self.subTest(fragments=fragments):
+                connection = MagicMock()
+                connection.recv.side_effect = fragments
+                with patch.object(linux_tun_test.socket, 'create_connection') as connect:
+                    connect.return_value.__enter__.return_value = connection
+                    with self.assertRaises(expected):
+                        linux_tun_test.socks_http('127.0.0.1', 7898, 'http://updates.fixture.test/')
+                connection.makefile.assert_not_called()
+
+
+class PreparedVmTests(unittest.TestCase):
+    def fixture(self):
+        return json.loads((build.ROOT/'docs/workflows/fixtures/prepared-vm-v1.json').read_text())
+
+    def health(self):
+        return json.loads((build.ROOT/'docs/workflows/fixtures/prepared-vm-health-v1.json').read_text())
+
+    def manifest(self, payload=b'prepared-system-disk'):
+        record = self.fixture()['base_request']
+        record['image']['size'] = len(payload)
+        record['image']['sha256'] = hashlib.sha256(payload).hexdigest()
+        return record
+
+    def receipt(self, record):
+        return {**copy.deepcopy(record), 'status': 'ready', 'object_id': 'object_one',
+                'size': record['image']['size'], 'sha256': record['image']['sha256'],
+                'created_at': 1794143576.125}
+
+    @contextmanager
+    def replies(self, responses):
+        calls = []
+
+        @contextmanager
+        def response(config, path, **kwargs):
+            calls.append((config, path, kwargs))
+            status, body = responses.pop(0)
+            payload = body if isinstance(body, bytes) else json.dumps(body).encode()
+            stream = io.BytesIO(payload)
+            reply = MagicMock(status=status)
+            reply.read = stream.read
+            reply.read1 = stream.read1
+            reply.getheader.side_effect = lambda name: str(len(payload)) if name == 'Content-Length' else None
+            yield reply
+
+        with patch.object(local_cache, 'response', side_effect=response):
+            yield calls
+
+    def test_shared_contract_vectors(self):
+        fixture = self.fixture()
+        self.assertEqual(fixture['revision'], '2026-11-08-x64')
+        self.assertEqual(len(fixture['cases']), 46)
+        for case in fixture['cases']:
+            with self.subTest(case=case['id']):
+                record = copy.deepcopy(fixture['base_request'])
+                for operation in case['operations']:
+                    container = record
+                    for component in operation['path'][:-1]:
+                        container = container[component]
+                    name = operation['path'][-1]
+                    if operation['op'] == 'set':
+                        container[name] = copy.deepcopy(operation['value'])
+                    else:
+                        del container[name]
+                payload = json.dumps(record)
+                wire = case.get('wire', {})
+                if name := wire.get('duplicate_top_key'):
+                    payload = '{' + json.dumps(name) + ':' + json.dumps(record[name]) + ',' + payload[1:]
+                payload += wire.get('append', '')
+                if case['expected']['valid']:
+                    value = prepared_vm.validate(prepared_vm.decode(payload.encode()))
+                    self.assertEqual(value['env_key'], case['expected']['env_key'])
+                    self.assertEqual(value['environment']['packages_sha256'],
+                                     case['expected']['packages_sha256'])
+                else:
+                    with self.assertRaises(prepared_vm.ProtocolError) as failure:
+                        prepared_vm.validate(prepared_vm.decode(payload.encode()))
+                    self.assertEqual(failure.exception.code, case['expected']['error'])
+
+    def test_parser_rejects_nested_duplicates_nonfinite_invalid_utf8_and_oversize(self):
+        for payload in (b'{"nested":{"key":1,"key":2}}', b'{"key":NaN}', b'{"key":Infinity}',
+                        b'\xff', b' ' * (prepared_vm.MAX_JSON + 1)):
+            with self.subTest(payload=payload[:30]), self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm.decode(payload)
+
+    def test_disabled_capability_never_probes_a_vm_endpoint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                        Path(temporary)/'report.json')
+            with self.replies([(200, {'capabilities': []})]) as calls:
+                self.assertFalse(client.available())
+            self.assertEqual([call[1] for call in calls], ['/health'])
+            self.assertNotIn('private', (Path(temporary)/'report.json').read_text())
+
+    def test_capability_requires_exact_supported_limits(self):
+        limits = self.health()['vm_limits']
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                        Path(temporary)/'report.json')
+            invalid = [{**limits, name: value} for name, value in (
+                ('group', 'upstream/files'), ('architectures', ['arm64', 'arm64']),
+                ('architectures', ['arm64', 1]), ('architectures', 'arm64'),
+                ('max_image_bytes', True), ('max_image_bytes', 0),
+                ('max_image_bytes', prepared_vm.MAX_IMAGE + 1),
+                ('max_virtual_bytes', 24 * 1024**3 - 1),
+                ('max_virtual_bytes', prepared_vm.MAX_VIRTUAL + 1),
+                ('range_supported', True), ('range_supported', 0),
+                ('resume_supported', True), ('resume_supported', 0))]
+            invalid.extend({name: value for name, value in limits.items() if name != missing}
+                           for missing in ('group', 'architectures', 'max_image_bytes',
+                                           'max_virtual_bytes', 'range_supported', 'resume_supported'))
+            for advertised, expected in [(limits, True), *((value, False) for value in invalid)]:
+                with self.subTest(limits=advertised), self.replies([
+                    (200, {**self.health(), 'vm_limits': advertised, 'prepared_vm': advertised})
+                ]):
+                    self.assertEqual(client.available(), expected)
+                    if not expected:
+                        self.assertEqual(client.limits, {})
+
+    def test_legacy_health_names_do_not_enable_vm_uploads(self):
+        health = self.health()
+        limits = health.pop('vm_limits')
+        for advertised in ({**health, 'prepared_vm': limits},
+                           {**health, 'vm_limits': {
+                               name: value for name, value in limits.items() if name != 'range_supported'
+                           } | {'range': False}}):
+            with tempfile.TemporaryDirectory() as temporary:
+                client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                            Path(temporary)/'report.json')
+                with self.subTest(health=advertised), self.replies([(200, advertised)]) as calls:
+                    self.assertFalse(client.available())
+                self.assertEqual([call[1] for call in calls], ['/health'])
+
+    def test_lost_capability_clears_previous_limits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                        Path(temporary)/'report.json')
+            with self.replies([(200, self.health()), (200, {'capabilities': []})]):
+                self.assertTrue(client.available())
+                self.assertFalse(client.available())
+            self.assertEqual(client.limits, {})
+
+    def test_conflicting_health_aliases_never_enable_vm_operations(self):
+        for key, value in (('max_environments', True), ('architectures', ['arm64']),
+                           ('range', True), ('resume', True)):
+            advertised = self.health()
+            advertised['prepared_vm'][key] = value
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
+                client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
+                                            Path(temporary)/'report.json')
+                with self.replies([(200, advertised)]) as calls:
+                    self.assertFalse(client.available())
+                self.assertEqual([call[1] for call in calls], ['/health'])
+                self.assertEqual(client.limits, {})
+
+    def test_ready_receipt_checks_identity_copies_and_fractional_times(self):
+        record = self.manifest()
+        valid = self.receipt(record)
+        valid.update(upload_id='upload_one', terminal_at=1794143576.25,
+                     receipt_expires_at=1794748376.25)
+        self.assertEqual(prepared_vm.receipt(valid, record['descriptor'])['upload_id'], 'upload_one')
+        for name, value in (('size', True), ('size', record['image']['size'] + 1),
+                            ('sha256', 'f' * 64), ('created_at', '1794143576'),
+                            ('terminal_at', True), ('receipt_expires_at', 1)):
+            with self.subTest(name=name), self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm.receipt({**valid, name: value}, record['descriptor'])
+        for value in (True, None, 0, -1, '123', float('nan'), float('inf')):
+            with self.subTest(timestamp=value), self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm.timestamp(value)
+
+    def test_capability_selects_only_an_advertised_native_architecture(self):
+        limits = {**self.health()['vm_limits'], 'architectures': ['arm64', 'x64']}
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            client.config = {'url': 'http://127.0.0.1', 'token': 'private'}
+            for arch in prepared_vm.ARCHITECTURES:
+                for advertised, expected in ((limits, True),
+                                             ({**limits, 'architectures': ['arm64']}, arch == 'arm64')):
+                    with self.subTest(arch=arch, limits=advertised), self.replies([
+                        (200, {**self.health(), 'vm_limits': advertised, 'prepared_vm': advertised})
+                    ]) as calls:
+                        self.assertEqual(client.available(arch), expected)
+                    self.assertEqual([call[1] for call in calls], ['/health'])
+
+    def test_apt_sources_use_native_official_suites(self):
+        for arch, native, base in (
+                ('arm64', 'arm64', 'https://ports.ubuntu.com/ubuntu-ports'),
+                ('x64', 'amd64', 'https://archive.ubuntu.com/ubuntu')):
+            with self.subTest(arch=arch):
+                sources = prepared_vm_environment.sources(arch).splitlines()
+                self.assertEqual(len(sources), 3)
+                for source, suite in zip(sources, ('focal', 'focal-updates', 'focal-security')):
+                    origin = 'https://security.ubuntu.com/ubuntu' if arch == 'x64' and suite == 'focal-security' else base
+                    self.assertTrue(source.startswith('deb [arch=' + native + ' signed-by='))
+                    self.assertIn(f'] {origin} {suite} main universe restricted multiverse', source)
+
+    def test_vm_ssh_retries_transient_timeouts_before_the_boot_deadline(self):
+        clock = [0.0]
+        attempts = []
+        process = MagicMock()
+        process.poll.return_value = None
+
+        def execute(command, **kwargs):
+            attempts.append(kwargs['timeout'])
+            clock[0] += 1
+            if len(attempts) == 1:
+                raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+            return subprocess.CompletedProcess(command, 1 if len(attempts) == 2 else 0)
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with patch.object(linux_ci.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(linux_ci.time, 'sleep', side_effect=sleep), \
+                patch.object(linux_ci.subprocess, 'run', side_effect=execute):
+            linux_ci.wait_vm_ssh(process, ['ssh', 'guest'], timeout=30)
+        self.assertEqual(attempts, [15, 15, 15])
+
+    def test_vm_ssh_never_outlives_the_total_deadline_or_a_dead_guest(self):
+        clock = [0.0]
+        process = MagicMock()
+        process.poll.return_value = None
+
+        def execute(command, **kwargs):
+            clock[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with patch.object(linux_ci.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(linux_ci.time, 'sleep', side_effect=sleep), \
+                patch.object(linux_ci.subprocess, 'run', side_effect=execute) as commands:
+            with self.assertRaisesRegex(TimeoutError, 'SSH-ready'):
+                linux_ci.wait_vm_ssh(process, ['ssh', 'guest'], timeout=18)
+            self.assertEqual(clock[0], 18)
+            self.assertEqual(commands.call_count, 1)
+            process.poll.return_value = 1
+            with self.assertRaisesRegex(RuntimeError, 'exited during boot'):
+                linux_ci.wait_vm_ssh(process, ['ssh', 'guest'])
+            self.assertEqual(commands.call_count, 1)
+
+    def test_guest_report_preserves_only_complete_generated_archives(self):
+        for result, body, state in ((0, b'', 'not_generated'),
+                                    (0, b'complete report', 'saved'),
+                                    (1, b'partial report', 'transfer_failed'),
+                                    ('timeout', b'partial report', 'transfer_failed')):
+            with self.subTest(result=result, state=state), tempfile.TemporaryDirectory() as temporary:
+                report = Path(temporary)
+                guest = object.__new__(linux_ci.VmGuest)
+                guest.ssh = ['ssh', 'guest']
+
+                def transfer(command, **kwargs):
+                    kwargs['stdout'].write(body)
+                    if result == 'timeout':
+                        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+                    return subprocess.CompletedProcess(command, result, stderr=b'fixture failure')
+
+                with patch.object(linux_ci, 'REPORT', report), \
+                        patch.object(linux_ci, 'guest_receipts') as receipts, \
+                        patch.object(linux_ci.subprocess, 'run', side_effect=transfer):
+                    guest.preserve()
+                self.assertEqual(json.loads((report/'focal-guest-report-status.json').read_text()),
+                                 {'schema': 1, 'state': state})
+                archive = report/'focal-guest-report.tar.gz'
+                self.assertEqual(archive.exists(), state == 'saved')
+                if state == 'saved':
+                    self.assertEqual(archive.read_bytes(), body)
+                receipts.assert_called_once_with(guest.ssh)
+                self.assertFalse(list(report.glob('guest-report-*')))
+
+    def test_private_restore_is_atomic_and_preserves_existing_file_on_bad_bytes(self):
+        record = self.manifest()
+        for body, result in ((b'prepared-system-disk', True), (b'damaged-system-disk!', False)):
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary)/'image.qcow2'
+                target.write_bytes(b'existing')
+                client = prepared_vm.Client({}, Path(temporary)/'report.json')
+                replies = [(200, self.receipt(record)), (200, body)]
+                if not result:
+                    replies.append((200, body))
+                with self.replies(replies) as calls:
+                    restored = client.restore(record['descriptor'], target, lambda path, size: None)
+                self.assertEqual(restored is not None, result)
+                self.assertEqual(target.read_bytes(), body if result else b'existing')
+                self.assertTrue(all('Range' not in call[2].get('headers', {}) for call in calls))
+                self.assertFalse(list(Path(temporary).glob('vm-download-*')))
+
+    def test_http_failure_bodies_are_not_exported_and_404_is_a_miss(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(404, b'not-json private-service-address')]):
+                self.assertIsNone(client.lookup(self.manifest()['descriptor']))
+            with self.replies([(507, {'error_code': 'capacity_unavailable', 'detail': 'private'})]):
+                with self.assertRaises(prepared_vm.ProtocolError) as failure:
+                    client.request('/v1/vm-images/uploads', 'POST', self.manifest())
+            self.assertEqual(failure.exception.status, 507)
+            self.assertEqual(str(failure.exception), 'capacity_unavailable')
+
+    def test_upload_streams_a_file_and_recovers_a_lost_content_response(self):
+        record = self.manifest()
+        for lost in (False, True):
+            with self.subTest(lost=lost), tempfile.TemporaryDirectory() as temporary:
+                image = Path(temporary)/'image.qcow2'
+                image.write_bytes(b'prepared-system-disk')
+                client = prepared_vm.Client({}, Path(temporary)/'report.json')
+                reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                               'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800.125}
+                responses = [(201, reservation),
+                             (502, b'private error') if lost else (200, self.receipt(record))]
+                if lost:
+                    responses.append((200, self.receipt(record)))
+                with self.replies(responses) as calls:
+                    self.assertIsNotNone(client.upload(record, image))
+                self.assertEqual(calls[1][2]['headers']['Content-Length'], str(image.stat().st_size))
+                self.assertIsInstance(calls[1][2]['file'], prepared_vm.DeadlineReader)
+                self.assertEqual(calls[1][1], '/v1/vm-images/uploads/upload_one/content')
+                if lost:
+                    self.assertEqual(calls[2][1], '/v1/vm-images/uploads/upload_one')
+                self.assertNotIn('private', (Path(temporary)/'report.json').read_text())
+
+    def test_existing_immutable_image_keeps_original_producer_and_different_file_identity(self):
+        record = self.manifest()
+        existing = self.receipt(record)
+        existing['producer']['run_id'] = 9
+        existing['image']['sha256'] = 'f' * 64
+        existing['sha256'] = 'f' * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(200, existing)]) as calls:
+                result = client.upload(record, image)
+            self.assertEqual(result['producer']['run_id'], 9)
+            self.assertEqual(result['image']['sha256'], 'f' * 64)
+            self.assertEqual(len(calls), 1)
+
+    def test_existing_environment_cannot_change_sources_under_the_same_key(self):
+        record = self.manifest()
+        existing = self.receipt(record)
+        existing['environment']['sources'][0]['url'] = 'https://cloud-images.ubuntu.com/synthetic-alias.img'
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(200, existing)]):
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(client.events[-1]['result'], 'identity_conflict')
+
+    def test_expired_upload_receipt_recovers_ready_image_by_exact_environment(self):
+        record = self.manifest()
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                           'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800.25}
+            with self.replies([(201, reservation), (502, {}), (404, {'error_code': 'upload_not_found'}),
+                               (200, self.receipt(record))]) as calls:
+                saved = client.upload(record, image)
+            self.assertEqual(saved['env_key'], record['env_key'])
+            self.assertEqual(calls[-1][1], '/v1/vm-images?key=' + record['env_key'])
+            self.assertEqual(client.events[-1]['result'], 'ready_after_lookup')
+
+    def test_interrupted_upload_keeps_terminal_error_without_retransmitting(self):
+        record = self.manifest()
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                           'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800}
+            failed = {**reservation, 'status': 'failed', 'error_code': 'upload_interrupted'}
+            with self.replies([(201, reservation), (502, {}), (200, failed)]) as calls:
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(client.events[-1]['result'], 'upload_interrupted')
+            self.assertEqual(len(calls), 3)
+
+    def test_busy_upload_is_pending_and_does_not_send_content(self):
+        record = self.manifest()
+        busy = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
+                'status': 'busy', 'upload_id': 'upload_one'}
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(202, busy)]) as calls:
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(client.events[-1]['result'], 'pending')
+
+    def test_expired_upload_and_capacity_failure_never_send_file_or_delete(self):
+        record = self.manifest()
+        for status, value in ((507, {'error_code': 'capacity_unavailable'}),
+                              (201, {'schema': 1, 'group': prepared_vm.GROUP,
+                                     'env_key': record['env_key'], 'status': 'uploading',
+                                     'upload_id': 'upload_one', 'expires_at': 1})):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                image = Path(temporary)/'image.qcow2'
+                image.write_bytes(b'prepared-system-disk')
+                client = prepared_vm.Client({}, Path(temporary)/'report.json')
+                responses = [(status, value)]
+                if status == 201:
+                    responses.extend([(404, {}), (404, {})])
+                with self.replies(responses) as calls:
+                    self.assertIsNone(client.upload(record, image))
+                self.assertTrue(all(call[2].get('stream') is None for call in calls))
+                self.assertTrue(all(call[2].get('method', 'GET') != 'DELETE' for call in calls))
+
+    def test_stream_reader_enforces_wall_clock(self):
+        with self.assertRaises(local_cache.RestoreBudgetExceeded):
+            prepared_vm.DeadlineReader(io.BytesIO(b'file'), {'restore_deadline': 0}).read(4)
+
+    def test_metadata_reader_rechecks_wall_clock_between_chunks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            with self.replies([(200, {'status': 'ready'})]), \
+                    patch.object(local_cache, 'restore_remaining',
+                                 side_effect=[1, local_cache.RestoreBudgetExceeded()]):
+                with self.assertRaises(local_cache.RestoreBudgetExceeded):
+                    client.request('/health')
+
+    def test_limits_reject_oversize_virtual_disk_before_transfer(self):
+        record = self.manifest()
+        record['image']['virtual_size'] = 32 * 1024**3
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary)/'image.qcow2'
+            image.write_bytes(b'prepared-system-disk')
+            client = prepared_vm.Client({}, Path(temporary)/'report.json')
+            client.limits = {'max_image_bytes': prepared_vm.MAX_IMAGE,
+                             'max_virtual_bytes': 24 * 1024**3}
+            with self.replies([(200, self.receipt(record))]) as calls:
+                self.assertIsNone(client.restore(record['descriptor'], image, MagicMock()))
+            self.assertEqual(len(calls), 1)
+            with self.replies([]) as calls:
+                self.assertIsNone(client.upload(record, image))
+            self.assertEqual(calls, [])
+
+    def test_environment_resolution_is_opt_in_and_requires_linux_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {}, clear=True), \
+                patch.object(prepared_vm_environment, 'run') as execute:
+            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
+            execute.assert_not_called()
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+                'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
+                patch.object(prepared_vm, 'client', side_effect=AssertionError('No private access during freeze')), \
+                patch.object(prepared_vm_environment, 'run') as execute:
+            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
+            execute.assert_not_called()
+
+    def test_environment_key_ignores_application_and_run_identity(self):
+        descriptor = self.manifest()['descriptor']
+        expected = prepared_vm.identity(descriptor)
+        with patch.dict(os.environ, {'GITHUB_RUN_ID': '999', 'GITHUB_SHA': 'f' * 40}):
+            self.assertEqual(prepared_vm.identity(descriptor), expected)
+        changed = {**descriptor, 'environment_lock_sha256': 'f' * 64}
+        self.assertNotEqual(prepared_vm.identity(changed), expected)
+
+    @contextmanager
+    def vm_context(self, temporary, arch='arm64'):
+        record = self.manifest()
+        record['descriptor']['arch'] = arch
+        for package in record['environment']['packages']:
+            if package['architecture'] != 'all':
+                package['architecture'] = prepared_vm.ARCHITECTURES[arch]
+        record['environment']['packages_sha256'] = prepared_vm.checksum(record['environment']['packages'])
+        record['env_key'] = prepared_vm.identity(record['descriptor'])
+        frozen = {'descriptor': record['descriptor'],
+                  'lock': {'packages': record['environment']['packages'], 'downloads': {}}}
+        linux = {'architectures': {arch: {'cloud': {
+            'url': record['environment']['sources'][0]['url'], 'sha256': 'a' * 64},
+            'python': {'url': record['environment']['sources'][1]['url'], 'sha256': 'b' * 64}}}}
+        client = MagicMock()
+        client.available.return_value = True
+        client.restore.return_value = self.receipt(record)
+        guest = MagicMock(kernel='5.4.0-216-generic',
+                          architecture='aarch64' if arch == 'arm64' else 'x86_64',
+                          kvm=arch == 'x64', boot_seconds=0.1)
+        guest.inspect.return_value = record['environment']
+        with patch.dict(os.environ, {'RUNNER_TEMP': temporary}, clear=False), \
+                patch.object(linux_ci, 'require_actions'), \
+                patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
+                patch.object(linux_ci, 'inputs', return_value=linux), \
+                patch.object(linux_ci, 'host_arch', return_value=arch), \
+                patch.object(build_inputs, 'manifest', return_value={'prepared_vms': {
+                    name: frozen if name == arch else {'schema': 1, 'status': 'disabled'}
+                    for name in prepared_vm.ARCHITECTURES}}), \
+                patch.object(prepared_vm, 'client', return_value=client), \
+                patch.object(prepared_vm_environment, 'verify_frozen', return_value=True), \
+                patch.object(linux_ci, 'vm_source_archive', return_value=Path(temporary)/'source.tar.gz'), \
+                patch.object(linux_ci, 'VmGuest', return_value=guest), \
+                patch.object(linux_ci, 'download') as download, \
+                patch.object(linux_ci, 'prepare_vm_guest') as prepare, \
+                patch.object(linux_ci, 'verify_vm_package') as application:
+            yield client, guest, download, prepare, application
+
+    def test_warm_vm_skips_all_cold_downloads_but_runs_application_tests(self):
+        for arch in prepared_vm.ARCHITECTURES:
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temporary, \
+                    self.vm_context(temporary, arch) as context:
+                client, guest, download, prepare, application = context
+                linux_ci.vm_test(123)
+                client.available.assert_called_once_with(arch)
+                download.assert_not_called()
+                prepare.assert_not_called()
+                client.upload.assert_not_called()
+                self.assertEqual(application.call_args.kwargs['prepared'], True)
+                self.assertEqual(application.call_args.args[2], 123)
+                guest.preserve.assert_called_once()
+                guest.close.assert_called_once()
+
+    def test_missing_service_capability_keeps_frozen_inputs_on_the_cold_path(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            client.available.return_value = False
+            linux_ci.vm_test(123)
+            client.restore.assert_not_called()
+            client.upload.assert_not_called()
+            self.assertEqual(download.call_count, 2)
+            prepare.assert_called_once()
+            self.assertIsNone(prepare.call_args.args[2])
+            self.assertFalse(application.call_args.kwargs['prepared'])
+
+    def test_application_failure_on_warm_vm_is_not_hidden_by_cold_retry(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            application.side_effect = subprocess.CalledProcessError(1, ['application-test'])
+            with self.assertRaises(subprocess.CalledProcessError):
+                linux_ci.vm_test(123)
+            download.assert_not_called()
+            prepare.assert_not_called()
+            guest.close.assert_called_once()
+            report = json.loads((Path(temporary)/'report/focal-vm.json').read_text())
+            self.assertFalse(report['success'])
+            self.assertEqual(report['cache_path'], 'warm')
+
+    def test_invalid_warm_environment_falls_back_without_republishing_same_identity(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            guest.inspect.side_effect = prepared_vm.ProtocolError('environment_mismatch')
+            source = Path(temporary)/'original'
+            source.write_bytes(b'original')
+            download.return_value = source
+            linux_ci.vm_test(123)
+            self.assertEqual(download.call_count, 2)
+            self.assertEqual(prepare.call_count, 1)
+            self.assertIsNone(prepare.call_args.args[2])
+            self.assertFalse(application.call_args.kwargs['prepared'])
+            events = [call.args[1] for call in client.event.call_args_list]
+            self.assertIn('cold_fallback', events)
+            client.upload.assert_not_called()
+
+    def test_cold_preparation_failure_keeps_failure_report(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            client.restore.return_value = None
+            client.available.return_value = False
+            prepare.side_effect = RuntimeError('isolated preparation failure')
+            with self.assertRaises(RuntimeError):
+                linux_ci.vm_test(123)
+            application.assert_not_called()
+            client.upload.assert_not_called()
+            report = json.loads((Path(temporary)/'report/focal-vm.json').read_text())
+            self.assertFalse(report['success'])
+            self.assertIn('upload_tail_wait', report['timings_seconds'])
+
+    def test_restored_sources_must_cover_the_exact_frozen_downloads(self):
+        record = self.manifest()
+        download = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/test.deb',
+                    'size': 100, 'sha256': 'c' * 64}
+        frozen = {'descriptor': record['descriptor'], 'lock': {'downloads': {'test.deb': download}}}
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_sources(record['environment'], frozen)
+        record['environment']['sources'].append(download)
+        prepared_vm_environment.check_sources(record['environment'], frozen)
+        record['environment']['sources'][-1] = {**download, 'size': 101}
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_sources(record['environment'], frozen)
+
+    def test_new_template_is_shut_down_and_second_boot_checked_before_upload(self):
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, guest, download, prepare, application = context
+            client.restore.return_value = None
+            source = Path(temporary)/'original'
+            source.write_bytes(b'original')
+            download.return_value = source
+            guest.disk = source
+
+            def qemu(command, **kwargs):
+                if command[:2] == ['qemu-img', 'convert']:
+                    self.assertTrue(guest.shutdown.called)
+                    Path(command[-1]).write_bytes(b'prepared-system-disk')
+
+            with patch.object(linux_ci, 'run', side_effect=qemu), \
+                    patch.object(linux_ci, 'verify_vm_image'), \
+                    patch.object(prepared_vm, 'producer', return_value=self.manifest()['producer']):
+                linux_ci.vm_test(123)
+            guest.shutdown.assert_called_once()
+            self.assertEqual(guest.inspect.call_count, 2)
+            client.upload.assert_called_once()
+            uploaded = client.upload.call_args.args[0]
+            self.assertEqual(uploaded['image']['sha256'], hashlib.sha256(b'prepared-system-disk').hexdigest())
+            prepared_vm.validate(uploaded)
+            self.assertTrue(application.call_args.kwargs['prepared'])
+
+    def test_signed_apt_resolution_freezes_versions_without_touching_host_apt(self):
+        for arch in prepared_vm.ARCHITECTURES:
+            with self.subTest(arch=arch):
+                self.check_signed_apt_resolution(arch)
+
+    def check_signed_apt_resolution(self, arch):
+        changes = {'version': '1', 'index': 0}
+        native = prepared_vm.ARCHITECTURES[arch]
+        base = ('https://ports.ubuntu.com/ubuntu-ports' if arch == 'arm64'
+                else 'https://archive.ubuntu.com/ubuntu')
+
+        def execute(command, **kwargs):
+            apt = Path(kwargs['env']['APT_CONFIG']).parent
+            self.assertIn('APT::Architecture=' + native, command)
+            if command[-1] == 'update':
+                changes['index'] += 1
+                for suite in ('focal', 'focal-updates', 'focal-security'):
+                    (apt/'lists'/('ports.ubuntu.com_' + suite + '_InRelease')).write_text(
+                        'isolated signed-index stand-in ' + str(changes['index']))
+                self.assertNotIn('/etc/apt/sources.list', command)
+                self.assertTrue((apt/'isolated.conf').read_text().startswith('Dir::Etc::parts "-"'))
+                return subprocess.CompletedProcess(command, 0)
+            packages = command[command.index('--no-install-recommends') + 1:]
+            lines = []
+            for package in packages:
+                filename = package + '_' + changes['version'] + '_' + native + '.deb'
+                checksum = hashlib.sha256(filename.encode()).hexdigest()
+                lines.append(f"'{base}/pool/{filename}' {filename} 10 SHA256:{checksum}")
+            return subprocess.CompletedProcess(command, 0, '\n'.join(lines))
+
+        linux = {'architectures': {arch: {'cloud': {'sha256': 'a' * 64},
+                                            'python': {'sha256': 'b' * 64}}}}
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+                'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
+                patch.object(prepared_vm, 'client', side_effect=AssertionError('No private access during freeze')), \
+                patch.object(prepared_vm_environment, 'run', side_effect=execute):
+            root = Path(temporary)
+            first = prepared_vm_environment.freeze(root/'first', linux, arch)
+            second = prepared_vm_environment.freeze(root/'second', linux, arch)
+            self.assertEqual(first['status'], 'frozen')
+            self.assertEqual(first['descriptor'], second['descriptor'])
+            self.assertNotEqual(first['files'], second['files'])
+            self.assertTrue(prepared_vm_environment.verify_frozen(root/'first', first, linux))
+            for change in ('invalid_name', 'missing_download'):
+                malformed = copy.deepcopy(first)
+                if change == 'invalid_name':
+                    malformed['lock']['packages'][0]['name'] = '--option'
+                else:
+                    malformed['lock']['downloads'].clear()
+                malformed['descriptor']['environment_lock_sha256'] = prepared_vm.checksum(malformed['lock'])
+                with self.subTest(change=change), self.assertRaises(prepared_vm.ProtocolError):
+                    prepared_vm_environment.verify_frozen(root/'first', malformed, linux)
+            changes['version'] = '2'
+            changed = prepared_vm_environment.freeze(root/'third', linux, arch)
+            self.assertNotEqual(first['descriptor']['environment_lock_sha256'],
+                                changed['descriptor']['environment_lock_sha256'])
+            damaged = root/'first'/next(iter(first['files']))
+            damaged.write_text('tampered')
+            with self.assertRaises(prepared_vm.ProtocolError):
+                prepared_vm_environment.verify_frozen(root/'first', first, linux)
+
+    def test_package_plan_decodes_epochs_and_rejects_duplicate_architecture(self):
+        result = prepared_vm_environment.packages_from_plan({
+            'example_1%3a2.0-1_arm64.deb': {}, 'second_3_all.deb': {}})
+        self.assertEqual(result[0]['version'], '1:2.0-1')
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.packages_from_plan({
+                'example_1_arm64.deb': {}, 'example_2_arm64.deb': {}})
+
+    def test_snapshot_keeps_native_environment_locks_separate(self):
+        environments = {arch: {'schema': 1, 'status': 'disabled'} for arch in prepared_vm.ARCHITECTURES}
+        self.assertEqual(prepared_vm_environment.frozen_environments({'prepared_vms': environments}),
+                         environments)
+        legacy = {'schema': 1, 'status': 'disabled'}
+        self.assertEqual(prepared_vm_environment.frozen_environments({'prepared_vm': legacy}),
+                         {'arm64': legacy})
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.frozen_environments({'prepared_vms': {'arm64': legacy}})
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.packages_from_plan({'example_1_arm64.deb': {}}, 'x64')
+        result = prepared_vm_environment.packages_from_plan({'example_1_amd64.deb': {}}, 'x64')
+        self.assertEqual(result[0]['architecture'], 'amd64')
+
+    def test_verified_guest_checks_its_native_frozen_environment(self):
+        environments = {
+            arch: {'status': 'frozen', 'lock': {'arch': arch}}
+            for arch in prepared_vm.ARCHITECTURES
+        }
+        linux = {'architectures': {}}
+        snapshot = {'prepared_vms': environments, 'upstream': {'linux': linux}}
+        actual = {'packages': []}
+        for arch in prepared_vm.ARCHITECTURES:
+            with self.subTest(arch=arch), patch.dict(os.environ, {
+                    'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_VERIFIED': 'true',
+                    'BUILD_INPUTS_DIR': 'dependency-snapshot'}), \
+                    patch.object(build_inputs, 'manifest', return_value=snapshot), \
+                    patch.object(release_package, 'host_arch', return_value=arch), \
+                    patch.object(prepared_vm_environment, 'verify_frozen') as verify, \
+                    patch.object(prepared_vm_environment, 'inspect_environment', return_value=actual), \
+                    patch.object(prepared_vm_environment, 'check_environment') as check, \
+                    patch.object(release_package, 'install_packages') as install:
+                release_package.prepare_compatibility_environment()
+                verify.assert_called_once_with(Path('dependency-snapshot'), environments[arch], linux)
+                check.assert_called_once_with(actual, None, environments[arch]['lock'])
+                install.assert_not_called()
+                verify.side_effect = prepared_vm.ProtocolError('environment_mismatch')
+                with self.assertRaises(prepared_vm.ProtocolError):
+                    release_package.prepare_compatibility_environment()
+                self.assertEqual(check.call_count, 1)
+                verify.side_effect = None
+                environments[arch]['status'] = 'disabled'
+                with self.assertRaisesRegex(ValueError, 'frozen CI environment'):
+                    release_package.prepare_compatibility_environment()
+                environments[arch]['status'] = 'frozen'
+
+    def test_warm_guest_must_match_full_package_manifest_and_frozen_versions(self):
+        actual = self.manifest()['environment']
+        lock = {'packages': actual['packages']}
+        prepared_vm_environment.check_environment(actual, actual, lock)
+        changed = copy.deepcopy(actual)
+        changed['packages'][0]['version'] = '999'
+        changed['packages_sha256'] = prepared_vm.checksum(changed['packages'])
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_environment(changed, actual, lock)
+        with self.assertRaises(prepared_vm.ProtocolError):
+            prepared_vm_environment.check_environment(changed, None, lock)
+
+    def test_guest_template_operations_cannot_run_on_the_host(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(prepared_vm_environment, 'run') as execute:
+            for function in (prepared_vm_environment.clean_template, prepared_vm_environment.inspect_environment):
+                with self.assertRaises(RuntimeError):
+                    function()
+            execute.assert_not_called()
+
+    def test_template_cleanup_finishes_before_its_working_directory_disappears(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'cor-source'
+            source.mkdir()
+            original_exists = Path.exists
+
+            def exists(path):
+                return path != Path('/opt/clash-of-rust') and original_exists(path)
+
+            def execute(command, **kwargs):
+                if not source.exists():
+                    raise FileNotFoundError('The source working directory has been deleted')
+                if '/home/ubuntu/cor-source' in command[-1]:
+                    source.rmdir()
+
+            with patch.object(prepared_vm_environment, 'guest_only'), \
+                    patch.object(Path, 'exists', exists), \
+                    patch.object(prepared_vm_environment, 'run', side_effect=execute) as commands:
+                prepared_vm_environment.clean_template()
+            self.assertFalse(source.exists())
+            self.assertIn('fstrim /', commands.call_args.args[0][-1])
+
+    def test_image_checks_reject_external_dependencies_dirty_images_and_leaks(self):
+        information = {'format': 'qcow2', 'virtual-size': 24 * 1024**3}
+        invalid = [
+            {**information, 'backing-filename': 'external'},
+            {**information, 'snapshots': [{'id': 'snapshot'}]},
+            {**information, 'encrypted': True},
+            {**information, 'dirty-flag': True},
+            {**information, 'format-specific': {'data': {'data-file': 'external'}}},
+            {**information, 'format-specific': {'data': {'dirty-flag': True}}},
+        ]
+        for value in invalid:
+            with self.subTest(value=value), patch.object(prepared_vm, 'qcow2_header'), \
+                    patch.object(linux_ci.subprocess, 'check_output', return_value=json.dumps(value)):
+                with self.assertRaises(prepared_vm.ProtocolError):
+                    linux_ci.verify_vm_image(Path('/synthetic/image.qcow2'), 24 * 1024**3)
+        for checked in ({}, {'format': 'qcow2', 'check-errors': 0, 'leaks': 1},
+                        {'format': 'qcow2', 'check-errors': 1}):
+            with self.subTest(checked=checked), patch.object(prepared_vm, 'qcow2_header'), \
+                    patch.object(linux_ci.subprocess, 'check_output', side_effect=[
+                        json.dumps(information), json.dumps(checked)]):
+                with self.assertRaises(prepared_vm.ProtocolError):
+                    linux_ci.verify_vm_image(Path('/fake/image.qcow2'), 24 * 1024**3)
+        with patch.object(prepared_vm, 'qcow2_header'), patch.object(linux_ci.subprocess, 'check_output', side_effect=[
+                json.dumps(information), json.dumps({'format': 'qcow2', 'check-errors': 0})]):
+            linux_ci.verify_vm_image(Path('/fake/image.qcow2'), 24 * 1024**3)
+
+    def test_qcow_header_rejects_external_storage_before_invoking_qemu(self):
+        header = bytearray(512)
+        struct.pack_into('>4sI', header, 0, b'QFI\xfb', 3)
+        struct.pack_into('>I', header, 20, 9)
+        struct.pack_into('>Q', header, 24, 24 * 1024**3)
+        struct.pack_into('>I', header, 100, 104)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'image.qcow2'
+            path.write_bytes(header)
+            prepared_vm.qcow2_header(path, 24 * 1024**3)
+            for offset, value, format in ((8, 512, '>Q'), (32, 1, '>I'), (60, 1, '>I'),
+                                           (72, 4, '>Q'), (88, 1, '>Q'),
+                                           (104, 0x44415441, '>I')):
+                changed = bytearray(header)
+                struct.pack_into(format, changed, offset, value)
+                path.write_bytes(changed)
+                with self.subTest(offset=offset), patch.object(linux_ci.subprocess, 'check_output') as execute:
+                    with self.assertRaises(prepared_vm.ProtocolError):
+                        linux_ci.verify_vm_image(path, 24 * 1024**3)
+                    execute.assert_not_called()
 
 
 class BuildTests(unittest.TestCase):
+    def test_windows_update_gate_handles_spaces_without_quoting_the_option_name(self):
+        command = windows._update_handoff_command(
+            r'C:\Downloads\COR setup.exe', r'C:\Users\Test User\cor update', 123,
+            r'C:\Program Files\Clash of Rust')
+        self.assertIn('/CORWAITDIR="C:\\Users\\Test User\\cor update"', command)
+        self.assertNotIn('"/CORWAITDIR=', command)
+        self.assertTrue(command.endswith('/D=C:\\Program Files\\Clash of Rust'))
+        with self.assertRaises(ValueError):
+            windows._update_handoff_command('setup.exe', 'bad"path', 123, 'installed')
+
+    def test_installed_update_driver_runs_outside_the_runner_checkout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            driver = cli_update.stage_test_driver(directory)
+            result = subprocess.run([sys.executable, '-B', driver, '--help'], cwd=directory,
+                                    text=True, capture_output=True, check=True)
+            self.assertIn('--phase', result.stdout)
+            self.assertEqual(driver.stat().st_mode & 0o777, 0o644)
+
+    def test_terminal_update_result_requires_helper_exit_and_a_persisted_terminal_state(self):
+        for code, state, accepted in ((0, 'succeeded', True), (0, 'failed', True),
+                                      (0, 'preparing', False), (0, 'installing', False),
+                                      (1, 'succeeded', False)):
+            with self.subTest(code=code, state=state), \
+                    patch.object(cli_update.subprocess, 'run',
+                                 return_value=subprocess.CompletedProcess([], code, '', 'helper error')), \
+                    patch.object(cli_update, 'cli', return_value={'state': state}):
+                if accepted:
+                    self.assertEqual(cli_update.run_helper(Path('/fixture/update'), Path('/fixture/data')),
+                                     {'state': state})
+                else:
+                    with self.assertRaisesRegex(AssertionError, 'terminal result'):
+                        cli_update.run_helper(Path('/fixture/update'), Path('/fixture/data'))
+
+    def test_installed_terminal_update_is_not_run_in_a_development_environment(self):
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), \
+                patch.object(sys, 'argv', ['test-cli-update.py', '--package', '/candidate.deb']), \
+                patch.object(cli_update.subprocess, 'run') as commands:
+            with self.assertRaisesRegex(RuntimeError, 'disposable Actions'):
+                cli_update.main()
+            commands.assert_not_called()
+
+    def test_ci_policy_keeps_real_network_smoke_and_selects_changed_specialties(self):
+        basic = 'basicSystemProxyAndTun'
+        routing = 'applicationRoutingPersistsAndKeepsOtherAppsOnline'
+        lifecycle = 'localProxyAndRealTunCarryTrafficAndDisconnectCleanly'
+        tile = 'quickTileRestoresColdCoreWithoutOpeningTheActivity'
+        source = (build.ROOT/'apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java').read_text()
+        for name in (basic, routing, lifecycle, tile):
+            self.assertRegex(source, r'@Test\s+public\s+void\s+'+name+r'\s*\(')
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_ANDROID_ROUTING_TESTS': 'false',
+                                     'COR_CI_LINUX_USER_TESTS': 'false',
+                                     'COR_CI_UPDATE_TESTS': 'false',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'false'}):
+            self.assertEqual(ci_test_policy.android_cases(), (basic,))
+            self.assertFalse(ci_test_policy.linux_user_tests())
+            self.assertFalse(ci_test_policy.desktop_ui_tests())
+            self.assertFalse(ci_test_policy.update_tests())
+            self.assertEqual(ci_test_policy.select([]), {
+                'extended_tests': False, 'android_routing_tests': False, 'linux_user_tests': False,
+                'desktop_ui_tests': False, 'proxy_benchmark': False, 'update_tests': False})
+            self.assertTrue(ci_test_policy.select([
+                'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
+            ])['android_routing_tests'])
+            self.assertTrue(ci_test_policy.select([
+                'apps/android/native/src/application_routing_mode.rs'
+            ])['android_routing_tests'])
+            self.assertTrue(ci_test_policy.select([
+                'crates/client-runtime/src/platform/host_network/linux.rs'
+            ])['linux_user_tests'])
+            self.assertTrue(ci_test_policy.select([
+                'crates/client-ui/ui/pages/proxies.slint'
+            ])['desktop_ui_tests'])
+            for path in ('crates/client-runtime/src/update/install/terminal.rs',
+                         'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py'):
+                self.assertTrue(ci_test_policy.select([path])['update_tests'])
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_ANDROID_ROUTING_TESTS': 'true'}):
+            self.assertEqual(ci_test_policy.android_cases(), (basic, routing))
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}):
+            self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile))
+            self.assertTrue(ci_test_policy.linux_user_tests())
+            self.assertTrue(ci_test_policy.desktop_ui_tests())
+            self.assertTrue(ci_test_policy.update_tests())
+
+    def test_linux_network_selection_survives_sudo(self):
+        specification = importlib.util.spec_from_file_location(
+            'proxy_modes', build.ROOT/'scripts/test-proxy-modes.py')
+        proxy_modes = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(proxy_modes)
+        for selected in (False, True):
+            with self.subTest(selected=selected), \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                            'COR_CI_EXTENDED_TESTS': 'false',
+                                            'COR_CI_LINUX_USER_TESTS': str(selected).lower()}), \
+                    patch.object(proxy_modes, 'host_system', return_value='linux'), \
+                    patch.object(proxy_modes.Path, 'resolve', autospec=True,
+                                 side_effect=lambda path, **kwargs: path), \
+                    patch.object(proxy_modes, 'run') as invoke:
+                proxy_modes.check(Path('/test/core_integration'), Path('/opt/clash-of-rust'))
+            command = invoke.call_args.args[0]
+            self.assertEqual('--with-user-tests' in command, selected)
+
+    def test_proxy_benchmark_is_selected_for_transport_changes_and_survives_sudo(self):
+        self.assertTrue(ci_test_policy.select([
+            'apps/desktop/tests/support/proxy_benchmark.rs'])['proxy_benchmark'])
+        self.assertTrue(ci_test_policy.select([
+            'crates/client-core/src/subscription/routes.rs'])['proxy_benchmark'])
+        self.assertTrue(ci_test_policy.select([
+            'crates/client-core/src/controller/mod.rs'])['proxy_benchmark'])
+        self.assertFalse(ci_test_policy.select(['README.md'])['proxy_benchmark'])
+        specification = importlib.util.spec_from_file_location(
+            'proxy_modes_benchmark', build.ROOT/'scripts/test-proxy-modes.py')
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                    'COR_CI_PROXY_BENCHMARK': 'true',
+                                    'COR_CI_LINUX_USER_TESTS': 'false',
+                                    'COR_CI_EXTENDED_TESTS': 'false'}), \
+                patch.object(module, 'host_system', return_value='linux'), \
+                patch.object(module.Path, 'resolve', autospec=True,
+                             side_effect=lambda path, **kwargs: path), \
+                patch.object(module, 'run') as invoke:
+            module.check(Path('/test/core_integration'), Path('/opt/clash-of-rust'))
+        self.assertIn('--proxy-benchmark', invoke.call_args.args[0])
+
+    def test_proxy_benchmark_fixture_serves_identical_verified_http_and_https_payloads(self):
+        import ssl
+        import urllib.request
+        with patch.object(proxy_benchmark, 'BODY_SIZE', len(proxy_benchmark.BLOCK)), \
+                patch.object(proxy_benchmark, 'save_report') as save:
+            with proxy_benchmark.fixture() as environment:
+                manifest = json.loads(Path(environment['CLASH_PROXY_BENCHMARK_FIXTURE']).read_text())
+                context = ssl.create_default_context(cafile=manifest['certificate'])
+                context.verify_flags |= ssl.VERIFY_X509_STRICT
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
+                for url in manifest['urls']:
+                    with opener.open(url, timeout=5) as response:
+                        body = response.read()
+                        self.assertEqual(len(body), manifest['size'])
+                        self.assertEqual(hashlib.sha256(body).hexdigest(), manifest['sha256'])
+                        self.assertEqual(response.headers['Content-Length'], str(len(body)))
+                request = urllib.request.Request(manifest['latency_url'], method='HEAD')
+                with opener.open(request, timeout=5) as response:
+                    self.assertEqual(response.status, 204)
+                    self.assertEqual(response.read(), b'')
+                Path(manifest['report']).write_text('{"complete": true}')
+            save.assert_called_once()
+            self.assertFalse(Path(manifest['certificate']).exists())
+
+    def test_proxy_benchmark_rejects_missing_or_partial_reports_without_masking_test_failure(self):
+        for report in (None, {'complete': False}):
+            with self.subTest(report=report), \
+                    patch.object(proxy_benchmark, 'save_report') as save:
+                with self.assertRaisesRegex(RuntimeError, 'did not'):
+                    with proxy_benchmark.fixture() as environment:
+                        manifest = json.loads(Path(environment['CLASH_PROXY_BENCHMARK_FIXTURE']).read_text())
+                        if report is not None:
+                            Path(manifest['report']).write_text(json.dumps(report))
+                self.assertEqual(save.call_count, int(report is not None))
+        with patch.object(proxy_benchmark, 'save_report'):
+            with self.assertRaisesRegex(ValueError, 'original failure'):
+                with proxy_benchmark.fixture():
+                    raise ValueError('original failure')
+
+    def test_proxy_benchmark_preserves_partial_measurements_and_labels_their_scope(self):
+        report = {
+            'system': 'windows', 'arch': 'x64', 'host': {'logical_cpus': 4},
+            'complete': False, 'error': 'TLS handshake timed out',
+            'samples': [], 'summaries': [{
+                'protocol': 'https', 'route': 'native-http', 'sink': 'memory',
+                'median_mib_per_second': 12.5, 'median_first_byte_ms': 4.25,
+            }],
+            'latency_summaries': [{
+                'route': 'controller-loopback-socks', 'median_elapsed_ms': 51.5,
+                'median_reported_delay_ms': 25,
+            }, {
+                'route': 'direct', 'median_elapsed_ms': 25.5,
+                'median_reported_delay_ms': None,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root/'report.json'
+            source.write_text(json.dumps(report))
+            with patch.object(proxy_benchmark, 'ROOT', root), \
+                    patch.dict(os.environ, {'GITHUB_STEP_SUMMARY': str(root/'summary.md')}), \
+                    patch('builtins.print'):
+                proxy_benchmark.save_report(source)
+            preserved = json.loads((root/'target/proxy-benchmark-report/loopback.json').read_text())
+            self.assertFalse(preserved['complete'])
+            self.assertEqual(preserved['error'], report['error'])
+            text = (root/'summary.md').read_text()
+            self.assertIn('| https | native-http | memory | 12.50 | 4.25 |', text)
+            self.assertIn('| controller-loopback-socks | 51.50 | 25.00 |', text)
+            self.assertIn('| direct | 25.50 | — |', text)
+            self.assertIn('no public DNS, remote node or GitHub CDN', text)
+
+    def test_previews_reject_a_viewer_without_color_font_support(self):
+        for version, supported in [('slint-viewer 1.18.1', False),
+                                   ('slint-viewer 1.19.0', True)]:
+            with self.subTest(version=version), patch.object(
+                    preview_slint.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], 0, version)):
+                if supported:
+                    self.assertEqual(preview_slint.rendering_viewer('viewer')['version'], version)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'Accurate emoji previews'):
+                        preview_slint.rendering_viewer('viewer')
+
+    def test_previews_use_bundled_font_fallback_instead_of_the_hosts_preferences(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+                os.environ, {'SLINT_FONT_PATH': '/unrelated/font',
+                             'SLINT_DEFAULT_FONT': '/unrelated/primary'}):
+            environment = preview_slint.preview_environment(Path(temporary))
+            self.assertEqual(environment['SLINT_FONT_PATH'],
+                             str(build.ROOT/'resources/fonts/NotoColorEmoji-Regular.ttf'))
+            self.assertEqual(environment['SLINT_DEFAULT_FONT'],
+                             str(build.ROOT/'resources/fonts/SourceHanSansCN-Regular.otf'))
+
+    def test_desktop_scope_uses_the_selected_checkout_members(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=["apps/desktop"]\n')
+            self.assertEqual(build.desktop_cargo_scope(root), ['--workspace'])
+            native = root/'apps/android/native'
+            native.mkdir(parents=True)
+            (native/'Cargo.toml').write_text('[package]\nname="legacy-android-host"\n')
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=["apps/desktop","apps/android/native"]\n')
+            self.assertEqual(build.desktop_cargo_scope(root), ['--workspace', '--exclude', 'legacy-android-host'])
+
+    def test_desktop_pipeline_excludes_mobile_without_dropping_shared_sources(self):
+        specification = importlib.util.spec_from_file_location('native_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+
+        def capture(command, **kwargs):
+            commands.append(command)
+        def capture_test(command, **kwargs):
+            commands.append(command)
+            raise RuntimeError('source checks completed')
+
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=capture), \
+                patch.object(native_ci, 'cargo_messages', side_effect=capture_test):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        for command in commands[1:3]:
+            excluded = [command[index + 1] for index, value in enumerate(command) if value == '--exclude']
+            self.assertEqual(set(excluded), {'clash-mobile-runtime', 'clash-android'})
+            self.assertIn('--workspace', command)
+        self.assertEqual([command[1] for command in commands], ['fmt', 'clippy', 'build', 'test'])
+        self.assertEqual(commands[-1][2:6], ['-p', 'clash-of-rust', '--test', 'core_integration'])
+        self.assertIn('--no-run', commands[-1])
+
+    def test_update_changes_run_shared_schedule_config_cli_and_gui_regressions(self):
+        specification = importlib.util.spec_from_file_location('native_update_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'false',
+                                     'COR_CI_UPDATE_TESTS': 'true'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        for package, case in (('clash-client-core', 'update'),
+                              ('clash-client-runtime', 'update_check_interval'),
+                              ('clash-cli', 'update_interval'),
+                              ('clash-of-rust', 'update_')):
+            self.assertTrue(any(command[command.index('-p')+1] == package and case in command
+                                for command in checks), (package, case, checks))
+        for path in ('crates/client-core/src/config/mod.rs',
+                     'crates/client-core/src/update/schedule.rs'):
+            self.assertTrue(ci_test_policy.select([path])['update_tests'])
+
+    def test_desktop_ui_changes_run_targeted_checks_in_linux_container(self):
+        specification = importlib.util.spec_from_file_location('native_ui_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'true'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        ui_checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        self.assertEqual(len(ui_checks), 9)
+        self.assertTrue(any('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions'
+                            in command for command in ui_checks))
+        self.assertTrue(any('application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release'
+                            in command for command in ui_checks))
+        self.assertTrue(any('application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it'
+                            in command for command in ui_checks))
+        self.assertTrue(any('notice_countdown_restarts_and_expires_after_five_seconds'
+                            in command for command in ui_checks))
+        self.assertTrue(any('applications_scroll_across_phone_and_tablet_viewports'
+                            in command for command in ui_checks))
+        focused = [command for command in ui_checks if
+                   command[command.index('-p')+1] == 'clash-of-rust'
+                   or 'mobile_lists' in command]
+        self.assertEqual(len(focused), 5)
+        self.assertTrue(all('--exact' in command for command in focused))
+        for package, target in (('clash-client-ui', 'ui_models'),
+                                ('clash-desktop-ui', '--lib'),
+                                ('clash-client-core', 'api::tests::'),
+                                ('clash-client-core', 'overview::tests::')):
+            self.assertTrue(any(command[command.index('-p')+1] == package and target in command
+                                for command in ui_checks), (package, target))
+        with patch.dict(os.environ, {'COR_CI_DESKTOP_UI_TESTS': 'true'}), \
+                patch.object(linux_ci, 'build_image', return_value='test-image'), \
+                patch.object(linux_ci, 'run') as run:
+            linux_ci.container(['true'])
+        arguments = run.call_args.args[0]
+        index = arguments.index('COR_CI_DESKTOP_UI_TESTS')
+        self.assertEqual(arguments[index - 1], '--env')
+
+    def test_linux_tun_changes_run_agent_and_restart_checks_without_full_suite(self):
+        specification = importlib.util.spec_from_file_location('native_tun_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_LINUX_USER_TESTS': 'true',
+                                     'COR_CI_DESKTOP_UI_TESTS': 'false',
+                                     'COR_CI_UPDATE_TESTS': 'false'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'linux', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='linux'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        self.assertEqual(len(checks), 2)
+        for package, case in (('clash-client-runtime', 'platform::linux_tun::'),
+                              ('clash-cli', 'backend::tests::')):
+            self.assertTrue(any(command[command.index('-p')+1] == package and case in command
+                                for command in checks), (package, case))
+        self.assertTrue(ci_test_policy.select([
+            'crates/client-runtime/src/platform/linux/tun/terminal_agent.rs'
+        ])['linux_user_tests'])
+
+    def test_android_build_runs_mobile_unit_tests_before_preparing_target_tools(self):
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(android_build, 'cargo_build') as clippy, \
+                patch.object(android_build, 'run', side_effect=RuntimeError('mobile tests executed')) as tests:
+            with self.assertRaisesRegex(RuntimeError, 'mobile tests executed'):
+                android_build.build('arm64')
+        for command in (clippy.call_args.args[0], tests.call_args.args[0]):
+            packages = [command[index + 1] for index, value in enumerate(command) if value == '-p']
+            self.assertEqual(packages, ['clash-mobile-runtime', 'clash-android'])
+            self.assertNotIn('--workspace', command)
+            self.assertIn('--locked', command)
+        self.assertIn('--lib', tests.call_args.args[0])
+
     def test_linux_ci_prepares_resources_on_host_before_entering_container(self):
         with patch.object(sys, 'argv', ['linux_ci.py', 'ci']), \
                 patch.object(linux_ci, 'require_actions'), \
@@ -127,6 +1388,58 @@ class BuildTests(unittest.TestCase):
                 windows.wait_unelevated_ready(kernel, 12, ready)
             pause.assert_not_called()
 
+    def test_macos_window_waits_for_native_mapping_and_records_rejected_candidates(self):
+        pending = {'windows': [], 'candidates': [{'checks': {'onscreen': False}}]}
+        mapped = {'windows': [{'kCGWindowOwnerPID': 42}], 'candidates': []}
+        process = MagicMock()
+        process.poll.return_value = None
+        inspect = MagicMock(side_effect=[(pending, {42: 'clash-desktop-ui'}),
+                                         (mapped, {42: 'clash-desktop-ui'})])
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(macos, 'REPORT', Path(temporary)), \
+             patch.object(macos.time, 'sleep') as pause:
+            result = macos.wait_for_window(inspect, process, 'installed')
+            self.assertEqual(result, (mapped, {42: 'clash-desktop-ui'}))
+            self.assertEqual(json.loads((Path(temporary)/'installed-window-observations.json').read_text()),
+                             [pending, mapped])
+        pause.assert_called_once_with(.5)
+
+    def test_macos_window_wait_reports_candidates_at_bounded_deadline(self):
+        pending = {'windows': [], 'candidates': [{'checks': {'minimum_width': False}}]}
+        process = MagicMock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(macos, 'REPORT', Path(temporary)), \
+             patch.object(macos.time, 'monotonic', side_effect=[0, 30]), \
+             patch.object(macos.time, 'sleep') as pause:
+            with self.assertRaisesRegex(RuntimeError, r'30 seconds.*minimum_width'):
+                macos.wait_for_window(lambda label: (pending, {}), process, 'installed')
+        pause.assert_not_called()
+
+    def test_macos_window_wait_rejects_an_exited_owner(self):
+        process = MagicMock()
+        process.poll.return_value = -11
+        process.returncode = -11
+        inspect = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, r'GUI exited.*-11'):
+            macos.wait_for_window(inspect, process, 'installed')
+        inspect.assert_not_called()
+
+    def test_macos_cleanup_keeps_primary_failure_and_still_rejects_cleanup_only_failure(self):
+        for primary in (RuntimeError('window missing'), None):
+            process = MagicMock()
+            process.terminate.side_effect = RuntimeError('cleanup failed')
+            with self.subTest(primary=primary), tempfile.TemporaryDirectory() as temporary, \
+                 patch.object(macos, 'REPORT', Path(temporary)):
+                if primary is None:
+                    with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                        macos.cleanup_gui(process, None, 'installed')
+                else:
+                    macos.cleanup_gui(process, None, 'installed', primary)
+                report = json.loads((Path(temporary)/'installed-cleanup-error.json').read_text())
+                self.assertEqual(report, {'error': 'cleanup failed',
+                                         'primary_error': str(primary) if primary else None})
+
     def test_linux_guest_package_preparation_skips_documentation_indexes(self):
         with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \
              patch.object(release_package, 'run') as execute:
@@ -168,6 +1481,107 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             linux_ci.cache_keys(value, 'x64')
 
+    def test_linux_build_bootstraps_https_with_runner_trust_and_removes_it_from_context(self):
+        value = {'image': 'ubuntu@sha256:' + 'c'*64, 'architectures': {
+            'x64': {'python': {'sha256': 'a'*64}}}}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root/'python.tar.gz'
+            archive.write_bytes(b'portable Python')
+            certificates = root/'ca.crt'
+            certificates.write_bytes(b'runner trust bundle')
+            contexts = []
+
+            def build_image(command, **kwargs):
+                context = Path(command[-1])
+                contexts.append(context)
+                self.assertEqual((context/'bootstrap-ca.crt').read_bytes(), certificates.read_bytes())
+                self.assertEqual((context/'python.tar.gz').read_bytes(), archive.read_bytes())
+                self.assertEqual((context/'Dockerfile').read_bytes(),
+                                 (build.ROOT/'resources/linux/ubuntu20.Dockerfile').read_bytes())
+
+            with patch.object(linux_ci, 'require_actions'), \
+                    patch.object(linux_ci, 'inputs', return_value=value), \
+                    patch.object(linux_ci, 'host_arch', return_value='x64'), \
+                    patch.object(linux_ci, 'download', return_value=archive), \
+                    patch.object(linux_ci, 'tools_directory', return_value=root), \
+                    patch.object(linux_ci.subprocess, 'run') as inspect, \
+                    patch.object(linux_ci, 'system_ca_bundle') as trust, \
+                    patch.object(linux_ci, 'run', side_effect=build_image) as execute:
+                inspect.return_value.returncode = 0
+                linux_ci.build_image()
+                trust.assert_not_called()
+                execute.assert_not_called()
+                inspect.return_value.returncode = 1
+                trust.side_effect = RuntimeError('Ubuntu build requires the runner system CA bundle')
+                with self.assertRaisesRegex(RuntimeError, 'system CA bundle'):
+                    linux_ci.build_image()
+                execute.assert_not_called()
+                trust.side_effect = None
+                trust.return_value = certificates
+                linux_ci.build_image()
+                execute.assert_called_once()
+            self.assertEqual(len(contexts), 1)
+            self.assertFalse(contexts[0].exists())
+
+    def test_linux_build_uses_runner_ca_when_standalone_python_has_no_default(self):
+        with patch.object(linux_ci.ssl, 'get_default_verify_paths') as trust, \
+                patch.object(Path, 'is_file', autospec=True) as exists:
+            trust.return_value.cafile = None
+            exists.side_effect = lambda path: str(path) == '/etc/ssl/certs/ca-certificates.crt'
+            self.assertEqual(linux_ci.system_ca_bundle(), Path('/etc/ssl/certs/ca-certificates.crt'))
+            trust.return_value.cafile = '/custom/runner-ca.crt'
+            exists.side_effect = lambda path: str(path) == '/custom/runner-ca.crt'
+            self.assertEqual(linux_ci.system_ca_bundle(), Path('/custom/runner-ca.crt'))
+            exists.return_value = False
+            exists.side_effect = None
+            with self.assertRaisesRegex(RuntimeError, 'system CA bundle'):
+                linux_ci.system_ca_bundle()
+
+    def test_compiler_container_restore_verifies_bytes_environment_and_loaded_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root/'image.tar'
+            image.write_bytes(b'compiler environment without applications or VM disks')
+            receipt = {
+                'schema': 1, 'identity': 'a'*64, 'id': 'sha256:'+'b'*64,
+                'size': image.stat().st_size, 'sha256': build.sha256(image),
+            }
+            inspect = ['docker', 'image', 'inspect', '--format={{.Id}}', 'fixture']
+            for replacement in (None, [], dict(receipt, identity='c'*64),
+                                dict(receipt, sha256='0'*64), dict(receipt, size=1),
+                                dict(receipt, id=['invalid'])):
+                with self.subTest(replacement=replacement):
+                    (root/'image.json').write_text(json.dumps(replacement))
+                    with patch.object(linux_ci, 'run') as execute:
+                        self.assertFalse(linux_ci.restore_build_image(root, 'a'*64, inspect))
+                    execute.assert_not_called()
+            (root/'image.json').write_text(json.dumps(receipt))
+            with patch.object(linux_ci, 'run') as execute, \
+                    patch.object(linux_ci.subprocess, 'check_output', return_value=receipt['id']+'\n'):
+                self.assertTrue(linux_ci.restore_build_image(root, 'a'*64, inspect))
+            execute.assert_called_once_with(['docker', 'image', 'load', '--input', image], timeout=120)
+            with patch.object(linux_ci, 'run'), \
+                    patch.object(linux_ci.subprocess, 'check_output', return_value='sha256:'+'c'*64):
+                self.assertFalse(linux_ci.restore_build_image(root, 'a'*64, inspect))
+            image.write_bytes(b'corrupt')
+            with patch.object(linux_ci, 'run') as execute:
+                self.assertFalse(linux_ci.restore_build_image(root, 'a'*64, inspect))
+            execute.assert_not_called()
+
+    def test_linux_container_mounts_checked_workspace_receipt_for_both_restore_and_save(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = str(Path(temporary)/'sources/source.json')
+            with patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': snapshot}), \
+                    patch.object(linux_ci, 'build_image', return_value='fixture'), \
+                    patch.object(linux_ci, 'run') as execute:
+                linux_ci.container(['true'])
+            arguments = execute.call_args.args[0]
+            self.assertIn('WORKSPACE_SOURCE_CACHE', arguments)
+            directory = Path(snapshot).parent
+            self.assertIn(f'{directory}:{directory}', arguments)
+            self.assertTrue(directory.is_dir())
+
     def test_linux_download_revalidates_cached_bytes_and_uses_frozen_digest(self):
         data = b'verified upstream archive'
         record = {'url': 'https://example.invalid/archive',
@@ -204,6 +1618,116 @@ class BuildTests(unittest.TestCase):
         self.assertIn('--wayland-display=cor-wayland', modern)
         self.assertIn('--virtual-monitor=1280x900', modern)
         self.assertIn('--unsafe-mode', modern)
+
+    def test_dbus_probe_errors_remain_in_the_report_and_still_raise(self):
+        import linux_gui
+        failure = subprocess.CalledProcessError(1, ['gdbus'], stderr='service is starting')
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'COR_GUI_REPORT': temporary}), \
+                patch.object(linux_gui, 'output', side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError):
+                linux_gui.dbus('org.gnome.Shell', '/org/gnome/Shell', 'org.gnome.Shell.Eval', 'true')
+            self.assertIn('service is starting', (Path(temporary)/'dbus-probes.log').read_text())
+
+    def test_only_macos_tailscale_bootstrap_binaries_survive_retirement(self):
+        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-amd64'))
+        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-arm64'))
+        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Linux-amd64'))
+        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Windows-arm64'))
+        self.assertEqual(storage.lineage('action-setup-tailscale/1.104.5/macOS-arm64'),
+                         storage.lineage('action-setup-tailscale/1.104.1/macOS-arm64'))
+        native = 'native-release-v2-macos-26-arm64-build-' + 'a'*8 + '-' + 'b'*8
+        bootstrap = 'action-setup-tailscale/' + '1.104.5/' + 'macOS-arm64'
+        self.assertGreater(storage.priority({'key': bootstrap}),
+                           storage.priority({'key': native}))
+
+    def test_guest_original_receipts_replace_slow_archive_exports_and_reject_bad_sources(self):
+        record = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
+                  'sha256': 'a'*64, 'size': 123}
+        for valid in (True, False):
+            value = record if valid else dict(record, url='https://untrusted.invalid/a.deb')
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
+                    patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
+                    patch.object(linux_ci.subprocess, 'check_output',
+                                 return_value=json.dumps([value]).encode()):
+                linux_ci.guest_receipts(['ssh', 'isolated-guest'])
+                receipts = list((Path(temporary)/'cor-upstream-downloads').glob('*.json'))
+                self.assertEqual(len(receipts), int(valid))
+                if valid:
+                    self.assertEqual(json.loads(receipts[0].read_text()), record)
+
+    def test_guest_python_loads_the_real_package_entry_from_the_checkout_root(self):
+        calls = []
+        linux_ci.guest_python(
+            lambda command, **kwargs: calls.append((command, kwargs)), '',
+            "import runpy; "
+            "module=runpy.run_path('scripts/test-release-package.py'); "
+            "assert callable(module['prepare_compatibility_environment']); "
+            "assert 'git' in module['compatibility_dependencies']()",
+            timeout=2100)
+        command, options = calls.pop()
+        self.assertEqual(options, {'timeout': 2100})
+        arguments = shlex.split(command)
+        self.assertEqual(arguments[0], '/opt/cor-test-python/bin/python3')
+        result = subprocess.run(
+            [sys.executable, '-I', *arguments[1:]], cwd=build.ROOT,
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_guest_debs_use_host_fallback_and_verify_bytes_before_transferring(self):
+        payload = b'verified-signed-deb'
+        record = {'url': 'http://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
+                  'sha256': hashlib.sha256(payload).hexdigest(), 'size': len(payload)}
+        for scenario in ('valid', 'changed-bytes', 'bad-source', 'bad-name', 'unavailable'):
+            value = dict(record, url='https://untrusted.invalid/a.deb') if scenario == 'bad-source' else record
+            name = '../a.deb' if scenario == 'bad-name' else 'a.deb'
+            received = []
+
+            def download(url, destination, digest):
+                self.assertTrue(url.startswith('https://ports.ubuntu.com/'))
+                self.assertEqual(digest, record['sha256'])
+                if scenario == 'unavailable':
+                    raise OSError('Both official and private downloads failed')
+                destination.write_bytes(payload if scenario != 'changed-bytes' else b'changed')
+
+            def remote(command, **kwargs):
+                if stream := kwargs.get('stdin'):
+                    with tarfile.open(fileobj=io.BytesIO(stream.read())) as archive:
+                        received.append(archive.extractfile('a.deb').read())
+
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(linux_ci.subprocess, 'check_output',
+                                 return_value=json.dumps({name: value}).encode()), \
+                    patch.object(linux_ci, 'download_original', side_effect=download):
+                if scenario == 'valid':
+                    linux_ci.guest_deb_downloads(['ssh'], remote, 'environment ', Path(temporary)/'debs')
+                    self.assertEqual(received, [payload])
+                else:
+                    expected = OSError if scenario == 'unavailable' else ValueError
+                    with self.assertRaises(expected):
+                        linux_ci.guest_deb_downloads(['ssh'], remote, 'environment ', Path(temporary)/'debs')
+                    self.assertFalse(received)
+
+    def test_vm_prefetches_package_dependencies_without_preinstalling_them(self):
+        package_font = 'fonts-wqy-microhei'
+        self.assertIn(package_font, release_package.compatibility_download_dependencies())
+        self.assertNotIn(package_font, release_package.compatibility_dependencies())
+
+    def test_basic_hosted_network_checks_do_not_install_an_unused_desktop_session(self):
+        for extended, guest in (('false', ''), ('true', ''), ('false', 'true')):
+            with self.subTest(extended=extended, guest=guest), patch.dict(os.environ, {
+                    'COR_CI_EXTENDED_TESTS': extended, 'COR_LINUX_GUEST': guest}):
+                packages = release_package.compatibility_dependencies()
+                self.assertTrue({'git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin'}
+                                .issubset(packages))
+                if extended == 'true' or guest:
+                    self.assertEqual(packages, list(prepared_vm_environment.TEST_PACKAGES))
+                else:
+                    self.assertTrue({'gnome-shell', 'openbox', 'xwayland', 'policykit-1-gnome'}
+                                    .isdisjoint(packages))
+                    self.assertIn('gsettings-desktop-schemas',
+                                  release_package.compatibility_download_dependencies())
 
     @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
     def test_linux_gui_finds_only_wayland_sockets(self):
@@ -508,6 +2032,95 @@ Private_Clean: 2 kB
             self.assertEqual(first,local_cache.rust_keys(root,b'compiler',{})[1])
             version('0.6.1','new')
             self.assertNotEqual(first,local_cache.rust_keys(root,b'compiler',{})[1])
+
+    def test_local_vendor_artifacts_survive_cache_cleanup_without_saving_other_workspace_objects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target, cache = root/'target', root/'external'
+            packages = {'vendor/renderer': 'renderer-patch', 'crates/core': 'clash-core'}
+            objects = {
+                'release/deps/librenderer_patch-first.rlib': b'compiled library',
+                'release/deps/renderer_patch-first.d': b'dependency paths',
+                'release/.fingerprint/renderer-patch-first/lib-renderer_patch.json': b'fingerprint',
+                'aarch64-linux-android/release/build/renderer-patch/second/output': b'generated bindings',
+            }
+            for relative, data in {**objects, 'release/deps/libclash_core-first.rlib': b'application'}.items():
+                path = target/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            local_cache.workspace_vendor_objects(root, cache, packages, save=True)
+            shutil.rmtree(target)
+            local_cache.workspace_vendor_objects(root, cache, packages)
+            for relative, data in objects.items():
+                self.assertEqual((target/relative).read_bytes(), data)
+            self.assertFalse((target/'release/deps/libclash_core-first.rlib').exists())
+
+    def test_incomplete_or_escaping_vendor_receipts_restore_no_partial_compiler_objects(self):
+        for corruption in ('changed', 'missing', 'escape'):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                target, cache = root/'target', root/'external'
+                packages = {'vendor/renderer': 'renderer-patch'}
+                for name in ('first', 'second'):
+                    path = target/f'release/deps/librenderer_patch-{name}.rlib'
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(name.encode())
+                local_cache.workspace_vendor_objects(root, cache, packages, save=True)
+                shutil.rmtree(target)
+                path = cache/'vendor-objects/release/deps/librenderer_patch-second.rlib'
+                if corruption == 'changed':
+                    path.write_bytes(b'wrong')
+                elif corruption == 'missing':
+                    path.unlink()
+                else:
+                    receipt = cache/'vendor-objects.json'
+                    value = json.loads(receipt.read_text())
+                    value['files']['../../outside'] = {'size': 1, 'sha256': 'a'*64}
+                    receipt.write_text(json.dumps(value))
+                local_cache.workspace_vendor_objects(root, cache, packages)
+                self.assertFalse(target.exists())
+                self.assertFalse((root.parent/'outside').exists())
+
+    def test_changed_vendor_source_invalidates_restored_fingerprints_before_cargo_runs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vendor = root/'vendor/renderer'
+            vendor.mkdir(parents=True)
+            (vendor/'Cargo.toml').write_text('[package]\nname="renderer-patch"\nversion="1.0.0"\n')
+            code = vendor/'lib.rs'
+            code.write_text('old source')
+            fingerprint = root/'target/release/.fingerprint/renderer-patch-first/lib-renderer_patch.json'
+            fingerprint.parent.mkdir(parents=True)
+            fingerprint.write_text('old fingerprint')
+            tracked = b'vendor/renderer/Cargo.toml\0vendor/renderer/lib.rs\0'
+            with patch.object(local_cache.subprocess, 'check_output', return_value=tracked), \
+                    patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': str(root/'external/source.json')}):
+                local_cache.workspace_sources(root, save=True)
+                shutil.rmtree(root/'target')
+                code.write_text('changed source')
+                local_cache.workspace_sources(root)
+            self.assertFalse(fingerprint.exists())
+
+    def test_malformed_workspace_receipt_preserves_sources_and_existing_compiler_objects(self):
+        for value in ([], None, 'invalid', 1):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root/'crates/core/lib.rs'
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b'current source')
+                stamp = source.stat().st_mtime_ns
+                artifact = root/'target/release/deps/libcore-current.rlib'
+                artifact.parent.mkdir(parents=True)
+                artifact.write_bytes(b'existing compiler object')
+                receipt = root/'external/source.json'
+                receipt.parent.mkdir()
+                receipt.write_text(json.dumps(value))
+                with patch.object(local_cache.subprocess, 'check_output', return_value=b'crates/core/lib.rs\0'), \
+                        patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': str(receipt)}):
+                    local_cache.workspace_sources(root)
+                self.assertEqual(source.read_bytes(), b'current source')
+                self.assertEqual(source.stat().st_mtime_ns, stamp)
+                self.assertEqual(artifact.read_bytes(), b'existing compiler object')
 
     def test_workspace_cache_verifies_contents_before_restoring_times_and_invalidates_changed_crates(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1237,6 +2850,135 @@ Private_Clean: 2 kB
                 execute.assert_called_once()
                 self.assertEqual(execute.call_args.args[0][0], 'java')
 
+    def test_desktop_toolchain_report_never_invokes_ambient_android_tools(self):
+        for system in ('windows', 'macos', 'linux'):
+            def execute(command, **kwargs):
+                self.assertIn(command[0], ('rustc', 'cargo'))
+                return subprocess.CompletedProcess(command, 0, command[0] + ' version', '')
+
+            with self.subTest(system=system), \
+                    patch.object(build_inputs.shutil, 'which', side_effect=lambda name: name) as locate, \
+                    patch.object(build_inputs.subprocess, 'run', side_effect=execute) as run_tool, \
+                    patch.dict(os.environ, {'ANDROID_NDK_ROOT': '/unused-android-toolchain'}):
+                report = build_inputs.toolchain_report(system)
+            self.assertEqual([call.args[0] for call in locate.call_args_list], ['rustc', 'cargo'])
+            self.assertEqual(run_tool.call_count, 2)
+            self.assertEqual(set(report), {'python', 'rustc', 'cargo'})
+
+    def test_android_toolchain_report_records_required_tools_and_ndk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'source.properties').write_text('Pkg.Revision = fixture')
+            with patch.object(build_inputs.shutil, 'which', side_effect=lambda name: name), \
+                    patch.object(build_inputs.subprocess, 'run', side_effect=lambda command, **kwargs:
+                                 subprocess.CompletedProcess(command, 0, command[0] + ' version', '')) as execute, \
+                    patch.dict(os.environ, {'ANDROID_NDK_ROOT': directory}):
+                report = build_inputs.toolchain_report('android')
+            self.assertEqual([call.args[0][0] for call in execute.call_args_list],
+                             ['rustc', 'cargo', 'go', 'java', 'gradle'])
+            self.assertEqual(set(report), {'python', 'rustc', 'cargo', 'go', 'java', 'gradle', 'android_ndk'})
+            self.assertEqual(report['android_ndk'], 'Pkg.Revision = fixture')
+
+    def test_toolchain_report_rejects_an_unknown_system_before_running_tools(self):
+        with patch.object(build_inputs.subprocess, 'run') as execute, \
+                self.assertRaisesRegex(ValueError, 'Unknown build system'):
+            build_inputs.toolchain_report('unknown')
+        execute.assert_not_called()
+
+    def test_gradle_tool_check_rejects_another_version_on_path(self):
+        selected = build_inputs.tool_versions()
+        for version, accepted in ((selected['gradle'], True), ('9.6.0', False)):
+            with self.subTest(version=version), \
+                    patch.object(build_inputs.sys, 'version', selected['python']), \
+                    patch.object(build_inputs.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 0, '\nGradle ' + version + '\n', '')):
+                if accepted:
+                    build_inputs.check_tools(('gradle',))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Active Gradle'):
+                        build_inputs.check_tools(('gradle',))
+
+    def test_gradle_official_failure_restores_the_verified_private_original(self):
+        version = build_inputs.tool_versions()['gradle']
+        prefix = 'gradle-' + version
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, 'w') as archive:
+            for name in ('bin/gradle', 'bin/gradle.bat', f'lib/gradle-launcher-{version}.jar'):
+                archive.writestr(prefix + '/' + name, 'fixture ' + name)
+        payload = content.getvalue()
+        selected = {'version': version,
+                    'url': f'https://services.gradle.org/distributions/gradle-{version}-bin.zip',
+                    'sha256': hashlib.sha256(payload).hexdigest()}
+
+        def restore(url, target, checksum):
+            target.write_bytes(payload)
+            return True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path_output = root / 'path'
+            with patch.object(build_inputs, 'component', return_value=selected), \
+                    patch.dict(os.environ, {'GITHUB_PATH': str(path_output)}), \
+                    patch.object(build, 'opener') as http, \
+                    patch.object(build.time, 'sleep'), \
+                    patch.object(upstream_cache, 'restore', side_effect=restore) as mirror:
+                http.return_value.open.side_effect = OSError('HTTP 504')
+                result = build_inputs.prepare_gradle(root / 'tools')
+            self.assertEqual(http.return_value.open.call_count, 3)
+            mirror.assert_called_once_with(selected['url'], root / 'tools' / (prefix + '-bin.zip'),
+                                           selected['sha256'])
+            self.assertEqual(path_output.read_text().splitlines(), [str(result / 'bin')])
+            self.assertTrue(os.access(result / 'bin/gradle', os.X_OK))
+            self.assertEqual((result / 'bin/gradle.bat').read_text(), 'fixture bin/gradle.bat')
+            self.assertFalse(any((root / 'tools').glob('.gradle-*')))
+
+    def test_gradle_rejects_unapproved_identity_before_downloading(self):
+        selected = build_inputs.approved()['upstream']['gradle']
+        for changed in ({'version': '9.6.0'}, {'sha256': ''},
+                        {'url': 'https://example.com/gradle.zip'}):
+            with self.subTest(changed=changed), \
+                    patch.object(build_inputs, 'component', return_value={**selected, **changed}), \
+                    patch.object(build_inputs, 'download') as download:
+                with self.assertRaisesRegex(ValueError, 'approved identity'):
+                    build_inputs.prepare_gradle(Path('/unused'))
+                download.assert_not_called()
+
+    def test_gradle_rejects_corrupt_or_unsafe_archives_without_exposing_tools(self):
+        version = build_inputs.tool_versions()['gradle']
+        prefix = 'gradle-' + version
+        for scenario in ('checksum', 'parent', 'absolute', 'symlink', 'missing-launcher'):
+            content = io.BytesIO()
+            with zipfile.ZipFile(content, 'w') as archive:
+                archive.writestr(prefix + '/bin/gradle', 'fixture launcher')
+                if scenario == 'parent':
+                    archive.writestr(prefix + '/../outside', 'invalid')
+                elif scenario == 'absolute':
+                    archive.writestr('/' + prefix + '/outside', 'invalid')
+                elif scenario == 'symlink':
+                    member = zipfile.ZipInfo(prefix + '/link')
+                    member.create_system = 3
+                    member.external_attr = 0o120777 << 16
+                    archive.writestr(member, '../../outside')
+            payload = content.getvalue()
+            selected = {'version': version,
+                        'url': f'https://services.gradle.org/distributions/gradle-{version}-bin.zip',
+                        'sha256': '0' * 64 if scenario == 'checksum' else hashlib.sha256(payload).hexdigest()}
+
+            def save(url, target, **kwargs):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with patch.object(build_inputs, 'component', return_value=selected), \
+                        patch.object(build_inputs, 'download', side_effect=save), \
+                        patch.dict(os.environ, {'GITHUB_PATH': str(root / 'path')}):
+                    with self.assertRaises(ValueError):
+                        build_inputs.prepare_gradle(root / 'tools')
+                self.assertFalse((root / 'path').exists())
+                self.assertFalse((root / 'outside').exists())
+                self.assertFalse((root / 'tools' / prefix).exists())
+                self.assertFalse(any((root / 'tools').glob('.gradle-*')))
+
     def test_dependency_refresh_does_not_export_partial_lockfiles_after_resolution_failure(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch'}), \
@@ -1286,6 +3028,93 @@ Private_Clean: 2 kB
                 (root / 'Cargo.lock').write_text('unapproved update')
                 with self.assertRaisesRegex(ValueError, 'approved repository'):
                     build_inputs.resolve(snapshot)
+
+    def test_geo_snapshot_reuses_verified_bytes_without_network_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = b'frozen official database'
+            checksum = hashlib.sha256(payload).hexdigest()
+            upstream = {'geo': {'assets': [
+                {'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum,
+                 'browser_download_url': 'https://github.com/example/geo/' + name}
+                for name in build_inputs.GEO]}}
+            with patch.object(build_inputs, 'download_asset') as download:
+                def save(asset, path):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+                download.side_effect = save
+                resources = build_inputs.freeze_geo(root, upstream)
+            value = {'upstream': upstream, 'resources': resources}
+            with patch.object(build_inputs, 'download_asset', side_effect=AssertionError('unexpected download')):
+                self.assertEqual(set(build_inputs.verify_geo_snapshot(value, root)), set(build_inputs.GEO))
+                damaged = root / 'resources/GeoIP.dat'
+                damaged.write_bytes(b'x' * len(payload))
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.verify_geo_snapshot(value, root)
+                damaged.unlink()
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.verify_geo_snapshot(value, root)
+                with self.assertRaisesRegex(ValueError, 'inventory'):
+                    build_inputs.verify_geo_snapshot({**value, 'resources': {}}, root)
+
+    def test_geo_snapshot_rejects_incomplete_assets_and_wrong_download_size(self):
+        payload = b'frozen official database'
+        checksum = hashlib.sha256(payload).hexdigest()
+        assets = [{'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum}
+                  for name in build_inputs.GEO]
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            build_inputs.geo_assets({'geo': {'assets': assets[:-1]}})
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(build_inputs, 'download_asset') as download:
+            def save(asset, path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+            download.side_effect = save
+            assets[0]['size'] += 1
+            with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                build_inputs.freeze_geo(Path(temporary), {'geo': {'assets': assets}})
+
+    def test_apply_verifies_geo_before_replacing_source_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / 'snapshot'
+            payload = b'verified geo'
+            checksum = hashlib.sha256(payload).hexdigest()
+            upstream = {'geo': {'assets': [
+                {'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum}
+                for name in build_inputs.GEO]}}
+            resources = {}
+            for name in build_inputs.GEO.values():
+                path = snapshot / 'resources' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+                resources['resources/' + name] = checksum
+            sources = {name: b'approved source' for name in build_inputs.FILES}
+            for name, content in sources.items():
+                path = snapshot / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'unchanged local source')
+            files = {name: hashlib.sha256(content).hexdigest() for name, content in sources.items()}
+            value = {'schema': 1, 'commit': 'current', 'constraints': {}, 'files': files,
+                     'baseline': files, 'upstream': upstream, 'resources': resources}
+            build.write_json(snapshot / 'inputs.json', value)
+            damaged = snapshot / 'resources/GeoIP.dat'
+            damaged.write_bytes(b'x' * len(payload))
+            with patch.object(build_inputs, 'ROOT', root), \
+                    patch.object(build_inputs, 'current_commit', return_value='current'), \
+                    patch.object(build_inputs, 'constraints', return_value={}), \
+                    patch.object(build_inputs, 'original', side_effect=sources.__getitem__):
+                with self.assertRaisesRegex(ValueError, 'checksum or size'):
+                    build_inputs.apply(snapshot)
+                self.assertEqual((root / 'Cargo.lock').read_bytes(), b'unchanged local source')
+                damaged.write_bytes(payload)
+                build_inputs.apply(snapshot)
+                self.assertEqual((root / 'Cargo.lock').read_bytes(), sources['Cargo.lock'])
+                for name in build_inputs.GEO.values():
+                    self.assertEqual((root / 'bundle/resources' / name).read_bytes(), payload)
 
     def test_version_bootstrap_does_not_require_python_311_modules(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1361,6 +3190,106 @@ runpy.run_path(str(script), run_name='__main__')
         with patch.object(dependency_audit, 'metadata', return_value=legacy):
             self.assertEqual(dependency_audit.android_candidate('system-image-legacy','31-r14')[0],'31-r99')
 
+    def test_emulator_storage_accounts_for_the_effective_userdata_floor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            avd = root/'device.avd'
+            avd.mkdir()
+            config = avd/'config.ini'
+            config.write_text('hw.device.name=pixel_6\n'
+                              'disk.dataPartition.size=10G\n'
+                              '  disk.dataPartition.size = 12G\n'
+                              'hw.ramSize=4096\n')
+            free = 10 * 1024**3
+            with patch.object(android_build.shutil, 'disk_usage',
+                              return_value=MagicMock(free=free)):
+                android_build.configure_emulator_storage(avd, root/'report')
+                android_build.configure_emulator_storage(avd, root/'report')
+            self.assertEqual(config.read_text(), 'hw.device.name=pixel_6\nhw.ramSize=4096\n'
+                             'disk.dataPartition.size=6144M\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], free)
+            self.assertEqual(report['userdata_mib'], 6144)
+            self.assertGreater(report['required_free_bytes'], 7 * 1024**3)
+            self.assertLess(report['required_free_bytes'], free)
+            self.assertEqual(report['removed_host_tools'], [])
+
+    def test_emulator_storage_reports_insufficient_space_before_changing_the_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root/'config.ini'
+            config.write_text('disk.dataPartition.size=10G\n')
+            with patch.dict(os.environ, {'GITHUB_ACTIONS': ''}), \
+                 patch.object(android_build, 'run') as invoke, \
+                 patch.object(android_build.shutil, 'disk_usage',
+                              return_value=MagicMock(free=3 * 1024**3)):
+                with self.assertRaisesRegex(RuntimeError, 'available: 3.00 GiB'):
+                    android_build.configure_emulator_storage(root, root/'report')
+            self.assertEqual(config.read_text(), 'disk.dataPartition.size=10G\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], 3 * 1024**3)
+            invoke.assert_not_called()
+
+    def test_emulator_storage_reclaims_only_unused_tools_on_hosted_linux(self):
+        for environment, system in (('github-hosted', 'Linux'),
+                                    ('self-hosted', 'Linux'),
+                                    ('github-hosted', 'Windows')):
+            with self.subTest(environment=environment, system=system), \
+                 tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = root/'config.ini'
+                config.write_text('disk.dataPartition.size=10G\n')
+                free_before = 5255 * 1024**2
+                hosted_linux = environment == 'github-hosted' and system == 'Linux'
+                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                             'RUNNER_ENVIRONMENT': environment,
+                                             'RUNNER_OS': system}), \
+                     patch.object(android_build, 'run') as invoke, \
+                     patch.object(android_build.shutil, 'disk_usage', side_effect=[
+                         MagicMock(free=free_before), MagicMock(free=15 * 1024**3),
+                     ]):
+                    if hosted_linux:
+                        android_build.configure_emulator_storage(root, root/'report')
+                        invoke.assert_called_once_with(
+                            ['sudo', '-n', 'rm', '-rf', '--', '/usr/share/dotnet'], timeout=120)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'available: 5.13 GiB'):
+                            android_build.configure_emulator_storage(root, root/'report')
+                        invoke.assert_not_called()
+                        self.assertEqual(config.read_text(), 'disk.dataPartition.size=10G\n')
+                report = json.loads((root/'report/storage.json').read_text())
+                self.assertEqual(report['free_bytes_before'], free_before)
+                self.assertEqual(report['free_bytes'],
+                                 15 * 1024**3 if hosted_linux else free_before)
+                self.assertEqual(report['removed_host_tools'],
+                                 ['/usr/share/dotnet'] if hosted_linux else [])
+
+    def test_emulator_storage_rechecks_capacity_after_reclaiming_host_tools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root/'config.ini'
+            config.write_text('disk.dataPartition.size=10G\n')
+            with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                         'RUNNER_ENVIRONMENT': 'github-hosted',
+                                         'RUNNER_OS': 'Linux'}), \
+                 patch.object(android_build, 'run'), \
+                 patch.object(android_build.shutil, 'disk_usage', side_effect=[
+                     MagicMock(free=5 * 1024**3), MagicMock(free=6 * 1024**3),
+                 ]):
+                with self.assertRaisesRegex(RuntimeError, 'available: 6.00 GiB'):
+                    android_build.configure_emulator_storage(root, root/'report')
+            self.assertEqual(config.read_text(), 'disk.dataPartition.size=10G\n')
+            report = json.loads((root/'report/storage.json').read_text())
+            self.assertEqual(report['free_bytes'], 6 * 1024**3)
+
+    def test_preview_installs_apk_inspection_tools_before_starting_the_emulator(self):
+        versions = build_inputs.android_versions()
+        image, revision, _ = android_build.emulator_image(api=31)
+        regular = android_build.emulator_sdk_packages(image, revision)
+        preview = android_build.emulator_sdk_packages(image, revision, preview=True)
+        self.assertEqual(preview, regular + ['build-tools;' + versions['build_tools']])
+        self.assertIn('platform-tools@' + versions['platform_tools'], preview)
+
     def test_emulator_rejects_revisions_that_differ_from_the_cache_identity(self):
         versions = build_inputs.android_versions()
         with tempfile.TemporaryDirectory() as temporary:
@@ -1390,11 +3319,12 @@ runpy.run_path(str(script), run_name='__main__')
                     android_build.verify_emulator_versions(sdk,legacy=True)
 
     def test_historical_android_probe_images_keep_archive_and_embedded_identity_separate(self):
-        for api in (26,28,29,30,31,32,33,34,35,36):
+        for api in (26,27,28,29,30,31,32,33,34,35,36):
             with self.subTest(api=api), tempfile.TemporaryDirectory() as temporary:
                 sdk=Path(temporary)
                 image,archive_revision,source_revision=android_build.emulator_image(api=api)
-                self.assertEqual(image,f'system-images;android-{api};google_apis;x86_64')
+                tag = 'default' if api == 27 else 'google_apis'
+                self.assertEqual(image,f'system-images;android-{api};{tag};x86_64')
                 self.assertTrue(archive_revision.isdigit())
                 emulator=sdk/'emulator'
                 emulator.mkdir()
@@ -1408,26 +3338,30 @@ runpy.run_path(str(script), run_name='__main__')
                     with self.assertRaisesRegex(ValueError,'revision differs'):
                         android_build.verify_emulator_versions(sdk,api=api)
         with self.assertRaisesRegex(ValueError,'No approved'):
-            android_build.emulator_image(api=27)
+            android_build.emulator_image(api=25)
 
     def test_ime_export_retries_permission_failure_only_on_a_debuggable_emulator(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            report=Path(temporary)
-            commands=[]
-            def invoke(command, **kwargs):
-                commands.append(command[1:])
-                if command[1]=='pull':
-                    if commands.count(command[1:])==1:
-                        return subprocess.CompletedProcess(command,1,'','Permission denied')
-                    (report/'ime-report/name.png').write_bytes(b'screenshot')
-                return subprocess.CompletedProcess(command,0,'1\n' if command[1]=='shell' else '','')
-            with patch.object(android_build.subprocess,'run',side_effect=invoke):
-                android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
-            self.assertIn(['root'],commands)
-            self.assertIn(['wait-for-device'],commands)
-            self.assertEqual(sum(command[0]=='pull' for command in commands),2)
-            self.assertEqual(commands[-1][1],'/sdcard/ime-report/.')
-            self.assertIn('Permission denied',(report/'ime-pull.txt').read_text())
+        for name in ('ime-report', 'application-preview'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                self.verify_device_report_export(Path(temporary), name)
+
+    def verify_device_report_export(self, report, name):
+        commands=[]
+        def invoke(command, **kwargs):
+            commands.append(command[1:])
+            if command[1]=='pull':
+                if commands.count(command[1:])==1:
+                    return subprocess.CompletedProcess(command,1,'','Permission denied')
+                (report/name/'name.png').write_bytes(b'screenshot')
+            return subprocess.CompletedProcess(command,0,'1\n' if command[1]=='shell' else '','')
+        with patch.object(android_build.subprocess,'run',side_effect=invoke):
+            android_build.pull_device_report('/sdcard/'+name,report,required=True,name=name)
+        self.assertIn(['root'],commands)
+        self.assertIn(['wait-for-device'],commands)
+        self.assertEqual(sum(command[0]=='pull' for command in commands),2)
+        self.assertEqual(commands[-1][1],'/sdcard/'+name+'/.')
+        pull_log = name.removesuffix('-report') + '-pull.txt'
+        self.assertIn('Permission denied',(report/pull_log).read_text())
 
     def test_ime_export_does_not_root_a_physical_or_non_debuggable_device(self):
         for values in (('0','1'),('1','0')):
@@ -1437,7 +3371,7 @@ runpy.run_path(str(script), run_name='__main__')
                            *(subprocess.CompletedProcess([],0,value+'\n','') for value in values)]
                 with patch.object(android_build.subprocess,'run',side_effect=responses) as invoke:
                     with self.assertRaisesRegex(RuntimeError,'screenshot export failed'):
-                        android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
+                        android_build.pull_device_report('/sdcard/ime-report',report,required=True)
                 self.assertNotIn([android_build.ADB,'root'],[call.args[0] for call in invoke.call_args_list])
 
     def test_ime_export_rejects_successful_empty_reports(self):
@@ -1446,8 +3380,677 @@ runpy.run_path(str(script), run_name='__main__')
             with patch.object(android_build.subprocess,'run',
                               return_value=subprocess.CompletedProcess([],0,'0 files pulled','')) as invoke:
                 with self.assertRaisesRegex(RuntimeError,'screenshot export failed'):
-                    android_build.pull_ime_report('/sdcard/ime-report',report,required=True)
+                    android_build.pull_device_report('/sdcard/ime-report',report,required=True)
             self.assertEqual(invoke.call_count,1)
+
+    def test_ime_export_can_require_native_control_state_instead_of_subscription_screenshots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            def invoke(command, **kwargs):
+                (report/'ime-report/state.json').write_text('{"editor":"android.widget.EditText"}')
+                return subprocess.CompletedProcess(command,0,'1 file pulled','')
+            with patch.object(android_build.subprocess,'run',side_effect=invoke):
+                android_build.pull_device_report('/sdcard/native-control',report,
+                                              required=True,required_pattern='state.json')
+            self.assertTrue((report/'ime-report/state.json').is_file())
+
+    def test_android_tun_origin_keeps_the_probe_live_until_controller_verification(self):
+        for path, acknowledgement in (('/probe', None), ('/hold', b'!'), ('/hold', b'?')):
+            with self.subTest(path=path, acknowledgement=acknowledgement):
+                server, client = socket.socketpair()
+                client.settimeout(1)
+                errors = []
+                def serve():
+                    try:
+                        with server:
+                            android_build.network_origin_handler()(server, ('127.0.0.1', 0), None)
+                    except Exception as error:
+                        errors.append(error)
+                worker = threading.Thread(target=serve, daemon=True)
+                worker.start()
+                try:
+                    client.sendall(
+                        f'GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\nContent-Length: 1\r\n\r\n'.encode()
+                    )
+                    headers = bytearray()
+                    while not headers.endswith(b'\r\n\r\n'):
+                        fragment = client.recv(1)
+                        self.assertTrue(fragment, 'Origin closed before sending HTTP headers')
+                        headers.extend(fragment)
+                    self.assertTrue(headers.startswith(b'HTTP/1.1 200 '))
+                    expected = b'cor-android-network-ok'
+                    body = bytearray()
+                    while len(body) < len(expected):
+                        fragment = client.recv(len(expected) - len(body))
+                        self.assertTrue(fragment, 'Origin truncated the body')
+                        body.extend(fragment)
+                    self.assertEqual(body, expected)
+                    if acknowledgement is not None:
+                        self.assertIn(f'Content-Length: {len(expected) + 1}\r\n'.encode(), headers)
+                        client.settimeout(0.05)
+                        with self.assertRaises(socket.timeout):
+                            client.recv(1)
+                        client.settimeout(1)
+                        client.sendall(acknowledgement)
+                        self.assertEqual(client.recv(1), b'\n' if acknowledgement == b'!' else b'')
+                    self.assertEqual(client.recv(1), b'')
+                finally:
+                    client.close()
+                    worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+
+    def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
+        network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                       'applicationRoutingPersistsAndKeepsOtherAppsOnline',
+                       'quickTileRestoresColdCoreWithoutOpeningTheActivity')
+        for failed_case, log_error, captured_log in (
+                (None,None,'network test complete'),
+                (network_cases[0],None,'network test failed'),
+                (network_cases[1],None,'application routing test failed'),
+                (network_cases[2],None,'tile test failed'),
+                (None,RuntimeError('Android test log end marker is missing'),'partial log'),
+                (None,None,'Mobile runtime stopped: core failure')):
+            with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \
+                    patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
+                    tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary)
+                cases=[]
+                def invoke(command, **kwargs):
+                    if 'instrument' in command:
+                        case=command[command.index('class')+1].split('#')[1]
+                        cases.append(case)
+                        output='FAILURES!!!' if case==failed_case else 'OK (1 test)'
+                        return subprocess.CompletedProcess(command,0,output,'')
+                    return subprocess.CompletedProcess(command,0,'','')
+                with patch.object(android_build,'ROOT',root), \
+                        patch.object(android_build,'run'), \
+                        patch.object(android_build.subprocess,'check_output',return_value='36\n') as properties, \
+                        patch.object(android_build.subprocess,'run',side_effect=invoke) as commands, \
+                        patch('http.server.ThreadingHTTPServer') as server, \
+                        patch('threading.Thread'), \
+                        patch.object(android_build,'start_test_log'), \
+                        patch.object(android_build,'finish_test_log',return_value=(captured_log,log_error)), \
+                        patch.object(android_build,'pull_device_report') as pull, \
+                        patch.object(android_build,'input_method_crashes') as ime_crashes:
+                    if failed_case or log_error or 'Mobile runtime stopped:' in captured_log:
+                        with self.assertRaises(RuntimeError):
+                            android_build.test('x64',root/'app.apk',root/'test.apk')
+                    else:
+                        android_build.test('x64',root/'app.apk',root/'test.apk')
+                    self.assertEqual(cases,list(network_cases))
+                    self.assertTrue(all('getprop' in call.args[0] for call in properties.call_args_list))
+                    self.assertFalse(any('input_method' in call.args[0] for call in commands.call_args_list))
+                    pull.assert_not_called()
+                    ime_crashes.assert_not_called()
+                    server.return_value.shutdown.assert_called_once()
+                    server.return_value.server_close.assert_called_once()
+                report=root/'target/android-report/x64'
+                self.assertFalse((report/'input-method-status.json').exists())
+                self.assertTrue((report/'instrumentation.txt').is_file())
+
+    def test_android_routing_policy_requires_both_real_network_cases(self):
+        cases = ('basicSystemProxyAndTun', 'applicationRoutingPersistsAndKeepsOtherAppsOnline')
+        for failed in (None, *cases):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                observed = []
+                def invoke(command, **kwargs):
+                    if 'instrument' in command:
+                        case = command[command.index('class') + 1].split('#')[1]
+                        observed.append(case)
+                        result = 'FAILURES!!!' if case == failed else 'OK (1 test)'
+                        return subprocess.CompletedProcess(command, 0, result, '')
+                    return subprocess.CompletedProcess(command, 0, '', '')
+                with patch.dict(os.environ, {
+                        'COR_CI_EXTENDED_TESTS': 'false',
+                        'COR_CI_ANDROID_ROUTING_TESTS': 'true',
+                    }), \
+                        patch.object(android_build, 'ROOT', root), \
+                        patch.object(android_build, 'run'), \
+                        patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
+                        patch.object(android_build.subprocess, 'run', side_effect=invoke), \
+                        patch('http.server.ThreadingHTTPServer') as origin, \
+                        patch('threading.Thread'), \
+                        patch.object(android_build, 'start_test_log'), \
+                        patch.object(android_build, 'finish_test_log', return_value=('', None)):
+                    if failed:
+                        with self.assertRaisesRegex(RuntimeError, 'Android integration test failed'):
+                            android_build.test('x64', root/'app.apk', root/'test.apk')
+                    else:
+                        android_build.test('x64', root/'app.apk', root/'test.apk')
+                    self.assertEqual(observed, list(cases))
+                    origin.return_value.shutdown.assert_called_once()
+                report = root/'target/android-report/x64'
+                self.assertTrue((report/'instrumentation.txt').is_file())
+                self.assertTrue((report/'runtime-status.json').is_file())
+
+    def test_device_properties_retry_only_transient_adb_errors_and_keep_terminal_failure(self):
+        command = [android_build.ADB, 'shell', 'getprop', 'ro.product.manufacturer']
+        transient = subprocess.CalledProcessError(255, command, stderr='device offline')
+        permanent = subprocess.CalledProcessError(1, command, stderr='permission denied')
+        for failures in ([transient, 'Google\n'], [subprocess.TimeoutExpired(command, 15), 'Google\n'],
+                         [transient] * 3, [permanent]):
+            with self.subTest(failures=failures), \
+                    patch.object(android_build.subprocess, 'check_output', side_effect=failures) as read, \
+                    patch.object(android_build.time, 'sleep') as delay:
+                if isinstance(failures[-1], str):
+                    self.assertEqual(android_build.device_property('ro.product.manufacturer'), 'Google')
+                else:
+                    with self.assertRaises(type(failures[-1])):
+                        android_build.device_property('ro.product.manufacturer')
+                self.assertEqual(read.call_count, len(failures))
+                self.assertEqual(delay.call_count, len(failures) - 1)
+
+    def test_android_ime_runs_remain_explicit_and_require_screenshot_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            cases=[]
+            def invoke(command, **kwargs):
+                if 'instrument' in command:
+                    cases.append(command[command.index('class')+1].split('#')[1])
+                return subprocess.CompletedProcess(command,0,'OK (1 test)','')
+            def property_value(command, **kwargs):
+                return 'com.example.ime/.Keyboard\n' if 'default_input_method' in command else '36\n'
+            with patch.object(android_build,'ROOT',root), \
+                    patch.object(android_build,'run'), \
+                    patch.object(android_build.subprocess,'check_output',side_effect=property_value), \
+                    patch.object(android_build.subprocess,'run',side_effect=invoke), \
+                    patch('http.server.ThreadingHTTPServer') as server, \
+                    patch.object(android_build,'start_test_log'), \
+                    patch.object(android_build,'finish_test_log',return_value=('',None)), \
+                    patch.object(android_build,'pull_device_report') as pull:
+                with self.assertRaisesRegex(RuntimeError,'IME evidence is incomplete'):
+                    android_build.test('x64',root/'app.apk',root/'test.apk',ime_only=True)
+                self.assertEqual(cases,['subscriptionFieldsShowImeAcceptTextAndReopenAfterBack'])
+                server.assert_not_called()
+                pull.assert_called_once()
+                self.assertTrue(pull.call_args.kwargs['required'])
+            self.assertTrue((root/'target/android-report/x64/ime-api-36/regression/input-method-status.json').is_file())
+
+    def test_application_preview_matrix_uses_every_approved_image_and_readable_names(self):
+        from build_inputs import android_versions
+        versions = android_versions()
+        apis = set(map(int, versions['ime_system_images']))
+        apis.update(int(versions[name].split(';')[1].removeprefix('android-'))
+                    for name in ('system_image', 'legacy_system_image'))
+        matrix = android_previews.matrix()['include']
+        self.assertEqual([item['api'] for item in matrix], sorted(apis))
+        self.assertEqual(next(item['android'] for item in matrix if item['api'] == 27), '8.1')
+        self.assertEqual(next(item['android'] for item in matrix if item['api'] == 31), '12')
+        self.assertEqual(next(item['android'] for item in matrix if item['api'] == 32), '12L')
+
+    def test_preview_source_rejects_failed_foreign_or_different_commit_ci(self):
+        source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': 'a' * 40,
+                  'repository': {'full_name': 'example/project'},
+                  'head_repository': {'full_name': 'example/project'},
+                  'status': 'completed', 'conclusion': 'success', 'event': 'pull_request'}
+        self.assertEqual(android_previews.validate_run(source, 'example/project', 'a' * 40), 123)
+        for changes in ({'status': 'in_progress'}, {'conclusion': 'failure'}, {'head_sha': 'b' * 40},
+                        {'path': '.github/workflows/android-previews.yml'}, {'event': 'workflow_run'},
+                        {'head_repository': {'full_name': 'external/fork'}},
+                        {'repository': {'full_name': 'other/project'}}, {'id': True}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                android_previews.validate_run(source | changes, 'example/project', 'a' * 40)
+
+    def test_preview_source_requires_unique_live_same_run_inputs(self):
+        source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': 'a' * 40,
+                  'repository': {'full_name': 'example/project'},
+                  'head_repository': {'full_name': 'example/project'},
+                  'status': 'completed', 'conclusion': 'success', 'event': 'pull_request'}
+        artifacts = [{'name': name, 'expired': False,
+                      'workflow_run': {'id': 123, 'head_sha': 'a' * 40}}
+                     for name in ('build-android-x64', 'dependency-snapshot')]
+        def client(items):
+            return lambda path: {'artifacts': items} if '/artifacts?' in path else source
+        self.assertEqual(android_previews.resolve(client(artifacts), 'example/project', 'a' * 40, 123)
+                         ['ci_run_id'], 123)
+        for items in (artifacts[:1], artifacts + [artifacts[0]],
+                      [artifacts[0] | {'expired': True}, artifacts[1]],
+                      [artifacts[0] | {'workflow_run': {'id': 124, 'head_sha': 'a' * 40}}, artifacts[1]],
+                      [artifacts[0] | {'workflow_run': {'id': 123, 'head_sha': 'b' * 40}}, artifacts[1]]):
+            with self.subTest(items=items), self.assertRaises(ValueError):
+                android_previews.resolve(client(items), 'example/project', 'a' * 40, 123)
+
+    def test_android_preview_requires_all_pages_real_applications_and_matching_version(self):
+        base = {'live': True, 'vpn': False, 'vpn_pending': False, 'detail': 0,
+                'applications_loaded': True, 'applications_loading': False,
+                'applications_error': '', 'applications_total': 15, 'applications_visible': 7,
+                'applications_system': False, 'applications_mode': 1, 'applications_selected': 15,
+                'applications_icons': 7, 'applications_icon_failures': 0,
+                'applications_visibility_limited': False, 'applications_query_permission': True,
+                'applications_saved_summary': '全部应用',
+                'nodes_list': False, 'profiles_list': False, 'scale': 1.0}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            cases = []
+            def add(layout, name, page, **state):
+                width, height = ((800, 1280) if layout == 'tablet-portrait' else
+                                 (1280, 800) if layout == 'tablet-landscape' else
+                                 (852, 393) if layout == 'landscape' else (393, 852))
+                case_name = layout + '-' + name
+                image = b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR' + struct.pack('>II', width, height)
+                (directory / (case_name + '.png')).write_bytes(image)
+                (directory / (case_name + '-screen.png')).write_bytes(image)
+                cases.append({'name': case_name, 'image': case_name + '.png',
+                              'screen_image': case_name + '-screen.png',
+                              'capture_method': 'pixelcopy-window', 'black_sample_ratio': 0,
+                              'pixel_width': width, 'pixel_height': height,
+                              'state': base | {'width': width, 'height': height, 'page': page} | state})
+            for layout in ('phone', 'landscape', 'tablet-portrait', 'tablet-landscape'):
+                for name, page, state in (
+                        ('home', 0, {}), ('proxies-grid', 1, {}), ('proxies-list', 1, {'nodes_list': True}),
+                        ('subscriptions-grid', 2, {}), ('subscriptions-list', 2, {'profiles_list': True}),
+                        ('settings-top', 9, {}), ('settings-middle', 9, {}), ('settings-bottom', 9, {}),
+                        ('applications-all', 9, {'detail': 18, 'applications_mode': 0,
+                                                 'applications_visible': 0, 'applications_icons': 0}),
+                        ('applications-default', 9, {'detail': 18}),
+                        ('applications-scrolled', 9, {'detail': 18, 'applications_scroll_y': -120})):
+                    add(layout, name, page, **state)
+            for name, page, state in (
+                    ('subscription-editor', 2, {'detail': 3}), ('tools', 10, {}),
+                    ('connections', 3, {}), ('rules', 4, {}), ('rule-shortcuts', 4, {'shortcuts_open': True}),
+                    ('logs', 5, {}), ('network', 6, {}), ('ip', 7, {}), ('ai', 8, {}),
+                    ('applications-system', 9, {'detail': 18, 'applications_system': True}),
+                    ('applications-only', 9, {'detail': 18, 'applications_mode': 1}),
+                    ('applications-exclude', 9, {'detail': 18, 'applications_mode': 2,
+                                                'applications_selected': 0}),
+                    ('applications-unsaved', 9, {'detail': 12})):
+                add('phone', name, page, **state)
+            manifest = {'schema': 3, 'scope': 'android-ui-preview', 'android_api': 31,
+                        'android_release': '12', 'cases': cases}
+            def write():
+                (directory / 'manifest.json').write_text(json.dumps(manifest))
+            write()
+            android_build.validate_application_preview(directory, 31)
+            for name, changes, message in (
+                    ('phone-applications-all', {'applications_visible': 7}, 'application list'),
+                    ('phone-applications-all', {'applications_icons': 1}, 'application icons'),
+                    ('phone-applications-default', {'applications_mode': 0}, 'routing mode'),
+                    ('phone-applications-exclude', {'applications_selected': 1}, 'invert'),
+                    ('phone-applications-only', {'applications_selected': True}, 'selection'),
+                    ('phone-applications-only', {'applications_selected': 16}, 'selection')):
+                with self.subTest(name=name, changes=changes):
+                    changed = next(case for case in cases if case['name'] == name)
+                    original = changed['state']
+                    changed['state'] = original | changes
+                    write()
+                    with self.assertRaisesRegex(ValueError, message):
+                        android_build.validate_application_preview(directory, 31)
+                    changed['state'] = original
+            write()
+            application = next(case for case in cases if case['name'] == 'phone-applications-default')
+            for change in ({'applications_icons': 0}, {'applications_icons': True},
+                           {'applications_icons': 8}, {'applications_icon_failures': -1},
+                           {'applications_visibility_limited': True},
+                           {'applications_query_permission': False},
+                           {'applications_saved_summary': ''}):
+                with self.subTest(application=change):
+                    original = application['state']
+                    application['state'] = original | change
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'application (icons|visibility)'):
+                        android_build.validate_application_preview(directory, 31)
+                    application['state'] = original
+            manifest['schema'] = 2
+            write()
+            with self.assertRaisesRegex(ValueError, 'identity'):
+                android_build.validate_application_preview(directory, 31)
+            manifest['schema'] = 3
+            tablet = next(case for case in cases if case['name'] == 'tablet-portrait-home')
+            for scale in (None, 0, -1, 2.75, True, float('nan'), float('inf')):
+                with self.subTest(scale=scale):
+                    original = tablet['state']
+                    tablet['state'] = original | {'scale': scale}
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'display scale'):
+                        android_build.validate_application_preview(directory, 31)
+                    tablet['state'] = original
+            write()
+            for change in ({'capture_method': None}, {'capture_method': 'uiautomation'},
+                           {'state': tablet['state'] | {'width': 1000}},
+                           {'black_sample_ratio': None}, {'black_sample_ratio': -1},
+                           {'black_sample_ratio': .21}, {'black_sample_ratio': True},
+                           {'black_sample_ratio': float('nan')}, {'black_sample_ratio': float('inf')}):
+                with self.subTest(change=change):
+                    original = dict(tablet)
+                    tablet.update(change)
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'window capture'):
+                        android_build.validate_application_preview(directory, 31)
+                    tablet.clear()
+                    tablet.update(original)
+            write()
+            application = next(case for case in cases if case['name'] == 'phone-applications-default')
+            for changes in ({'detail': 9}, {'live': False}, {'applications_loading': True},
+                            {'applications_loaded': False}, {'applications_error': 'access denied'},
+                            {'applications_total': 0}, {'applications_visible': 1},
+                            {'applications_visible': 16}, {'applications_visible': True},
+                            {'vpn': True}, {'vpn_pending': True}):
+                with self.subTest(changes=changes):
+                    original = application['state']
+                    application['state'] = original | changes
+                    write()
+                    with self.assertRaises(ValueError):
+                        android_build.validate_application_preview(directory, 31)
+                    application['state'] = original
+            scrolled = next(case for case in cases if case['name'] == 'phone-applications-scrolled')
+            for offset in (None, 0, 1, True, float('nan')):
+                with self.subTest(offset=offset):
+                    original = scrolled['state']
+                    scrolled['state'] = original | {'applications_scroll_y': offset}
+                    write()
+                    with self.assertRaisesRegex(ValueError, 'did not scroll'):
+                        android_build.validate_application_preview(directory, 31)
+                    scrolled['state'] = original
+            write()
+            with self.assertRaisesRegex(ValueError, 'version'):
+                android_build.validate_application_preview(directory, 30)
+            missing = cases.pop()
+            write()
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                android_build.validate_application_preview(directory, 31)
+            cases.append(missing)
+            write()
+            (directory / 'phone-applications-default.png').write_bytes(b'not an image')
+            with self.assertRaisesRegex(ValueError, 'screenshot'):
+                android_build.validate_application_preview(directory, 31)
+
+    def test_application_preview_rejects_the_wrong_device_before_installing_apks(self):
+        with patch.object(android_build.subprocess, 'check_output', return_value='36\n'), \
+                patch.object(android_build, 'test') as run_test:
+            with self.assertRaisesRegex(ValueError, 'selected Android version'):
+                android_build.application_preview(Path('/missing-build'), 31)
+            run_test.assert_not_called()
+
+    def test_application_preview_keeps_the_live_adb_installation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root/'sdk'
+            tool = sdk/'build-tools'/build_inputs.android_versions()['build_tools']/'aapt2'
+            tool.parent.mkdir(parents=True)
+            tool.touch()
+            source = root/'build'
+            source.mkdir()
+            (source/'build.tar.gz').write_bytes(b'archive')
+            (source/'build.tar.gz.sha256').write_text('a' * 64)
+            with patch.dict(os.environ, {'ANDROID_HOME': str(sdk)}), \
+                    patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
+                    patch.object(android_build, 'sha256', return_value='a' * 64), \
+                    patch('workflow_artifacts.extract_build'), \
+                    patch.object(android_build, 'prepare_sdk') as prepare, \
+                    patch.object(android_build, 'verify_build'), \
+                    patch.object(android_build, 'commit', return_value='b' * 40), \
+                    patch.object(android_build, 'test') as run_test:
+                android_build.application_preview(source, 31)
+            prepare.assert_not_called()
+            self.assertTrue(run_test.call_args.kwargs['applications_only'])
+
+    def test_application_preview_never_starts_network_tests_and_requires_exported_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            commands = []
+            def execute(command, **kwargs):
+                commands.append(list(map(str, command)))
+                return subprocess.CompletedProcess(command, 0, 'OK (1 test)', '')
+            with patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build, 'run', side_effect=execute), \
+                    patch.object(android_build.subprocess, 'run', side_effect=execute), \
+                    patch.object(android_build.subprocess, 'check_output', return_value='31\n'), \
+                    patch('http.server.ThreadingHTTPServer') as origin, \
+                    patch.object(android_build, 'start_test_log'), \
+                    patch.object(android_build, 'finish_test_log', return_value=('', None)), \
+                    patch.object(android_build, 'pull_device_report') as pull, \
+                    patch.object(android_build, 'validate_application_preview',
+                                 side_effect=ValueError('missing screenshot')) as verify:
+                with self.assertRaisesRegex(RuntimeError, 'missing screenshot'):
+                    android_build.test('x64', root/'app.apk', root/'test.apk', applications_only=True)
+                origin.assert_not_called()
+                self.assertFalse(any('ACTIVATE_VPN' in command for command in commands))
+                instruments = [command for command in commands if 'instrument' in command]
+                self.assertEqual(len(instruments), 1)
+                self.assertIn('org.clashofrust.android.ProxyTunTest#androidUiPreviewCapturesPagesAndApplications',
+                              instruments[0])
+                verify.assert_called_once_with(
+                    root/'target/android-report/x64/applications-api-31/application-preview', 31)
+                pull.assert_called_once_with(
+                    '/sdcard/Android/data/org.clashofrust.android/files/application-preview',
+                    root/'target/android-report/x64/applications-api-31',
+                    required=True, name='application-preview')
+
+    def test_android_runtime_report_separates_adjacent_app_and_system_ui_crashes(self):
+        log=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+             'E AndroidRuntime: Process: com.android.systemui, PID: 42\n'
+             'E AndroidRuntime: java.lang.NullPointerException: navigation bar\n'
+             'E AndroidRuntime: FATAL EXCEPTION: main\n'
+             'E AndroidRuntime: Process: org.clashofrust.android, PID: 43\n'
+             'E AndroidRuntime: java.lang.IllegalStateException: application\n')
+        report=android_build.runtime_crash_status(log)
+        self.assertTrue(report['log_scoped'])
+        self.assertEqual(report['application_crashes'],
+                         [{'process':'org.clashofrust.android',
+                           'exception':'java.lang.IllegalStateException: application'}])
+        self.assertEqual(report['system_ui_crashes'],
+                         [{'process':'com.android.systemui',
+                           'exception':'java.lang.NullPointerException: navigation bar'}])
+        self.assertFalse(android_build.runtime_crash_status(log,False)['log_scoped'])
+        self.assertEqual(android_build.runtime_crash_status('ordinary log')['application_crashes'],[])
+
+    def test_android_runtime_report_includes_native_panics_without_a_java_exception(self):
+        log = (
+            '11-10 08:36:18.681 3904 3969 E GoLog: thread panicked at layout.rs:567\n'
+            '11-10 08:36:18.692 3904 3953 E RustPanic: index out of bounds: the len is 4 but the index is 4\n'
+        )
+        report = android_build.runtime_crash_status(log)
+        self.assertEqual(report['application_crashes'],
+                         [{'process': 'org.clashofrust.android',
+                           'exception': 'RustPanic: index out of bounds: the len is 4 but the index is 4'}])
+        self.assertEqual(report['system_ui_crashes'], [])
+        self.assertEqual(android_build.runtime_crash_status('I RustPanic: tag example')['application_crashes'], [])
+
+    def test_android_ime_crash_report_uses_only_the_current_run_and_selected_input_method(self):
+        crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+               'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+               'E AndroidRuntime: java.lang.NullPointerException: unavailable keyboard\n')
+        log=crash+'I CorAndroidTest: start-current-test\n'+crash
+        current=android_build.scoped_test_log(log,'start-current-test')
+        self.assertEqual(android_build.input_method_crashes(current,'com.example.ime'),
+                         [{'process':'com.example.ime',
+                           'exception':'java.lang.NullPointerException: unavailable keyboard'}])
+        self.assertEqual(android_build.input_method_crashes(current,'org.clashofrust.android'),[])
+        self.assertEqual(android_build.input_method_crashes(
+            android_build.scoped_test_log(crash+'I CorAndroidTest: start-current-test\n','start-current-test'),
+            'com.example.ime'),[])
+        with self.assertRaisesRegex(RuntimeError,'start marker is missing'):
+            android_build.scoped_test_log(log,'unrecorded-marker')
+
+    def test_android_ime_crash_report_ignores_other_packages_and_ordinary_log_errors(self):
+        log=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+             'E AndroidRuntime: Process: com.example.other, PID: 42\n'
+             'E AndroidRuntime: java.lang.IllegalArgumentException: bad input\n'
+             'E AndroidRuntime: Process: com.example.ime.extra, PID: 43\n'
+             'E InputMethodManager: java.lang.NullPointerException: remote connection\n')
+        self.assertEqual(android_build.input_method_crashes(log,'com.example.ime'),[])
+
+    def test_android_ime_log_accepts_invalid_utf8_without_hiding_crashes_or_losing_scope(self):
+        log=(b'I system: old invalid message \xc0\n'
+             b'I CorAndroidTest: current-ime-test\n'
+             b'I system: new invalid message \xc0\n'
+             b'E AndroidRuntime: FATAL EXCEPTION: main\n'
+             b'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+             b'E AndroidRuntime: java.lang.NullPointerException: bad keyboard \xc0\n')
+        current=android_build.scoped_test_log(log,'current-ime-test')
+        self.assertNotIn('old invalid message',current)
+        self.assertIn('new invalid message \ufffd',current)
+        self.assertEqual(android_build.input_method_crashes(current,'com.example.ime'),
+                         [{'process':'com.example.ime',
+                           'exception':'java.lang.NullPointerException: bad keyboard \ufffd'}])
+        with self.assertRaisesRegex(RuntimeError,'start marker is missing'):
+            android_build.scoped_test_log(log,'absent-ime-test')
+
+    def test_android_log_stream_preserves_bytes_and_checks_crashes_between_both_markers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            def start(command, **kwargs):
+                self.assertNotIn('-d',command)
+                self.assertNotIn('-T',command)
+                kwargs['stdout'].write(b'I system: previous log\n')
+                kwargs['stdout'].flush()
+                return process
+            def emit(command, **kwargs):
+                marker=command[-1]
+                with (report/'logcat.raw').open('ab') as output:
+                    output.write(f'I CorAndroidTest: {marker}\n'.encode())
+                    if not marker.endswith('-end'):
+                        output.write(b'I system: invalid byte \xc0\n'
+                                     b'E AndroidRuntime: FATAL EXCEPTION: main\n'
+                                     b'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+                                     b'E AndroidRuntime: java.lang.NullPointerException: keyboard\n')
+                return subprocess.CompletedProcess(command,0)
+            with patch.object(android_build.subprocess,'Popen',side_effect=start), \
+                    patch.object(android_build.subprocess,'run',side_effect=emit):
+                capture=android_build.start_test_log(report,'current-test')
+                captured,error=android_build.finish_test_log(capture,report,'current-test')
+            self.assertIsNone(error)
+            self.assertNotIn('previous log',captured)
+            self.assertNotIn('current-test-end',captured)
+            self.assertIn('\ufffd',captured)
+            self.assertIn(b'\xc0',(report/'logcat.raw').read_bytes())
+            self.assertEqual(len(android_build.input_method_crashes(captured,'com.example.ime')),1)
+            process.terminate.assert_called_once()
+
+    def test_android_log_stream_failure_preserves_raw_evidence_and_requires_complete_scope(self):
+        for ended,timeout in ((True,False),(False,True)):
+            with self.subTest(ended=ended), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                raw=b'I CorAndroidTest: current-test\nI system: partial evidence\n'
+                (report/'logcat.raw').write_bytes(raw)
+                process=MagicMock()
+                process.poll.return_value=1 if ended else None
+                with patch.object(android_build.subprocess,'run'), \
+                        patch.object(android_build.time,'monotonic',side_effect=[0,31]), \
+                        patch.object(android_build.time,'sleep') as pause:
+                    captured,error=android_build.finish_test_log(process,report,'current-test')
+                self.assertIsNotNone(error)
+                self.assertIn('partial evidence',captured)
+                self.assertEqual((report/'logcat.raw').read_bytes(),raw)
+                pause.assert_not_called()
+                if timeout:
+                    process.terminate.assert_called_once()
+                else:
+                    process.terminate.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError,'end marker is missing'):
+            android_build.scoped_test_log(b'I CorAndroidTest: current-test\n','current-test','current-test-end')
+
+    def test_android_log_stream_cleans_up_when_start_marker_cannot_be_written(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            process.wait.side_effect=[subprocess.TimeoutExpired([],5),0]
+            with patch.object(android_build.subprocess,'Popen',return_value=process), \
+                    patch.object(android_build.subprocess,'run',side_effect=subprocess.TimeoutExpired([],15)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    android_build.start_test_log(report,'current-test')
+            process.terminate.assert_called_once()
+            process.kill.assert_called_once()
+
+    def test_android_log_stream_requires_a_captured_start_marker_before_running_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            with patch.object(android_build.subprocess,'Popen',return_value=process), \
+                    patch.object(android_build.subprocess,'run'), \
+                    patch.object(android_build.time,'monotonic',side_effect=[0,31]):
+                with self.assertRaisesRegex(RuntimeError,'did not capture its marker'):
+                    android_build.start_test_log(report,'current-test')
+            process.terminate.assert_called_once()
+
+    def test_android_input_method_preparation_never_mutates_a_physical_or_other_api_device(self):
+        for values in (('0','1','31'),('1','0','31'),('1','1','36')):
+            with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:
+                with patch.object(android_build.subprocess,'check_output',side_effect=values), \
+                        patch.object(android_build.subprocess,'run') as invoke:
+                    if values[2]=='31':
+                        with self.assertRaisesRegex(RuntimeError,'debuggable API 31 emulator'):
+                            android_build.prepare_emulator_input_method(Path(temporary))
+                    else:
+                        android_build.prepare_emulator_input_method(Path(temporary))
+                invoke.assert_not_called()
+
+    def test_android_input_method_preparation_keeps_a_different_keyboard_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(android_build.subprocess,'check_output',
+                              side_effect=['1','1','31','com.example.ime/.Keyboard']), \
+                    patch.object(android_build.subprocess,'run') as invoke:
+                android_build.prepare_emulator_input_method(Path(temporary))
+            invoke.assert_not_called()
+
+    def test_android_input_method_preparation_preserves_identity_and_rejects_incomplete_setup(self):
+        service='com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'
+        for reset_ok in (True,False):
+            with self.subTest(reset_ok=reset_ok), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                def invoke(command, **kwargs):
+                    output=(b'approved Gboard version' if command[1:3]==['shell','dumpsys']
+                            else 'Success\n' if reset_ok else 'Failed\n')
+                    return subprocess.CompletedProcess(command,0,output,
+                                                       b'' if isinstance(output,bytes) else '')
+                with patch.object(android_build.subprocess,'check_output',
+                                  side_effect=['1','1','31',service,service]), \
+                        patch.object(android_build.subprocess,'run',side_effect=invoke) as execute:
+                    if reset_ok:
+                        android_build.prepare_emulator_input_method(report)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError,'Could not prepare'):
+                            android_build.prepare_emulator_input_method(report)
+                record=json.loads((report/'input-method-setup.json').read_text())
+                self.assertEqual(record['complete'],reset_ok)
+                self.assertTrue(record['before_application_tests'])
+                self.assertEqual(record['input_method'],service)
+                self.assertEqual((report/'input-method-package-before-setup.txt').read_bytes(),
+                                 b'approved Gboard version')
+                mutations=[call.args[0][1:] for call in execute.call_args_list][1:]
+                self.assertEqual(mutations[0],['shell','pm','clear','com.google.android.inputmethod.latin'])
+                self.assertEqual(len(mutations),3 if reset_ok else 1)
+
+    def test_android_native_ime_control_never_resets_a_physical_or_other_api_device(self):
+        for values in (('0','1','31'),('1','0','31'),('1','1','36')):
+            with self.subTest(properties=values), tempfile.TemporaryDirectory() as temporary:
+                with patch.object(android_build.subprocess,'check_output',side_effect=values), \
+                        patch.object(android_build.subprocess,'run') as invoke:
+                    with self.assertRaisesRegex(RuntimeError,'debuggable API 31 emulator'):
+                        android_build.platform_ime_control(Path(temporary),'com.example.ime/.Keyboard')
+                invoke.assert_not_called()
+
+    def test_android_native_ime_controls_preserve_crashes_without_replacing_production_results(self):
+        crash=('E AndroidRuntime: FATAL EXCEPTION: main\n'
+               'E AndroidRuntime: Process: com.example.ime, PID: 42\n'
+               'E AndroidRuntime: java.lang.NullPointerException: native editor\n')
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            def invoke(command, **kwargs):
+                output='Success\n' if command[1:4]==['shell','pm','clear'] else b'evidence'
+                return subprocess.CompletedProcess(command,0,output,'' if isinstance(output,str) else b'')
+            with patch.object(android_build.subprocess,'check_output',side_effect=['1','1','31']), \
+                    patch.object(android_build.subprocess,'run',side_effect=invoke) as execute, \
+                    patch.object(android_build,'start_test_log'), \
+                    patch.object(android_build,'finish_test_log',return_value=(crash,None)), \
+                    patch.object(android_build,'pull_device_report'), \
+                    patch.object(android_build.time,'monotonic',side_effect=[0,16,0,16]):
+                android_build.platform_ime_control(report,'com.example.ime/.Keyboard')
+            reset_commands=[call.args[0] for call in execute.call_args_list
+                            if call.args[0][1:4]==['shell','pm','clear']]
+            self.assertEqual(reset_commands,[[android_build.ADB,'shell','pm','clear','com.example.ime']]*2)
+            for requests in (1,2):
+                result=json.loads((report/'platform-control'/f'show-{requests}'/'result.json').read_text())
+                self.assertEqual(len(result['crashes']),1)
+                self.assertTrue(result['diagnostic_only'])
+                self.assertFalse(result['replaces_production_result'])
 
     def test_android_preparation_uses_the_approved_sdk_and_skips_unused_package_tools(self):
         versions = build_inputs.android_versions()
@@ -1475,6 +4078,19 @@ runpy.run_path(str(script), run_name='__main__')
                     self.assertEqual(commands[1][7:], ['platforms/android-' + versions['platform'],
                                                        'ndk/' + versions['ndk']])
                     self.assertEqual(output.read_text(), 'ANDROID_NDK_ROOT=' + str(sdk / 'ndk' / versions['ndk']) + '\n')
+
+    def test_android_gradle_uses_the_approved_ndk_for_each_architecture(self):
+        for arch, (abi, _, _, _) in android_build.ABIS.items():
+            for debug in ('0', '1'):
+                with self.subTest(arch=arch, debug=debug), \
+                        patch.dict(os.environ, {'GITHUB_RUN_NUMBER': '42', 'RUNNER_DEBUG': debug}), \
+                        patch.object(android_build, 'android_versions', return_value={'ndk': '30.0.12345678'}):
+                    command = android_build.gradle('assembleRelease', arch=arch)
+                self.assertIn('-PappNdkVersion=30.0.12345678', command)
+                self.assertIn('-PappAbi=' + abi, command)
+                self.assertEqual('--info' in command, debug == '1')
+                self.assertEqual('-Dorg.gradle.deprecation.trace=true' in command, debug == '1')
+                self.assertEqual(command[-1], 'assembleRelease')
 
     def test_android_sdk_bootstrap_prefers_the_native_cli_and_reuses_the_pinned_install(self):
         versions = build_inputs.android_versions()
@@ -1899,7 +4515,7 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 200)], [4, 3, 1])
         self.assertEqual([c['id'] for c in storage.eviction_plan([old, new, go, gradle], 60)], [4, 3, 1])
         other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
-        self.assertEqual(storage.eviction_plan([new, other_branch], 100), [])
+        self.assertEqual(storage.eviction_plan([new, other_branch], 100), [new])
         compiler_old = entry(6, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'b'*64, 20)
         compiler_new = entry(7, 'macos-compiler-arm64-' + 'a'*16 + '-' + 'c'*64, 20)
         self.assertEqual(storage.eviction_plan([compiler_old, compiler_new], 100), [compiler_new,compiler_old])
@@ -1923,6 +4539,74 @@ runpy.run_path(str(script), run_name='__main__')
                 ('action-setup-tailscale/1.94.2/Linux-amd64','action-setup-tailscale/1.104.1/Linux-amd64')):
             self.assertEqual(storage.lineage(older),storage.lineage(newer))
         with self.assertRaises(ValueError): storage.eviction_plan([], 0)
+
+    def test_cache_retains_latest_created_target_across_refs_despite_old_cache_reads(self):
+        older = {
+            'id': 1, 'key': 'native-release-v2-macos-26-arm64-build-aaaaaaaa-bbbbbbbb',
+            'ref': 'refs/heads/main', 'size_in_bytes': 30,
+            'created_at': '2026-11-09T00:00:00Z', 'last_accessed_at': '2026-11-10T12:00:00Z',
+        }
+        newer = dict(older, id=2, ref='refs/pull/34/merge',
+                     key='native-release-v2-macos-26-arm64-build-cccccccc-dddddddd',
+                     created_at='2026-11-10T00:00:00Z', last_accessed_at='2026-11-10T00:00:00Z')
+        for old_ref, new_ref in (
+                ('refs/heads/main', 'refs/pull/34/merge'),
+                ('refs/pull/34/merge', 'refs/heads/main'),
+                ('refs/pull/34/merge', 'refs/pull/35/merge')):
+            with self.subTest(old_ref=old_ref, new_ref=new_ref):
+                previous = dict(older, ref=old_ref)
+                latest = dict(newer, ref=new_ref)
+                self.assertEqual(storage.eviction_plan([previous, latest], 100), [previous])
+                self.assertEqual(storage.eviction_plan([previous], 100), [])
+
+    def test_cache_deduplicates_workspace_sources_and_tailscale_versions_globally(self):
+        def entry(number, key, ref):
+            return {'id': number, 'key': key, 'ref': ref, 'size_in_bytes': 10,
+                    'created_at': f'2026-11-10T00:00:0{number}Z',
+                    'last_accessed_at': f'2026-11-10T00:00:0{number}Z'}
+
+        workspace = 'native-release-v2-windows-arm64-build-workspace-'
+        previous = entry(1, workspace + 'a'*64 + '-aaaaaaaa-bbbbbbbb', 'refs/heads/main')
+        latest = entry(2, workspace + 'b'*64 + '-cccccccc-dddddddd', 'refs/pull/34/merge')
+        tools_previous = entry(3, 'action-setup-tailscale/1.104.1/macOS-arm64', 'refs/heads/main')
+        tools_latest = entry(4, 'action-setup-tailscale/1.104.5/macOS-arm64', 'refs/pull/34/merge')
+        tools_other_arch = entry(5, 'action-setup-tailscale/1.104.5/macOS-amd64', 'refs/heads/main')
+        self.assertEqual(storage.eviction_plan(
+            [previous, latest, tools_previous, tools_latest, tools_other_arch], 100),
+            [tools_previous, previous])
+        tied = dict(latest, id=6, ref='refs/heads/main')
+        self.assertEqual(storage.eviction_plan([latest, tied], 100), [latest])
+
+    def test_cache_budget_does_not_prefer_main_and_keeps_profiles_separate(self):
+        def entry(number, key, ref):
+            return {'id': number, 'key': key, 'ref': ref, 'size_in_bytes': 10,
+                    'created_at': f'2026-11-10T00:00:0{number}Z',
+                    'last_accessed_at': f'2026-11-10T00:00:0{number}Z'}
+
+        main = entry(1, 'unknown-main-tool', 'refs/heads/main')
+        pull = entry(2, 'unknown-pull-tool', 'refs/pull/34/merge')
+        self.assertEqual(storage.eviction_plan([main, pull], 10), [main])
+        release = entry(3, 'memory-ubuntu22-v2-release-build-aaaaaaaa-bbbbbbbb', 'refs/heads/main')
+        dev = entry(4, 'memory-ubuntu22-v2-dev-build-aaaaaaaa-bbbbbbbb', 'refs/pull/34/merge')
+        self.assertEqual(storage.eviction_plan([release, dev], 20), [])
+
+    def test_compiler_environments_and_android_go_keep_one_generation_per_architecture(self):
+        def entry(number, key):
+            return {'id': number, 'key': key, 'ref': 'refs/pull/34/merge', 'size_in_bytes': 10,
+                    'created_at': f'2026-11-10T00:00:0{number}Z',
+                    'last_accessed_at': f'2026-11-10T00:00:0{number}Z'}
+        for prefix in ('linux-build-linux-image-ubuntu20-v1-', 'android-go-build-v1-'):
+            previous = entry(1, prefix+'arm64-'+'a'*64)
+            latest = entry(2, prefix+'arm64-'+'b'*64)
+            other = entry(3, prefix+'x64-'+'c'*64)
+            self.assertFalse(storage.retired(latest['key']))
+            self.assertEqual(storage.eviction_plan([previous, latest, other], 100), [previous])
+        self.assertGreater(storage.priority(entry(1, 'action-setup-tailscale/1.104.5/macOS-arm64')),
+                           storage.priority(entry(2, 'linux-build-linux-image-ubuntu20-v1-arm64-'+'a'*64)))
+        previous = entry(1, 'native-release-v2-windows-11-arm-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb')
+        latest = entry(2, 'native-release-v2-windows-11-arm-vendor-'+'a'*64
+                       +'-local-deps-v1-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb')
+        self.assertEqual(storage.eviction_plan([previous, latest], 100), [previous])
 
     def test_cache_cleanup_rechecks_size_and_fork_report_never_deletes(self):
         entries = [{'id': 1, 'key': 'tool-one', 'ref': 'refs/heads/main', 'size_in_bytes': 30,
@@ -2015,14 +4699,19 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertEqual(build.core_directory(root), root/'crates/client-core')
 
     def test_release_job_protocol_matches_workflow_display_names(self):
-        workflow = (build.ROOT/'.github/workflows/release.yml').read_text()
-        for name in release.PACKAGE_JOBS - set(release.PACKAGES):
+        workflow = (build.ROOT/'.github/workflows/ci.yml').read_text()
+        for name in release.CI_JOBS:
             if name.startswith('Ubuntu 20.04-'):
-                self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed GUI and TUN\n', workflow)
+                self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed proxy and TUN\n', workflow)
                 arch = name.removeprefix('Ubuntu 20.04-').split(' ', 1)[0]
                 self.assertIn('            arch: '+arch+'\n', workflow)
-            else:
+            elif name.startswith('Ubuntu latest-'):
                 self.assertIn('    name: '+name+'\n', workflow)
+        publishing = (build.ROOT/'.github/workflows/release.yml').read_text()
+        self.assertIn('    name: package-android-${{ matrix.arch }}\n', publishing)
+        self.assertNotIn('  ubuntu_20:', publishing)
+        self.assertNotIn('  ubuntu_latest:', publishing)
+        self.assertNotIn('scripts/test-release-package.py', publishing)
 
     def test_failed_cargo_json_preserves_human_diagnostics(self):
         message = json.dumps({'reason': 'compiler-message', 'message': {'rendered': 'error[E0308]: expected borrowed window'}})+'\n'
@@ -2323,6 +5012,17 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual(annotations['org.freedesktop.policykit.exec.path'], '/opt/clash-of-rust/clash-of-rust')
         self.assertEqual(annotations['org.freedesktop.policykit.exec.argv1'], '--authorize-tun')
         self.assertNotIn('org.freedesktop.policykit.exec.allow_gui', annotations)
+
+    def test_linux_package_validation_requires_the_terminal_agent_and_pkexec(self):
+        for missing in (None, 'pkexec', 'pkttyagent'):
+            with self.subTest(missing=missing), \
+                    patch.object(release_package.shutil, 'which',
+                                 side_effect=lambda name: None if name == missing else '/usr/bin/' + name):
+                if missing:
+                    with self.assertRaisesRegex(RuntimeError, missing):
+                        release_package.require_linux_polkit_tools()
+                else:
+                    release_package.require_linux_polkit_tools()
 
     def test_arm64_bundles_are_separate_and_native_architecture_is_detected(self):
         self.assertEqual(build.bundle_directory('windows','x64'),build.ROOT/'bundle')
@@ -2665,6 +5365,27 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):release.verified_run(self.client(jobs=jobs),self.commit,77)
         with self.assertRaises(ValueError):release.verified_run(self.client(main='b'*40),self.commit,77)
 
+    def test_release_allows_skipped_optional_matrix_without_omitting_required_jobs(self):
+        required = [{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS]
+        optional = {'name':'Android 16 IME','status':'completed','conclusion':'skipped'}
+        changes = {'event':'pull_request','head_branch':'codex/fix-android'}
+        for mode in ({'check_only':True}, {'prerelease':True}):
+            with self.subTest(mode=mode):
+                self.assertEqual(release.verified_run(self.client(changes,jobs=required+[optional]),
+                                                     self.commit,77,**mode)['id'],77)
+                with self.assertRaisesRegex(ValueError,'does not cover'):
+                    release.verified_run(self.client(changes,jobs=required[:-1]+[optional]),
+                                         self.commit,77,**mode)
+                skipped = [dict(job) for job in required]
+                skipped[0]['conclusion'] = 'skipped'
+                with self.assertRaisesRegex(ValueError,'did not pass'):
+                    release.verified_run(self.client(changes,jobs=skipped+[optional]),
+                                         self.commit,77,**mode)
+        for conclusion in ['failure','cancelled','success']:
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                release.verified_run(self.client(jobs=required+[optional|{'conclusion':conclusion}]),
+                                     self.commit,77)
+
     def test_preview_packaging_accepts_current_same_repository_pr_ci_only_in_check_mode(self):
         changes = {'event':'pull_request', 'head_branch':'codex/dev-0.5.2'}
         with self.assertRaises(ValueError):
@@ -2686,6 +5407,55 @@ class ReleaseTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 path=Path(folder)/'notes.md';path.write_text('Uncommitted notes')
                 with self.assertRaises(ValueError):release.release_metadata(self.commit,notes_path=path)
+
+    def test_download_badges_target_each_asset_for_stable_and_prerelease(self):
+        for version in ['0.6.6', '0.6.7-fix.1.example']:
+            with self.subTest(version=version):
+                tag = 'v' + version
+                notes = release.release_notes_with_downloads(self.notes, 'example/project', version, tag)
+                self.assertTrue(notes.startswith(self.notes.rstrip()))
+                self.assertEqual(notes.count('https://img.shields.io/badge/'), len(release.PACKAGES))
+                self.assertEqual(notes.count('https://img.shields.io/github/downloads/'), len(release.PACKAGES))
+                self.assertEqual(notes.count('displayAssetName=false'), len(release.PACKAGES))
+                buttons = re.findall(r'\[!\[([^]]+)\]\(([^)]+)\)\]\(([^)]+)\)', notes)
+                self.assertEqual(len(buttons), 2 * len(release.PACKAGES))
+                downloads = []
+                for label, image_url, download_url in buttons:
+                    image = urllib.parse.urlparse(image_url)
+                    download = urllib.parse.urlparse(download_url)
+                    self.assertEqual(image.netloc, 'img.shields.io')
+                    self.assertEqual(download.netloc, 'github.com')
+                    self.assertEqual(urllib.parse.unquote(download.path).split('/')[-2], tag)
+                    if label.endswith(' downloads'):
+                        self.assertEqual(urllib.parse.parse_qs(image.query),
+                                         {'label': ['downloads'], 'displayAssetName': ['false']})
+                        self.assertEqual(urllib.parse.unquote(image.path).split('/')[-2], tag)
+                        self.assertEqual(image.path.split('/')[-1], download.path.split('/')[-1])
+                    downloads.append(urllib.parse.unquote(download.path).split('/')[-1])
+                self.assertEqual(set(downloads),
+                                 {'Clash-of-Rust-' + version + '-' + suffix for suffix in release.PACKAGES.values()})
+                for suffix in release.PACKAGES.values():
+                    filename = 'Clash-of-Rust-' + version + '-' + suffix
+                    self.assertEqual(downloads.count(filename), 2)
+                self.assertNotIn('/downloads-pre/', notes)
+                self.assertNotIn('/latest/', notes)
+                self.assertNotIn('下载次数包含重复下载', notes)
+                self.assertNotIn('SHA256 校验文件位于下方 Assets', notes)
+        with self.assertRaises(ValueError):
+            release.release_notes_with_downloads(self.notes, 'example/project', '0.6.6', 'v0.6.5')
+
+    def test_download_table_precedes_long_release_details(self):
+        version = '0.6.7-fix.7.settings-storage'
+        details = '## 更新\n\n' + '完整保留更新说明。\n' * 2000
+        notes = '# ' + version + '\n\n' + details
+        result = release.release_notes_with_downloads(notes, 'example/project', version, 'v' + version)
+        self.assertTrue(result.startswith('# ' + version + '\n\n## 下载\n'))
+        self.assertTrue(result.endswith(details.rstrip() + '\n'))
+        downloads = result.split('## 更新', 1)[0]
+        self.assertEqual(downloads.count(' downloads]('), len(release.PACKAGES))
+        buttons = re.findall(r'\[!\[[^]]+\]\([^)]+\)\]\([^)]+\)', downloads)
+        self.assertEqual(len(buttons), 2 * len(release.PACKAGES))
+        self.assertLess(len(downloads), 9000)
 
     def test_prerelease_requires_explicit_current_same_repository_ci(self):
         changes = {'event':'pull_request', 'head_branch':'codex/fix-android'}
@@ -2730,8 +5500,9 @@ class ReleaseTests(unittest.TestCase):
             checksum.write_text('0'*64+'\n')
             with self.assertRaises(ValueError):release.validate_files(list(files.values()),self.version)
 
-    def artifact_client(self, bad_name=False, expired=False, bad_digest=False, duplicate=False, bad_receipt=False, bad_build=False):
-        artifacts=[];archives={};builds=[]
+    def artifact_client(self, bad_name=False, expired=False, bad_digest=False, duplicate=False, bad_receipt=False, bad_build=False,
+                        bad_signing=False, missing_candidate=False):
+        artifacts=[];candidates=[];archives={};builds=[]
         for number,(package,suffix) in enumerate(release.PACKAGES.items()):
             name=f'Clash-of-Rust-{self.version}-{suffix}'
             data=('installer '+suffix).encode();stream=io.BytesIO()
@@ -2742,6 +5513,8 @@ class ReleaseTests(unittest.TestCase):
                      'system':system,'arch':arch,'package':name,'tests_passed':True,
                      'sha256':hashlib.sha256(data).hexdigest(),
                      'build_artifact':{key:source[key] for key in ('id','name','digest')}}
+            if system == 'android':
+                receipt['distribution_signed'] = not bad_signing
             if bad_receipt:receipt['commit']='b'*40
             if bad_build:receipt['build_artifact']['id']=999
             with zipfile.ZipFile(stream,'w') as zipped:
@@ -2751,9 +5524,23 @@ class ReleaseTests(unittest.TestCase):
             blob=stream.getvalue();archives[number]=blob
             artifacts.append({'id':number,'name':package,'expired':expired,
                               'digest':'sha256:'+('0'*64 if bad_digest else hashlib.sha256(blob).hexdigest())})
+            candidate = copy.deepcopy(receipt)
+            if system == 'android':
+                candidate['distribution_signed'] = False
+            candidate_stream = io.BytesIO()
+            with zipfile.ZipFile(candidate_stream, 'w') as zipped:
+                zipped.writestr('../outside' if bad_name and number==0 else name, data)
+                zipped.writestr(name+'.sha256', hashlib.sha256(data).hexdigest()+'\n')
+                zipped.writestr('package-receipt.json', json.dumps(candidate))
+            candidate_blob = candidate_stream.getvalue()
+            archives[1000+number] = candidate_blob
+            candidates.append({'id': 1000+number, 'name': package, 'expired': expired,
+                               'digest': 'sha256:'+hashlib.sha256(candidate_blob).hexdigest()})
+        artifacts = [artifact for artifact in artifacts if artifact['name'] in release.PACKAGE_JOBS]
         if duplicate:artifacts.append(artifacts[0])
+        if missing_candidate:candidates.pop()
         def request(path, raw=False):
-            if path.startswith('/actions/runs/77/artifacts?'):return {'artifacts':builds}
+            if path.startswith('/actions/runs/77/artifacts?'):return {'artifacts':builds+candidates}
             if path.startswith('/actions/runs/88/artifacts?'):return {'artifacts':artifacts}
             return archives[int(path.split('/')[3])]
         return request
@@ -2762,10 +5549,28 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             directory=Path(folder)
             self.assertEqual(len(release.download_package_files(self.artifact_client(),88,77,self.commit,self.version,directory/'good')),len(release.PACKAGES)*2)
-            for key in ('bad_name','expired','bad_digest','duplicate','bad_receipt','bad_build'):
+            for key in ('bad_name','expired','bad_digest','duplicate','bad_receipt','bad_build','bad_signing','missing_candidate'):
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     release.download_package_files(self.artifact_client(**{key:True}),88,77,self.commit,self.version,directory/key)
             self.assertFalse((directory/'outside').exists())
+
+    def test_check_mode_reads_only_ci_candidates_and_rejects_them_for_distribution(self):
+        selected = self.artifact_client()
+        queries = []
+
+        def client(path, raw=False):
+            queries.append(path)
+            self.assertNotIn('/actions/runs/88/', path)
+            return selected(path, raw=raw)
+
+        with tempfile.TemporaryDirectory() as directory:
+            files = release.download_package_files(client, 88, 77, self.commit, self.version,
+                                                    Path(directory)/'check', check_only=True)
+            self.assertEqual(len(files), 18)
+            self.assertTrue(queries)
+            with self.assertRaisesRegex(ValueError, 'separate release'):
+                release.download_package_files(client, 77, 77, self.commit, self.version,
+                                               Path(directory)/'signed')
 
     def test_release_requires_every_package_and_compatibility_job(self):
         def client(changes=None,jobs=None):
@@ -2773,7 +5578,8 @@ class ReleaseTests(unittest.TestCase):
                  'head_branch':'main','head_sha':self.commit,'head_repository':{'full_name':'example/project'},
                  'status':'completed','conclusion':'success'}
             run.update(changes or {})
-            records=jobs if jobs is not None else [{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
+            records=jobs if jobs is not None else [{'name':name,'status':'completed','conclusion':'success'}
+                for name in release.PACKAGE_JOBS | {'Resolve verified CI'}]
             def request(path):
                 return {'jobs':records,'total_count':len(records)} if '/jobs?' in path else run
             request.repo='example/project'
@@ -2784,7 +5590,8 @@ class ReleaseTests(unittest.TestCase):
                            {'status':'in_progress'},{'conclusion':'failure'},{'head_branch':'codex/dev-0.5.2'}):
                 with self.subTest(change=change),self.assertRaises(ValueError):
                     release.verified_package_run(client(change),88,self.commit)
-            jobs=[{'name':name,'status':'completed','conclusion':'success'} for name in release.PACKAGE_JOBS]
+            jobs=[{'name':name,'status':'completed','conclusion':'success'}
+                  for name in sorted(release.PACKAGE_JOBS | {'Resolve verified CI'})]
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs[:-1]),88,self.commit)
             jobs[0]['conclusion']='skipped'
             with self.assertRaises(ValueError):release.verified_package_run(client(jobs=jobs),88,self.commit)
@@ -2810,7 +5617,8 @@ class ReleaseTests(unittest.TestCase):
                  patch.object(release,'GitHub'),patch.object(release,'git',return_value=self.commit), \
                  patch.object(release,'verified_run',return_value={'id':77}), \
                  patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
-                 patch.object(release,'build_artifacts'),patch.object(release,'download_package_files') as download, \
+                 patch.object(release,'build_artifacts'),patch.object(release,'candidate_artifacts'), \
+                 patch.object(release,'download_package_files') as download, \
                  patch.object(release,'publish') as publishing,patch.dict(build.os.environ,{'GITHUB_OUTPUT':str(output)}):
                 release.main()
                 download.assert_not_called();publishing.assert_not_called()
@@ -3291,6 +6099,31 @@ if(mode==='main'){
                 with self.assertRaises(ValueError):
                     upstream_cache.lookup({}, 'a' * 64)
 
+    def test_lookup_reports_only_rejected_field_names(self):
+        value = {'schema': True, 'group': 'private-value', 'key': 'wrong-value',
+                 'id': None, 'sha256': ['private-value'], 'size': True}
+        reply = io.BytesIO(json.dumps(value).encode())
+        reply.status = 200
+        with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
+            with self.assertRaises(upstream_cache.LookupMetadataError) as raised:
+                upstream_cache.lookup({}, 'a' * 64)
+        self.assertEqual(str(raised.exception),
+                         'Invalid original download metadata: schema, group, key, id, sha256, size')
+
+    def test_restore_failure_reports_its_stage_without_private_error_contents(self):
+        for error, expected in (
+                (OSError('private-address secret-token'), 'lookup: OSError'),
+                (upstream_cache.LookupMetadataError(('schema',)), 'lookup: Invalid original download metadata: schema')):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
+                    patch.object(upstream_cache, 'lookup', side_effect=error), \
+                    patch('sys.stdout', new_callable=io.StringIO) as output:
+                self.assertFalse(upstream_cache.restore(
+                    'https://github.com/tool/original', Path('unused'), 'a' * 64))
+            self.assertIn(expected, output.getvalue())
+            self.assertNotIn('private-address', output.getvalue())
+            self.assertNotIn('secret-token', output.getvalue())
+
     def test_slow_rust_platforms_survive_budget_pressure(self):
         def entry(number, key):
             return {'id': number, 'key': key, 'ref': 'refs/heads/main', 'size_in_bytes': 100,
@@ -3302,6 +6135,35 @@ if(mode==='main'){
         tool = entry(5, 'runtime-v1-java-linux-x64')
         removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
         self.assertEqual({value['id'] for value in removed}, {3, 4, 5})
+
+    def test_cache_budget_preserves_small_bootstrap_then_measured_ci_bottlenecks(self):
+        native_prefix = 'native-release-'+'v2-'
+        keys = [
+            'action-setup-tailscale/1.104.5/macOS-arm64',
+            native_prefix+'macos-latest',
+            native_prefix+'macos-15-intel',
+            'android-v2-arm64',
+            'android-v2-armv7',
+            'android-v2-x64',
+            native_prefix+'windows-11-arm',
+            'native-release-ubuntu20-v1-ubuntu-22.04',
+            native_prefix+'windows-2025',
+            'native-release-ubuntu20-v1-ubuntu-22.04-arm',
+            'memory-ubuntu22-v2-release',
+        ]
+        entries = [{'id':index,'key':key if key.startswith('action-setup-tailscale/') else key+'-13131313-11223344','ref':'refs/heads/main',
+                    'size_in_bytes':100,'last_accessed_at':f'{index:02d}','created_at':f'{index:02d}'}
+                   for index,key in enumerate(keys)]
+        for count in range(1,len(entries)+1):
+            with self.subTest(retained=count):
+                removed = storage.eviction_plan(entries,count*100)
+                retained = {entry['id'] for entry in entries}-{entry['id'] for entry in removed}
+                self.assertEqual(retained,set(range(count)))
+        self.assertEqual(storage.priority({'key':native_prefix+'macos-13-check-13131313-11223344'}),8)
+        self.assertGreater(storage.priority({'key': keys[0]}),
+                           storage.priority({'key': keys[-1]}))
+        self.assertEqual(storage.priority({'key': keys[0]}),
+                         storage.priority({'key': 'action-setup-tailscale/' + '1.104.5/macOS-amd64'}))
 
 
 class AptCacheTests(unittest.TestCase):

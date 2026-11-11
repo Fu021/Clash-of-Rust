@@ -8,6 +8,18 @@ pub(super) async fn show(window: &AppWindow) -> Result<(), slint::PlatformError>
     // Slint may defer native window creation until the event loop is running.
     // Do not retain the returned Arc: that would prevent hide() destroying it.
     drop(window.window().winit_window().await?);
+    #[cfg(target_os = "macos")]
+    window.window().with_winit_window(|native| {
+        eprintln!(
+            "Window activation: requested={}, visible={:?}, minimized={:?}, decorated={}, size={:?}, position={:?}",
+            window.window().is_visible(),
+            native.is_visible(),
+            native.is_minimized(),
+            native.is_decorated(),
+            native.inner_size(),
+            native.outer_position()
+        );
+    });
     if !window.window().is_visible() {
         return Ok(()); // A close command overtook this pending activation.
     }

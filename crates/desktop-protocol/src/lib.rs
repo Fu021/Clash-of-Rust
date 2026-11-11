@@ -85,7 +85,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 16;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -100,6 +100,12 @@ pub struct ViewState {
     pub position: Option<(i32, i32)>,
     pub maximized: bool,
     pub fullscreen: bool,
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
+    #[serde(default)]
+    pub nodes_list: bool,
+    #[serde(default)]
+    pub profiles_list: bool,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metrics {
@@ -218,6 +224,22 @@ pub fn read_frame(reader: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
 mod tests {
     use super::*;
     #[test]
+    fn view_state_round_trip_preserves_page_view_choices() {
+        let state = ViewState {
+            nodes_list: true,
+            profiles_list: true,
+            sidebar_collapsed: true,
+            ..Default::default()
+        };
+        let UiEvent::Close(decoded) = decode(&encode(&UiEvent::Close(state)).unwrap()).unwrap()
+        else {
+            panic!("wrong packet")
+        };
+        assert!(decoded.nodes_list);
+        assert!(decoded.profiles_list);
+        assert!(decoded.sidebar_collapsed);
+    }
+    #[test]
     fn framed_pipe_preserves_unicode_and_message_boundaries_and_detects_truncation() {
         let event = UiEvent::Intent {
             revision: 37,
@@ -253,7 +275,7 @@ mod tests {
     #[test]
     fn production_contract_round_trip_carries_lists_flags_and_drafts() {
         let data = UiData::default();
-        let models = models::ViewModels::default();
+        let mut models = models::ViewModels::default();
         models.attach(&data);
         data.set_edit_name("未保存订阅".into());
         data.set_rule_payload("google.com".into());
@@ -269,7 +291,23 @@ mod tests {
             message: "完整日志".into(),
             ..Default::default()
         }]);
-        data.set_site_exit_flag("DE".into());
+        data.set_site_exit_flag("🇩🇪".into());
+        data.set_node("🚀 🇯🇵 日本 01".into());
+        models.set_groups(vec![(
+            GroupItem {
+                id: "Proxy".into(),
+                current: "🚀 🇯🇵 日本 01".into(),
+                ..Default::default()
+            },
+            vec![NodePair {
+                left: NodeItem {
+                    name: "🇺🇸 美国 01".into(),
+                    valid: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+        )]);
         let packet = HostPacket::Frame {
             data: data.snapshot(),
             view_ready: true,
@@ -286,7 +324,12 @@ mod tests {
         assert_eq!(accepted, 8);
         assert_eq!(decoded.edit_name, "未保存订阅");
         assert_eq!(decoded.rule_payload, "google.com");
-        assert_eq!(decoded.site_exit_flag, "DE");
+        assert_eq!(decoded.site_exit_flag, "🇩🇪");
+        assert_eq!(decoded.node, "🚀 🇯🇵 日本 01");
+        let group = decoded.groups.row_data(0).unwrap();
+        assert_eq!(group.current, "🚀 🇯🇵 日本 01");
+        let node = group.nodes.row_data(0).unwrap().left;
+        assert_eq!(node.name, "🇺🇸 美国 01");
         assert_eq!(decoded.logs.row_data(0).unwrap().message, "完整日志");
         let exclusion = decoded.fake_ip_exclusions.row_data(0).unwrap();
         assert_eq!(exclusion.domain, "localhost");

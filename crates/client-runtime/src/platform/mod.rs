@@ -4,8 +4,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod host_network;
 pub mod memory;
 pub(crate) mod network;
+pub use network::{HostInfo, host_info};
 pub mod notification;
 mod proxy_state;
 pub use proxy_state::{ProxyState, ProxyValue};
@@ -241,7 +243,9 @@ pub fn is_elevated() -> bool {
 #[cfg(windows)]
 pub use windows::{autostart_helper_main, migrate_autostart};
 #[cfg(windows)]
-pub use windows::{installed_executable, launch_update_installer};
+pub use windows::{
+    installed_executable, launch_after_install, launch_update_installer, restart_after_update,
+};
 #[cfg(windows)]
 pub fn exit_requested() -> bool {
     windows::exit_requested()

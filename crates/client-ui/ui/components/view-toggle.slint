@@ -1,0 +1,41 @@
+import { ActionButton } from "controls.slint";
+import { Theme } from "../theme/palette.slint";
+import { Motion } from "motion.slint";
+
+export global PageViews {
+    in-out property <bool> nodes-list;
+    in-out property <bool> profiles-list;
+}
+
+export component ViewModeIcon inherits Rectangle {
+    in property <bool> list-view;
+    property <float> progress: root.list-view ? 1 : 0;
+    animate progress { duration: Motion.control; easing: ease-out; enabled: Motion.layout-active; }
+    Image {
+        width: parent.width; height: parent.height;
+        source: @image-url("../icons/layout-grid.svg");
+        colorize: Theme.dark ? #f0efec : #181817;
+        opacity: root.progress;
+    }
+    Image {
+        width: parent.width; height: parent.height;
+        source: @image-url("../icons/list.svg");
+        colorize: Theme.dark ? #f0efec : #181817;
+        opacity: 1 - root.progress;
+    }
+}
+
+export component ViewToggle inherits ActionButton {
+    in-out property <bool> list-view;
+    width: 32px; height: 32px;
+    accessible-label: root.list-view ? "切换到宫格视图" : "切换到列表视图";
+    compact: true;
+    quiet: true;
+    ViewModeIcon {
+        list-view: root.list-view;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2 + root.press-offset;
+        width: 18px; height: 18px;
+    }
+    clicked => { root.list-view = !root.list-view; }
+}

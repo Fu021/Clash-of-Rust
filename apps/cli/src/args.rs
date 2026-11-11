@@ -42,10 +42,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "stop",
         "停止内核并恢复网络；独立后台同时退出",
-        "stop",
+        "stop [--all-users]",
         0,
         0,
-        ""
+        "all-users"
     ),
     command!(
         "restart",
@@ -58,10 +58,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "status",
         "显示内核、订阅、节点、模式及实时流量",
-        "status [--watch]",
+        "status [--watch] [--all-users]",
         0,
         0,
-        "watch interval"
+        "watch interval all-users"
     ),
     command!("version", "显示客户端版本与本机架构", "version", 0, 0, ""),
     command!(
@@ -171,10 +171,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "proxy",
         "读取或切换系统代理、TUN、关闭状态",
-        "proxy [system|tun|off]",
+        "proxy [system|tun|off] [--all-users]",
         0,
         1,
-        ""
+        "all-users"
     ),
     command!(
         "env",
@@ -282,7 +282,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "logs export",
-        "导出当前完整日志",
+        "导出当前最多 500 条缓冲日志；排障现场用 diagnose --output",
         "logs export --output FILE",
         0,
         0,
@@ -322,11 +322,11 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "diagnose",
-        "检查出口、HTTP 与系统/内核 DNS",
-        "diagnose [--url URL] [--host DOMAIN]",
+        "检查网络；--output 保存诊断报告，--offline 仅收集本地现场",
+        "diagnose [--url URL] [--host DOMAIN] [--offline] [--output FILE] [--all-users]",
         0,
         0,
-        "url host"
+        "url host offline output all-users"
     ),
     command!(
         "dns",
@@ -418,8 +418,16 @@ pub static COMMANDS: &[Spec] = &[
         "output"
     ),
     command!(
+        "update status",
+        "查看本账户最近一次更新安装的结果，不启动后台",
+        "update status",
+        0,
+        0,
+        ""
+    ),
+    command!(
         "update install",
-        "下载并交给系统安装更新，完成后退出后台",
+        "下载安装更新；Linux 终端等待结果，失败尝试恢复后台",
         "update install [--yes]",
         0,
         0,
@@ -467,7 +475,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "completion",
-        "生成 Bash、Zsh、Fish 或 PowerShell 补全脚本",
+        "生成 Bash、Zsh、Fish 或 PowerShell 上下文补全脚本",
         "completion SHELL",
         1,
         1,
@@ -574,6 +582,10 @@ fn validate(args: &Args) -> Result<()> {
             if let Some(value) = args.positional.first() {
                 enum_value(value, &["system", "tun", "off"])?;
             }
+            ensure!(
+                !args.flag("all-users") || args.positional.is_empty(),
+                "--all-users 仅用于跨用户观察，不能同时切换代理"
+            );
         }
         "claude protect" | "autostart" => {
             if let Some(value) = args.positional.first() {
@@ -724,6 +736,7 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
     let Some(spec) = selected else {
         let prefix = words.join(" ");
         if prefix.is_empty()
+            || (help && prefix == "all")
             || COMMANDS
                 .iter()
                 .any(|spec| spec.path.starts_with(&(prefix.clone() + " ")))
@@ -771,7 +784,31 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
 
 pub fn help(prefix: &str) -> String {
     let mut out = format!("Clash of Rust CLI {}\n\n", clash_client_core::VERSION);
-    if let Some(spec) = COMMANDS.iter().find(|s| s.path == prefix) {
+    if prefix.is_empty() {
+        out += "用法：cor <命令> [选项]\n\n常用命令：\n";
+        for path in ["start", "stop", "restart", "status", "proxy", "diagnose"] {
+            let spec = COMMANDS.iter().find(|spec| spec.path == path).unwrap();
+            out += &format!("  {:<25} {}\n", spec.path, spec.description);
+        }
+        out += "  profile                   订阅添加、切换与更新；cor profile help\n";
+        out += "  node                      节点选择与测速；cor node help\n";
+        let advanced = COMMANDS
+            .iter()
+            .map(|spec| spec.path.split_whitespace().next().unwrap())
+            .filter(|path| {
+                ![
+                    "start", "stop", "restart", "status", "proxy", "diagnose", "profile", "node",
+                ]
+                .contains(path)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("、");
+        out += &format!("\n其他功能：{advanced}\n完整命令与通用选项：cor help all\n");
+    } else if prefix == "all" {
+        out += "用法：cor <命令> [选项]\n\n全部命令：\n";
+    } else if let Some(spec) = COMMANDS.iter().find(|s| s.path == prefix) {
         out += &format!("{}\n\n用法：cor {}\n\n", spec.description, spec.usage);
         if !spec.options.is_empty() {
             out += "命令选项：\n";
@@ -787,10 +824,12 @@ pub fn help(prefix: &str) -> String {
             if prefix.is_empty() { "" } else { " " }
         );
     }
-    for spec in COMMANDS
-        .iter()
-        .filter(|s| prefix.is_empty() || s.path.starts_with(&(prefix.to_owned() + " ")))
-    {
+    for spec in COMMANDS.iter().filter(|spec| {
+        prefix == "all"
+            || (!prefix.is_empty()
+                && spec.path.starts_with(&(prefix.to_owned() + " "))
+                && spec.path != "profile import")
+    }) {
         out += &format!("  {:<25} {}\n", spec.path, spec.description);
     }
     let example = match prefix {
@@ -813,7 +852,13 @@ pub fn help(prefix: &str) -> String {
         out += &format!("\n示例：\n  {example}\n");
     }
     out += "\n通用选项：\n";
-    for key in GLOBAL.split_whitespace() {
+    for key in (if prefix.is_empty() {
+        "help version json data-dir user"
+    } else {
+        GLOBAL
+    })
+    .split_whitespace()
+    {
         out += &option_help(key);
     }
     out += "\n详情：cor help <命令>；使用文档：docs/cli.md\n退出码：0 成功，1 操作失败，2 参数错误，3 后台不可达，124 请求超时，130 已取消。\n";
@@ -829,7 +874,7 @@ fn option_help(key: &str) -> String {
         "data-dir" => "指定独立数据目录",
         "resources" => "指定内核与 Geo 资源目录",
         "user" => "Linux 管理员以指定用户身份操作其配置与后台",
-        "all-users" => "Linux 管理员只读列出各本机用户默认目录中的订阅",
+        "all-users" => "Linux root 跨用户只读观察；订阅列表或 TUN 持有进程",
         "yes" => "明确确认删除、保护或安装等操作（-y）",
         "show-secrets" => "显式允许输出订阅/配置中的完整凭据",
         "quiet" => "不显示进度提示（-q）",
@@ -860,7 +905,7 @@ fn option_help(key: &str) -> String {
         "host" => "诊断域名，默认 github.com",
         "system" => "使用本机系统 DNS，默认使用内核/代理 DNS",
         "category" => "检测分类，例如 AI、全球、日本",
-        "offline" => "仅扫描本机配置，不请求外部检测服务",
+        "offline" => "仅收集本机信息，不请求外部检测服务",
         "open" => "在默认浏览器打开本机采样入口",
         _ => "见当前命令说明",
     };
@@ -877,34 +922,191 @@ fn option_help(key: &str) -> String {
 }
 
 pub fn completion(shell: &str) -> Result<String> {
-    let words: BTreeSet<_> = COMMANDS
-        .iter()
-        .flat_map(|s| s.path.split_whitespace())
-        .chain(["help"])
-        .collect();
-    let mut words = words
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    words.extend(
-        GLOBAL
-            .split_whitespace()
-            .chain(COMMANDS.iter().flat_map(|s| s.options.split_whitespace()))
-            .map(|s| format!("--{s}")),
-    );
-    let words = words.into_iter().collect::<Vec<_>>().join(" ");
     Ok(match shell {
-        "bash" => format!(
-            "_cor_complete() {{ COMPREPLY=($(compgen -W '{words}' -- \"${{COMP_WORDS[COMP_CWORD]}}\")); }}\ncomplete -F _cor_complete cor\n"
-        ),
-        "zsh" => format!("#compdef cor\ncompctl -k '({words})' cor\n"),
-        "fish" => format!("complete -c cor -f -a '{words}'\n"),
-        "powershell" => format!(
-            "Register-ArgumentCompleter -Native -CommandName cor -ScriptBlock {{ param($wordToComplete) '{}'.Split(' ') | Where-Object {{ $_ -like \"$wordToComplete*\" }} }}\n",
-            words
-        ),
+        "bash" => "_cor_complete() {\n  local IFS=$'\\n'\n  COMPREPLY=( $(cor __complete \"${COMP_WORDS[@]:1}\") )\n}\ncomplete -F _cor_complete cor\n".into(),
+        "zsh" => "#compdef cor\n_cor() {\n  local -a candidates\n  candidates=(\"${(@f)$(cor __complete \"${(@)words[2,-1]}\")}\")\n  compadd -a candidates\n}\ncompdef _cor cor\n".into(),
+        "fish" => "function __cor_complete\n  set -l tokens (commandline -opc)\n  set -e tokens[1]\n  cor __complete $tokens (commandline -ct)\nend\ncomplete -c cor -f -a '(__cor_complete)'\n".into(),
+        "powershell" => "Register-ArgumentCompleter -Native -CommandName cor -ScriptBlock {\n  param($wordToComplete, $commandAst, $cursorPosition)\n  $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text.Trim('\"').Trim(\"'\") })\n  if ($words.Count -eq 0 -or $words[-1] -ne $wordToComplete) { $words += $wordToComplete }\n  cor __complete @words | ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }\n}\n".into(),
         _ => bail!("补全支持 bash、zsh、fish、powershell"),
     })
+}
+
+/// Context-sensitive candidates for the hidden shell-completion entry point.
+/// The final item is the incomplete word currently under the cursor.
+pub fn complete(words: &[String]) -> String {
+    let last = words.last().map(String::as_str).unwrap_or("");
+    let completed = words
+        .get(..words.len().saturating_sub(1))
+        .unwrap_or_default();
+    let tokens = completion_tokens(completed);
+    let path = completion_path(&tokens);
+    let path_parts = path.split_whitespace().count();
+    let positional = tokens.get(path_parts..).unwrap_or_default();
+    let spec = COMMANDS.iter().find(|spec| spec.path == path);
+
+    let mut candidates = BTreeSet::new();
+    if let Some((option, prefix)) = attached_option(last) {
+        for value in option_values(&path, option) {
+            candidates.insert(format!("{prefix}{value}"));
+        }
+    } else if let Some(option) = completed
+        .last()
+        .and_then(|value| value.strip_prefix("--"))
+        .filter(|value| VALUES.split_whitespace().any(|name| name == *value))
+    {
+        candidates.extend(
+            option_values(&path, option)
+                .iter()
+                .copied()
+                .map(str::to_owned),
+        );
+    } else if last.starts_with("--") {
+        for option in GLOBAL.split_whitespace().chain(
+            spec.into_iter()
+                .flat_map(|spec| spec.options.split_whitespace()),
+        ) {
+            candidates.insert(format!("--{option}"));
+        }
+    } else if spec.is_none() {
+        candidates.extend(next_commands(&path));
+    } else {
+        candidates.extend(position_candidates(&path, positional));
+    }
+    let mut result = candidates
+        .into_iter()
+        .filter(|candidate| candidate.starts_with(last))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !result.is_empty() {
+        result.push('\n');
+    }
+    result
+}
+
+fn completion_tokens(words: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < words.len() {
+        let word = &words[index];
+        if word == "--" {
+            result.extend(words[index + 1..].iter().cloned());
+            break;
+        }
+        if let Some(option) = word.strip_prefix("--") {
+            let (option, attached) = option
+                .split_once('=')
+                .map_or((option, false), |(option, _)| (option, true));
+            index += if !attached && VALUES.split_whitespace().any(|name| name == option) {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        result.push(word.clone());
+        index += 1;
+    }
+    result
+}
+
+fn completion_path(words: &[String]) -> String {
+    let mut best = 0;
+    for spec in COMMANDS {
+        let parts = spec.path.split_whitespace().collect::<Vec<_>>();
+        let shared = words
+            .iter()
+            .zip(parts)
+            .take_while(|(word, part)| word == part)
+            .count();
+        best = best.max(shared);
+    }
+    words[..best].join(" ")
+}
+
+fn next_commands(path: &str) -> BTreeSet<String> {
+    let prefix = if path.is_empty() {
+        String::new()
+    } else {
+        format!("{path} ")
+    };
+    let mut candidates = COMMANDS
+        .iter()
+        .filter_map(|spec| {
+            spec.path
+                .strip_prefix(prefix.as_str())?
+                .split_whitespace()
+                .next()
+                .map(str::to_owned)
+        })
+        .collect::<BTreeSet<_>>();
+    if path.is_empty() {
+        candidates.extend(["help".to_owned()]);
+    }
+    candidates
+}
+
+fn position_candidates(path: &str, positional: &[String]) -> Vec<String> {
+    let index = positional.len();
+    let values: &[&str] = match (path, index) {
+        ("mode", 0) => &["rule", "global", "direct"],
+        ("proxy", 0) => &["system", "tun", "off"],
+        ("claude protect" | "autostart", 0) => &["on", "off"],
+        ("rule enable", 1) => &["on", "off"],
+        ("rule shortcut", 0) => &["ads", "private-domain", "private-ip", "cn-domain", "cn-ip"],
+        ("rule shortcut", 1) => &["on", "off"],
+        ("completion", 0) => &["bash", "zsh", "fish", "powershell"],
+        ("config get", 0) => clash_client_core::config::READABLE_SETTINGS,
+        ("config set", 0) => clash_client_core::config::MUTABLE_SETTINGS,
+        ("config set", 1) => {
+            return positional.first().map_or_else(Vec::new, |key| {
+                setting_values(key)
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect()
+            });
+        }
+        _ => &[],
+    };
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+fn setting_values(key: &str) -> &'static [&'static str] {
+    match key {
+        "dark" | "tray_speed" | "update_prereleases" | "dns_override" | "fake_ip" | "ipv6"
+        | "udp" => &["false", "true"],
+        "theme_mode" => &["system", "light", "dark"],
+        "accent_color" => &["teal", "blue", "purple", "rose", "amber", "slate"],
+        "node_sort" => &["latency_ascending", "latency_descending", "name"],
+        _ => &[],
+    }
+}
+
+fn attached_option(word: &str) -> Option<(&str, &str)> {
+    let (option, value) = word.strip_prefix("--")?.split_once('=')?;
+    VALUES
+        .split_whitespace()
+        .any(|name| name == option)
+        .then_some((option, &word[..word.len() - value.len()]))
+}
+
+fn option_values(path: &str, option: &str) -> &'static [&'static str] {
+    match option {
+        "sort" if path == "node list" => &["name", "latency"],
+        "sort" => &[
+            "name",
+            "rule",
+            "chain",
+            "upload",
+            "download",
+            "upload-rate",
+            "download-rate",
+            "start",
+            "none",
+        ],
+        "level" => &["debug", "info", "warning", "error", "silent"],
+        "shell" => &["bash", "zsh", "fish", "powershell", "cmd"],
+        _ => &[],
+    }
 }
 
 #[cfg(test)]
@@ -953,12 +1155,35 @@ mod tests {
         assert!(args(&["node", "unknown"]).is_err());
     }
     #[test]
+    fn default_help_is_compact_and_full_help_keeps_compatible_commands() {
+        let compact = help("");
+        assert!(compact.contains("cor help all"));
+        assert!(compact.contains("cor node help"));
+        assert!(!compact.contains("profile import"));
+        let full = args(&["help", "all"]).unwrap();
+        assert!(full.help);
+        for spec in COMMANDS {
+            assert!(help(&full.path).contains(spec.usage.split_whitespace().next().unwrap()));
+            assert!(help(&full.path).contains(spec.path));
+        }
+        assert!(!help("profile").contains("profile import"));
+        assert!(args(&["profile", "import", "example.yaml", "--name", "example"]).is_ok());
+    }
+    #[test]
     fn network_refresh_is_an_explicit_restart_option() {
         let parsed = args(&["restart", "--network-only", "--yes"]).unwrap();
         assert!(parsed.flag("network-only"));
         assert!(parsed.flag("yes"));
         assert!(args(&["start", "--network-only"]).is_err());
         assert!(help("restart").contains("关闭旧连接"));
+    }
+    #[test]
+    fn diagnostics_can_export_local_evidence_without_starting_a_backend() {
+        let parsed = args(&["diagnose", "--offline", "--output", "report.json"]).unwrap();
+        assert!(parsed.flag("offline"));
+        assert_eq!(parsed.get("output"), Some("report.json"));
+        assert!(args(&["status", "--offline"]).is_err());
+        assert!(help("diagnose").contains("--output"));
     }
     #[test]
     fn cross_user_inventory_cannot_be_confused_with_a_selected_data_directory() {
@@ -970,5 +1195,54 @@ mod tests {
             args(&["--user=alice", "status"]).unwrap().get("user"),
             Some("alice")
         );
+    }
+    #[test]
+    fn cross_user_tun_observation_is_explicit_and_limited_to_network_commands() {
+        for command in ["status", "proxy", "stop", "diagnose"] {
+            assert!(args(&[command, "--all-users"]).is_ok(), "{command}");
+        }
+        assert!(args(&["--all-users", "status"]).is_ok());
+        assert!(args(&["status", "--watch", "--all-users"]).is_ok());
+        assert!(args(&["proxy", "--all-users"]).is_ok());
+        assert!(args(&["proxy", "off", "--all-users"]).is_err());
+        assert!(args(&["node", "list", "--all-users"]).is_err());
+        assert!(args(&["status", "--all-users", "--user", "alice"]).is_err());
+    }
+    #[test]
+    fn contextual_completion_handles_commands_keys_values_and_options() {
+        let complete = |line: &[&str]| {
+            super::complete(
+                &line
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert!(complete(&["co"]).contains("completion\n"));
+        assert!(complete(&["config", "g"]).contains("get\n"));
+        assert!(complete(&["config", "set", "the"]).contains("theme_mode\n"));
+        assert_eq!(
+            complete(&["config", "set", "theme_mode", ""]),
+            "dark\nlight\nsystem\n"
+        );
+        assert_eq!(complete(&["config", "set", "dns_override", "t"]), "true\n");
+        assert!(complete(&["config", "set", "ipv6", "--"]).contains("--help\n"));
+        assert_eq!(complete(&["node", "list", "--sort", ""]), "latency\nname\n");
+        assert_eq!(complete(&["env", "--shell", "p"]), "powershell\n");
+        assert!(complete(&["config", "get", ""]).contains("update_prereleases\n"));
+        assert!(
+            complete(&["config", "get", "update_"]).contains("update_check_interval_minutes\n")
+        );
+        assert!(
+            complete(&["config", "set", "update_"]).contains("update_check_interval_minutes\n")
+        );
+        assert!(!complete(&["config", "get", ""]).contains("controller_port\n"));
+        assert!(!complete(&["config", "set", ""]).contains("active_profile\n"));
+    }
+    #[test]
+    fn completion_scripts_delegate_to_the_contextual_entry_point() {
+        for shell in ["bash", "zsh", "fish", "powershell"] {
+            assert!(completion(shell).unwrap().contains("__complete"));
+        }
     }
 }

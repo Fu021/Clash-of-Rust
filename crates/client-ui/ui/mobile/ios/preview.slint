@@ -2,13 +2,16 @@ import { MobilePreviewSurface } from "../shared/preview.slint";
 import { IosSurface } from "app.slint";
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 export component IosPreview inherits Window {
+    in-out property <bool> preview-long-names <=> scene.preview-long-names;
     preferred-width: 393px; preferred-height: 852px;
     default-font-family: "Source Han Sans CN";
     in-out property <bool> preview-motion <=> scene.preview-motion;
+    in-out property <bool> preview-list-view <=> scene.preview-list-view;
     in-out property <int> preview-page <=> scene.preview-page;
     in-out property <int> preview-detail <=> scene.preview-detail;
     in-out property <bool> preview-dark <=> scene.preview-dark;
     in-out property <bool> preview-connected <=> scene.preview-connected;
+    in-out property <bool> preview-core-running <=> scene.preview-core-running;
     in-out property <length> inset-top <=> scene.inset-top;
     in-out property <length> inset-bottom <=> scene.inset-bottom;
     in-out property <length> inset-left <=> scene.inset-left;
@@ -18,11 +21,15 @@ export component IosPreview inherits Window {
     in-out property <bool> preview-selected-rule <=> scene.preview-selected-rule;
     in-out property <bool> preview-shortcuts <=> scene.preview-shortcuts;
     in-out property <length> preview-rules-scroll <=> scene.preview-rules-scroll;
+    in-out property <length> preview-home-scroll <=> scene.preview-home-scroll;
     in-out property <bool> preview-protection-pending <=> scene.preview-protection-pending;
     in-out property <bool> preview-protected <=> scene.preview-protected;
     in-out property <int> preview-protection-health <=> scene.preview-protection-health;
     in-out property <string> preview-protection-message <=> scene.preview-protection-message;
     in-out property <string> preview-notice <=> scene.preview-notice;
+    in-out property <bool> preview-notice-error <=> scene.preview-notice-error;
+    in-out property <bool> preview-notice-critical <=> scene.preview-notice-critical;
+    in-out property <bool> preview-notice-recover-network <=> scene.preview-notice-recover-network;
     in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
     in-out property <bool> preview-sparse <=> scene.preview-sparse;
     scene := MobilePreviewSurface {

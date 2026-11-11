@@ -14,32 +14,42 @@ final class VpnRouting extends ConnectivityManager.NetworkCallback implements Au
     private final String previousInterface;
     private final boolean ipv6;
     private final CountDownLatch ready=new CountDownLatch(1);
-    private Network network;
-    private NetworkCapabilities capabilities;
-    private LinkProperties links;
+    private static final class Snapshot {
+        NetworkCapabilities capabilities;
+        LinkProperties links;
+    }
+    private final java.util.Map<Network, Snapshot> networks = new java.util.HashMap<>();
     private volatile String interfaceName;
 
     VpnRouting(Context context,String previousInterface,boolean ipv6) {
         manager=context.getSystemService(ConnectivityManager.class);
         this.previousInterface=previousInterface;
         this.ipv6=ipv6;
-        manager.registerDefaultNetworkCallback(this);
+        manager.registerNetworkCallback(new NetworkRequest.Builder()
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .addTransportType(NetworkCapabilities.TRANSPORT_VPN).build(), this);
     }
     @Override public synchronized void onAvailable(Network value) {
-        network=value;capabilities=null;links=null;
+        networks.putIfAbsent(value, new Snapshot());
     }
     @Override public synchronized void onCapabilitiesChanged(Network value,NetworkCapabilities snapshot) {
-        if (!value.equals(network)) return;
-        capabilities=snapshot;check();
+        Snapshot current = networks.get(value);
+        if (current == null) return;
+        current.capabilities = snapshot;
+        check(current);
     }
     @Override public synchronized void onLinkPropertiesChanged(Network value,LinkProperties snapshot) {
-        if (!value.equals(network)) return;
-        links=snapshot;check();
+        Snapshot current = networks.get(value);
+        if (current == null) return;
+        current.links = snapshot;
+        check(current);
     }
     @Override public synchronized void onLost(Network value) {
-        if (value.equals(network)) {network=null;capabilities=null;links=null;}
+        networks.remove(value);
     }
-    private void check() {
+    private void check(Snapshot snapshot) {
+        NetworkCapabilities capabilities = snapshot.capabilities;
+        LinkProperties links = snapshot.links;
         if (capabilities==null || links==null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return;
         String name=links.getInterfaceName();
         if (name==null || name.isEmpty() || name.equals(previousInterface)) return;

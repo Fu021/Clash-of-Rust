@@ -20,6 +20,61 @@ pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOIP,CN,DIRECT,no-resolve",
 ];
 
+/// Settings exposed by `cor config get`, excluding the controller port that
+/// the runtime reserves itself.
+pub const READABLE_SETTINGS: &[&str] = &[
+    "mixed_port",
+    "direct_download_port",
+    "secret",
+    "dark",
+    "theme_mode",
+    "accent_color",
+    "text_scale",
+    "tray_speed",
+    "update_prereleases",
+    "update_check_interval_minutes",
+    "dns_override",
+    "fake_ip",
+    "fake_ip_exclusions",
+    "fake_ip_disabled_defaults",
+    "ipv6",
+    "udp",
+    "claude_protection",
+    "ip_reputation_key",
+    "delay_interval_minutes",
+    "subscription_update_interval_minutes",
+    "active_profile",
+    "run_mode",
+    "proxy_mode",
+    "node_sort",
+    "rule_overrides",
+    "rule_profiles",
+];
+
+/// Settings accepted by `cor config set`; lifecycle settings use dedicated
+/// commands so their validation and rollback cannot be bypassed.
+pub const MUTABLE_SETTINGS: &[&str] = &[
+    "mixed_port",
+    "secret",
+    "dark",
+    "theme_mode",
+    "accent_color",
+    "text_scale",
+    "tray_speed",
+    "update_prereleases",
+    "update_check_interval_minutes",
+    "dns_override",
+    "fake_ip",
+    "fake_ip_exclusions",
+    "fake_ip_disabled_defaults",
+    "ipv6",
+    "udp",
+    "ip_reputation_key",
+    "delay_interval_minutes",
+    "subscription_update_interval_minutes",
+    "node_sort",
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RuleOverrides {
@@ -117,6 +172,7 @@ fn validate_fake_ip_exclusion(value: &str) -> Result<()> {
 pub struct Settings {
     pub controller_port: u16,
     pub mixed_port: u16,
+    pub direct_download_port: u16,
     pub secret: String,
     pub dark: bool,
     // None preserves the explicit theme of settings saved by older versions.
@@ -125,6 +181,7 @@ pub struct Settings {
     pub text_scale: u16,
     pub tray_speed: bool,
     pub update_prereleases: bool,
+    pub update_check_interval_minutes: u32,
     pub dns_override: bool,
     pub fake_ip: bool,
     pub fake_ip_exclusions: Vec<String>,
@@ -160,6 +217,7 @@ impl Default for Settings {
         Self {
             controller_port: defaults.controller_port,
             mixed_port: defaults.mixed_port,
+            direct_download_port: 0,
             secret: uuid::Uuid::new_v4().to_string(),
             dark: defaults.dark,
             theme_mode: None,
@@ -167,6 +225,7 @@ impl Default for Settings {
             text_scale: 100,
             tray_speed: false,
             update_prereleases: false,
+            update_check_interval_minutes: 360,
             dns_override: true,
             fake_ip: true,
             fake_ip_exclusions: Vec::new(),
@@ -188,6 +247,25 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn require_mutable(&self) -> Result<()> {
+        ensure!(
+            self.claude_protection.is_none(),
+            crate::protection::READ_ONLY_NOTICE
+        );
+        Ok(())
+    }
+
+    pub fn download_ports(&self) -> crate::network::DownloadPorts {
+        crate::network::DownloadPorts {
+            mixed: self.mixed_port,
+            direct: if self.claude_protection.is_none() {
+                self.direct_download_port
+            } else {
+                0
+            },
+        }
+    }
+
     /// DNS overrides own the Fake-IP switch. Turning the override off also
     /// turns Fake-IP off so a later override cannot silently restore it.
     pub fn fake_ip_enabled(&self) -> bool {
@@ -347,6 +425,10 @@ impl Settings {
             bail!("定时测速间隔应为 0–1440 分钟，0 表示关闭");
         }
         ensure!(
+            self.update_check_interval_minutes <= 10080,
+            "更新检查间隔应为 0–10080 分钟，0 表示关闭"
+        );
+        ensure!(
             self.subscription_update_interval_minutes <= 10080,
             "订阅更新间隔应为 0–10080 分钟，0 表示关闭"
         );
@@ -396,6 +478,10 @@ impl Profile {
                 .file_name()
                 .is_some_and(|name| name == "default.yaml")
     }
+
+    pub fn is_local(&self) -> bool {
+        !reqwest::Url::parse(&self.source).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -404,16 +490,20 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn default_root() -> Result<PathBuf> {
+        Ok(
+            if let Some(path) = std::env::var_os("CLASH_OF_RUST_DATA_DIR") {
+                PathBuf::from(path)
+            } else {
+                ProjectDirs::from("org", "clash-of-rust", "ClashOfRust")
+                    .context("无法确定应用数据目录")?
+                    .data_local_dir()
+                    .to_owned()
+            },
+        )
+    }
     pub fn discover() -> Result<Self> {
-        let root = if let Some(path) = std::env::var_os("CLASH_OF_RUST_DATA_DIR") {
-            PathBuf::from(path)
-        } else {
-            ProjectDirs::from("org", "clash-of-rust", "ClashOfRust")
-                .context("无法确定应用数据目录")?
-                .data_local_dir()
-                .to_owned()
-        };
-        Self::at(root)
+        Self::at(Self::default_root()?)
     }
     pub fn at(root: PathBuf) -> Result<Self> {
         for name in ["profiles", "runtime"] {
@@ -425,12 +515,19 @@ impl Store {
     }
     pub fn load_settings(&self) -> Result<Settings> {
         let path = self.root.join("settings.json");
-        if !path.exists() {
-            let settings = Settings::default();
-            self.save_settings(&settings)?;
-            return Ok(settings);
-        }
-        let mut settings: Settings = serde_json::from_slice(&std::fs::read(path)?)?;
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let settings = Settings::default();
+                self.save_settings(&settings)?;
+                return Ok(settings);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("无法读取设置文件：{}", path.display()));
+            }
+        };
+        let mut settings: Settings = serde_json::from_slice(&bytes)
+            .with_context(|| format!("设置文件格式错误：{}", path.display()))?;
         settings.normalize();
         settings.validate()?;
         Ok(settings)
@@ -457,10 +554,15 @@ impl Store {
     }
     pub fn profiles(&self) -> Result<Vec<Profile>> {
         let path = self.root.join("profiles.json");
-        if !path.exists() {
-            return Ok(vec![]);
-        }
-        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(error) => {
+                return Err(error).with_context(|| format!("无法读取订阅索引：{}", path.display()));
+            }
+        };
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("订阅索引格式错误：{}", path.display()))
     }
     pub fn save_profiles(&self, profiles: &[Profile]) -> Result<()> {
         atomic_write(
@@ -615,6 +717,23 @@ pub fn runtime_config_with_rules(
         Value::from(format!("127.0.0.1:{}", settings.controller_port)),
     );
     map.insert(Value::from("secret"), Value::from(settings.secret.clone()));
+    if settings.direct_download_port != 0 && settings.claude_protection.is_none() {
+        if [settings.controller_port, settings.mixed_port].contains(&settings.direct_download_port)
+        {
+            bail!("直连下载端口不能与控制或代理端口相同");
+        }
+        map.insert(
+            Value::from("listeners"),
+            yaml_serde::to_value([serde_json::json!({
+                "name": "cor-download-direct",
+                "type": "mixed",
+                "listen": "127.0.0.1",
+                "port": settings.direct_download_port,
+                "proxy": "DIRECT",
+                "udp": false,
+            })])?,
+        );
+    }
     map.insert(Value::from("allow-lan"), Value::from(false));
     map.insert(Value::from("bind-address"), Value::from("127.0.0.1"));
     map.insert(Value::from("mode"), Value::from(settings.run_mode.clone()));
@@ -828,6 +947,29 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn completion_and_mutation_keys_cover_the_settings_schema() {
+        let settings = serde_json::to_value(Settings::default()).unwrap();
+        let actual = settings
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let readable = READABLE_SETTINGS
+            .iter()
+            .copied()
+            .chain(["controller_port"])
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, readable);
+        let mutable = MUTABLE_SETTINGS
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(mutable.is_subset(&actual));
+        assert_eq!(mutable.len(), MUTABLE_SETTINGS.len());
+    }
+
+    #[test]
     fn existing_settings_keep_stable_updates_and_channel_choice_survives_reload() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(!settings.update_prereleases);
@@ -842,6 +984,107 @@ mod tests {
         store.save_settings(&selected).unwrap();
         assert!(store.load_settings().unwrap().update_prereleases);
     }
+
+    #[test]
+    fn update_check_interval_survives_reload_and_legacy_settings_keep_the_default() {
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.update_check_interval_minutes, 360);
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::at(root.path().to_owned()).unwrap();
+        for minutes in [0, 1, 360, 10080] {
+            let settings = Settings {
+                update_check_interval_minutes: minutes,
+                update_prereleases: true,
+                ..legacy.clone()
+            };
+            store.save_settings(&settings).unwrap();
+            let loaded = store.load_settings().unwrap();
+            assert_eq!(loaded.update_check_interval_minutes, minutes);
+            assert!(loaded.update_prereleases);
+            assert_eq!(
+                loaded.subscription_update_interval_minutes,
+                legacy.subscription_update_interval_minutes
+            );
+        }
+        let invalid = Settings {
+            update_check_interval_minutes: 10081,
+            ..legacy
+        };
+        assert!(store.save_settings(&invalid).is_err());
+        assert_eq!(
+            store.load_settings().unwrap().update_check_interval_minutes,
+            10080
+        );
+    }
+
+    #[test]
+    fn missing_storage_initializes_settings_without_creating_a_profile_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let settings = store.load_settings().unwrap();
+        assert!(!settings.update_prereleases);
+        assert!(directory.path().join("settings.json").is_file());
+        assert!(store.profiles().unwrap().is_empty());
+        assert!(!directory.path().join("profiles.json").exists());
+    }
+
+    #[test]
+    fn storage_read_errors_include_the_path_and_preserve_existing_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let settings = directory.path().join("settings.json");
+        let profiles = directory.path().join("profiles.json");
+        for path in [&settings, &profiles] {
+            std::fs::create_dir(path).unwrap();
+            std::fs::write(path.join("preserve"), b"original").unwrap();
+        }
+        assert!(
+            store
+                .load_settings()
+                .unwrap_err()
+                .to_string()
+                .contains(&settings.display().to_string())
+        );
+        assert!(
+            store
+                .profiles()
+                .unwrap_err()
+                .to_string()
+                .contains(&profiles.display().to_string())
+        );
+        for path in [&settings, &profiles] {
+            assert_eq!(std::fs::read(path.join("preserve")).unwrap(), b"original");
+        }
+    }
+
+    #[test]
+    fn invalid_storage_is_not_replaced_with_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let settings = directory.path().join("settings.json");
+        let profiles = directory.path().join("profiles.json");
+        for path in [&settings, &profiles] {
+            std::fs::write(path, b"invalid json").unwrap();
+        }
+        assert!(
+            store
+                .load_settings()
+                .unwrap_err()
+                .to_string()
+                .contains(&settings.display().to_string())
+        );
+        assert!(
+            store
+                .profiles()
+                .unwrap_err()
+                .to_string()
+                .contains(&profiles.display().to_string())
+        );
+        for path in [&settings, &profiles] {
+            assert_eq!(std::fs::read(path).unwrap(), b"invalid json");
+        }
+    }
+
     #[test]
     fn data_directory_is_exclusive() {
         let tmp = tempfile::tempdir().unwrap();
@@ -886,6 +1129,28 @@ mod tests {
         }
     }
     use super::*;
+    #[test]
+    fn profile_origin_distinguishes_imported_files_from_remote_subscriptions() {
+        for (source, local) in [
+            ("", true),
+            ("/home/example/subscription.yaml", true),
+            (r"C:\Users\Example\subscription.yaml", true),
+            ("default.yaml", true),
+            ("https://example.test/subscription", false),
+            ("http://example.test/config.yaml?token=example", false),
+            ("HTTPS://example.test/subscription", false),
+        ] {
+            let profile = Profile {
+                id: "fixture".into(),
+                name: "Imported".into(),
+                source: source.into(),
+                updated: 0,
+                usage: None,
+            };
+            assert_eq!(profile.is_local(), local, "{source}");
+        }
+    }
+
     #[test]
     fn yaml_runtime_preserves_aliases_tags_and_quoted_scalars() {
         let raw = "proxies: []\nx-base: &base {server: example.test, port: '443'}\nx-copy: *base\nx-merged: {<<: *base, enabled: true}\nx-tagged: !custom 'on'\nx-text: ['yes', '001', 'null']\n";
@@ -1119,6 +1384,12 @@ mod tests {
                         "https://dns.alidns.com/dns-query",
                     ])
                     .unwrap();
+                    expected["direct-nameserver"] = yaml_serde::to_value([
+                        "https://doh.pub/dns-query#DIRECT",
+                        "https://dns.alidns.com/dns-query#DIRECT",
+                    ])
+                    .unwrap();
+                    expected["direct-nameserver-follow-policy"] = Value::from(false);
                     let filters = expected["fake-ip-filter"].as_sequence_mut().unwrap();
                     for domain in DEFAULT_FAKE_IP_EXCLUSIONS {
                         if !filters.contains(&Value::from(*domain)) {
@@ -1605,6 +1876,35 @@ mod tests {
         assert_eq!(result["secret"].as_str(), Some(settings.secret.as_str()));
     }
     #[test]
+    fn protection_marks_settings_read_only_and_removes_the_direct_download_listener() {
+        use crate::claude_check::protection::{Previous, Protection};
+        let profile_id = uuid::Uuid::new_v4().to_string();
+        let mut settings = Settings {
+            direct_download_port: 45678,
+            active_profile: Some(profile_id.clone()),
+            ..Default::default()
+        };
+        assert_eq!(settings.download_ports().direct, 45678);
+        assert!(settings.require_mutable().is_ok());
+        settings.claude_protection = Some(std::sync::Arc::new(Protection::new(
+            profile_id,
+            "node".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: crate::model::ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        assert!(settings.require_mutable().is_err());
+        assert_eq!(settings.download_ports().direct, 0);
+        let runtime: Value = yaml_serde::from_str(
+            &runtime_config("proxies: []\nrules: [MATCH,DIRECT]\n", &settings).unwrap(),
+        )
+        .unwrap();
+        assert!(runtime["listeners"].is_null());
+    }
+
+    #[test]
     fn rejects_node_links_and_invalid_ports() {
         assert!(parse_profile("ss://example").is_err());
         let settings = Settings {
@@ -1612,6 +1912,44 @@ mod tests {
             ..Settings::default()
         };
         assert!(runtime_config("proxies: []", &settings).is_err());
+    }
+
+    #[test]
+    fn download_listener_forces_direct_and_replaces_subscription_listeners() {
+        let mut settings = Settings::default();
+        let listener = reserve_controller(0, settings.mixed_port).unwrap();
+        settings.direct_download_port = listener.local_addr().unwrap().port();
+        let raw = "proxies: []\nlisteners: [{name: untrusted, type: mixed, port: 8888, listen: '0.0.0.0'}]\ndns: {direct-nameserver: ['https://dns.example.test/dns-query#BadNode'], direct-nameserver-follow-policy: true}\n";
+        for mode in ["rule", "global", "direct"] {
+            settings.run_mode = mode.into();
+            let runtime: Value =
+                yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+            let listeners = runtime["listeners"].as_sequence().unwrap();
+            assert_eq!(listeners.len(), 1);
+            assert_eq!(listeners[0]["listen"].as_str(), Some("127.0.0.1"));
+            assert_eq!(listeners[0]["proxy"].as_str(), Some("DIRECT"));
+            assert_eq!(
+                listeners[0]["port"].as_u64(),
+                Some(u64::from(settings.direct_download_port))
+            );
+            assert_eq!(
+                runtime["dns"]["direct-nameserver-follow-policy"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                runtime["dns"]["direct-nameserver"][0].as_str(),
+                Some("https://doh.pub/dns-query#DIRECT")
+            );
+        }
+        settings.dns_override = false;
+        let runtime: Value =
+            yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert_eq!(
+            runtime["dns"]["direct-nameserver"][0].as_str(),
+            Some("https://dns.example.test/dns-query#BadNode")
+        );
+        settings.direct_download_port = settings.mixed_port;
+        assert!(runtime_config(raw, &settings).is_err());
     }
     #[test]
     fn atomic_storage_and_profile_ids() {

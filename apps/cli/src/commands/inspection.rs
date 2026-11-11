@@ -273,6 +273,9 @@ async fn logs(args: &Args) -> Result<()> {
         if !args.flag("quiet") {
             eprintln!("已保存：{path}");
         }
+        if lines.iter().any(|line| log_level(line) == "error") {
+            crate::diagnostics::failure_hint(Some(args));
+        }
         return Ok(());
     }
     let level = args.get("level");
@@ -318,6 +321,9 @@ async fn logs(args: &Args) -> Result<()> {
                     json!(line)
                 },
             )?;
+            if detected == "error" {
+                crate::diagnostics::failure_hint(Some(args));
+            }
         }
         previous = hashes;
         if !args.flag("follow") {
@@ -329,6 +335,20 @@ async fn logs(args: &Args) -> Result<()> {
 }
 
 async fn diagnose(args: &Args) -> Result<()> {
+    if args.path == "diagnose" {
+        crate::diagnostics::validate_output(args)?;
+        if args.flag("offline") {
+            let (report, routes) = tokio::join!(
+                crate::diagnostics::collect(args),
+                crate::host_network::observe(args)
+            );
+            let mut report = report?;
+            report["offline"] = json!(true);
+            report["tun_configuration"] = tun_configuration(args);
+            report["host_routes"] = routes;
+            return output::emit(args, report);
+        }
+    }
     if args.path == "dns" && args.flag("system") {
         return output::emit(
             args,
@@ -356,63 +376,153 @@ async fn diagnose(args: &Args) -> Result<()> {
         Err(e) => json!({"error":format!("{e:#}")}),
     };
     let backend_probes = async {
-        let remote = backend::connect(args, false)
-            .await?
-            .context("当前用户后台未运行")?;
-        let meta: Meta = remote.request(Command::Meta).await?;
+        let (remote, meta): (_, Meta) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let remote = backend::connect(args, false)
+                    .await?
+                    .context("当前用户后台未运行")?;
+                let meta = remote.request(Command::Meta).await?;
+                Ok::<_, anyhow::Error>((remote, meta))
+            })
+            .await
+            .context("连接当前用户后台超过 5 秒；可用 --offline 保存本地现场")??;
         ensure!(meta.running, "当前用户内核未运行");
         let api = Api::new(&meta.settings)?;
-        let (core, http, v4, v6) = tokio::join!(
-            api.resolve_domain(host),
-            clash_client_core::probe::website(url.into(), meta.settings.mixed_port, false),
-            clash_client_core::probe::website(
-                "https://api.ipify.org".into(),
-                meta.settings.mixed_port,
-                true
-            ),
-            clash_client_core::probe::website(
-                "https://api6.ipify.org".into(),
-                meta.settings.mixed_port,
-                true
+        let logs = async {
+            if args.get("output").is_none() {
+                return json!({"state":"not_requested"});
+            }
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                remote.request::<Vec<String>>(Command::Logs { clear: false }),
             )
+            .await
+            {
+                Ok(Ok(lines)) => crate::diagnostics::core_logs(lines, &meta),
+                Ok(Err(error)) => json!({"state":"unavailable","error":format!("{error:#}")}),
+                Err(_) => json!({"state":"unavailable","error":"读取内核日志超过 5 秒"}),
+            }
+        };
+        let (core, http, v4, v6, logs) = tokio::join!(
+            bounded_probe(api.resolve_domain(host)),
+            bounded_probe(clash_client_core::probe::website(
+                url.into(),
+                meta.settings.mixed_port,
+                false
+            )),
+            bounded_probe(clash_client_core::probe::website(
+                "https://api.ipify.org?format=json".into(),
+                meta.settings.mixed_port,
+                true
+            )),
+            bounded_probe(clash_client_core::probe::website(
+                "https://api6.ipify.org?format=json".into(),
+                meta.settings.mixed_port,
+                true
+            )),
+            logs
         );
         Ok::<_, anyhow::Error>(json!({
             "core_dns":core.map_err(|error|format!("{error:#}")),
             "http":display(http),
             "ipv4":display(v4),
-            "ipv6":display(v6)
+            "ipv6":display(v6),
+            "core_logs":logs
         }))
     };
-    let (system, system_http, backend_result, routes) = tokio::join!(
-        clash_client_core::probe::dns(host.into()),
-        clash_client_core::probe::website_system_route(url.into()),
+    let local = async {
+        if args.get("output").is_some() {
+            crate::diagnostics::collect(args).await
+        } else {
+            Ok(json!({}))
+        }
+    };
+    let (system, system_http, backend_result, routes, local) = tokio::join!(
+        bounded_probe(clash_client_core::probe::dns(host.into())),
+        bounded_probe(clash_client_core::probe::website_system_route(url.into())),
         backend_probes,
-        crate::host_network::observe()
+        crate::host_network::observe(args),
+        local
     );
     let (backend, backend_error) = match backend_result {
         Ok(value) => (value, None),
         Err(error) => (json!({}), Some(format!("{error:#}"))),
     };
-    output::emit(
-        args,
-        json!({
-            "dns_host":host,
-            "system_dns":system.map_err(|e|format!("{e:#}")),
-            "core_dns":backend["core_dns"],
-            "http":backend["http"],
-            "system_route_http":display(system_http),
-            "host_routes":routes,
-            "proxy_environment":{
-                "http":proxy_environment_set("http_proxy"),
-                "https":proxy_environment_set("https_proxy"),
-                "all":proxy_environment_set("all_proxy"),
-                "no_proxy":proxy_environment_set("no_proxy")
-            },
-            "ipv4":backend["ipv4"],
-            "ipv6":backend["ipv6"],
-            "backend_error":backend_error
-        }),
-    )
+    let mut report = json!({
+        "dns_host":host,
+        "system_dns":system.map_err(|e|format!("{e:#}")),
+        "core_dns":backend["core_dns"],
+        "http":backend["http"],
+        "system_route_http":display(system_http),
+        "tun_configuration":tun_configuration(args),
+        "host_routes":routes,
+        "proxy_environment":{
+            "http":proxy_environment_set("http_proxy"),
+            "https":proxy_environment_set("https_proxy"),
+            "all":proxy_environment_set("all_proxy"),
+            "no_proxy":proxy_environment_set("no_proxy")
+        },
+        "ipv4":backend["ipv4"],
+        "ipv6":backend["ipv6"],
+        "core_logs":backend["core_logs"],
+        "backend_error":backend_error
+    });
+    match local {
+        Ok(Value::Object(fields)) => report.as_object_mut().unwrap().extend(fields),
+        Ok(_) => {}
+        Err(error) => report["local_evidence_error"] = json!(format!("{error:#}")),
+    }
+    output::emit(args, report)
+}
+
+fn tun_configuration(args: &Args) -> Value {
+    const LIMIT: u64 = 4 * 1024 * 1024;
+    let Ok(root) = backend::data_root(args) else {
+        return json!({"state":"unavailable","reason":"data_directory_unavailable"});
+    };
+    let path = root.join("runtime").join("config.yaml");
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return json!({"state":"not_generated"});
+        }
+        Err(_) => return json!({"state":"unavailable","reason":"metadata_unavailable"}),
+    };
+    if !metadata.is_file() || metadata.len() > LIMIT {
+        return json!({"state":"unavailable","reason":"file_invalid_or_too_large"});
+    }
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return json!({"state":"unavailable","reason":"read_failed"});
+    };
+    parse_tun_configuration(&raw)
+}
+
+fn parse_tun_configuration(raw: &str) -> Value {
+    let Ok(config) = yaml_serde::from_str::<Value>(raw) else {
+        return json!({"state":"unavailable","reason":"invalid_runtime_config"});
+    };
+    let tun = &config["tun"];
+    let dns = &config["dns"];
+    json!({
+        "state":"observed",
+        "stack":tun["stack"],
+        "auto_route":tun["auto-route"],
+        "auto_detect_interface":tun["auto-detect-interface"],
+        "strict_route":tun["strict-route"],
+        "mtu":tun["mtu"],
+        "route_address":tun["route-address"],
+        "inet4_route_address":tun["inet4-route-address"],
+        "inet6_route_address":tun["inet6-route-address"],
+        "dns_hijack":tun["dns-hijack"],
+        "dns_enhanced_mode":dns["enhanced-mode"],
+        "fake_ip_range":dns["fake-ip-range"]
+    })
+}
+
+async fn bounded_probe<T>(probe: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    tokio::time::timeout(std::time::Duration::from_secs(15), probe)
+        .await
+        .context("单项检测超过 15 秒")?
 }
 
 fn proxy_environment_set(name: &str) -> bool {
@@ -637,6 +747,20 @@ impl Drop for AuditScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tun_diagnostic_keeps_coverage_fields_and_drops_resolvers() {
+        let report = parse_tun_configuration(
+            "tun:\n  stack: mips\n  auto-route: true\n  strict-route: false\n  route-address: [0.0.0.0/1, 128.0.0.0/1]\n  dns-hijack: [any:53]\ndns:\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  nameserver: ['https://private.example/dns-query']\n",
+        );
+        assert_eq!(report["state"], "observed");
+        assert_eq!(report["auto_route"], true);
+        assert_eq!(report["strict_route"], false);
+        assert_eq!(report["dns_hijack"][0], "any:53");
+        assert_eq!(report["dns_enhanced_mode"], "fake-ip");
+        assert!(report.get("nameserver").is_none());
+        assert!(!report.to_string().contains("private.example"));
+    }
+
     #[test]
     fn slimming_keeps_only_rate_baseline_and_restart_invalidates_it() {
         let mut previous = vec![Connection {

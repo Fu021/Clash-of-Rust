@@ -2,7 +2,9 @@
 export global Motion {
     in-out property <bool> initialized;
     in-out property <bool> enabled: true;
+    in-out property <bool> reduced-motion;
     out property <bool> active: initialized && enabled;
+    out property <bool> layout-active: active && !reduced-motion;
     out property <duration> fast: 100ms;
     out property <duration> control: 160ms;
     out property <duration> reveal: 200ms;
@@ -20,14 +22,15 @@ export component MotionScope {
 
 export component Entrance {
     in property <int> revision;
+    in property <bool> enabled: Motion.active;
     property <bool> revealed;
     out property <float> progress: self.revealed ? 1 : 0;
-    animate progress { duration: Motion.reveal; easing: ease-out; enabled: Motion.active && self.revealed; }
+    animate progress { duration: Motion.reveal; easing: ease-out; enabled: root.enabled && self.revealed; }
     init => {
-        if Motion.active { reveal.restart(); } else { self.revealed = true; }
+        if root.enabled { reveal.restart(); } else { self.revealed = true; }
     }
     changed revision => {
-        if Motion.active { self.revealed = false; reveal.restart(); }
+        if root.enabled { self.revealed = false; reveal.restart(); }
         else { self.revealed = true; }
     }
     reveal := Timer { interval: 1ms; triggered => { self.stop(); root.revealed = true; } }
@@ -46,8 +49,9 @@ export component Presence {
 // Pages remain conditional: only the newly selected page enters, no page cache.
 export component PageSurface inherits Rectangle {
     in property <int> motion-revision;
+    in property <bool> motion-enabled: Motion.active;
     in property <bool> locked;
-    entrance := Entrance { revision: root.motion-revision; }
+    entrance := Entrance { revision: root.motion-revision; enabled: root.motion-enabled; }
     opacity: entrance.progress * (root.locked ? 0.5 : 1);
     clip: true;
     Rectangle {
@@ -86,11 +90,25 @@ export component ProgressTrack inherits Rectangle {
     animate displayed { duration: Motion.control; easing: ease-out; enabled: Motion.active && root.smooth && root.value > 0; }
     height: 3px; vertical-stretch: 0; clip: true; background: root.track;
     animate background { duration: Motion.appearance; enabled: Motion.active; }
-    if !root.indeterminate: Rectangle { width: parent.width * root.displayed; height: parent.height; background: root.fill; }
+    if !root.indeterminate: Rectangle { x: 0px; y: 0px; width: parent.width * root.displayed; height: parent.height; background: root.fill; }
     if root.indeterminate: Rectangle {
         width: parent.width * 0.25; height: parent.height; background: root.fill;
         x: Motion.active ? (parent.width + self.width) * mod(animation-tick(), 1400ms) / 1400ms - self.width : parent.width * 0.375;
     }
+}
+
+export component NoticeCountdown inherits ProgressTrack {
+    in property <int> revision;
+    in property <float> elapsed;
+    property <duration> started;
+    smooth: false;
+    value: clamp(1 - (animation-tick() - root.started) / 5s, 0, 1);
+    function reset() {
+        self.started = animation-tick() - root.elapsed * 1s;
+    }
+    init => { self.reset(); }
+    changed revision => { self.reset(); }
+    changed elapsed => { self.reset(); }
 }
 
 // Acknowledgements come from the native clipboard, never from the click itself.

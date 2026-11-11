@@ -39,8 +39,16 @@ def output(command, **kwargs):
 
 
 def dbus(destination, path, method, *arguments):
-    return output(['gdbus', 'call', '--session', '--dest', destination,
-                   '--object-path', path, '--method', method, *arguments])
+    try:
+        return output(['gdbus', 'call', '--session', '--dest', destination,
+                       '--object-path', path, '--method', method, *arguments],
+                      stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        directory = Path(os.environ.get('COR_GUI_REPORT', REPORT))
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory/'dbus-probes.log').open('a') as log:
+            log.write(f'{time.monotonic():.3f} {destination} {method}: {error.stderr or error}\n')
+        raise
 
 
 def evaluate(script):
@@ -400,13 +408,16 @@ def session():
             runtime = Path(os.environ['XDG_RUNTIME_DIR'])
             existing_sockets = wayland_sockets(runtime)
             shell = stack.enter_context(process(command, log))
+            last_probe_error = ''
             def ready():
+                nonlocal last_probe_error
                 if shell.poll() is not None or display.poll() is not None:
                     raise RuntimeError('Desktop compositor exited')
                 try:
                     if not evaluate('true'):
                         return False
-                except (subprocess.SubprocessError, ValueError, RuntimeError):
+                except (subprocess.SubprocessError, ValueError, RuntimeError) as error:
+                    last_probe_error = getattr(error, 'stderr', None) or str(error)
                     return False
                 sockets = wayland_sockets(runtime)-existing_sockets
                 if '--wayland-display=cor-wayland' in command:
@@ -417,7 +428,10 @@ def session():
                     os.environ['WAYLAND_DISPLAY'] = next(iter(sockets))
                     return True
                 return False
-            wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
+            try:
+                wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
+            except TimeoutError as error:
+                raise RuntimeError(f'{error}; last DBus probe: {last_probe_error}') from error
             for backend in ('x11', 'wayland'):
                 result['checks'][backend] = gui(backend, report)
             result['status'] = 'passed'

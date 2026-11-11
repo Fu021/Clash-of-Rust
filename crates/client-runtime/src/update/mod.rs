@@ -4,13 +4,18 @@ mod install;
 use anyhow::{Context, Result, bail};
 pub use clash_client_core::update::Progress;
 pub use clash_client_core::update::channel;
+pub use clash_client_core::update::schedule;
 use futures_util::future::{AbortHandle, AbortRegistration};
-#[cfg(target_os = "macos")]
-pub(crate) use install::handoff_owner_deferred;
+#[cfg(target_os = "linux")]
+pub use install::run_terminal_install;
 pub use install::{
-    InstallSession, cleanup, ensure_installable, handoff, handoff_owner, helper_main,
-    startup_outcome,
+    InstallSession, InstallationStatus, cleanup, ensure_installable, handoff, handoff_at,
+    handoff_owner, handoff_owner_at, helper_main, installation_status, startup_outcome,
 };
+#[cfg(target_os = "linux")]
+pub(crate) use install::{commit_terminal_install, prepare_terminal_install};
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) use install::{handoff_owner_deferred_at, supports_deferred_install};
 use reqwest::{Client, StatusCode, Url};
 use semver::Version;
 use serde::Deserialize;
@@ -23,7 +28,6 @@ use std::{
 use tokio::io::AsyncWriteExt;
 
 pub const RELEASES_URL: &str = "https://github.com/Fu021/Clash-of-Rust/releases";
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const API_URL: &str = "https://api.github.com/repos/Fu021/Clash-of-Rust/releases?per_page=100";
 
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
@@ -53,6 +57,11 @@ pub struct Downloaded {
 }
 
 impl Downloaded {
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
     pub fn package_path(&self) -> &Path {
         &self.package
     }
@@ -124,6 +133,17 @@ impl State {
         self.failure = None;
         self.outcome = None;
         self.status = "更新通道已更改，请检查更新".into();
+    }
+
+    pub fn pause_for_protection(&mut self) {
+        self.cancel_download();
+        self.check_id = self.check_id.wrapping_add(1);
+        self.checking = false;
+        self.available = None;
+        self.cached_download = None;
+        self.failure = None;
+        self.outcome = None;
+        self.status = "Claude 保护期间暂停客户端更新".into();
     }
 
     pub fn busy(&self) -> bool {
@@ -390,7 +410,7 @@ fn checksum(bytes: &[u8]) -> Result<String> {
 
 pub async fn download(
     available: Available,
-    proxy_port: Option<u16>,
+    proxy_port: Option<crate::network::DownloadPorts>,
     api: Option<crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
@@ -584,11 +604,11 @@ async fn transfer(
     Ok(())
 }
 
-pub async fn check(proxy_port: Option<u16>) -> Result<Option<Available>> {
+pub async fn check(proxy_port: Option<crate::network::DownloadPorts>) -> Result<Option<Available>> {
     check_with_prereleases(proxy_port, false).await
 }
 pub async fn check_with_prereleases(
-    proxy_port: Option<u16>,
+    proxy_port: Option<crate::network::DownloadPorts>,
     include_prereleases: bool,
 ) -> Result<Option<Available>> {
     discovery::check(proxy_port, include_prereleases).await

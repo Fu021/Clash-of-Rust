@@ -1,0 +1,11 @@
+import { Theme } from "../theme/palette.slint";
+
+export component CardGrid inherits VerticalLayout {
+    in property <length> minimum-card-width: 320px;
+    in property <length> available-width;
+    in property <bool> list-view;
+    out property <int> columns: root.list-view ? 1 : max(1, floor((root.available-width + Theme.page-gap) / (root.minimum-card-width * Theme.text-scale + Theme.page-gap)));
+    alignment: start;
+    spacing: Theme.page-gap;
+    @children
+}

@@ -1,11 +1,13 @@
 plugins { id("com.android.application") }
 
-val appVersion = providers.gradleProperty("appVersion").orElse("0.6.7-fix.1.cli-tun-diagnostics").get()
+val appVersion = providers.gradleProperty("appVersion").orElse("0.7.0").get()
 val appVersionCode = providers.gradleProperty("appVersionCode").orElse("605000").get().toInt()
 val selectedAbi = providers.gradleProperty("appAbi").orNull
+val selectedNdkVersion = providers.gradleProperty("appNdkVersion").orNull
 
 android {
     namespace = "org.clashofrust.android"
+    selectedNdkVersion?.let { ndkVersion = it }
     compileSdk {
         version = release(37) {
             minorApiLevel = 2

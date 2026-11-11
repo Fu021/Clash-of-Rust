@@ -6,25 +6,25 @@ import { AppearanceSettings, NetworkToggles, ScheduleSettings, CurrentVersion, G
 
 component IosNetwork inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MHeading { text: "网络"; }
+    MSmall { text: "网络"; font-weight: 600; }
     MCard { NetworkToggles { } }
 }
 component IosConnection inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MHeading { text: "VPN 与系统"; }
+    MSmall { text: "VPN 与系统"; font-weight: 600; }
     MCard {
-        MSwitch { title: "按需连接"; checked: IosData.on-demand;
+        MSwitch { title: "按需连接"; checked: IosData.on-demand; enabled: !MobileData.protected && !MobileData.protection-pending;
             toggled(value) => { IosActions.request(IosIntent.on-demand, value ? "true" : "false"); }
         }
         MDivider { }
-        MRow { title: "系统 VPN 配置"; value: IosData.vpn-profile; clicked => { IosActions.request(IosIntent.vpn-settings, ""); } }
+        MRow { title: "系统 VPN 配置"; value: IosData.vpn-profile; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { IosActions.request(IosIntent.vpn-settings, ""); } }
         MDivider { }
-        MRow { title: "打开系统设置"; clicked => { IosActions.request(IosIntent.system-settings, ""); } }
+        MRow { title: "打开系统设置"; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { IosActions.request(IosIntent.system-settings, ""); } }
     }
 }
 component IosUpdates inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MHeading { text: "更新"; }
+    MSmall { text: "更新"; font-weight: 600; }
     MCard {
         CurrentVersion { }
         MSmall { text: "版本与分发信息"; }
@@ -36,11 +36,15 @@ component IosUpdates inherits VerticalLayout {
 export component IosSettings inherits PageSurface {
     MScroll {
         if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
-            AppearanceSettings { } IosNetwork { } IosConnection { } ScheduleSettings { } IosUpdates { }
+            IosConnection { } IosNetwork { } AppearanceSettings { } IosUpdates { } ScheduleSettings { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { alignment: start; spacing: 20px; AppearanceSettings { } IosConnection { } ScheduleSettings { } }
-            VerticalLayout { alignment: start; spacing: 20px; IosNetwork { } IosUpdates { } }
+            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                IosConnection { } IosNetwork { }
+            }
+            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                AppearanceSettings { } IosUpdates { } ScheduleSettings { }
+            }
         }
     }
 }

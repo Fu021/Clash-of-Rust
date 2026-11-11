@@ -190,6 +190,38 @@ impl App {
             Message::TextScale(scale) => self.dispatch(Action::TextScale(*scale)),
             Message::TraySpeed(enabled) => self.dispatch(Action::TraySpeed(*enabled)),
             Message::Copy(value) => desktop_runtime::clipboard::write(value.clone()),
+            Message::ExportDiagnostics(context) => self.export_diagnostics(context),
+            Message::ReportIssue(context) => self.prepare_diagnostics(context, true),
+            Message::DiagnosticsExported(result) => {
+                self.diagnosing = false;
+                match result {
+                    Ok((path, url)) => {
+                        self.show_notice_followup(format!("诊断已导出：{path}"), false);
+                        if let Some(url) = url {
+                            let url = url.clone();
+                            return Some(Task::perform(
+                                async move {
+                                    tokio::task::spawn_blocking(move || platform::open_url(&url))
+                                        .await
+                                        .map_err(|error| error.to_string())?
+                                        .map_err(|error| error.to_string())
+                                },
+                                Message::IssueOpened,
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        self.show_notice_followup(format!("诊断采集或导出失败：{error}"), true)
+                    }
+                }
+                none()
+            }
+            Message::IssueOpened(result) => {
+                if let Err(error) = result {
+                    self.show_notice_followup(format!("无法打开问题反馈页面：{error}"), true);
+                }
+                none()
+            }
             Message::LogLevel(level) => {
                 self.log_level = *level;
                 self.list_offset = 0;
@@ -311,7 +343,9 @@ impl App {
                     return Some(none());
                 }
                 if let Some(p) = &mut self.profile_editor {
-                    if p.name.trim().is_empty() || p.source.trim().is_empty() {
+                    if p.name.trim().is_empty()
+                        || (p.source.trim().is_empty() && !p.original.1.is_empty())
+                    {
                         p.error = "配置名称与来源不能为空。".into();
                         return Some(none());
                     }

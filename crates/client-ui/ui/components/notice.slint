@@ -1,35 +1,116 @@
-import { Motion, Presence, ProgressTrack } from "motion.slint";
+import { Presence, NoticeCountdown } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { ContentPanel, Paragraph, ActionButton } from "controls.slint";
+import { ContentPanel, Paragraph, Heading, ActionButton } from "controls.slint";
+import { GeometryTarget } from "geometry.slint";
+
+export component DiagnosticActions inherits HorizontalLayout {
+    in property <string> context;
+    in property <bool> notice-control;
+    spacing: 6px; alignment: start;
+    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: UiData.diagnosing ? "正在采集…" : "导出诊断"; enabled: !UiData.diagnosing;
+        clicked => { UiActions.dispatch(Intent.export-diagnostics, root.context, ""); }
+    }
+    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: "新建 Issue"; enabled: !UiData.diagnosing;
+        clicked => { UiActions.dispatch(Intent.report-issue, root.context, ""); }
+    }
+    @children
+}
 
 export component DesktopNotice inherits Rectangle {
+    in property <length> available-height;
     presence := Presence { open: UiData.notice != ""; }
     out property <bool> mounted: presence.mounted;
+    in-out property <[length]> close-target;
     property <string> message;
     property <string> source: UiData.notice;
-    property <int> revision: UiData.notice-revision;
-    property <duration> started;
     changed source => { if self.source != "" { self.message = self.source; } }
-    init => { self.message = UiData.notice; self.started = animation-tick() - UiData.notice-elapsed * 1s; }
-    changed revision => { self.started = animation-tick() - UiData.notice-elapsed * 1s; }
-    y: 16px - (1 - presence.progress) * 8px;
-    height: panel.preferred-height;
+    init => { self.message = UiData.notice; }
+    height: root.available-height;
     visible: presence.mounted;
     opacity: presence.progress;
+    if UiData.notice-modal: Rectangle {
+        width: parent.width; height: parent.height; background: #00000065;
+        TouchArea { }
+    }
+    error-focus := FocusScope {
+        property <bool> active: UiData.notice-modal;
+        enabled: self.active;
+        changed active => { if self.active { self.focus(); } }
+        init => { if self.active { self.focus(); } }
+        key-pressed(event) => {
+            if event.text == Key.Escape && self.active {
+                UiActions.dispatch(Intent.dismiss-notice, "", ""); return accept;
+            }
+            return reject;
+        }
+    }
     panel := VerticalLayout {
+        x: (parent.width - self.width) / 2;
+        y: UiData.notice-modal ? max(16px, (parent.height - self.height) / 2) : parent.height - self.height - 24px + (1 - presence.progress) * 8px;
+        width: min(UiData.notice-modal ? 600px : 480px, parent.width - 48px); height: self.preferred-height;
         if presence.mounted: ContentPanel {
+            background: UiData.notice-error ? Theme.surface : Theme.ink;
+            vertical-padding: UiData.notice-modal ? Theme.card-padding : 12px;
+            border-radius: UiData.notice-modal ? 18px : 14px;
+            border-color: Theme.line;
             drop-shadow-blur: 20px; drop-shadow-offset-y: 4px; drop-shadow-color: #00000030;
             interactive: true;
-            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Paragraph { text: root.message; color: UiData.notice-error ? Theme.danger : Theme.secondary; }
-                if UiData.retry-core: ActionButton { modal-control: true; text: "重启内核"; primary: true; enabled: UiData.notice != "" && !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
-                ActionButton { modal-control: true; text: "关闭"; enabled: UiData.notice != ""; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+            clicked => { if !UiData.notice-error { UiActions.dispatch(Intent.dismiss-notice, "", ""); } }
+            if UiData.notice-error: HorizontalLayout { cross-axis-alignment: center; spacing: 10px;
+                Rectangle { width: 26px; height: 26px; border-radius: 8px; background: Theme.danger-wash;
+                    Heading { text: "!"; color: Theme.danger; width: parent.width; height: parent.height; horizontal-alignment: center; }
+                }
+                Heading { text: UiData.notice-modal ? "需要处理" : "操作未完成"; font-size: UiData.notice-modal ? 18px * Theme.text-scale : Theme.detail-size; }
             }
-            ProgressTrack {
-                height: 2px; smooth: false;
-                value: clamp((animation-tick() - root.started) / 8s, 0, 1);
-                track: Theme.subtle-line; fill: UiData.notice-error ? Theme.danger : Theme.accent;
+            HorizontalLayout { cross-axis-alignment: start; spacing: Theme.content-gap;
+                Flickable {
+                    property <string> context: root.message;
+                    property <length> bottom: min(0px, self.height - self.content-height);
+                    changed context => { self.content-y = 0px; }
+                    changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
+                    height: min(content.preferred-height, max(48px, root.available-height * (UiData.notice-modal ? 0.8 : 0.4) - (UiData.notice-modal ? 120px : 80px)));
+                    horizontal-stretch: 1; vertical-stretch: 0; min-width: 0px;
+                    interactive: true; mouse-drag-pan-enabled: true;
+                    content-width: self.width; content-height: max(self.height, content.preferred-height);
+                    content := VerticalLayout {
+                        width: parent.width; height: self.preferred-height;
+                        alignment: start; spacing: Theme.content-gap;
+                        message-area := Rectangle {
+                            GeometryTarget { key: "notice-message"; bounds: message-area.target; }
+                            property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                            changed target => { if !UiData.notice-error { root.close-target = self.target; } }
+                            init => { if !UiData.notice-error { root.close-target = self.target; } }
+                            height: message.preferred-height;
+                            accessible-role: text;
+                            accessible-label: root.message;
+                            message := Paragraph { width: parent.width; text: root.message; color: UiData.notice-error ? Theme.ink : Theme.canvas; font-size: UiData.notice-modal ? Theme.body-size : Theme.detail-size; }
+                            if !UiData.notice-error: TouchArea {
+                                accessible-role: button; accessible-label: "关闭提示";
+                                accessible-action-default => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
+                                mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
+                            }
+                        }
+                    }
+                }
+            }
+            if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true;
+                if UiData.notice-recover-network && UiData.proxy-mode != 2 && !UiData.protected && !UiData.protection-pending: ActionButton {
+                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭代理"; enabled: !UiData.working;
+                    clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); }
+                }
+                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; compact: true; quiet: true; text: "重启内核"; enabled: UiData.notice != "" && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                ActionButton {
+                    property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+                    changed target => { root.close-target = self.target; }
+                    init => { root.close-target = self.target; }
+                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭";
+                    clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
+                }
+            }
+            if !UiData.notice-error: NoticeCountdown {
+                revision: UiData.notice-revision; elapsed: UiData.notice-elapsed;
+                track: Theme.canvas.with-alpha(0.15); fill: Theme.accent;
             }
         }
     }

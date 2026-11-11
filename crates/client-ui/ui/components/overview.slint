@@ -1,0 +1,143 @@
+import { UiData, UiActions, Intent, OverviewItem } from "../state.slint";
+import { Theme } from "../theme/palette.slint";
+import { HomeSection, HomeSectionHeader } from "home-section.slint";
+import { Label, Caption, Paragraph, ActionButton, Divider } from "controls.slint";
+
+global OverviewTone {
+    pure public function color(tone: int) -> brush {
+        return tone == 1 ? Theme.success : tone == 2 ? Theme.warning : tone == 3 ? Theme.danger : tone == 4 ? Theme.muted : Theme.ink;
+    }
+}
+
+component InfoCell inherits Rectangle {
+    in property <OverviewItem> item;
+    in property <length> body-size;
+    in property <length> caption-size;
+    in property <length> detail-size;
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        spacing: 5px; alignment: start;
+        Caption { text: root.item.title; font-size: root.caption-size; }
+        Paragraph {
+            text: root.item.fogged ? "已隐藏" : root.item.value;
+            font-size: root.body-size; font-weight: 600;
+            color: root.item.fogged ? Theme.muted : root.item.tone == 3 || root.item.tone == 4 ? OverviewTone.color(root.item.tone) : Theme.ink;
+        }
+        Paragraph {
+            text: (root.item.flagged ? root.item.flag + " " : "") + root.item.detail;
+            color: Theme.secondary; font-size: root.detail-size;
+        }
+        if root.item.delay != "": Caption {
+            text: root.item.delay; color: Theme.tone-color(root.item.delay-tone); font-size: root.detail-size;
+        }
+    }
+}
+
+component ServiceCell inherits HomeSection {
+    in property <OverviewItem> item;
+    in property <length> body-size;
+    in property <length> detail-size;
+    horizontal-padding: 9px; vertical-padding: 9px; gap: 4px;
+    background: Theme.inset;
+    HorizontalLayout {
+        spacing: 6px; cross-axis-alignment: center;
+        Rectangle { width: 7px; height: 7px; border-radius: 4px; background: OverviewTone.color(root.item.tone); }
+        Label { text: root.item.title; font-size: root.body-size; font-weight: 600; }
+        if Theme.text-scale <= 1.25: Label {
+            text: root.item.value; color: root.item.delay != "" ? Theme.tone-color(root.item.delay-tone) : OverviewTone.color(root.item.tone);
+            font-size: root.body-size; horizontal-stretch: 0; width: self.preferred-width;
+        }
+    }
+    if Theme.text-scale > 1.25: Paragraph { text: root.item.value; color: root.item.delay != "" ? Theme.tone-color(root.item.delay-tone) : OverviewTone.color(root.item.tone); font-size: root.body-size; }
+    Paragraph { text: root.item.detail; color: Theme.secondary; font-size: root.detail-size; }
+}
+
+export component NetworkInfo inherits HomeSection {
+    in property <[OverviewItem]> items;
+    in property <length> available-width;
+    in property <bool> hidden;
+    in property <bool> busy;
+    in property <bool> enabled: true;
+    in property <length> body-size: 16px * Theme.text-scale;
+    in property <length> caption-size: Theme.detail-size;
+    in property <length> detail-size: 12px * Theme.text-scale;
+    in property <length> title-size: Theme.heading-size;
+    in property <length> control-size: Theme.control-height;
+    property <int> columns: root.available-width / Theme.text-scale >= 900px ? 4 : root.available-width / Theme.text-scale >= 320px ? 2 : 1;
+    callback privacy-requested();
+    callback refresh-requested();
+    HomeSectionHeader {
+        title: "网络信息"; title-size: root.title-size; control-size: root.control-size;
+        ActionButton {
+            geometry-key: "overview-privacy";
+            quiet: true; compact: true; width: root.control-size; height: root.control-size;
+            selected: root.hidden; enabled: root.enabled;
+            accessible-label: root.hidden ? "显示 IP 地址" : "隐藏 IP 地址";
+            Image {
+                source: root.hidden ? @image-url("../icons/eye-off.svg") : @image-url("../icons/eye.svg");
+                colorize: root.hidden ? Theme.accent : Theme.secondary;
+                width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            }
+            clicked => { root.privacy-requested(); }
+        }
+        ActionButton {
+            geometry-key: "overview-refresh";
+            quiet: true; compact: true; width: root.control-size; height: root.control-size;
+            busy: root.busy; enabled: root.enabled && !root.busy;
+            accessible-label: root.busy ? "网络检测中" : "重新检测网络";
+            Image {
+                source: @image-url("../icons/refresh.svg"); colorize: Theme.secondary;
+                width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            }
+            clicked => { root.refresh-requested(); }
+        }
+    }
+    Divider { }
+    for row in ceil(root.items.length / root.columns): HorizontalLayout {
+        spacing: 12px; cross-axis-alignment: start;
+        for column in root.columns: InfoCell {
+            item: root.items[row * root.columns + column];
+            body-size: root.body-size; caption-size: root.caption-size; detail-size: root.detail-size;
+            visible: row * root.columns + column < root.items.length;
+        }
+    }
+}
+
+export component ServiceStatus inherits HomeSection {
+    in property <[OverviewItem]> items;
+    in property <string> status;
+    in property <length> available-width;
+    in property <length> body-size: Theme.detail-size;
+    in property <length> detail-size: 12px * Theme.text-scale;
+    in property <length> title-size: Theme.heading-size;
+    in property <length> control-size: Theme.control-height;
+    property <int> columns: root.available-width / Theme.text-scale >= 780px ? 4 : root.available-width / Theme.text-scale >= 340px ? 2 : 1;
+    HomeSectionHeader {
+        title: "服务状态"; title-size: root.title-size; control-size: root.control-size;
+        if Theme.text-scale <= 1.25: Caption { text: root.status; font-size: root.body-size; horizontal-alignment: right; }
+    }
+    Divider { }
+    if Theme.text-scale > 1.25: Paragraph { text: root.status; font-size: root.body-size; color: Theme.secondary; }
+    for row in ceil(root.items.length / root.columns): HorizontalLayout {
+        spacing: 8px; cross-axis-alignment: start;
+        for column in root.columns: ServiceCell {
+            item: root.items[row * root.columns + column];
+            body-size: root.body-size; detail-size: root.detail-size;
+            visible: row * root.columns + column < root.items.length;
+        }
+    }
+}
+
+export component NetworkOverview inherits VerticalLayout {
+    in property <length> available-width;
+    spacing: Theme.page-gap; alignment: start;
+    NetworkInfo {
+        available-width: root.available-width; items: UiData.overview-network;
+        hidden: UiData.privacy-hidden; busy: UiData.overview-busy;
+        enabled: !UiData.working && UiData.modal == 0 && !UiData.notice-modal;
+        privacy-requested => { UiActions.dispatch(Intent.overview-privacy, "", ""); }
+        refresh-requested => { UiActions.dispatch(Intent.overview-refresh, "", ""); }
+    }
+    ServiceStatus { available-width: root.available-width; items: UiData.overview-services; status: UiData.overview-status; }
+}

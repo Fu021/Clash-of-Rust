@@ -1,0 +1,70 @@
+import { Theme } from "../theme/palette.slint";
+import { ConnectionItem } from "../state.slint";
+import { Label, Caption, Paragraph, Heading, ContentPanel, ActionButton, Divider } from "controls.slint";
+
+export component HomeSection inherits ContentPanel {
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+    horizontal-padding: Theme.home-card-padding; vertical-padding: Theme.home-card-padding;
+    gap: Theme.content-gap; border-radius: 18px; drop-shadow-blur: 0px;
+}
+
+export component HomeSectionHeader inherits HorizontalLayout {
+    in property <string> title;
+    in property <length> title-size: Theme.heading-size;
+    in property <length> control-size: Theme.control-height;
+    height: max(root.control-size, heading.preferred-height);
+    vertical-stretch: 0; spacing: 8px; cross-axis-alignment: center;
+    heading := Heading { text: root.title; font-size: root.title-size; }
+    @children
+}
+
+export component HomeConnections inherits HomeSection {
+    in property <[ConnectionItem]> items;
+    in property <string> count;
+    in property <bool> running;
+    in property <bool> enabled: true;
+    in property <int> limit: 3;
+    in property <length> title-size: Theme.heading-size;
+    in property <length> body-size: 14px * Theme.text-scale;
+    in property <length> caption-size: 12px * Theme.text-scale;
+    in property <length> control-size: Theme.control-height;
+    callback open-all();
+    callback item-selected(string);
+    HomeSectionHeader {
+        title: "活跃连接"; title-size: root.title-size; control-size: root.control-size;
+        ActionButton {
+            text: (root.running ? root.count : "0") + " 条 ›"; quiet: true; compact: true;
+            width: max(84px, root.caption-size * 6 + 16px); height: root.control-size;
+            enabled: root.enabled;
+            clicked => { root.open-all(); }
+        }
+    }
+    Divider { }
+    VerticalLayout {
+        spacing: 0px; alignment: start;
+        for index in (root.running ? min(root.items.length, root.limit) : 0): row := Rectangle {
+            property <ConnectionItem> item: root.items[index];
+            height: max(64px, content.preferred-height + 16px);
+            content := HorizontalLayout {
+                y: (parent.height - self.height) / 2; width: parent.width; height: self.preferred-height;
+                cross-axis-alignment: center; spacing: 10px;
+                VerticalLayout { spacing: 5px; min-width: 0px;
+                    Label { text: row.item.host; font-size: root.body-size; font-weight: 500; }
+                    Caption { text: row.item.route + " · " + row.item.rule; font-size: root.caption-size; }
+                }
+                VerticalLayout { spacing: 5px; horizontal-stretch: 0;
+                    Caption { text: "↓ " + row.item.down; font-size: root.caption-size; horizontal-alignment: right; }
+                    Caption { text: "↑ " + row.item.up; font-size: root.caption-size; horizontal-alignment: right; color: Theme.muted; }
+                }
+            }
+            if index + 1 < min(root.items.length, root.limit): Divider {
+                x: 0px; y: parent.height - self.height; width: parent.width;
+            }
+            TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.item-selected(row.item.id); } }
+        }
+        if !root.running || root.items.length == 0: Paragraph {
+            text: !root.running ? "启动内核后查看实时连接" : root.count == "0" ? "暂无活跃连接" : root.count + " 条活跃连接，查看完整列表";
+            color: Theme.secondary; font-size: root.caption-size; min-height: 48px;
+        }
+    }
+}

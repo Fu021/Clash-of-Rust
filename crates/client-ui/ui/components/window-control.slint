@@ -1,0 +1,23 @@
+import { ActionButton } from "controls.slint";
+import { Theme } from "../theme/palette.slint";
+
+export component WindowControl inherits ActionButton {
+    in property <int> action;
+    in property <bool> restored;
+    width: 40px; height: 32px;
+    compact: true; quiet: true;
+    modal-control: true; notice-control: true;
+    text: "";
+    accessible-label: root.action == 0 ? "最小化" : root.action == 1 ? (root.restored ? "还原窗口" : "最大化") : "关闭窗口";
+    geometry-key: root.action == 0 ? "window-minimize" : root.action == 1 ? "window-maximize" : "window-close";
+    Path {
+        x: 13px; y: 9px; width: 14px; height: 14px;
+        viewbox-width: 16; viewbox-height: 16;
+        stroke: Theme.secondary;
+        stroke-width: 1.3px;
+        commands: root.action == 0 ? "M2 8H14"
+            : root.action == 2 ? "M3 3L13 13 M13 3L3 13"
+            : root.restored ? "M5 3V1H15V11H13 M1 5H11V15H1Z"
+            : "M2 2H14V14H2Z";
+    }
+}

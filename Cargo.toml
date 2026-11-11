@@ -1,14 +1,15 @@
 [workspace]
 members = ["crates/client-core", "crates/client-runtime", "apps/cli", "crates/client-ui", "crates/mobile-ffi", "apps/desktop", "apps/desktop-ui", "crates/desktop-shell", "crates/desktop-protocol", "apps/android/native"]
-exclude = ["vendor/slint-android-activity"]
+exclude = ["vendor/slint-android-activity", "vendor/slint-renderer-software"]
 default-members = ["apps/desktop", "apps/desktop-ui"]
 resolver = "3"
 
 [patch.crates-io]
 i-slint-backend-android-activity = { path = "vendor/slint-android-activity" }
+i-slint-renderer-software = { path = "vendor/slint-renderer-software" }
 
 [workspace.package]
-version = "0.6.7-fix.1.cli-tun-diagnostics"
+version = "0.7.0"
 edition = "2024"
 license = "GPL-3.0-only"
 
@@ -25,7 +26,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "net", "
 tempfile = "3"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures-util = "0.3"
-slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-path", "unstable-winit-030"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-path", "unstable-winit-030", "unstable-fontique-011"] }
 slint-build = "=1.18.1"
 sha2 = "0.11"
 regex = "1"

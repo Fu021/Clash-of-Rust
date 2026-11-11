@@ -43,7 +43,7 @@ def safe_name(name):
 
 
 def test_binaries(messages):
-    """Units run in CI; packaging needs only the native proxy/TUN executable."""
+    """Packaging needs only the native proxy/TUN integration executable."""
     result = {}
     for line in messages.splitlines():
         entry = json.loads(line)
@@ -100,7 +100,7 @@ def export_build(system, arch, tests, output, binaries=None):
                     'tests': paths, 'files': records}
         from build_inputs import verified_manifest, toolchain_report
         manifest['build_inputs'] = verified_manifest()
-        manifest['toolchain'] = toolchain_report()
+        manifest['toolchain'] = toolchain_report(system)
         if system == 'linux' and (os.environ.get('GITHUB_ACTIONS') == 'true'
                                   or os.environ.get('COR_LINUX_BASELINE')):
             from linux_ci import audit_elf, baseline_report
@@ -217,6 +217,22 @@ def extract_build(archive, root):
                 shutil.copyfileobj(source, destination)
 
 
+def stage_local_build(archive, root, system, arch, expected_commit, artifact_id, artifact_digest):
+    if (type(artifact_id) is not int or artifact_id <= 0
+            or not re.fullmatch(r'[a-f0-9]{64}', artifact_digest)):
+        raise ValueError('Invalid uploaded build artifact identity')
+    checksum = archive.with_name(archive.name + '.sha256').read_text(encoding='ascii').strip()
+    if not re.fullmatch(r'[a-f0-9]{64}', checksum) or sha256(archive) != checksum:
+        raise ValueError('Local build tar checksum mismatch')
+    root.mkdir(parents=True, exist_ok=False)
+    extract_build(archive, root)
+    verify_build(root, system, arch, expected_commit)
+    write_json(root/'source-artifact.json', {
+        'id': artifact_id, 'name': f'build-{system}-{arch}', 'digest': 'sha256:' + artifact_digest,
+    })
+    return root
+
+
 def fetch_build(client, run_id, system, arch, root, expected_commit):
     name = f'build-{system}-{arch}'
     matches = [a for a in client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts'] if a['name'] == name]
@@ -265,13 +281,57 @@ def wait_package(client, run_id, system, arch, expected_commit, timeout=1200):
                   flush=True)
             return
         jobs = client(f'/actions/runs/{run_id}/jobs?per_page=100&filter=latest')['jobs']
+        producers = {producer}
+        if run.get('path', '').split('@', 1)[0] == '.github/workflows/ci.yml':
+            producers = {f'linux-{arch}'}
         if run.get('status') == 'completed' or any(
-                job['name'] == producer and job.get('status') == 'completed'
+                job['name'] in producers and job.get('status') == 'completed'
                 and job.get('conclusion') != 'success' for job in jobs):
             raise RuntimeError(producer + ' did not produce the required artifacts')
         if time.monotonic() >= deadline:
             raise TimeoutError('Timed out waiting for ' + producer)
         time.sleep(15)
+
+
+def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_ci_run_id):
+    if type(expected_ci_run_id) is not int or expected_ci_run_id <= 0:
+        raise ValueError('Package inputs require a verified source CI run')
+    wait_package(client, run_id, 'linux', arch, expected_commit, timeout=3600)
+    records = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+    suffix = 'amd64' if arch == 'x64' else 'arm64'
+    package = f'Clash-of-Rust-{package_version()}-linux-{suffix}.deb'
+    for name, folder, expected in [
+            (f'package-linux-{arch}', root/'dist',
+             {package, package+'.sha256', 'package-receipt.json'}),
+            (f'linux-tun-test-{arch}', root/'target', {'linux-tun-test'})]:
+        matches = [record for record in records if record['name'] == name]
+        if len(matches) != 1 or matches[0].get('expired'):
+            raise ValueError('Package artifact duplicated, expired or missing: '+name)
+        artifact = matches[0]
+        data = client(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
+        if artifact.get('digest') != 'sha256:'+hashlib.sha256(data).hexdigest():
+            raise ValueError('Package artifact checksum mismatch: '+name)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = archive.infolist()
+            if (len(entries) != len(expected) or {entry.filename for entry in entries} != expected
+                    or any(not safe_name(entry.filename) or entry.is_dir()
+                           or (entry.external_attr >> 16) & 0o170000 == 0o120000
+                           or entry.file_size > 512*1024*1024 for entry in entries)):
+                raise ValueError('Unexpected package artifact members: '+name)
+            folder.mkdir(parents=True, exist_ok=True)
+            for entry in entries:
+                with archive.open(entry) as source, (folder/entry.filename).open('wb') as target:
+                    shutil.copyfileobj(source, target)
+    receipt = json.loads((root/'dist/package-receipt.json').read_text())
+    if (receipt.get('schema') != 1 or receipt.get('tests_passed') is not True
+            or receipt.get('system') != 'linux' or receipt.get('arch') != arch
+            or receipt.get('version') != package_version()
+            or receipt.get('ci_run_id') != expected_ci_run_id
+            or receipt.get('commit') != expected_commit or receipt.get('package') != package
+            or receipt.get('sha256') != sha256(root/'dist'/package)
+            or (root/'dist'/(package+'.sha256')).read_text().strip() != receipt.get('sha256')
+            or receipt.get('linux_tun_test_sha256') != sha256(root/'target/linux-tun-test')):
+        raise ValueError('Package receipt differs from the selected source or binaries')
 
 
 def main():

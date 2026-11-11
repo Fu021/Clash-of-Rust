@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 clash-mobile-runtime = { path = "../../../crates/mobile-ffi" }
-slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-skia-opengl"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-skia-opengl", "unstable-fontique-011"] }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,3 +24,6 @@ android_logger = "0.15"
 
 [build-dependencies]
 slint-build.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

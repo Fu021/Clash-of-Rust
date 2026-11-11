@@ -21,9 +21,12 @@ impl std::fmt::Display for Unavailable {
 impl std::error::Error for Unavailable {}
 
 pub fn store(args: &Args) -> Result<Store> {
+    Store::at(data_root(args)?)
+}
+pub fn data_root(args: &Args) -> Result<PathBuf> {
     match args.get("data-dir") {
-        Some(path) => Store::at(absolute(path)?),
-        None => Store::discover(),
+        Some(path) => absolute(path),
+        None => Store::default_root(),
     }
 }
 pub fn absolute(path: &str) -> Result<PathBuf> {
@@ -46,7 +49,9 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
         match remote.request::<Meta>(Command::Meta).await {
             Ok(_) => return Ok(Some(remote)),
             Err(error) if store.instance_lock().is_err() => {
-                return Err(error.context(Unavailable("存活的后台暂时不可达，请稍后重试".into())));
+                return Err(
+                    error.context(Unavailable("存活的后台暂时不可达，请先保留排障现场".into()))
+                );
             }
             Err(_) => {}
         }
@@ -138,14 +143,20 @@ pub async fn live(args: &Args) -> Result<Meta> {
 }
 pub async fn prepare_start(args: &Args) -> Result<()> {
     let state = meta(args).await?;
-    if !state.running
-        && (state.settings.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
-            || state.settings.claude_protection.is_some())
-    {
-        crate::host_network::warn_tun();
+    if start_requires_authorization(state.running, args.path == "restart", &state.settings) {
         authorize_tun(args).await?;
     }
     Ok(())
+}
+
+fn start_requires_authorization(
+    running: bool,
+    restarting: bool,
+    settings: &clash_client_runtime::config::Settings,
+) -> bool {
+    (!running || restarting)
+        && (settings.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
+            || settings.claude_protection.is_some())
 }
 pub async fn authorize_tun(args: &Args) -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -193,7 +204,6 @@ pub async fn run(args: &Args) -> Result<()> {
         if state.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
             || state.claude_protection.is_some()
         {
-            crate::host_network::warn_tun();
             authorize_tun(args).await?;
         }
         let mut owner = engine.lock().await;
@@ -229,7 +239,17 @@ pub async fn run(args: &Args) -> Result<()> {
                     let shared = engine.clone();
                     delay_job = Some(tokio::spawn(async move {
                         match api.delay_all_nodes().await {
-                            Ok(_) => shared.lock().await.invalidate_views(),
+                            Ok(delays) => {
+                                shared.lock().await.invalidate_views();
+                                if !delays.is_empty()
+                                    && delays.values().all(|delay| *delay == 0)
+                                    && let Err(error) = Engine::recover_unreachable_shared(&shared).await
+                                {
+                                    shared.lock().await.record_failure(&format!(
+                                        "节点状态复测未完成，已保留网络设置：{error:#}"
+                                    ));
+                                }
+                            }
                             Err(error) => shared.lock().await.record_failure(&format!("定时测速失败：{error:#}")),
                         }
                     }));
@@ -265,4 +285,29 @@ pub async fn interrupted() -> Result<()> {
         std::future::pending::<()>().await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clash_client_runtime::{config::Settings, engine::ProxyMode};
+
+    #[test]
+    fn restart_authorizes_before_stopping_a_running_tun_but_start_reuses_it() {
+        for mode in [ProxyMode::Off, ProxyMode::System, ProxyMode::Tun] {
+            let settings = Settings {
+                proxy_mode: mode,
+                ..Default::default()
+            };
+            for (running, restarting) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                assert_eq!(
+                    start_requires_authorization(running, restarting, &settings),
+                    mode == ProxyMode::Tun && (!running || restarting),
+                    "{mode:?}, running={running}, restarting={restarting}"
+                );
+            }
+        }
+    }
 }

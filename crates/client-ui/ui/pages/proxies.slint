@@ -1,26 +1,56 @@
-import { PageSurface, Disclosure } from "../components/motion.slint";
+import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
+import { CardGrid } from "../components/card-grid.slint";
+import { PageViews, ViewToggle } from "../components/view-toggle.slint";
+import { GeometryTarget, UiGeometry } from "../components/geometry.slint";
 import { PageScroll, Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
 
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
+    if UiGeometry.enabled: GeometryTarget { key: "node:" + root.node.name; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
+    in property <bool> detailed;
+    in property <bool> list-view;
+    callback detail-requested();
     preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
+    vertical-padding: root.list-view ? 4px : 10px;
+    horizontal-padding: root.list-view ? 10px : 16px;
+    gap: root.list-view ? 2px : 4px;
+    drop-shadow-blur: 0px;
+    drop-shadow-offset-y: 0px;
     interactive: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
     clicked => { UiActions.dispatch(Intent.select-node, root.node.group, root.node.name); }
     border-color: node.selected ? Theme.accent : Theme.line;
-    background: node.selected ? Theme.accent-wash : Theme.surface;
-    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-        Label { text: root.node.name; color: root.node.selected ? Theme.accent : Theme.ink; }
-        Caption { text: root.node.delay; color: root.node.tone == 1 ? Theme.success : root.node.tone == 2 ? Theme.warning : root.node.tone == 3 ? Theme.danger : Theme.muted; horizontal-stretch: 0; }
+    background: node.selected ? Theme.accent-wash : Theme.canvas;
+    if root.list-view: HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
+        Label { text: root.node.name; preferred-width: 0px; font-size: 14px * Theme.text-scale; font-weight: root.node.selected ? 600 : 500; }
+        ActionButton { geometry-key: "node-delay:" + root.node.name; text: root.node.delay; width: 78px; compact: true; quiet: true; text-color: Theme.tone-color(root.node.tone); enabled: UiData.running && !UiData.working;
+            accessible-label: "测速 " + root.node.name + "，" + root.node.delay;
+            clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); }
+        }
+        ActionButton { geometry-key: "node-detail:" + root.node.name; text: root.detailed ? "收起" : "详情"; width: 44px; compact: true; quiet: true; clicked => { root.detail-requested(); } }
     }
-    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-        Caption { text: root.node.kind; }
-        if root.node.selected: Badge { text: UiData.protected ? "已锁定" : "使用中"; tone: 1; }
-        ActionButton { text: "测速"; enabled: UiData.running && !UiData.working; clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); } }
+    if !root.list-view: GridLayout { spacing: Theme.content-gap;
+        HorizontalLayout { col: 0; row: 0; colspan: 3; cross-axis-alignment: center; spacing: Theme.content-gap;
+            Label { text: root.node.name; preferred-width: 0px; font-size: 14px * Theme.text-scale; font-weight: root.node.selected ? 600 : 500; }
+        }
+        Caption { col: 0; row: 1; text: root.node.kind; horizontal-stretch: 1; }
+        ActionButton { col: 1; row: 1; geometry-key: "node-detail:" + root.node.name; text: root.detailed ? "收起" : "详情"; compact: true; quiet: true; clicked => { root.detail-requested(); } }
+        ActionButton { col: 2; row: 1; geometry-key: "node-delay:" + root.node.name; text: root.node.delay; compact: true; quiet: true; text-color: Theme.tone-color(root.node.tone); enabled: UiData.running && !UiData.working;
+            accessible-label: "测速 " + root.node.name + "，" + root.node.delay;
+            clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); }
+        }
+    }
+    if root.detailed: VerticalLayout { spacing: Theme.content-gap;
+        Caption { text: "完整名称：" + root.node.name; wrap: word-wrap; }
+        Caption { text: "协议：" + root.node.kind; wrap: word-wrap; }
     }
 }
 export component ProxiesPage inherits PageSurface {
+    motion-revision: PageViews.nodes-list ? 1 : 0;
+    motion-enabled: Motion.layout-active;
+    property <string> detail-group;
+    property <string> detail-node;
     PageScroll {
         content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.node-sort;
         content-y <=> UiData.scroll-proxies;
@@ -29,8 +59,9 @@ export component ProxiesPage inherits PageSurface {
             alignment: start;
             padding-right: Theme.content-gap; spacing: Theme.page-gap;
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                ViewToggle { geometry-key: "nodes-view"; list-view <=> PageViews.nodes-list; }
                 Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                Select { width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
+                Select { geometry-key: "node-sort"; width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
             }
             for group in UiData.groups: group-card := ContentPanel {
                 property <[NodePair]> closing-nodes;
@@ -46,30 +77,52 @@ export component ProxiesPage inherits PageSurface {
                     // last model briefly; leaving the page releases it too.
                     UiActions.dispatch(Intent.toggle-group, group.id, "");
                 }
+                vertical-padding: 12px; gap: 10px;
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     header := Rectangle {
-                        horizontal-stretch: 1; height: max(Theme.control-height, heading.preferred-height);
+                        GeometryTarget { key: "group:" + group.id; bounds: [header.absolute-position.x, header.absolute-position.y, header.width, header.height]; }
+                        min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; height: max(Theme.control-height, heading.preferred-height);
                         heading := HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
-                            VerticalLayout { spacing: 4px; Heading { text: group.title; } Caption { text: group.detail; } }
-                            Badge { text: group.current; width-limit: root.width * 0.28; }
                             Chevron { expanded: group-card.expanded; }
+                            Heading { text: group.title; preferred-width: 0px; font-size: Theme.body-size; }
+                            Caption { text: group.detail; max-width: 150px * Theme.text-scale; }
+                            if root.width > 720px: Caption { text: group.current; preferred-width: 0px; horizontal-alignment: right; }
                         }
                         TouchArea { mouse-cursor: pointer; clicked => { group-card.toggle(); } }
                     }
-                    ActionButton { text: group.testing ? "测速中…" : "全部测速"; busy: group.testing; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
+                    ActionButton { text: group.testing ? "测速中…" : "组测速"; compact: true; quiet: true; busy: group.testing; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
                 }
                 group-body := Disclosure { expanded: group-card.expanded;
                     if group-body.mounted: VerticalLayout {
                         spacing: Theme.page-gap;
-                        for pair in (group.expanded ? group.nodes : group-card.closing-nodes): HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                            NodeCard { node: pair.left; }
-                            if pair.right.valid: NodeCard { node: pair.right; }
-                            if !pair.right.valid: Rectangle { horizontal-stretch: 1; }
+                        grid := CardGrid {
+                            list-view: PageViews.nodes-list;
+                            minimum-card-width: 196px;
+                            available-width: root.width - 2 * Theme.card-padding - Theme.page-gap - Theme.content-gap;
+                            property <[NodePair]> pairs: group.expanded ? group.nodes : group-card.closing-nodes;
+                            property <int> count: self.pairs.length == 0 ? 0 : self.pairs.length * 2 - (self.pairs[self.pairs.length - 1].right.valid ? 0 : 1);
+                            pure function node(index: int) -> NodeItem {
+                                return mod(index, 2) == 0 ? self.pairs[floor(index / 2)].left : self.pairs[floor(index / 2)].right;
+                            }
+                            for row in floor((grid.count + grid.columns - 1) / grid.columns): HorizontalLayout { cross-axis-alignment: start; spacing: Theme.page-gap;
+                                for column in grid.columns: VerticalLayout {
+                                    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; alignment: start;
+                                    if row * grid.columns + column < grid.count: NodeCard {
+                                        list-view: PageViews.nodes-list;
+                                        node: grid.node(row * grid.columns + column);
+                                        detailed: root.detail-group == self.node.group && root.detail-node == self.node.name;
+                                        detail-requested => {
+                                            root.detail-group = self.node.group;
+                                            root.detail-node = self.detailed ? "" : self.node.name;
+                                        }
+                                    }
+                                }
+                            }
                         }
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                             Caption { text: group.expanded ? group.page : group-card.closing-page; }
-                            ActionButton { text: "上一页"; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
-                            ActionButton { text: "下一页"; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
+                            ActionButton { text: "上一页"; compact: true; quiet: true; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
+                            ActionButton { text: "下一页"; compact: true; quiet: true; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
                         }
                     }
                 }

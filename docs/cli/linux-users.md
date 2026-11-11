@@ -34,7 +34,9 @@ sudo cor profile list --all-users --filter alice --json
 
 `cor` 不需要 Wayland、X11、桌面窗口或托盘。SSH 中运行 `cor start` / `cor run`；`clash-of-rust` 是桌面入口，无法连接图形服务时会提示改用 `cor`。
 
-普通用户首次执行 `cor proxy tun` 或开启 Claude 保护，由 `pkexec` 请求管理员认证；SSH、非活动会话同样需要管理员认证，不自动免密授权。系统需安装并运行 polkit，终端需可交互认证。没有认证代理时可先仅授权固定助手，再回到普通用户命令：
+普通用户首次执行 `cor proxy tun` 或开启 Claude 保护，由 `pkexec` 请求管理员认证；SSH、非活动会话同样需要管理员认证，不自动免密授权。交互终端由原用户启动独立 `pkttyagent`，按当前进程及启动时间注册，确认就绪后再请求固定助手；退出、拒绝或取消后回收该代理。这样保留 polkit 的密码认证，并避免部分旧版本 `pkexec` 内置代理的 `No session for cookie` 问题。系统需安装并运行 polkit，终端需可交互认证；无终端时不启动内置密码提示，桌面仍使用已有图形认证代理。
+
+授权完成后重新核对已安装助手的实际权限。`cor restart` 恢复 TUN 时先完成授权，再停止已有内核；授权失败不应停止仍可用的内核。管理员也可只授权固定助手，再回到普通用户命令：
 
 ```sh
 sudo /opt/clash-of-rust/clash-of-rust --authorize-tun
@@ -44,3 +46,5 @@ cor proxy tun
 也可执行 `sudo cor proxy tun`：root 只预先调用安装目录中的固定 TUN 助手，随后以原用户身份切换代理。sudo 的启动、重启、前台运行也预先准备该助手，避免恢复已保存的 TUN 时在后台索取授权；`run --no-core` 和 `restart --network-only` 不需要此步骤。助手不接收用户内核路径或 YAML，不以 root 启动普通用户后台。直接 root 自有实例沿用 root 的网络能力。
 
 设备与容器仍须提供 `/dev/net/tun` 和相应网络能力。仅使用 root 权限无法绕过宿主限制；系统代理也需要对应用户的桌面会话，服务器优先使用 TUN。
+
+`cor status` 与桌面窗口在实际观察到外部 TUN 时提示接口及可读取的 PID/UID，正常状态不常驻多用户说明，受权限限制时不猜测开启者。普通用户跨用户看不到其他进程的 TUN 描述符是内核权限边界，不是“没有 TUN”；Linux root 可显式使用 `cor status --all-users` 观察所有本机用户的持有进程，`proxy`、`stop` 和 `diagnose` 同样接受该标志。由故障进程所属用户或有权限的管理员按[诊断报告](runtime.md#故障反馈与诊断报告)导出现场；`proxy off` 只关闭所连接后台的代理，不会替其他实例关闭 TUN。观察范围和刷新时机见[运行状态](runtime.md#运行与代理)。

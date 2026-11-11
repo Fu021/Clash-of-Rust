@@ -57,20 +57,22 @@
 - 覆盖首次授权、拒绝、取消后的迟到授权、已授权、VPN 重建和关闭清理。
 - 关闭界面不得停止 VPN；套接字必须绕过自身 TUN。
 - Activity 重建须在旧窗口终止时释放 EGL surface，再初始化新界面并附加现有内核，避免重复重载；验证新界面实际渲染及 VPN 配置未变。[CI 40745218037](https://github.com/Fu021/Clash-of-Rust/actions/runs/40745218037) 出现 `EGL_BAD_ALLOC`；当前 Slint 1.18.1 Android 后端回移了[上游生命周期修复](../../vendor/slint-android-activity/PATCHES.md)，修复须由后续模拟器与设备复验。
+- 不能只串行化渲染线程而放任旧移动运行时退出：旧手动下载及已排队结果仍可能在新会话开局后写盘。NativeActivity 的会话工作线程现在由退出守卫持有，窗口正常退出或错误返回均先发取消信号、丢弃会话 future，再等待运行时和阻塞写入清理完毕，最后释放旧 UI 生命周期；VPN 服务独立保留。源码回归覆盖未完成写入的取消、下一会话打开前的清理及已退出线程再次关闭；真实旋转、后台重建和厂商 ROM 仍须按当前提交证据验收。
 - [打包 40813504181](https://github.com/Fu021/Clash-of-Rust/actions/runs/40813504181) 的 x64 模拟器第二次 VPN 重建后，系统仍报告路由与 TUN 描述符存在，但真实 TCP 连接超时；同任务单独复验通过，具体原因尚未确认。不能用控制面状态或延长等待替代流量验证，失败时保留接口计数及原始诊断。
+- Android 13 的 [分流验收 42849495890](https://github.com/Fu021/Clash-of-Rust/actions/runs/42849495890) 和 `42859725218` 中，隔离请求收到 HTTP 响应，控制器限时查询仍缺少相同源端口，旧证据未能区分连接生命周期与观测问题。探针改为确认握手：隔离源站等待客户端完成精确连接核对后才发出末字节；客户端按字节读取有界响应头，禁用观测请求缓存。仍要求源端口、TUN 类型、目标端口和指定出站全部匹配，收到响应或看到旧连接均不能当作通过。`3ff9550` 的 `42876368177` 已在包括 Android 13 的 11 个版本通过两项真实网络测试，回执与原始日志核对一致；范围见[分流验收](../android-application-routing.md#范围与验证)。
+- Android 9 的 `42859725218` 曾点入系统 VPN 设置而未进入分流页。入口坐标来自当前窗口的共享几何观测，并在窗口有焦点、布局稳定后点击；不能复用更新栏出现前的旧坐标。源码回归覆盖手机、平板横竖屏及更新栏出现／消失；`42876368177` 的 Android 9 页面、滚动截图和真实分流均已通过，不能由此推断厂商 ROM 或真机。
 - 测试辅助状态必须有稳定来源，等待状态变化而不是固定 sleep。
+- 应用分流先通过公开 `PackageManager.getApplicationInfo` 核对安装状态，再交给 VPN Builder；不能只依赖 Builder 的 `NameNotFoundException`。[CI 42587460890](https://github.com/Fu021/Clash-of-Rust/actions/runs/42587460890) 在仅选中模式建立 VPN 后仍保留不存在的包名；[AOSP 的 `verifyApp`](https://android.googlesource.com/platform/frameworks/base/+/master/core/java/android/net/VpnService.java#785) 未处理 Binder 查询返回空值，可能不抛文档所述异常。回归核对三种模式的真实路由、卸载清理、有效选择保留，以及全部选中项失效时拒绝建立 VPN。
 - VPN 授权测试不能把无障碍 `ACTION_CLICK` 返回成功当作对话框已关闭；要等应用窗口实际恢复前台与焦点，再发起下一次授权，避免连续拒绝/允许误点正在退出的旧窗口。证据见 [CI 40161810492](https://github.com/Fu021/Clash-of-Rust/actions/runs/40161810492) 的 Android x64 logcat。
 - 焦点等待失败时同时检查宿主生命周期与模拟器系统窗口。[打包 40524184066](https://github.com/Fu021/Clash-of-Rust/actions/runs/40524184066) 的 Google Messages、[打包 41812352411](https://github.com/Fu021/Clash-of-Rust/actions/runs/41812352411) 的 SystemUI/Google 服务均曾在应用外出现 ANR，挡住已 `RESUMED` 的应用焦点；不能改写应用生命周期或删除焦点断言。后者冷启动时 CPU 压力约 89%、负载约 17.5；可丢弃模拟器改为 4 GiB RAM、至多使用宿主的 4 个 CPU，并保存窗口、Activity、电源诊断；显式传入 `-no-metrics`，避免后续交互式遥测确认。`2ac829d` 的 CI `41823452467` 与不发布打包 `41828458776` 均通过真实代理/TUN 和授权检查；这不能认定旧 ANR 的唯一根因或代替实机验收。
-- 订阅保护校验放在共享会话，在下载、保存或重载前拒绝编辑和更新受保护订阅，同时允许修改其他订阅；界面禁用按钮只提供反馈，不能代替业务校验。
+- 保护只读校验放在共享会话，在下载、保存或重载前拒绝所有订阅编辑、更新和设置修改；界面禁用按钮只提供反馈，不能代替业务校验。
 - 网络开关同步移动协议、宿主投影、持久化与预览；依赖项被规范化关闭后要有重新开启入口。回归覆盖 DNS 覆盖关闭、重开、Fake-IP 手动恢复和重启保留，见[移动会话测试](../../crates/mobile-ffi/src/lib.rs)。
 
 ### 输入框有光标但软键盘不显示
 
-- [issue #31](https://github.com/Fu021/Clash-of-Rust/issues/31) 的 Redmi K30 / MIUI 14.0.5 在两种输入法下均出现问题，视频有焦点和选择柄；这不能证明 Android 已建立 `InputConnection` 或键盘已显示。MIUI 版本也不能替代 Android 版本和 API 级别。
-- `v0.6.6` 与当前 [Java helper](../../vendor/slint-android-activity/java/SlintAndroidJavaHelper.java) 字节相同，已包含将动画回调移至输入视图的 OEM 补丁；[上游 #11344](https://github.com/slint-ui/slint/issues/11344) 不能再当作本次缺少的修复。Slint 1.18.1 重复点击已聚焦输入框仍会请求键盘，不能只据视频归因为首次调用过早。
-- 当前 helper 直接 `requestFocus()` 后调用 `showSoftInput()`，未核对返回值或实际 IME 可见性；窗口初始化还会隐藏键盘。请求未被系统接收、OEM 显示异常及随后隐藏均待设备日志区分，不能靠无限重试、强制弹出或模拟器通过认定修复。
-- 专项 `41995793003` 的 API 31 截图有光标却无键盘，系统同时报告 `mInputShown=true`、有效输入连接和可见 IME；API 36 截图键盘可见，两版的 `MobileView.keyboard-inset` 均为 0。显示、系统状态与界面避让是不同证据，不能将一个断言失败归为同一根因。该轮关闭系统动画，后续用正常/关闭动画、保留/移除应用动画回调的多轮对照；MIUI 实机仍未验证。
-- 复现时采集跨进程 `adb logcat -b main -b system -v threadtime`，点击前后分别保留 `dumpsys input_method`、`dumpsys window windows` 及系统/API 信息；用虚构名称和地址，分享前脱敏。`cor logs` 是内核日志，不能替代系统输入法日志。[定向 CI](../workflows/ci.md#ci)补上 API 36/31 的添加表单、系统键盘可见性、输入连接提交、切换字段与隐藏后重开；首轮 `41993603936` 被首帧诊断尚未就绪及镜像元数据差异阻断，不算键盘复现。API 31 官方 `x86_64-31_r14.zip` 的仓库 revision 为 14，包内 `source.properties` 实为 12，分别固定下载身份与包内版本；不可放宽成任意版本。修正后的模拟器结果及 MIUI 实机仍待验证。
+十版本、51 轮的截图与接口对照及当前修复见[输入法专页](android-ime.md)。API 31/32 已复现系统报告显示却未绘出键盘，移除动画回调明显改善；本地一并修复字段切换时序、跨版本键盘高度同步、旧版系统栏误判及字段滚动避让，仍待新补丁的 Actions 和 MIUI 实机验收。不能把历史模拟器采集成功当作全面兼容或正式修复通过。
+
+Android 8.0/8.1 的[应用分流截图](https://github.com/Fu021/Clash-of-Rust/actions/runs/42651167579)曾在 `keyboard_inset=0` 时吞掉返回键，未出现放弃修改提示。`InputMethodManager.isAcceptingText()` 只说明输入连接接受文本，不能判定键盘是否可见；Android 10 及以下按窗口可见区域扣除稳定导航栏判断，Android 11 起读取 IME insets，只有确认可见才消费返回键。
 
 ### Geo 与安装包下载
 

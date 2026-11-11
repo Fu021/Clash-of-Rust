@@ -5,8 +5,24 @@ import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll, MCopyButton, MSwitch } from "controls.slint";
 import { MobileFakeIp, MobileRuleActions, MobileSiteResults, MobileDetectionOptions } from "editors.slint";
 
+component MobileEditorActions inherits HorizontalLayout {
+    spacing: MobileTypography.small-gap;
+    MButton { text: "取消"; enabled: !MobileData.profile-busy; clicked => { MobileView.back(); } }
+    MButton { text: MobileView.detail == 2 ? "保存规则" : MobileData.profile-busy ? "正在保存…" : "保存订阅"; primary: true;
+        enabled: !MobileData.working && !MobileData.profile-busy;
+        busy: MobileView.detail == 3 && MobileData.profile-busy;
+        clicked => {
+            if MobileView.detail == 2 {
+                MobileActions.request(MobileIntent.rule-save, MobileView.rule-text-mode ? MobileView.rule-raw : root.rule-line, MobileView.rule-position + "|" + (MobileView.rule-enabled ? "true" : "false"));
+            } else { MobileActions.request(MobileIntent.save-profile, MobileView.profile-name, MobileView.profile-source); }
+        }
+    }
+    in property <string> rule-line;
+}
+
 export component MobileDetails inherits PageSurface {
     motion-revision: MobileView.detail;
+    property <bool> scrolling-editor-actions: root.height < 200px * MobileTypography.density;
     property <bool> supports-no-resolve: MobileView.rule-kind == "GEOIP" || MobileView.rule-kind == "IP-CIDR" || MobileView.rule-kind == "IP-CIDR6" || MobileView.rule-kind == "IP-ASN" || MobileView.rule-kind == "RULE-SET";
     property <string> rule-line: (MobileView.rule-kind == "MATCH" ? "MATCH," + MobileView.rule-policy : MobileView.rule-kind + "," + MobileView.rule-payload + "," + MobileView.rule-policy) + (root.supports-no-resolve && MobileView.rule-no-resolve ? ",no-resolve" : "");
     if MobileView.detail == 14: MobileFakeIp { }
@@ -14,7 +30,12 @@ export component MobileDetails inherits PageSurface {
     if MobileView.detail == 6: MobileSiteResults { }
     if MobileView.detail == 17: MobileDetectionOptions { }
     if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6 && MobileView.detail != 17: VerticalLayout { spacing: MobileTypography.gap;
-        MScroll { content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message; VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+        details-scroll := MScroll {
+            content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message;
+            property <[length]> viewport: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
+            changed viewport => { MobileView.profile-editor-viewport = self.viewport; }
+            init => { MobileView.profile-editor-viewport = self.viewport; }
+            VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if MobileView.detail == 5: MCard {
                 for row[i] in MobileData.connection-details: VerticalLayout { spacing: MobileTypography.small-gap;
                     MSmall { text: row.label; }
@@ -56,21 +77,42 @@ export component MobileDetails inherits PageSurface {
                     toggled(value) => { MobileView.rule-enabled = value; MobileView.draft-dirty = true; }
                 }
             }
-            if MobileView.detail == 3: MCard {
+            if MobileView.detail == 3: profile-form := MCard {
+                property <length> keyboard: MobileView.keyboard-inset;
+                property <length> viewport-height: details-scroll.height;
+                property <bool> name-focused: MobileView.profile-name-focused;
+                property <bool> source-focused: MobileView.profile-source-focused;
+                function reveal-profile-field() {
+                    if self.keyboard > 0px {
+                        if self.name-focused {
+                            details-scroll.reveal(name-field.absolute-position.y, name-field.height);
+                        } else if self.source-focused {
+                            details-scroll.reveal(source-field.absolute-position.y, source-field.height);
+                        }
+                    }
+                }
+                changed keyboard => { self.reveal-profile-field(); }
+                changed viewport-height => { self.reveal-profile-field(); }
+                changed name-focused => { self.reveal-profile-field(); }
+                changed source-focused => { self.reveal-profile-field(); }
                 MSmall { text: "订阅名称"; }
-                MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
+                name-field := MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-name-target = self.target; }
-                    changed has-focus => { MobileView.profile-name-focused = self.has-focus; }
+                    changed has-focus => {
+                        MobileView.profile-name-focused = self.has-focus;
+                    }
                     init => { MobileView.profile-name-target = self.target; MobileView.profile-name-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
                 MButton { text: "选择本地文件"; enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
                 MSmall { text: "订阅地址（本地配置可留空）"; }
-                MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
+                source-field := MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-source-target = self.target; }
-                    changed has-focus => { MobileView.profile-source-focused = self.has-focus; }
+                    changed has-focus => {
+                        MobileView.profile-source-focused = self.has-focus;
+                    }
                     init => { MobileView.profile-source-target = self.target; MobileView.profile-source-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
@@ -92,16 +134,18 @@ export component MobileDetails inherits PageSurface {
                     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                         MParagraph { text: result.value; min-width: 0px; horizontal-stretch: result.country == "" ? 1 : 0; }
                         if result.country != "": HorizontalLayout { spacing: 6px; cross-axis-alignment: center; horizontal-stretch: 0;
-                            if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
+                            if result.flagged: Text { text: result.flag; width: 24px; height: 24px; font-size: 20px; }
                             MParagraph { text: result.country; wrap: no-wrap; min-width: self.preferred-width; horizontal-stretch: 0; }
                         }
                         if result.country != "": Rectangle { horizontal-stretch: 1; }
                     }
                     MSmall { text: result.detail; wrap: word-wrap; }
                     MSmall { text: result.source; wrap: word-wrap; }
+                    if result.delay != "": MSmall { text: result.delay; color: Theme.tone-color(result.delay-tone); }
                   }
                 }
             }
+            if root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         } }
         if MobileView.detail == 5 || MobileView.detail == 10: HorizontalLayout { spacing: MobileTypography.small-gap;
             MCopyButton { label: MobileView.detail == 5 ? "复制详情" : "复制全文";
@@ -109,18 +153,7 @@ export component MobileDetails inherits PageSurface {
             }
             MButton { text: "关闭"; clicked => { MobileView.back(); } }
         }
-        if MobileView.detail == 2 || MobileView.detail == 3: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "取消"; enabled: !MobileData.profile-busy; clicked => { MobileView.back(); } }
-            MButton { text: MobileView.detail == 2 ? "保存规则" : MobileData.profile-busy ? "正在保存…" : "保存订阅"; primary: true;
-                enabled: !MobileData.working && !MobileData.profile-busy;
-                busy: MobileView.detail == 3 && MobileData.profile-busy;
-                clicked => {
-                    if MobileView.detail == 2 {
-                        MobileActions.request(MobileIntent.rule-save, MobileView.rule-text-mode ? MobileView.rule-raw : root.rule-line, MobileView.rule-position + "|" + (MobileView.rule-enabled ? "true" : "false"));
-                    } else { MobileActions.request(MobileIntent.save-profile, MobileView.profile-name, MobileView.profile-source); }
-                }
-            }
-        }
+        if !root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         if MobileView.detail == 16: HorizontalLayout { spacing: MobileTypography.small-gap;
             MButton { text: "返回结果"; clicked => { MobileView.detail = 6; } }
             MButton { text: "重测此项"; primary: true; enabled: !MobileData.detecting;
@@ -161,7 +194,8 @@ export component MobileModal inherits Rectangle {
                 height: content.preferred-height;
                 x: (parent.width - self.width) / 2;
                 y: root.centered ? (parent.height - self.height) / 2 : max(MobileView.safe-top, parent.height - self.height - MobileView.safe-bottom - 12px) + (1 - presence.progress) * (root.centered ? 8px : 20px);
-                background: Theme.surface; border-radius: 12px; border-width: 1px; border-color: Theme.line;
+            background: Theme.raised; border-radius: 18px; border-width: 1px; border-color: Theme.line;
+            drop-shadow-blur: 32px; drop-shadow-offset-y: 8px;
                 content := VerticalLayout { alignment: start; spacing: MobileTypography.padding; padding: 24px;
                     MHeading { text: root.kind == 4 ? "删除此订阅？" : root.kind == 8 ? "开启 Claude 保护？" : root.kind == 12 ? "放弃未保存的修改？" : root.kind == 13 ? "安装预发布版 " + MobileData.update-version + "？" : "强调色"; }
                     if root.kind != 11: MParagraph {
@@ -180,13 +214,15 @@ export component MobileModal inherits Rectangle {
                         for row in [0, 1, 2]: HorizontalLayout { spacing: MobileTypography.small-gap;
                             for column in [0, 1]: MButton { modal-control: true; text: AccentPalette.accent-names[row * 2 + column]; selected: Theme.accent-index == row * 2 + column;
                                 show-swatch: true; swatch: Theme.dark ? AccentPalette.dark-colors[row * 2 + column] : AccentPalette.accent-colors[row * 2 + column];
+                                enabled: !MobileData.protected && !MobileData.protection-pending;
                                 clicked => { Theme.accent-index = row * 2 + column; MobileActions.request(MobileIntent.accent, "" + Theme.accent-index, ""); }
                             }
                         }
                     }
                     if root.kind != 11: MButton {
+                        geometry-key: root.kind == 12 ? "preview-discard" : "";
                         modal-control: true; primary: root.kind == 8 || root.kind == 13; danger: root.kind == 4 || root.kind == 12;
-                        enabled: !MobileData.profile-busy && (root.kind != 8 || root.seconds == 0) && (root.kind != 13 || MobileData.update-confirm-wait == 0);
+                        enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending && (root.kind != 8 || root.seconds == 0) && (root.kind != 13 || MobileData.update-confirm-wait == 0);
                         busy: root.kind == 4 && MobileData.profile-busy;
                         text: root.kind == 4 ? (MobileData.profile-busy ? "正在删除…" : "删除订阅") : root.kind == 12 ? "放弃修改"
                             : root.kind == 13 ? (MobileData.update-confirm-wait > 0 ? "继续安装（" + MobileData.update-confirm-wait + " 秒）" : "继续安装")

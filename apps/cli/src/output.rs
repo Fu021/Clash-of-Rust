@@ -3,6 +3,7 @@ use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Write};
 mod human;
+pub(crate) use clash_client_core::support::redact;
 
 pub fn download_progress(progress: &clash_client_core::update::Progress) -> String {
     human::download_progress(progress)
@@ -21,9 +22,16 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
         if !args.flag("quiet") {
             eprintln!("已保存：{path}");
         }
+        if crate::diagnostics::has_failure(&value) {
+            crate::diagnostics::failure_hint(Some(args));
+        }
         return Ok(());
     }
-    write_output(&mut std::io::stdout().lock(), args, &value)
+    write_output(&mut std::io::stdout().lock(), args, &value)?;
+    if crate::diagnostics::has_failure(&value) {
+        crate::diagnostics::failure_hint(Some(args));
+    }
+    Ok(())
 }
 
 fn write_output(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
@@ -37,53 +45,6 @@ fn write_output(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
         human::write(out, args, value)?;
     }
     Ok(())
-}
-
-pub fn redact(mut value: Value) -> Value {
-    match &mut value {
-        Value::Object(map) => {
-            for (key, field) in map {
-                let normalized = key.to_ascii_lowercase().replace('-', "_");
-                if [
-                    "password",
-                    "secret",
-                    "token",
-                    "uuid",
-                    "private_key",
-                    "ip_reputation_key",
-                    "authorization",
-                    "auth",
-                    "psk",
-                    "preshared_key",
-                    "api_key",
-                ]
-                .iter()
-                .any(|s| normalized == *s || normalized.ends_with(&format!("_{s}")))
-                {
-                    if !field.is_null() {
-                        *field = Value::String("[已隐藏]".into());
-                    }
-                } else if matches!(normalized.as_str(), "source" | "url")
-                    && field
-                        .as_str()
-                        .is_some_and(|s| s.starts_with("http://") || s.starts_with("https://"))
-                {
-                    *field = Value::String(clash_client_runtime::claude_check::system::redact_url(
-                        field.as_str().unwrap(),
-                    ));
-                } else {
-                    *field = redact(std::mem::take(field));
-                }
-            }
-        }
-        Value::Array(items) => {
-            for field in items {
-                *field = redact(std::mem::take(field));
-            }
-        }
-        _ => {}
-    }
-    value
 }
 
 pub async fn confirm(args: &Args, message: &str) -> Result<()> {
@@ -147,6 +108,63 @@ mod tests {
         let mut out = Vec::new();
         write_output(&mut out, &args, &redact(value)).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn update_handoff_and_result_have_distinct_output() {
+        let handed_off = render(&["update", "install"], json!({"shutdown":true}));
+        assert!(handed_off.contains("尚未确认安装完成"));
+        assert!(handed_off.contains("cor update status"));
+        let completed_install = render(
+            &["update", "install"],
+            json!({"state":"succeeded","version":"0.6.7","message":"已更新至 0.6.7；可用 cor start 启动后台","error":false}),
+        );
+        assert!(completed_install.contains("已更新至 0.6.7"));
+        assert!(!completed_install.contains("尚未确认安装完成"));
+        let finished = render(
+            &["update", "status"],
+            json!({"state":"succeeded","version":"0.6.7","message":"已更新至 0.6.7","error":false}),
+        );
+        assert!(finished.contains("已更新至 0.6.7"));
+        assert!(!finished.contains("尚未确认"));
+        let failed = render(
+            &["update", "status"],
+            json!({"state":"failed","version":"0.6.7","message":"安装授权已取消","error":true}),
+        );
+        assert!(failed.contains("安装授权已取消"));
+    }
+
+    #[test]
+    fn update_interval_output_uses_minutes_or_disabled_while_json_keeps_the_number() {
+        for (minutes, expected) in [(0, "已关闭"), (360, "360 分钟")] {
+            let value = json!({"update_check_interval_minutes": minutes});
+            let text = render(
+                &["config", "get", "update_check_interval_minutes"],
+                value.clone(),
+            );
+            assert!(text.contains("自动检查更新间隔"));
+            assert!(text.contains(expected));
+            let json = render(
+                &["config", "get", "update_check_interval_minutes", "--json"],
+                value.clone(),
+            );
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed["data"], value);
+        }
+    }
+
+    #[test]
+    fn failed_group_tests_offer_network_recovery_without_changing_json() {
+        let all_failed = json!({"节点 A": 0, "节点 B": 0});
+        let human = render(&["node", "test", "--all"], all_failed.clone());
+        assert!(human.contains("cor proxy off"));
+        assert!(human.contains("cor diagnose --output cor-diagnose.json"));
+        assert!(
+            !render(&["node", "test", "--all"], json!({"A": 1, "B": 0})).contains("cor proxy off")
+        );
+        assert!(!render(&["node", "test", "A"], json!({"A": 0})).contains("cor proxy off"));
+        let json = render(&["node", "test", "--all", "--json"], all_failed);
+        assert!(!json.contains("cor proxy off"));
     }
 
     #[test]
@@ -214,20 +232,30 @@ mod tests {
     }
 
     #[test]
-    fn status_and_diagnostics_explain_route_scope_without_claiming_ownership() {
+    fn status_reports_external_tun_and_an_action_instead_of_route_sampling_noise() {
         let routes = json!({
             "scope":"current_network_namespace",
+            "holder_scope":"current_user",
             "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
             "ipv6":{"state":"unknown"},
+            "tun_holders":{
+                "state":"complete","scope":"current_user",
+                "interfaces":{"Meta":[]},"skipped_other_users":1
+            },
             "warnings":["tun_owner_unconfirmed"]
         });
         let status = render(
             &["status"],
             json!({"running":false,"owner":null,"host_routes":routes}),
         );
-        assert!(status.contains("TUN/TAP 接口 Meta"));
-        assert!(status.contains("归属未确认"));
-        assert!(status.contains("可能来自其他用户或程序"));
+        assert!(status.contains("外部 TUN"));
+        assert!(status.contains("Meta"));
+        assert!(status.contains("当前用户范围未发现持有进程"), "{status}");
+        assert!(status.contains("sudo cor status --all-users"), "{status}");
+        assert!(!status.contains("无法读取"), "{status}");
+        assert!(status.contains("cor diagnose --output cor-diagnose.json"));
+        assert!(!status.contains("ipv6"));
+        assert!(!status.contains("未检测连通性"));
         let report = render(
             &["diagnose"],
             json!({
@@ -250,10 +278,87 @@ mod tests {
             "HTTP 200",
             "当前用户后台未运行",
             "HTTPS_PROXY",
-            "不代表其他应用或目标服务可用",
         ] {
             assert!(report.contains(expected), "{report}");
         }
+    }
+
+    #[test]
+    fn status_reports_a_root_tun_holder_without_claiming_who_enabled_it() {
+        let status = render(
+            &["status"],
+            json!({
+                "running":false,
+                "host_routes":{
+                    "scope":"current_network_namespace","observer_uid":1000,
+                    "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                    "ipv6":{"state":"unknown","reason":"route_unavailable"},
+                    "tun_holders":{"state":"partial","interfaces":{
+                        "Meta":[{"uid":0,"pid":42,"process":"mihomo"}]
+                    }},
+                    "warnings":["tun_owner_unconfirmed"]
+                }
+            }),
+        );
+        assert!(status.contains("root · PID 42"), "{status}");
+        assert!(status.contains("持有进程"));
+        assert!(!status.contains("开启者"));
+        assert!(!status.contains("无可用示例路由"));
+        assert!(!status.contains("IPv6 不可用"));
+    }
+
+    #[test]
+    fn explicit_all_user_scan_shows_holders_even_when_this_instance_owns_tun() {
+        let status = render(
+            &["status", "--all-users"],
+            json!({
+                "running":true,"owner":"daemon","version":"0.6.7","proxy":"tun","mode":"rule",
+                "profile":"sub","node":"Node","protected":false,"connections":1,
+                "upload_rate":1,"download_rate":2,
+                "host_routes":{
+                    "scope":"current_network_namespace","holder_scope":"all_users",
+                    "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                    "ipv6":{"state":"unknown"},
+                    "tun_holders":{"state":"complete","scope":"all_users","interfaces":{
+                        "Meta":[{"uid":1000,"pid":42,"process":"mihomo"}]
+                    }},
+                    "warnings":[]
+                }
+            }),
+        );
+        assert!(status.contains("TUN 持有进程"), "{status}");
+        assert!(status.contains("UID 1000 · PID 42"), "{status}");
+    }
+
+    #[test]
+    fn routine_status_omits_unavailable_samples_and_stop_does_not_claim_global_recovery() {
+        let host_routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","interface":"eth0","kind":"other"},
+            "ipv6":{"state":"unknown","reason":"route_unavailable"},
+            "warnings":[]
+        });
+        for command in ["status", "proxy", "stop"] {
+            let text = render(
+                &[command],
+                json!({"running":false,"proxy":"off","host_routes":host_routes}),
+            );
+            assert!(!text.contains("IPv6"), "{text}");
+            assert!(!text.contains("ipv6"), "{text}");
+            assert!(!text.contains("其他用户"), "{text}");
+            assert!(!text.contains("网络设置已恢复"), "{text}");
+        }
+        let text = render(
+            &["stop"],
+            json!({"host_routes":{
+                "scope":"current_network_namespace",
+                "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                "warnings":["tun_owner_unconfirmed"]
+            }}),
+        );
+        assert!(text.starts_with("内核已停止\n"));
+        assert!(text.contains("外部 TUN"));
+        assert!(text.contains("cor diagnose --output cor-diagnose.json"));
     }
 
     #[test]

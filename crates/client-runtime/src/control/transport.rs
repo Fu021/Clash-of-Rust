@@ -287,7 +287,10 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                 };
                 let (result, disconnected) = if matches!(
                     &operation,
-                    Command::GeoUpdate | Command::UpdateInstall | Command::Import { .. }
+                    Command::GeoUpdate
+                        | Command::UpdateInstall
+                        | Command::UpdatePrepareTerminal
+                        | Command::Import { .. }
                 ) {
                     let (cancellation, disconnected) = watch::channel(false);
                     until_disconnect(

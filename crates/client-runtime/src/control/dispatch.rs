@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) async fn prepare_update_handoff<'a, S, F, Fut, C>(
     shared: &'a Arc<Mutex<Engine>>,
     job: &crate::engine::downloads::UpdateJob,
@@ -16,24 +16,30 @@ pub(crate) async fn prepare_update_handoff<'a, S, F, Fut, C>(
     cancel: C,
 ) -> Result<(tokio::sync::MutexGuard<'a, Engine>, S)>
 where
-    F: FnOnce(u32, bool) -> Fut,
+    F: FnOnce(u32, bool, std::path::PathBuf) -> Fut,
     Fut: std::future::Future<Output = Result<S>>,
     C: FnOnce(&S),
 {
-    let (gui, parent) = {
+    let (gui, parent, data_dir) = {
         let engine = shared.lock().await;
         job.ensure_current(disconnected)?;
+        engine.settings.require_mutable()?;
         anyhow::ensure!(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
         );
         let gui = super::gui_pid(&engine.store)?;
-        (gui, gui.unwrap_or_else(std::process::id))
+        (
+            gui,
+            gui.unwrap_or_else(std::process::id),
+            engine.store.root.clone(),
+        )
     };
-    let session = prepare(parent, gui.is_some()).await?;
+    let session = prepare(parent, gui.is_some(), data_dir).await?;
     let engine = shared.lock().await;
     if let Err(error) = (|| -> Result<()> {
         job.ensure_current(disconnected)?;
+        engine.settings.require_mutable()?;
         anyhow::ensure!(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
@@ -76,12 +82,44 @@ pub(super) async fn execute(
     owner: Owner,
     disconnected: Option<watch::Receiver<bool>>,
 ) -> Result<Value> {
+    operation.check_protection(&shared.lock().await.settings)?;
+    if matches!(&operation, Command::RecoverUnreachable) {
+        return Ok(serde_json::to_value(
+            Engine::recover_unreachable_cancellable(shared, disconnected).await?,
+        )?);
+    }
+    if let Command::Delay { name, group } = &operation {
+        let api = {
+            let mut engine = shared.lock().await;
+            start(&mut engine).await?;
+            engine.api.clone()
+        };
+        let result = match name {
+            Some(name) if *group => api.delay_group(name).await?,
+            Some(name) => api.delay_node(name).await?,
+            None => api.delay_all_nodes().await?,
+        };
+        if (name.is_none() || *group)
+            && !result.is_empty()
+            && result.values().all(|delay| *delay == 0)
+            && let Err(error) = Engine::recover_unreachable_cancellable(shared, disconnected).await
+        {
+            shared
+                .lock()
+                .await
+                .record_failure(&format!("节点状态复测未完成，已保留网络设置：{error:#}"));
+        }
+        return Ok(serde_json::to_value(result)?);
+    }
     if matches!(&operation, Command::GeoUpdate) {
         Engine::update_geo_cancellable(shared, disconnected).await?;
         return Ok(Value::Null);
     }
     if matches!(&operation, Command::UpdateInstall) {
-        return install_update(shared, disconnected).await;
+        return install_update(shared, disconnected, false).await;
+    }
+    if matches!(&operation, Command::UpdatePrepareTerminal) {
+        return install_update(shared, disconnected, true).await;
     }
     if let Command::Import {
         name,
@@ -127,8 +165,9 @@ pub(super) async fn execute(
             | Command::Delay { .. }
     );
     let mut engine = shared.lock().await;
+    operation.check_protection(&engine.settings)?;
     if changes_view {
-        engine.view_revision = engine.view_revision.wrapping_add(1);
+        engine.invalidate_views();
     }
     match operation {
         Command::Meta => return Ok(serde_json::to_value(meta(&engine, owner)?)?),
@@ -149,6 +188,7 @@ pub(super) async fn execute(
             start(&mut engine).await?;
         }
         Command::RecoverNetwork => engine.recover_network().await?,
+        Command::RecoverUnreachable => unreachable!("handled before locking the owner"),
         Command::Shutdown => {
             engine.stop().await?;
             return Ok(
@@ -245,15 +285,7 @@ pub(super) async fn execute(
             engine.claude_protection(enabled).await?;
         }
         Command::TrayNodes => return Ok(serde_json::to_value(engine.tray_nodes().await?)?),
-        Command::Delay { name, group } => {
-            start(&mut engine).await?;
-            let result = match name {
-                Some(name) if group => engine.api.delay_group(&name).await?,
-                Some(name) => engine.api.delay_node(&name).await?,
-                None => engine.api.delay_all_nodes().await?,
-            };
-            return Ok(serde_json::to_value(result)?);
-        }
+        Command::Delay { .. } => unreachable!("handled before locking the owner"),
         Command::Close { id } => {
             if let Some(id) = id {
                 engine.api.close_connection(&id).await?;
@@ -288,6 +320,19 @@ pub(super) async fn execute(
             return Ok(json!({"enabled":crate::platform::autostart_enabled()?}));
         }
         Command::UpdateInstall => unreachable!("handled before locking the owner"),
+        Command::UpdatePrepareTerminal => unreachable!("handled before locking the owner"),
+        Command::UpdateCommitTerminal { directory } => {
+            #[cfg(target_os = "linux")]
+            {
+                crate::update::commit_terminal_install(&directory, &mut engine).await?;
+                return Ok(json!({"shutdown":true}));
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = directory;
+                anyhow::bail!("当前平台不支持 Linux 终端安装交接");
+            }
+        }
     }
     Ok(Value::Null)
 }
@@ -295,7 +340,10 @@ pub(super) async fn execute(
 async fn install_update(
     shared: &Arc<Mutex<Engine>>,
     mut disconnected: Option<watch::Receiver<bool>>,
+    terminal: bool,
 ) -> Result<Value> {
+    #[cfg(not(target_os = "linux"))]
+    anyhow::ensure!(!terminal, "当前平台不支持 Linux 终端安装交接");
     crate::update::ensure_installable()?;
     let (job, download, prereleases) = Engine::download_app_update_with(
         shared,
@@ -308,53 +356,100 @@ async fn install_update(
         },
     )
     .await?;
-    // macOS may wait for DMG verification or authorization. The helper is
-    // gated until the owner rechecks the GUI and explicitly commits the swap.
-    #[cfg(target_os = "macos")]
-    let (mut engine, session) = prepare_update_handoff(
-        shared,
-        &job,
-        &disconnected,
-        prereleases,
-        |parent, gui| async move {
-            tokio::task::spawn_blocking(move || {
-                crate::update::handoff_owner_deferred(Arc::new(download), parent, gui)
-            })
-            .await?
-        },
-        |session| session.cancel(),
-    )
-    .await?;
-    #[cfg(not(target_os = "macos"))]
-    let (mut engine, session) = {
+    #[cfg(target_os = "linux")]
+    if terminal {
         let engine = shared.lock().await;
         job.ensure_current(&disconnected)?;
+        engine.settings.require_mutable()?;
+        anyhow::ensure!(
+            engine.settings.update_prereleases == prereleases,
+            "更新通道已改变，请重新检查更新"
+        );
+        let directory = crate::update::prepare_terminal_install(Arc::new(download), &engine)?;
+        return Ok(json!({"installer":directory,"shutdown":false}));
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    let deferred =
+        cfg!(target_os = "macos") || crate::update::supports_deferred_install(download.version());
+    #[cfg(any(windows, target_os = "macos"))]
+    let (mut engine, session) = if deferred {
+        prepare_update_handoff(
+            shared,
+            &job,
+            &disconnected,
+            prereleases,
+            |parent, gui, data_dir| async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::update::handoff_owner_deferred_at(
+                        Arc::new(download),
+                        parent,
+                        gui,
+                        Some(data_dir),
+                    )
+                })
+                .await?
+            },
+            |session| session.cancel(),
+        )
+        .await?
+    } else {
+        let engine = shared.lock().await;
+        job.ensure_current(&disconnected)?;
+        engine.settings.require_mutable()?;
         anyhow::ensure!(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
         );
         let gui = super::gui_pid(&engine.store)?;
         let parent = gui.unwrap_or_else(std::process::id);
+        let data_dir = engine.store.root.clone();
         let session = tokio::task::spawn_blocking(move || {
-            crate::update::handoff_owner(Arc::new(download), parent, gui.is_some())
+            crate::update::handoff_owner_at(
+                Arc::new(download),
+                parent,
+                gui.is_some(),
+                Some(data_dir),
+            )
         })
         .await??;
         (engine, session)
     };
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let (mut engine, session) = {
+        let engine = shared.lock().await;
+        job.ensure_current(&disconnected)?;
+        engine.settings.require_mutable()?;
+        anyhow::ensure!(
+            engine.settings.update_prereleases == prereleases,
+            "更新通道已改变，请重新检查更新"
+        );
+        let gui = super::gui_pid(&engine.store)?;
+        let parent = gui.unwrap_or_else(std::process::id);
+        let data_dir = engine.store.root.clone();
+        let session = tokio::task::spawn_blocking(move || {
+            crate::update::handoff_owner_at(
+                Arc::new(download),
+                parent,
+                gui.is_some(),
+                Some(data_dir),
+            )
+        })
+        .await??;
+        (engine, session)
+    };
+    #[cfg(any(windows, target_os = "macos"))]
     let was_running = engine.running();
     if let Err(error) = engine.stop().await {
         session.cancel();
         return Err(error);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     if let Err(error) = super::request_gui_exit(&engine.store) {
         session.cancel();
         return Err(error);
     }
-    #[cfg(target_os = "macos")]
-    if let Err(error) = session
-        .commit()
+    #[cfg(any(windows, target_os = "macos"))]
+    if let Err(error) = (if deferred { session.commit() } else { Ok(()) })
         .and_then(|()| super::request_gui_exit(&engine.store))
     {
         session.cancel();

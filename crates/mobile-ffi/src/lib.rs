@@ -9,6 +9,8 @@ use core::{
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
+pub mod overview;
+
 pub trait NativeHost: Send + Sync + 'static {
     fn request(&self, value: Value) -> Result<Value>;
     fn notify(&self, title: &str, message: &str, interactive: bool) -> Result<()> {
@@ -56,7 +58,15 @@ impl Snapshot {
             }
         };
         let connections = async {
-            if matches!(page, 3 | 8) {
+            if page == 0 {
+                let preview: core::api::ConnectionPreview = api.get("connections").await?;
+                let stats = core::api::ConnectionStats {
+                    count: preview.count,
+                    upload_total: preview.connections.upload_total,
+                    download_total: preview.connections.download_total,
+                };
+                Ok::<_, anyhow::Error>((Some(preview.connections), stats))
+            } else if matches!(page, 3 | 8) {
                 let connections: Connections = api.get("connections").await?;
                 let stats = core::api::ConnectionStats {
                     count: connections.connections.len(),
@@ -239,8 +249,23 @@ impl Session {
                 self.settings = settings;
             }
         }
+        let direct = if native_running || self.settings.claude_protection.is_some() {
+            None
+        } else {
+            Some(core::config::reserve_controller(
+                self.settings.direct_download_port,
+                self.settings.mixed_port,
+            )?)
+        };
+        if let Some(listener) = &direct {
+            let mut settings = self.settings.clone();
+            settings.direct_download_port = listener.local_addr()?.port();
+            self.store.save_settings(&settings)?;
+            self.settings = settings;
+        }
         let raw = self.runtime(&self.settings)?;
         drop(controller);
+        drop(direct);
         self.native.request(
             json!({"op":"initialize","config":raw,"ipv6":effective_ipv6(&self.settings)}),
         )?;
@@ -265,6 +290,7 @@ impl Session {
         Ok(())
     }
     pub fn install_geo(&mut self, staged: &std::path::Path) -> Result<core::geodata::GeoManifest> {
+        self.settings.require_mutable()?;
         let raw = self.runtime(&self.settings)?;
         let runtime = self.store.runtime();
         core::geodata::begin_install(staged, &runtime)?;
@@ -292,8 +318,30 @@ impl Session {
         };
         Ok(manifest)
     }
-    pub fn commit_settings(&mut self, mut settings: Settings) -> Result<()> {
+    pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
+        self.settings.require_mutable()?;
+        ensure!(
+            settings.claude_protection == self.settings.claude_protection,
+            "请使用 Claude 保护开关"
+        );
+        self.apply_settings(settings)
+    }
+
+    pub fn commit_protection(
+        &mut self,
+        protection: Option<Arc<core::claude_check::protection::Protection>>,
+        run_mode: String,
+    ) -> Result<()> {
+        self.apply_settings(Settings {
+            claude_protection: protection,
+            run_mode,
+            ..self.settings.clone()
+        })
+    }
+
+    fn apply_settings(&mut self, mut settings: Settings) -> Result<()> {
         settings.normalize();
+        settings.direct_download_port = self.settings.direct_download_port;
         if settings.mixed_port == settings.controller_port {
             settings.controller_port = core::config::reserve_controller(0, settings.mixed_port)?
                 .local_addr()?
@@ -478,6 +526,7 @@ impl Session {
         source: &str,
         content: Option<&str>,
     ) -> Result<()> {
+        self.settings.require_mutable()?;
         if let Some(id) = id {
             self.require_unprotected_profile(id)?;
             ensure!(
@@ -497,7 +546,13 @@ impl Session {
         );
         let (raw, usage) = if let Some(raw) = content {
             (raw.to_owned(), None)
-        } else if source.is_empty() {
+        } else if source.is_empty()
+            || id.is_some_and(|id| {
+                self.profiles.iter().any(|profile| {
+                    profile.id == id && profile.is_local() && profile.source == source
+                })
+            })
+        {
             let id = id.context("本地配置需要导入文件")?;
             (
                 core::config::read_profile(&self.store.profile_path(id)?)?,
@@ -507,7 +562,10 @@ impl Session {
             let url = core::probe::validate_url(source)?;
             core::subscription::download_routes(
                 &url,
-                &core::network::routes(self.running.then_some(self.settings.mixed_port), None),
+                &core::network::download_routes(
+                    self.running.then_some(self.settings.download_ports()),
+                    None,
+                ),
             )
             .await
             .context(if id.is_some() {
@@ -546,6 +604,7 @@ impl Session {
         raw: String,
         usage: Option<String>,
     ) -> Result<()> {
+        self.settings.require_mutable()?;
         if let Some(id) = id {
             self.require_unprotected_profile(id)?;
         }
@@ -629,15 +688,8 @@ impl Session {
         }
         Ok(())
     }
-    fn require_unprotected_profile(&self, id: &str) -> Result<()> {
-        ensure!(
-            self.settings
-                .claude_protection
-                .as_ref()
-                .is_none_or(|protection| protection.profile_id != id),
-            "请先关闭 Claude 保护，再修改正在使用的订阅"
-        );
-        Ok(())
+    fn require_unprotected_profile(&self, _id: &str) -> Result<()> {
+        self.settings.require_mutable()
     }
     pub async fn update_profile(&mut self, id: &str) -> Result<()> {
         self.require_unprotected_profile(id)?;
@@ -647,7 +699,7 @@ impl Session {
             .find(|p| p.id == id)
             .context("订阅不存在")?
             .clone();
-        ensure!(!profile.source.is_empty(), "本地配置没有更新地址");
+        ensure!(!profile.is_local(), "本地配置没有更新地址");
         self.save_profile(Some(id), &profile.name, &profile.source, None)
             .await
     }
@@ -831,13 +883,9 @@ impl Session {
         let max = (rows.len() + usize::from(!existing)).max(1);
         let selected_key = format!("c:{selected}");
         ensure!((1..=max).contains(&position), "插入位置应为 1-{max}");
-        ensure!(
-            !enabled
-                || !rows
-                    .iter()
-                    .any(|row| { row.enabled && row.raw.trim() == raw && row.id != selected_key }),
-            "已有相同的启用规则，请修改原规则或调整顺序"
-        );
+        if enabled {
+            core::rule_manager::ensure_unique_enabled(&rows, raw, Some(&selected_key))?;
+        }
         let id = if existing {
             selected.to_owned()
         } else {
@@ -897,16 +945,26 @@ impl Session {
         let id = selected
             .strip_prefix("c:")
             .context("只有自定义规则可以停用")?;
+        let (rows, _) = self.document().rows(&self.draft);
+        let row = rows
+            .iter()
+            .find(|row| row.id == selected)
+            .context("规则已变化，请重新选择")?;
+        let enabled = !row.enabled;
+        if enabled {
+            core::rule_manager::ensure_unique_enabled(&rows, &row.raw, Some(selected))?;
+        }
         let rule = self
             .draft
             .custom
             .iter_mut()
             .find(|rule| rule.id == id)
             .context("规则已变化，请重新选择")?;
-        rule.enabled = !rule.enabled;
+        rule.enabled = enabled;
         Ok(())
     }
     pub fn apply_rules(&mut self) -> Result<()> {
+        self.settings.require_mutable()?;
         let mut next = self.settings.clone();
         next.rule_profiles
             .insert(self.rule_profile.clone(), Arc::new(self.draft.clone()));
@@ -1339,6 +1397,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn renaming_an_imported_profile_preserves_its_content_after_reopen() {
+        for source in ["", "/no-longer-present/imported.yaml"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+            let raw = "proxies: []\nrules: ['MATCH,DIRECT']\n";
+            session
+                .save_profile(None, "Imported", source, Some(raw))
+                .await
+                .unwrap();
+            let id = session.profiles.last().unwrap().id.clone();
+            assert!(
+                session
+                    .update_profile(&id)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("本地配置没有更新地址")
+            );
+            session
+                .save_profile(Some(&id), "Renamed", source, None)
+                .await
+                .unwrap();
+            let reopened = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+            let profile = reopened
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .unwrap();
+            assert_eq!(profile.name, "Renamed");
+            assert_eq!(profile.source, source);
+            assert!(profile.is_local());
+            assert_eq!(
+                core::config::read_profile(&reopened.store.profile_path(&id).unwrap()).unwrap(),
+                raw
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn deleting_the_active_profile_uses_default_without_losing_another_profiles_draft() {
         let root = tempfile::tempdir().unwrap();
         let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
@@ -1703,8 +1800,7 @@ mod tests {
         before.dns_override = false;
         session.commit_settings(before.clone()).unwrap();
         let raw = session.runtime(&before).unwrap();
-        let mut next = before.clone();
-        next.claude_protection = Some(Arc::new(Protection::new(
+        let protection = Protection::new(
             profile,
             "Test".into(),
             Previous {
@@ -1712,8 +1808,11 @@ mod tests {
                 proxy_mode: core::model::ProxyMode::Off,
                 selectors: Default::default(),
             },
-        )));
-        session.commit_settings(next).unwrap();
+        );
+        let mode = before.run_mode.clone();
+        session
+            .commit_protection(Some(Arc::new(protection)), mode)
+            .unwrap();
         assert!(effective_ipv6(&session.settings));
         assert!(!session.settings.ipv6 && !session.settings.udp && !session.settings.dns_override);
         let active: yaml_serde::Value =
@@ -1722,11 +1821,60 @@ mod tests {
         assert_eq!(active["tun"]["enable"], false);
         let mut reopened = Session::open(root.path().into(), native).unwrap();
         assert!(reopened.settings.claude_protection.is_some());
-        reopened.commit_settings(before).unwrap();
+        reopened
+            .commit_protection(before.claude_protection, before.run_mode)
+            .unwrap();
         assert!(!effective_ipv6(&reopened.settings));
         assert_eq!(reopened.runtime(&reopened.settings).unwrap(), raw);
         assert!(!core::profile_transaction::recover(&reopened.store.root).unwrap());
     }
+
+    #[tokio::test]
+    async fn protected_initialize_skips_the_direct_download_listener() {
+        use crate::core::claude_check::protection::{Previous, Protection};
+
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        session
+            .save_profile(
+                None,
+                "Protected",
+                "",
+                Some(
+                    "proxies: [{name: Test, type: socks5, server: 127.0.0.1, port: 1080}]\nrules: ['MATCH,Test']\n",
+                ),
+            )
+            .await
+            .unwrap();
+        let profile = session
+            .profiles
+            .iter()
+            .find(|profile| profile.name == "Protected")
+            .unwrap()
+            .id
+            .clone();
+        session.activate(&profile).unwrap();
+        let before = session.settings.clone();
+        session
+            .commit_protection(
+                Some(Arc::new(Protection::new(
+                    profile,
+                    "Test".into(),
+                    Previous {
+                        mode: before.run_mode.clone(),
+                        proxy_mode: core::model::ProxyMode::Off,
+                        selectors: Default::default(),
+                    },
+                ))),
+                before.run_mode.clone(),
+            )
+            .unwrap();
+        let direct_port = session.settings.direct_download_port;
+        session.initialize().unwrap();
+        assert_eq!(session.settings.direct_download_port, direct_port);
+        assert_eq!(session.settings.download_ports().direct, 0);
+    }
+
     #[tokio::test]
     async fn scheduled_subscription_commit_preserves_drafts_and_discards_stale_results() {
         let root = tempfile::tempdir().unwrap();
@@ -1778,7 +1926,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protected_profile_rejects_edits_and_updates_but_allows_other_profiles() {
+    async fn protection_rejects_every_profile_and_settings_mutation() {
         use crate::core::claude_check::protection::{Previous, Protection};
         const ORIGINAL: &str = "proxies: [{name: Test, type: socks5, server: 127.0.0.1, port: 1080}]\nrules: ['MATCH,Test']\n";
         const REPLACEMENT: &str = "proxies: [{name: Test, type: socks5, server: 127.0.0.2, port: 1080}]\nrules: ['MATCH,Test']\n";
@@ -1801,17 +1949,19 @@ mod tests {
             .unwrap();
         let backup = session.profiles.last().unwrap().id.clone();
         session.initialize().unwrap();
-        let mut next = session.settings.clone();
-        next.claude_protection = Some(Arc::new(Protection::new(
+        let mode = session.settings.run_mode.clone();
+        let protection = Protection::new(
             id.clone(),
             "Test".into(),
             Previous {
-                mode: next.run_mode.clone(),
+                mode: mode.clone(),
                 proxy_mode: core::model::ProxyMode::Tun,
                 selectors: Default::default(),
             },
-        )));
-        session.commit_settings(next).unwrap();
+        );
+        session
+            .commit_protection(Some(Arc::new(protection)), mode)
+            .unwrap();
         let before_settings = session.settings.clone();
         let before_profiles = serde_json::to_value(&session.profiles).unwrap();
         let files = [
@@ -1832,6 +1982,12 @@ mod tests {
         let error = session.update_profile(&id).await.unwrap_err();
         assert!(error.to_string().contains("请先关闭 Claude 保护"));
         assert!(session.set_fake_ip(false).is_err());
+        let error = session.apply_rules().unwrap_err();
+        assert!(error.to_string().contains("请先关闭 Claude 保护"));
+        let error = session
+            .commit_settings(before_settings.clone())
+            .unwrap_err();
+        assert!(error.to_string().contains("请先关闭 Claude 保护"));
         assert_eq!(
             serde_json::to_value(&session.settings).unwrap(),
             serde_json::to_value(&before_settings).unwrap()
@@ -1848,15 +2004,21 @@ mod tests {
         session
             .save_profile(Some(&backup), "Backup", "", Some(REPLACEMENT))
             .await
-            .unwrap();
+            .unwrap_err();
         assert_eq!(
             std::fs::read(&files[3]).unwrap(),
             before_files[3],
-            "Editing an inactive profile must not reload the protected configuration"
+            "All profile edits must leave the protected runtime unchanged"
         );
-        let mut next = session.settings.clone();
-        next.claude_protection = None;
-        session.commit_settings(next).unwrap();
+        let mode = session
+            .settings
+            .claude_protection
+            .as_ref()
+            .unwrap()
+            .previous
+            .mode
+            .clone();
+        session.commit_protection(None, mode).unwrap();
         session
             .save_profile(Some(&id), "Changed", "", Some(REPLACEMENT))
             .await
@@ -2023,6 +2185,10 @@ mod tests {
             .save_rule_state("", "DOMAIN,unique.example,DIRECT", 2, false)
             .unwrap();
         assert!(!session.draft.custom[1].enabled);
+        let disabled = format!("c:{}", session.draft.custom[1].id);
+        let before = session.draft.clone();
+        assert!(session.toggle_rule(&disabled).is_err());
+        assert_eq!(session.draft, before);
     }
     #[test]
     fn mobile_rule_limit_failure_does_not_poison_the_draft() {

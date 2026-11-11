@@ -71,6 +71,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         }
         path if path.starts_with("service ") => {
             if path != "service status" {
+                backend::store(args)?.load_settings()?.require_mutable()?;
                 output::confirm(
                     args,
                     if path == "service install" {
@@ -164,20 +165,32 @@ pub(super) async fn authorize_tun(args: &Args) -> Result<()> {
 }
 
 async fn update(args: &Args) -> Result<()> {
+    if args.path == "update status" {
+        let status = clash_client_runtime::update::installation_status(&backend::data_root(args)?)?;
+        return output::emit(
+            args,
+            match status {
+                Some(status) => json!({
+                    "state":status.state, "version":status.version,
+                    "message":status.message, "error":status.error, "updated_at":status.updated_at,
+                }),
+                None => json!({"state":"none","message":"没有安装记录"}),
+            },
+        );
+    }
     let (port, api, include_prereleases) =
         if let Some(remote) = backend::connect(args, false).await? {
             let meta: Meta = remote.request(Command::Meta).await?;
+            meta.settings.require_mutable()?;
             (
-                meta.running.then_some(meta.settings.mixed_port),
+                meta.running.then_some(meta.settings.download_ports()),
                 Some(clash_client_core::api::Api::new(&meta.settings)?),
                 meta.settings.update_prereleases,
             )
         } else {
-            (
-                None,
-                None,
-                backend::store(args)?.load_settings()?.update_prereleases,
-            )
+            let settings = backend::store(args)?.load_settings()?;
+            settings.require_mutable()?;
+            (None, None, settings.update_prereleases)
         };
     if args.path == "update install" {
         let prompt = if include_prereleases {
@@ -189,6 +202,31 @@ async fn update(args: &Args) -> Result<()> {
             "下载并安装最新正式版（预发布版可返回正式版），停止当前内核和后台？".into()
         };
         output::confirm(args, &prompt).await?;
+        if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
+            eprintln!("正在检查更新、下载安装包并校验 SHA256…");
+        }
+        #[cfg(target_os = "linux")]
+        if clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none() {
+            let prepared: Value = backend::request(args, Command::UpdatePrepareTerminal)
+                .await
+                .context("终端安装准备失败；旧版后台请先退出后重试")?;
+            let directory = std::path::PathBuf::from(
+                prepared["installer"]
+                    .as_str()
+                    .context("后台没有返回终端安装目录")?,
+            );
+            let result = tokio::task::spawn_blocking(move || {
+                clash_client_runtime::update::run_terminal_install(&directory)
+            })
+            .await??;
+            if result.error {
+                bail!("{}", result.message);
+            }
+            return output::emit(
+                args,
+                json!({"state":result.state,"version":result.version,"message":result.message,"error":false}),
+            );
+        }
         return output::emit(args, backend::request(args, Command::UpdateInstall).await?);
     }
     let available =

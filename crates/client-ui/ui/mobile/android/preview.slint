@@ -4,13 +4,16 @@ import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
 import { AndroidData } from "state.slint";
 import { MobileData, MobileView } from "../shared/state.slint";
 export component AndroidPreview inherits Window {
+    in-out property <bool> preview-long-names <=> scene.preview-long-names;
     preferred-width: 393px; preferred-height: 852px;
     default-font-family: "Source Han Sans CN";
     in-out property <bool> preview-motion <=> scene.preview-motion;
+    in-out property <bool> preview-list-view <=> scene.preview-list-view;
     in-out property <int> preview-page <=> scene.preview-page;
     in-out property <int> preview-detail <=> scene.preview-detail;
     in-out property <bool> preview-dark <=> scene.preview-dark;
     in-out property <bool> preview-connected <=> scene.preview-connected;
+    in-out property <bool> preview-core-running <=> scene.preview-core-running;
     in-out property <length> inset-top <=> scene.inset-top;
     in-out property <length> inset-bottom <=> scene.inset-bottom;
     in-out property <length> inset-left <=> scene.inset-left;
@@ -24,6 +27,9 @@ export component AndroidPreview inherits Window {
     in-out property <int> preview-protection-health <=> scene.preview-protection-health;
     in-out property <string> preview-protection-message <=> scene.preview-protection-message;
     in-out property <string> preview-notice <=> scene.preview-notice;
+    in-out property <bool> preview-notice-error <=> scene.preview-notice-error;
+    in-out property <bool> preview-notice-critical <=> scene.preview-notice-critical;
+    in-out property <bool> preview-notice-recover-network <=> scene.preview-notice-recover-network;
     in-out property <float> preview-notice-elapsed <=> scene.preview-notice-elapsed;
     in-out property <bool> preview-sparse <=> scene.preview-sparse;
     in-out property <bool> preview-profile-busy <=> MobileData.profile-busy;
@@ -32,8 +38,15 @@ export component AndroidPreview inherits Window {
     in-out property <string> preview-update-version <=> MobileData.update-version;
     in-out property <bool> preview-update-available <=> AndroidData.update-available;
     in-out property <string> preview-update-status <=> AndroidData.update-status;
+    in-out property <bool> preview-update-downloading <=> AndroidData.update-downloading;
+    in-out property <float> preview-update-progress <=> AndroidData.update-progress;
+    in-out property <int> preview-applications-mode <=> AndroidData.applications-mode;
+    in-out property <int> preview-applications-filter <=> AndroidData.applications-filter;
+    in-out property <bool> preview-applications-limited <=> AndroidData.applications-visibility-limited;
+    in-out property <bool> preview-applications-dirty <=> MobileView.draft-dirty;
     in-out property <length> preview-settings-scroll <=> MobileView.settings-scroll-y;
     in-out property <length> preview-rules-scroll <=> MobileView.rules-scroll-y;
+    in-out property <length> preview-home-scroll <=> MobileView.home-scroll-y;
     scene := MobilePreviewSurface {
         inset-top: 28px; inset-bottom: 24px; preview-connected: true;
         AndroidSurface { }
@@ -41,5 +54,19 @@ export component AndroidPreview inherits Window {
     init => {
         AndroidData.authorization-status = "已允许";
         MobileData.protection-supported = true;
+        AndroidData.applications-loaded = true;
+        AndroidData.applications-total = 6;
+        AndroidData.applications-selected = 2;
+        AndroidData.applications-mode = 1;
+        AndroidData.applications-saved-summary = "仅选中 2 个应用";
+        AndroidData.applications-query-permission = true;
+        AndroidData.applications = [
+            {name: "浏览器", package: "org.example.browser", selected: true, icon: @image-url("../../icons/network.svg"), has-icon: true},
+            {name: "地图", package: "org.example.maps", selected: false, icon: @image-url("../../icons/ip.svg"), has-icon: true},
+            {name: "邮件", package: "org.example.mail", selected: true, icon: @image-url("../../icons/subscriptions.svg"), has-icon: true},
+            {name: "音乐", package: "org.example.music", selected: false, icon: @image-url("../../icons/proxies.svg"), has-icon: true},
+            {name: "很长的应用名称用于检查操作控件是否始终可见", package: "org.example.long.application.name", selected: false, icon: @image-url("../../icons/home.svg"), has-icon: true},
+            {name: "Clash of Rust", package: "org.clashofrust.android", selected: false, icon: @image-url("../../icons/settings.svg"), has-icon: true},
+        ];
     }
 }

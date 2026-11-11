@@ -50,7 +50,8 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Clash of Rust contributors · GPL-3
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-  !define MUI_FINISHPAGE_RUN "$INSTDIR\clash-of-rust.exe"
+  !define MUI_FINISHPAGE_RUN
+  !define MUI_FINISHPAGE_RUN_FUNCTION LaunchClient
   !define MUI_FINISHPAGE_RUN_TEXT "立即启动 Clash of Rust"
   !define MUI_FINISHPAGE_SHOWREADME ""
   !define MUI_FINISHPAGE_SHOWREADME_TEXT "添加快捷方式"
@@ -69,10 +70,23 @@ Var KeepAutostart
 Var UpdateMode
 Var UpdateBackup
 Var UpdateUiBackup
+Var WaitDirectory
+Var WaitPid
 Var DeleteUserData
 Var UserDataDir
 Var DataOptionsDialog
 Var DeleteDataCheckbox
+
+Function LaunchClient
+  ClearErrors
+  ExecWait '"$INSTDIR\clash-of-rust.exe" --launch-after-install' $ResultCode
+  ${If} ${Errors}
+    StrCpy $ResultCode 1
+  ${EndIf}
+  ${If} $ResultCode != 0
+    MessageBox MB_OK|MB_ICONINFORMATION "安装已完成，请从开始菜单启动 Clash of Rust。"
+  ${EndIf}
+FunctionEnd
 
 !macro CheckRunning PREFIX
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0'
@@ -116,6 +130,12 @@ Function .onInit
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
   ${EndIf}
+  StrCpy $WaitDirectory ""
+  StrCpy $WaitPid ""
+  ${GetOptions} $0 "/CORWAITDIR=" $WaitDirectory
+  ${GetOptions} $0 "/CORWAITPID=" $WaitPid
+  ClearErrors
+  Call WaitForHandoff
   ReadRegStr $ExistingDir ${PRODUCT_HIVE} "${PRODUCT_KEY}" "InstallLocation"
     ${If} $ExistingDir == ""
       ReadRegStr $ExistingDir HKCU "${LEGACY_KEY}" "InstallLocation"
@@ -164,6 +184,52 @@ Function .onInit
   ${EndIf}
   !insertmacro CheckRunning init_
   init_done:
+FunctionEnd
+
+Function WaitForHandoff
+  ${If} $WaitDirectory == ""
+  ${AndIf} $WaitPid == ""
+    Return
+  ${EndIf}
+  ${If} $UpdateMode != 1
+  ${OrIf} $WaitDirectory == ""
+  ${OrIf} $WaitPid < 2
+    Goto handoff_failed
+  ${EndIf}
+  StrCpy $2 0
+  handoff_wait:
+    IfFileExists "$WaitDirectory\plan.json" 0 handoff_failed
+    IfFileExists "$WaitDirectory\cancel" handoff_cancelled 0
+    IfFileExists "$WaitDirectory\commit" 0 handoff_pending
+    System::Call 'kernel32::OpenProcess(i 0x100000, i 0, i $WaitPid) p.r0 ?e'
+    Pop $1
+    ${If} $0 == 0
+      ${If} $1 == 87
+        Return
+      ${EndIf}
+      Goto handoff_failed
+    ${EndIf}
+    System::Call 'kernel32::WaitForSingleObject(p r0, i 0) i.r1'
+    System::Call 'kernel32::CloseHandle(p r0)'
+    ${If} $1 == 0
+      Return
+    ${EndIf}
+    ${If} $1 != 258
+      Goto handoff_failed
+    ${EndIf}
+  handoff_pending:
+    IntOp $2 $2 + 1
+    ${If} $2 >= 450
+      Goto handoff_failed
+    ${EndIf}
+    Sleep 100
+    Goto handoff_wait
+  handoff_cancelled:
+    SetErrorLevel 2
+    Abort
+  handoff_failed:
+    SetErrorLevel 67
+    Abort
 FunctionEnd
 
 Function ShutdownExisting
@@ -254,7 +320,7 @@ Section "Clash of Rust" MainSection
     ClearErrors
     Rename "$INSTDIR\clash-of-rust.exe" "$INSTDIR\clash-of-rust.update-backup.exe"
     ${If} ${Errors}
-      SetErrorLevel 6
+      SetErrorLevel 61
       Abort
     ${EndIf}
     StrCpy $UpdateBackup 1
@@ -267,7 +333,7 @@ Section "Clash of Rust" MainSection
       ${If} ${Errors}
         StrCpy $UpdateUiBackup 0
         Call RestoreUpdate
-        SetErrorLevel 6
+        SetErrorLevel 62
         Abort
       ${EndIf}
       StrCpy $UpdateUiBackup 1
@@ -297,24 +363,32 @@ Section "Clash of Rust" MainSection
   File "${PAYLOAD}\resources\settings-defaults.json"
   File "${PAYLOAD}\resources\THIRD-PARTY-NOTICES.txt"
   File /oname=SourceHanSans-LICENSE.txt "${__FILEDIR__}\..\resources\fonts\LICENSE.txt"
-  File /oname=Twemoji-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Twemoji.txt"
-  File /oname=Unicode-LICENSE.txt "${__FILEDIR__}\..\resources\flags\LICENSE-Unicode.txt"
+  File /oname=NotoEmoji-LICENSE.txt "${__FILEDIR__}\..\resources\fonts\LICENSE-NotoEmoji.txt"
+  File /oname=Unicode-LICENSE.txt "${__FILEDIR__}\..\resources\countries\LICENSE-Unicode.txt"
   SetOutPath "$INSTDIR\resources\ip-check"
   File "${PAYLOAD}\resources\ip-check\LICENSE"
   File "${PAYLOAD}\resources\ip-check\SOURCE.md"
   SetOutPath "$INSTDIR"
-  WriteUninstaller "$INSTDIR\uninstall.exe"
   ${If} ${Errors}
     Call RestoreUpdate
     SetErrorLevel 6
     Abort
   ${EndIf}
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+  ${If} ${Errors}
+    Call RestoreUpdate
+    SetErrorLevel 64
+    Abort
+  ${EndIf}
   ; The installer's existing administrator grant registers the demand-start
   ; service once. Ordinary GUI launches and TUN switches never elevate it.
+  ClearErrors
+  StrCpy $0 1
   ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-install' $0
-  ${If} $0 != 0
+  ${If} ${Errors}
+  ${OrIf} $0 != 0
     Call RestoreUpdate
-    SetErrorLevel 6
+    SetErrorLevel 65
     Abort
   ${EndIf}
     ${If} $KeepAutostart == 1
@@ -333,7 +407,7 @@ Section "Clash of Rust" MainSection
   WriteRegDWORD ${PRODUCT_HIVE} "${PRODUCT_KEY}" "NoRepair" 1
   ${If} ${Errors}
     Call RestoreUpdate
-    SetErrorLevel 6
+    SetErrorLevel 66
     Abort
   ${EndIf}
     ${If} $UpdateMode == 1
@@ -504,6 +578,7 @@ Section "Uninstall"
   Delete "$INSTDIR\resources\settings-defaults.json"
   Delete "$INSTDIR\resources\THIRD-PARTY-NOTICES.txt"
   Delete "$INSTDIR\resources\SourceHanSans-LICENSE.txt"
+  Delete "$INSTDIR\resources\NotoEmoji-LICENSE.txt"
   Delete "$INSTDIR\resources\Twemoji-LICENSE.txt"
   Delete "$INSTDIR\resources\Unicode-LICENSE.txt"
   RMDir /r "$INSTDIR\resources\ip-check"

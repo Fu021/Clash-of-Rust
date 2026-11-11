@@ -50,6 +50,10 @@ bind_java_type! {
             name = "font_scale",
             sig = () -> jfloat,
         },
+        fn display_density {
+            name = "display_density",
+            sig = () -> jfloat,
+        },
         fn get_clipboard {
             name = "get_clipboard",
             sig = () -> JString,
@@ -519,6 +523,10 @@ impl JavaHelper {
 
     pub fn font_scale(&self) -> Result<f32, jni::errors::Error> {
         self.with_jni_env(|env, helper| helper.font_scale(env))
+    }
+
+    pub fn display_density(&self) -> Result<f32, jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.display_density(env))
     }
 
     pub fn accent_color(&self) -> Result<Color, jni::errors::Error> {

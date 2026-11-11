@@ -5,6 +5,7 @@ explicit build inputs enter the disposable container; guests receive no tokens.
 """
 import argparse
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -13,12 +14,14 @@ import re
 import shlex
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 import urllib.request
+import uuid
 
 from build_support import ROOT, download as download_original, host_arch, opener, read_json, run, sha256, write_json
 from linux_apt import OPTIONS as APT_OPTIONS
@@ -141,34 +144,96 @@ def cache_downloads(vm=False):
         download(records[name], tools_directory()/filename)
 
 
-def guest_cache(scp, remote, restore=False):
-    """Transfer only guest DEBs; fresh signed indexes establish their trust."""
-    configured = os.environ.get('COR_LINUX_APT_CACHE')
-    if not configured:
-        return
-    directory = Path(configured)
+def guest_python(remote, environment, script, timeout):
+    bootstrap = "import sys; sys.path.insert(0,'scripts'); "
+    remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
+        bootstrap+script), timeout=timeout)
+
+
+def guest_deb_downloads(ssh, remote, environment, staging, records=None):
+    script = (
+        "import json,pathlib,runpy,subprocess; "
+        "from linux_apt import OPTIONS,archive_records,privileged; "
+        "packages=runpy.run_path('scripts/test-release-package.py')['compatibility_download_dependencies'](); "
+        "pathlib.Path('/home/ubuntu/cor-apt-plan-archives').mkdir(exist_ok=True); "
+        "result=privileged([*OPTIONS,'-o','Acquire::ForceHash=SHA256','--print-uris',"
+        "'-o','Dir::Cache::archives=/home/ubuntu/cor-apt-plan-archives',"
+        "'install','-y','--no-install-recommends',*packages],120,stdout=subprocess.PIPE,text=True); "
+        "pathlib.Path('/home/ubuntu/cor-apt-plan.json').write_text(json.dumps(archive_records(result.stdout)))"
+    )
+    if records is None:
+        guest_python(remote, environment, script, timeout=180)
+        records = json.loads(subprocess.check_output([*ssh, 'cat ~/cor-apt-plan.json'], timeout=60))
+    from linux_apt import matches, source_url
+    from upstream_cache import valid_source
+    if not isinstance(records, dict) or len(records) > 4096:
+        raise ValueError('Guest APT download plan is invalid')
+    for name, record in records.items():
+        if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9.+_%~:-]+\.deb', name)
+                or not isinstance(record, dict) or set(record) != {'url', 'size', 'sha256'}
+                or not isinstance(record['url'], str)
+                or not valid_source(source_url(record['url']), record['sha256'], record['size'])):
+            raise ValueError('Guest APT download plan has invalid metadata')
+    staging.mkdir(parents=True, exist_ok=True)
+
+    def fetch(entry):
+        name, record = entry
+        destination = staging/name
+        download_original(source_url(record['url']), destination, digest=record['sha256'])
+        if not matches(destination, record):
+            raise ValueError('Guest DEB download differs from signed APT metadata')
+        return destination
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        archives = list(workers.map(fetch, records.items()))
+    archive = staging.parent/'guest-debs.tar'
+    with tarfile.open(archive, 'w') as tar:
+        for path in archives:
+            tar.add(path, arcname=path.name, recursive=False)
+    with archive.open('rb') as stream:
+        remote('mkdir -p ~/cor-apt && tar xf - -C ~/cor-apt', stdin=stream, timeout=600)
+    print(f'Guest APT inputs: staged {len(archives)} verified originals through host official/private fallback',
+          flush=True)
+
+
+def guest_receipts(ssh):
+    from upstream_cache import directory, valid_source
+    script = ("import json,pathlib; root=pathlib.Path('/home/ubuntu/cor-runner-temp/cor-upstream-downloads'); "
+              "files=sorted(root.glob('*.json')); "
+              "assert len(files)<=4096; "
+              "print(json.dumps([json.loads(path.read_text()) for path in files]))")
     try:
-        directory.mkdir(parents=True, exist_ok=True)
-        if restore:
-            files = [path for path in directory.glob('*.deb')
-                     if path.is_file() and not path.is_symlink()]
-            if files:
-                run([*scp, *files, remote+':cor-apt/'], timeout=300)
-            print(f'Guest DEB cache: staged {len(files)} untrusted downloads', flush=True)
-        else:
-            run([*scp, remote+':cor-apt/*.deb', directory], timeout=300)
-            print(f'Guest DEB cache: exported {len(list(directory.glob("*.deb")))} downloads',
-                  flush=True)
-    except (OSError, subprocess.SubprocessError) as error:
-        print('::warning::Optional guest DEB cache transfer unavailable: '
+        payload = subprocess.check_output(
+            [*ssh, '/opt/cor-test-python/bin/python3 -c '+shlex.quote(script)], timeout=60)
+        if len(payload) > 1024*1024:
+            raise ValueError('Guest original receipt exceeds 1 MiB')
+        records = json.loads(payload)
+        if not isinstance(records, list) or any(
+                not isinstance(record, dict) or set(record) != {'url', 'size', 'sha256'}
+                or not valid_source(record['url'], record['sha256'], record['size'])
+                for record in records):
+            raise ValueError('Guest original receipt has invalid metadata')
+        write_json(REPORT/'focal-upstream-receipts.json', records)
+        for record in records:
+            identity = hashlib.sha256((record['url']+'\n'+record['sha256']).encode()).hexdigest()
+            write_json(directory()/(identity+'.json'), record)
+        print(f'Guest DEB inventory: imported {len(records)} verified original receipts; no archives copied',
+              flush=True)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print('::warning::Guest original download receipts unavailable: '
               + type(error).__name__, flush=True)
+
+
+def system_ca_bundle():
+    for candidate in (ssl.get_default_verify_paths().cafile, '/etc/ssl/certs/ca-certificates.crt'):
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    raise RuntimeError('Ubuntu build requires the runner system CA bundle')
 
 
 def build_image():
     require_actions()
     value = inputs()
-    archive = download(value['architectures'][host_arch()]['python'],
-                       tools_directory()/'python.tar.gz')
     dockerfile = ROOT/'resources/linux/ubuntu20.Dockerfile'
     identity = image_identity(value, host_arch())
     tag = 'cor-ubuntu20:' + identity[:20]
@@ -176,14 +241,62 @@ def build_image():
     present = subprocess.run(inspect, capture_output=True, text=True)
     if present.returncode == 0:
         return tag
+    cache = Path(os.environ['COR_LINUX_BUILD_CACHE']) if os.environ.get('COR_LINUX_BUILD_CACHE') else None
+    if cache and restore_build_image(cache, identity, inspect):
+        return tag
+    archive = download(value['architectures'][host_arch()]['python'],
+                       tools_directory()/'python.tar.gz')
     with tempfile.TemporaryDirectory(prefix='cor-build-image-') as temporary:
         directory = Path(temporary)
+        certificates = system_ca_bundle()
+        shutil.copyfile(certificates, directory/'bootstrap-ca.crt')
         shutil.copy2(dockerfile, directory/'Dockerfile')
         shutil.copy2(archive, directory/'python.tar.gz')
         run(['docker', 'build', '--build-arg', 'BASE_IMAGE='+value['image'],
              '--build-arg', 'USER_ID='+str(os.getuid()), '--build-arg', 'GROUP_ID='+str(os.getgid()),
              '--tag', tag, directory], timeout=900)
+    if cache:
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            image = cache/'image.tar'
+            temporary = cache/'image.partial'
+            run(['docker', 'image', 'save', '--output', temporary, tag], timeout=120)
+            temporary.replace(image)
+            identifier = subprocess.check_output(inspect, text=True).strip()
+            write_json(cache/'image.json', {
+                'schema': 1, 'identity': identity, 'id': identifier,
+                'size': image.stat().st_size, 'sha256': sha256(image),
+            })
+            print(f'Ubuntu compiler container: archived {image.stat().st_size/1024**2:.1f} MiB', flush=True)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            (cache/'image.json').unlink(missing_ok=True)
+            print('::warning::Ubuntu compiler container archive failed; the prepared build remains usable',
+                  flush=True)
     return tag
+
+
+def restore_build_image(cache, identity, inspect):
+    try:
+        image, receipt = cache/'image.tar', cache/'image.json'
+        if receipt.stat().st_size > 1024**2:
+            raise ValueError('Build image receipt exceeds limit')
+        value = json.loads(receipt.read_text())
+        if (not isinstance(value, dict) or value.get('schema') != 1 or value.get('identity') != identity
+                or not isinstance(value.get('id'), str)
+                or not re.fullmatch(r'sha256:[0-9a-f]{64}', value['id'])
+                or image.is_symlink() or receipt.is_symlink()
+                or image.stat().st_size != value.get('size')
+                or sha256(image) != value.get('sha256')):
+            raise ValueError('Build image identity mismatch')
+        run(['docker', 'image', 'load', '--input', image], timeout=120)
+        actual = subprocess.check_output(inspect, text=True).strip()
+        if actual != value['id']:
+            raise ValueError('Loaded Docker image identity mismatch')
+        print('Ubuntu build environment: verified GitHub cache; no VM or application data', flush=True)
+        return True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        print('Ubuntu build environment cache unavailable; preparing the frozen environment', flush=True)
+        return False
 
 
 def container(command):
@@ -201,7 +314,9 @@ def container(command):
                  '--env', 'GITHUB_ACTIONS=true', '--env', 'PYTHONDONTWRITEBYTECODE=1',
                  '--env', 'COR_LINUX_BASELINE='+BASELINE]
     for key in ('BUILD_INPUTS_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY',
-                'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'):
+                'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'RUST_BACKTRACE',
+                'COR_CI_EXTENDED_TESTS', 'COR_CI_LINUX_USER_TESTS', 'COR_CI_DESKTOP_UI_TESTS',
+                'COR_CI_UPDATE_TESTS'):
         if key in os.environ:
             # Runner summary files live outside the source mount.
             if key in ('GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY'):
@@ -211,6 +326,10 @@ def container(command):
     if cache := os.environ.get('COR_LINUX_APT_CACHE'):
         Path(cache).mkdir(parents=True, exist_ok=True)
         arguments.extend(['--volume', cache + ':' + cache, '--env', 'COR_LINUX_APT_CACHE=' + cache])
+    if snapshot := os.environ.get('WORKSPACE_SOURCE_CACHE'):
+        directory = Path(snapshot).parent
+        directory.mkdir(parents=True, exist_ok=True)
+        arguments.extend(['--volume', f'{directory}:{directory}', '--env', 'WORKSPACE_SOURCE_CACHE'])
     run([*arguments, tag, *command], timeout=3300)
 
 
@@ -254,126 +373,396 @@ def baseline_report():
             'packages': subprocess.check_output(['dpkg-query', '-W', '-f=${Package}=${Version}\\n'], text=True).splitlines()}
 
 
-def vm_test():
-    require_actions()
-    REPORT.mkdir(parents=True, exist_ok=True)
-    value = inputs()['architectures'][host_arch()]
-    base = download(value['cloud'], tools_directory()/'focal.img')
-    python = download(value['python'], tools_directory()/'python.tar.gz')
-    with tempfile.TemporaryDirectory(prefix='cor-focal-vm-') as temporary:
-        directory = Path(temporary)
-        key = directory/'id_ed25519'
-        run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', key])
+def wait_vm_ssh(process, command, timeout=600):
+    deadline = time.monotonic() + timeout
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError('Ubuntu 20.04 VM exited during boot')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Ubuntu 20.04 VM did not become SSH-ready')
+        try:
+            ready = subprocess.run([*command, 'true'], stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=min(15, remaining))
+        except subprocess.TimeoutExpired:
+            ready = None
+        if ready is not None and ready.returncode == 0:
+            return
+        time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
+class VmGuest:
+    def __init__(self, base, directory, label):
+        self.directory = Path(directory) / label
+        self.directory.mkdir()
+        self.process = None
+        self.console = None
+        boot_started = time.monotonic()
+        self.architecture = 'x86_64' if host_arch() == 'x64' else 'aarch64'
+        self.kvm = os.access('/dev/kvm', os.R_OK | os.W_OK)
+        directory = self.directory
+        key = directory / 'id_ed25519'
+        run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', key], stdout=subprocess.DEVNULL)
         public = key.with_suffix('.pub').read_text().strip()
-        # This password exists only in the disposable guest and its GUI agent test.
         user_data = {'ssh_genkeytypes': ['ed25519'],
                      'users': [{'name': 'ubuntu', 'groups': 'adm,sudo',
                                'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'shell': '/bin/bash',
                                'lock_passwd': False, 'ssh_authorized_keys': [public]}],
-                     'ssh_pwauth': False, 'chpasswd': {'list': 'ubuntu:cor-ci-only', 'expire': False}}
+                     'ssh_pwauth': False, 'package_update': False, 'package_upgrade': False,
+                     'chpasswd': {'list': 'ubuntu:cor-ci-only', 'expire': False}}
         (directory/'user-data').write_text('#cloud-config\n'+json.dumps(user_data))
-        (directory/'meta-data').write_text('instance-id: cor-focal-test\nlocal-hostname: cor-focal-test\n')
+        (directory/'meta-data').write_text(
+            'instance-id: cor-focal-' + uuid.uuid4().hex + '\nlocal-hostname: cor-focal-test\n')
         seed = directory/'seed.img'
-        disk = directory/'disk.qcow2'
+        self.disk = directory/'disk.qcow2'
         run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
-        run(['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, disk, '24G'])
+        run(['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk, '24G'])
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
-        kvm = os.access('/dev/kvm', os.R_OK | os.W_OK)
-        architecture = 'x86_64' if host_arch() == 'x64' else 'aarch64'
-        print(f'Ubuntu {BASELINE} VM: {architecture}, acceleration={"kvm" if kvm else "tcg"}',
+        architecture, kvm = self.architecture, self.kvm
+        print(f'Ubuntu {BASELINE} VM: {label}, {architecture}, acceleration={"kvm" if kvm else "tcg"}',
               flush=True)
         machine = 'q35' if architecture == 'x86_64' else 'virt'
         cpu = 'host' if kvm else ('max' if architecture == 'x86_64' else 'cortex-a72')
         command = ['qemu-system-'+architecture, '-machine', machine+',accel='+('kvm' if kvm else 'tcg'),
                    '-cpu', cpu, '-smp', '2', '-m', '4096', '-display', 'none',
                    '-serial', 'stdio', '-monitor', 'none',
-                   '-drive', f'file={disk},if=virtio,format=qcow2',
+                   '-drive', f'file={self.disk},if=virtio,format=qcow2,discard=unmap',
                    '-drive', f'file={seed},if=virtio,format=raw,readonly=on',
                    '-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
                    '-device', 'virtio-net-pci,netdev=net0']
         if architecture == 'aarch64':
             command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
-        connection = ['-i', str(key), '-o', 'StrictHostKeyChecking=no',
-                      '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
-                      '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
-                      '-o', 'ControlMaster=auto', '-o', 'ControlPersist=60',
-                      '-o', 'ControlPath='+str(directory/'ssh-control')]
-        ssh = ['ssh', *connection, '-p', str(port), 'ubuntu@127.0.0.1']
-        scp = ['scp', *connection, '-P', str(port)]
-        archive = directory/'source.tar.gz'
-        tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
-        with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
-            for relative in tracked:
-                if relative:
-                    tar.add(ROOT/relative, arcname=relative, recursive=False)
-            for relative in ('.git', 'dist', 'target/linux-tun-test', 'dependency-snapshot'):
-                path = ROOT/relative
-                if path.exists():
-                    tar.add(path, arcname=relative)
-        with (REPORT/'focal-console.log').open('w') as console:
-            guest = subprocess.Popen(command, stdout=console, stderr=subprocess.STDOUT)
+        self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
+                    '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
+                    '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
+                    '-o', 'ControlMaster=auto', '-o', 'ControlPersist=60',
+                    '-o', 'ControlPath='+str(directory/'ssh-control'),
+                    '-p', str(port), 'ubuntu@127.0.0.1']
+        self.environment = ('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
+                            'BUILD_INPUTS_DIR=dependency-snapshot RUNNER_TEMP=/home/ubuntu/cor-runner-temp '
+                            'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
+                            'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
+        from ci_test_policy import extended_tests, linux_user_tests
+        self.environment += (
+            f'COR_CI_EXTENDED_TESTS={str(extended_tests()).lower()} '
+            f'COR_CI_LINUX_USER_TESTS={str(linux_user_tests()).lower()} ')
+        try:
+            self.console = (REPORT / ('focal-console-' + label + '.log')).open('w')
+            self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT)
+            wait_vm_ssh(self.process, self.ssh)
+            self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
+                        timeout=360)
+            self.kernel = self.output('uname -r').strip()
+            if not self.kernel.startswith('5.4.'):
+                raise RuntimeError('Minimum-kernel test requires Ubuntu 20.04 GA 5.4')
+            self.boot_seconds = round(time.monotonic() - boot_started, 3)
+        except BaseException:
+            self.close()
+            raise
+
+    def remote(self, script, **kwargs):
+        return subprocess.run([*self.ssh, script], check=True, **kwargs)
+
+    def output(self, script, timeout=60):
+        return subprocess.check_output([*self.ssh, script], text=True, timeout=timeout)
+
+    def python(self, script, timeout=120):
+        return guest_python(self.remote, self.environment, script, timeout)
+
+    def stage(self, archive, python=None):
+        with archive.open('rb') as stream:
+            self.remote('mkdir -p ~/cor-source ~/cor-apt && tar xzf - -C ~/cor-source',
+                        stdin=stream, timeout=300)
+        if python:
+            with python.open('rb') as stream:
+                self.remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - '
+                            '-C /opt/cor-test-python --strip-components=1', stdin=stream, timeout=120)
+
+    def inspect(self):
+        script = ('import json,prepared_vm_environment; '
+                  'print(json.dumps(prepared_vm_environment.inspect_environment()))')
+        return json.loads(self.output(self.environment + '/opt/cor-test-python/bin/python3 -c '
+                                      + shlex.quote("import sys; sys.path.insert(0,'scripts'); " + script)))
+
+    def preserve(self):
+        state = 'not_generated'
+        try:
+            with tempfile.TemporaryDirectory(prefix='guest-report-', dir=REPORT) as temporary:
+                archive = Path(temporary)/'report.tar.gz'
+                with archive.open('wb') as output:
+                    result = subprocess.run(
+                        [*self.ssh, 'cd ~/cor-source && if test -d target/linux-report; '
+                                    'then tar czf - target/linux-report; fi'],
+                        stdout=output, stderr=subprocess.PIPE, timeout=60)
+                if result.returncode:
+                    state = 'transfer_failed'
+                    print(f'::warning::Guest diagnostic transfer failed (exit {result.returncode})', flush=True)
+                elif archive.stat().st_size:
+                    archive.replace(REPORT/'focal-guest-report.tar.gz')
+                    state = 'saved'
+        except (OSError, subprocess.SubprocessError) as error:
+            state = 'transfer_failed'
+            print(f'::warning::Guest diagnostic transfer failed ({type(error).__name__})', flush=True)
+        write_json(REPORT/'focal-guest-report-status.json', {'schema': 1, 'state': state})
+        guest_receipts(self.ssh)
+
+    def shutdown(self):
+        with contextlib.suppress(subprocess.CalledProcessError):
+            self.remote('sudo shutdown -h now', timeout=30)
+        if self.process.wait(timeout=180) != 0:
+            raise RuntimeError('Template guest did not shut down cleanly')
+        self.close()
+
+    def close(self):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run([self.ssh[0], '-O', 'exit', *self.ssh[1:]], timeout=10,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
             try:
-                deadline = time.monotonic()+600
-                while True:
-                    if guest.poll() is not None:
-                        raise RuntimeError('Ubuntu 20.04 VM exited during boot')
-                    ready = subprocess.run([*ssh, 'true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if ready.returncode == 0:
-                        break
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError('Ubuntu 20.04 VM did not become SSH-ready')
-                    time.sleep(5)
-                remote = lambda script, **kwargs: subprocess.run([*ssh, script], check=True, **kwargs)
-                remote('sudo timeout --signal=TERM --kill-after=30s 300s '
-                       'cloud-init status --wait', timeout=360)
-                kernel = subprocess.check_output([*ssh, 'uname -r'], text=True).strip()
-                if not kernel.startswith('5.4.'):
-                    raise RuntimeError('Minimum-kernel test requires Ubuntu 20.04 GA 5.4; got '+kernel)
-                remote('mkdir -p ~/cor-source && tar xzf - -C ~/cor-source',
-                       stdin=archive.open('rb'), timeout=300)
-                remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - -C /opt/cor-test-python --strip-components=1',
-                       stdin=python.open('rb'), timeout=120)
-                remote('mkdir -p ~/cor-apt')
-                guest_cache(scp, 'ubuntu@127.0.0.1', restore=True)
-                environment = ('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
-                               'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
-                if os.environ.get('COR_LINUX_APT_CACHE'):
-                    environment += 'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
-                remote('sudo timeout --signal=TERM --kill-after=30s 300s '
-                       + shlex.join([*APT_OPTIONS, 'update']),
-                       timeout=360)
-                remote(environment+'/opt/cor-test-python/bin/python3 -c '+shlex.quote(
-                    "import sys; sys.path.insert(0, 'scripts'); "
-                    "from linux_apt import install; install(['git'], 300)"), timeout=600)
-                remote(environment+'/opt/cor-test-python/bin/python3 scripts/test-release-package.py '
-                       '--linux-compat --expect-ubuntu 20.04',
-                       timeout=2400 if architecture == 'aarch64' or not kvm else 1200)
-                write_json(REPORT/'focal-vm.json', {'distribution': BASELINE, 'kernel': kernel,
-                           'acceleration': 'kvm' if kvm else 'tcg', 'arch': host_arch(),
-                           'cloud_sha256': value['cloud']['sha256'], 'success': True})
-            finally:
-                with contextlib.suppress(subprocess.SubprocessError):
-                    subprocess.run([*ssh, 'cd ~/cor-source && tar czf - target/linux-report'],
-                                   stdout=(REPORT/'focal-guest-report.tar.gz').open('wb'), timeout=60)
-                guest_cache(scp, 'ubuntu@127.0.0.1')
-                with contextlib.suppress(OSError, subprocess.SubprocessError):
-                    subprocess.run(['ssh', '-O', 'exit', *connection, '-p', str(port),
-                                    'ubuntu@127.0.0.1'], timeout=10)
-                guest.terminate()
+                self.process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=10)
+        if self.console:
+            self.console.close()
+
+
+def vm_source_archive(directory):
+    archive = directory / 'source.tar.gz'
+    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+    with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
+        for relative in tracked:
+            if relative:
+                tar.add(ROOT / relative, arcname=relative, recursive=False)
+        for relative in ('.git', 'dist', 'target/linux-tun-test', 'dependency-snapshot'):
+            path = ROOT / relative
+            if path.exists():
+                tar.add(path, arcname=relative)
+    return archive
+
+
+def verify_vm_image(path, virtual_size):
+    import prepared_vm as protocol
+    protocol.qcow2_header(path, virtual_size)
+    information = json.loads(subprocess.check_output(
+        ['qemu-img', 'info', '--output=json', '-f', 'qcow2', path], timeout=60))
+    specific = information.get('format-specific', {}).get('data', {})
+    protocol.require(information.get('format') == 'qcow2'
+                     and information.get('virtual-size') == virtual_size
+                     and not information.get('backing-filename')
+                     and not information.get('full-backing-filename')
+                     and not information.get('encrypted') and not information.get('snapshots')
+                     and not information.get('dirty-flag')
+                     and not specific.get('data-file') and not specific.get('corrupt')
+                     and not specific.get('dirty-flag'), 'unsupported_image')
+    result = json.loads(subprocess.check_output(
+        ['qemu-img', 'check', '--output=json', '-f', 'qcow2', path], timeout=180))
+    protocol.require(type(result.get('check-errors')) is int and result['check-errors'] == 0
+                     and result.get('format') == 'qcow2'
+                     and all(result.get(name, 0) == 0 for name in ('corruptions', 'leaks')),
+                     'unsupported_image')
+
+
+def prepare_vm_guest(guest, directory, frozen=None):
+    if frozen:
+        guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs',
+                            frozen['lock']['downloads'])
+        guest.python("from build_inputs import manifest; "
+                     "from prepared_vm_environment import install_frozen, frozen_environments; "
+                     "from build_support import host_arch; "
+                     "value=manifest(); install_frozen('dependency-snapshot',"
+                     "frozen_environments(value)[host_arch()],"
+                     "value['upstream']['linux'])", timeout=2100)
+    else:
+        guest.remote('sudo timeout --signal=TERM --kill-after=30s 300s '
+                     + shlex.join([*APT_OPTIONS, 'update']), timeout=360)
+        guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs')
+        guest.python("import runpy; runpy.run_path('scripts/test-release-package.py')"
+                     "['prepare_compatibility_environment']()", timeout=2100)
+    guest_receipts(guest.ssh)
+    try:
+        run([sys.executable, ROOT/'scripts/upstream_cache.py', 'submit',
+             '--budget-seconds', '20', '--poll-seconds', '0', '--no-summary'], timeout=30)
+    except (OSError, subprocess.SubprocessError) as error:
+        print('::warning::Early guest download manifest submission unavailable: '
+              + type(error).__name__, flush=True)
+
+
+def verify_vm_package(guest, directory, package_run_id, prepared=False, timings=None):
+    timings = timings if timings is not None else {}
+    started = time.monotonic()
+    try:
+        if package_run_id:
+            from workflow_artifacts import commit, fetch_package_inputs, release_module
+            module = release_module()
+            repo = module.repository()
+            client = module.GitHub(repo, module.credential(repo))
+            fetch_package_inputs(client, package_run_id, host_arch(), ROOT, commit(),
+                                 int(os.environ['CI_RUN_ID']))
+            with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
+                for relative in ('dist', 'target/linux-tun-test'):
+                    tar.add(ROOT/relative, arcname=relative)
+            with (directory/'package.tar.gz').open('rb') as stream:
+                guest.remote('tar xzf - -C ~/cor-source', stdin=stream, timeout=300)
+    finally:
+        timings['package_wait_and_transfer'] = round(time.monotonic() - started, 3)
+    extra = 'COR_PREPARED_VM_VERIFIED=true ' if prepared else ''
+    started = time.monotonic()
+    try:
+        guest.remote(guest.environment + extra + '/opt/cor-test-python/bin/python3 '
+                     'scripts/test-release-package.py --linux-compat --expect-ubuntu 20.04',
+                     timeout=2400 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
+    finally:
+        timings['application_tests'] = round(time.monotonic() - started, 3)
+
+
+def vm_test(package_run_id=None):
+    overall_started = time.monotonic()
+    timings = {}
+    require_actions()
+    import prepared_vm as protocol
+    import prepared_vm_environment as environment
+    from build_inputs import manifest
+    REPORT.mkdir(parents=True, exist_ok=True)
+    linux = inputs()
+    value = linux['architectures'][host_arch()]
+    client = protocol.client(REPORT / 'prepared-vm.json')
+    snapshot = manifest() or {}
+    frozen = environment.frozen_environments(snapshot).get(host_arch())
+    enabled = False
+    if frozen:
+        try:
+            enabled = environment.verify_frozen(
+                Path(os.environ.get('BUILD_INPUTS_DIR', 'dependency-snapshot')), frozen, linux)
+            enabled = enabled and client.available(host_arch())
+        except protocol.ERRORS as error:
+            client.event('inputs', 'invalid_frozen_inputs', time.monotonic(),
+                         error_code=getattr(error, 'code', type(error).__name__))
+    temporary_root = Path(os.environ.get('RUNNER_TEMP', tempfile.gettempdir())).resolve()
+    protocol.require(not temporary_root.is_relative_to(ROOT), 'unsafe_image_directory')
+    with tempfile.TemporaryDirectory(prefix='cor-focal-vm-', dir=temporary_root) as temporary:
+        directory = Path(temporary)
+        archive = vm_source_archive(directory)
+        candidate = directory / 'prepared.qcow2'
+        phase_started = time.monotonic()
+        saved = client.restore(frozen['descriptor'], candidate, verify_vm_image) if enabled else None
+        timings['private_lookup_download_verify'] = round(time.monotonic() - phase_started, 3)
+        guest = None
+        upload = None
+        result = {'distribution': BASELINE, 'arch': host_arch(), 'success': False}
+        cache_path = 'cold'
+        workers = ThreadPoolExecutor(max_workers=1)
+        started = time.monotonic()
+        try:
+            if saved:
                 try:
-                    guest.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    guest.kill()
-                    guest.wait(timeout=10)
+                    protocol.require(saved['image']['virtual_size'] == 24 * 1024**3,
+                                     'environment_mismatch')
+                    environment.check_sources(saved['environment'], frozen)
+                    guest = VmGuest(candidate, directory, 'warm')
+                    guest.stage(archive)
+                    environment.check_environment(guest.inspect(), saved['environment'], frozen['lock'])
+                    client.event('boot', 'warm_verified', started)
+                    cache_path = 'warm'
+                except protocol.ERRORS as error:
+                    if guest:
+                        guest.close()
+                    guest = None
+                    enabled = False
+                    cache_path = 'cold_after_restore_failure'
+                    client.event('boot', 'cold_fallback', started,
+                                 error_code=getattr(error, 'code', type(error).__name__))
+            if guest is None:
+                phase_started = time.monotonic()
+                base = download(value['cloud'], tools_directory()/'focal.img')
+                python = download(value['python'], tools_directory()/'python.tar.gz')
+                timings['original_downloads'] = round(time.monotonic() - phase_started, 3)
+                guest = VmGuest(base, directory, 'cold')
+                guest.stage(archive, python)
+                try:
+                    phase_started = time.monotonic()
+                    prepare_vm_guest(guest, directory, frozen if enabled else None)
+                    timings['dependency_preparation'] = round(time.monotonic() - phase_started, 3)
+                    if enabled and client.available(host_arch()):
+                        phase_started = time.monotonic()
+                        actual = guest.inspect()
+                        environment.check_environment(actual, None, frozen['lock'])
+                        sources = {record['sha256']: record for record in frozen['lock']['downloads'].values()}
+                        for name, path in (('cloud', base), ('python', python)):
+                            sources[value[name]['sha256']] = {**value[name], 'size': path.stat().st_size}
+                        actual['sources'] = [sources[checksum] for checksum in sorted(sources)]
+                        guest.python('from prepared_vm_environment import clean_template; clean_template()')
+                        guest.shutdown()
+                        run(['qemu-img', 'convert', '-f', 'qcow2', '-O', 'qcow2', '-c',
+                             '-o', 'compat=1.1', guest.disk, candidate], timeout=600)
+                        run(['qemu-img', 'compare', '-f', 'qcow2', '-F', 'qcow2',
+                             guest.disk, candidate], timeout=300)
+                        verify_vm_image(candidate, 24 * 1024**3)
+                        candidate.chmod(0o400)
+                        record = {'schema': 1, 'group': protocol.GROUP,
+                                  'env_key': protocol.identity(frozen['descriptor']),
+                                  'descriptor': frozen['descriptor'],
+                                  'image': {'format': 'qcow2', 'size': candidate.stat().st_size,
+                                            'virtual_size': 24 * 1024**3, 'sha256': sha256(candidate)},
+                                  'environment': actual, 'producer': protocol.producer()}
+                        protocol.validate(record)
+                        write_json(REPORT / 'prepared-vm-manifest.json', record)
+                        guest = VmGuest(candidate, directory, 'template-check')
+                        guest.stage(archive)
+                        environment.check_environment(guest.inspect(), actual, frozen['lock'])
+                        client.event('template', 'second_boot_verified', started)
+                        cache_path = 'cold_template'
+                        timings['template_and_second_boot'] = round(time.monotonic() - phase_started, 3)
+                        if client.available(host_arch()):
+                            upload = workers.submit(client.upload, record, candidate)
+                except protocol.ERRORS as error:
+                    if not enabled:
+                        raise
+                    client.event('template', 'cold_fallback', started,
+                                 error_code=getattr(error, 'code', type(error).__name__))
+                    guest.close()
+                    guest = VmGuest(base, directory, 'cold-fallback')
+                    guest.stage(archive, python)
+                    phase_started = time.monotonic()
+                    prepare_vm_guest(guest, directory)
+                    timings['fallback_dependency_preparation'] = round(time.monotonic() - phase_started, 3)
+                    enabled = False
+            timings['final_guest_boot'] = guest.boot_seconds
+            verify_vm_package(guest, directory, package_run_id, prepared=enabled, timings=timings)
+            result.update(kernel=guest.kernel, acceleration='kvm' if guest.kvm else 'tcg',
+                          cloud_sha256=value['cloud']['sha256'], success=True)
+        finally:
+            try:
+                if guest:
+                    try:
+                        guest.preserve()
+                    finally:
+                        guest.close()
+            finally:
+                phase_started = time.monotonic()
+                try:
+                    workers.shutdown(wait=True)
+                    if upload is not None:
+                        result['template_saved'] = upload.result() is not None
+                finally:
+                    timings['upload_tail_wait'] = round(time.monotonic() - phase_started, 3)
+                    result.update(prepared=enabled, cache_path=cache_path,
+                                  seconds=round(time.monotonic() - overall_started, 3),
+                                  timings_seconds=timings)
+                    write_json(REPORT/'focal-vm.json', result)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('ci', 'package', 'vm', 'cache-keys', 'cache-downloads', 'cache-image'))
     parser.add_argument('--vm', action='store_true', help='Include cloud image downloads')
+    parser.add_argument('--package-run-id', type=int, help='Prepare the VM before waiting for this run’s Linux package')
     args, extra = parser.parse_known_args()
+    if args.package_run_id is not None and (args.operation != 'vm' or args.package_run_id <= 0):
+        parser.error('--package-run-id requires vm and a positive Actions run id')
     if args.operation in ('cache-keys', 'cache-downloads'):
         if extra or (args.vm and args.operation != 'cache-downloads'):
             parser.error('Unexpected cache arguments')
@@ -390,10 +779,13 @@ def main():
         if extra:
             parser.error('cache-image takes no additional arguments')
         build_image()
+        if (cache := os.environ.get('COR_LINUX_BUILD_CACHE')) and (output := os.environ.get('GITHUB_OUTPUT')):
+            with Path(output).open('a') as stream:
+                stream.write('ready=' + str((Path(cache)/'image.json').is_file()).lower() + '\n')
     elif args.operation == 'vm':
         if extra:
             parser.error('vm takes no additional arguments')
-        vm_test()
+        vm_test(args.package_run_id)
     elif args.operation == 'ci':
         require_actions()
         run([sys.executable, ROOT/'scripts/prepare-resources.py',

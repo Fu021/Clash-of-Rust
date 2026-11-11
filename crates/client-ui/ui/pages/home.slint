@@ -1,81 +1,94 @@
 import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
-import { PageScroll, Label, Caption, Paragraph, ContentPanel, RowPanel, ActionButton, Divider } from "../components/controls.slint";
+import { ConnectionPower } from "../components/brand.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, Panel, ActionButton, Divider, Select } from "../components/controls.slint";
+import { ChoiceBar } from "../components/sections.slint";
+import { NetworkOverview } from "../components/overview.slint";
+import { HomeConnections } from "../components/home-section.slint";
 
 component TrafficMetric inherits Rectangle {
     in property <string> title;
     in property <string> value;
     in property <string> detail;
-    preferred-width: 0px;
+    preferred-width: 0px; min-width: 0px;
     height: content.preferred-height;
     content := VerticalLayout {
-        spacing: 4px;
-        Caption { text: root.title; }
-        Label { text: root.value; font-size: 30px * Theme.text-scale; color: Theme.accent; }
-        Caption { text: root.detail; }
+        padding: 14px; spacing: 6px;
+        Caption { text: root.title; font-size: 12px * Theme.text-scale; }
+        Label { text: root.value; font-size: 21px * Theme.text-scale; font-weight: 600; }
+        Caption { text: root.detail; font-size: 12px * Theme.text-scale; }
     }
 }
 
 export component HomePage inherits PageSurface {
+    property <length> choice-width: (root.width - (Theme.text-scale > 1.25 ? 28px : 36px)) / (Theme.text-scale > 1.25 ? 1 : 2);
     PageScroll {
         content-y <=> UiData.scroll-home;
-        x: 0px;
-        width: parent.width + Theme.content-gap;
         VerticalLayout {
-            padding-right: Theme.content-gap;
-            spacing: Theme.page-gap;
-            RowPanel {
-                Rectangle {
-                    width: 40px; height: 40px; border-radius: 20px; background: Theme.accent-wash;
-                    Label { width: parent.width; height: parent.height; text: "✓"; font-size: 23px * Theme.text-scale; color: Theme.accent; horizontal-alignment: center; }
-                }
-                VerticalLayout {
-                    spacing: 4px;
-                    horizontal-stretch: 1;
-                    Label { text: !UiData.running ? "内核尚未运行" : UiData.proxy-mode == 0 ? "系统代理已连接" : UiData.proxy-mode == 1 ? "TUN 模式已连接" : "代理已关闭"; font-size: 18px * Theme.text-scale; }
-                    Caption { text: "当前节点 · " + UiData.node; }
-                    Paragraph { text: "此处仅显示当前用户状态；其他用户或程序的 TUN 可能影响本机流量。"; color: Theme.secondary; font-size: Theme.detail-size; }
-                }
-                if UiData.retry-core: ActionButton { text: "重启内核"; primary: true; enabled: !UiData.working; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
-                ActionButton { text: "查看代理 →"; clicked => { UiActions.dispatch(Intent.navigate, "1", ""); } }
-            }
-            RowPanel {
-                metric := TrafficMetric { title: "下载速度"; value: UiData.download-rate; detail: "实时流量"; }
-                Rectangle { width: 1px; height: metric.height; background: Theme.subtle-line; }
-                TrafficMetric { title: "上传速度"; value: UiData.upload-rate; detail: "实时流量"; }
-                Rectangle { width: 1px; height: metric.height; background: Theme.subtle-line; }
-                TrafficMetric { title: "活跃连接"; value: UiData.connection-count; detail: "当前连接"; }
-            }
-            ContentPanel {
-                Label { text: "连接设置"; font-size: 16px * Theme.text-scale; height: 28px; }
-                HorizontalLayout { cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Caption { text: "运行模式"; horizontal-stretch: 1; }
-                    ActionButton { text: "规则"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 0; clicked => { UiActions.dispatch(Intent.mode, "0", ""); } }
-                    ActionButton { text: "全局"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 1; clicked => { UiActions.dispatch(Intent.mode, "1", ""); } }
-                    ActionButton { text: "直连"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.mode == 2; clicked => { UiActions.dispatch(Intent.mode, "2", ""); } }
-                }
-                Divider { }
-                HorizontalLayout { cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Caption { text: "代理模式"; horizontal-stretch: 1; }
-                    ActionButton { text: "系统代理"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 0; clicked => { UiActions.dispatch(Intent.proxy-mode, "0", ""); } }
-                    ActionButton { text: "TUN"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 1; clicked => { UiActions.dispatch(Intent.proxy-mode, "1", ""); } }
-                    ActionButton { text: "关闭"; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; selected: UiData.proxy-mode == 2; clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); } }
-                }
-            }
-            ContentPanel {
-                HorizontalLayout { cross-axis-alignment: center;
-                    Label { text: "当前订阅"; }
-                    Caption { text: "累计流量 · 本次运行"; horizontal-alignment: right; }
-                }
-                HorizontalLayout { cross-axis-alignment: center;
-                    Label { text: UiData.profile; color: Theme.accent; }
-                    Caption { text: "↑ " + UiData.upload-total + "     ↓ " + UiData.download-total; horizontal-alignment: right; }
+            alignment: start; padding-top: 8px; padding-right: 8px; spacing: Theme.page-gap;
+            Panel {
+                height: composer.preferred-height; border-radius: 18px;
+                drop-shadow-blur: 16px; drop-shadow-offset-y: 5px;
+                composer := VerticalLayout { spacing: 0px;
+                    HorizontalLayout {
+                        padding: 24px; spacing: 24px; cross-axis-alignment: center;
+                        VerticalLayout { spacing: 10px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+                            HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+                                Caption { text: "● " + (!UiData.running ? "内核未启动" : UiData.proxy-mode == 2 ? "代理已关闭" : "已连接"); color: UiData.running && UiData.proxy-mode != 2 ? Theme.success : Theme.secondary; horizontal-stretch: 0; }
+                                Caption { text: "·  " + UiData.profile; preferred-width: 0px; }
+                            }
+                            Rectangle {
+                                height: max(44px, node.preferred-height);
+                                node := Label { width: parent.width; height: parent.height; text: UiData.node == "" ? "选择一个节点" : UiData.node; font-size: 30px * Theme.text-scale; font-weight: 600; }
+                                TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.navigate, "1", ""); } }
+                            }
+                            Caption { text: !UiData.running ? "启动内核以恢复连接" : UiData.proxy-mode == 1 ? "TUN  ·  全局网络接管" : UiData.proxy-mode == 0 ? "系统代理  ·  按当前规则路由" : "系统网络"; }
+                        }
+                        ConnectionPower {
+                            connected: UiData.running && UiData.proxy-mode != 2;
+                            label: self.connected ? "关闭代理" : UiData.retry-core ? "重启内核" : "连接代理";
+                            enabled: (UiData.ready || UiData.retry-core) && !UiData.working && (UiData.retry-core || (!UiData.protected && !UiData.protection-pending)) && UiData.modal == 0 && !UiData.notice-modal;
+                            clicked => {
+                                if UiData.retry-core { UiActions.dispatch(Intent.restart-core, "", ""); }
+                                else { UiActions.dispatch(Intent.proxy-mode, UiData.proxy-mode == 2 ? "0" : "2", ""); }
+                            }
+                        }
+                    }
+                    Divider { }
+                    GridLayout { padding: 10px; spacing: 8px;
+                        ChoiceBar {
+                            col: 0; row: 0; options: ["规则", "全局", "直连"]; selected: UiData.mode;
+                            available-width: root.choice-width;
+                            enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
+                            chosen(index) => { UiActions.dispatch(Intent.mode, "" + index, ""); }
+                        }
+                        ChoiceBar {
+                            col: Theme.text-scale > 1.25 ? 0 : 1; row: Theme.text-scale > 1.25 ? 1 : 0;
+                            available-width: root.choice-width;
+                            options: ["系统代理", "TUN", "关闭"]; selected: UiData.proxy-mode;
+                            enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
+                            chosen(index) => { UiActions.dispatch(Intent.proxy-mode, "" + index, ""); }
+                        }
+                    }
                 }
             }
-            Rectangle { vertical-stretch: 1; }
+            Panel {
+                height: stats.preferred-height;
+                stats := GridLayout { spacing: 0px;
+                    TrafficMetric { col: 0; row: 0; title: "↓ 下载速度"; value: UiData.running ? UiData.download-rate : "—"; detail: "累计 " + UiData.download-total; }
+                    TrafficMetric { col: 1; row: 0; title: "↑ 上传速度"; value: UiData.running ? UiData.upload-rate : "—"; detail: "累计 " + UiData.upload-total; }
+                    TrafficMetric { col: root.width < 680px * Theme.text-scale ? 0 : 2; row: root.width < 680px * Theme.text-scale ? 1 : 0; title: "活跃连接"; value: UiData.running ? UiData.connection-count : "0"; detail: "当前内核连接"; }
+                    TrafficMetric { col: root.width < 680px * Theme.text-scale ? 1 : 3; row: root.width < 680px * Theme.text-scale ? 1 : 0; title: "本次下载"; value: UiData.download-total; detail: "↑ " + UiData.upload-total; }
+                }
+            }
+            NetworkOverview { available-width: root.width - 48px; }
+            HomeConnections {
+                items: UiData.connections; count: UiData.connection-count; running: UiData.running;
+                enabled: UiData.modal == 0 && !UiData.notice-modal;
+                open-all => { UiActions.dispatch(Intent.navigate, "3", ""); }
+                item-selected(id) => { UiActions.dispatch(Intent.navigate, "3", ""); }
+            }
         }
     }
 }

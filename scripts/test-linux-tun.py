@@ -8,20 +8,21 @@ import argparse
 import base64
 import contextlib
 import errno
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPResponse
 import json
 import os
 from pathlib import Path
-import pwd
 import re
 import shutil
 import signal
+import socket
 import ssl
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -237,6 +238,47 @@ def tun_device_counters(device):
     return int(stats['rx']['bytes']), int(stats['tx']['bytes'])
 
 
+def socks_http(host, port, url):
+    target = urllib.parse.urlsplit(url)
+    if target.scheme != 'http' or not target.hostname or target.username or target.password:
+        raise ValueError('The isolated SOCKS probe requires a public HTTP URL without credentials')
+    hostname = target.hostname.encode('idna')
+    if len(hostname) > 255:
+        raise ValueError('SOCKS destination name is too long')
+    with socket.create_connection((host, port), timeout=10) as connection:
+        def receive(size):
+            data = bytearray()
+            while len(data) < size:
+                chunk = connection.recv(size-len(data))
+                if not chunk:
+                    raise EOFError('Truncated SOCKS response')
+                data.extend(chunk)
+            return bytes(data)
+
+        connection.sendall(b'\x05\x01\x00')
+        if receive(2) != b'\x05\x00':
+            raise RuntimeError('The managed DIRECT listener rejected SOCKS authentication')
+        connection.sendall(b'\x05\x01\x00\x03'+bytes([len(hostname)])+hostname
+                           +(target.port or 80).to_bytes(2, 'big'))
+        reply = receive(4)
+        if reply[:3] != b'\x05\x00\x00':
+            raise RuntimeError(f'The managed DIRECT listener rejected the target: {reply!r}')
+        address_size = {1: 4, 4: 16}.get(reply[3])
+        if reply[3] == 3:
+            address_size = receive(1)[0]
+        if address_size is None:
+            raise RuntimeError('The managed DIRECT listener returned an invalid address type')
+        receive(address_size+2)
+        path = urllib.parse.urlunsplit(('', '', target.path or '/', target.query, ''))
+        connection.sendall(
+            f'GET {path} HTTP/1.1\r\nHost: {target.netloc}\r\nConnection: close\r\n\r\n'.encode('ascii'))
+        response = HTTPResponse(connection)
+        response.begin()
+        body = response.read()
+        assert response.status == 200, f'Managed DIRECT HTTP {response.status}; response={body[:256]!r}'
+        return body
+
+
 def root_cli_smoke():
     """Exercise the installed headless root path before granting user TUN access."""
     cli = '/opt/clash-of-rust/cor'
@@ -246,9 +288,11 @@ def root_cli_smoke():
     env = dict(os.environ)
     for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'DBUS_SESSION_BUS_ADDRESS'):
         env.pop(key, None)
+    env['GSETTINGS_BACKEND'] = 'memory'
     with tempfile.TemporaryDirectory(prefix='cor-root-cli-') as temporary:
         directory = Path(temporary)
-        command = [cli, '--data-dir', str(directory/'data'), '--json', '--timeout', '30']
+        env['CLASH_OF_RUST_DATA_DIR'] = str(directory/'data')
+        command = [cli, '--json', '--timeout', '30']
 
         def invoke(*arguments, success=True):
             output = subprocess.run([*command, *map(str, arguments)], env=env,
@@ -259,14 +303,18 @@ def root_cli_smoke():
             assert output.returncode != 0, f'Invalid configuration was accepted: {arguments}'
             return output.stderr
 
-        def http(host, port, path, secret=None):
+        def http(host, port, path, secret=None, headers=None):
             connection = HTTPConnection(host, port, timeout=10)
             try:
-                headers = {'Authorization': 'Bearer '+secret} if secret else {}
-                connection.request('GET', path, headers=headers)
+                request_headers = dict(headers or {})
+                if secret:
+                    request_headers['Authorization'] = 'Bearer '+secret
+                connection.request('GET', path, headers=request_headers)
                 response = connection.getresponse()
-                assert response.status == 200, f'HTTP {host}:{port}: {response.status}'
-                return response.read()
+                body = response.read()
+                assert response.status == 200, (
+                    f'HTTP {host}:{port}: {response.status}; response={body[:256]!r}')
+                return body
             finally:
                 connection.close()
 
@@ -321,17 +369,80 @@ def root_cli_smoke():
             invoke('profile', 'use', 'root-network')
             invoke('proxy', 'tun')
             assert api('configs')['tun']['enable']
+            assert invoke('status')['host_routes']['holder_scope'] == 'current_user'
+            assert invoke('status', '--all-users')['host_routes']['holder_scope'] == 'all_users'
             verify_tun_http()
             invoke('stop')
             # A fresh root daemon must also restore a persisted TUN mode.
             assert invoke('start')['running'] and api('configs')['tun']['enable']
             verify_tun_http()
+            unavailable = directory/'unavailable.yaml'
+            unavailable.write_text(
+                'proxies: [{name: Unavailable, type: socks5, server: 203.0.113.10, port: 9}]\n'
+                'rules: ["MATCH,Unavailable"]\n'
+                'dns: {enable: true, enhanced-mode: fake-ip, '
+                'nameserver: ["https://192.0.2.254/dns-query#DIRECT"], '
+                'direct-nameserver: ["https://1.1.1.1/dns-query#DIRECT"], '
+                'direct-nameserver-follow-policy: false}\n'
+                'tun: {device: CorRootTest, route-address: [203.0.113.0/24], dns-hijack: []}\n')
+            invoke('profile', 'import', unavailable, '--name', 'unavailable-nodes')
+            invoke('profile', 'use', 'unavailable-nodes')
+            previous = invoke('status')
+            subscription_url = 'http://updates.fixture.test/subscription.yaml'
+            direct = json.loads((directory/'data/settings.json').read_text())['direct_download_port']
+            assert direct > 0 and direct not in (mixed, controller), 'Managed DIRECT listener is missing'
+
+            def verify_independent_direct():
+                from tun_dns_fixture import UPDATES
+                headers = {'Host': urllib.parse.urlsplit(subscription_url).netloc}
+                for family, address in zip(('-4', '-6'), UPDATES):
+                    routes = json.loads(subprocess.check_output(
+                        ['ip', family, '-j', 'route', 'get', address], text=True))
+                    assert len(routes) == 1 and routes[0].get('dev') == 'uplink', (
+                        f'Update fixture must remain on the physical peer: {routes}')
+                connection = HTTPConnection('127.0.0.1', mixed, timeout=15)
+                try:
+                    connection.request('GET', subscription_url, headers=headers)
+                    rejected = connection.getresponse()
+                    assert rejected.status != 200, 'The failed-node proxy unexpectedly recovered'
+                    rejected.read()
+                finally:
+                    connection.close()
+                assert socks_http('127.0.0.1', direct, subscription_url) == (
+                    b'proxies: []\nrules: ["MATCH,DIRECT"]\n'
+                ), 'Managed DIRECT could not bypass the failed node or resolve the update domain'
+
+            verify_independent_direct()
+            invoke('profile', 'add', 'direct-fallback', subscription_url)
+            invoke('profile', 'update', 'direct-fallback')
+            after = invoke('status')
+            assert (after['profile'] == previous['profile'] and after['mode'] == previous['mode']
+                    and after['proxy'] == previous['proxy']), 'Download fallback changed the active network'
+            print('PASS: subscription import/update bypass a failed rule through managed DIRECT with TUN active',
+                  flush=True)
             invoke('proxy', 'off')
             assert not api('configs')['tun']['enable']
+            for proxy_mode in ('off', 'system'):
+                invoke('proxy', proxy_mode)
+                assert not api('configs')['tun']['enable']
+                before_update = invoke('status')
+                verify_independent_direct()
+                invoke('profile', 'update', 'direct-fallback')
+                after = invoke('status')
+                assert after['profile'] == previous['profile'], 'Update required changing subscriptions'
+                assert after['mode'] == previous['mode'], 'Update changed the rule mode'
+                assert after['proxy'] == before_update['proxy'], 'Update changed proxy ownership or mode'
+                print(f'PASS: {proxy_mode} mode keeps the failed-node profile and network state '
+                      'while subscription updates use independent DIRECT', flush=True)
+            invoke('proxy', 'off')
         except Exception:
-            diagnostics = subprocess.run([*command, 'logs', '--limit', '40'], env=env,
+            diagnostics = subprocess.run([*command, 'logs', '--limit', '500'], env=env,
                                          capture_output=True, text=True, timeout=45)
             print(diagnostics.stdout+diagnostics.stderr, flush=True)
+            try:
+                print('Isolated upstream metrics:', http('192.0.2.254', 80, '/metrics').decode(), flush=True)
+            except Exception as error:
+                print('Isolated upstream metrics unavailable:', error, flush=True)
             raise
         finally:
             invoke('stop')
@@ -344,6 +455,8 @@ def root_cli_smoke():
 @contextlib.contextmanager
 def isolated_accounts():
     """Account/sudo policy changes exist only in this private mount namespace."""
+    import pwd
+
     with tempfile.TemporaryDirectory(prefix='cor-account-matrix-') as temporary:
         root = Path(temporary)
         root.chmod(0o755)
@@ -456,6 +569,7 @@ def account_cli_matrix():
                         assert '用法：cor ' in output.stdout
                 assert not data(user).exists()
                 invoke(user, 'user', 'profile', 'list', '--all-users', success=False)
+                invoke(user, 'user', 'status', '--all-users', success=False)
                 invoke(user, 'user', '--user', users[1]['name'], 'status', success=False)
                 raw = ('proxies: []\nproxy-groups: [{name: Route, type: select, proxies: [DIRECT, REJECT]}]\n'
                        'rules: ["MATCH,Route"]\n'
@@ -605,10 +719,14 @@ def account_cli_matrix():
 
 
 def main():
+    import pwd
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-binary', type=Path, required=True)
     parser.add_argument('--uid', type=int, required=True)
     parser.add_argument('--inside-namespace', action='store_true')
+    parser.add_argument('--with-user-tests', action='store_true')
+    parser.add_argument('--proxy-benchmark', action='store_true')
     parser.add_argument('--test-case', default='basic_system_proxy_and_tun', choices=('basic_system_proxy_and_tun',))
     args = parser.parse_args()
     assert os.geteuid() == 0 and args.uid != 0
@@ -622,16 +740,22 @@ def main():
 
     if args.inside_namespace:
         with isolated_resolved(), isolated_uplink():
-            root_cli_smoke()
-            account_cli_matrix()
+            if args.with_user_tests:
+                root_cli_smoke()
+                account_cli_matrix()
             run(['/opt/clash-of-rust/clash-of-rust', '--authorize-tun'])
-            run([binary, args.test_case, '--exact',
-                 '--ignored', '--test-threads=1', '--nocapture'],
-                env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
-                         MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
-                         GSETTINGS_BACKEND='memory', SSL_CERT_FILE='/etc/ssl/certs/ca-certificates.crt',
-                         SSL_CERT_DIR='/etc/ssl/certs'),
-                preexec_fn=ordinary_user, timeout=240)
+            benchmark = contextlib.nullcontext({})
+            if args.proxy_benchmark:
+                from proxy_benchmark import fixture
+                benchmark = fixture(uid=user.pw_uid, gid=user.pw_gid)
+            with benchmark as benchmark_environment:
+                run([binary, args.test_case, '--exact',
+                     '--ignored', '--test-threads=1', '--nocapture'],
+                    env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
+                             MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
+                             GSETTINGS_BACKEND='memory', SSL_CERT_FILE='/etc/ssl/certs/ca-certificates.crt',
+                             SSL_CERT_DIR='/etc/ssl/certs', **benchmark_environment),
+                    preexec_fn=ordinary_user, timeout=360 if args.proxy_benchmark else 240)
         return
 
     core = '/opt/clash-of-rust/resources/mihomo'
@@ -647,9 +771,14 @@ def main():
     original = {path: attribute(path) for path in (core, launcher)}
     original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
+        user_tests = ['--with-user-tests'] if args.with_user_tests else []
+        if args.proxy_benchmark:
+            user_tests += ['--proxy-benchmark']
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
-             '--inside-namespace', '--test-binary', binary, '--uid', args.uid, '--test-case', args.test_case], timeout=520)
-        print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': True, 'ordinary_user': args.uid,
+             '--inside-namespace', '--test-binary', binary, '--uid', args.uid,
+             '--test-case', args.test_case, *user_tests],
+            timeout=640 if args.proxy_benchmark else 520)
+        print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': args.with_user_tests, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))
     finally:

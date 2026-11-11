@@ -12,6 +12,9 @@ mod macos_dns;
 #[path = "support/protected_dns.rs"]
 mod protected_dns;
 
+#[path = "support/proxy_benchmark.rs"]
+mod proxy_benchmark;
+
 fn test_resources() -> std::path::PathBuf {
     std::env::var_os("MIHOMO_TEST_RESOURCES")
         .map(std::path::PathBuf::from)
@@ -294,7 +297,14 @@ async fn basic_system_proxy_and_tun() {
     });
     // Route only this documentation subnet. The runner's control traffic and
     // Internet default route remain outside TUN even if a test aborts.
-    std::fs::write(&profile, format!("proxies: []\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['{dns_address}']}}\ntun:\n  device: {device}\n  stack: system\n  route-address: [203.0.113.0/24]\n  dns-hijack: []\n")).unwrap();
+    let proxies = if std::env::var_os("CLASH_PROXY_BENCHMARK_FIXTURE").is_some() {
+        format!(
+            "proxies: [{{name: CI-Loopback, type: socks5, server: 127.0.0.1, port: {mixed_port}}}]"
+        )
+    } else {
+        "proxies: []".into()
+    };
+    std::fs::write(&profile, format!("{proxies}\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['{dns_address}']}}\ntun:\n  device: {device}\n  stack: system\n  route-address: [203.0.113.0/24]\n  dns-hijack: []\n")).unwrap();
     engine
         .import("Proxy smoke".into(), profile.display().to_string(), None)
         .await
@@ -324,6 +334,9 @@ async fn basic_system_proxy_and_tun() {
     println!("PASS: real mihomo DNS API returns IPv4 and IPv6 for connection details");
     engine.select_proxy_mode(ProxyMode::System).await.unwrap();
     assert_system_proxy_ports(&store, mixed_port);
+    proxy_benchmark::check(&engine.api, mixed_port)
+        .await
+        .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -792,7 +805,12 @@ async fn basic_system_proxy_and_tun() {
             facade.stop().await.unwrap();
             assert!(!facade.running());
             assert_eq!(facade.settings.proxy_mode, ProxyMode::Tun);
-            facade.start_with_proxy_mode().await.unwrap();
+            if let Err(error) = facade.start_with_proxy_mode().await {
+                for line in engine.lock().await.poll(Scope::Logs).await.unwrap().logs {
+                    eprintln!("{line}");
+                }
+                panic!("attached GUI could not restore saved TUN: {error:#}");
+            }
             assert!(facade.is_remote() && facade.running());
             let state = facade.poll(Scope::Home).await.unwrap();
             assert!(state.running && state.tun);

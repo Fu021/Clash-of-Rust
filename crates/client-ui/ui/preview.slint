@@ -2,13 +2,32 @@
 import { AppWindow } from "app.slint";
 import { UiData } from "state.slint";
 import { Motion } from "components/motion.slint";
+import { PageViews } from "components/view-toggle.slint";
+import "../../../resources/fonts/NotoColorEmoji-Regular.ttf";
 
 export component Preview inherits AppWindow {
+    in-out property <bool> preview-long-names;
+    property <string> long-name: "🚀 这是一份用于检验超长配置名称不会挤压状态和操作按钮的订阅 · 日本东京专线 / IPv6 / VeryLongUnbrokenConfigurationName0123456789";
+    changed preview-long-names => {
+        if root.preview-long-names {
+            UiData.profile = root.long-name; UiData.node = root.long-name;
+            UiData.profiles[0].name = root.long-name;
+            UiData.groups[0].title = root.long-name;
+            UiData.groups[0].current = root.long-name;
+            UiData.groups[0].nodes = [{left: {group: "Proxy", name: root.long-name, kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true},
+                right: {group: "Proxy", name: "🇯🇵 日本 01", kind: "VLESS", delay: "28 ms", tone: 1, valid: true}}];
+        }
+    }
+    in-out property <string> preview-network-alert;
+    changed preview-network-alert => { UiData.network-alert = root.preview-network-alert; }
     in-out property <bool> preview-motion;
     changed preview-motion => { Motion.enabled = root.preview-motion; }
+    in-out property <bool> preview-sidebar-collapsed <=> root.sidebar-collapsed;
+    in-out property <bool> preview-list-view;
+    changed preview-list-view => { PageViews.nodes-list = root.preview-list-view; PageViews.profiles-list = root.preview-list-view; }
     in-out property <int> preview-page <=> UiData.page;
     changed preview-page => {
-        let count = root.preview-page == 4 ? UiData.rules.length : UiData.connections.length;
+        let count = root.preview-page == 2 ? UiData.profiles.length : root.preview-page == 4 ? UiData.rules.length : UiData.connections.length;
         UiData.page-status = count == 0 ? "0 条" : count + " 条 · 1–" + count;
     }
     in-out property <bool> preview-fake-ip-editor;
@@ -17,6 +36,12 @@ export component Preview inherits AppWindow {
     in-out property <int> preview-text-scale <=> UiData.text-scale;
     in-out property <int> preview-accent <=> UiData.accent;
     in-out property <string> preview-notice <=> UiData.notice;
+    in-out property <bool> preview-notice-error <=> UiData.notice-error;
+    in-out property <bool> preview-notice-critical <=> UiData.notice-critical;
+    in-out property <bool> preview-notice-recover-network <=> UiData.notice-recover-network;
+    in-out property <bool> preview-core-running <=> UiData.running;
+    changed preview-core-running => { UiData.retry-core = !root.preview-core-running; }
+    in-out property <string> preview-modal-error <=> UiData.modal-error;
     in-out property <float> preview-notice-elapsed <=> UiData.notice-elapsed;
     in-out property <bool> preview-protection-pending <=> UiData.protection-pending;
     in-out property <bool> preview-protected <=> UiData.protected;
@@ -24,9 +49,20 @@ export component Preview inherits AppWindow {
     in-out property <int> preview-protection-health <=> UiData.protection-health;
     in-out property <string> preview-protection-message <=> UiData.protection-message;
     in-out property <bool> preview-update-prereleases <=> UiData.update-prereleases;
+    in-out property <bool> preview-sites-report <=> UiData.sites-report;
+    in-out property <int> preview-claude-filter <=> UiData.claude-filter;
     in-out property <int> dialog;
-    in-out property <bool> shortcuts-open <=> UiData.shortcuts-open;
+    in-out property <bool> preview-shortcuts <=> root.rule-shortcuts-open;
     in-out property <length> preview-rules-scroll <=> UiData.scroll-rules;
+    in-out property <length> preview-home-scroll <=> UiData.scroll-home;
+    in-out property <length> preview-proxies-scroll <=> UiData.scroll-proxies;
+    in-out property <length> preview-profiles-scroll <=> UiData.scroll-profiles;
+    in-out property <length> preview-connections-scroll <=> UiData.scroll-connections;
+    in-out property <length> preview-logs-scroll <=> UiData.scroll-logs;
+    in-out property <length> preview-network-scroll <=> UiData.scroll-network;
+    in-out property <length> preview-sites-scroll <=> UiData.scroll-sites;
+    in-out property <length> preview-claude-scroll <=> UiData.scroll-claude;
+    in-out property <length> preview-settings-scroll <=> UiData.scroll-settings;
     in-out property <bool> raw-rule <=> UiData.rule-text-mode;
     changed dialog => {
         UiData.modal = root.dialog == 1 || root.dialog == 2 ? 1 : root.dialog == 3 ? 7 : root.dialog == 5 ? 2 : root.dialog == 6 ? 11 : root.dialog == 10 ? 12 : root.dialog == 11 ? 10 : root.dialog;
@@ -58,11 +94,26 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.6.7-fix.1.cli-tun-diagnostics";
+        UiData.version = "0.7.0";
         UiData.ready = true; UiData.running = true;
-        UiData.profile = "我的订阅"; UiData.node = "德国 01 · IPv6";
+        UiData.profile = root.preview-long-names ? root.long-name : "我的订阅"; UiData.node = root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";
         UiData.connection-count = "24"; UiData.download-total = "386 MiB"; UiData.upload-total = "21.7 MiB";
+        UiData.overview-status = "可访问 7 / 8";
+        UiData.overview-network = [
+            {id: "lan", title: "内网 IP", value: "192.168.1.23", detail: "仅 IPv4", tone: 0},
+            {id: "exit", title: "出口 IP", value: "203.0.113.42", detail: "德国", delay: "188 ms", delay-tone: 1, tone: 1, flag: "🇩🇪", flagged: true},
+            {id: "dns", title: "DNS 服务器", value: "223.5.5.5  119.29.29.29", detail: "系统解析器配置", tone: 0},
+            {id: "lookup", title: "DNS 解析", value: "github.com → 198.18.0.12", detail: "Fake-IP", delay: "12 ms", delay-tone: 1, tone: 1}];
+        UiData.overview-services = [
+            {id: "google", title: "Google", value: "142 ms", delay: "142 ms", delay-tone: 1, detail: "HTTP 204", tone: 1},
+            {id: "youtube", title: "YouTube", value: "156 ms", delay: "156 ms", delay-tone: 1, detail: "HTTP 204", tone: 1},
+            {id: "github", title: "GitHub", value: "311 ms", delay: "311 ms", delay-tone: 2, detail: "HTTP 200", tone: 1},
+            {id: "chatgpt", title: "ChatGPT", value: "264 ms", delay: "264 ms", delay-tone: 1, detail: "HTTP 403 · 可达", tone: 2},
+            {id: "claude", title: "Claude", value: "233 ms", delay: "233 ms", delay-tone: 1, detail: "HTTP 307", tone: 1},
+            {id: "gemini", title: "Gemini", value: "1260 ms", delay: "1260 ms", delay-tone: 3, detail: "HTTP 200", tone: 1},
+            {id: "telegram", title: "Telegram", value: "无法连接", detail: "未获得响应", tone: 3},
+            {id: "x", title: "X", value: "402 ms", delay: "402 ms", delay-tone: 2, detail: "HTTP 200", tone: 1}];
         UiData.protection-status = "正在开启保护，切换 TUN、规则与 DNS…";
         UiData.connection-details = [
             {label: "连接名称", value: "api.github.com"}, {label: "域名", value: "api.github.com"},
@@ -74,17 +125,24 @@ export component Preview inherits AppWindow {
             {label: "累计上传", value: "24 KiB"}, {label: "累计下载", value: "1.8 MiB"},
             {label: "开始时间", value: "2026-10-16T10:31:20.123+08:00"},
             {label: "连接 ID", value: "9f1a0f02-d63e-4cfe-832e-4ed947af10de"}];
+        UiData.connection-selected-id = "9f1a0f02-d63e-4cfe-832e-4ed947af10de";
         UiData.page-status = "3 条 · 1–3";
-        UiData.groups = [{id: "Proxy", title: "Proxy", detail: "Selector · 6 个节点", current: "德国 01 · IPv6", expanded: true, testing: false, page: "6 个节点 · 1–6", previous: false, next: false,
+        UiData.groups = [{id: "Proxy", title: root.preview-long-names ? root.long-name : "🚀 Proxy 策略 ❤️", detail: "Selector · 10 个节点", current: root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", expanded: true, testing: false, page: "10 个节点 · 1–10", previous: false, next: false,
             nodes: [
-                {left: {group: "Proxy", name: "德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true}, right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, selected: false, valid: true}},
-                {left: {group: "Proxy", name: "日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, selected: false, valid: true}, right: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, selected: false, valid: true}},
-                {left: {group: "Proxy", name: "美国 01", kind: "VLESS", delay: "868 ms", tone: 3, selected: false, valid: true}, right: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, selected: false, valid: true}}
+                {left: {group: "Proxy", name: root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true}, right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, selected: false, valid: true}},
+                {left: {group: "Proxy", name: "🚀 🇯🇵 日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, selected: false, valid: true}, right: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, selected: false, valid: true}},
+                {left: {group: "Proxy", name: "🇺🇸 美国 01 ❤️", kind: "VLESS", delay: "868 ms", tone: 3, selected: false, valid: true}, right: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, selected: false, valid: true}},
+                {left: {group: "Proxy", name: "日本 02 · 备用入口 · 用于确认完整名称不会丢失", kind: "Trojan", delay: "超时", tone: 3, valid: true}, right: {group: "Proxy", name: "US-美国 02", kind: "VLESS", delay: "128 ms", tone: 1, valid: true}},
+                {left: {group: "Proxy", name: "👩🏽‍💻 新加坡 02", kind: "Shadowsocks", delay: "78 ms", tone: 1, valid: true}, right: {group: "Proxy", name: "😀 德国 02", kind: "VLESS", delay: "176 ms", tone: 2, valid: true}}
             ]}];
         UiData.profiles = [
-            {id: "main", name: "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4/100 GiB · 到期 2026-12-31 · 更新 10-15 10:30", active: true, local: false},
+            {id: "main", name: root.preview-long-names ? root.long-name : "我的订阅", source: "https://example.com/subscription", detail: "已用 2.4/100 GiB · 到期 2026-12-31 · 更新 10-15 10:30", active: true, local: false},
             {id: "backup", name: "备用订阅", source: "https://example.org/sub", detail: "已用 1/50 GiB · 不限期 · 更新 10-14 18:20", active: false, local: false},
-            {id: "default", name: "默认直连", source: "default.yaml", detail: "本地配置", active: false, local: true}];
+            {id: "default", name: "默认直连", source: "default.yaml", detail: "本地配置", active: false, local: true, builtin: true},
+            {id: "daily", name: "日常备用", source: "https://example.net/daily", detail: "已用 12/80 GiB · 到期 2026-12-01 · 更新 11-05 11:00", active: false, local: false},
+            {id: "testing", name: "测试线路 · 用于检查长订阅名称与来源详情", source: "https://example.com/testing/long-source-path", detail: "已用 8/60 GiB · 不限期 · 更新 11-05 10:30", active: false, local: false},
+            {id: "overseas", name: "海外线路", source: "https://example.org/overseas", detail: "流量信息未提供 · 更新 11-04 15:20", active: false, local: false},
+            {id: "backup-c", name: "本地导入的配置", source: "", detail: "本地配置", active: false, local: true}];
         UiData.connections = [
             {id: "1", host: "api.github.com:443", detail: "tcp · 10:31:20", rule: "DOMAIN-SUFFIX github.com", route: "Proxy → 德国 01", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
             {id: "2", host: "www.google.com:443", detail: "tcp · 10:31:24", rule: "MATCH", route: "Proxy → 德国 01", up: "1.8 KiB/s", down: "86 KiB/s", upload: "18 KiB", download: "980 KiB"},
@@ -114,18 +172,24 @@ export component Preview inherits AppWindow {
         UiData.sites-started = true; UiData.site-progress = "完成 183 / 183"; UiData.site-fraction = 1;
         UiData.site-counts = [{id: "确认可用", label: "确认可用 74"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 48"}];
         UiData.site-summary = "出口 IP：203.0.113.42 · 各平台识别到 6 个地区";
-        UiData.site-exit-country = "德国";
+        UiData.site-exit-country = "香港"; UiData.site-exit-flagged = true; UiData.site-exit-flag = "🇨🇳";
+        UiData.site-results = [
+            {id: "netflix", title: "Netflix", value: "确认可用 · 香港", country: "香港", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1, delay: "128 ms", delay-tone: 1},
+            {id: "chatgpt", title: "ChatGPT", value: "确认可用 · 台湾", country: "台湾", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1, delay: "420 ms", delay-tone: 2},
+            {id: "claude", title: "Claude", value: "确认可用 · 德国", country: "德国", flag: "🇩🇪", flagged: true, source: "固定演示结果", tone: 1, delay: "925 ms", delay-tone: 3}
+        ];
         UiData.categories = [
             {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
             {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
             {left: {id: "欧洲", title: "欧洲", count: "12 / 12", detail: "确认可用 12 · 网页可达 0 · 受限 0", tone: 1}, right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}];
         UiData.claude-normal = "19"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
         UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
-        UiData.claude-results = [
-            {flag: @image-url("mobile/preview-data/de.svg"), flagged: true, id: "1", title: "实际递归 DNS", value: "172.217.33.153", country: "德国", detail: "Google 官方 geofeed 标为德国，bash.ws 原标签为美国。修正后与德国出口一致；不代表已排除其他泄漏。固定演示结果。", source: "浏览器采样 · bash.ws 权威 DNS 观测", tone: 1},
-            {flagged: false, id: "2", title: "实际递归 DNS", value: "2001:db8:1234:5678:abcd:ef01:2345:6789", country: "香港", detail: "此演示国家与德国出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。固定演示结果。", source: "系统 DNS · 固定演示结果", tone: 3},
+        UiData.claude-results = root.preview-claude-filter == 1 ? [
+            {flag: "🇨🇳", flagged: true, id: "2", title: "实际递归 DNS", value: "2001:db8:1234:5678:abcd:ef01:2345:6789", country: "台湾", detail: "此演示国家与香港出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。固定演示结果。", source: "系统 DNS · 固定演示结果", tone: 3}
+        ] : [
+            {flag: "🇨🇳", flagged: true, id: "1", title: "实际递归 DNS", value: "203.0.113.53", country: "香港", detail: "固定演示结果：国家名称保留香港，旗帜按报告映射显示。显示素材不改变实际检测结论。", source: "浏览器采样 · 固定演示结果", tone: 1}
         ];
-        UiData.claude-result-status = "2 条 · 1–2";
+        UiData.claude-result-status = "1 条 · 1–1";
         UiData.dns-override = true; UiData.fake-ip = true;
         UiData.fake-ip-exclusions = [
             {domain: "+.example.com", source: "用户自定义"},
@@ -137,7 +201,7 @@ export component Preview inherits AppWindow {
         UiData.fake-ip-input = "new.example.test";
         UiData.ipv6 = true; UiData.udp = true;
         UiData.mixed-port = "7897";
-        UiData.window-width = "950"; UiData.window-height = "700"; UiData.interval = "0"; UiData.subscription-interval = "360";
+        UiData.window-width = "950"; UiData.window-height = "700"; UiData.interval = "0"; UiData.subscription-interval = "360"; UiData.update-interval = "360";
         UiData.geo-status = "数据版本：2026-10-15\n本机上次更新：2026-10-16 12:30:00"; UiData.update-status = "已是最新版本";
         UiData.edit-name = "我的订阅"; UiData.edit-source = "https://example.com/subscription";
     }

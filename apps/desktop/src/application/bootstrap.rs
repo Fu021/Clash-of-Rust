@@ -2,6 +2,11 @@
 use super::*;
 pub(crate) fn run() -> anyhow::Result<()> {
     #[cfg(windows)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--launch-after-install"))
+    {
+        return platform::launch_after_install();
+    }
+    #[cfg(windows)]
     if let Some(result) = clash_of_rust::control::background_helper_main() {
         return result;
     }

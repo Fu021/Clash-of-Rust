@@ -1,21 +1,45 @@
 # 开发与验证
 
-按本次改动阅读职责、数据流、平台或验证的相关章节；跨任务约束与收尾流程见 [AGENTS](../AGENTS.md)。功能和修复的循环检查按[循环审查工作流](loop-workflow.md)执行。
+按本次改动阅读职责、数据流、平台或验证的相关章节；跨任务约束与收尾流程见 [AGENTS](../AGENTS.md)。功能和修复的循环检查按[循环审查工作流](loop-workflow.md)执行。其他主题从[文档导航](README.md)进入。
 
 ## 目录与职责
 
-| 目录 | 职责 |
-| --- | --- |
-| `crates/client-core` | 共享配置、存储、订阅、规则、控制器、DNS 与检测；不依赖 GUI。 |
-| `crates/client-runtime` | 桌面/CLI 内核生命周期、平台网络、更新与共享控制服务。 |
-| `crates/client-ui` | 正式 Slint 组件、界面数据与列表模型。 |
-| `crates/desktop-protocol`、`crates/desktop-shell` | 宿主/窗口协议；托盘等桌面原生集成。 |
-| `apps/desktop`、`apps/desktop-ui` | 常驻宿主与状态投影；可关闭并重建的窗口进程。 |
-| `apps/cli` | `cor` 与后台入口，见 [CLI 文档](cli.md)。 |
-| `crates/mobile-ffi` | 共享移动会话，以 `NativeHost` 接入原生能力；不依赖 JNI、Slint 或 Android SDK。 |
-| `apps/android` | `native` Rust/Slint/JNI 宿主、`app` 生命周期/VPN/通知、`core` Go/mihomo 桥接。 |
-| `apps/ios` | 仅 `.gitkeep` 宿主占位；可预览原型位于 `crates/client-ui/ui/mobile/ios`，尚非可用 VPN 客户端。 |
-| `resources`、`scripts`、`docs` | 必需资源、[维护脚本](../scripts/README.md)与文档。 |
+下面列出主要源码与维护入口；`target/`、`bundle/` 和 `dist/` 是构建输出，不提交到仓库。
+
+```text
+Clash-of-Rust/
+├── apps/                          各端入口与原生宿主
+│   ├── desktop/                   常驻桌面宿主、后台协调与状态投影
+│   ├── desktop-ui/                可关闭并重建的独立窗口进程
+│   ├── cli/                       cor 命令行与后台入口
+│   ├── android/
+│   │   ├── native/                Rust / Slint / JNI 宿主
+│   │   ├── app/                   Java 生命周期、VPN、通知与系统交互
+│   │   └── core/                  Go / mihomo 移动桥接
+│   └── ios/                       宿主占位，尚无可用 VPN 客户端
+├── crates/                        共享模块
+│   ├── client-core/               配置、存储、订阅、规则、控制器、DNS、检测与诊断
+│   ├── client-runtime/            桌面 / CLI 内核生命周期、平台网络、更新与控制服务
+│   ├── client-ui/                 正式 Slint 组件、界面数据与列表模型
+│   │   └── ui/mobile/             Android 共享界面与 iOS 原型
+│   ├── desktop-protocol/          桌面宿主与窗口间的消息协议
+│   ├── desktop-shell/             托盘等桌面原生集成
+│   └── mobile-ffi/                共享移动会话与 NativeHost 原生能力接口
+├── resources/                     图标、字体、默认配置、检测数据与第三方声明
+├── scripts/                       构建、验证、打包、缓存和 UI 预览入口
+├── docs/                          使用、开发、工作流、发布说明与失败复盘
+├── vendor/                        带来源、许可证及移除条件的 Slint 局部修复
+├── .github/
+│   ├── workflows/                 CI、发布、内存基准和按需 Android 应用列表截图
+│   ├── actions/                   工作流共用的下载与缓存操作
+│   ├── cache-server/              缓存服务运行配置；服务实现由另一仓库维护
+│   └── build-versions.json         工作流工具与资源版本基线
+├── Cargo.toml / Cargo.lock        Rust workspace、包版本与已解析依赖
+├── README.md                      项目概览、安装与使用入口
+└── AGENTS.md                      agent 跨任务开发约束
+```
+
+`client-core` 不依赖 GUI；`mobile-ffi` 不依赖 JNI、Slint 或 Android SDK。桌面 GUI 和 CLI 共用运行时，移动端通过 `NativeHost` 接入原生能力。用户文档见 [CLI](cli.md)及[文档导航](README.md)，脚本的职责和调用关系见[维护脚本](../scripts/README.md)。
 
 界面细节见 [Slint 说明](../crates/client-ui/README.md)，Android 生命周期与构建见 [Android 说明](../apps/android/README.md)。尽量在现有层次解决问题，不把平台权限、文件访问或网络请求写进 `.slint`。
 
@@ -56,8 +80,8 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 - GUI/CLI 共享数据目录、后台所有者和内核；检查两端刷新、退出与重新附加，避免重复内核、轮询或测速。
 - 界面选项贯通 Slint 状态/回调、协议、宿主、业务、持久化和刷新，并检查桌面/移动端。协议变更同步收发端、序列化、预览和测试，明确兼容性与版本变化。
 - 外部更新不得覆盖规则、订阅或设置草稿；保留并发校验、删除确认、原订阅与配置原子保存/回滚，覆盖拒绝、超时、退出和重启恢复。
-- 规则表单统一拒绝重复的启用规则及越界位置，数量上限等校验通过后才替换草稿；拒绝不得污染原草稿。拖动按起始规则 ID 提交，筛选或分页变化后立即失效，不能只等待异步状态回调清理。
-- 手动与定时订阅更新都先完整下载并校验有效 YAML，再进入保存/重载事务；代理与直连均不可用、超时、HTTP 错误、空白/错误页面或响应截断时结束本次更新，保留原始订阅、用量、更新时间、设置、草稿和运行状态，不切回默认直连。测速与检测结果只在更新成功后失效；失败必须提示，不能伪报成功。定时任务由唯一后台所有者运行，提交前复核订阅、来源、文件、开关和保护状态，过期结果丢弃；间隔与失败计时见[订阅自动更新](subscriptions.md)。桌面与 CLI 共用运行时，Android 共用移动会话，iOS 目前仅为宿主占位。
+- 规则新增、编辑和启用统一拒绝重复的启用规则，表单拒绝越界位置；数量上限等校验通过后才替换草稿，拒绝不得污染原草稿。拖动按起始规则 ID 提交，筛选或分页变化后立即失效，不能只等待异步状态回调清理。
+- 手动与定时订阅更新都先完整下载并校验有效 YAML，再进入保存/重载事务；代理与直连均不可用、超时、HTTP 错误、空白/错误页面或响应截断时结束本次更新，保留原始订阅、用量、更新时间、设置、草稿和运行状态，不切回默认直连。测速与检测结果只在更新成功后失效；失败必须提示，不能伪报成功。定时任务应由唯一后台所有者运行，提交前复核订阅、来源、文件、开关和保护状态，过期结果丢弃；Android 生命周期边界、间隔及失败计时见[订阅自动更新](subscriptions.md)。桌面与 CLI 共用运行时，iOS 目前仅为宿主占位。
 - Geo、订阅与 Release 安装包沿用[共享下载约束](../crates/client-core/src/download.rs)，检测断流及可回退路线的持续慢速；Geo 与安装包采用缓冲异步写盘。每条路线重新下载并校验，最后路线允许慢网继续，不能跳过 SHA256/大小校验或自动改用户节点。Geo 整组暂存校验，事务安装、回滚及提交后的备份清理见 [Geo 复盘](agent-failures/android.md#geo-与安装包下载)。本机更新时间只在安装和必要的内核重载成功后记录；Android 重载保留现有 VPN。
 - 控制器只监听本机，使用随机密钥并处理内部端口冲突；密钥不得进入日志、示例或界面。
 - 系统代理、TUN、DNS、提权、自启动、通知与更新沿用平台入口，检查授权、拒绝、重复操作和失败清理。
@@ -84,7 +108,7 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 
 ## 依赖维护
 
-- [依赖核对表](dependency-audit.csv)记录 2026-10-24 的升级前后版本、官方元数据与兼容性限制；后续升级同步声明、锁文件和对应行，不把核对日期当成持续安全保证。
-- YAML 使用维护中的 `yaml_serde` / `libyaml-rs`，替换已停止维护的 `serde_yaml` / `unsafe-libyaml`；保留原订阅、别名、标签和引号标量语义。桌面私有管道使用 `postcard`，协议号为 9，收发端须一起更新，保留帧长度、截断和尾随数据检查。
+- [依赖核对表](dependency-audit.csv)是 2026-10-24 的历史升级快照，表内“当前版本”仅指当日，不代表现有依赖。当前版本以源码声明、锁文件及[工具基线](../.github/build-versions.json)为准；升级同步这些来源和适用的兼容说明，再取得同提交的[依赖审计附件](workflows/ci.md#ci)及验证，不把历史核对日期当成持续安全保证。
+- YAML 使用维护中的 `yaml_serde` / `libyaml-rs`，替换已停止维护的 `serde_yaml` / `unsafe-libyaml`；保留原订阅、别名、标签和引号标量语义。桌面私有管道使用 `postcard`，协议号以 [`PROTOCOL`](../crates/desktop-protocol/src/lib.rs) 为准，收发端须一起更新，保留帧长度、截断和尾随数据检查。报告国旗使用 UTF-8 文本，与普通标签共用 `Text`，不传递图像代号。
 - HTTP 客户端统一使用 `clash_client_core::network::client_builder`，保留内置公共根证书；`reqwest` 0.13 的平台证书校验默认值不能直接用于未接入 Java verifier 的 Android 宿主。JNI 0.22 原生入口先经 `EnvUnowned::with_env`，工作线程经 VM 回调获取 `Env`，全局引用和异常处理遵循其生命周期。
 - macOS `tray-icon` 仍固定在与 Slint 共用原生菜单类的版本。Slint/ksni 的 zbus 5、字体栈的 `ttf-parser` 及 `typed-index-collections` 的可选 bincode 尚受上游约束；不以强制替换不兼容主版本掩盖这些链路。

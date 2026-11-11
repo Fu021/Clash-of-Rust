@@ -38,27 +38,7 @@ pub enum RuleChange {
 
 pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Settings> {
     ensure!(
-        matches!(
-            key,
-            "mixed_port"
-                | "secret"
-                | "dark"
-                | "theme_mode"
-                | "accent_color"
-                | "text_scale"
-                | "tray_speed"
-                | "update_prereleases"
-                | "dns_override"
-                | "fake_ip"
-                | "fake_ip_exclusions"
-                | "fake_ip_disabled_defaults"
-                | "ipv6"
-                | "udp"
-                | "ip_reputation_key"
-                | "delay_interval_minutes"
-                | "subscription_update_interval_minutes"
-                | "node_sort"
-        ),
+        crate::config::MUTABLE_SETTINGS.contains(&key),
         "该设置不能直接修改；订阅、规则、模式和保护请使用对应命令"
     );
     let mut next = serde_json::to_value(settings)?;
@@ -98,6 +78,9 @@ pub(super) fn rule(
         } => {
             crate::rule_manager::parts(&raw)?;
             ensure!((1..=rows.len() + 1).contains(&position), "规则位置超出范围");
+            if enabled {
+                crate::rule_manager::ensure_unique_enabled(&rows, &raw, None)?;
+            }
             let id = uuid::Uuid::new_v4().to_string();
             draft.custom.push(CustomRule {
                 id: id.clone(),
@@ -139,13 +122,25 @@ pub(super) fn rule(
             match change {
                 RuleChange::Edit { raw, .. } => {
                     crate::rule_manager::parts(&raw)?;
+                    if draft.custom[at].enabled {
+                        crate::rule_manager::ensure_unique_enabled(&rows, &raw, Some(&row.id))?;
+                    }
                     draft.custom[at].rule = raw;
                 }
                 RuleChange::Remove { .. } => {
                     draft.custom.remove(at);
                     draft.order.retain(|id| id != &row.id);
                 }
-                RuleChange::Enable { enabled, .. } => draft.custom[at].enabled = enabled,
+                RuleChange::Enable { enabled, .. } => {
+                    if enabled {
+                        crate::rule_manager::ensure_unique_enabled(
+                            &rows,
+                            &draft.custom[at].rule,
+                            Some(&row.id),
+                        )?;
+                    }
+                    draft.custom[at].enabled = enabled;
+                }
                 _ => unreachable!(),
             }
         }
@@ -156,6 +151,35 @@ pub(super) fn rule(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn update_check_interval_accepts_zero_and_rejects_invalid_patches() {
+        let settings = Settings::default();
+        for minutes in [0, 1, 360, 10080] {
+            let next = setting(
+                &settings,
+                "update_check_interval_minutes",
+                serde_json::json!(minutes),
+            )
+            .unwrap();
+            assert_eq!(next.update_check_interval_minutes, minutes);
+            assert_eq!(
+                next.subscription_update_interval_minutes,
+                settings.subscription_update_interval_minutes
+            );
+            assert_eq!(next.update_prereleases, settings.update_prereleases);
+        }
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(10081),
+            serde_json::json!(1.5),
+            serde_json::json!("abc"),
+            serde_json::Value::Null,
+        ] {
+            assert!(setting(&settings, "update_check_interval_minutes", value).is_err());
+        }
+        assert_eq!(settings.update_check_interval_minutes, 360);
+    }
+
     #[test]
     fn subscription_interval_preserves_preferences_and_rejects_invalid_values() {
         let settings = Settings::default();
@@ -275,5 +299,78 @@ mod tests {
         )
         .unwrap();
         assert!(!doc.rows(&draft).0[0].enabled);
+    }
+
+    #[test]
+    fn cli_rejects_duplicate_add_edit_and_enable_without_changing_the_draft() {
+        let doc = Document::from_raw(
+            "test",
+            false,
+            "proxies: []\nrules: [\"DOMAIN,a.test,DIRECT\", \"MATCH,DIRECT\"]",
+        )
+        .unwrap();
+        let mut draft = ProfileRules::default();
+        let initial = draft.clone();
+        assert!(
+            rule(
+                &doc,
+                &mut draft,
+                RuleChange::Add {
+                    raw: "DOMAIN,a.test,DIRECT".into(),
+                    position: 1,
+                    enabled: true,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(draft, initial);
+        rule(
+            &doc,
+            &mut draft,
+            RuleChange::Add {
+                raw: "DOMAIN,b.test,DIRECT".into(),
+                position: 1,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        let unique = format!("c:{}", draft.custom[0].id);
+        let before = draft.clone();
+        assert!(
+            rule(
+                &doc,
+                &mut draft,
+                RuleChange::Edit {
+                    rule: unique,
+                    raw: "DOMAIN,a.test,DIRECT".into(),
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(draft, before);
+        rule(
+            &doc,
+            &mut draft,
+            RuleChange::Add {
+                raw: "DOMAIN,a.test,DIRECT".into(),
+                position: 1,
+                enabled: false,
+            },
+        )
+        .unwrap();
+        let disabled = format!("c:{}", draft.custom[1].id);
+        let before = draft.clone();
+        assert!(
+            rule(
+                &doc,
+                &mut draft,
+                RuleChange::Enable {
+                    rule: disabled,
+                    enabled: true,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(draft, before);
     }
 }

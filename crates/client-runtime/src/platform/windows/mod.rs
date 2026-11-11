@@ -7,6 +7,30 @@ use winreg::{
 
 const KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 
+pub fn launch_after_install() -> Result<()> {
+    let executable = std::env::current_exe()?;
+    anyhow::ensure!(installed_executable(&executable)?, "请从已安装的客户端启动");
+    super::windows_process::spawn_desktop(&executable, &[], None)?;
+    Ok(())
+}
+
+pub fn restart_after_update(
+    executable: &Path,
+    directory: &Path,
+    data_dir: Option<&Path>,
+) -> Result<()> {
+    anyhow::ensure!(
+        installed_executable(executable)?,
+        "更新后客户端路径与安装记录不一致"
+    );
+    super::windows_process::spawn_desktop(
+        executable,
+        &["--update-result".into(), directory.as_os_str().to_owned()],
+        data_dir,
+    )?;
+    Ok(())
+}
+
 pub fn installed_executable(executable: &Path) -> Result<bool> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY};
     let key = match RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(
@@ -46,7 +70,10 @@ impl Drop for UpdateInstaller {
     }
 }
 
-pub fn launch_update_installer(package: &Path) -> Result<UpdateInstaller> {
+pub fn launch_update_installer(
+    package: &Path,
+    handoff: Option<(&Path, u32)>,
+) -> Result<UpdateInstaller> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::{
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
@@ -57,7 +84,16 @@ pub fn launch_update_installer(package: &Path) -> Result<UpdateInstaller> {
     };
     let file: Vec<u16> = package.as_os_str().encode_wide().chain([0]).collect();
     let verb: Vec<u16> = "runas".encode_utf16().chain([0]).collect();
-    let parameters: Vec<u16> = "/S /UPDATE".encode_utf16().chain([0]).collect();
+    let mut parameters = "/S /UPDATE".to_owned();
+    if let Some((directory, parent)) = handoff {
+        anyhow::ensure!(directory.is_absolute() && parent > 1, "安装交接参数无效");
+        let directory = directory.to_str().context("安装交接路径无效")?;
+        anyhow::ensure!(!directory.contains('"'), "安装交接路径无效");
+        parameters.push_str(&format!(
+            " /CORWAITDIR=\"{directory}\" /CORWAITPID={parent}"
+        ));
+    }
+    let parameters: Vec<u16> = parameters.encode_utf16().chain([0]).collect();
     let initialized =
         unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };

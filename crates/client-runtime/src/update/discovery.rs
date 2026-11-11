@@ -21,7 +21,7 @@ fn client(route: &Route) -> Result<Client> {
 }
 
 pub(super) async fn check(
-    port: Option<u16>,
+    port: Option<crate::network::DownloadPorts>,
     include_prereleases: bool,
 ) -> Result<Option<Available>> {
     // Reading settings does not change the desktop proxy, and an unavailable

@@ -3,7 +3,10 @@ FROM ${BASE_IMAGE}
 ARG USER_ID=1001
 ARG GROUP_ID=1001
 ENV DEBIAN_FRONTEND=noninteractive
+COPY bootstrap-ca.crt /tmp/bootstrap-ca.crt
 RUN printf 'path-include=/usr/share/man/man1/*\n' > /etc/dpkg/dpkg.cfg.d/zz-cor-ci-manuals \
+    && printf 'Acquire::Retries "2";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::https::CaInfo "/tmp/bootstrap-ca.crt";\n' > /etc/apt/apt.conf.d/80cor-ci-download \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list \
     && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates openssl build-essential binutils git pkg-config cmake ninja-build perl \
     libglib2.0-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
@@ -11,6 +14,7 @@ RUN printf 'path-include=/usr/share/man/man1/*\n' > /etc/dpkg/dpkg.cfg.d/zz-cor-
     dbus dbus-x11 libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 libxinerama1 \
     libegl1 iproute2 util-linux libcap2-bin systemd sudo dpkg-dev xvfb x11-utils fonts-wqy-microhei \
     libssl1.1 zlib1g libffi7 libbz2-1.0 liblzma5 libsqlite3-0 libreadline8 \
+    && rm /tmp/bootstrap-ca.crt /etc/apt/apt.conf.d/80cor-ci-download \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -o -g ${GROUP_ID} builder \
     && useradd -o -u ${USER_ID} -g ${GROUP_ID} -m -s /bin/bash builder \

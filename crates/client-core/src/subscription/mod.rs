@@ -295,6 +295,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_node_can_fall_back_to_the_managed_direct_listener() {
+        let (failed_proxy, failed_task) = server(
+            b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        )
+        .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let direct = listener.local_addr().unwrap().port();
+        let direct_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut greeting = [0; 2];
+            socket.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting[0], 5);
+            let mut methods = vec![0; usize::from(greeting[1])];
+            socket.read_exact(&mut methods).await.unwrap();
+            assert!(methods.contains(&0));
+            socket.write_all(&[5, 0]).await.unwrap();
+            let mut header = [0; 5];
+            socket.read_exact(&mut header).await.unwrap();
+            assert_eq!(&header[..4], &[5, 1, 0, 3]);
+            let mut destination = vec![0; usize::from(header[4])];
+            socket.read_exact(&mut destination).await.unwrap();
+            assert_eq!(destination.as_slice(), b"unreachable-origin.invalid");
+            let mut port = [0; 2];
+            socket.read_exact(&mut port).await.unwrap();
+            assert_eq!(u16::from_be_bytes(port), 80);
+            socket
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+                .await
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                assert!(request.len() <= 8192);
+            }
+            socket.write_all(&response()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let mixed = Url::parse(&failed_proxy).unwrap().port().unwrap();
+        let routes = crate::network::download_routes(
+            Some(crate::network::DownloadPorts { mixed, direct }),
+            None,
+        );
+        let url = Url::parse("http://unreachable-origin.invalid/subscription").unwrap();
+        let (raw, _) = download_routes(&url, &routes).await.unwrap();
+        assert_eq!(raw, "proxies: []\n");
+        assert!(
+            failed_task
+                .await
+                .unwrap()
+                .contains("unreachable-origin.invalid")
+        );
+        let request = direct_task.await.unwrap();
+        assert!(request.starts_with("GET /subscription HTTP/1.1\r\n"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("host: unreachable-origin.invalid\r\n")
+        );
+    }
+
+    #[tokio::test]
     async fn incomplete_oversized_and_non_utf8_subscriptions_are_rejected() {
         for (wire, incompatible) in [
             (

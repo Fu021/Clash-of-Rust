@@ -1,21 +1,30 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
+import { DiagnosticActions } from "../components/notice.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData, UiActions, Intent } from "../state.slint";
-import { PageScroll, Label, Caption, Heading, ContentPanel, RowPanel, ActionButton, Toggle, Badge, Paragraph } from "../components/controls.slint";
-component ResultEntry inherits ContentPanel {
-    in property <string> title;
-    in property <string> count;
-    in property <string> description;
-    in property <bool> risk;
-    interactive: true; preferred-width: 0px; min-width: 0px; horizontal-stretch: 1;
-    HorizontalLayout { cross-axis-alignment: center;
-        Heading { text: root.title; }
-        Label { text: root.count; font-size: 30px * Theme.text-scale; color: root.risk ? Theme.danger : Theme.success; horizontal-alignment: right; }
+import { UiData, UiActions, Intent, ReportItem } from "../state.slint";
+import { PageScroll, Label, Caption, Heading, Panel, ContentPanel, RowPanel, ActionButton, Toggle, Badge, Paragraph, Divider } from "../components/controls.slint";
+import { ToolHeading, SummaryMetric } from "../components/sections.slint";
+component FindingRow inherits Rectangle {
+    in property <ReportItem> item;
+    height: content.preferred-height;
+    content := HorizontalLayout {
+        padding: 16px; spacing: 12px; cross-axis-alignment: start;
+        Rectangle {
+            width: 30px; height: 30px; border-radius: 8px; background: Theme.inset;
+            if root.item.flagged: Text { width: parent.width; height: parent.height; text: root.item.flag; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
+            if !root.item.flagged: Image { x: 7px; y: 7px; width: 16px; height: 16px; source: @image-url("../icons/ai.svg"); colorize: Theme.secondary; }
+        }
+        VerticalLayout {
+            min-width: 0px; spacing: 5px;
+            Label { text: root.item.title; font-weight: 600; }
+            Paragraph { text: root.item.value; font-size: Theme.detail-size; }
+            if root.item.country != "": Caption { text: root.item.country; }
+            if root.item.detail != "": Paragraph { text: root.item.detail; font-size: Theme.detail-size; color: Theme.secondary; }
+            if root.item.source != "": Caption { text: root.item.source; wrap: word-wrap; color: Theme.muted; }
+        }
+        Badge { text: root.item.tone == 1 ? "正常" : root.item.tone == 3 ? "风险" : "线索"; tone: root.item.tone; }
     }
-    HorizontalLayout { cross-axis-alignment: center;
-        Caption { text: root.description; }
-        Caption { text: "查看详情 →"; color: Theme.accent; horizontal-alignment: right; }
-    }
+    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.subtle-line; }
 }
 export component AiCheckPage inherits PageSurface {
     motion-revision: UiData.claude-filter + 1;
@@ -27,11 +36,9 @@ export component AiCheckPage inherits PageSurface {
             alignment: start; padding-right: Theme.content-gap; spacing: Theme.page-gap;
             ContentPanel {
                 border-color: UiData.protected ? Theme.accent : Theme.line;
-                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Heading { text: "Claude 保护"; horizontal-stretch: 0; }
-                    Badge { text: UiData.protection-pending ? "切换中…" : UiData.protected ? "已开启" : "未开启"; tone: UiData.protected ? 1 : 4; }
+                ToolHeading { title: "Claude 保护"; icon: @image-url("../icons/ai.svg");
                     Rectangle { horizontal-stretch: 1; }
-                    Toggle { enabled: !UiData.working && !UiData.exiting && !UiData.claude-busy && (UiData.running || UiData.protected); checked: UiData.protected; toggled(value) => { UiActions.dispatch(Intent.claude-protection, value ? "true" : "false", ""); } }
+                    Toggle { enabled: !UiData.working && !UiData.exiting && !UiData.claude-busy && !UiData.protection-pending && (UiData.running || UiData.protected); checked: UiData.protected; toggled(value) => { UiActions.dispatch(Intent.claude-protection, value ? "true" : "false", ""); } }
                 }
                 Caption { text: UiData.protection-pending ? UiData.protection-status : UiData.protected ? "保护节点：" + UiData.protection-node : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
                 if UiData.protection-pending: ProgressTrack { indeterminate: true; track: Theme.subtle-line; fill: Theme.accent; }
@@ -45,27 +52,30 @@ export component AiCheckPage inherits PageSurface {
             }
             if UiData.claude-busy: ProgressTrack { value: UiData.claude-progress; track: Theme.subtle-line; fill: Theme.accent; }
             if UiData.claude-status != "": Paragraph { text: UiData.claude-status; font-size: Theme.detail-size; color: UiData.claude-error ? Theme.danger : Theme.secondary; }
+            if UiData.claude-error: DiagnosticActions { context: UiData.claude-status; }
             if UiData.claude-audit != "": Caption { text: UiData.claude-audit; }
             if UiData.claude-guard != "": Caption { text: UiData.claude-guard; }
             if UiData.browser-session: RowPanel {
                 Caption { text: "浏览器正在自动采样；离开此页会关闭回传入口。"; }
                 ActionButton { text: "关闭入口"; clicked => { UiActions.dispatch(Intent.claude-close-session, "", ""); } }
             }
-            if UiData.claude-filter < 0: VerticalLayout {
-                spacing: Theme.page-gap;
-                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                    ResultEntry { title: "正常项目"; count: UiData.claude-normal; description: "网络出口、地区线索与配置"; clicked => { UiActions.dispatch(Intent.claude-filter, "0", ""); } }
-                    ResultEntry { title: "风险项目"; count: UiData.claude-risk; description: "需要检查的环境差异与配置"; risk: true; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
+            Panel {
+                height: metrics.preferred-height;
+                metrics := HorizontalLayout { spacing: 1px;
+                    SummaryMetric { title: "正常项目"; value: UiData.claude-normal; tone: 1; selected: UiData.claude-filter == 0; clicked => { UiActions.dispatch(Intent.claude-filter, "0", ""); } }
+                    SummaryMetric { title: "风险项目"; value: UiData.claude-risk; tone: 3; selected: UiData.claude-filter == 1; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
+                    SummaryMetric { title: "其他线索"; value: UiData.claude-clues; tone: 2; selected: UiData.claude-filter == 2; clicked => { UiActions.dispatch(Intent.claude-filter, "2", ""); } }
                 }
-                RowPanel {
-                    VerticalLayout { spacing: 4px; Heading { text: "其他线索"; } Caption { text: "证据不足或需要进一步确认的结果"; } }
-                    Label { text: UiData.claude-clues; font-size: 26px * Theme.text-scale; color: Theme.warning; horizontal-stretch: 0; }
-                    Caption { text: "查看详情 →"; color: Theme.accent; horizontal-stretch: 0; }
-                    interactive: true; clicked => { UiActions.dispatch(Intent.claude-filter, "2", ""); }
+            }
+            if UiData.claude-filter < 0 && UiData.claude-results.length > 0: VerticalLayout {
+                spacing: 8px;
+                Heading { text: "检测结果"; }
+                Panel { height: findings.preferred-height;
+                    findings := VerticalLayout { spacing: 0px; for result in UiData.claude-results: FindingRow { item: result; } }
                 }
-                RowPanel {
-                    Caption { text: "浏览器自动采样 · 扫描已知 Claude 项目配置"; }
-                    ActionButton { text: "补充采样"; clicked => { UiActions.dispatch(Intent.claude-guide, "supplement", ""); } }
+                HorizontalLayout {
+                    Caption { text: UiData.claude-result-status; }
+                    ActionButton { text: "查看风险项目"; quiet: true; compact: true; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
                 }
             }
             if UiData.claude-filter >= 0: VerticalLayout {
@@ -74,26 +84,13 @@ export component AiCheckPage inherits PageSurface {
                     ActionButton { text: "← 返回报告"; clicked => { UiActions.dispatch(Intent.claude-filter, "-1", ""); } }
                     Caption { text: UiData.claude-result-status; horizontal-alignment: right; }
                 }
-                for result in UiData.claude-results: ContentPanel {
-                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                        Heading { text: result.title; }
-                        Badge { text: result.tone == 1 ? "正常" : result.tone == 3 ? "风险" : "线索"; tone: result.tone; }
-                    }
-                    HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                        Paragraph { text: result.value; min-width: 0px; horizontal-stretch: result.country == "" ? 1 : 0; }
-                        if result.country != "": HorizontalLayout { spacing: 6px; cross-axis-alignment: center; horizontal-stretch: 0;
-                            if result.flagged: Image { source: result.flag; width: 24px; height: 24px; image-fit: contain; }
-                            Paragraph { text: result.country; wrap: no-wrap; min-width: self.preferred-width; horizontal-stretch: 0; }
-                        }
-                        if result.country != "": Rectangle { horizontal-stretch: 1; }
-                    }
-                    if result.detail != "": Paragraph { text: result.detail; font-size: Theme.detail-size; color: Theme.secondary; }
-                    if result.source != "": Paragraph { text: result.source; font-size: Theme.detail-size; color: Theme.muted; }
+                Panel { height: filtered.preferred-height;
+                    filtered := VerticalLayout { spacing: 0px; for result in UiData.claude-results: FindingRow { item: result; } }
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Caption { text: UiData.claude-result-status; }
-                    ActionButton { text: "上一页"; enabled: UiData.claude-previous; clicked => { UiActions.dispatch(Intent.claude-page, "" + (UiData.claude-result-page - 1), ""); } }
-                    ActionButton { text: "下一页"; enabled: UiData.claude-next; clicked => { UiActions.dispatch(Intent.claude-page, "" + (UiData.claude-result-page + 1), ""); } }
+                    ActionButton { text: "上一页"; compact: true; enabled: UiData.claude-previous; clicked => { UiActions.dispatch(Intent.claude-page, "" + (UiData.claude-result-page - 1), ""); } }
+                    ActionButton { text: "下一页"; compact: true; enabled: UiData.claude-next; clicked => { UiActions.dispatch(Intent.claude-page, "" + (UiData.claude-result-page + 1), ""); } }
                 }
             }
         }

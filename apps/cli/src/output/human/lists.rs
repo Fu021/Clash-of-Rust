@@ -131,7 +131,7 @@ pub(super) fn nodes(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
     table::page(out, value)
 }
 
-pub(super) fn delays(out: &mut dyn Write, value: &Value) -> Result<()> {
+pub(super) fn delays(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
     if let Some(map) = value.as_object() {
         let cells: Vec<_> = map
             .iter()
@@ -147,6 +147,17 @@ pub(super) fn delays(out: &mut dyn Write, value: &Value) -> Result<()> {
             "测速完成：{available} 项可达，{} 项超时或不可达",
             map.len() - available
         )?;
+        if (args.flag("all") || args.get("group").is_some())
+            && !map.is_empty()
+            && map.values().all(|delay| delay.as_u64() == Some(0))
+        {
+            writeln!(
+                out,
+                "全部节点不可达。请更换节点；更新失败后会自动尝试直连。"
+            )?;
+            writeln!(out, "接管状态：cor status · 关闭代理：cor proxy off")?;
+            writeln!(out, "导出诊断：cor diagnose --output cor-diagnose.json")?;
+        }
     }
     Ok(())
 }

@@ -18,6 +18,48 @@ import static org.junit.Assert.*;
 /** Uses the packaged Slint Activity, embedded core and the real Android VPN. */
 @RunWith(AndroidJUnit4.class)
 public class ProxyTunTest {
+    private static void persistNetworkProfile(Context context) throws Exception {
+        assertFalse("Prepare the network profile before starting the core", CoreBridge.ready());
+        File directory = new File(context.getFilesDir(), "client");
+        File profiles = new File(directory, "profiles");
+        assertTrue(profiles.isDirectory() || profiles.mkdirs());
+        String profileId = "b4f7a20e-402d-4739-90dd-4b517591e653";
+        File settingsFile = new File(directory, "settings.json");
+        JSONObject settings = settingsFile.isFile()
+            ? new JSONObject(new String(java.nio.file.Files.readAllBytes(settingsFile.toPath()), StandardCharsets.UTF_8))
+            : new JSONObject();
+        File indexFile = new File(directory, "profiles.json");
+        JSONArray index = indexFile.isFile()
+            ? new JSONArray(new String(java.nio.file.Files.readAllBytes(indexFile.toPath()), StandardCharsets.UTF_8))
+            : new JSONArray();
+        JSONArray updated = new JSONArray();
+        for (int position = 0; position < index.length(); position++) {
+            JSONObject profile = index.getJSONObject(position);
+            if (!profileId.equals(profile.getString("id"))) updated.put(profile);
+        }
+        updated.put(new JSONObject().put("id", profileId).put("name", "CI TUN route")
+            .put("source", "ci-tun.yaml").put("updated", 0).put("usage", JSONObject.NULL));
+        String raw = "dns:\n  enable: true\n  enhanced-mode: fake-ip\n"
+            + "  nameserver: [https://1.1.1.1/dns-query]\n"
+            + "hosts:\n  android-tun.test: 10.0.2.2\n"
+            + "proxies:\n  - {name: CI-TUN-origin, type: http, server: 10.0.2.2, port: 18081}\n"
+            + "rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n";
+        settings.put("active_profile", profileId).put("run_mode", "rule").put("ipv6", true);
+        java.nio.file.Files.write(new File(profiles, profileId + ".yaml").toPath(), raw.getBytes(StandardCharsets.UTF_8));
+        java.nio.file.Files.write(indexFile.toPath(), updated.toString().getBytes(StandardCharsets.UTF_8));
+        java.nio.file.Files.write(settingsFile.toPath(), settings.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void assertNetworkProfile(String raw) throws Exception {
+        assertTrue("The active profile lost its TUN route", raw.contains("198.51.100.1/32"));
+        assertTrue("The active profile lost its DNS host", raw.contains("android-tun.test"));
+        JSONObject proxies = new JSONObject(read(
+            new URL("http://" + value(raw, "external-controller") + "/proxies"),
+            java.net.Proxy.NO_PROXY, value(raw, "secret")));
+        assertTrue("The running core did not load the persisted test outbound",
+            proxies.getJSONObject("proxies").has("CI-TUN-origin"));
+    }
+
     @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() {
         String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true, "");
         assertTrue(text.contains("全局 · Current node"));
@@ -43,17 +85,24 @@ public class ProxyTunTest {
             }
         }
     }
-    private static void pointer(int action,float x,float y,long down,long now) {
+    private static boolean injectPointer(int action,float x,float y,long down,long now) {
         MotionEvent event=MotionEvent.obtain(down,now,action,x,y,0);
         event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-        try { assertTrue("Android rejected touch input", InstrumentationRegistry.getInstrumentation().getUiAutomation().injectInputEvent(event,true)); }
+        try { return InstrumentationRegistry.getInstrumentation().getUiAutomation().injectInputEvent(event,true); }
         finally {event.recycle();}
     }
-    private static void tap(float x,float y) {
+    private static void pointer(int action,float x,float y,long down,long now) {
+        assertTrue("Android rejected touch input",injectPointer(action,x,y,down,now));
+    }
+    private static boolean tryTap(float x,float y) {
         long start=SystemClock.uptimeMillis();
-        pointer(MotionEvent.ACTION_DOWN,x,y,start,start);
+        boolean pressed=injectPointer(MotionEvent.ACTION_DOWN,x,y,start,start);
         SystemClock.sleep(50);
-        pointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
+        boolean released=injectPointer(MotionEvent.ACTION_UP,x,y,start,SystemClock.uptimeMillis());
+        return pressed && released;
+    }
+    private static void tap(float x,float y) {
+        assertTrue("Android rejected touch input",tryTap(x,y));
     }
     private static String shell(String command) throws Exception {
         try (InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(
@@ -81,6 +130,21 @@ public class ProxyTunTest {
             SystemClock.sleep(500);
             return MainActivity.diagnostics().optInt("page",-1)==page;
         });
+    }
+    @Test public void presentationUsesSavedAppearanceAndHandlesNavigation() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        shell("cmd uimode night no");
+        File settings=new File(context.getFilesDir(),"client/settings.json");
+        settings.getParentFile().mkdirs();
+        JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
+        saved.put("theme_mode","dark");
+        saved.put("accent_color","purple");
+        java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
+        await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
+        waitForAppWindow();
+        verifyPresentation();
     }
     private static void verifyPresentation() throws Exception {
         new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
@@ -160,9 +224,25 @@ public class ProxyTunTest {
     private static void waitForAppWindow() throws Exception {
         android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
         automation.waitForIdle(500,10000);
-        await("Clash window is not the active input window",()-> {
-            android.view.accessibility.AccessibilityNodeInfo root=automation.getRootInActiveWindow();
-            return root!=null && "org.clashofrust.android".contentEquals(root.getPackageName());
+        await("Clash window is not visible and focused",()-> {
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicInteger width=new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.atomic.AtomicInteger height=new java.util.concurrent.atomic.AtomicInteger();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View decor=activity.getWindow().getDecorView();
+                visible.set(decor.isAttachedToWindow() && decor.isShown()
+                    && decor.hasWindowFocus() && decor.isLaidOut() && !decor.isLayoutRequested());
+                width.set(decor.getWidth());
+                height.set(decor.getHeight());
+            });
+            JSONObject ui=MainActivity.diagnostics();
+            double scale=ui.optDouble("scale");
+            return visible.get() && ui.optBoolean("live") && scale>0
+                && ui.optDouble("width")>0 && ui.optDouble("height")>0
+                && Math.abs(width.get()-ui.optDouble("width")*scale)<=2
+                && Math.abs(height.get()-ui.optDouble("height")*scale)<=2;
         });
     }
     private static boolean inStage(androidx.test.runner.lifecycle.Stage stage,boolean focused) {
@@ -183,15 +263,90 @@ public class ProxyTunTest {
         });
         return result.get();
     }
-    private static void tapTarget(String name) throws Exception {
+    private static int[] windowOrigin() throws Exception {
+        java.util.concurrent.atomic.AtomicReference<int[]> origin=new java.util.concurrent.atomic.AtomicReference<>();
+        await("Slint activity did not regain focus",()-> {
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View decor=activity.getWindow().getDecorView();
+                if (activity.hasWindowFocus() && decor.isAttachedToWindow() && decor.isShown()) {
+                    int[] position=new int[2];
+                    decor.getLocationOnScreen(position);
+                    origin.set(position);
+                }
+            });
+            return origin.get()!=null;
+        });
+        return origin.get();
+    }
+    private static boolean tryTapTarget(String name) throws Exception {
         JSONObject ui=MainActivity.diagnostics();
+        assertTrue("Refusing to touch a stale Slint snapshot",ui.optBoolean("live"));
         JSONArray bounds=ui.getJSONArray(name);
         assertEquals("Expected the real Slint control bounds",4,bounds.length());
         assertTrue("Control has no width",bounds.getDouble(2)>0);
         assertTrue("Control has no height",bounds.getDouble(3)>0);
         float scale=(float)ui.getDouble("scale");
-        tap((float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
-            (float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
+        int[] origin=windowOrigin();
+        return tryTap(origin[0]+(float)(bounds.getDouble(0)+bounds.getDouble(2)/2)*scale,
+            origin[1]+(float)(bounds.getDouble(1)+bounds.getDouble(3)/2)*scale);
+    }
+    private static void tapTarget(String name) throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
+        await("Control "+name+" layout did not settle before touch",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            String geometry=ui.getJSONArray(name).toString()+ui.getDouble("keyboard_inset");
+            long now=SystemClock.uptimeMillis();
+            if (!geometry.equals(previous.getAndSet(geometry))) stableSince.set(now);
+            return now-stableSince.get()>=250;
+        });
+        assertTrue("Android rejected touch input",tryTapTarget(name));
+    }
+    private static void dismissErrorDialogIfPresent() throws Exception {
+        dismissErrorDialogIfPresent(true);
+    }
+    private static void dismissErrorDialogIfPresent(boolean imeEvidence) throws Exception {
+        JSONObject ui=MainActivity.diagnostics();
+        if (!ui.optBoolean("notice_active") || !ui.optBoolean("notice_error")) return;
+        if (imeEvidence) captureIme("background-error");
+        else assertFalse("Screenshot encountered a blocking error: "+ui,ui.optBoolean("notice_modal"));
+        await("The error dialog close button has no layout",()-> {
+            JSONArray target=MainActivity.diagnostics().optJSONArray("notice_close_target");
+            return target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+        });
+        tapTarget("notice_close_target");
+        await("The background error dialog did not close",
+            ()->!MainActivity.diagnostics().optBoolean("notice_active"));
+    }
+    private static void tapVisibleProfileField(String field) throws Exception {
+        dismissErrorDialogIfPresent();
+        await("Could not scroll the subscription "+field+" into its viewport",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            JSONArray target=ui.getJSONArray("profile_"+field+"_target");
+            JSONArray viewport=ui.getJSONArray("profile_editor_viewport");
+            double center=target.getDouble(1)+target.getDouble(3)/2;
+            double top=viewport.getDouble(1), bottom=top+viewport.getDouble(3);
+            if (center>=top+4 && center<=bottom-4) return true;
+            assertTrue("Subscription scroll viewport is too short to swipe",bottom-top>16);
+            float scale=(float)ui.getDouble("scale");
+            float horizontal=(float)(viewport.getDouble(0)+8)*scale;
+            float upper=(float)(top+4)*scale, lower=(float)(bottom-4)*scale;
+            float start=center>bottom?lower:upper, end=center>bottom?upper:lower;
+            long down=SystemClock.uptimeMillis();
+            pointer(MotionEvent.ACTION_DOWN,horizontal,start,down,down);
+            for (int index=1;index<=10;index++) {
+                SystemClock.sleep(20);
+                pointer(MotionEvent.ACTION_MOVE,horizontal,start+(end-start)*index/10,down,SystemClock.uptimeMillis());
+            }
+            pointer(MotionEvent.ACTION_UP,horizontal,end,down,SystemClock.uptimeMillis());
+            SystemClock.sleep(750);
+            return false;
+        });
+        tapTarget("profile_"+field+"_target");
     }
     private static android.view.View inputEditor(android.view.View view) {
         if ("SlintInputView".equals(view.getClass().getSimpleName())) return view;
@@ -204,6 +359,22 @@ public class ProxyTunTest {
         }
         return null;
     }
+    @SuppressWarnings("deprecation")
+    private static int imeBottom(android.view.View editor) {
+        android.view.WindowInsets insets=editor.getRootWindowInsets();
+        if (Build.VERSION.SDK_INT>=30) {
+            return insets!=null && insets.isVisible(android.view.WindowInsets.Type.ime())
+                ? insets.getInsets(android.view.WindowInsets.Type.ime()).bottom : 0;
+        }
+        android.view.View root=editor.getRootView();
+        android.graphics.Rect frame=new android.graphics.Rect();
+        root.getWindowVisibleDisplayFrame(frame);
+        int[] origin=new int[2];
+        root.getLocationOnScreen(origin);
+        int obscured=Math.max(0,origin[1]+root.getHeight()-frame.bottom);
+        int navigation=insets!=null ? insets.getStableInsetBottom() : 0;
+        return obscured>navigation ? obscured : 0;
+    }
     private static boolean imeVisible() {
         java.util.concurrent.atomic.AtomicBoolean visible=new java.util.concurrent.atomic.AtomicBoolean();
         MainActivity activity=resumedActivity();
@@ -211,16 +382,57 @@ public class ProxyTunTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
             android.view.View editor=inputEditor(activity.getWindow().getDecorView());
             if (editor==null || !editor.hasFocus()) return;
-            android.view.WindowInsets insets=editor.getRootWindowInsets();
             android.view.inputmethod.InputMethodManager manager=activity.getSystemService(
                 android.view.inputmethod.InputMethodManager.class);
-            visible.set(insets!=null && insets.isVisible(android.view.WindowInsets.Type.ime())
-                && insets.getInsets(android.view.WindowInsets.Type.ime()).bottom>0
-                && manager.isActive(editor));
+            if (!manager.isActive(editor)) return;
+            visible.set(imeBottom(editor)>0);
         });
         return visible.get();
     }
-    private static void commitImeText(String text) {
+    private static void assertImeLayout(String field) throws Exception {
+        MainActivity activity=resumedActivity();
+        assertNotNull("No resumed input Activity",activity);
+        java.util.concurrent.atomic.AtomicInteger bottom=new java.util.concurrent.atomic.AtomicInteger();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+            android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+            assertNotNull("Slint input editor is missing",editor);
+            bottom.set(imeBottom(editor));
+        });
+        assertTrue("Android IME has no occluded area",bottom.get()>0);
+        JSONObject ui=MainActivity.diagnostics();
+        double occluded=bottom.get()/ui.getDouble("scale");
+        double expected=Math.max(0,occluded-ui.getDouble("safe_bottom"));
+        assertTrue("Android IME must extend above the navigation area",expected>0);
+        assertEquals("Keyboard height must exclude the bottom safe area exactly once",
+            expected,ui.getDouble("keyboard_inset"),2);
+        JSONArray target=ui.getJSONArray("profile_"+field+"_target");
+        JSONArray viewport=ui.getJSONArray("profile_editor_viewport");
+        assertEquals("Missing subscription scroll viewport",4,viewport.length());
+        assertTrue("Subscription "+field+" is above the scroll viewport",
+            target.getDouble(1)>=viewport.getDouble(1)-2);
+        assertTrue("Subscription "+field+" is clipped by the scroll viewport",
+            target.getDouble(1)+target.getDouble(3)<=viewport.getDouble(1)+viewport.getDouble(3)+2);
+        assertTrue("Subscription "+field+" is covered by the keyboard",
+            target.getDouble(1)+target.getDouble(3)<=ui.getDouble("height")-occluded+2);
+    }
+    private static void commitImeText(String field,String text) throws Exception {
+        await("Android input connection did not synchronize the focused "+field,()-> {
+            int expected=MainActivity.diagnostics().getInt("profile_"+field+"_length");
+            java.util.concurrent.atomic.AtomicBoolean synchronizedText=new java.util.concurrent.atomic.AtomicBoolean();
+            MainActivity activity=resumedActivity();
+            if (activity==null) return false;
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
+                android.view.View editor=inputEditor(activity.getWindow().getDecorView());
+                if (editor==null || !editor.hasFocus()) return;
+                android.view.inputmethod.InputConnection connection=editor.onCreateInputConnection(
+                    new android.view.inputmethod.EditorInfo());
+                if (!(connection instanceof android.view.inputmethod.BaseInputConnection)) return;
+                android.text.Editable editable=((android.view.inputmethod.BaseInputConnection)connection).getEditable();
+                synchronizedText.set(editable!=null
+                    && Character.codePointCount(editable,0,editable.length())==expected);
+            });
+            return synchronizedText.get();
+        });
         MainActivity activity=resumedActivity();
         assertNotNull("No resumed input Activity",activity);
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
@@ -237,6 +449,7 @@ public class ProxyTunTest {
             assertNotNull("Input connection has no editable text",editable);
             connection.beginBatchEdit();
             try {
+                assertTrue("Input connection did not finish composition",connection.finishComposingText());
                 assertTrue(connection.setSelection(0,editable.length()));
                 assertTrue("Input connection rejected committed text",connection.commitText(text,1));
             } finally {connection.endBatchEdit();}
@@ -245,13 +458,10 @@ public class ProxyTunTest {
     private static void captureIme(String phase) throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         File directory=new File(context.getExternalFilesDir(null),"ime-report");
-        if (Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("ime_probe","false"))) {
-            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
-                .getString("ime_system_animation","false"));
-            int round=Integer.parseInt(InstrumentationRegistry.getArguments().getString("ime_round","1"));
-            assertTrue(round>=1 && round<=3);
-            directory=new File(directory,(systemAnimation?"system-animation":"production")+"/round-"+round);
-        }
+        boolean probe=Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("ime_probe","false"));
+        int round=Integer.parseInt(InstrumentationRegistry.getArguments().getString("ime_round","1"));
+        assertTrue(round>=1 && round<=3);
+        directory=new File(directory,(probe?"production":"regression")+"/round-"+round);
         assertTrue(directory.isDirectory() || directory.mkdirs());
         for (String service:new String[]{"input_method","window windows"}) {
             String name=service.startsWith("window")?"windows":"input-method";
@@ -276,6 +486,7 @@ public class ProxyTunTest {
                     .put("editor_focus",editor!=null && editor.hasFocus())
                     .put("editor_active",editor!=null && activity.getSystemService(
                         android.view.inputmethod.InputMethodManager.class).isActive(editor))
+                    .put("ime_occlusion_bottom",editor!=null ? imeBottom(editor) : 0)
                     .put("decor_height",decor.getHeight())
                     .put("visible_frame_bottom",visibleFrame.bottom)
                     .put("soft_input_mode",activity.getWindow().getAttributes().softInputMode)
@@ -300,6 +511,7 @@ public class ProxyTunTest {
         try {
             await("Keyboard probe Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             await("Keyboard probe core did not start",CoreBridge::ready);
+            dismissErrorDialogIfPresent();
             tab(2,2);
             await("Keyboard probe add control has no layout",()-> {
                 JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
@@ -307,17 +519,7 @@ public class ProxyTunTest {
             });
             tapTarget("profile_add_target");
             await("Keyboard probe editor did not open",()->MainActivity.diagnostics().optInt("detail")==3);
-            boolean systemAnimation=Boolean.parseBoolean(InstrumentationRegistry.getArguments()
-                .getString("ime_system_animation","false"));
-            if (systemAnimation && Build.VERSION.SDK_INT>=30) {
-                MainActivity activity=resumedActivity();
-                assertNotNull(activity);
-                InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
-                    android.view.View editor=inputEditor(activity.getWindow().getDecorView());
-                    assertNotNull(editor);
-                    editor.setWindowInsetsAnimationCallback(null);
-                });
-            }
+            dismissErrorDialogIfPresent();
             captureIme("before-focus");
             for (String field:new String[]{"name","source"}) {
                 tapTarget("profile_"+field+"_target");
@@ -345,6 +547,38 @@ public class ProxyTunTest {
             throw error;
         }
     }
+    private static void verifyRestoredImeAndHide(String orientation) throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince=new java.util.concurrent.atomic.AtomicLong();
+        await("Restored "+orientation+" keyboard state did not settle",()-> {
+            JSONObject ui=MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            String state=imeVisible()+"/"+ui.getDouble("keyboard_inset")+"/"
+                +ui.getBoolean("profile_name_focused")+"/"+ui.getBoolean("profile_source_focused");
+            long now=SystemClock.uptimeMillis();
+            if (!state.equals(previous.getAndSet(state))) stableSince.set(now);
+            return now-stableSince.get()>=500;
+        });
+        if (imeVisible()) {
+            await("Restored "+orientation+" Slint keyboard inset did not synchronize",
+                ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+            JSONObject ui=MainActivity.diagnostics();
+            String field=ui.optBoolean("profile_source_focused")?"source":"name";
+            assertTrue("Restored keyboard has no focused subscription field",
+                ui.optBoolean("profile_"+field+"_focused"));
+            assertImeLayout(field);
+            captureIme(orientation+"-restored-visible");
+            shell("input keyevent KEYCODE_BACK");
+        }
+        await("Restored "+orientation+" IME did not hide after Back",()->!imeVisible()
+            && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+        assertEquals("Navigation bars must not become a keyboard inset after rotation",
+            0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
+        captureIme(orientation+"-hidden");
+        assertFalse("The keyboard reopened while capturing "+orientation,imeVisible());
+        assertEquals("Slint keyboard inset changed after hiding "+orientation,
+            0,MainActivity.diagnostics().getDouble("keyboard_inset"),0);
+    }
     @Test public void subscriptionFieldsShowImeAcceptTextAndReopenAfterBack() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         shell("settings put system font_scale 1.0");
@@ -353,6 +587,7 @@ public class ProxyTunTest {
             await("Input test Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             waitForAppWindow();
             await("Input test core did not start",CoreBridge::ready);
+            dismissErrorDialogIfPresent();
             tab(2,2);
             await("Add subscription control has no layout",()-> {
                 JSONArray target=MainActivity.diagnostics().optJSONArray("profile_add_target");
@@ -360,36 +595,125 @@ public class ProxyTunTest {
             });
             tapTarget("profile_add_target");
             await("Add subscription did not open",()->MainActivity.diagnostics().optInt("detail")==3);
+            dismissErrorDialogIfPresent();
             captureIme("before-focus");
+            int draftNameLength=MainActivity.diagnostics().getInt("profile_name_length");
+            int draftSourceLength=MainActivity.diagnostics().getInt("profile_source_length");
+            MainActivity.emit("error","检查更新失败：测试网络不可用");
+            await("The background error notice did not appear",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                JSONArray target=ui.optJSONArray("notice_close_target");
+                return ui.optBoolean("notice_active") && ui.optBoolean("notice_error")
+                    && target!=null && target.length()==4 && target.optDouble(2)>0 && target.optDouble(3)>0;
+            });
+            captureIme("notice-before-close");
+            assertFalse("A recoverable update error must not open a modal",
+                MainActivity.diagnostics().optBoolean("notice_modal"));
+            tapTarget("notice_close_target");
+            await("The error notice did not close",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                return ui.optBoolean("live") && !ui.optBoolean("notice_active");
+            });
+            assertEquals("Closing the notice must keep the subscription editor open",
+                3,MainActivity.diagnostics().getInt("detail"));
+            assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
+            assertEquals(draftSourceLength,MainActivity.diagnostics().getInt("profile_source_length"));
+            MainActivity.emit("critical","内核启动失败：测试权限不足。\n原订阅和输入内容均已保留。");
+            await("The critical error dialog did not appear",()->MainActivity.diagnostics().optBoolean("notice_modal"));
+            shell("input keyevent KEYCODE_BACK");
+            await("Android Back did not dismiss the error dialog while keeping the Activity active",()-> {
+                JSONObject ui=MainActivity.diagnostics();
+                return ui.optBoolean("live") && !ui.optBoolean("notice_active")
+                    && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
+            });
+            assertEquals("Back must preserve the editor under the error dialog",
+                3,MainActivity.diagnostics().getInt("detail"));
+            assertEquals(draftNameLength,MainActivity.diagnostics().getInt("profile_name_length"));
+            assertEquals(draftSourceLength,MainActivity.diagnostics().getInt("profile_source_length"));
             int iteration=0;
-            for (String field:new String[]{"name","source","name"}) {
-                tapTarget("profile_"+field+"_target");
-                await("Subscription "+field+" did not gain Slint focus",()-> {
-                    if (MainActivity.diagnostics().optBoolean("profile_"+field+"_focused")) return true;
-                    tapTarget("profile_"+field+"_target");
-                    SystemClock.sleep(250);
-                    return MainActivity.diagnostics().optBoolean("profile_"+field+"_focused");
-                });
+            for (String field:new String[]{"name","source","name","source","name"}) {
+                tapVisibleProfileField(field);
+                await("Subscription "+field+" did not gain Slint focus",
+                    ()->MainActivity.diagnostics().optBoolean("profile_"+field+"_focused"));
                 await("Focused subscription "+field+" did not show the actual Android IME",ProxyTunTest::imeVisible);
                 await("Slint did not receive the keyboard inset",()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
                 String text=field.equals("name")?"ImeProbe":"https://example.invalid/ime";
-                commitImeText(text);
+                commitImeText(field,text);
                 await("IME text did not reach the subscription "+field,()->MainActivity.diagnostics()
                     .optInt("profile_"+field+"_length",-1)==text.length());
+                SystemClock.sleep(1500);
+                assertEquals("Committed text changed after the input connection settled",
+                    text.length(),MainActivity.diagnostics().getInt("profile_"+field+"_length"));
+                assertTrue("Android IME disappeared after switching to "+field,imeVisible());
+                assertTrue("Slint lost the keyboard inset after switching to "+field,
+                    MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                assertImeLayout(field);
                 captureIme((iteration++)+"-"+field+"-visible");
+                if (iteration<3) continue;
                 shell("input keyevent KEYCODE_BACK");
                 await("Android IME did not hide after Back",()->!imeVisible()
                     && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
                 assertEquals("Back should hide the IME and keep the editor open",3,MainActivity.diagnostics().getInt("detail"));
+                captureIme((iteration-1)+"-"+field+"-hidden");
             }
             shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
             await("Input test Activity did not enter background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
             shell("am start -W -n org.clashofrust.android/.MainActivity");
             await("Input test Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
             waitForAppWindow();
-            tapTarget("profile_source_target");
+            captureIme("before-resumed-tap");
+            verifyRestoredImeAndHide("foreground");
+            tapVisibleProfileField("source");
+            await("Resumed subscription source did not receive touch focus",
+                ()->MainActivity.diagnostics().optBoolean("profile_source_focused"));
             await("Resumed subscription editor did not show the IME",ProxyTunTest::imeVisible);
+            await("Resumed Slint editor did not receive the keyboard inset",
+                ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+            SystemClock.sleep(1500);
+            assertImeLayout("source");
             captureIme("after-resume");
+            shell("input keyevent KEYCODE_BACK");
+            await("Resumed IME did not hide",()->!imeVisible()
+                && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+            android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
+            try {
+                assertTrue("Window manager rejected landscape rotation",
+                    automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+                await("Input surface did not enter landscape",()-> {
+                    JSONObject ui=MainActivity.diagnostics();
+                    return ui.optDouble("width")>ui.optDouble("height");
+                });
+                SystemClock.sleep(1500);
+                verifyRestoredImeAndHide("landscape");
+                for (String field:new String[]{"name","source"}) {
+                    tapVisibleProfileField(field);
+                    await("Landscape subscription "+field+" did not gain focus",
+                        ()->MainActivity.diagnostics().optBoolean("profile_"+field+"_focused"));
+                    await("Landscape editor did not show the IME",ProxyTunTest::imeVisible);
+                    await("Landscape Slint editor did not receive the keyboard inset",
+                        ()->MainActivity.diagnostics().optDouble("keyboard_inset")>0);
+                    SystemClock.sleep(1500);
+                    assertImeLayout(field);
+                    captureIme("landscape-"+field+"-visible");
+                }
+                shell("input keyevent KEYCODE_BACK");
+                await("Landscape keyboard inset did not clear",()->!imeVisible()
+                    && MainActivity.diagnostics().optDouble("keyboard_inset")==0);
+            } catch (Exception | AssertionError error) {
+                try {captureIme("landscape-failure");}
+                catch (Exception | AssertionError snapshot) {error.addSuppressed(snapshot);}
+                throw error;
+            } finally {
+                automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0);
+                try {
+                    await("Input surface did not return to portrait",()-> {
+                        JSONObject ui=MainActivity.diagnostics();
+                        return ui.optDouble("height")>ui.optDouble("width");
+                    });
+                } finally {automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE);}
+            }
+            SystemClock.sleep(1500);
+            verifyRestoredImeAndHide("portrait");
             captureIme("final");
         } catch (Exception | AssertionError error) {
             try {captureIme("failure");}
@@ -419,6 +743,8 @@ public class ProxyTunTest {
     private static String read(URL url, java.net.Proxy proxy, String secret) throws Exception {
         HttpURLConnection connection = (HttpURLConnection)url.openConnection(proxy);
         connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
+        connection.setUseCaches(false);
+        connection.setRequestProperty("Cache-Control", "no-store");
         connection.setRequestProperty("Connection", "close");
         if (secret != null) connection.setRequestProperty("Authorization", "Bearer " + secret);
         try (InputStream in = connection.getInputStream()) {
@@ -454,26 +780,72 @@ public class ProxyTunTest {
             return node.getChecked() == android.view.accessibility.AccessibilityNodeInfo.CHECKED_STATE_TRUE;
         return node.isChecked();
     }
+    private static void logConsentNode(android.view.accessibility.AccessibilityNodeInfo node,
+            int depth, StringBuilder details) {
+        if (node==null || depth>5 || details.length()>4000) return;
+        details.append('\n').append(depth).append(' ')
+            .append(node.getPackageName()).append(' ').append(node.getClassName()).append(' ')
+            .append(node.getViewIdResourceName()).append(" enabled=").append(node.isEnabled())
+            .append(" clickable=").append(node.isClickable());
+        for (int index=0;index<node.getChildCount();index++)
+            logConsentNode(node.getChild(index),depth+1,details);
+    }
+    private static android.view.accessibility.AccessibilityNodeInfo consentRoot(android.app.UiAutomation automation) {
+        android.view.accessibility.AccessibilityNodeInfo active=automation.getRootInActiveWindow();
+        if (active!=null && "com.android.vpndialogs".contentEquals(active.getPackageName())) return active;
+        for (android.view.accessibility.AccessibilityWindowInfo window:automation.getWindows()) {
+            if (!window.isActive() && !window.isFocused()) continue;
+            android.view.accessibility.AccessibilityNodeInfo root=window.getRoot();
+            if (root!=null && "com.android.vpndialogs".contentEquals(root.getPackageName())) return root;
+        }
+        return null;
+    }
     private static void consent(boolean allow) throws Exception {
-        java.util.concurrent.atomic.AtomicBoolean clicked=new java.util.concurrent.atomic.AtomicBoolean();
-        await("Android VPN consent did not return to the app",()-> {
-            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation()
-                .getUiAutomation().getRootInActiveWindow();
-            if (root==null) return false;
-            if ("org.clashofrust.android".contentEquals(root.getPackageName()))
-                return clicked.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true);
-            if (!"com.android.vpndialogs".contentEquals(root.getPackageName())) return false;
-            for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
-                if (check.isCheckable() && !checked(check))
-                    check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
-            // Accessibility can accept an action against a closing window.
-            // Wait for the actual return so the next consent uses its own dialog.
-            for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
-                allow ? "android:id/button1" : "android:id/button2"))
-                if (button.isEnabled() && button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
-                    clicked.set(true);
-            return false;
-        });
+        android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        android.accessibilityservice.AccessibilityServiceInfo service=automation.getServiceInfo();
+        if (service==null) throw new IOException("Android accessibility automation is unavailable");
+        int originalFlags=service.flags;
+        service.flags |= android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            | android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        automation.setServiceInfo(service);
+        java.util.concurrent.atomic.AtomicBoolean attempted=new java.util.concurrent.atomic.AtomicBoolean();
+        try {
+            await("Android VPN consent did not return to the app",()-> {
+                if (attempted.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true))
+                    return true;
+                android.view.accessibility.AccessibilityNodeInfo root=consentRoot(automation);
+                if (root==null) return false;
+                for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
+                    if (check.isCheckable() && !checked(check))
+                        check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
+                    allow ? "android:id/button1" : "android:id/button2")) {
+                    if (button.isEnabled()) {
+                        attempted.set(true);
+                        button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                    }
+                }
+                return false;
+            });
+        } catch (AssertionError error) {
+            try {
+                StringBuilder details=new StringBuilder("VPN consent accessibility tree; attempted=")
+                    .append(attempted.get());
+                logConsentNode(automation.getRootInActiveWindow(),0,details);
+                for (android.view.accessibility.AccessibilityWindowInfo window:automation.getWindows()) {
+                    details.append("\nwindow active=").append(window.isActive())
+                        .append(" focused=").append(window.isFocused());
+                    logConsentNode(window.getRoot(),0,details);
+                }
+                android.util.Log.w("ClashOfRustTest",details.toString());
+            } catch (RuntimeException failure) {
+                error.addSuppressed(failure);
+            }
+            throw error;
+        } finally {
+            service.flags=originalFlags;
+            automation.setServiceInfo(service);
+        }
     }
     private static void authorization(long request,String status) throws Exception {
         await("VPN authorization did not reach "+status,()-> {
@@ -593,6 +965,19 @@ public class ProxyTunTest {
         } while (SystemClock.elapsedRealtime()<deadline);
         throw new IOException("VPN data path did not become ready; before="+before+"; "+networkState(),last);
     }
+    private static void tunResolvesAndCarriesHttp() throws Exception {
+        long deadline=SystemClock.elapsedRealtime()+15000;
+        IOException last=null;
+        do {
+            try {
+                assertEquals("cor-android-network-ok",read(
+                    URI.create("http://android-tun.test:18081/probe").toURL(),java.net.Proxy.NO_PROXY,null));
+                return;
+            } catch (IOException transition) {last=transition;}
+            SystemClock.sleep(100);
+        } while (SystemClock.elapsedRealtime()<deadline);
+        throw new IOException("VPN hostname traffic did not become ready; "+networkState(),last);
+    }
     private static String interfaceCounters(ConnectivityManager manager) {
         LinkProperties properties=manager.getLinkProperties(manager.getActiveNetwork());
         String device=properties==null ? null : properties.getInterfaceName();
@@ -660,68 +1045,713 @@ public class ProxyTunTest {
         try (Socket connection=new Socket(java.net.Proxy.NO_PROXY)) {
             connection.connect(new InetSocketAddress("198.51.100.1",18081),5000);
             connection.setSoTimeout(5000);
-            connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\n\r\n")
+            connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\nContent-Length: 1\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
-            BufferedReader stream=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.US_ASCII));
-            assertHeldResponse(stream);
-            JSONObject records=new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
-            JSONArray connections=records.getJSONArray("connections");
-            boolean observed=false;
-            for (int i=0;i<connections.length();i++) {
-                JSONObject record=connections.getJSONObject(i);
-                JSONObject metadata=record.getJSONObject("metadata");
-                if (metadata.optString("type").equalsIgnoreCase("Tun")
-                    && metadata.optInt("sourcePort")==connection.getLocalPort()
-                    && metadata.optInt("destinationPort")==18081
-                    && record.getJSONArray("chains").toString().contains("CI-TUN-origin")) observed=true;
-            }
-            assertTrue("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
-                +"; a direct-only test must fail; records="+records,observed);
+            assertHeldResponse(connection.getInputStream());
+            long deadline=SystemClock.elapsedRealtime()+5000;
+            JSONObject records;
+            do {
+                records=new JSONObject(read(new URL("http://"+controller+"/connections"),java.net.Proxy.NO_PROXY,secret));
+                JSONArray connections=records.getJSONArray("connections");
+                for (int index=0;index<connections.length();index++) {
+                    JSONObject record=connections.getJSONObject(index);
+                    JSONObject metadata=record.getJSONObject("metadata");
+                    JSONArray chains=record.getJSONArray("chains");
+                    for (int chain=0;chain<chains.length();chain++)
+                        if (metadata.optString("type").equalsIgnoreCase("Tun")
+                            && metadata.optInt("sourcePort")==connection.getLocalPort()
+                            && metadata.optInt("destinationPort")==18081
+                            && "CI-TUN-origin".equals(chains.optString(chain))) {
+                            connection.getOutputStream().write('!');
+                            return;
+                        }
+                }
+                SystemClock.sleep(100);
+            } while (SystemClock.elapsedRealtime()<deadline);
+            fail("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
+                +"; a direct-only test must fail; records="+records);
         }
     }
-    private static void assertHeldResponse(BufferedReader stream) throws IOException {
-        String status=stream.readLine();
-        if (status==null) throw new EOFException("Held TUN request returned no HTTP response");
-        assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
-        boolean headersComplete=false;
-        for (int header=0;header<100;header++) {
-            String line=stream.readLine();
-            if (line==null) throw new EOFException("Held HTTP headers were truncated");
-            if (line.isEmpty()) {headersComplete=true;break;}
+    private static void assertHeldResponse(InputStream stream) throws IOException {
+        ByteArrayOutputStream header=new ByteArrayOutputStream();
+        int ending=0;
+        while (ending<4 && header.size()<8192) {
+            int value=stream.read();
+            if (value<0) throw new EOFException("Held HTTP headers were truncated");
+            header.write(value);
+            int expected=ending%2==0 ? '\r' : '\n';
+            ending=value==expected ? ending+1 : value=='\r' ? 1 : 0;
         }
-        assertTrue("Too many held HTTP headers",headersComplete);
+        assertEquals("Held HTTP headers exceed the size limit",4,ending);
+        String status=header.toString(StandardCharsets.US_ASCII.name()).split("\r\n",2)[0];
+        assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
         if (stream.read()<0) throw new EOFException("Held HTTP response returned no body");
     }
     @Test public void heldResponseClassifiesTruncationAsTransportFailure() throws Exception {
         for (String raw:new String[]{"", "HTTP/1.1 200 OK\r\nX-Test: 1\r\n", "HTTP/1.1 200 OK\r\n\r\n"}) {
             try {
-                assertHeldResponse(new BufferedReader(new StringReader(raw)));
+                assertHeldResponse(new ByteArrayInputStream(raw.getBytes(StandardCharsets.US_ASCII)));
                 fail("Truncated HTTP response must fail");
             } catch (EOFException expected) { /* The existing readiness loop may open a fresh connection. */ }
         }
         AssertionError rejected=null;
-        try {assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 403 Forbidden\r\n\r\nx")));}
+        try {assertHeldResponse(new ByteArrayInputStream("HTTP/1.1 403 Forbidden\r\n\r\nx".getBytes(StandardCharsets.US_ASCII)));}
         catch (AssertionError error) {rejected=error;}
         assertNotNull("An HTTP error must fail without a readiness retry",rejected);
-        assertHeldResponse(new BufferedReader(new StringReader("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx")));
+        assertHeldResponse(new ByteArrayInputStream("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx".getBytes(StandardCharsets.US_ASCII)));
     }
+    private static JSONArray previewBounds(JSONObject ui, String name) {
+        JSONObject targets = ui.optJSONObject("targets");
+        return targets == null ? null : targets.optJSONArray(name);
+    }
+    private static boolean tryPreviewTarget(String name) throws Exception {
+        if (!inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true)) return false;
+        dismissErrorDialogIfPresent(false);
+        JSONObject ui = MainActivity.diagnostics();
+        JSONArray bounds = previewBounds(ui, name);
+        if (!ui.optBoolean("live") || bounds == null || bounds.length() != 4
+                || bounds.optDouble(2) <= 0 || bounds.optDouble(3) <= 0) return false;
+        double x = bounds.getDouble(0) + bounds.getDouble(2) / 2;
+        double y = bounds.getDouble(1) + bounds.getDouble(3) / 2;
+        if (x < 0 || y < 0 || x >= ui.getDouble("width") || y >= ui.getDouble("height")) return false;
+        float scale = (float)ui.getDouble("scale");
+        MainActivity activity = resumedActivity();
+        if (activity == null) return false;
+        int[] origin = new int[2];
+        java.util.concurrent.atomic.AtomicBoolean ready = new java.util.concurrent.atomic.AtomicBoolean();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            android.view.View decor = activity.getWindow().getDecorView();
+            if (activity.hasWindowFocus() && decor.isAttachedToWindow() && decor.isShown()
+                    && Math.abs(decor.getWidth() - ui.optDouble("width") * scale) <= 2
+                    && Math.abs(decor.getHeight() - ui.optDouble("height") * scale) <= 2) {
+                decor.getLocationOnScreen(origin);
+                ready.set(true);
+            }
+        });
+        return ready.get() && tryTap(origin[0] + (float)x * scale, origin[1] + (float)y * scale);
+    }
+    private static void previewTarget(String name) throws Exception {
+        await("Screenshot control was unavailable: " + name, () -> tryPreviewTarget(name));
+    }
+    private static void previewSwipe(boolean forward) throws Exception {
+        dismissErrorDialogIfPresent(false);
+        JSONObject ui = MainActivity.diagnostics();
+        JSONArray bounds = previewBounds(ui, "preview-content");
+        assertNotNull("Screenshot content has no measured bounds", bounds);
+        float scale = (float)ui.getDouble("scale");
+        int[] origin = windowOrigin();
+        float x = origin[0] + (float)(bounds.getDouble(0) + bounds.getDouble(2) * 0.55) * scale;
+        float top = origin[1] + (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.22) * scale;
+        float bottom = origin[1] + (float)(bounds.getDouble(1) + bounds.getDouble(3) * 0.78) * scale;
+        float start = forward ? bottom : top, end = forward ? top : bottom;
+        long down = SystemClock.uptimeMillis();
+        pointer(MotionEvent.ACTION_DOWN, x, start, down, down);
+        for (int index = 1; index <= 12; index++) {
+            SystemClock.sleep(20);
+            pointer(MotionEvent.ACTION_MOVE, x, start + (end - start) * index / 12, down, SystemClock.uptimeMillis());
+        }
+        pointer(MotionEvent.ACTION_UP, x, end, down, SystemClock.uptimeMillis());
+        SystemClock.sleep(500);
+    }
+    private static void previewNavigate(int page) throws Exception {
+        await("Could not navigate to screenshot page " + page, () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            if (ui.optInt("page", -1) == page && ui.optInt("detail", -1) == 0) return true;
+            tryPreviewTarget("preview-nav:" + page);
+            SystemClock.sleep(350);
+            return false;
+        });
+    }
+    private static void previewTool(int page) throws Exception {
+        previewNavigate(10);
+        for (int attempt = 0; attempt < 5; attempt++) {
+            JSONObject ui = MainActivity.diagnostics();
+            JSONArray bounds = previewBounds(ui, "preview-tool:" + page);
+            JSONArray content = previewBounds(ui, "preview-content");
+            if (bounds != null && content != null && bounds.length() == 4 && content.length() == 4) {
+                double center = bounds.getDouble(1) + bounds.getDouble(3) / 2;
+                if (center >= content.getDouble(1) && center < content.getDouble(1) + content.getDouble(3)) {
+                    previewTarget("preview-tool:" + page);
+                    await("Tool page did not open: " + page,
+                        () -> MainActivity.diagnostics().optInt("page", -1) == page);
+                    return;
+                }
+                previewSwipe(center > content.getDouble(1));
+            } else {
+                SystemClock.sleep(350);
+            }
+        }
+        fail("Tool is outside the screenshot viewport: " + page);
+    }
+    private static android.graphics.Bitmap previewWindowBitmap() throws Exception {
+        java.util.concurrent.atomic.AtomicReference<MainActivity> focused = new java.util.concurrent.atomic.AtomicReference<>();
+        await("Screenshot activity did not regain focus", () -> {
+            focused.set(resumedActivity());
+            return focused.get() != null;
+        });
+        MainActivity activity = focused.get();
+        java.util.concurrent.atomic.AtomicReference<android.graphics.Bitmap> bitmap =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<RuntimeException> failure =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger result = new java.util.concurrent.atomic.AtomicInteger(-1);
+        java.util.concurrent.CountDownLatch completed = new java.util.concurrent.CountDownLatch(1);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            try {
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.graphics.Bitmap target = android.graphics.Bitmap.createBitmap(
+                    decor.getWidth(), decor.getHeight(), android.graphics.Bitmap.Config.ARGB_8888);
+                bitmap.set(target);
+                android.view.PixelCopy.request(activity.getWindow(), target, status -> {
+                    result.set(status);
+                    completed.countDown();
+                }, new android.os.Handler(android.os.Looper.getMainLooper()));
+            } catch (RuntimeException error) {
+                failure.set(error);
+                completed.countDown();
+            }
+        });
+        assertTrue("Window screenshot timed out", completed.await(10, java.util.concurrent.TimeUnit.SECONDS));
+        if (failure.get() != null) throw failure.get();
+        assertEquals("Could not copy the Slint window surface", android.view.PixelCopy.SUCCESS, result.get());
+        return bitmap.get();
+    }
+    private static double previewBlackRatio(android.graphics.Bitmap bitmap) {
+        int black = 0, sampled = 0;
+        int stepX = Math.max(1, bitmap.getWidth() / 64);
+        int stepY = Math.max(1, bitmap.getHeight() / 64);
+        for (int row = stepY / 2; row < bitmap.getHeight(); row += stepY) {
+            for (int column = stepX / 2; column < bitmap.getWidth(); column += stepX) {
+                int color = bitmap.getPixel(column, row);
+                if (android.graphics.Color.alpha(color) < 128
+                        || (android.graphics.Color.red(color) < 8 && android.graphics.Color.green(color) < 8
+                            && android.graphics.Color.blue(color) < 8)) black++;
+                sampled++;
+            }
+        }
+        return (double)black / sampled;
+    }
+    private static void capturePreview(File directory, JSONArray cases, String name) throws Exception {
+        waitForAppWindow();
+        SystemClock.sleep(400);
+        JSONObject ui = MainActivity.diagnostics();
+        assertTrue("Screenshot is not from the live Slint window: " + name, ui.optBoolean("live"));
+        assertFalse("Screenshot preview must not start VPN", TunnelService.connected() || TunnelService.pending());
+        int[] origin = windowOrigin();
+        ui.put("window_origin_px", new JSONArray().put(origin[0]).put(origin[1]));
+        android.graphics.Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+        assertNotNull("Could not capture " + name, screenshot);
+        String screenImage = name + "-screen.png";
+        try (OutputStream output = new FileOutputStream(new File(directory, screenImage))) {
+            assertTrue("Could not encode " + name, screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
+        } finally { screenshot.recycle(); }
+        android.graphics.Bitmap window = previewWindowBitmap();
+        int width = window.getWidth(), height = window.getHeight();
+        double blackRatio = previewBlackRatio(window);
+        try (OutputStream output = new FileOutputStream(new File(directory, name + ".png"))) {
+            assertTrue("Could not encode the window " + name,
+                window.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
+        } finally { window.recycle(); }
+        double scale = ui.getDouble("scale");
+        assertEquals("Screenshot window width differs from Slint", Math.round(ui.getDouble("width") * scale), width, 2);
+        assertEquals("Screenshot window height differs from Slint", Math.round(ui.getDouble("height") * scale), height, 2);
+        assertTrue("Screenshot window contains excessive black or transparent pixels: " + blackRatio, blackRatio <= 0.2);
+        cases.put(new JSONObject().put("name", name).put("image", name + ".png")
+            .put("screen_image", screenImage).put("capture_method", "pixelcopy-window")
+            .put("black_sample_ratio", blackRatio)
+            .put("pixel_width", width).put("pixel_height", height).put("state", ui));
+        JSONObject manifest = new JSONObject().put("schema", 3).put("scope", "android-ui-preview")
+            .put("android_api", Build.VERSION.SDK_INT).put("android_release", Build.VERSION.RELEASE)
+            .put("cases", cases);
+        java.nio.file.Files.write(new File(directory, "manifest.json").toPath(),
+            manifest.toString(2).getBytes(StandardCharsets.UTF_8));
+    }
+    private static void previewSettingsTop() throws Exception {
+        for (int attempt = 0; attempt < 6 && MainActivity.diagnostics().optDouble("settings_scroll_y") < -2; attempt++)
+            previewSwipe(false);
+        assertTrue("Settings did not return to its top",
+            MainActivity.diagnostics().optDouble("settings_scroll_y") >= -2);
+    }
+    private static void previewSettings(File directory, JSONArray cases, String prefix) throws Exception {
+        previewNavigate(9);
+        previewSettingsTop();
+        capturePreview(directory, cases, prefix + "-settings-top");
+        previewSwipe(true);
+        capturePreview(directory, cases, prefix + "-settings-middle");
+        previewSwipe(true);
+        capturePreview(directory, cases, prefix + "-settings-bottom");
+        previewSettingsTop();
+    }
+    private static void previewApplicationCatalog(Context context) throws Exception {
+        JSONObject catalog = ApplicationCatalog.read(context);
+        JSONArray entries = catalog.getJSONArray("applications");
+        java.util.Set<String> selected = ApplicationRouting.load(context).packages;
+        int expected = 0, other = 0, icons = 0;
+        for (int index = 0; index < entries.length(); index++) {
+            JSONObject item = entries.getJSONObject(index);
+            boolean visible = item.getBoolean("launchable") || !item.getBoolean("system")
+                || selected.contains(item.getString("package"));
+            if (visible) {
+                expected++;
+                if (!context.getPackageName().equals(item.getString("package"))) other++;
+                String icon = item.getString("icon");
+                if (!icon.isEmpty() && new File(icon).isFile()) icons++;
+            }
+        }
+        JSONObject ui = MainActivity.diagnostics();
+        assertEquals("Application enumeration failed: " + ui, "", ui.getString("applications_error"));
+        assertEquals(entries.length(), ui.getInt("applications_total"));
+        boolean all = ui.getInt("applications_mode") == 0;
+        assertEquals(all ? 0 : expected, ui.getInt("applications_visible"));
+        assertTrue("The emulator has no other visible applications", other > 0);
+        assertFalse("Application visibility was incorrectly reported as restricted", catalog.getBoolean("visibility_limited"));
+        assertTrue("No installed application icon was loaded", icons > 0);
+        if (all) assertEquals("All applications must hide the list and icons", 0, ui.getInt("applications_icons"));
+        else assertTrue("Slint did not receive application icons", ui.getInt("applications_icons") > 0);
+        assertEquals("Saved routing summary is missing", catalog.getString("summary"), ui.getString("applications_saved_summary"));
+    }
+    private static void openApplicationRouting() throws Exception {
+        previewNavigate(9);
+        previewSettingsTop();
+        waitForAppWindow();
+        java.util.concurrent.atomic.AtomicReference<String> previous = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicLong stableSince = new java.util.concurrent.atomic.AtomicLong();
+        await("Application routing entry layout did not settle", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            JSONArray bounds = previewBounds(ui, "preview-application-routing");
+            if (bounds == null || bounds.length() != 4 || bounds.optDouble(2) <= 0 || bounds.optDouble(3) <= 0) return false;
+            String geometry = bounds.toString() + "/" + ui.optDouble("width") + "/" + ui.optDouble("height");
+            long now = SystemClock.uptimeMillis();
+            if (!geometry.equals(previous.getAndSet(geometry))) stableSince.set(now);
+            return now - stableSince.get() >= 250;
+        });
+        previewTarget("preview-application-routing");
+        await("Application enumeration did not finish", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optInt("detail") == 18 && !ui.optBoolean("applications_loading")
+                && (ui.optBoolean("applications_loaded") || !ui.optString("applications_error").isEmpty());
+        });
+    }
+    private static void applicationMode(int mode) throws Exception {
+        JSONObject before = MainActivity.diagnostics();
+        int previous = before.getInt("applications_mode");
+        int total = before.getInt("applications_total");
+        int selected = before.getInt("applications_selected");
+        int expected = previous == mode || mode == 0 ? selected
+            : previous == 0 ? (mode == 1 ? total : 0) : total - selected;
+        previewTarget("preview-applications-mode:" + mode);
+        await("Application routing mode or automatic inversion did not apply: " + mode, () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            if (!ui.optString("applications_error").isEmpty())
+                throw new IOException(ui.getString("applications_error"));
+            if (ui.optInt("applications_mode", -1) == mode
+                    && ui.optInt("applications_selected", -1) == expected) return true;
+            if (ui.optInt("applications_mode", -1) == previous && previous != mode) {
+                tryPreviewTarget("preview-applications-mode:" + mode);
+                SystemClock.sleep(350);
+            }
+            return false;
+        });
+        if (mode == 0)
+            assertEquals("All applications must remove the selection list", 0,
+                MainActivity.diagnostics().getInt("applications_visible"));
+    }
+    private static void previewApplications(Context context, File directory, JSONArray cases,
+            String prefix, boolean modes) throws Exception {
+        openApplicationRouting();
+        previewApplicationCatalog(context);
+        applicationMode(0);
+        capturePreview(directory, cases, prefix + "-applications-all");
+        applicationMode(1);
+        capturePreview(directory, cases, prefix + "-applications-default");
+        if (modes) {
+            previewTarget("preview-applications-system");
+            await("System components did not become visible",
+                () -> MainActivity.diagnostics().optBoolean("applications_system"));
+            capturePreview(directory, cases, prefix + "-applications-system");
+            previewTarget("preview-applications-system");
+            await("System component filter did not return",
+                () -> !MainActivity.diagnostics().optBoolean("applications_system"));
+            for (int round = 0; round < 3; round++) {
+                applicationMode(2);
+                applicationMode(2);
+                if (round == 0) capturePreview(directory, cases, prefix + "-applications-exclude");
+                applicationMode(1);
+                applicationMode(1);
+            }
+            capturePreview(directory, cases, prefix + "-applications-only");
+        }
+        double beforeScroll = MainActivity.diagnostics().getDouble("applications_scroll_y");
+        previewSwipe(true);
+        await("Application list did not scroll",
+            () -> MainActivity.diagnostics().getDouble("applications_scroll_y") < beforeScroll - 1);
+        capturePreview(directory, cases, prefix + "-applications-scrolled");
+        boolean dirty = MainActivity.diagnostics().getBoolean("applications_dirty");
+        shell("input keyevent KEYCODE_BACK");
+        if (dirty) {
+            await("Unsaved application changes did not request confirmation",
+                () -> MainActivity.diagnostics().optInt("detail") == 12);
+            if (modes) capturePreview(directory, cases, prefix + "-applications-unsaved");
+            previewTarget("preview-discard");
+        }
+        await("Application routing did not return to settings",
+            () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+    }
+    private static void previewPrimaryPages(File directory, JSONArray cases, String prefix) throws Exception {
+        waitForAppWindow();
+        previewNavigate(0);
+        capturePreview(directory, cases, prefix + "-home");
+        previewNavigate(1);
+        await("Proxy groups were not loaded", () -> MainActivity.diagnostics().optInt("groups") > 0);
+        capturePreview(directory, cases, prefix + "-proxies-grid");
+        previewTarget("nodes-view");
+        await("Proxy list view did not open", () -> MainActivity.diagnostics().optBoolean("nodes_list"));
+        capturePreview(directory, cases, prefix + "-proxies-list");
+        previewTarget("nodes-view");
+        await("Proxy grid view did not return", () -> !MainActivity.diagnostics().optBoolean("nodes_list"));
+        previewNavigate(2);
+        await("Subscriptions were not loaded", () -> MainActivity.diagnostics().optInt("profiles") > 0);
+        capturePreview(directory, cases, prefix + "-subscriptions-grid");
+        previewTarget("profiles-view");
+        await("Subscription list view did not open", () -> MainActivity.diagnostics().optBoolean("profiles_list"));
+        capturePreview(directory, cases, prefix + "-subscriptions-list");
+        previewTarget("profiles-view");
+        await("Subscription grid view did not return", () -> !MainActivity.diagnostics().optBoolean("profiles_list"));
+    }
+    @Test public void androidUiPreviewCapturesPagesAndApplications() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        String before = ApplicationRouting.load(context).summary();
+        File directory = new File(context.getExternalFilesDir(null), "application-preview");
+        assertTrue(directory.isDirectory() || directory.mkdirs());
+        JSONArray cases = new JSONArray();
+        android.app.UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            await("Slint did not start for Android screenshots", () -> MainActivity.diagnostics().optBoolean("live"));
+            await("Android screenshot activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+            waitForAppWindow();
+            if (MainActivity.diagnostics().optBoolean("notice_error")) {
+                capturePreview(directory, cases, "startup-error");
+                dismissErrorDialogIfPresent(false);
+            }
+            previewApplications(context, directory, cases, "phone", true);
+            previewPrimaryPages(directory, cases, "phone");
+            tapTarget("profile_add_target");
+            await("Subscription editor did not open", () -> MainActivity.diagnostics().optInt("detail") == 3);
+            capturePreview(directory, cases, "phone-subscription-editor");
+            shell("input keyevent KEYCODE_BACK");
+            await("Subscription editor did not close", () -> MainActivity.diagnostics().optInt("detail") == 0);
+            previewNavigate(10);
+            capturePreview(directory, cases, "phone-tools");
+            for (int page = 3; page <= 8; page++) {
+                previewTool(page);
+                String[] names = {"connections", "rules", "logs", "network", "ip", "ai"};
+                capturePreview(directory, cases, "phone-" + names[page - 3]);
+                if (page == 4) {
+                    previewTarget("rule-shortcuts-open");
+                    await("Rule shortcuts did not open", () -> MainActivity.diagnostics().optBoolean("shortcuts_open"));
+                    capturePreview(directory, cases, "phone-rule-shortcuts");
+                    shell("input keyevent KEYCODE_BACK");
+                    await("Rule shortcuts did not close", () -> !MainActivity.diagnostics().optBoolean("shortcuts_open"));
+                }
+            }
+            previewSettings(directory, cases, "phone");
+            assertTrue("Window manager rejected landscape rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+            await("Phone did not enter landscape", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optDouble("width") > ui.optDouble("height");
+            });
+            previewPrimaryPages(directory, cases, "landscape");
+            previewSettings(directory, cases, "landscape");
+            previewApplications(context, directory, cases, "landscape", false);
+            assertTrue("Window manager rejected portrait rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0));
+            await("Phone did not return to portrait before tablet resize", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optDouble("width") < ui.optDouble("height");
+            });
+            shell("wm size 800x1280");
+            shell("wm density 160");
+            assertTrue("Window manager rejected tablet portrait rotation",
+                automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0));
+            await("Tablet portrait viewport was not applied", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return Math.abs(ui.optDouble("scale") - 1.0) < 0.001
+                    && ui.optDouble("width") >= 760 && ui.optDouble("height") > ui.optDouble("width");
+            });
+            previewPrimaryPages(directory, cases, "tablet-portrait");
+            previewSettings(directory, cases, "tablet-portrait");
+            previewApplications(context, directory, cases, "tablet-portrait", false);
+            assertTrue("Window manager rejected tablet rotation", automation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90));
+            await("Tablet landscape viewport was not applied", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return Math.abs(ui.optDouble("scale") - 1.0) < 0.001
+                    && ui.optDouble("width") >= 1024 && ui.optDouble("width") > ui.optDouble("height");
+            });
+            previewPrimaryPages(directory, cases, "tablet-landscape");
+            previewSettings(directory, cases, "tablet-landscape");
+            previewApplications(context, directory, cases, "tablet-landscape", false);
+            assertEquals("Preview must not save application routing", before, ApplicationRouting.load(context).summary());
+            assertFalse("Preview must not start VPN", TunnelService.connected() || TunnelService.pending());
+        } catch (Exception | AssertionError error) {
+            try { capturePreview(directory, cases, "failure"); }
+            catch (Exception | AssertionError snapshot) { error.addSuppressed(snapshot); }
+            throw error;
+        } finally {
+            shell("wm size reset");
+            shell("wm density reset");
+            automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE);
+        }
+    }
+    @Test public void applicationRoutingPersistsAndKeepsOtherAppsOnline() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        android.content.pm.ApplicationInfo bundled = new android.content.pm.ApplicationInfo();
+        bundled.flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM;
+        assertTrue("Preinstalled launchable apps must remain selectable",
+            ApplicationCatalog.visibleWithoutComponents(bundled, true, false));
+        assertFalse("Non-launchable system components are hidden by default",
+            ApplicationCatalog.visibleWithoutComponents(bundled, false, false));
+        assertTrue("Filtering must not hide selected system components",
+            ApplicationCatalog.visibleWithoutComponents(bundled, false, true));
+        bundled.flags = 0;
+        assertTrue("Background user applications must remain selectable",
+            ApplicationCatalog.visibleWithoutComponents(bundled, false, false));
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("Native core did not restore for application routing", CoreBridge::ready);
+        assertNull("Application routing requires the consent granted by the preceding VPN test", VpnService.prepare(context));
+        android.content.SharedPreferences preferences = context.getSharedPreferences("vpn", Context.MODE_PRIVATE);
+        ApplicationRouting original = ApplicationRouting.load(preferences);
+        android.content.SharedPreferences migration = context.getSharedPreferences("routing-regression", Context.MODE_PRIVATE);
+        String self = context.getPackageName();
+        String other = "com.android.shell";
+        context.getPackageManager().getApplicationInfo(other, 0);
+        String removed = "org.clashofrust.uninstalled.regression";
+        try {
+            context.getPackageManager().getApplicationInfo(removed, 0);
+            fail("The removed-application fixture must not be installed");
+        } catch (android.content.pm.PackageManager.NameNotFoundException expected) {
+            assertNotNull(expected);
+        }
+        try {
+            assertTrue(migration.edit().clear().commit());
+            assertEquals(ApplicationRouting.ALL, ApplicationRouting.load(migration).mode);
+            assertTrue(migration.edit().putStringSet("excluded", java.util.Collections.singleton(self)).commit());
+            ApplicationRouting legacy = ApplicationRouting.load(migration);
+            assertEquals(ApplicationRouting.EXCLUDE, legacy.mode);
+            assertEquals(java.util.Collections.singleton(self), legacy.packages);
+            legacy.persist(migration);
+            assertEquals(ApplicationRouting.EXCLUDE, ApplicationRouting.load(migration).mode);
+            assertEquals(java.util.Collections.singleton(self), ApplicationRouting.load(migration).packages);
+            ApplicationRouting protectedRouting = ApplicationRouting.effective(legacy, true);
+            assertEquals(ApplicationRouting.ALL, protectedRouting.mode);
+            assertTrue(protectedRouting.packages.isEmpty());
+            assertEquals(java.util.Collections.singleton(self), legacy.packages);
+            try {
+                new ApplicationRouting(ApplicationRouting.ONLY, java.util.Collections.emptySet()).save(context);
+                fail("An empty allowlist must never capture every application");
+            } catch (IllegalArgumentException expected) {
+                assertEquals("请至少选择一个应用", expected.getMessage());
+            }
+            String raw = CoreBridge.config();
+            assertNetworkProfile(raw);
+            String controller = value(raw, "external-controller");
+            String secret = value(raw, "secret");
+            ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+            new ApplicationRouting(ApplicationRouting.ONLY, java.util.Collections.singleton(self)).save(context);
+            openApplicationRouting();
+            previewApplicationCatalog(context);
+            java.util.Set<String> available = new java.util.HashSet<>();
+            JSONArray catalog = ApplicationCatalog.read(context).getJSONArray("applications");
+            for (int index = 0; index < catalog.length(); index++)
+                available.add(catalog.getJSONObject(index).getString("package"));
+            java.util.Set<String> complement = new java.util.HashSet<>(available);
+            complement.remove(self);
+            for (int round = 0; round < 3; round++) {
+                applicationMode(2);
+                applicationMode(2);
+                assertTrue("Mode changes must remain drafts", MainActivity.diagnostics().getBoolean("applications_dirty"));
+                assertEquals(java.util.Collections.singleton(self), ApplicationRouting.load(context).packages);
+                applicationMode(1);
+                applicationMode(1);
+                assertFalse("A full round trip must restore the saved state",
+                    MainActivity.diagnostics().getBoolean("applications_dirty"));
+            }
+            applicationMode(2);
+            previewTarget("preview-applications-save");
+            await("UI save did not persist the inverted selection", () -> {
+                ApplicationRouting saved = ApplicationRouting.load(context);
+                return ApplicationRouting.EXCLUDE.equals(saved.mode) && complement.equals(saved.packages)
+                    && !MainActivity.diagnostics().optBoolean("applications_dirty", true);
+            });
+            TunnelService.start(context, false);
+            await("The inverted exclusion must keep this application inside VPN", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected() && vpnActive(connectivity);
+            });
+            tunCarriesSocket(controller, secret);
+            shell("input keyevent KEYCODE_BACK");
+            await("Saved editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            openApplicationRouting();
+            assertEquals(2, MainActivity.diagnostics().getInt("applications_mode"));
+            assertEquals(complement.size(), MainActivity.diagnostics().getInt("applications_selected"));
+            applicationMode(1);
+            long invertedGeneration = TunnelService.generation();
+            previewTarget("preview-applications-save");
+            await("Returning to only-selected must save and reconnect automatically", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                ApplicationRouting saved = ApplicationRouting.load(context);
+                return ApplicationRouting.ONLY.equals(saved.mode)
+                    && java.util.Collections.singleton(self).equals(saved.packages)
+                    && TunnelService.generation() > invertedGeneration
+                    && TunnelService.connected() && vpnActive(connectivity)
+                    && !MainActivity.diagnostics().optBoolean("applications_dirty", true);
+            });
+            tunCarriesSocket(controller, secret);
+            applicationMode(0);
+            applicationMode(2);
+            assertEquals(0, MainActivity.diagnostics().getInt("applications_selected"));
+            applicationMode(0);
+            applicationMode(1);
+            assertEquals(available.size(), MainActivity.diagnostics().getInt("applications_selected"));
+            previewTarget("preview-applications-revert");
+            await("Revert must restore the saved mode and selection", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optInt("applications_mode", -1) == 1 && ui.optInt("applications_selected", -1) == 1
+                    && !ui.optBoolean("applications_dirty", true);
+            });
+            applicationMode(0);
+            long allGeneration = TunnelService.generation();
+            previewTarget("preview-applications-save");
+            await("All-applications mode must save and reconnect automatically", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return ApplicationRouting.ALL.equals(ApplicationRouting.load(context).mode)
+                    && TunnelService.generation() > allGeneration
+                    && TunnelService.connected() && vpnActive(connectivity)
+                    && !MainActivity.diagnostics().optBoolean("applications_dirty", true);
+            });
+            tunCarriesSocket(controller, secret);
+            shell("input keyevent KEYCODE_BACK");
+            await("Saved all-applications editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            openApplicationRouting();
+            assertEquals(0, MainActivity.diagnostics().getInt("applications_mode"));
+            assertEquals(0, MainActivity.diagnostics().getInt("applications_visible"));
+            shell("input keyevent KEYCODE_BACK");
+            await("All-applications editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            TunnelService.stop(context);
+            await("UI routing regression did not disconnect VPN", () -> !TunnelService.connected() && !TunnelService.pending());
+            awaitDirectRecovery(connectivity);
+            String[] modes = {ApplicationRouting.ALL, ApplicationRouting.ONLY, ApplicationRouting.ONLY,
+                ApplicationRouting.EXCLUDE, ApplicationRouting.EXCLUDE};
+            String[] packages = {self, self, other, self, other};
+            boolean[] captured = {true, true, false, false, true};
+            for (int index = 0; index < modes.length; index++) {
+                String mode = modes[index];
+                java.util.Set<String> selected = new java.util.HashSet<>(java.util.Collections.singleton(packages[index]));
+                selected.add(removed);
+                new ApplicationRouting(mode, selected).save(context);
+                assertEquals(mode, ApplicationRouting.load(context).mode);
+                boolean throughVpn = captured[index];
+                TunnelService.start(context, false);
+                await("Application routing did not establish VPN for " + mode, () -> {
+                    if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                    return TunnelService.connected();
+                });
+                await("The application's selected route did not match " + mode,
+                    () -> vpnActive(connectivity) == throughVpn);
+                if (throughVpn) tunCarriesSocket(controller, secret);
+                else {
+                    assertEquals("An app outside the VPN must retain direct access", "cor-android-network-ok",
+                        read(new URL("http://10.0.2.2:18081/probe"), java.net.Proxy.NO_PROXY, null));
+                    noTunRoute();
+                }
+                ApplicationRouting cleaned = ApplicationRouting.load(context);
+                if (!ApplicationRouting.ALL.equals(mode)) {
+                    assertFalse("Uninstalled applications must be pruned for " + mode,
+                        cleaned.packages.contains(removed));
+                    assertEquals("Installed applications must remain selected for " + mode,
+                        java.util.Collections.singleton(packages[index]), cleaned.packages);
+                }
+                new ApplicationRouting(ApplicationRouting.ALL, java.util.Collections.emptySet()).save(context);
+                assertEquals("Saving preferences alone must not change the live VPN", throughVpn, vpnActive(connectivity));
+                long previousGeneration = TunnelService.generation();
+                JSONObject saved = ApplicationCatalog.save(context, new JSONObject()
+                    .put("mode", ApplicationRouting.ALL).put("selected", new JSONArray()));
+                assertTrue("Saving while connected must request a VPN reconfiguration", saved.getBoolean("reconnecting"));
+                assertEquals("", saved.getString("reconnect_error"));
+                await("Saved application routing was not applied without a manual reconnect", () -> {
+                    if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                    return TunnelService.generation() > previousGeneration
+                        && TunnelService.connected() && vpnActive(connectivity);
+                });
+                assertEquals(ApplicationRouting.ALL, ApplicationRouting.load(context).mode);
+                tunCarriesSocket(controller, secret);
+                TunnelService.stop(context);
+                await("Application routing left VPN connected", () -> !TunnelService.connected());
+                awaitDirectRecovery(connectivity);
+            }
+            new ApplicationRouting(ApplicationRouting.ONLY,
+                java.util.Collections.singleton(removed)).save(context);
+            TunnelService.start(context, false);
+            await("An entirely uninstalled allowlist was not rejected", () -> !TunnelService.error().isEmpty());
+            assertFalse(TunnelService.connected());
+            assertTrue(ApplicationRouting.load(context).packages.isEmpty());
+            assertFalse("A rejected allowlist must not capture all apps", vpnActive(connectivity));
+        } finally {
+            TunnelService.stop(context);
+            await("Application routing cleanup did not stop VPN", () -> !TunnelService.connected() && !TunnelService.pending());
+            original.persist(preferences);
+            assertTrue(migration.edit().clear().commit());
+        }
+    }
+
+    @Test public void basicSystemProxyAndTun() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        persistNetworkProfile(context);
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("Native UI did not start its core", CoreBridge::ready);
+        await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        waitForAppWindow();
+        String raw = CoreBridge.config();
+        assertNetworkProfile(raw);
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        assertNotNull("Test must start without pre-granted VPN consent", VpnService.prepare(context));
+        activity.request("{\"op\":\"authorize-vpn\",\"request\":103}");
+        authorization(103, "pending");
+        consent(true);
+        authorization(103, "granted");
+        assertNull(VpnService.prepare(context));
+        String secret = value(raw, "secret");
+        String controller = value(raw, "external-controller");
+        int mixed = Integer.parseInt(value(raw, "mixed-port"));
+        java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", mixed));
+        assertEquals("cor-android-network-ok", read(URI.create("http://10.0.2.2:18081/probe").toURL(), proxy, null));
+        noTunRoute();
+        ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+        try {
+            TunnelService.start(context, false);
+            await("VPN did not connect", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected();
+            });
+            await("Android did not make VPN its active network", () -> vpnActive(connectivity));
+            tunCarriesSocket(controller, secret);
+            tunResolvesAndCarriesHttp();
+        } finally {
+            TunnelService.stop(context);
+        }
+        awaitDirectRecovery(connectivity);
+    }
+
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        // A light emulator must still launch an explicitly dark app correctly
-        // on its first frame, before the core/settings worker is ready.
-        shell("cmd uimode night no");
-        File settings=new File(context.getFilesDir(),"client/settings.json");
-        settings.getParentFile().mkdirs();
-        JSONObject saved=settings.isFile()?new JSONObject(new String(java.nio.file.Files.readAllBytes(settings.toPath()),StandardCharsets.UTF_8)):new JSONObject();
-        saved.put("theme_mode","dark");
-        saved.put("accent_color","purple");
-        java.nio.file.Files.write(settings.toPath(),saved.toString().getBytes(StandardCharsets.UTF_8));
+        persistNetworkProfile(context);
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core; inspect logcat", CoreBridge::ready);
         await("Activity did not receive focus",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
         waitForAppWindow();
-        verifyPresentation();
+        heldResponseClassifiesTruncationAsTransportFailure();
         String raw = CoreBridge.config();
+        assertNetworkProfile(raw);
         verifyFirstVpnConsent(context,raw);
         String secret = value(raw,"secret");
         int mixed = Integer.parseInt(value(raw,"mixed-port"));
@@ -732,12 +1762,6 @@ public class ProxyTunTest {
         assertNotNull(new JSONObject(read(new URL("http://"+controller+"/version"),java.net.Proxy.NO_PROXY,secret)).getString("version"));
         assertNull("The real consent dialog must grant VPN permission", VpnService.prepare(context));
         noTunRoute();
-        CoreBridge.reload("mixed-port: "+mixed+"\nexternal-controller: "+controller+"\nsecret: "+JSONObject.quote(secret)
-            +"\nmode: rule\nipv6: true\nfind-process-mode: off\n"
-            +"dns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: [https://1.1.1.1/dns-query]\n"
-            +"hosts:\n  android-tun.test: 10.0.2.2\n"
-            +"proxies:\n  - {name: CI-TUN-origin, type: http, server: 10.0.2.2, port: 18081}\n"
-            +"rules:\n  - IP-CIDR,198.51.100.1/32,CI-TUN-origin,no-resolve\n  - MATCH,DIRECT\n");
         shell("cmd statusbar add-tile org.clashofrust.android/.VpnTileService");
         for (int cycle=0; cycle<2; cycle++) {
             if (cycle==0) TunnelService.start(context,false);
@@ -751,13 +1775,14 @@ public class ProxyTunTest {
             tunCarriesSocket(controller,secret);
             // A settings reload must preserve the independently owned Android TUN.
             CoreBridge.reload(CoreBridge.config());
+            tunCarriesSocket(controller,secret);
             if (cycle == 0) {
                 shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
                 await("VPN Activity did not enter background",()->inStage(androidx.test.runner.lifecycle.Stage.STOPPED,false));
                 assertTrue("Closing the UI disconnected the foreground VPN", TunnelService.connected());
                 assertTrue("Explicit disconnect must be remembered for sticky recovery",
                     context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",false));
-                assertEquals("cor-android-network-ok", read(URI.create("http://android-tun.test:18081/probe").toURL(),java.net.Proxy.NO_PROXY,null));
+                tunResolvesAndCarriesHttp();
                 shell("am start -W -n org.clashofrust.android/.MainActivity");
                 await("VPN Activity did not resume",()->inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true));
                 java.util.concurrent.atomic.AtomicBoolean monitoring=new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -820,10 +1845,10 @@ public class ProxyTunTest {
             assertFalse("Explicit disconnect must not restart on sticky recovery",
                 context.getSharedPreferences("vpn",Context.MODE_PRIVATE).getBoolean("desired",true));
         }
-        // The next instrumentation starts in a fresh process and must restore
-        // this known test route without opening the Activity.
-        java.nio.file.Files.write(new File(context.getFilesDir(),"client/runtime/config.yaml").toPath(),
-            CoreBridge.config().getBytes(StandardCharsets.UTF_8));
+        assertNetworkProfile(CoreBridge.config());
+        assertTrue("The generated runtime must survive a cold process",
+            CoreBridge.config().equals(new String(java.nio.file.Files.readAllBytes(
+                new File(context.getFilesDir(), "client/runtime/config.yaml").toPath()), StandardCharsets.UTF_8)));
     }
     @Test public void quickTileRestoresColdCoreWithoutOpeningTheActivity() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -868,6 +1893,7 @@ public class ProxyTunTest {
             assertFalse(inStage(androidx.test.runner.lifecycle.Stage.STARTED,false));
             assertFalse(inStage(androidx.test.runner.lifecycle.Stage.CREATED,false));
             String raw=CoreBridge.config();
+            assertNetworkProfile(raw);
             tunCarriesSocket(value(raw,"external-controller"),value(raw,"secret"));
             shell("cmd statusbar click-tile org.clashofrust.android/.VpnTileService");
             await("Cold tile did not disconnect",()->!TunnelService.connected());

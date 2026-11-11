@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import runpy
 import select
 import shutil
 import signal
@@ -116,7 +117,14 @@ def linux_gui_smoke():
                         process.wait(timeout=5)
 
 
+def require_linux_polkit_tools():
+    for tool in ('pkexec', 'pkttyagent'):
+        if not shutil.which(tool):
+            raise RuntimeError('The installed package did not provide the polkit tool: ' + tool)
+
+
 def linux_package_tests(package, tun_test, structure=True):
+    from ci_test_policy import extended_tests, update_tests
     if structure:
         # Build/manifest checks already verify payload identity and resources.
         run(['dpkg-deb', '--info', package])
@@ -130,24 +138,72 @@ def linux_package_tests(package, tun_test, structure=True):
             timeout=300)
     package_argument = './'+str(package.relative_to(ROOT))
     install_packages([package_argument])
-    if os.environ.get('COR_LINUX_BASELINE') and not shutil.which('pkexec'):
-        raise RuntimeError('The installed package did not provide the polkit authorization helper')
+    if os.environ.get('COR_LINUX_BASELINE'):
+        require_linux_polkit_tools()
     if not any(Path(path).is_file() for path in (
             '/usr/lib/systemd/systemd-resolved', '/lib/systemd/systemd-resolved')):
         release = Path('/etc/os-release').read_text()
         install_packages(['systemd' if 'VERSION_ID="20.04"' in release else 'systemd-resolved'])
     if not shutil.which('resolvectl'):
         raise RuntimeError('Installed distribution has no resolvectl')
-    if os.environ.get('COR_LINUX_BASELINE'):
+    if extended_tests() and os.environ.get('COR_LINUX_BASELINE'):
         # This checks old user-space libraries; its host kernel is recorded
         # separately and never presented as minimum-kernel evidence.
         linux_gui_smoke()
-    else:
+    elif extended_tests():
         from linux_gui import installed_tests
         installed_tests()
     if not os.environ.get('COR_LINUX_BASELINE'):
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', tun_test, '--bundle', '/opt/clash-of-rust'])
+        if update_tests():
+            run([sys.executable, ROOT/'scripts/test-cli-update.py', '--package', package], timeout=900)
+
+
+def compatibility_dependencies():
+    from ci_test_policy import extended_tests
+    from prepared_vm_environment import TEST_PACKAGES
+    if extended_tests() or os.environ.get('COR_LINUX_GUEST') == 'true':
+        return list(TEST_PACKAGES)
+    return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']
+
+
+def compatibility_download_dependencies():
+    dependencies = runpy.run_path(str(ROOT/'scripts/build-installer.py'))['GUI_DEPENDENCIES']
+    return list(dict.fromkeys([
+        *compatibility_dependencies(),
+        *(dependency.split('|', 1)[0].strip() for dependency in dependencies),
+    ]))
+
+
+def prepare_compatibility_environment():
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Compatibility preparation requires a disposable GitHub Actions runner')
+    if os.environ.get('COR_PREPARED_VM_VERIFIED') == 'true':
+        from build_inputs import manifest
+        from prepared_vm_environment import (
+            check_environment, frozen_environments, inspect_environment, verify_frozen,
+        )
+        value = manifest()
+        frozen = frozen_environments(value or {}).get(host_arch())
+        if not frozen or frozen.get('status') != 'frozen':
+            raise ValueError('Prepared VM lacks the frozen CI environment')
+        verify_frozen(Path(os.environ['BUILD_INPUTS_DIR']), frozen, value['upstream']['linux'])
+        check_environment(inspect_environment(), None, frozen['lock'])
+        return
+    # The hosted image's Azure mirror can stall on package indices even after
+    # falling back for InRelease. Use the official HTTPS mirrors consistently.
+    for name, mirror in (('apt-mirrors.txt', 'https://archive.ubuntu.com/ubuntu/'),
+                         ('apt-mirrors-security.txt', 'https://security.ubuntu.com/ubuntu/')):
+        path = Path('/etc/apt')/name
+        if path.is_file():
+            run(['sudo', 'tee', path], input=mirror+'\n', text=True)
+    prepare_guest_package_environment()
+    if not os.environ.get('COR_LINUX_GUEST'):
+        run_privileged_with_timeout(
+            [*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
+    package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
+    install_packages(compatibility_dependencies(), package_timeout, no_recommends=True)
 
 
 def run_compatibility(expected=None):
@@ -169,23 +225,7 @@ def run_compatibility(expected=None):
         or receipt['linux_tun_test_sha256'] != sha256(binary)):
         raise ValueError('Compatibility inputs differ from the verified package/test binaries')
     binary.chmod(0o755)
-    # The hosted image's Azure mirror can stall on package indices even after
-    # falling back for InRelease. Use the official HTTPS mirrors consistently.
-    for name, mirror in (('apt-mirrors.txt', 'https://archive.ubuntu.com/ubuntu/'),
-                         ('apt-mirrors-security.txt', 'https://security.ubuntu.com/ubuntu/')):
-        path = Path('/etc/apt')/name
-        if path.is_file():
-            run(['sudo', 'tee', path], input=mirror+'\n', text=True)
-    prepare_guest_package_environment()
-    if not os.environ.get('COR_LINUX_GUEST'):
-        run_privileged_with_timeout(
-            [*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
-    package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
-    install_packages(
-        ['dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
-         'xvfb', 'xwayland', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
-         'gnome-shell', 'gnome-shell-extension-appindicator', 'policykit-1-gnome',
-         'libgl1-mesa-dri', 'libegl1'], package_timeout, no_recommends=True)
+    prepare_compatibility_environment()
     # Package structure was tested in the native packaging job. This job tests
     # its GUI, proxy and routing against this distribution, without repackaging.
     linux_package_tests(packages[0], binary, structure=False)

@@ -17,6 +17,27 @@ pub struct Route {
     pub proxy: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct DownloadPorts {
+    pub mixed: u16,
+    pub direct: u16,
+}
+
+pub fn download_routes(ports: Option<DownloadPorts>, system: Option<String>) -> Vec<Route> {
+    let mut selected = routes(ports.map(|ports| ports.mixed), system);
+    if let Some(ports) = ports.filter(|ports| ports.direct != 0) {
+        selected.insert(
+            selected.len() - 1,
+            Route {
+                label: "内核直连",
+                proxy: Some(format!("socks5h://127.0.0.1:{}", ports.direct)),
+            },
+        );
+    }
+    selected.last_mut().unwrap().label = "系统网络";
+    selected
+}
+
 pub fn routes(port: Option<u16>, system: Option<String>) -> Vec<Route> {
     let mut routes = Vec::new();
     for (label, proxy) in [
@@ -87,5 +108,44 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].proxy.as_deref(), Some("http://127.0.0.1:7897"));
         assert!(selected[1].proxy.is_none());
+    }
+
+    #[test]
+    fn managed_direct_follows_proxies_without_changing_proxy_preferences() {
+        let selected = download_routes(
+            Some(DownloadPorts {
+                mixed: 7897,
+                direct: 7898,
+            }),
+            Some("http://127.0.0.1:7897".into()),
+        );
+        assert_eq!(selected.len(), 3);
+        assert_eq!(selected[0].label, "内核代理");
+        assert_eq!(selected[1].label, "内核直连");
+        assert_eq!(
+            selected[1].proxy.as_deref(),
+            Some("socks5h://127.0.0.1:7898")
+        );
+        assert_eq!(selected[2].label, "系统网络");
+        assert!(selected[2].proxy.is_none());
+    }
+
+    #[test]
+    fn system_network_is_never_advertised_as_bypassing_a_tun() {
+        let selected = download_routes(None, None);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].label, "系统网络");
+        assert!(selected[0].proxy.is_none());
+        let selected = download_routes(
+            Some(DownloadPorts {
+                mixed: 7897,
+                direct: 7898,
+            }),
+            Some("socks5h://127.0.0.1:1080".into()),
+        );
+        assert_eq!(
+            selected.iter().map(|route| route.label).collect::<Vec<_>>(),
+            ["内核代理", "系统代理", "内核直连", "系统网络"]
+        );
     }
 }

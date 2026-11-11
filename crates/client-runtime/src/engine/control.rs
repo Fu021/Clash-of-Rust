@@ -8,6 +8,7 @@ impl Engine {
 
     pub fn invalidate_views(&mut self) {
         self.view_revision = self.view_revision.wrapping_add(1);
+        self.unreachable_recovery.cancel();
     }
 
     pub fn is_remote(&self) -> bool {
@@ -39,6 +40,7 @@ impl Engine {
             geo_updates: Default::default(),
             app_updates: Default::default(),
             subscription_updates: Default::default(),
+            unreachable_recovery: Default::default(),
             subscription_failure: None,
             subscription_failure_revision: 0,
             resources: resources.to_owned(),

@@ -5,13 +5,16 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
+mod connection_preview;
+pub use connection_preview::{CONNECTION_PREVIEW_LIMIT, ConnectionPreview};
+
 const JSON_LIMIT: usize = 32 * 1024 * 1024;
 
 // Backpressure bounds queued response chunks. Dropping the request closes the
 // sender, so a cancelled request also wakes the blocking JSON parser.
 struct JsonReader {
-    receiver: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
-    chunk: std::io::Cursor<Vec<u8>>,
+    receiver: tokio::sync::mpsc::Receiver<std::io::Result<bytes::Bytes>>,
+    chunk: std::io::Cursor<bytes::Bytes>,
 }
 
 impl Read for JsonReader {
@@ -24,6 +27,7 @@ impl Read for JsonReader {
             if count > 0 {
                 return Ok(count);
             }
+            self.chunk = std::io::Cursor::new(bytes::Bytes::new());
             match self.receiver.blocking_recv() {
                 Some(chunk) => self.chunk = std::io::Cursor::new(chunk?),
                 None => return Ok(0),
@@ -54,7 +58,7 @@ async fn decode_json_with<T: Send + 'static>(
             64 * 1024,
             JsonReader {
                 receiver,
-                chunk: std::io::Cursor::new(Vec::new()),
+                chunk: std::io::Cursor::new(bytes::Bytes::new()),
             },
         ))
     });
@@ -69,8 +73,9 @@ async fn decode_json_with<T: Send + 'static>(
                         .await;
                     break;
                 }
-                for bytes in chunk.chunks(16 * 1024) {
-                    if sender.send(Ok(bytes.to_vec())).await.is_err() {
+                for start in (0..chunk.len()).step_by(16 * 1024) {
+                    let end = (start + 16 * 1024).min(chunk.len());
+                    if sender.send(Ok(chunk.slice(start..end))).await.is_err() {
                         break 'response;
                     }
                 }
@@ -301,6 +306,26 @@ pub struct Delay {
 fn automatic(proxy: &Proxy) -> bool {
     matches!(proxy.kind.as_str(), "URLTest" | "Fallback") && !proxy.all.is_empty()
 }
+
+fn recovery_targets(proxies: &Proxies) -> std::collections::BTreeSet<Text> {
+    proxies
+        .proxies
+        .iter()
+        .filter(|(_, proxy)| proxy.all.is_empty())
+        .map(|(name, _)| name)
+        .chain(proxies.proxies.values().flat_map(|proxy| proxy.all.iter()))
+        .filter(|name| {
+            proxies.proxies.get(name.as_str()).is_none_or(|proxy| {
+                proxy.all.is_empty()
+                    && !matches!(
+                        proxy.kind.as_str(),
+                        "Direct" | "Reject" | "Compatible" | "Pass"
+                    )
+            })
+        })
+        .cloned()
+        .collect()
+}
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Proxies {
     pub proxies: BTreeMap<Text, Proxy>,
@@ -460,7 +485,7 @@ impl<'de> Deserialize<'de> for Connections {
     }
 }
 
-/// Home needs counts and traffic totals, without allocating each connection's metadata.
+/// Background indicators need counts and totals without allocating connection metadata.
 #[derive(Debug, Default, Deserialize)]
 pub struct ConnectionStats {
     #[serde(rename = "uploadTotal", default)]
@@ -535,6 +560,7 @@ impl Api {
         Ok(Self {
             client: crate::network::client_builder()
                 .no_proxy()
+                .pool_max_idle_per_host(0)
                 .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(8))
                 .build()?,
@@ -553,6 +579,26 @@ impl Api {
     pub fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
         self.client.request(method, url).bearer_auth(&self.secret)
     }
+    async fn read_response(&self, url: Url) -> Result<reqwest::Response> {
+        self.read_request(self.request(Method::GET, url)).await
+    }
+    async fn read_request(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let retry = request.try_clone().context("无法重建控制查询")?;
+        let first = match tokio::time::timeout(Duration::from_secs(8), request.send()).await {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(error)) if !error.is_timeout() && !error.is_connect() && !error.is_request() => {
+                return Err(error.into());
+            }
+            Ok(Err(error)) => anyhow::Error::from(error),
+            Err(error) => anyhow::Error::from(error),
+        };
+        tokio::time::timeout(Duration::from_secs(2), retry.send())
+            .await
+            .context("控制查询重试超时")
+            .and_then(|result| result.map_err(anyhow::Error::from))
+            .context(first)
+            .context("mihomo 控制查询失败，已用新连接重试一次")
+    }
     async fn checked(response: reqwest::Response) -> Result<reqwest::Response> {
         let status = response.status();
         if !status.is_success() {
@@ -563,8 +609,7 @@ impl Api {
     }
     pub async fn get<T: DeserializeOwned + Send + 'static>(&self, path: &str) -> Result<T> {
         let response = self
-            .request(Method::GET, self.url(&[path])?)
-            .send()
+            .read_response(self.url(&[path])?)
             .await
             .context("无法连接 mihomo 控制接口")?;
         decode_json(Self::checked(response).await?).await
@@ -575,27 +620,21 @@ impl Api {
         path: &str,
         decode: impl FnOnce(&mut dyn Read) -> serde_json::Result<T> + Send + 'static,
     ) -> Result<T> {
-        let response = self.request(Method::GET, self.url(&[path])?).send().await?;
+        let response = self.read_response(self.url(&[path])?).await?;
         decode_json_with(Self::checked(response).await?, move |mut reader| {
             decode(&mut reader)
         })
         .await
     }
     pub async fn proxy_selection(&self, name: &str) -> Result<Option<ProxySelection>> {
-        let response = self
-            .request(Method::GET, self.url(&["proxies", name])?)
-            .send()
-            .await?;
+        let response = self.read_response(self.url(&["proxies", name])?).await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None); // Provider members do not have a /proxies/{name} entry.
         }
         decode_json(Self::checked(response).await?).await.map(Some)
     }
     pub async fn proxy_nodes(&self, name: &str) -> Result<Proxy> {
-        let response = self
-            .request(Method::GET, self.url(&["proxies", name])?)
-            .send()
-            .await?;
+        let response = self.read_response(self.url(&["proxies", name])?).await?;
         decode_json(Self::checked(response).await?).await
     }
     pub async fn patch(&self, body: Value) -> Result<()> {
@@ -687,7 +726,7 @@ impl Api {
             url.query_pairs_mut()
                 .append_pair("name", host)
                 .append_pair("type", kind);
-            let response = Self::checked(self.request(Method::GET, url).send().await?).await?;
+            let response = Self::checked(self.read_response(url).await?).await?;
             let answer: crate::dns::Answer = decode_json(response).await?;
             answer.addresses()
         };
@@ -798,8 +837,7 @@ impl Api {
             providers: BTreeMap<Text, Source>,
         }
         let response = self
-            .request(Method::GET, self.url(&["providers", "proxies"])?)
-            .send()
+            .read_response(self.url(&["providers", "proxies"])?)
             .await?;
         let sources: Sources = decode_json(Self::checked(response).await?).await?;
         let mut routes = BTreeMap::new();
@@ -857,6 +895,44 @@ impl Api {
             .collect();
         self.delay_batch(proxies, names.into_iter().collect(), false)
             .await
+    }
+
+    pub async fn confirm_all_nodes_unreachable(&self) -> Result<bool> {
+        let proxies: Proxies = self.get("proxies").await?;
+        let targets = recovery_targets(&proxies);
+        if targets.is_empty() {
+            return Ok(false);
+        }
+        let missing = targets
+            .iter()
+            .filter(|name| !proxies.proxies.contains_key(name.as_str()))
+            .cloned()
+            .collect();
+        let providers = self.provider_routes(&missing).await?;
+        let measured = self
+            .measure_delays(
+                targets.iter().cloned().collect(),
+                "https://www.gstatic.com/generate_204",
+                "204",
+                &providers,
+            )
+            .await;
+        if measured.values().any(|delay| *delay > 0) {
+            return Ok(false);
+        }
+        let confirmed = self
+            .measure_delays(
+                targets.iter().cloned().collect(),
+                "https://www.cloudflare.com/cdn-cgi/trace",
+                "200",
+                &providers,
+            )
+            .await;
+        let current: Proxies = self.get("proxies").await?;
+        let _: ConfigStatus = self.get("configs").await?;
+        Ok(recovery_targets(&current) == targets
+            && confirmed.len() == targets.len()
+            && confirmed.values().all(|delay| *delay == 0))
     }
 
     pub async fn delay_node(&self, name: &str) -> Result<BTreeMap<String, u32>> {
@@ -1054,15 +1130,90 @@ impl Api {
         url.query_pairs_mut().append_pair("level", "info");
         let client = crate::network::client_builder()
             .no_proxy()
+            .pool_max_idle_per_host(0)
             .connect_timeout(Duration::from_secs(2))
             .build()?;
-        Self::checked(client.get(url).bearer_auth(&self.secret).send().await?).await
+        Self::checked(
+            self.read_request(client.get(url).bearer_auth(&self.secret))
+                .await?,
+        )
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn controller_reads_retry_a_closed_connection_without_replaying_writes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = Api::new(&Settings {
+            controller_port: listener.local_addr().unwrap().port(),
+            secret: "fresh-control-test".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let mut methods = Vec::new();
+            for attempt in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let mut buffer = [0; 4096];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                methods.push(
+                    String::from_utf8_lossy(&request)
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                        .to_owned(),
+                );
+                if attempt == 1 {
+                    let body = r#"{"version":"test"}"#;
+                    socket.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                    ).as_bytes()).await.unwrap();
+                }
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                    .await
+                    .is_err()
+            );
+            methods
+        });
+        let version: Value = tokio::time::timeout(Duration::from_secs(5), api.get("version"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(version["version"], "test");
+        assert!(api.patch(json!({"tun":{"enable":false}})).await.is_err());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap(),
+            ["GET", "GET", "PATCH"]
+        );
+    }
+
+    #[tokio::test]
+    async fn controller_http_rejections_are_not_transport_retried() {
+        let (api, server) = recovery_controller(vec![("401 Unauthorized", "{}")]).await;
+        assert!(
+            api.get::<Value>("configs")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("401")
+        );
+        assert_eq!(server.await.unwrap().len(), 1);
+    }
+
     async fn recovery_controller(
         responses: Vec<(&'static str, &'static str)>,
     ) -> (Api, tokio::task::JoinHandle<Vec<String>>) {
@@ -1468,7 +1619,7 @@ rules: ['MATCH,group']\n";
         let parser = tokio::task::spawn_blocking(move || {
             let mut reader = JsonReader {
                 receiver,
-                chunk: std::io::Cursor::new(Vec::new()),
+                chunk: std::io::Cursor::new(bytes::Bytes::new()),
             };
             reader.read(&mut [0; 1]).unwrap()
         });
@@ -1526,6 +1677,91 @@ rules: ['MATCH,group']\n";
         assert_eq!(delays["bad"], 0);
         assert_eq!(delays.values().filter(|v| **v == 42).count(), 8);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recovery_requires_all_nodes_to_fail_on_both_targets_and_a_live_controller() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (primary, secondary, controller, empty, changed, expected) in [
+            (42, 0, true, false, false, Some(false)),
+            (0, 42, true, false, false, Some(false)),
+            (0, 0, true, false, false, Some(true)),
+            (0, 0, false, false, false, None),
+            (0, 0, true, true, false, Some(false)),
+            (0, 0, true, false, true, Some(false)),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let reads = reads.clone();
+                    tokio::spawn(async move {
+                        let mut request = Vec::new();
+                        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                            let mut buffer = [0; 2048];
+                            let count = socket.read(&mut buffer).await.unwrap();
+                            if count == 0 || request.len() > 8192 {
+                                return;
+                            }
+                            request.extend_from_slice(&buffer[..count]);
+                        }
+                        let request = String::from_utf8(request).unwrap();
+                        let (status, body) = if request.starts_with("GET /proxies HTTP") {
+                            (
+                                "200 OK",
+                                if empty {
+                                    r#"{"proxies":{"DIRECT":{"type":"Direct"}}}"#.into()
+                                } else if changed
+                                    && reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0
+                                {
+                                    r#"{"proxies":{"replacement":{"type":"Socks5"}}}"#.into()
+                                } else {
+                                    r#"{"proxies":{"Proxy":{"type":"Selector","all":["node","DIRECT"]},"node":{"type":"Socks5"},"DIRECT":{"type":"Direct"}}}"#.into()
+                                },
+                            )
+                        } else if request.starts_with("GET /providers/proxies HTTP") {
+                            ("200 OK", r#"{"providers":{}}"#.into())
+                        } else if request.starts_with("GET /configs HTTP") {
+                            (
+                                if controller {
+                                    "200 OK"
+                                } else {
+                                    "503 Service Unavailable"
+                                },
+                                "{}".into(),
+                            )
+                        } else {
+                            assert!(request.starts_with("GET /proxies/node/delay?"));
+                            let delay = if request.contains("cloudflare.com") {
+                                secondary
+                            } else {
+                                primary
+                            };
+                            ("200 OK", format!(r#"{{"delay":{delay}}}"#))
+                        };
+                        let _ = socket.write_all(format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                        ).as_bytes()).await;
+                    });
+                }
+            });
+            let api = Api::new(&Settings {
+                controller_port: port,
+                ..Default::default()
+            })
+            .unwrap();
+            let result =
+                tokio::time::timeout(Duration::from_secs(5), api.confirm_all_nodes_unreachable())
+                    .await
+                    .unwrap();
+            match expected {
+                Some(value) => assert_eq!(result.unwrap(), value),
+                None => assert!(result.is_err()),
+            }
+            server.abort();
+        }
     }
     #[test]
     fn accepts_go_nil_slices_in_idle_core() {

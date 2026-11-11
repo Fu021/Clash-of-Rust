@@ -8,20 +8,21 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
+import zipfile
 
-from build_support import ROOT, host_arch, host_system, read_json, sha256, write_json
+from build_support import ROOT, download, download_asset, host_arch, host_system, read_json, sha256, write_json
 
 FILES = ('Cargo.lock', 'apps/android/core/go.mod', 'apps/android/core/go.sum',
          'apps/android/build.gradle.kts', 'apps/android/app/build.gradle.kts')
 SNAPSHOT = ROOT / 'target/dependency-snapshot'
 GEO = {'geoip.dat': 'GeoIP.dat', 'geosite.dat': 'GeoSite.dat',
        'country.mmdb': 'Country.mmdb', 'GeoLite2-ASN.mmdb': 'ASN.mmdb'}
-# AGP 9.4 requires Gradle 9.6 or newer; stay within its supported major.
-GRADLE_MIN = '9.6.0'
 
 
 def approved():
@@ -54,12 +55,14 @@ def check_tools(tools=('go', 'java')):
     for name, command, expected in (
         ('Go', ['go', 'env', 'GOVERSION'], 'go' + selected['go']),
         ('Java', ['java', '-XshowSettings:properties', '-version'], selected['java'].split('+')[0]),
+        ('Gradle', ['gradle', '--version'], selected['gradle']),
     ):
         if name.lower() not in tools:
             continue
         result = subprocess.run(command, check=True, text=True, capture_output=True, timeout=30)
         output = result.stdout + result.stderr
-        version = re.search(r'(?m)^\s*java\.version\s*=\s*(\S+)', output) if name == 'Java' else None
+        version = (re.search(r'(?m)^\s*java\.version\s*=\s*(\S+)', output) if name == 'Java'
+                   else re.search(r'(?m)^Gradle ([0-9.]+)\s*$', output) if name == 'Gradle' else None)
         actual = version[1] if version else output.strip()
         if actual != expected:
             raise ValueError(f'Active {name} differs from the approved version: {actual}')
@@ -91,6 +94,7 @@ def constraints():
     paths = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'apps/**/Cargo.toml',
                                      'crates/**/Cargo.toml', 'vendor/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties',
                                      'resources/linux/ubuntu20.Dockerfile', 'scripts/linux_ci.py',
+                                     'scripts/prepared_vm.py', 'scripts/prepared_vm_environment.py',
                                      '.github/build-versions.json'],
                                     cwd=ROOT, text=True).splitlines()
     return {path: hashlib.sha256(original(path)).hexdigest() for path in paths}
@@ -111,12 +115,100 @@ def verified_manifest():
         path = ROOT / relative
         if not path.is_file() or sha256(path) != checksum:
             raise ValueError('Build dependencies changed after resolution: ' + relative)
+    verify_geo_snapshot(value, Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
+    from prepared_vm_environment import frozen_environments, verify_frozen
+    for frozen in frozen_environments(value).values():
+        verify_frozen(Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)),
+                      frozen, value['upstream']['linux'])
     return value
+
+
+def geo_assets(upstream):
+    release = upstream.get('geo')
+    if release is None:
+        return {}
+    assets = {asset['name']: asset for asset in release['assets'] if asset['name'] in GEO}
+    if set(assets) != set(GEO):
+        raise ValueError('Dependency snapshot Geo resources are incomplete')
+    for asset in assets.values():
+        if (not re.fullmatch(r'sha256:[0-9a-f]{64}', asset.get('digest', ''))
+                or type(asset.get('size')) is not int or asset['size'] <= 0):
+            raise ValueError('Dependency snapshot Geo identity is invalid')
+    return assets
+
+
+def freeze_geo(directory, upstream):
+    files = {}
+    for name, asset in geo_assets(upstream).items():
+        relative = 'resources/' + GEO[name]
+        path = directory / relative
+        download_asset(asset, path)
+        if path.is_symlink() or path.stat().st_size != asset['size'] or sha256(path) != asset['digest'][7:]:
+            raise ValueError('Dependency snapshot Geo checksum or size mismatch: ' + name)
+        files[relative] = asset['digest'][7:]
+    return files
+
+
+def verify_geo_snapshot(value, directory):
+    assets = geo_assets(value.get('upstream', {}))
+    expected = {'resources/' + GEO[name]: asset['digest'][7:] for name, asset in assets.items()}
+    if value.get('resources', {}) != expected:
+        raise ValueError('Dependency snapshot Geo resource inventory mismatch')
+    for name, asset in assets.items():
+        path = directory / 'resources' / GEO[name]
+        if (path.is_symlink() or not path.is_file() or path.stat().st_size != asset['size']
+                or sha256(path) != asset['digest'][7:]):
+            raise ValueError('Dependency snapshot Geo checksum or size mismatch: ' + name)
+    return assets
 
 
 def component(name):
     value = manifest()
     return value.get('upstream', {}).get(name) if value else None
+
+
+def prepare_gradle(directory):
+    selected = component('gradle') or approved()['upstream']['gradle']
+    version = selected['version']
+    if (version != tool_versions()['gradle'] or not re.fullmatch(r'[0-9]+(?:\.[0-9]+){2}', version)
+            or not re.fullmatch(r'[0-9a-f]{64}', selected.get('sha256', ''))
+            or selected.get('url') != f'https://services.gradle.org/distributions/gradle-{version}-bin.zip'):
+        raise ValueError('Gradle archive differs from the approved identity')
+    directory = Path(directory).resolve()
+    archive = directory / f'gradle-{version}-bin.zip'
+    download(selected['url'], archive, digest=selected['sha256'])
+    if archive.is_symlink() or sha256(archive) != selected['sha256']:
+        raise ValueError('Gradle archive checksum mismatch')
+    name = 'gradle-' + version
+    destination = directory / name
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('Gradle installation directory already exists')
+    with tempfile.TemporaryDirectory(prefix='.gradle-', dir=directory) as temporary:
+        stage = Path(temporary)
+        with zipfile.ZipFile(archive) as source:
+            members = source.infolist()
+            names = [entry.filename for entry in members]
+            if (len(members) > 20_000 or sum(entry.file_size for entry in members) > 1024**3
+                    or len(set(names)) != len(names)):
+                raise ValueError('Gradle archive exceeds extraction limits or repeats a member')
+            for entry in members:
+                path = Path(entry.filename)
+                if (not path.parts or path.parts[0] != name or path.is_absolute()
+                        or '..' in path.parts or '\\' in entry.filename
+                        or stat.S_IFMT(entry.external_attr >> 16) not in (0, stat.S_IFREG, stat.S_IFDIR)):
+                    raise ValueError('Invalid Gradle archive member')
+            source.extractall(stage)
+        payload = stage / name
+        if (not (payload / 'bin/gradle').is_file() or not (payload / 'bin/gradle.bat').is_file()
+                or not (payload / 'lib' / f'gradle-launcher-{version}.jar').is_file()):
+            raise ValueError('Gradle archive lacks its launcher')
+        (payload / 'bin/gradle').chmod(0o755)
+        payload.replace(destination)
+    if output := os.environ.get('GITHUB_PATH'):
+        with open(output, 'a') as stream:
+            stream.write(str(destination / 'bin') + '\n')
+    print('Prepared verified Gradle:', version, flush=True)
+    return destination
 
 
 def resource_release(name, cached, proxy='', version=None):
@@ -183,17 +275,22 @@ def resolve(directory):
         (ROOT / 'apps/android/core/go.mod').read_text())]
     value = {'schema': 1, 'commit': current_commit(), 'baseline': baseline, 'constraints': constraints(), 'files': files,
              'resolved_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-             'upstream': upstream, 'warnings': [],
+             'upstream': upstream, 'resources': freeze_geo(directory, upstream), 'warnings': [],
              'rust_packages': [{key: package[key] for key in ('name', 'version', 'source', 'checksum') if key in package}
                                for package in packages],
              'go_modules': go_modules,
              'policy': 'Repository lockfiles and approved build versions only; apply the maintainer loop update policy and validate committed changes.'}
+    if 'linux' in upstream:
+        from prepared_vm_environment import freeze
+        from prepared_vm import ARCHITECTURES
+        value['prepared_vms'] = {arch: freeze(directory, upstream['linux'], arch)
+                                for arch in ARCHITECTURES}
     write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write('resources=' + resource_key(upstream) + '\n')
-            for name, fallback in (('tailscale', '1.104.5'), ('gradle', GRADLE_MIN)):
+            for name, fallback in (('tailscale', '1.104.5'),):
                 version = upstream.get(name, {}).get('version', fallback)
                 if not re.fullmatch(r'v?[0-9.]+', version):
                     raise ValueError('Invalid resolved tool version')
@@ -253,8 +350,16 @@ def apply(directory, require_commit=True):
         path = directory / relative
         if path.is_symlink() or sha256(path) != checksum:
             raise ValueError('Dependency snapshot checksum mismatch: ' + relative)
+    assets = verify_geo_snapshot(value, directory)
+    from prepared_vm_environment import frozen_environments, verify_frozen
+    for frozen in frozen_environments(value).values():
+        verify_frozen(directory, frozen, value['upstream']['linux'])
     for relative in FILES:
         shutil.copy2(directory / relative, ROOT / relative)
+    for name in assets:
+        destination = ROOT / 'bundle/resources' / GEO[name]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(directory / 'resources' / GEO[name], destination)
     print('Applied verified dependency snapshot:', value.get('resolved_at', 'unknown'))
 
 
@@ -278,17 +383,21 @@ def package_contents(build):
             'installer_compiler': json.loads(tool.read_text()) if tool.is_file() else None}
 
 
-def toolchain_report():
+def toolchain_report(system):
     """Record the actual runner tools, in addition to resolved dependency versions."""
+    if system not in ('android', 'linux', 'windows', 'macos'):
+        raise ValueError('Unknown build system for toolchain report: ' + system)
     tools = {'python': sys.version.split()[0]}
-    for name, args in {'rustc': ['-vV'], 'cargo': ['--version'], 'go': ['version'],
-                       'java': ['-version'], 'gradle': ['--version']}.items():
+    commands = {'rustc': ['-vV'], 'cargo': ['--version']}
+    if system == 'android':
+        commands.update({'go': ['version'], 'java': ['-version'], 'gradle': ['--version']})
+    for name, args in commands.items():
         if executable := shutil.which(name):
             result = subprocess.run([executable, *args], capture_output=True, text=True, timeout=60)
             tools[name] = (result.stdout + result.stderr).strip()[:8192]
             if result.returncode:
                 tools[name] = 'version query failed: ' + str(result.returncode)
-    ndk = os.environ.get('ANDROID_NDK_ROOT')
+    ndk = os.environ.get('ANDROID_NDK_ROOT') if system == 'android' else None
     if ndk and (path := Path(ndk)/'source.properties').is_file():
         tools['android_ndk'] = path.read_text().strip()
     return tools
@@ -334,9 +443,9 @@ def shared_go(directory, restore=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('resolve', 'refresh', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions', 'check-tools'))
+    parser.add_argument('operation', choices=('resolve', 'refresh', 'apply', 'packaging', 'share-go', 'restore-go', 'audit', 'versions', 'check-tools', 'prepare-gradle'))
     parser.add_argument('--directory', type=Path, default=Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
-    parser.add_argument('--tools', nargs='+', choices=('go', 'java'), default=('go', 'java'))
+    parser.add_argument('--tools', nargs='+', choices=('go', 'java', 'gradle'), default=('go', 'java'))
     args = parser.parse_args()
     if args.operation == 'audit':
         from dependency_audit import audit
@@ -345,6 +454,8 @@ def main():
         versions()
     elif args.operation == 'check-tools':
         check_tools(args.tools)
+    elif args.operation == 'prepare-gradle':
+        prepare_gradle(args.directory)
     elif args.operation in ('share-go', 'restore-go'):
         shared_go(args.directory, args.operation == 'restore-go')
     else:

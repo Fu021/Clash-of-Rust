@@ -7,6 +7,8 @@ import android.net.Uri;
 import android.net.VpnService;
 import android.os.*;
 import android.provider.Settings;
+import android.view.WindowInsets;
+import android.view.inputmethod.InputMethodManager;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -26,6 +28,7 @@ public final class MainActivity extends NativeActivity {
     private boolean tileConnect;
     boolean waitingForInstallPermission;
     private String exportContent;
+    private volatile NetworkOverview networkOverview;
     private String notificationTitle, notificationMessage;
     private static native void nativeEvent(String value);
     private static native String nativeDiagnostics();
@@ -42,10 +45,15 @@ public final class MainActivity extends NativeActivity {
         setTheme(dark ? R.style.ClientDark : R.style.ClientLight);
         tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
         super.onCreate(state);
+        try { networkOverview = new NetworkOverview(this); }
+        catch (RuntimeException error) { android.util.Log.w("ClashOfRust", "Network overview unavailable", error); }
         UpdateInstaller.pruneInstalled(this);
         configureSystemBars(dark);
+        // Slint's Android helper also registers a PRIORITY_DEFAULT back callback.
+        // Stay above that callback but below system overlays so a single app path
+        // owns navigation and dialog dismissal.
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> emit("back",true));
+            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT + 1, this::handleBack);
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
@@ -55,12 +63,39 @@ public final class MainActivity extends NativeActivity {
         if (tileConnect && CoreBridge.ready()) { tileConnect=false; prepareVpn(); }
     }
     // NativeActivity cannot use ComponentActivity. API 33+ dispatches through
-    // OnBackInvokedDispatcher above; this entry is solely for API 26–32.
+    // OnBackInvokedDispatcher above; this entry is the legacy path for API 26–32.
+    // Keep forwarding instead of calling super so Android 16 cannot finish the
+    // Activity before Slint dismisses a dialog or navigates back.
     @android.annotation.SuppressLint("GestureBackNavigation")
     @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
-        if (Build.VERSION.SDK_INT < 33) emit("back",true);
-        else super.onBackPressed();
+        handleBack();
+    }
+    private void handleBack() {
+        if (hideImeIfVisible()) return;
+        emit("back",true);
+    }
+    @SuppressWarnings("deprecation")
+    private boolean hideImeIfVisible() {
+        InputMethodManager imm=(InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+        if (imm==null) return false;
+        android.view.View root=getWindow().getDecorView().getRootView();
+        WindowInsets insets=root.getRootWindowInsets();
+        boolean visible;
+        if (Build.VERSION.SDK_INT >= 30) {
+            visible=insets!=null && insets.isVisible(WindowInsets.Type.ime());
+        } else {
+            android.graphics.Rect frame=new android.graphics.Rect();
+            root.getWindowVisibleDisplayFrame(frame);
+            int[] origin=new int[2];
+            root.getLocationOnScreen(origin);
+            int obscured=Math.max(0,origin[1]+root.getHeight()-frame.bottom);
+            int navigation=insets!=null ? insets.getStableInsetBottom() : 0;
+            visible=obscured>navigation;
+        }
+        if (!visible) return false;
+        imm.hideSoftInputFromWindow(getWindow().getDecorView().getWindowToken(),0);
+        return true;
     }
     @Override protected void onResume() {
         super.onResume(); emit("visible", true);
@@ -71,6 +106,16 @@ public final class MainActivity extends NativeActivity {
         }
     }
     @Override protected void onPause() { emit("visible", false); super.onPause(); }
+    @Override protected void onDestroy() {
+        NetworkOverview current = networkOverview;
+        networkOverview = null;
+        if (current != null) current.close();
+        super.onDestroy();
+    }
+    private long networkRevision() {
+        NetworkOverview current = networkOverview;
+        return current == null ? 0 : current.revision();
+    }
 
     /** Invoked by the Rust worker, never performs blocking work on the UI thread. */
     public String request(String input) {
@@ -81,10 +126,16 @@ public final class MainActivity extends NativeActivity {
                 case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); runOnUiThread(this::connectFromTile); break;
                 case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
                 case "state": return CoreBridge.state()
+                    .put("network_revision",networkRevision())
                     .put("font_sizes",systemFontSizes())
                     .put("dark", Appearance.systemDark(this))
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
-                    .put("excluded_apps",getSharedPreferences("vpn",MODE_PRIVATE).getStringSet("excluded",Collections.emptySet()).size()).toString();
+                    .put("application_scope",ApplicationRouting.load(this).summary()).toString();
+                case "network-info": {
+                    NetworkOverview current = networkOverview;
+                    if (current == null) throw new IOException("系统网络信息尚未就绪");
+                    return current.read().toString();
+                }
                 case "connect":
                 case "reconnect": {
                     if (vpnPrompt) break;
@@ -142,18 +193,37 @@ public final class MainActivity extends NativeActivity {
                 case "export": {
                     String name = data.getString("name"), content = data.getString("content");
                     runOnUiThread(() -> {
-                        if (exportContent != null) { emit("error", "已有导出操作正在进行"); return; }
+                        if (exportContent != null) { emit("export-error", "已有导出操作正在进行"); return; }
                         exportContent = content;
-                        startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                            .setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE)
-                            .putExtra(Intent.EXTRA_TITLE, name), SAVE);
+                        try {
+                            startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                                .setType(name.endsWith(".json") ? "application/json" : "text/plain").addCategory(Intent.CATEGORY_OPENABLE)
+                                .putExtra(Intent.EXTRA_TITLE, name), SAVE);
+                        } catch (Exception error) {
+                            exportContent = null;
+                            emit("export-error", "无法打开保存位置：" + error);
+                        }
                     });
                     break;
                 }
+                case "diagnostics": return new JSONObject()
+                    .put("sdk", android.os.Build.VERSION.SDK_INT)
+                    .put("release", android.os.Build.VERSION.RELEASE)
+                    .put("manufacturer", android.os.Build.MANUFACTURER)
+                    .put("model", android.os.Build.MODEL).toString();
                 case "background": runOnUiThread(() -> moveTaskToBack(true)); break;
                 case "vpn-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_VPN_SETTINGS))); break;
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;
-                case "application-routing": runOnUiThread(this::applicationRouting); break;
+                case "applications-list": return ApplicationCatalog.read(this).toString();
+                case "applications-save": return ApplicationCatalog.save(this, data).toString();
+                case "applications-permissions":
+                    runOnUiThread(() -> {
+                        try {
+                            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:" + getPackageName())));
+                        } catch (RuntimeException error) { emit("error", "无法打开应用权限设置：" + error); }
+                    });
+                    break;
                 case "notification-speeds":
                     getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("notification-speeds", data.getBoolean("value")).apply(); break;
                 case "notify": {
@@ -170,7 +240,10 @@ public final class MainActivity extends NativeActivity {
                     Uri url = Uri.parse(data.getString("url"));
                     if (!"https".equals(url.getScheme()) && !"http".equals(url.getScheme()))
                         throw new IOException("仅支持 HTTP/HTTPS 地址");
-                    runOnUiThread(() -> startActivity(new Intent(Intent.ACTION_VIEW, url)));
+                    runOnUiThread(() -> {
+                        try { startActivity(new Intent(Intent.ACTION_VIEW, url)); }
+                        catch (RuntimeException error) { emit("link-error", "无法打开网页：" + error); }
+                    });
                     break;
                 }
                 default: throw new IOException("未知 Android 操作：" + op);
@@ -304,7 +377,7 @@ public final class MainActivity extends NativeActivity {
                         if (out == null) throw new IOException("无法写入所选文件");
                         out.write(content.getBytes(StandardCharsets.UTF_8));
                     }
-                    emit("notice", "文件已导出");
+                    emit("export-notice", "文件已导出");
                 } else {
                     try (InputStream in = getContentResolver().openInputStream(uri)) {
                         if (in == null) throw new IOException("无法读取所选文件");
@@ -324,39 +397,9 @@ public final class MainActivity extends NativeActivity {
                         emit("file", file);
                     }
                 }
-            } catch (Exception error) { emit("error", error.toString()); }
+            } catch (Exception error) { emit(request == SAVE ? "export-error" : "error", error.toString()); }
         });
         worker.shutdown();
-    }
-    private void applicationRouting() {
-        try {
-            if (CoreBridge.protectedMode(this)) {
-                emit("notice", "请先关闭 Claude 保护，再修改应用分流"); return;
-            }
-        } catch (Exception error) { emit("error", error.toString()); return; }
-        if (TunnelService.connected()) {
-            new AlertDialog.Builder(this).setMessage("请先断开 VPN，再修改应用分流。")
-                .setPositiveButton("知道了", null).show(); return;
-        }
-        List<android.content.pm.ResolveInfo> apps = getPackageManager().queryIntentActivities(
-            new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
-        apps.sort(Comparator.comparing(item -> item.loadLabel(getPackageManager()).toString()));
-        Set<String> exclusions = new HashSet<>(getSharedPreferences("vpn", MODE_PRIVATE)
-            .getStringSet("excluded", Collections.emptySet()));
-        String[] labels = new String[apps.size()];
-        boolean[] checked = new boolean[apps.size()];
-        for (int i=0; i<apps.size(); i++) {
-            labels[i] = apps.get(i).loadLabel(getPackageManager()).toString();
-            checked[i] = exclusions.contains(apps.get(i).activityInfo.packageName);
-        }
-        new AlertDialog.Builder(this).setTitle("选择不经过 VPN 的应用")
-            .setMultiChoiceItems(labels, checked, (dialog, which, selected) -> {
-                String id = apps.get(which).activityInfo.packageName;
-                if (selected) exclusions.add(id); else exclusions.remove(id);
-            }).setNegativeButton("取消", null).setPositiveButton("保存", (dialog, which) -> {
-                getSharedPreferences("vpn", MODE_PRIVATE).edit().putStringSet("excluded", exclusions).apply();
-                emit("notice", "应用分流已保存，下次连接时生效");
-            }).show();
     }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);

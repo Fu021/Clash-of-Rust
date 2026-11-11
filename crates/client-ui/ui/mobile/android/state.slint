@@ -1,11 +1,28 @@
 // Android-only presentation and native requests. iOS does not import this file.
-export enum AndroidIntent { vpn-settings, application-routing, notification-speeds, battery-settings, check-update, save-ports, background }
+export enum AndroidIntent { vpn-settings, application-routing, application-query, application-system, application-filter, application-mode, application-toggle, application-select, application-revert, application-save, application-refresh, application-permissions, notification-speeds, battery-settings, check-update, save-ports, background }
 export global AndroidActions { callback request(AndroidIntent, string); }
+export struct ApplicationItem { name: string, package: string, selected: bool, icon: image, has-icon: bool }
 export global AndroidData {
+    in-out property <[ApplicationItem]> applications;
+    in-out property <bool> applications-loading;
+    in-out property <bool> applications-saving;
+    in-out property <bool> applications-loaded;
+    in-out property <bool> applications-system;
+    in-out property <string> applications-query;
+    in-out property <string> applications-error;
+    in-out property <bool> applications-visibility-limited;
+    in-out property <bool> applications-query-permission;
+    in-out property <int> applications-icon-failures;
+    in-out property <string> applications-saved-summary;
+    in-out property <int> applications-mode;
+    in-out property <int> applications-filter;
+    in-out property <int> applications-total;
+    in-out property <int> applications-selected;
+    in-out property <length> applications-scroll-y;
     in-out property <bool> notification-speeds: true;
     in-out property <bool> ports-dirty;
     in-out property <string> authorization-status: "未授权";
-    in-out property <string> application-scope: "所有应用";
+    in-out property <string> application-scope: "全部应用";
     in-out property <string> update-status: "尚未检查更新";
     in-out property <bool> update-busy;
     in-out property <bool> update-downloading;

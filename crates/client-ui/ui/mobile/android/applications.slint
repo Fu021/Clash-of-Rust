@@ -1,0 +1,170 @@
+import { PageSurface } from "../../components/motion.slint";
+import { Theme } from "../../theme/palette.slint";
+import { MobileTypography } from "../shared/typography.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+import { AndroidData, AndroidActions, AndroidIntent, ApplicationItem } from "state.slint";
+import { MText, MSmall, MParagraph, MCard, MButton, MField, MSwitch, MScroll } from "../shared/controls.slint";
+
+component ApplicationRow inherits Rectangle {
+    in property <ApplicationItem> item;
+    in property <bool> editable;
+    height: max(64px, row.preferred-height + 16px);
+    background: root.item.selected ? Theme.accent-wash : Theme.surface;
+    border-radius: 10px;
+    accessible-role: checkbox;
+    accessible-label: root.item.name + " · " + root.item.package;
+    accessible-checked: root.item.selected;
+    accessible-enabled: root.editable;
+    accessible-action-default => { if root.editable { AndroidActions.request(AndroidIntent.application-toggle, root.item.package); } }
+    row := HorizontalLayout { x: 12px; y: 8px; width: parent.width - 24px; height: self.preferred-height;
+        spacing: 12px; cross-axis-alignment: center;
+        Rectangle { width: 36px; height: 36px; border-radius: 10px; background: Theme.inset; horizontal-stretch: 0;
+            if root.item.has-icon: Image { width: 36px; height: 36px; source: root.item.icon; image-fit: contain; }
+            if !root.item.has-icon: Image { width: 20px; height: 20px; x: 8px; y: 8px; source: @image-url("../../icons/proxies.svg"); colorize: Theme.secondary; }
+        }
+        VerticalLayout { spacing: 4px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+            MText { text: root.item.name; font-size: MobileTypography.font-size(14); }
+            MSmall { text: root.item.package; font-size: MobileTypography.font-size(11); }
+        }
+        MSmall { text: root.item.selected ? "已选" : "未选";
+            color: root.item.selected ? Theme.accent : Theme.secondary;
+            width: max(32px, MobileTypography.font-size(12) * 2); horizontal-stretch: 0; horizontal-alignment: center;
+        }
+    }
+    TouchArea { enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-toggle, root.item.package); } }
+}
+
+component ApplicationSaveCard inherits MCard {
+    in property <bool> editable;
+    in property <bool> protection-locked;
+    vertical-padding: 8px; horizontal-padding: 12px; gap: 4px;
+    HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+        VerticalLayout { spacing: 4px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+            MText { text: "已保存"; font-size: MobileTypography.font-size(14); font-weight: 600; }
+            MSmall { text: AndroidData.applications-loaded ? AndroidData.applications-saved-summary : "正在读取…"; wrap: word-wrap; }
+        }
+        MButton {
+            geometry-key: "preview-applications-save";
+            text: MobileData.vpn-connected ? "保存并重连" : "保存"; primary: true; compact: true;
+            width: max(80px, MobileTypography.font-size(13) * (MobileData.vpn-connected ? 5 : 2) + 20px); horizontal-stretch: 0;
+            busy: AndroidData.applications-saving;
+            enabled: root.editable && MobileView.draft-dirty;
+            clicked => { AndroidActions.request(AndroidIntent.application-save, ""); }
+        }
+    }
+    HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
+        MSmall { text: root.protection-locked ? "Claude 保护已锁定应用分流" : !AndroidData.applications-loaded ? "尚未读取设置" : MobileView.draft-dirty ? "有未保存修改" : "设置已保存";
+            color: root.protection-locked ? Theme.warning : MobileView.draft-dirty ? Theme.accent : Theme.secondary;
+        }
+        if MobileView.draft-dirty: MButton { text: "撤销修改"; compact: true; quiet: true;
+            geometry-key: "preview-applications-revert";
+            width: max(80px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0;
+            enabled: root.editable;
+            clicked => { AndroidActions.request(AndroidIntent.application-revert, ""); }
+        }
+    }
+}
+
+component ApplicationModeButton inherits MButton {
+    in property <int> mode;
+    geometry-key: "preview-applications-mode:" + root.mode;
+    text: root.mode == 0 ? "全部应用" : root.mode == 1 ? "仅选中" : "排除选中";
+    compact: true;
+    quiet: true;
+    selected: AndroidData.applications-mode == root.mode;
+    clicked => { AndroidActions.request(AndroidIntent.application-mode, "" + root.mode); }
+}
+
+export component AndroidApplications inherits PageSurface {
+    property <bool> protection-locked: MobileData.protected || MobileData.protection-pending;
+    property <bool> editable: AndroidData.applications-loaded && !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked && !MobileView.modal && !MobileView.notice-modal;
+    property <bool> selectable: root.editable && AndroidData.applications-mode != 0;
+    init => { AndroidData.applications-scroll-y = 0px; }
+    saved := ApplicationSaveCard { x: 0px; y: 0px; width: parent.width; editable: root.editable; protection-locked: root.protection-locked; }
+    Rectangle {
+        x: 0px; y: saved.height + 10px; width: parent.width; height: max(0px, parent.height - self.y);
+        clip: true;
+        apps := MScroll {
+            width: parent.width; height: parent.height;
+            content-key: AndroidData.applications-mode + "/" + AndroidData.applications-query + "/" + AndroidData.applications-filter + (AndroidData.applications-system ? "/system" : "/apps");
+            content-y <=> AndroidData.applications-scroll-y;
+            VerticalLayout { alignment: start; spacing: 10px; padding-bottom: 12px;
+                MCard { vertical-padding: 10px; horizontal-padding: 12px; gap: 6px;
+                    MText { text: "哪些应用进入 VPN"; font-size: MobileTypography.font-size(14); font-weight: 600; }
+                    GridLayout { spacing: 4px;
+                        ApplicationModeButton { mode: 0; col: 0; row: 0; enabled: root.editable; }
+                        ApplicationModeButton { mode: 1; col: Theme.text-scale > 1.25 ? 0 : 1; row: Theme.text-scale > 1.25 ? 1 : 0; enabled: root.editable; }
+                        ApplicationModeButton { mode: 2; col: Theme.text-scale > 1.25 ? 0 : 2; row: Theme.text-scale > 1.25 ? 2 : 0; enabled: root.editable; }
+                    }
+                    MParagraph { text: AndroidData.applications-mode == 1 ? "选中的应用进入 VPN，其余应用直连。"
+                        : AndroidData.applications-mode == 2 ? "选中的应用直连，其余应用进入 VPN。" : "所有应用进入 VPN。";
+                        font-size: MobileTypography.font-size(13); color: Theme.secondary;
+                    }
+                }
+                if AndroidData.applications-visibility-limited || (AndroidData.applications-loaded && !AndroidData.applications-query-permission): MCard {
+                    vertical-padding: 8px; horizontal-padding: 12px; gap: 4px;
+                    MParagraph { text: !AndroidData.applications-query-permission
+                        ? "应用列表权限未生效；可打开应用信息检查权限或设备限制，再返回刷新。"
+                        : "系统未返回其他可选应用；可打开应用信息检查设备限制，再返回刷新。";
+                        color: Theme.warning; font-size: MobileTypography.font-size(13);
+                    }
+                    MSmall { text: "Android 没有通用的应用列表授权弹窗。"; wrap: word-wrap; }
+                    MButton { text: "应用信息"; compact: true; enabled: !root.protection-locked;
+                        clicked => { AndroidActions.request(AndroidIntent.application-permissions, ""); }
+                    }
+                    if AndroidData.applications-error == "": MButton { text: "刷新"; compact: true; busy: AndroidData.applications-loading;
+                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
+                        clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
+                    }
+                }
+                if AndroidData.applications-mode != 0: VerticalLayout { alignment: start; spacing: 10px;
+                MField { placeholder: "搜索应用名称或包名"; text <=> AndroidData.applications-query; enabled: root.editable;
+                    edited(value) => { AndroidActions.request(AndroidIntent.application-query, value); }
+                }
+                HorizontalLayout { spacing: 4px; cross-axis-alignment: center;
+                    for label[index] in ["全部", "已选", "未选"]: MButton {
+                        geometry-key: "preview-applications-filter:" + index;
+                        text: label; quiet: true; compact: true; selected: AndroidData.applications-filter == index;
+                        enabled: root.editable;
+                        clicked => { AndroidActions.request(AndroidIntent.application-filter, "" + index); }
+                    }
+                    MButton { text: "刷新"; quiet: true; compact: true;
+                        busy: AndroidData.applications-loading;
+                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
+                        clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
+                    }
+                }
+                MSwitch { geometry-key: "preview-applications-system"; title: "显示系统组件"; checked: AndroidData.applications-system; enabled: root.editable;
+                    toggled(value) => { AndroidActions.request(AndroidIntent.application-system, value ? "true" : "false"); }
+                }
+                HorizontalLayout { spacing: 4px;
+                    MButton { text: "全选结果"; quiet: true; compact: true; enabled: root.selectable; clicked => { AndroidActions.request(AndroidIntent.application-select, "all"); } }
+                    MButton { text: "反选结果"; quiet: true; compact: true; enabled: root.selectable; clicked => { AndroidActions.request(AndroidIntent.application-select, "invert"); } }
+                    MButton { text: "清空选择"; quiet: true; compact: true; enabled: root.selectable; clicked => { AndroidActions.request(AndroidIntent.application-select, "clear"); } }
+                }
+                MSmall { text: AndroidData.applications-loading ? "正在读取应用…" : "显示 " + AndroidData.applications.length + " / " + AndroidData.applications-total
+                    + " · 已选 " + AndroidData.applications-selected;
+                    wrap: word-wrap;
+                }
+                if AndroidData.applications-icon-failures > 0: MSmall { text: "部分图标未读取，已使用通用图标。"; wrap: word-wrap; }
+                if !AndroidData.applications-loading && AndroidData.applications-loaded && AndroidData.applications.length == 0: MParagraph {
+                    text: AndroidData.applications-total == 0 ? "未读取到应用，请刷新重试" : AndroidData.applications-filter == 1 ? "没有匹配的已选应用，可切回全部查看。" : "没有匹配的应用，可调整搜索或筛选。";
+                    color: Theme.secondary;
+                }
+                for application in AndroidData.applications: ApplicationRow { item: application; editable: root.selectable; }
+                }
+                if AndroidData.applications-error != "": MParagraph { text: AndroidData.applications-error; color: Theme.danger; }
+                if AndroidData.applications-error != "": HorizontalLayout { spacing: 6px;
+                    MButton { geometry-key: "preview-applications-retry"; text: "重试"; compact: true;
+                        busy: AndroidData.applications-loading;
+                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
+                        clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
+                    }
+                    MButton { text: "导出诊断"; compact: true;
+                        clicked => { MobileActions.request(MobileIntent.export-diagnostics, AndroidData.applications-error, ""); }
+                    }
+                }
+            }
+        }
+    }
+}

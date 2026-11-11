@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt;
 pub mod channel;
 mod retry;
 mod route;
+pub mod schedule;
 pub use retry::check as retry_check;
 pub use route::Observer as RouteObserver;
 
@@ -31,7 +32,7 @@ impl Progress {
                 format!("{} · 直连 ({node})", self.route)
             }
             Some(node) => format!("{} · {node}", self.route),
-            None => format!("{} · 正在确认出站", self.route),
+            None => self.route.to_owned(),
         }
     }
 }
@@ -127,6 +128,12 @@ fn select_channel(
         (&release.tag_name, release.draft, release.prerelease)
     });
     if let Some((version, release)) = release {
+        if suffix.starts_with("android-")
+            && suffix.ends_with(".apk")
+            && version.cmp_precedence(&current).is_lt()
+        {
+            return Ok(None);
+        }
         let name = format!("Clash-of-Rust-{version}-{suffix}");
         let matches = release
             .assets
@@ -164,13 +171,17 @@ fn select_channel(
     }
     Ok(None)
 }
-pub async fn check(current: &str, suffix: &str, port: Option<u16>) -> Result<Option<Package>> {
+pub async fn check(
+    current: &str,
+    suffix: &str,
+    port: Option<crate::network::DownloadPorts>,
+) -> Result<Option<Package>> {
     check_with_prereleases(current, suffix, port, false).await
 }
 pub async fn check_with_prereleases(
     current: &str,
     suffix: &str,
-    port: Option<u16>,
+    port: Option<crate::network::DownloadPorts>,
     include_prereleases: bool,
 ) -> Result<Option<Package>> {
     // Validate local arguments once; retry only the remote discovery operation.
@@ -182,7 +193,7 @@ pub async fn check_with_prereleases(
                 .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)),
         "安装包平台无效"
     );
-    let routes = crate::network::routes(port, None);
+    let routes = crate::network::download_routes(port, None);
     retry_check(|| check_once_channel(current, suffix, &routes, API, include_prereleases)).await
 }
 
@@ -244,7 +255,7 @@ fn checksum(bytes: &[u8], name: &str) -> Result<String> {
 }
 pub async fn download(
     package: &Package,
-    port: Option<u16>,
+    port: Option<crate::network::DownloadPorts>,
     path: &Path,
     api: Option<&crate::api::Api>,
     mut progress: impl FnMut(Progress),
@@ -253,7 +264,7 @@ pub async fn download(
     let parent = path.parent().context("更新缓存路径无效")?;
     tokio::fs::create_dir_all(parent).await?;
     let mut errors = Vec::new();
-    let routes = crate::network::routes(port, None);
+    let routes = crate::network::download_routes(port, None);
     for (index, route) in routes.iter().enumerate() {
         progress(Progress {
             total: package.size,
@@ -419,7 +430,7 @@ mod tests {
         assert_eq!(progress.first().unwrap().received, 0);
         let last = progress.last().unwrap();
         assert_eq!(last.received, package.size);
-        assert_eq!(last.route, "直连");
+        assert_eq!(last.route, "系统网络");
         assert!(last.bytes_per_second > 0);
         server.await.unwrap();
     }
@@ -449,7 +460,7 @@ mod tests {
         );
     }
     #[test]
-    fn android_channels_offer_previews_and_return_to_the_newest_complete_stable_package() {
+    fn android_channels_offer_newer_versions_without_returning_to_older_stable_packages() {
         let releases = serde_json::json!([
             {"tag_name":"v0.6.4-dev.2","draft":false,"prerelease":true,"assets":[
                 {"name":"Clash-of-Rust-0.6.4-dev.2-android-arm64.apk","size":42},
@@ -467,12 +478,19 @@ mod tests {
             .unwrap();
         assert_eq!(preview.version, "0.6.4-dev.2");
         assert!(preview.preview);
+        let stable = select_channel(parse(), "0.6.3-dev.1", "android-arm64.apk", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stable.version, "0.6.3");
+        assert!(!stable.preview);
         for current in ["0.6.4-dev.1", "0.999.0", "0.999.0-fix.1.local"] {
-            let stable = select_channel(parse(), current, "android-arm64.apk", false)
-                .unwrap()
-                .unwrap();
-            assert_eq!(stable.version, "0.6.3");
-            assert!(!stable.preview);
+            for suffix in ["android-arm64.apk", "android-armv7.apk", "android-x64.apk"] {
+                assert!(
+                    select_channel(parse(), current, suffix, false)
+                        .unwrap()
+                        .is_none()
+                );
+            }
         }
         for current in ["0.999.0", "0.999.0-fix.1.local"] {
             assert!(
@@ -481,7 +499,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert!(select_channel(parse(), "0.6.4-dev.1", "android-x64.apk", false).is_err());
+        assert!(select_channel(parse(), "0.6.2", "android-x64.apk", false).is_err());
         assert!(
             select_channel(parse(), "0.6.3", "android-arm64.apk", false)
                 .unwrap()

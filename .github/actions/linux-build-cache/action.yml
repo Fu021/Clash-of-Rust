@@ -1,0 +1,29 @@
+name: Ubuntu build environment
+description: Reuse the frozen compiler container; prepared VM system disks stay in the private cache
+runs:
+  using: composite
+  steps:
+    - name: Identify frozen compiler environment
+      id: identity
+      shell: bash
+      run: python3 scripts/linux_ci.py cache-keys
+    - name: Restore compiler container
+      id: restore
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ runner.temp }}/cor-linux-build-cache
+        key: linux-build-${{ steps.identity.outputs.image }}
+    - name: Verify or prepare compiler container
+      id: prepare
+      shell: bash
+      env:
+        COR_LINUX_BUILD_CACHE: ${{ runner.temp }}/cor-linux-build-cache
+      run: python3 scripts/linux_ci.py cache-image
+    - name: Save compiler container
+      if: steps.prepare.outputs.ready == 'true' && steps.restore.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      continue-on-error: true
+      with:
+        path: ${{ runner.temp }}/cor-linux-build-cache
+        key: linux-build-${{ steps.identity.outputs.image }}

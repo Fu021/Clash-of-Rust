@@ -30,6 +30,7 @@ on:
         default: '10'
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+  ZSTD_CLEVEL: '1'
 permissions:
   contents: read
 jobs:
@@ -92,7 +93,7 @@ jobs:
           audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:github-action-cache
           version: ${{ env.COR_TAILSCALE }}
-          use-cache: 'false'
+          use-cache: ${{ runner.os == 'macOS' && 'true' || 'false' }}
           retry: '1'
           timeout: 45s
           args: --accept-dns=false
@@ -130,7 +131,7 @@ jobs:
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: true
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
         shell: python
@@ -198,7 +199,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Prioritize slow Rust compilation within the 9 GiB cache budget
+      - name: Keep the latest cache per target within 20 GiB across branches
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'

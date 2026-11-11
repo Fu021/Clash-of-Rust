@@ -1,17 +1,32 @@
-import { MobileView } from "../shared/state.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+import { AndroidData } from "state.slint";
 import { MobileFrame } from "../shared/frame.slint";
 import { MobileHome, MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileLogs, MobileNetwork, MobileIpCheck, MobileAiCheck, MobileTools } from "../shared/pages.slint";
 import { AndroidSettings } from "settings.slint";
+import { AndroidApplications } from "applications.slint";
 
 // Android owns this composition and may replace/add pages without iOS changes.
 export component AndroidSurface inherits MobileFrame {
     primary-pages: [0, 1, 2, 10, 9];
-    sidebar-pages: [0, 1, 2, 10];
+    sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
     sidebar-footer-pages: [9];
-    grouped-tools: true;
-    tab-pill: true; title-size: 24px; sidebar-width: 192px; tab-height: 56px;
+    grouped-tools: false;
+    tab-pill: true; title-size: 26px; sidebar-width: 236px; tab-height: 56px;
     compact-system-insets: true;
+    standalone-detail: MobileView.detail == 18 || (MobileView.detail == 12 && MobileView.pending-detail == 18);
+    standalone-title: "应用分流";
     centered-modal: false;
+    update-available: AndroidData.update-available;
+    update-busy: AndroidData.update-busy;
+    update-downloading: AndroidData.update-downloading;
+    update-status: AndroidData.update-status;
+    update-progress: AndroidData.update-progress;
+    install-update => {
+        if MobileData.update-preview {
+            MobileActions.request(MobileIntent.install-update, "", "prepare");
+            MobileView.detail = 13;
+        } else { MobileActions.request(MobileIntent.install-update, "", ""); }
+    }
     if MobileView.page == 0: MobileHome { }
     if MobileView.page == 1: MobileProxies { }
     if MobileView.page == 2: MobileSubscriptions { }
@@ -21,6 +36,7 @@ export component AndroidSurface inherits MobileFrame {
     if MobileView.page == 6: MobileNetwork { }
     if MobileView.page == 7: MobileIpCheck { }
     if MobileView.page == 8: MobileAiCheck { }
-    if MobileView.page == 9: AndroidSettings { }
+    if MobileView.page == 9 && !root.standalone-detail: AndroidSettings { }
+    if root.standalone-detail: AndroidApplications { }
     if MobileView.page == 10: MobileTools { }
 }

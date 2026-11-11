@@ -1,4 +1,4 @@
-"""Keep Rust compilation caches below 9 GiB, favoring slow native targets."""
+"""Keep the latest cache per target across refs within 20 GiB."""
 import argparse
 import os
 from pathlib import Path
@@ -8,7 +8,7 @@ import urllib.error
 
 from workflow_artifacts import release_module
 
-BUDGET = 9 * 1024**3
+BUDGET = 20 * 1024**3
 
 
 def caches(client):
@@ -23,7 +23,12 @@ def caches(client):
 
 
 def lineage(key):
-    key = re.sub(r'-workspace-[0-9a-f]{64}', '', key)
+    key = re.sub(r'-(?:workspace|vendor)-[0-9a-f]{64}', '', key)
+    key = re.sub(r'-local-deps-v\d+', '', key)
+    if key.startswith('linux-build-linux-image-ubuntu20-'):
+        return re.sub(r'-[0-9a-f]{64}$', '', key)
+    if key.startswith('android-go-build-v1-'):
+        return re.sub(r'-[0-9a-f]{64}$', '', key)
     if key.startswith(('linux-python-ubuntu20-', 'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-')):
         return re.sub(r'^(linux-(?:python|cloud|apt|image)-ubuntu20-v\d+-(?:x64|arm64))-.+$',
                       r'\1', key)
@@ -38,7 +43,7 @@ def lineage(key):
     if key.startswith('action-setup-tailscale/'):
         return 'tailscale/' + key.rsplit('/', 1)[-1]
     # Rust caches differ by compiler/dependency hashes. Keep the newest revision
-    # per native target and branch; obsolete lockfiles must not accumulate.
+    # per native target across branches; obsolete lockfiles must not accumulate.
     if key.startswith(('native-release-', 'android-', 'memory-ubuntu22-')):
         return re.sub(r'-[0-9a-f]{8,}-[0-9a-f]{8,}$', '', key)
     if key.startswith('macos-compiler-'):
@@ -58,18 +63,28 @@ def lineage(key):
 
 def priority(entry):
     key = entry['key']
+    if re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key):
+        return 10
+    if key.startswith('linux-build-linux-image-ubuntu20-'):
+        return 8
+    if key.startswith('android-go-build-v1-'):
+        return 0
     if key.startswith('native-release-'):
-        if 'windows' in key and 'arm' in key:
-            return 6
-        if 'macos' in key and ('13' in key or 'intel' in key):
-            return 5
-        if 'windows' in key:
-            return 4
         if 'macos' in key:
-            return 3
+            return 8 if 'macos-13-' in key or 'intel' in key else 9
+        if 'windows' in key and 'arm' in key:
+            return 4
+        if 'windows' in key:
+            return 2
+        if 'linux' in key or 'ubuntu' in key:
+            return 1 if 'arm' in key else 3
         return 1
+    if key.startswith('android-v2-arm64-'):
+        return 7
+    if key.startswith('android-v2-x64-'):
+        return 5
     if key.startswith('android-v2-armv7-'):
-        return 2
+        return 6
     if key.startswith('android-v2-'):
         return 1
     if key.startswith('memory-'):
@@ -78,18 +93,21 @@ def priority(entry):
 
 
 def retired(key):
+    if key.startswith('action-setup-tailscale/'):
+        return re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key) is None
+    if key.startswith('android-go-build-v1-'):
+        return False
     return key.startswith((
         'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
         'gradle-', 'tools-nsis-', 'skia-source-', 'linux-python-ubuntu20-',
         'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-',
-        'action-setup-tailscale/',
     ))
 
 
 def eviction_plan(entries, budget=BUDGET):
     if budget <= 0:
         raise ValueError('Cache budget must be positive')
-    recent = sorted(entries, key=lambda c: (c['last_accessed_at'], c['created_at'], c['id']), reverse=True)
+    recent = sorted(entries, key=lambda c: (c['created_at'], c['id']), reverse=True)
     seen = set()
     keep = []
     remove = []
@@ -97,15 +115,15 @@ def eviction_plan(entries, budget=BUDGET):
         if retired(entry['key']):
             remove.append(entry)
             continue
-        family = (entry['ref'], lineage(entry['key']))
+        family = lineage(entry['key'])
         if family in seen:
             remove.append(entry)
         else:
             seen.add(family)
             keep.append(entry)
     size = sum(c['size_in_bytes'] for c in keep)
-    for entry in sorted(keep, key=lambda c: (priority(c), c['ref'] == 'refs/heads/main',
-                                           c['last_accessed_at'], c['created_at'], c['id'])):
+    for entry in sorted(keep, key=lambda c: (priority(c), c['last_accessed_at'],
+                                           c['created_at'], c['id'])):
         if size <= budget:
             break
         remove.append(entry)

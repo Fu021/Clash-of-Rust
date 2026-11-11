@@ -61,6 +61,20 @@ def package_version(source=None):
     return manifest_version(((Path(source) if source else ROOT)/'Cargo.toml').read_text(encoding='utf-8'))
 
 
+def desktop_cargo_scope(source=ROOT):
+    import tomllib
+
+    source = Path(source)
+    manifest = tomllib.loads((source/'Cargo.toml').read_text(encoding='utf-8'))
+    members = manifest.get('workspace', {}).get('members', [])
+    scope = ['--workspace']
+    for relative in ('crates/mobile-ffi', 'apps/android/native'):
+        if relative in members:
+            package = tomllib.loads((source/relative/'Cargo.toml').read_text(encoding='utf-8'))
+            scope.extend(['--exclude', package['package']['name']])
+    return scope
+
+
 def desktop_directory(source=None):
     source = Path(source) if source else ROOT
     return source/'apps/desktop' if (source/'apps/desktop/Cargo.toml').is_file() else source
@@ -277,7 +291,7 @@ def copy_static(bundle):
     core = json.loads((resources/'core.json').read_text(encoding='utf-8'))
     write_mihomo_notice(resources/'THIRD-PARTY-NOTICES.txt', core.get('version'))
     shutil.copy2(ROOT/'LICENSE', bundle/'LICENSE')
-    licenses = {'SourceHanSans-LICENSE.txt':'fonts/LICENSE.txt', 'Twemoji-LICENSE.txt':'flags/LICENSE-Twemoji.txt', 'Unicode-LICENSE.txt':'flags/LICENSE-Unicode.txt'}
+    licenses = {'SourceHanSans-LICENSE.txt':'fonts/LICENSE.txt', 'NotoEmoji-LICENSE.txt':'fonts/LICENSE-NotoEmoji.txt', 'Unicode-LICENSE.txt':'countries/LICENSE-Unicode.txt'}
     for name, source in licenses.items():
         shutil.copy2(ROOT/'resources'/source, resources/name)
     ip = resources/'ip-check'

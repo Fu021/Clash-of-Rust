@@ -1,18 +1,31 @@
 mod args;
 mod backend;
 mod commands;
+mod diagnostics;
 mod host_network;
 mod output;
 mod service;
 mod users;
 
 fn main() {
+    let mut completion = std::env::args_os().skip(1);
+    if completion.next().as_deref() == Some(std::ffi::OsStr::new("__complete")) {
+        use std::io::Write;
+        let words = completion
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let _ = std::io::stdout()
+            .lock()
+            .write_all(args::complete(&words).as_bytes());
+        return;
+    }
     if clash_client_runtime::update::helper_main() {
         return;
     }
     if let Some(result) = clash_client_runtime::claude_check::system::helper_main() {
         if let Err(error) = result {
             eprintln!("{error:#}");
+            diagnostics::failure_hint(None);
             std::process::exit(1);
         }
         return;
@@ -33,6 +46,7 @@ fn main() {
         #[cfg(windows)]
         if let Err(error) = clash_client_runtime::platform::notification::prepare_process() {
             eprintln!("通知初始化失败：{error:#}");
+            diagnostics::failure_hint(Some(&args));
         }
         anyhow::ensure!(
             !(args.flag("json") && args.flag("jsonl")),
@@ -80,6 +94,9 @@ fn main() {
         };
         if code != 0 {
             eprintln!("cor: {error:#}");
+            if code != 130 {
+                diagnostics::failure_hint(None);
+            }
         }
         std::process::exit(code);
     }

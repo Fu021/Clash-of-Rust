@@ -10,6 +10,7 @@ use std::{
     process::Command,
 };
 
+mod terminal_agent;
 mod trusted;
 use std::os::unix::fs::MetadataExt;
 use trusted::{CORE, LAUNCHER, NETWORK_CAPABILITIES, installed_resources, open_at};
@@ -74,13 +75,16 @@ pub fn check_tun_environment() -> Result<()> {
         .write(true)
         .open("/dev/net/tun")
         .context("无法访问 /dev/net/tun，请检查设备访问权限")?;
-    let status = std::fs::read_to_string("/proc/self/status")?;
+    check_tun_privileges(&std::fs::read_to_string("/proc/self/status")?)
+}
+
+fn check_tun_privileges(status: &str) -> Result<()> {
     ensure!(
-        status_number(&status, "NoNewPrivs:", 10)? == 0,
+        status_number(status, "NoNewPrivs:", 10)? == 0 || root_has_tun_permissions(status)?,
         "启动环境禁止获取网络权限，请从系统应用菜单启动客户端"
     );
     ensure!(
-        status_number(&status, "CapBnd:", 16)? & NETWORK_CAPABILITIES == NETWORK_CAPABILITIES,
+        status_number(status, "CapBnd:", 16)? & NETWORK_CAPABILITIES == NETWORK_CAPABILITIES,
         "启动环境限制了 TUN 网络权限，请检查容器或沙箱设置"
     );
     Ok(())
@@ -238,10 +242,13 @@ fn authorize(core: &Path, terminal: bool) -> Result<()> {
         Path::new("/usr/bin/pkexec").is_file(),
         "缺少 pkexec，请安装 pkexec 后重新开启 TUN"
     );
+    let _agent = if terminal {
+        terminal_agent::TerminalAgent::start()?
+    } else {
+        None
+    };
     let mut command = Command::new("/usr/bin/pkexec");
-    if !terminal {
-        command.arg("--disable-internal-agent");
-    }
+    command.arg("--disable-internal-agent");
     let status = command
         .args([EXECUTABLE, HELPER_ARGUMENT])
         .stdin(if terminal {
@@ -258,11 +265,15 @@ fn authorize(core: &Path, terminal: bool) -> Result<()> {
         .output()
         .context("无法启动 TUN 授权助手")?;
     match status.status.code() {
-        Some(0) => Ok(()),
+        Some(0) => {
+            ensure!(
+                installed_authorized()?,
+                "TUN 授权未生效，请检查安装助手的网络权限与 DNS 助手"
+            );
+            Ok(())
+        }
         Some(126) => bail!("TUN 授权已取消，当前代理模式保持不变"),
-        Some(127) if terminal => bail!(
-            "无法获得 TUN 管理员授权，请检查 polkit 服务及终端认证；也可先执行 sudo /opt/clash-of-rust/clash-of-rust --authorize-tun，再以普通用户运行 cor proxy tun"
-        ),
+        Some(127) if terminal => bail!("无法获得 TUN 管理员授权，请检查 polkit 服务及终端认证"),
         Some(127) => bail!("无法获得 TUN 授权，请检查 polkit 与桌面认证代理"),
         _ => {
             // This fixed helper emits only local installation diagnostics.
@@ -351,6 +362,22 @@ mod tests {
         }
         assert!(root_has_tun_permissions("Uid: 0\nCapEff: 3000\n").is_err());
         assert!(root_has_tun_permissions("CapEff: 3000\n").is_err());
+    }
+
+    #[test]
+    fn no_new_privileges_allows_existing_root_capabilities_but_never_grants_them() {
+        for (uid, effective, bounding, no_new_privs, allowed) in [
+            (0, 0x3000, 0x3000, 1, true),
+            (0, 0x1000, 0x3000, 1, false),
+            (0, 0x3000, 0x1000, 1, false),
+            (1000, 0x3000, 0x3000, 1, false),
+            (1000, 0, 0x3000, 0, true),
+        ] {
+            let status = format!(
+                "Uid:\t{uid} {uid} {uid} {uid}\nCapEff:\t{effective:x}\nCapBnd:\t{bounding:x}\nNoNewPrivs:\t{no_new_privs}\n"
+            );
+            assert_eq!(check_tun_privileges(&status).is_ok(), allowed);
+        }
     }
 
     #[test]

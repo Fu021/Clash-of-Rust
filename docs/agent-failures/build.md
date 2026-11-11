@@ -25,6 +25,7 @@
 - 所有离线脚本测试类须隔离 `RUNNER_TEMP`、原包配置及 Actions 的 env/output/state/summary 文件。共享 Go 下载测试也会登记原包，须验证记录只进入测试目录；检查真实下载清单没有混入测试 URL 或模拟结果，测试通过不能代替副作用检查。
 - 引导读取工具版本时不能提前导入 `tomllib` 等待安装解释器才提供的模块；固定 Python 须核对各 OS/架构实际提供的二进制，见[运行依赖缓存](../workflows/cache-coverage.md)，不能直接推广 Linux 的安全维护补丁号。
 - 绿色 CI 仍检查实际日志：Slint `viewport-y/height` 迁移为 `content-y/height`；Android 后端明确传入已选择的 SDK/build-tools，不能自动探测 runner 上的预览版；Gradle 显示完整弃用来源，Java 保留细粒度诊断。NativeActivity 的旧系统回退仅在必需方法上标注兼容，不能全局屏蔽。
+- 独立 Python 的 `ssl.get_default_verify_paths().cafile` 可能为空或不存在，不能直接据此认定 runner 缺少 CA。Linux 容器引导先查解释器默认路径，再查 runner 的 `/etc/ssl/certs/ca-certificates.crt`；两者都不存在才拒绝冷构建，不关闭 TLS 校验。CI `42768224908` 的两个 Linux 编译任务因此在构建前失败，三个安装验证任务只因缺候选包连带失败；本地回归覆盖默认路径、系统回退和全部缺失。
 
 **防回归**
 
@@ -52,17 +53,24 @@
 - 恢复失败后是否丢弃不完整编译对象，同时保留已验证源码快照和测试报告。
 - 远端限流、超时和 DNS 故障是否有有界重试、兼容缓存和正常下载回退。
 - Linux 构建容器不持有私网凭据；需私网回退的 Geo/内核原包先由宿主校验并准备。Windows 恢复文件应在目标目录暂存，避免继承仅管理员可访问的私有临时目录 ACL，再由普通用户真实读取验证。
+- 基础网络验收不应安装未执行的桌面会话。CI `42797177155` 的 Ubuntu latest 为 GNOME 间接拉取 245 个包，两个 Ubuntu 26.04 `libgphoto2` 原包返回官方 404；改为只准备网络工具，图形依赖保留给扩展验收，旧 VM 模板清单不变。不以跳过代理/TUN、关闭签名校验或盲重跑处理镜像同步问题。
 
 **防回归**
 
 - 缓存归档必须校验内容、路径、符号链接和中断状态，不能只校验文件存在。
+- 源码时间戳回执须先确认 JSON 根类型是对象，再读取 schema 和成员；数组、空值等损坏回执应忽略并正常交给 Cargo 校验，不能在可选缓存阶段中止构建。回归同时核对源文件内容、时间戳和现有编译对象未被修改。
 - 自动测试必须覆盖“部分恢复仍可正常重编”和“旧格式缓存不污染当前构建”。
 - 可选缓存上传要有硬超时，不能拖垮已经通过的主构建。
+- 依赖键的精确命中不代表 workspace 已更新：Linux 若只按锁文件保存，后续 UI 测试对象会一直缺失。workspace 保存须按源码分键，容器与宿主共用经过内容核对的时间戳回执；大归档的压缩、恢复和保存单独计时，日志超时不能被成功 job 掩盖。Docker 编译环境仅包含干净的构建依赖，恢复核对归档与加载后的镜像身份；VM 系统盘继续只存私网。
+- 缓存 Action 的“workspace”不等于根目录内所有 path 依赖。`Swatinem/rust-cache` 把 workspace 外部依赖和成员列为保留项，显式排除的本地 Slint 库会被清掉；`c3888a5` 的 macOS Intel 在源码未变化、518 个时间戳已复用时仍重编软件渲染库及上游 UI，构建耗时约 520 秒。通过现有外部回执目录另存限定包的对象、指纹和构建输出，恢复前核对整份内容，源文件变化仍失效。不要仅提高容量、只保存时间戳或为了缓存把 vendor 加入项目 lint／测试范围。
 - metadata 与原文件恢复均受剩余总预算约束，原包导入另有有界预算。调整预算后仍须用实际保存、下载和校验记录判断效果，不能把延长超时视为吞吐提升。
+- 私网预装镜像的能力门禁须直接回归脱敏后的实际 health 形状，不能只按客户端猜测构造 fixture。当前使用 `vm_limits` 和 `range_supported` / `resume_supported`；能力声明、架构准入、上传、恢复及真实启动分开验收。保留已部署 ARM64 向量，新增架构用独立扩展向量且仅在服务端明确声明后启用，见[响应封装](../workflows/prepared-vm-metadata.md#响应封装)。
 - 持久补拉先保存并提交全部批次，再有界查询分页；断线保持清单及 sequence，不能更换序号或自动 `retry_failed=true`。接收、pending、整批 ready 和实际恢复分开验收，详见[清单协议](../workflows/cache-server.md#持久清单补拉)。
 - 工作流不通过 README.txt 或反馈接口交换 agent 消息；需要服务端配合的事项由用户转达。当前原包仍须实际恢复验收，能力声明、metadata、导入接纳和隔离回归不能代替下载校验。已退役数据是否迁移或回收按[白名单](../workflows/cache-retention.md)处理，不再要求修复工作流不会读取的历史分片；职责见[缓存服务边界](../workflows/cache-server.md)。
 - 旧私网分片不能用“索引最后上传”推断引用安全。当前工作流已停止读取和保存这类数据；GitHub workspace key 仍须覆盖 SVG 等实际编译资源。
 - 当前 Rust 对象只用 GitHub，未命中直接编译；私网只保留[白名单原包](../workflows/cache-retention.md)，官方下载失败才回退。末尾只发送 URL 清单，失败不回传 runner 归档，不按 GitHub 淘汰结果清理私网。原生安装器尚未接入的路径须明确列出，不能宣称全量离线覆盖。
+- 原包在私网存在不代表官方 setup action 会使用它。CI `42565924150` 的 Android ARM64 在 `setup-gradle` 下载固定 9.9.0 时遇到 504；此独立下载未经过本仓库回退。改由 `build_inputs.py prepare-gradle` 用已提交官方摘要调用共享下载器，安装前校验及解压边界，编译前检查实际版本。回归须模拟官方失败并实际消费私网恢复的同摘要 ZIP，不能只核对 URL 已登记。CI 候选打包所需工具也在 CI 内准备；发布只准备重新签名所需工具，职责见[安装验收](../workflows/install-validation.md)。
+- GitHub `latest` 资源的资产 ID 可能被上游重建并删除；固定 ID 不代表永久保留。CI `42193941638` 的 Windows x64 在官方 Geo 资产 404 后遇到私网回退拒绝，而 inventory 仍列出相同原文件摘要。回退错误须区分配置、lookup、外层下载/校验、内层解包/校验及发布；元数据拒绝仅报告字段名，不输出响应正文、地址或凭据。不得改用新摘要冒充冻结的旧文件，实际恢复仍须双层校验。
 
 
 **Ubuntu 测试依赖缓存**
@@ -71,7 +79,7 @@ APT 可直接复用下载目录中同大小的 DEB，不能仅凭 GitHub 缓存�
 
 `apt-get --print-uris` 的本地应用 DEB 记录可能没有摘要；先区分本地输入，再要求远程依赖具备四字段及 SHA256，不能因此使整组依赖缓存失效。回归覆盖本地三字段与远程强校验混合记录，缺少摘要的远程记录仍拒绝。Linux 包按 `debian/<包名>` 暂存，扫描 ELF 前创建 `DEBIAN/`，供 `dpkg-shlibdeps` 识别包根目录；仅调整暂存路径不足以消除警告。独立 D-Bus 测试会话只更新自己的激活环境。旧内核 VM 复用本轮 SSH 控制连接，减少 TCG 下重复握手，不更改实际 GUI/代理/TUN 验证。NSIS 等原始下载按内容摘要去重；当前工作流不再上传安装目录或 Gradle 转换缓存。
 
-2026-11-04 审查的外部边界：JNI 0.22.4 的 `jni-macros/src/native_method.rs` 仍生成 `fetch_update`；`download-artifact` 已升级至当前 v8.0.2，仍在内部输出 `Buffer()` 弃用提示；Ubuntu 20.04 旧发行包也可能输出兼容提示。CI `41687501026` 的 Gradle 栈确认 `Configuration.setVisible` 来自 AGP 内置 Kotlin 插件；普通构建保留 `--warning-mode all`，`RUNNER_DEBUG=1` 时显示完整栈，避免每轮重复输出。保留来源与后续验证，不通过修改告警级别或发行包脚本伪装为已修复；复查要求见[日志与耗时审查](../workflows.md#运行日志与耗时审查)。
+2026-11-10 审查的外部边界：JNI 0.22.4 的 `jni-macros/src/native_method.rs` 仍生成 `fetch_update`；`download-artifact` v8.0.2 内部仍输出 `Buffer()` 弃用提示，[上游修复](https://github.com/actions/download-artifact/pull/490)尚未合并。CI `41687501026` 的 Gradle 栈确认 `Configuration.setVisible` 来自 AGP 内置 Kotlin 插件，[上游问题](https://issuetracker.google.com/issues/560282299)也记录过修复后仍可复现。普通构建保留 `--warning-mode all`；`RUNNER_DEBUG=1` 显示详细诊断及弃用栈。Android 编译显式传递冻结 NDK 版本后，CI `42845828066` 三个 ABI 未再出现原生库无法剥离提示；Ubuntu 20.04 x64 的 guest SSH 仍报告非后量子密钥交换。保留来源，不通过修改告警级别伪装为已修复；复查要求见[日志与耗时审查](../workflows.md#运行日志与耗时审查)。
 
 ## 3. Rust 编译与 Clippy 跨 target 差异
 

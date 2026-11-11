@@ -3,7 +3,7 @@ use crate::{activation, apply, apply_if_current, intent, repaint, view_state};
 use clash_client_ui::{AppWindow, Motion, Theme, UiActions, UiData, models::ViewModels};
 use clash_desktop_protocol::{self as wire, HostPacket, UiEvent, WindowCommand};
 use slint::{
-    ComponentHandle, Timer,
+    ComponentHandle, Model, Timer,
     winit_030::{EventResult, WinitWindowAccessor, winit},
 };
 use std::{
@@ -20,6 +20,7 @@ struct Frontend {
     pending_view: Option<wire::ViewState>,
     output: mpsc::Sender<UiEvent>,
     revision: Rc<Cell<u64>>,
+    reclaim: Timer,
 }
 fn send(output: &mpsc::Sender<UiEvent>, event: UiEvent) {
     let _ = output.send(event);
@@ -27,6 +28,7 @@ fn send(output: &mpsc::Sender<UiEvent>, event: UiEvent) {
 fn metrics(window: &AppWindow) -> wire::Metrics {
     // Event filters run before Slint updates its cached geometry. Read the
     // native state to avoid echoing a stale size/DPI/minimized state to the host.
+    let (maximized, fullscreen) = view_state::native_state(window);
     if let Some(metrics) = window.window().with_winit_window(|native| {
         let size = native.inner_size().to_logical::<f32>(native.scale_factor());
         wire::Metrics {
@@ -35,7 +37,7 @@ fn metrics(window: &AppWindow) -> wire::Metrics {
                 height: size.height,
             },
             available: available(window),
-            maximized: native.is_maximized() || native.fullscreen().is_some(),
+            maximized: maximized || fullscreen,
             minimized: native.is_minimized().unwrap_or(false),
             system_dark: native
                 .theme()
@@ -154,6 +156,7 @@ pub fn run() -> anyhow::Result<()> {
             "无法初始化桌面图形服务：{error}；纯命令行或 SSH 会话请使用 cor start，不要启动桌面主程序"
         )
     })?;
+    clash_client_ui::fonts::register_emoji()?;
     #[cfg(target_os = "linux")]
     slint::set_xdg_app_id("clash-of-rust")?;
     let (output, events) = mpsc::channel::<UiEvent>();
@@ -172,6 +175,7 @@ pub fn run() -> anyhow::Result<()> {
         }
     });
     let window = AppWindow::new()?;
+    crate::motion::refresh(&window);
     window.set_app_title(clash_client_core::WINDOW_TITLE.into());
     let mut models = ViewModels::default();
     models.attach(&window.global::<UiData>());
@@ -220,6 +224,8 @@ pub fn run() -> anyhow::Result<()> {
     let native_revision = revision.clone();
     let mut modifiers = winit::keyboard::ModifiersState::empty();
     let mut first_draw = true;
+    let geometry_timer = Timer::default();
+    let mut repaint_state = repaint::RepaintState::default();
     window
         .window()
         .on_winit_window_event(move |native_window, event| {
@@ -257,12 +263,22 @@ pub fn run() -> anyhow::Result<()> {
                             clash_desktop_shell::platform::memory::release_unused_heap();
                         });
                     }
-                    repaint::before_draw(native_window);
+                    repaint_state.before_draw(native_window);
                 }
                 WindowEvent::Resized(size) => {
                     let s = size.to_logical::<f32>(f64::from(native_window.scale_factor()));
                     repaint::invalidate_size(native_window, s.width, s.height);
-                    geometry(&native, &window);
+                    let weak = window.as_weak();
+                    let output = native.clone();
+                    geometry_timer.start(
+                        slint::TimerMode::SingleShot,
+                        Duration::from_millis(80),
+                        move || {
+                            if let Some(window) = weak.upgrade() {
+                                geometry(&output, &window);
+                            }
+                        },
+                    );
                 }
                 WindowEvent::Moved(_) | WindowEvent::ThemeChanged(_) => geometry(&native, &window),
                 WindowEvent::ScaleFactorChanged { .. } => {
@@ -270,6 +286,7 @@ pub fn run() -> anyhow::Result<()> {
                     send(&native, UiEvent::Rescaled);
                 }
                 WindowEvent::Focused(true) => {
+                    crate::motion::refresh(&window);
                     repaint::invalidate(native_window);
                     send(&native, UiEvent::Focused);
                 }
@@ -349,6 +366,7 @@ pub fn run() -> anyhow::Result<()> {
             pending_view: if view_ready { None } else { view },
             output: output.clone(),
             revision,
+            reclaim: Timer::default(),
         })
     });
     let opened = output.clone();
@@ -429,6 +447,13 @@ fn packet(bytes: &[u8]) {
                 view_ready,
                 accepted,
             } => {
+                let old_page = front.window.global::<UiData>().get_page();
+                let old_nodes: usize = front
+                    .models
+                    .groups
+                    .iter()
+                    .map(|group| group.nodes.row_count())
+                    .sum();
                 if !apply_if_current(
                     &data,
                     &front.window.global::<UiData>(),
@@ -437,6 +462,19 @@ fn packet(bytes: &[u8]) {
                     front.revision.get(),
                 ) {
                     return;
+                }
+                let nodes: usize = front
+                    .models
+                    .groups
+                    .iter()
+                    .map(|group| group.nodes.row_count())
+                    .sum();
+                if old_page != data.page || nodes < old_nodes {
+                    front.reclaim.start(
+                        slint::TimerMode::SingleShot,
+                        Duration::from_millis(350),
+                        clash_desktop_shell::platform::memory::release_unused_heap,
+                    );
                 }
                 appearance(&data, &front.window);
                 repaint::invalidate(front.window.window());

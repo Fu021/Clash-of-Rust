@@ -4,7 +4,6 @@ import android.app.*;
 import android.content.*;
 import android.net.VpnService;
 import android.os.*;
-import java.util.Collections;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -120,18 +119,7 @@ public final class TunnelService extends VpnService {
                 .addAddress("198.18.0.1", 30).addRoute("0.0.0.0", 0).addDnsServer("198.18.0.2");
             if (ipv6) builder.addAddress("fdfe:dcba:9876::1", 126).addRoute("::", 0).addDnsServer("fdfe:dcba:9876::2");
             // Do not allow IPv6 to escape the VPN when disabled: omitting its family blocks it.
-            java.util.Set<String> exclusions=getSharedPreferences("vpn", MODE_PRIVATE).getStringSet("excluded",Collections.emptySet());
-            java.util.Set<String> valid=new java.util.HashSet<>();
-            // Broad protection must cover excluded apps too; keep the user's
-            // preferences intact so disconnecting protection restores them.
-            for (String name : CoreBridge.protectedMode(this) ? Collections.<String>emptySet() : exclusions) {
-                try {builder.addDisallowedApplication(name);valid.add(name);}
-                catch (android.content.pm.PackageManager.NameNotFoundException removed) {
-                    android.util.Log.i("ClashOfRust","Removed an uninstalled application from VPN exclusions");
-                }
-            }
-            if (!CoreBridge.protectedMode(this) && !valid.equals(exclusions))
-                getSharedPreferences("vpn",MODE_PRIVATE).edit().putStringSet("excluded",valid).apply();
+            ApplicationRouting.apply(this, builder, CoreBridge.protectedMode(this));
             if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false);
             Intent open = new Intent(this, MainActivity.class);
             builder.setConfigureIntent(PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
@@ -187,8 +175,10 @@ public final class TunnelService extends VpnService {
                 // A rejected replacement leaves the old descriptor valid.
                 // Resume its guard and keep the working connection available.
                 connected = true;
+                boolean protectionRestored = true;
                 try { ProtectionRuntime.sync(this); }
                 catch (Exception guard) {
+                    protectionRestored = false;
                     lastError += "; 保护恢复失败：" + guard;
                     android.util.Log.e("ClashOfRust", "Restore protection after rejected VPN replacement", guard);
                 }
@@ -196,14 +186,14 @@ public final class TunnelService extends VpnService {
                     VpnTileService.refresh(this);
                     getSystemService(NotificationManager.class).notify(1, notification("VPN 重建失败，原连接已保留"));
                 } catch (RuntimeException status) { android.util.Log.w("ClashOfRust", "Update preserved VPN status", status); }
-                MainActivity.emit("error", "VPN 重建失败，原连接已保留：" + lastError);
+                MainActivity.emit(protectionRestored ? "error" : "critical", "VPN 重建失败，原连接已保留：" + lastError);
                 return;
             }
             if (previous != null) {
                 closeDescriptor(previous);
                 if (descriptor == previous) descriptor = null;
             }
-            MainActivity.emit("error", "VPN 启动失败：" + lastError);
+            MainActivity.emit("critical", "VPN 启动失败：" + lastError);
             disconnect(request);
         }
     }

@@ -1,0 +1,54 @@
+{
+  "capabilities": [
+    "validated-cache-commit-v1",
+    "complete-cache-retention-v1",
+    "upstream-fetch-v1",
+    "upstream-import-queue-v1",
+    "upstream-import-history-cleanup-v1",
+    "prepared-vm-cache-v1"
+  ],
+  "vm_limits": {
+    "group": "vm/prepared",
+    "architectures": ["arm64", "x64"],
+    "max_metadata_bytes": 1048576,
+    "max_packages": 4096,
+    "max_sources": 4096,
+    "max_image_bytes": 8589934592,
+    "max_virtual_bytes": 34359738368,
+    "budget_bytes": 17179869184,
+    "max_environments": 2,
+    "upload_concurrency": 1,
+    "upload_timeout_seconds": 1800,
+    "upload_lease_seconds": 2700,
+    "terminal_receipt_seconds": 604800,
+    "cleanup_interval_seconds": 60,
+    "range_supported": false,
+    "resume_supported": false,
+    "range": false,
+    "resume": false
+  },
+  "prepared_vm": {
+    "group": "vm/prepared",
+    "architectures": ["arm64", "x64"],
+    "max_metadata_bytes": 1048576,
+    "max_packages": 4096,
+    "max_sources": 4096,
+    "max_image_bytes": 8589934592,
+    "max_virtual_bytes": 34359738368,
+    "budget_bytes": 17179869184,
+    "max_environments": 2,
+    "upload_concurrency": 1,
+    "upload_timeout_seconds": 1800,
+    "upload_lease_seconds": 2700,
+    "terminal_receipt_seconds": 604800,
+    "cleanup_interval_seconds": 60,
+    "range_supported": false,
+    "resume_supported": false,
+    "range": false,
+    "resume": false
+  },
+  "storage_limits": {
+    "budget_bytes": 64424509440,
+    "min_free_bytes": 16106127360
+  }
+}

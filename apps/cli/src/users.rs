@@ -156,8 +156,12 @@ mod linux {
     pub(super) fn prepare(args: &Args) -> Result<()> {
         let root = platform::is_elevated();
         ensure!(
-            root || (args.get("user").is_none() && !args.flag("all-users")),
-            "只有 root 可以使用 --user 或 --all-users；普通用户只能管理自己的订阅"
+            root || !args.flag("all-users"),
+            "只有 root 可以使用 --all-users；跨用户 TUN 检查请运行 sudo cor status --all-users"
+        );
+        ensure!(
+            root || args.get("user").is_none(),
+            "只有 root 可以使用 --user；普通用户只能管理自己的订阅"
         );
         if !root || args.flag("all-users") {
             return Ok(());
