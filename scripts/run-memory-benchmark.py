@@ -173,12 +173,95 @@ def memory_maps(text, executable=None):
     return totals
 
 
+def mapping_snapshot(processes):
+    roles, unavailable = {}, 0
+    for process in processes:
+        root = Path('/proc') / str(process['pid'])
+        try:
+            stat = (root/'stat').read_text()
+            if int(stat[stat.rindex(')')+2:].split()[19]) != process['start_time']:
+                raise ValueError('Process identity changed')
+            categories = memory_maps((root/'smaps').read_text(), os.readlink(root/'exe'))
+            if not categories:
+                raise ValueError('Empty memory mapping')
+        except (OSError, ValueError, IndexError):
+            unavailable += 1
+            continue
+        for category, values in categories.items():
+            totals = roles.setdefault(process['role'], {}).setdefault(category, dict.fromkeys(values, 0))
+            for field, value in values.items():
+                totals[field] += value
+    return {'roles': roles, 'unavailable_processes': unavailable}
+
+
+def mapping_peaks(snapshots):
+    peaks = {}
+    for snapshot in snapshots:
+        for role, categories in snapshot['roles'].items():
+            for category, values in categories.items():
+                peak = peaks.setdefault(role, {}).setdefault(category, dict.fromkeys(values, 0))
+                for field, value in values.items():
+                    peak[field] = max(peak[field], value)
+    return peaks
+
+
+def mapping_private_peaks(snapshots):
+    peaks = {}
+    for snapshot in snapshots:
+        for role, categories in snapshot['roles'].items():
+            value = sum(categories.get(category, {}).get('private_bytes', 0)
+                        for category in ('anonymous', 'heap'))
+            peaks[role] = max(peaks.get(role, 0), value)
+    return peaks
+
+
 def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
     time.sleep(3)
+    samples_path = output/(name+'.jsonl')
+    snapshots = []
     with (output/(name+'.txt')).open('x') as text:
-        subprocess.run([str(benchmark), mode, str(pid), str(seconds), '250',
-                        str(output/(name+'.jsonl'))], stdout=text, check=True, env=env)
-    rows = read_scene(output/(name+'.jsonl'), seconds, 'daemon' if mode == 'daemon' else 'gui')
+        command = [str(benchmark), mode, str(pid), str(seconds), '250', str(samples_path)]
+        process = subprocess.Popen(command, stdout=text, env=env)
+        try:
+            while True:
+                try:
+                    status = process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    status = None
+                if samples_path.exists():
+                    lines = samples_path.read_text().splitlines()
+                    for line in reversed(lines):
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            continue
+                        if 'processes' in row and 'elapsed_ms' in row:
+                            if not snapshots or snapshots[-1]['elapsed_ms'] != row['elapsed_ms']:
+                                snapshots.append({'elapsed_ms': row['elapsed_ms'],
+                                                  **mapping_snapshot(row['processes'])})
+                            break
+                if status is not None:
+                    if status:
+                        raise subprocess.CalledProcessError(status, command)
+                    break
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+    rows = read_scene(samples_path, seconds, 'daemon' if mode == 'daemon' else 'gui')
+    write_json(output/(name+'-mapping-peaks.json'), {
+        'interval_ms': 1000, 'samples': len(snapshots), 'peak': mapping_peaks(snapshots),
+        'anonymous_heap_private_peak': mapping_private_peaks(snapshots),
+        'final': snapshots[-1] if snapshots else None,
+        'unavailable_samples': sum(row['unavailable_processes'] > 0 for row in snapshots),
+    })
+    with (output/(name+'-mapping-samples.jsonl')).open('x') as stream:
+        for row in snapshots:
+            stream.write(json.dumps(row)+'\n')
     maps = []
     for process in rows[-1]['processes']:
         path = Path(f"/proc/{process['pid']}/smaps")
@@ -426,6 +509,17 @@ def summarize(output, metadata):
             values = [f"{max(row[key][field] for row in samples)/1048576:.2f}"
                       for key, field in ((role, 'rss_bytes'), ('core', 'rss_bytes'), ('total', 'pss_bytes'))]
             lines.append(f'| {scene} | {"cor" if role == "daemon" else "GUI"} | '+ ' | '.join(values)+' |')
+    lines += ['', 'Mapping peaks are sampled separately every second; each category/metric peak can occur at a different time. Missing processes are reported rather than counted as zero.',
+              '', '| Scene | Role | Anonymous + heap private peak MiB | Final MiB | Missing samples |',
+              '| --- | --- | ---: | ---: | ---: |']
+    for path in sorted(output.glob('*-mapping-peaks.json')):
+        mapping = json.loads(path.read_text())
+        for role, categories in mapping['peak'].items():
+            peak = mapping['anonymous_heap_private_peak'][role]
+            final = (mapping.get('final') or {}).get('roles', {}).get(role)
+            retained = (f"{sum(final.get(category, {}).get('private_bytes', 0) for category in ('anonymous', 'heap'))/1048576:.2f}"
+                        if final is not None else 'unknown')
+            lines.append(f"| {path.name.removesuffix('-mapping-peaks.json')} | {role} | {peak/1048576:.2f} | {retained} | {mapping['unavailable_samples']} |")
     lines += ['', 'Client GUI values include both the native host and all renderer processes when present. GUI peaks are observed at 250 ms intervals, not exact allocator peaks. RSS can count shared pages twice. Compare separate runs only with the same toolchain, build profile, inputs and environment. Core memory also varies independently of the Rust GUI.', '']
     report = '\n'.join(lines)
     (output/'README.md').write_text(report, encoding='utf-8')

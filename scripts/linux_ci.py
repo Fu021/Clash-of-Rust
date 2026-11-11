@@ -7,6 +7,7 @@ import argparse
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -472,21 +473,36 @@ class VmGuest:
         return guest_python(self.remote, self.environment, script, timeout)
 
     def stage(self, archive, python=None):
-        with archive.open('rb') as stream:
-            self.remote('mkdir -p ~/cor-source ~/cor-apt && tar xzf - -C ~/cor-source',
-                        stdin=stream, timeout=300)
-        if python:
-            with python.open('rb') as stream:
-                self.remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - '
-                            '-C /opt/cor-test-python --strip-components=1', stdin=stream, timeout=120)
+        started = time.monotonic()
+        try:
+            with archive.open('rb') as stream:
+                self.remote('mkdir -p ~/cor-source ~/cor-apt && tar xzf - -C ~/cor-source',
+                            stdin=stream, timeout=300)
+            if python:
+                with python.open('rb') as stream:
+                    self.remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - '
+                                '-C /opt/cor-test-python --strip-components=1', stdin=stream, timeout=120)
+        finally:
+            self.stage_seconds = round(time.monotonic() - started, 3)
 
     def inspect(self):
         script = ('import json,prepared_vm_environment; '
                   'print(json.dumps(prepared_vm_environment.inspect_environment()))')
-        return json.loads(self.output(self.environment + '/opt/cor-test-python/bin/python3 -c '
-                                      + shlex.quote("import sys; sys.path.insert(0,'scripts'); " + script)))
+        started = time.monotonic()
+        try:
+            return json.loads(self.output(self.environment + '/opt/cor-test-python/bin/python3 -c '
+                                          + shlex.quote("import sys; sys.path.insert(0,'scripts'); " + script)))
+        finally:
+            self.inspect_seconds = round(time.monotonic() - started, 3)
 
     def preserve(self):
+        for name, command in (('cloud-init', 'cloud-init analyze show'),
+                              ('boot-chain', 'systemd-analyze critical-chain')):
+            try:
+                output = self.output(command, timeout=5)
+            except (OSError, subprocess.SubprocessError) as error:
+                output = 'Diagnostic unavailable: ' + type(error).__name__ + '\n'
+            (REPORT / (self.directory.name + '-' + name + '.txt')).write_text(output)
         state = 'not_generated'
         try:
             with tempfile.TemporaryDirectory(prefix='guest-report-', dir=REPORT) as temporary:
@@ -532,15 +548,25 @@ class VmGuest:
 
 def vm_source_archive(directory):
     archive = directory / 'source.tar.gz'
-    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+    from build_inputs import FILES
+    from workflow_artifacts import commit
+    paths = {'Cargo.toml', '.github/build-versions.json', 'apps/cli/src/args.rs', *FILES}
+    paths.update(path.relative_to(ROOT).as_posix() for path in (ROOT / 'scripts').glob('*.py'))
+    snapshot = Path(os.environ.get('BUILD_INPUTS_DIR', 'dependency-snapshot'))
+    if not snapshot.is_absolute():
+        snapshot = ROOT / snapshot
     with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
-        for relative in tracked:
-            if relative:
-                tar.add(ROOT / relative, arcname=relative, recursive=False)
-        for relative in ('.git', 'dist', 'target/linux-tun-test', 'dependency-snapshot'):
-            path = ROOT / relative
-            if path.exists():
-                tar.add(path, arcname=relative)
+        for relative in sorted(paths):
+            tar.add(ROOT / relative, arcname=relative, recursive=False)
+        tar.add(snapshot / 'inputs.json', arcname='dependency-snapshot/inputs.json')
+        environment = snapshot / 'vm-environment' / host_arch()
+        if environment.exists():
+            tar.add(environment, arcname='dependency-snapshot/vm-environment/' + host_arch())
+        data = (commit() + '\n').encode('ascii')
+        identity = tarfile.TarInfo('source-commit.txt')
+        identity.size = len(data)
+        identity.mode = 0o644
+        tar.addfile(identity, io.BytesIO(data))
     return archive
 
 
@@ -591,8 +617,7 @@ def prepare_vm_guest(guest, directory, frozen=None):
               + type(error).__name__, flush=True)
 
 
-def verify_vm_package(guest, directory, package_run_id, prepared=False, timings=None):
-    timings = timings if timings is not None else {}
+def fetch_vm_package(directory, package_run_id, timings):
     started = time.monotonic()
     try:
         if package_run_id:
@@ -602,13 +627,29 @@ def verify_vm_package(guest, directory, package_run_id, prepared=False, timings=
             client = module.GitHub(repo, module.credential(repo))
             fetch_package_inputs(client, package_run_id, host_arch(), ROOT, commit(),
                                  int(os.environ['CI_RUN_ID']))
-            with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
-                for relative in ('dist', 'target/linux-tun-test'):
-                    tar.add(ROOT/relative, arcname=relative)
-            with (directory/'package.tar.gz').open('rb') as stream:
-                guest.remote('tar xzf - -C ~/cor-source', stdin=stream, timeout=300)
+        with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
+            for relative in ('dist', 'target/linux-tun-test'):
+                tar.add(ROOT/relative, arcname=relative)
+        return directory / 'package.tar.gz'
     finally:
-        timings['package_wait_and_transfer'] = round(time.monotonic() - started, 3)
+        timings['package_download_and_archive'] = round(time.monotonic() - started, 3)
+
+
+def verify_vm_package(guest, directory, package_run_id, prepared=False, timings=None,
+                      package_future=None):
+    timings = timings if timings is not None else {}
+    started = time.monotonic()
+    try:
+        archive = (package_future.result() if package_future is not None
+                   else fetch_vm_package(directory, package_run_id, timings))
+    finally:
+        timings['package_remaining_wait'] = round(time.monotonic() - started, 3)
+    started = time.monotonic()
+    try:
+        with archive.open('rb') as stream:
+            guest.remote('tar xzf - -C ~/cor-source', stdin=stream, timeout=300)
+    finally:
+        timings['package_transfer'] = round(time.monotonic() - started, 3)
     extra = 'COR_PREPARED_VM_VERIFIED=true ' if prepared else ''
     started = time.monotonic()
     try:
@@ -645,18 +686,22 @@ def vm_test(package_run_id=None):
     protocol.require(not temporary_root.is_relative_to(ROOT), 'unsafe_image_directory')
     with tempfile.TemporaryDirectory(prefix='cor-focal-vm-', dir=temporary_root) as temporary:
         directory = Path(temporary)
-        archive = vm_source_archive(directory)
-        candidate = directory / 'prepared.qcow2'
         phase_started = time.monotonic()
-        saved = client.restore(frozen['descriptor'], candidate, verify_vm_image) if enabled else None
-        timings['private_lookup_download_verify'] = round(time.monotonic() - phase_started, 3)
+        archive = vm_source_archive(directory)
+        timings['source_archive'] = round(time.monotonic() - phase_started, 3)
+        candidate = directory / 'prepared.qcow2'
         guest = None
         upload = None
-        result = {'distribution': BASELINE, 'arch': host_arch(), 'success': False}
+        result = {'distribution': BASELINE, 'arch': host_arch(), 'success': False,
+                  'source_archive_bytes': archive.stat().st_size}
         cache_path = 'cold'
-        workers = ThreadPoolExecutor(max_workers=1)
+        workers = ThreadPoolExecutor(max_workers=2)
         started = time.monotonic()
         try:
+            package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings)
+            phase_started = time.monotonic()
+            saved = client.restore(frozen['descriptor'], candidate, verify_vm_image) if enabled else None
+            timings['private_lookup_download_verify'] = round(time.monotonic() - phase_started, 3)
             if saved:
                 try:
                     protocol.require(saved['image']['virtual_size'] == 24 * 1024**3,
@@ -731,7 +776,11 @@ def vm_test(package_run_id=None):
                     timings['fallback_dependency_preparation'] = round(time.monotonic() - phase_started, 3)
                     enabled = False
             timings['final_guest_boot'] = guest.boot_seconds
-            verify_vm_package(guest, directory, package_run_id, prepared=enabled, timings=timings)
+            timings['source_transfer'] = guest.stage_seconds
+            if enabled:
+                timings['environment_inspection'] = guest.inspect_seconds
+            verify_vm_package(guest, directory, package_run_id, prepared=enabled, timings=timings,
+                              package_future=package_future)
             result.update(kernel=guest.kernel, acceleration='kvm' if guest.kvm else 'tcg',
                           cloud_sha256=value['cloud']['sha256'], success=True)
         finally:

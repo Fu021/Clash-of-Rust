@@ -21,6 +21,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+#[path = "application_policies.rs"]
+mod application_policies;
 #[path = "application_routing.rs"]
 mod application_routing;
 #[path = "../../../../crates/client-ui/src/fonts.rs"]
@@ -234,6 +236,7 @@ struct ProtectionChange {
 }
 struct State {
     session: Session,
+    application_policies: application_policies::Editor,
     overview: clash_mobile_runtime::overview::Monitor,
     overview_epoch: u64,
     page: i32,
@@ -329,6 +332,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     DIAGNOSTIC_GEOMETRY.with(|geometry| geometry.borrow_mut().clear());
     window.global::<UiGeometry>().on_measured(|key, bounds| {
         if !(key.starts_with("preview-")
+            || key.starts_with("application-polic")
             || matches!(
                 key.as_str(),
                 "nodes-view" | "profiles-view" | "rule-shortcuts-open"
@@ -539,6 +543,7 @@ async fn run_loop(
         session: Session::open(root, native)?,
         overview: Default::default(),
         overview_epoch: 0,
+        application_policies: Default::default(),
         page: 0,
         query: String::new(),
         selected: String::new(),
@@ -1616,7 +1621,6 @@ fn start_claude_check(
     state.claude_generation = state.claude_generation.wrapping_add(1);
     state.claude_busy = true;
     let generation = state.claude_generation;
-    let key = state.session.settings.ip_reputation_key.clone();
     state.claude_status = "正在检测，浏览器将自动采样…".into();
     let port = state.session.settings.mixed_port;
     let host = state.session.native.clone();
@@ -1630,7 +1634,7 @@ fn start_claude_check(
                 "Android 网络环境",
             );
             core::claude_check::network(&client, &mut report, "内核代理").await;
-            core::claude_check::enhanced::extend(&client, &mut report, key.as_deref()).await;
+            core::claude_check::enhanced::extend(&client, &mut report).await;
             report
                 .signals
                 .extend(core::claude_check::system_dns(&client, "Android 系统").await);
@@ -1774,6 +1778,9 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         selected,
         profile_ticket: _,
     } = request;
+    if intent == MobileIntent::Navigate {
+        state.application_policies.clear();
+    }
     if state.session.settings.claude_protection.is_some() || state.protection_change.is_some() {
         ensure!(
             mobile_allowed_during_protection(intent, &a),
@@ -1783,9 +1790,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
     if (state.session.settings.claude_protection.is_some() || state.protection_change.is_some())
         && (matches!(
             intent,
-            MobileIntent::RulePage
-                | MobileIntent::RuleTextMode
-                | MobileIntent::RuleSelect
+            MobileIntent::RuleTextMode
                 | MobileIntent::RuleEdit
                 | MobileIntent::RuleAdd
                 | MobileIntent::RuleSave
@@ -1793,12 +1798,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 | MobileIntent::RuleDrop
                 | MobileIntent::RuleEnable
                 | MobileIntent::RuleRestore
-                | MobileIntent::RuleFilter
                 | MobileIntent::RuleDelete
                 | MobileIntent::RuleApply
                 | MobileIntent::RuleDiscard
                 | MobileIntent::RuleShortcut
-        ) || (intent == MobileIntent::Query && a == "rules"))
+        ))
     {
         return Ok(());
     }
@@ -1827,6 +1831,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
     );
     let session = &mut state.session;
     match intent {
+        MobileIntent::ApplicationPolicy => {
+            let notice = state.application_policies.request(session, &a, &b).await?;
+            if !notice.is_empty() {
+                state.notice = notice;
+                state.completed = Some(MobileIntent::ApplicationPolicy);
+            }
+        }
         MobileIntent::Connect | MobileIntent::Disconnect => {
             ensure!(
                 intent != MobileIntent::Disconnect || session.settings.claude_protection.is_none(),
@@ -1868,8 +1879,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             next.node_sort = *proxy_order::NodeSort::ALL
                 .get(a.parse::<usize>()?)
                 .context("排序无效")?;
-            session.store.save_settings(&next)?;
-            session.settings = next;
+            session.commit_settings(next)?;
         }
         MobileIntent::Query => {
             state.query = b;
@@ -2127,15 +2137,6 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 json!({"op":"open-url","url":"https://github.com/Fu021/Clash-of-Rust/releases"}),
             )?;
         }
-        MobileIntent::ClaudeKey => {
-            ensure!(!state.claude_busy, "请先停止检测，再修改密钥");
-            let mut next = session.settings.clone();
-            next.ip_reputation_key = (!a.trim().is_empty()).then(|| a.trim().to_owned());
-            next.validate()?;
-            session.store.save_settings(&next)?;
-            session.settings = next;
-            state.notice = "检测选项已保存".into();
-        }
         MobileIntent::DnsOverride | MobileIntent::Ipv6 | MobileIntent::Udp => {
             ensure!(
                 !session.vpn || intent != MobileIntent::Ipv6,
@@ -2186,8 +2187,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 _ => unreachable!(),
             }
             // Appearance changes do not reload the network configuration.
-            session.store.save_settings(&next)?;
-            session.settings = next;
+            session.commit_settings(next)?;
         }
         MobileIntent::Interval => {
             let mut next = session.settings.clone();
@@ -2316,12 +2316,19 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
     matches!(
         intent,
         MobileIntent::Navigate
+            | MobileIntent::Appearance
+            | MobileIntent::Accent
+            | MobileIntent::TextScale
+            | MobileIntent::NodeSort
+            | MobileIntent::ClearLogs
             | MobileIntent::OverviewRefresh
             | MobileIntent::OverviewPrivacy
             | MobileIntent::Query
             | MobileIntent::NodePage
             | MobileIntent::ConnectionPage
             | MobileIntent::RulePage
+            | MobileIntent::RuleFilter
+            | MobileIntent::RuleSelect
             | MobileIntent::ConnectionSort
             | MobileIntent::ConnectionDetail
             | MobileIntent::Copy
@@ -2349,6 +2356,8 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::CancelUpdate
             | MobileIntent::OpenRelease
     ) || (intent == MobileIntent::ClaudeProtection && value == "false")
+        || (intent == MobileIntent::ApplicationPolicy
+            && matches!(value, "open" | "refresh" | "query" | "edit" | "close"))
 }
 
 fn rows<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
@@ -2443,6 +2452,7 @@ struct GroupView {
     testing: bool,
 }
 struct Projection {
+    application_policies: application_policies::View,
     overview: core::overview::Presentation,
     copied: (i32, Arc<str>),
     page: i32,
@@ -2751,8 +2761,8 @@ fn project(state: &State) -> Projection {
             detail,
             source: service.group.clone(),
             tone,
+            country_label: core::probe::country_name(&country).unwrap_or_else(|| country.clone()),
             country,
-            country_label: String::new(),
             millis: slot
                 .and_then(|result| result.as_ref().ok())
                 .map(|result| result.millis),
@@ -2780,13 +2790,13 @@ fn project(state: &State) -> Projection {
             };
             claude.push(ReportRow {
                 id: index.to_string(),
-                title: signal.title.clone(),
+                title: signal.display_title().into(),
                 value: if country_label.is_empty() {
-                    signal.value.clone()
+                    signal.display_value().into()
                 } else {
                     signal.ip.clone()
                 },
-                detail: signal.detail.clone(),
+                detail: signal.explanation(),
                 source: signal.source.clone(),
                 tone,
                 country: signal.country.clone(),
@@ -2799,12 +2809,13 @@ fn project(state: &State) -> Projection {
         claude_counts.1 += 1;
         claude.push(ReportRow {
             id: format!("guard-{index}"),
-            title: route.host.clone(),
-            value: route.outcome.clone(),
-            detail: format!(
-                "规则：{}\n线路：{}\n时间：{}",
-                route.rule, route.chain, route.time
-            ),
+            title: route.display_title().into(),
+            value: if route.outcome.is_empty() {
+                "仅记录选路".into()
+            } else {
+                route.outcome.clone()
+            },
+            detail: route.explanation(),
             source: "实时拦截 · 内核连接记录".into(),
             tone: 3,
             country: String::new(),
@@ -2827,6 +2838,7 @@ fn project(state: &State) -> Projection {
         });
     }
     Projection {
+        application_policies: state.application_policies.view(s),
         overview: state.overview.present(s.running),
         copied: state.copied.clone(),
         page: state.page,
@@ -2951,6 +2963,55 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     }
     let data = ui.global::<MobileData>();
     let view = ui.global::<MobileView>();
+    let policies = ui.global::<AndroidData>();
+    policies.set_policies_supported(p.application_policies.supported);
+    policies.set_policies_profile(p.application_policies.profile.into());
+    policies.set_policies_status(p.application_policies.status.into());
+    policies.set_policies_applications(stable(
+        policies.get_policies_applications(),
+        rows(
+            p.application_policies
+                .applications
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        ),
+    ));
+    policies.set_policies_targets(stable(
+        policies.get_policies_targets(),
+        rows(
+            p.application_policies
+                .targets
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        ),
+    ));
+    policies.set_policies(stable(
+        policies.get_policies(),
+        rows(
+            p.application_policies
+                .rules
+                .into_iter()
+                .map(|(package, name, target, status)| ApplicationPolicyItem {
+                    package: package.into(),
+                    name: name.into(),
+                    target: target.into(),
+                    status: status.into(),
+                })
+                .collect(),
+        ),
+    ));
+    if policies.get_policies_revision() != p.application_policies.revision {
+        policies.set_policies_revision(p.application_policies.revision);
+        policies.set_policies_application(p.application_policies.form.0.into());
+        policies.set_policies_target(p.application_policies.form.1.into());
+        policies.set_policies_reject_missing(p.application_policies.form.2);
+        policies.set_policies_query("".into());
+        if view.get_detail() == 19 {
+            view.set_draft_dirty(false);
+        }
+    }
     let overview_row = |entry: core::overview::Item| OverviewItem {
         id: entry.id.into(),
         title: entry.title.into(),
@@ -2989,7 +3050,6 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_site_summary(p.site_summary.into());
     data.set_claude_status(p.claude_status.into());
     data.set_claude_busy(p.claude_busy);
-    data.set_reputation_key_saved(p.settings.ip_reputation_key.is_some());
     data.set_site_regions(stable(
         data.get_site_regions(),
         rows(p.site_regions.into_iter().map(Into::into).collect()),
@@ -3038,9 +3098,6 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         view.set_site_query("".into());
         view.set_site_region("全部地区".into());
         view.set_site_status("全部结果".into());
-    }
-    if p.completed == Some(MobileIntent::ClaudeKey) {
-        view.set_reputation_key("".into());
     }
     if p.completed == Some(MobileIntent::FakeIpAdd) {
         view.set_fake_ip_input("".into());
@@ -3107,8 +3164,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_protection_supported(true);
     data.set_protected(p.settings.claude_protection.is_some());
     data.set_protection_pending(p.protection_pending);
-    if (data.get_protected() || p.protection_pending)
-        && matches!(ui.global::<MobileView>().get_detail(), 2 | 15)
+    if (data.get_protected() || p.protection_pending) && ui.global::<MobileView>().get_detail() == 2
     {
         ui.global::<MobileView>().set_detail(0);
     }
@@ -3587,7 +3643,12 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "applications_visible":android.get_applications().row_count(),
             "applications_scroll_y":android.get_applications_scroll_y(),
             "applications_error":android.get_applications_error().as_str()});
-    for section in [targets, applications] {
+    let policies = json!({
+        "application_policies_loaded":!android.get_policies_profile().is_empty(),
+        "application_policies_supported":android.get_policies_supported(),
+        "application_policies_count":android.get_policies().row_count()
+    });
+    for section in [targets, applications, policies] {
         if let Value::Object(fields) = section {
             snapshot.as_object_mut().unwrap().extend(fields);
         }

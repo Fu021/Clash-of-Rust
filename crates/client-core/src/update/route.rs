@@ -1,6 +1,6 @@
 //! Attribute the download's own TCP socket; a selected group is not evidence
 //! that a request actually used that node. Ignore other GitHub/browser traffic.
-use crate::api::{Api, ConfigStatus};
+use crate::api::Api;
 use serde::{
     Deserialize,
     de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor},
@@ -18,37 +18,19 @@ pub struct Observer {
     task: Option<tokio::task::JoinHandle<()>>,
 }
 impl Observer {
-    pub fn new(response: &reqwest::Response, api: Option<Api>, direct: bool) -> Self {
+    pub fn new(response: &reqwest::Response, api: Option<Api>) -> Self {
         let outbound = Arc::new(Mutex::new(None));
         let mut observer = Self {
             outbound: outbound.clone(),
             task: None,
         };
-        let Some(api) = api else {
-            if direct {
-                *outbound.lock().unwrap() = Some(Arc::from("DIRECT"));
-            }
-            return observer;
-        };
+        let Some(api) = api else { return observer };
         let local = response
             .extensions()
             .get::<hyper_util::client::legacy::connect::HttpInfo>()
             .map(|info| info.local_addr());
         let host: Arc<str> = response.url().host_str().unwrap_or_default().into();
         observer.task = Some(tokio::spawn(async move {
-            // A proxy-free request can still be captured by our TUN. Call it
-            // DIRECT only after checking the real core configuration.
-            if direct
-                && let Ok(Ok(config)) = tokio::time::timeout(
-                    Duration::from_millis(500),
-                    api.get::<ConfigStatus>("configs"),
-                )
-                .await
-                && !config.tun.enable
-            {
-                *outbound.lock().unwrap() = Some(Arc::from("DIRECT"));
-                return;
-            }
             let Some(local) = local else {
                 return;
             };
@@ -273,7 +255,7 @@ mod tests {
             .send()
             .await
             .unwrap();
-        let observer = Observer::new(&response, Some(api), false);
+        let observer = Observer::new(&response, Some(api));
         tokio::time::timeout(Duration::from_secs(3), async {
             while observer.outbound().is_none() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -282,6 +264,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(observer.outbound().as_deref(), Some("Auto → 真实节点"));
+        assert!(Observer::new(&response, None).outbound().is_none());
         done.send(()).unwrap();
         origin_task.await.unwrap();
         controller_task.await.unwrap();

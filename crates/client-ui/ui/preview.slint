@@ -3,6 +3,7 @@ import { AppWindow } from "app.slint";
 import { UiData } from "state.slint";
 import { Motion } from "components/motion.slint";
 import { PageViews } from "components/view-toggle.slint";
+import { PreviewReports } from "preview-reports.slint";
 import "../../../resources/fonts/NotoColorEmoji-Regular.ttf";
 
 export component Preview inherits AppWindow {
@@ -26,9 +27,9 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-list-view;
     changed preview-list-view => { PageViews.nodes-list = root.preview-list-view; PageViews.profiles-list = root.preview-list-view; }
     in-out property <int> preview-page <=> UiData.page;
-    changed preview-page => {
-        let count = root.preview-page == 2 ? UiData.profiles.length : root.preview-page == 4 ? UiData.rules.length : UiData.connections.length;
-        UiData.page-status = count == 0 ? "0 条" : count + " 条 · 1–" + count;
+    property <int> preview-row-count: root.preview-page == 2 ? UiData.profiles.length : root.preview-page == 4 ? UiData.rules.length : root.preview-page == 7 ? UiData.site-results.length : UiData.connections.length;
+    changed preview-row-count => {
+        UiData.page-status = root.preview-row-count == 0 ? "0 条" : root.preview-row-count + " 条 · 1–" + root.preview-row-count;
     }
     in-out property <bool> preview-fake-ip-editor;
     changed preview-fake-ip-editor => { UiData.fake-ip-editor = root.preview-fake-ip-editor; }
@@ -51,6 +52,13 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-update-prereleases <=> UiData.update-prereleases;
     in-out property <bool> preview-sites-report <=> UiData.sites-report;
     in-out property <int> preview-claude-filter <=> UiData.claude-filter;
+    function refresh-report() {
+        UiData.claude-results = root.preview-claude-filter == 0 ? PreviewReports.normal
+            : root.preview-claude-filter == 1 ? PreviewReports.risk
+            : root.preview-claude-filter == 2 ? PreviewReports.clues : PreviewReports.all;
+        UiData.claude-result-status = "列出 " + UiData.claude-results.length + " 项 · 第 1 / 1 页";
+    }
+    changed preview-claude-filter => { root.refresh-report(); }
     in-out property <int> dialog;
     in-out property <bool> preview-shortcuts <=> root.rule-shortcuts-open;
     in-out property <length> preview-rules-scroll <=> UiData.scroll-rules;
@@ -126,7 +134,6 @@ export component Preview inherits AppWindow {
             {label: "开始时间", value: "2026-10-16T10:31:20.123+08:00"},
             {label: "连接 ID", value: "9f1a0f02-d63e-4cfe-832e-4ed947af10de"}];
         UiData.connection-selected-id = "9f1a0f02-d63e-4cfe-832e-4ed947af10de";
-        UiData.page-status = "3 条 · 1–3";
         UiData.groups = [{id: "Proxy", title: root.preview-long-names ? root.long-name : "🚀 Proxy 策略 ❤️", detail: "Selector · 10 个节点", current: root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", expanded: true, testing: false, page: "10 个节点 · 1–10", previous: false, next: false,
             nodes: [
                 {left: {group: "Proxy", name: root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true}, right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, selected: false, valid: true}},
@@ -173,23 +180,24 @@ export component Preview inherits AppWindow {
         UiData.site-counts = [{id: "确认可用", label: "确认可用 74"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 48"}];
         UiData.site-summary = "出口 IP：203.0.113.42 · 各平台识别到 6 个地区";
         UiData.site-exit-country = "香港"; UiData.site-exit-flagged = true; UiData.site-exit-flag = "🇨🇳";
+        UiData.site-category = "全部分类"; UiData.site-status = "全部结果"; UiData.site-region = "全部识别地区";
+        UiData.site-category-options = ["全部分类", "AI", "流媒体", "社交"];
+        UiData.site-status-options = ["全部结果", "确认可用", "仅网页可达", "信息已识别", "不可用或受限", "结果未确认"];
+        UiData.site-region-options = ["全部识别地区", "未识别地区", "德国", "香港", "台湾"];
         UiData.site-results = [
-            {id: "netflix", title: "Netflix", value: "确认可用 · 香港", country: "香港", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1, delay: "128 ms", delay-tone: 1},
-            {id: "chatgpt", title: "ChatGPT", value: "确认可用 · 台湾", country: "台湾", flag: "🇨🇳", flagged: true, source: "固定演示结果", tone: 1, delay: "420 ms", delay-tone: 2},
-            {id: "claude", title: "Claude", value: "确认可用 · 德国", country: "德国", flag: "🇩🇪", flagged: true, source: "固定演示结果", tone: 1, delay: "925 ms", delay-tone: 3}
+            {id: "chatgpt", title: "ChatGPT", value: "仅网页可达 · 固定演示结果", country: "德国", flag: "🇩🇪", flagged: true, source: "德国", tone: 2, delay: "1295 ms", delay-tone: 3},
+            {id: "claude", title: "Claude", value: "确认可用 · 固定演示结果", tone: 1, delay: "218 ms", delay-tone: 1},
+            {id: "gemini", title: "Gemini", value: "信息已识别 · 固定演示结果", country: "台湾", flag: "🇨🇳", flagged: true, source: "台湾", tone: 1, delay: "420 ms", delay-tone: 2},
+            {id: "copilot", title: "Microsoft Copilot", value: "不可用或受限 · 固定演示结果", tone: 3},
+            {id: "netflix", title: "Netflix", value: "确认可用 · 固定演示结果", country: "香港", flag: "🇨🇳", flagged: true, source: "香港", tone: 1, delay: "128 ms", delay-tone: 1}
         ];
         UiData.categories = [
             {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
             {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
             {left: {id: "欧洲", title: "欧洲", count: "12 / 12", detail: "确认可用 12 · 网页可达 0 · 受限 0", tone: 1}, right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}];
-        UiData.claude-normal = "19"; UiData.claude-risk = "2"; UiData.claude-clues = "5";
+        UiData.claude-normal = "" + PreviewReports.normal.length; UiData.claude-risk = "" + PreviewReports.risk.length; UiData.claude-clues = "" + PreviewReports.clues.length;
         UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
-        UiData.claude-results = root.preview-claude-filter == 1 ? [
-            {flag: "🇨🇳", flagged: true, id: "2", title: "实际递归 DNS", value: "2001:db8:1234:5678:abcd:ef01:2345:6789", country: "台湾", detail: "此演示国家与香港出口不同，仍按风险显示。请核对浏览器独立 DoH、系统 DNS 与实际线路。固定演示结果。", source: "系统 DNS · 固定演示结果", tone: 3}
-        ] : [
-            {flag: "🇨🇳", flagged: true, id: "1", title: "实际递归 DNS", value: "203.0.113.53", country: "香港", detail: "固定演示结果：国家名称保留香港，旗帜按报告映射显示。显示素材不改变实际检测结论。", source: "浏览器采样 · 固定演示结果", tone: 1}
-        ];
-        UiData.claude-result-status = "1 条 · 1–1";
+        root.refresh-report();
         UiData.dns-override = true; UiData.fake-ip = true;
         UiData.fake-ip-exclusions = [
             {domain: "+.example.com", source: "用户自定义"},

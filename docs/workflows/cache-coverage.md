@@ -48,10 +48,11 @@ macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两�
 
 | 工作流 | GitHub 编译缓存与收尾 | 私网预装镜像 |
 | --- | --- | --- |
-| CI | main 保存九个目标的 Rust 基线、Linux 编译容器及 Android Go；其他分支只读 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
+| CI | main 保存九个目标的 Rust 基线、Linux 编译容器及 Android Go；其他分支只读 | 只冻结环境输入，不启动 VM |
 | Memory Benchmark | main 当前提交保存 profile 基线，其他分支只读；使用同一预算 | 不使用 |
-| Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 复用 CI 验收结果，不下载或上传 VM |
-| Android UI Previews（按需） | 复用成功 CI 的 APK，只留截图 artifact | 不使用 |
+| Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 核对兼容性回执，不下载或上传 VM |
+| Android Compatibility | 复用成功 CI 的 APK，默认代理/TUN；截图及诊断可选 | 不使用 VM；官方系统镜像原包走 `upstream/files` |
+| Ubuntu Compatibility | 不保存编译缓存，只留小型报告与回执 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
 
 ## 原始下载：官方优先，私网回退
 

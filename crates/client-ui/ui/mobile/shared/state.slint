@@ -4,11 +4,11 @@ import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair
 
 export enum MobileIntent {
     navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
-    import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile,
+    import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe, dns,
-    site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-key, claude-protection, export-report,
+    site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-protection, export-report,
     appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
 export global MobileActions { callback request(MobileIntent, string, string); }
@@ -58,7 +58,6 @@ export global MobileData {
     in-out property <[DetailItem]> site-details;
     in-out property <[FakeIpExclusionItem]> fake-ip-exclusions;
     in-out property <int> fake-ip-removed-defaults;
-    in-out property <bool> reputation-key-saved;
     in-out property <bool> claude-busy;
     in-out property <[LogItem]> logs;
     in-out property <[CategoryPair]> categories;
@@ -130,7 +129,6 @@ export global MobileView {
     in-out property <length> rules-scroll-y;
     in-out property <length> home-scroll-y;
     in-out property <string> fake-ip-input;
-    in-out property <string> reputation-key;
     in-out property <bool> site-filters;
     in-out property <string> site-query;
     in-out property <string> site-region: "全部地区";

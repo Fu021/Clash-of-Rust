@@ -2019,6 +2019,44 @@ fn node_names_reach_all_views_without_rewriting_prefixes_or_emoji() {
 }
 
 #[test]
+fn claude_report_rows_keep_titles_and_labeled_explanations() {
+    use clash_of_rust::claude_check::{Environment, Group, Report, Route, Signal};
+
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Claude);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut report = Report::new(Environment::Core, "fixture");
+    let mut signal = Signal::unknown(Group::Dns, "temporary", "DNS fixture", "未取得结果");
+    signal.title = " ".into();
+    signal.value.clear();
+    signal.advice = "稍后重新检测".into();
+    report.signals.push(signal);
+    report.routes.push(Route {
+        chain: "节点 A".into(),
+        rule: "DOMAIN".into(),
+        time: "2026-11-12T08:00:00Z".into(),
+        ..Default::default()
+    });
+    app.claude.reports[0] = Some(report);
+    app.present_slint(&data, &mut models);
+    let rows = data.get_claude_results();
+    assert_eq!(rows.row_count(), 2);
+    let route = rows.row_data(0).unwrap();
+    assert_eq!(route.title, "连接检查");
+    assert_eq!(route.value, "仅记录选路");
+    assert!(route.detail.contains("线路：节点 A"));
+    assert!(route.detail.contains("时间：2026-11-12T08:00:00Z"));
+    assert_eq!(route.source, "内核连接记录");
+    let signal = rows.row_data(1).unwrap();
+    assert_eq!(signal.title, "DNS 地区");
+    assert_eq!(signal.value, "未确认");
+    assert_eq!(signal.detail, "说明：未取得结果\n建议：稍后重新检测");
+}
+
+#[test]
 fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals() {
     use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
 
@@ -3032,15 +3070,7 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
     let mut app = fixture(Page::Rules);
     app.claude.protection_pending = Some(true);
     let draft = app.rule_state.draft.clone();
-    for intent in [
-        Intent::RuleAdd,
-        Intent::RuleApply,
-        Intent::RuleDiscard,
-        Intent::RuleSelect,
-        Intent::RuleProfile,
-        Intent::Query,
-        Intent::ListPage,
-    ] {
+    for intent in [Intent::RuleAdd, Intent::RuleApply, Intent::RuleDiscard] {
         let _ = app.ui_intent(intent, "blocked", "");
     }
     assert_eq!(app.rule_state.draft, draft);
@@ -3081,6 +3111,15 @@ fn protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_chan
     assert!(!app.notice_visible);
     assert!(app.confirmation.is_none());
     assert_eq!(serde_json::to_value(&app.settings).unwrap(), settings);
+    app.busy = true;
+    let _ = app.ui_intent(Intent::AccentColor, "1", "");
+    assert!(matches!(app.queued_actions.back(), Some(Action::Accent(_))));
+    let _ = app.ui_intent(Intent::ClearLogs, "", "");
+    assert!(matches!(app.queued_actions.back(), Some(Action::ClearLogs)));
+    app.page = Page::Rules;
+    let _ = app.ui_intent(Intent::Query, "visible during protection", "");
+    assert_eq!(app.query, "visible during protection");
+    assert_eq!(app.rule_state.draft, draft);
     app.claude.protection_pending = None;
     app.page = Page::Rules;
     let _ = app.ui_intent(Intent::Query, "available", "");

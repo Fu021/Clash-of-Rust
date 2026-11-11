@@ -150,7 +150,7 @@ pub fn quality_signals(value: &Value, ip: &str) -> Vec<Signal> {
                 Group::Quality,
                 &format!("{title} · {ip}"),
                 "ipapi.is",
-                "该接口没有返回此字段；匿名额度只提供归属信息，完整信誉标签需要用户自己的 API 密钥。",
+                "公共查询没有返回此字段，可能受额度或供应商数据范围限制；不据此判定安全。",
             )
         };
         signal.ip = ip.into();
@@ -174,7 +174,7 @@ pub fn quality_signals(value: &Value, ip: &str) -> Vec<Signal> {
     signals
 }
 
-pub async fn extend(client: &Client, report: &mut Report, reputation_key: Option<&str>) {
+pub async fn extend(client: &Client, report: &mut Report) {
     let targets: Vec<_> = report
         .signals
         .iter()
@@ -195,7 +195,7 @@ pub async fn extend(client: &Client, report: &mut Report, reputation_key: Option
     let ips: Vec<_> = report
         .signals
         .iter()
-        .filter(|s| s.group == Group::Exit && !s.ip.is_empty())
+        .filter(|s| s.group == Group::Exit && s.evidence == Evidence::Measured && !s.ip.is_empty())
         .map(|s| s.ip.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -205,10 +205,7 @@ pub async fn extend(client: &Client, report: &mut Report, reputation_key: Option
         if !ip.parse::<IpAddr>().is_ok_and(public_ip) {
             continue;
         }
-        let mut payload = serde_json::json!({"q":ip});
-        if let Some(key) = reputation_key.filter(|s| !s.is_empty()) {
-            payload["key"] = Value::from(key);
-        }
+        let payload = serde_json::json!({"q":ip});
         let result = async {
             let response = client
                 .post("https://api.ipapi.is/")
@@ -256,6 +253,7 @@ pub async fn extend(client: &Client, report: &mut Report, reputation_key: Option
         connectivity(client, "api.anthropic.com")
     );
     report.signals.extend([web, console, api]);
+    super::additional::extend(client, report).await;
 }
 
 async fn connectivity(client: &Client, host: &str) -> Signal {

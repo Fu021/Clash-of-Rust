@@ -101,6 +101,17 @@ export component AndroidApplications inherits PageSurface {
                         font-size: MobileTypography.font-size(13); color: Theme.secondary;
                     }
                 }
+                MCard { vertical-padding: 8px; horizontal-padding: 12px; gap: 6px;
+                    MText { text: "应用规则"; font-size: MobileTypography.font-size(14); font-weight: 600; }
+                    MSmall { text: "为进入 VPN 的应用指定直连、策略组或节点。"; wrap: word-wrap; }
+                    MButton { text: "管理应用规则"; compact: true; enabled: !MobileView.draft-dirty && !MobileData.working;
+                        geometry-key: "application-policies-open";
+                        clicked => {
+                            MobileView.detail = 19;
+                            MobileActions.request(MobileIntent.application-policy, "open", "");
+                        }
+                    }
+                }
                 if AndroidData.applications-visibility-limited || (AndroidData.applications-loaded && !AndroidData.applications-query-permission): MCard {
                     vertical-padding: 8px; horizontal-padding: 12px; gap: 4px;
                     MParagraph { text: !AndroidData.applications-query-permission

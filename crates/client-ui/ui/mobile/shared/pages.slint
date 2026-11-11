@@ -2,12 +2,14 @@ import { PageSurface, Disclosure, Entrance, Motion } from "../../components/moti
 import { ListReorderGesture, ListReorderPreview } from "../../components/list-reorder.slint";
 import { PageViews, ViewModeIcon } from "../../components/view-toggle.slint";
 import { GeometryTarget } from "../../components/geometry.slint";
+import { Panel } from "../../components/controls.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { ConnectionPower } from "../../components/brand.slint";
 import { MobileNetworkInfo, MobileServices } from "overview.slint";
+import { MobileReport } from "reports.slint";
 import { HomeConnections } from "../../components/home-section.slint";
-import { NodeItem, ProfileItem, CategoryItem, ConnectionItem, RuleItem, LogItem, ReportItem } from "../../state.slint";
+import { NodeItem, ProfileItem, CategoryItem, ConnectionItem, RuleItem, LogItem } from "../../state.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MPagination, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, ListView, ListHeader, MProgress, MCopyButton, MDragHandle, MToolHeading } from "controls.slint";
 
@@ -285,36 +287,70 @@ export component MobileSubscriptions inherits PageSurface {
     } }
 }
 component ConnectionsToolbar inherits VerticalLayout {
-    alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
-    MField { placeholder: "搜索域名、IP、规则或线路"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "connections", value); } }
-    HorizontalLayout { spacing: MobileTypography.small-gap;
-        MSelect { value: MobileView.connection-sort; options: ["下载速度 ↓", "下载速度 ↑", "上传速度 ↓", "上传速度 ↑", "下载量 ↓", "下载量 ↑", "名称 A–Z", "名称 Z–A"];
+    alignment: start; spacing: MobileTypography.small-gap; vertical-stretch: 0;
+    padding: 12px;
+    MField {
+        GeometryTarget { key: "connections-search"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+        placeholder: "搜索域名、IP、规则或线路"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "connections", value); }
+    }
+    GridLayout { spacing: MobileTypography.small-gap;
+        property <bool> narrow: root.width - 24px < 300px || Theme.text-scale > 1.25;
+        MSelect { col: 0; row: 0; colspan: parent.narrow ? 2 : 1;
+            geometry-key: "connections-sort";
+            value: MobileView.connection-sort; options: ["下载速度 ↓", "下载速度 ↑", "上传速度 ↓", "上传速度 ↑", "下载量 ↓", "下载量 ↑", "名称 A–Z", "名称 Z–A"];
             selected(index, value) => { MobileView.connection-sort = value; MobileActions.request(MobileIntent.connection-sort, value, ""); }
         }
-        MButton { text: "关闭全部"; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0; danger: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
+        MButton { col: 1; row: parent.narrow ? 1 : 0;
+            geometry-key: "connections-close-all";
+            text: "关闭全部"; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0; danger: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
+        MSmall { col: 0; row: 1; colspan: parent.narrow ? 1 : 2; text: MobileData.connection-count + " 条活跃连接"; preferred-width: 0px; }
     }
-    MSmall { text: MobileData.connection-count + " 条活跃连接"; }
 }
 component ConnectionsRow inherits Rectangle {
     in property <ConnectionItem> item;
+    in property <bool> last;
+    property <bool> stacked: root.width < 600px || Theme.text-scale > 1.25;
+    GeometryTarget { key: "connection-row:" + root.item.id; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
+    GeometryTarget { key: "connection-name:" + root.item.id; bounds: [identity.absolute-position.x, identity.absolute-position.y, identity.width, identity.height]; }
     height: max(76px, content.preferred-height + 20px);
     background: MobileView.detail == 5 && MobileView.selected-id == root.item.id ? Theme.accent-wash : Theme.surface;
     TouchArea { enabled: !MobileView.modal && !MobileView.notice-modal; mouse-cursor: pointer;
+        accessible-role: button; accessible-label: "查看连接详情：" + root.item.host;
+        accessible-action-default => { MobileView.selected-id = root.item.id; MobileActions.request(MobileIntent.connection-detail, root.item.id, ""); MobileView.detail = 5; }
         clicked => { MobileView.selected-id = root.item.id; MobileActions.request(MobileIntent.connection-detail, root.item.id, ""); MobileView.detail = 5; }
     }
-    content := HorizontalLayout { x: 12px; y: 10px; width: parent.width - 24px; height: self.preferred-height; spacing: 8px; cross-axis-alignment: center;
-        VerticalLayout { spacing: 5px; min-width: 0px;
-            MText { text: root.item.host; font-size: MobileTypography.font-size(14); font-weight: 500; }
+    content := GridLayout { x: 12px; y: 10px; width: parent.width - 24px; height: self.preferred-height; spacing: 8px;
+        identity := VerticalLayout { col: 0; row: 0; colspan: root.stacked ? 3 : 1; spacing: 5px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 2;
+            MText { text: root.item.host; font-size: MobileTypography.font-size(14); font-weight: 500; preferred-width: 0px; }
+            MSmall { text: root.item.detail; font-size: MobileTypography.font-size(12); preferred-width: 0px; }
+        }
+        VerticalLayout { col: root.stacked ? 0 : 1; row: root.stacked ? 1 : 0; colspan: root.stacked ? 4 : 1;
+            spacing: 5px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 2;
             MSmall { text: root.item.route; font-size: MobileTypography.font-size(12); }
             MSmall { text: root.item.rule; font-size: MobileTypography.font-size(12); }
         }
-        VerticalLayout { spacing: 5px; horizontal-stretch: 0;
-            MSmall { text: "↓ " + root.item.down; horizontal-alignment: right; }
-            MSmall { text: "↑ " + root.item.up; horizontal-alignment: right; color: Theme.muted; font-size: MobileTypography.font-size(12); }
+        VerticalLayout { col: root.stacked ? 0 : 2; row: root.stacked ? 2 : 0; colspan: root.stacked ? 2 : 1;
+            spacing: 5px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+            MSmall { text: "↓ " + root.item.down; }
+            MSmall { text: root.item.download; color: Theme.muted; font-size: MobileTypography.font-size(12); }
         }
-        MButton { text: "×"; quiet: true; width: 48px; horizontal-stretch: 0; danger: true; accessible-role: button; accessible-label: "关闭连接"; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.close-connection, root.item.id, ""); } }
+        VerticalLayout { col: root.stacked ? 2 : 3; row: root.stacked ? 2 : 0; colspan: root.stacked ? 2 : 1;
+            spacing: 5px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+            MSmall { text: "↑ " + root.item.up; }
+            MSmall { text: root.item.upload; color: Theme.muted; font-size: MobileTypography.font-size(12); }
+        }
+        Rectangle { col: root.stacked ? 3 : 4; row: 0;
+            width: 48px; height: close-action.height; horizontal-stretch: 0; vertical-stretch: 0;
+            TouchArea { enabled: !MobileView.modal && !MobileView.notice-modal; }
+            close-action := MButton {
+                geometry-key: "connection-close:" + root.item.id;
+                text: "×"; quiet: true; width: parent.width; danger: true; accessible-role: button; accessible-label: "关闭连接";
+                enabled: !MobileData.protected && !MobileData.protection-pending;
+                clicked => { MobileActions.request(MobileIntent.close-connection, root.item.id, ""); }
+            }
+        }
     }
-    MDivider { y: parent.height - 1px; width: parent.width; }
+    if !root.last: MDivider { y: parent.height - 1px; width: parent.width; }
 }
 component ConnectionsFooter inherits HorizontalLayout {
     alignment: start; vertical-stretch: 0;
@@ -328,20 +364,23 @@ component ConnectionsFooter inherits HorizontalLayout {
 export component MobileConnections inherits PageSurface {
     property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25 || MobileView.keyboard-inset > 0px;
     VerticalLayout { spacing: MobileTypography.gap;
-        Rectangle {
+        Panel {
+            GeometryTarget { key: "connections-card"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+            GeometryTarget { key: "connections-list"; bounds: [list.absolute-position.x, list.absolute-position.y, list.width, list.height]; }
             clip: true;
-            list := ListView { width: parent.width; height: parent.height;
+            list := ListView { x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
                 content-key: MobileData.connection-page-index + "/" + MobileView.query + "/" + MobileView.connection-sort;
-                for index in MobileData.connections.length + (root.scrolling-footer ? 2 : 1): Rectangle {
+                for index in max(1, MobileData.connections.length) + (root.scrolling-footer ? 2 : 1): Rectangle {
                     height: index == 0 ? header.header-height : content.preferred-height;
                     content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
-                        if index > 0 && index <= MobileData.connections.length: ConnectionsRow { item: MobileData.connections[index - 1]; }
-                        if root.scrolling-footer && index == MobileData.connections.length + 1: ConnectionsFooter { }
+                        if index > 0 && index <= MobileData.connections.length: ConnectionsRow { item: MobileData.connections[index - 1]; last: index == MobileData.connections.length; }
+                        if index == 1 && MobileData.connections.length == 0: MSmall { text: "没有匹配的连接"; height: 64px; horizontal-alignment: center; }
+                        if root.scrolling-footer && index == max(1, MobileData.connections.length) + 1: ConnectionsFooter { }
                     }
                 }
             }
             header := ListHeader {
-                x: 0px; y: 0px; width: list.visible-width;
+                x: 1px; y: 1px; width: list.visible-width;
                 list-height: list.visible-height; list-content-height: list.content-height; content-y <=> list.content-y;
                 ConnectionsToolbar { }
             }
@@ -355,14 +394,14 @@ component RulesToolbar inherits VerticalLayout {
     property <bool> short: root.available-height < 420px || MobileView.keyboard-inset > 0px;
     alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MSelect { enabled: !MobileData.protected && !MobileData.protection-pending; options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
+        MSelect { enabled: !MobileData.working; options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
         MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 1; }
     }
     GridLayout { spacing: MobileTypography.small-gap;
         property <bool> narrow: root.width < 420px || Theme.text-scale > 1.25;
-        MField { enabled: !MobileData.protected && !MobileData.protection-pending; col: 0; row: 0; colspan: parent.narrow ? 2 : 1;
+        MField { enabled: !MobileData.working; col: 0; row: 0; colspan: parent.narrow ? 2 : 1;
             placeholder: "搜索规则"; text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "rules", value); } }
-        MSelect { enabled: !MobileData.protected && !MobileData.protection-pending; col: parent.narrow ? 0 : 1; row: parent.narrow ? 1 : 0;
+        MSelect { enabled: !MobileData.working; col: parent.narrow ? 0 : 1; row: parent.narrow ? 1 : 0;
             width: parent.narrow ? max(100px, (parent.width - MobileTypography.small-gap) / 2) : 100px; horizontal-stretch: 0;
             options: ["全部来源", "自定义", "快捷规则", "订阅"]; value: MobileView.rule-source;
             selected(index, value) => { MobileView.rule-source = value; MobileActions.request(MobileIntent.rule-filter, value, ""); }
@@ -407,7 +446,7 @@ export component RulesRow inherits MCard {
             enabled: root.item.source == "自定义" && !MobileData.protected && !MobileData.protection-pending && !root.floating && !MobileData.working;
             toggled(value) => { MobileActions.request(MobileIntent.rule-enable, root.item.id, ""); }
         }
-        MButton { col: 5; row: root.narrow ? 1 : 0; rowspan: root.narrow ? 1 : 2; geometry-key: root.floating ? "" : "rule-detail:" + root.item.id; text: ""; quiet: true; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0; enabled: !MobileData.protected && !MobileData.protection-pending && !root.floating;
+        MButton { col: 5; row: root.narrow ? 1 : 0; rowspan: root.narrow ? 1 : 2; geometry-key: root.floating ? "" : "rule-detail:" + root.item.id; text: ""; quiet: true; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0; enabled: !root.floating && !MobileData.working;
             Image { source: @image-url("../../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             }
@@ -423,7 +462,7 @@ component RulesFooter inherits GridLayout {
         col: 0; row: 0; compact: true; horizontal-stretch: root.wide ? 0 : 1;
         alignment: root.wide ? start : center;
         status: MobileData.rule-page;
-        previous-enabled: !MobileData.protected && !MobileData.protection-pending && MobileData.rule-previous; next-enabled: !MobileData.protected && !MobileData.protection-pending && MobileData.rule-next;
+        previous-enabled: !MobileData.working && MobileData.rule-previous; next-enabled: !MobileData.working && MobileData.rule-next;
         turn(direction) => { MobileActions.request(MobileIntent.rule-page, "" + direction, ""); }
     }
     if MobileData.rule-dirty: MCard {
@@ -440,7 +479,6 @@ component RulesFooter inherits GridLayout {
     }
 }
 export component MobileRules inherits PageSurface {
-    locked: MobileData.protected || MobileData.protection-pending;
     property <RuleItem> drag-item;
     property <length> row-extent: measurement.height + Theme.content-gap;
     property <length> toolbar-extent: header.header-height;
@@ -550,7 +588,7 @@ component LogsToolbar inherits VerticalLayout {
             selected(index, value) => { MobileView.log-level = value; MobileActions.request(MobileIntent.log-level, value, ""); }
         }
         MButton { text: "导出"; quiet: true; width: 56px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
-        MButton { text: "清空"; quiet: true; width: 56px; horizontal-stretch: 0; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
+        MButton { text: "清空"; quiet: true; width: 56px; horizontal-stretch: 0; enabled: !MobileData.working; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
         MButton { text: "诊断"; quiet: true; width: 56px; horizontal-stretch: 0;
             GeometryTarget { key: "preview-export-diagnostics"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
             clicked => { MobileActions.request(MobileIntent.export-diagnostics, "", ""); }
@@ -670,33 +708,22 @@ component MobileProtection inherits MCard {
             if MobileData.protection-pending: MProgress { indeterminate: true; }
             MSmall { text: "可能影响其他应用与国内网站；关闭后恢复原状态。"; color: Theme.warning; wrap: word-wrap; }
 }
-component MobileFinding inherits Rectangle {
-    in property <ReportItem> item;
-    height: content.preferred-height;
-    content := HorizontalLayout { padding-top: 12px; padding-bottom: 12px; spacing: 10px; cross-axis-alignment: start;
-        Rectangle { width: 28px; height: 28px; border-radius: 8px; background: Theme.inset;
-            if root.item.flagged: Text { text: root.item.flag; width: parent.width; height: parent.height; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
-            if !root.item.flagged: Image { source: @image-url("../../icons/ai.svg"); x: 6px; y: 6px; width: 16px; height: 16px; colorize: Theme.secondary; }
-        }
-        VerticalLayout { spacing: 6px; min-width: 0px;
-            MText { text: root.item.title; font-weight: 600; font-size: MobileTypography.font-size(14); wrap: word-wrap; }
-            MParagraph { text: root.item.value; font-size: MobileTypography.font-size(13); }
-            if root.item.country != "": MSmall { text: root.item.country; }
-            if root.item.detail != "": MSmall { text: root.item.detail; wrap: word-wrap; font-size: MobileTypography.font-size(12); }
-        }
-        MTag { text: root.item.tone == 3 ? "风险" : root.item.tone == 1 ? "正常" : "线索"; tone: root.item.tone; }
-    }
-}
 export component MobileAiCheck inherits PageSurface {
+    property <bool> compact-actions: root.width < 440px || Theme.text-scale > 1.25;
     MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MobileProtection { }
-        HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: MobileData.claude-busy ? "取消检测" : "开始检测"; primary: true;
-                clicked => { MobileActions.request(MobileData.claude-busy ? MobileIntent.claude-cancel : MobileIntent.claude-start, "", ""); }
+        GridLayout { spacing: MobileTypography.small-gap;
+            MHeading { col: 0; row: 0; text: MobileData.claude-busy ? "正在检测…" : "地区线索检测"; }
+            HorizontalLayout {
+                col: root.compact-actions ? 0 : 1; row: root.compact-actions ? 1 : 0;
+                horizontal-stretch: root.compact-actions ? 1 : 0; spacing: MobileTypography.small-gap;
+                MButton { text: "导出报告"; min-width: root.compact-actions ? 0px : max(100px, MobileTypography.font-size(15) * 4 + 24px); clicked => { MobileActions.request(MobileIntent.export-report, "claude", ""); } }
+                MButton { text: MobileData.claude-busy ? "取消" : "开始检测"; primary: true;
+                    min-width: root.compact-actions ? 0px : max(100px, MobileTypography.font-size(15) * 4 + 24px);
+                    clicked => { MobileActions.request(MobileData.claude-busy ? MobileIntent.claude-cancel : MobileIntent.claude-start, "", ""); }
+                }
             }
-            MButton { text: "检测选项"; clicked => { MobileView.detail = 17; } }
         }
-        MButton { text: "导出报告"; quiet: true; clicked => { MobileActions.request(MobileIntent.export-report, "claude", ""); } }
         MSmall { text: MobileData.claude-status; wrap: word-wrap; }
         MCard { vertical-padding: 0px; horizontal-padding: 0px;
             GridLayout { spacing: 0px;
@@ -713,12 +740,7 @@ export component MobileAiCheck inherits PageSurface {
         }
         if MobileData.claude-results.length > 0: VerticalLayout { spacing: 8px;
             MSmall { text: "检测结果"; font-weight: 600; }
-            MCard { vertical-padding: 0px; gap: 0px;
-                for result[index] in MobileData.claude-results: VerticalLayout { spacing: 0px;
-                    if index > 0: MDivider { }
-                    MobileFinding { item: result; }
-                }
-            }
+            MobileReport { items: MobileData.claude-results; }
         }
     } }
 }

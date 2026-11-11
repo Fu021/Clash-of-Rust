@@ -29,6 +29,23 @@ class ArtifactTests(unittest.TestCase):
     commit = 'a'*40
     version = '0.4.12'
 
+    def test_guest_source_marker_is_validated_without_falling_back_to_git(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            marker = root / 'source-commit.txt'
+            with patch.object(artifacts, 'ROOT', root), \
+                    patch.object(artifacts.subprocess, 'check_output') as git, \
+                    patch.dict(os.environ, {'COR_LINUX_GUEST': 'true', 'GITHUB_ACTIONS': 'true'}):
+                marker.write_text(self.commit + '\n')
+                self.assertEqual(artifacts.commit(), self.commit)
+                marker.write_text('unverified-source')
+                with self.assertRaises(ValueError):
+                    artifacts.commit()
+                marker.write_text(self.commit)
+                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), self.assertRaises(ValueError):
+                    artifacts.commit()
+                git.assert_not_called()
+
     def test_package_wait_preserves_source_identity_and_waits_for_both_artifacts(self):
         queries = []
         polls = 0

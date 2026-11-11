@@ -1,10 +1,21 @@
 //! Desktop bundle discovery and core executable validation.
 use anyhow::{Context, Result, bail};
 pub use clash_client_core::geodata::{
-    GEO_FILES, GeoFile, GeoManifest, MANIFEST, atomic_copy, begin_install, commit, download_geo,
-    hash_file, record_install, recover, verify_geo,
+    GEO_FILES, GeoFile, GeoManifest, MANIFEST, atomic_copy, begin_install, commit, hash_file,
+    record_install, recover, verify_geo,
 };
 use std::path::{Path, PathBuf};
+
+pub async fn download_geo(
+    destination: &Path,
+    port: Option<crate::network::DownloadPorts>,
+) -> Result<GeoManifest> {
+    clash_client_core::geodata::download_geo_via(
+        destination,
+        &crate::network::available_routes(port, "https"),
+    )
+    .await
+}
 
 pub fn discover() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;

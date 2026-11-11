@@ -179,12 +179,31 @@ fn holders(
     })
 }
 
+fn tun_interfaces(routes: &Value) -> Vec<String> {
+    let mut interfaces = Vec::new();
+    for family in ["ipv4", "ipv6"] {
+        for route in [routes.get(family), super::current_route(routes, family)]
+            .into_iter()
+            .flatten()
+        {
+            if route["state"] == "observed"
+                && route["kind"] == "tun"
+                && let Some(interface) = route["interface"].as_str()
+                && !interfaces.iter().any(|name| name == interface)
+            {
+                interfaces.push(interface.to_owned());
+            }
+        }
+    }
+    interfaces
+}
+
 pub(super) fn attach_holders(mut routes: Value, scope: HolderScope) -> Value {
-    let interfaces: Vec<_> = ["ipv4", "ipv6"]
-        .into_iter()
-        .filter(|family| routes[*family]["kind"] == "tun")
-        .filter_map(|family| routes[family]["interface"].as_str().map(str::to_owned))
-        .collect();
+    routes["network_namespace"] = std::fs::read_link("/proc/self/ns/net")
+        .ok()
+        .map(|namespace| namespace.to_string_lossy().into_owned())
+        .into();
+    let interfaces = tun_interfaces(&routes);
     if !interfaces.is_empty() {
         routes["tun_holders"] = holders(
             Path::new("/proc"),
@@ -201,6 +220,30 @@ pub(super) fn attach_holders(mut routes: Value, scope: HolderScope) -> Value {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn holder_queries_include_current_user_tcp_interfaces_without_borrowing_root_samples() {
+        let routes = json!({
+            "observer_uid":1000,
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"observed","kind":"tun","interface":"Meta"},
+            "tcp_uid_samples":[
+                {"uid":0,"protocol":"tcp","destination_port":443,
+                 "ipv4":{"state":"observed","kind":"tun","interface":"RootTun"}},
+                {"uid":1000,"protocol":"tcp","destination_port":443,
+                 "ipv4":{"state":"observed","kind":"tun","interface":"UserTun"},
+                 "ipv6":{"state":"observed","kind":"tun","interface":"Meta"}}
+            ]
+        });
+        assert_eq!(tun_interfaces(&routes), ["Meta", "UserTun"]);
+        assert_eq!(
+            tun_interfaces(&json!({
+                "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+                "ipv6":{"state":"observed","kind":"tun","interface":"Meta"}
+            })),
+            ["Meta"]
+        );
+    }
 
     fn process(root: &Path, pid: u32, uid: u32, namespace: &str, interface: &str) {
         let directory = root.join(pid.to_string());

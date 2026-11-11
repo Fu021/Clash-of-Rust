@@ -37,10 +37,29 @@ pub(super) fn invalidate_size(window: &slint::Window, width: f32, height: f32) {
         window.request_redraw();
     }
 }
+
+pub(super) fn resized(window: &slint::Window, width: f32, height: f32) {
+    invalidate_size(window, width, height);
+    #[cfg(target_os = "linux")]
+    if width > 0.0 && height > 0.0 {
+        use slint::winit_030::WinitWindowAccessor;
+        window.with_winit_window(|native| native.request_redraw());
+    }
+}
+
 pub(super) fn invalidate(window: &slint::Window) {
     let size = window.size().to_logical(window.scale_factor());
     invalidate_size(window, size.width, size.height);
 }
+
+#[cfg(test)]
+mod x11_resize_sync {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/winit/src/platform_impl/linux/x11/resize_sync.rs"
+    ));
+}
+
 #[cfg(windows)]
 mod windows {
     use super::*;

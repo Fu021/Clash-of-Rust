@@ -2,12 +2,13 @@
 
 | 工作流 | 触发与职责 | 产物 |
 | --- | --- | --- |
-| [CI](workflows/ci.md) | main push、PR；源码检查、编译、九组候选包、安装及 Ubuntu 兼容验证，真实集成聚焦代理/TUN | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
-| [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 候选包；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
+| [CI](workflows/ci.md) | main push、PR；源码检查、编译、九组候选包、安装及 Ubuntu latest，真实集成聚焦代理/TUN | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
+| [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 及两套兼容性回执；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
-| [Android UI Previews](workflows/android-previews.md) | 手动；复用成功 CI 的 x64 APK，采集多 Android 版本页面和应用分流截图 | 各版本 PNG、状态和日志，保留 7 天 |
+| [Android Compatibility](workflows/android-compatibility.md) | 手动；复用成功 CI 的 x64 APK，Android 8.0～16 基础代理/TUN，截图与诊断可选 | 状态和日志保留 7 天，发布回执保留 3 天 |
+| [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；复用成功 CI 的 Linux 包，Ubuntu 20.04 x64／ARM64 的 5.4 内核安装及代理/TUN | 小型报告及发布回执保留 3 天，VM 镜像仅存私网 |
 
-普通 CI 共 14 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu 兼容 3、缓存预算 1。Publish Release 的 `check_only` 仅执行来源解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布则执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不执行完整 CI 矩阵，不能作为发布来源。
+普通 CI 共 12 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu latest 1、缓存预算 1。Android Compatibility 共 13 个 job（解析、11 版本、回执），Ubuntu Compatibility 共 4 个 job（解析、两架构、回执）。发布前必须分别完成两套同提交、同源 CI 的兼容验证；Publish Release 自动核验，不能只凭普通 CI 发布。其 `check_only` 仍只执行解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不作为发布来源。
 
 桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。自 0.6.6 起 Ubuntu 构建基线为 20.04，安装验证覆盖 20.04、22.04 和最新版，架构与旧内核边界见[打包验证](workflows/release.md#publish-release)。iOS 仅有宿主占位与 UI 原型，不参与构建。
 

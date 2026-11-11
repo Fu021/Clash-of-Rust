@@ -131,8 +131,18 @@ pub(super) fn request(
     value: &str,
 ) -> Result<()> {
     let data = ui.global::<AndroidData>();
-    if ui.global::<MobileData>().get_protected()
-        || ui.global::<MobileData>().get_protection_pending()
+    if (ui.global::<MobileData>().get_protected()
+        || ui.global::<MobileData>().get_protection_pending())
+        && !matches!(
+            intent,
+            AndroidIntent::ApplicationRouting
+                | AndroidIntent::ApplicationRefresh
+                | AndroidIntent::ApplicationQuery
+                | AndroidIntent::ApplicationSystem
+                | AndroidIntent::ApplicationFilter
+                | AndroidIntent::ApplicationPermissions
+                | AndroidIntent::ApplicationRevert
+        )
     {
         bail!("请先关闭 Claude 保护，再修改应用分流");
     }

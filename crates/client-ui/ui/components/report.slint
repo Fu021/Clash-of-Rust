@@ -1,0 +1,54 @@
+import { GeometryTarget } from "geometry.slint";
+import { Panel, Label, Caption, Paragraph, Badge } from "controls.slint";
+import { Theme } from "../theme/palette.slint";
+import { ReportItem } from "../state.slint";
+
+component FindingRow inherits Rectangle {
+    in property <ReportItem> item;
+    in property <length> title-size;
+    in property <length> detail-size;
+    in property <length> caption-size;
+    height: content.preferred-height;
+    content := HorizontalLayout {
+        padding: 16px; spacing: 12px; cross-axis-alignment: start;
+        Rectangle {
+            width: 30px; height: 30px; border-radius: 8px; background: Theme.inset;
+            if root.item.flagged: Text { text: root.item.flag; width: parent.width; height: parent.height; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
+            if !root.item.flagged: Image { source: @image-url("../icons/ai.svg"); x: 7px; y: 7px; width: 16px; height: 16px; colorize: Theme.secondary; }
+        }
+        VerticalLayout {
+            spacing: 5px; min-width: 0px;
+            Label { text: root.item.title; font-weight: 600; font-size: root.title-size; wrap: word-wrap; }
+            Paragraph { text: root.item.value; font-size: root.detail-size; }
+            if root.item.country != "": Caption { text: "地区：" + root.item.country; font-size: root.caption-size; wrap: word-wrap; }
+            if root.item.detail != "": Paragraph { text: root.item.detail; color: Theme.secondary; font-size: root.detail-size; }
+            if root.item.source != "": Caption { text: "来源：" + root.item.source; wrap: word-wrap; color: Theme.muted; font-size: root.caption-size; }
+            if root.item.delay != "": Caption { text: root.item.delay; color: Theme.tone-color(root.item.delay-tone); font-size: root.caption-size; }
+        }
+        Badge { text: root.item.tone == 3 ? "风险" : root.item.tone == 1 ? "正常" : "线索"; tone: root.item.tone; font-size: root.caption-size; }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.subtle-line; }
+}
+
+export component FindingList inherits Panel {
+    in property <[ReportItem]> items;
+    in property <int> tone;
+    in property <length> title-size: Theme.body-size;
+    in property <length> detail-size: Theme.detail-size;
+    in property <length> caption-size: Theme.detail-size;
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
+    height: rows.preferred-height;
+    clip: true;
+    GeometryTarget { key: "claude-report"; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
+    rows := VerticalLayout {
+        spacing: 0px;
+        for result[index] in root.items: result-row := VerticalLayout {
+            spacing: 0px; vertical-stretch: 0;
+            GeometryTarget { key: "claude-result:" + index; bounds: [result-row.absolute-position.x, result-row.absolute-position.y, result-row.width, result-row.height]; }
+            if root.tone == 0 || result.tone == root.tone: FindingRow {
+                item: result;
+                title-size: root.title-size; detail-size: root.detail-size; caption-size: root.caption-size;
+            }
+        }
+    }
+}

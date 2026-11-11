@@ -1061,9 +1061,13 @@ impl App {
                     let (_, flag) = clash_of_rust::flags::label(&country);
                     let (title, value, detail, source) = match entry {
                         claude_view::Entry::Config(finding) => (
-                            finding.field.clone(),
-                            finding.value.clone(),
-                            format!("{}\n{}", finding.reason, finding.advice),
+                            finding.display_title().into(),
+                            if finding.value.trim().is_empty() {
+                                "未提供".into()
+                            } else {
+                                finding.value.clone()
+                            },
+                            finding.explanation(),
                             finding.path.clone(),
                         ),
                         claude_view::Entry::Clean(path) => (
@@ -1073,20 +1077,24 @@ impl App {
                             path.into(),
                         ),
                         claude_view::Entry::Signal(_, signal) => (
-                            signal.title.clone(),
+                            signal.display_title().into(),
                             if country.is_empty() {
-                                signal.value.clone()
+                                signal.display_value().into()
                             } else {
                                 signal.ip.clone()
                             },
-                            format!("{}\n{}", signal.detail, signal.advice),
+                            signal.explanation(),
                             signal.source.clone(),
                         ),
                         claude_view::Entry::Route(route) => (
-                            route.host.clone(),
-                            format!("{} · {}", route.outcome, route.chain),
-                            format!("规则：{}", route.rule),
-                            route.time.clone(),
+                            route.display_title().into(),
+                            if route.outcome.is_empty() {
+                                "仅记录选路".into()
+                            } else {
+                                route.outcome.clone()
+                            },
+                            route.explanation(),
+                            "内核连接记录".into(),
                         ),
                     };
                     ReportItem {
@@ -1201,12 +1209,6 @@ impl App {
                     kind = 8;
                     data.set_modal_title("补充采样".into());
                     data.set_modal_description("自动浏览器检测来自本机检测页面。需要核对 Claude 网页本身的设置时，可在该网页的开发者工具 Console 运行采样脚本，再导入结果。".into());
-                }
-                claude_view::Guide::Diagnostics => {
-                    kind = 9;
-                    data.set_modal_title("检测选项".into());
-                    data.set_reputation_key(self.claude.reputation_key.as_str().into());
-                    data.set_modal_description("完整的机房、VPN、代理、Tor 与滥用标签需要 ipapi.is 的个人 API 密钥。留空时相关项目显示未确认。\n\n密钥只保存在本机，以 HTTPS 提交检测服务，不交给浏览器或 Claude、不写入报告。\n\n补充检测手动触发：全球探针最多使用 20 个位置；小流量测速下载 10 MiB、上传 2 MiB。".into());
                 }
             }
         } else if let Some(id) = &self.connection_detail {

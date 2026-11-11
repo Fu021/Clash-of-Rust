@@ -224,6 +224,12 @@ public final class MainActivity extends NativeActivity {
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;
                 case "applications-list": return ApplicationCatalog.read(this).toString();
                 case "applications-save": return ApplicationCatalog.save(this, data).toString();
+                case "application-policy-capability": return ApplicationOwners.capability().toString();
+                case "applications-reconnect":
+                    if (CoreBridge.protectedMode(this))
+                        throw new IllegalStateException("请先关闭 Claude 保护，再修改应用规则");
+                    if (TunnelService.connected()) TunnelService.start(this, true);
+                    break;
                 case "applications-permissions":
                     runOnUiThread(() -> {
                         try {

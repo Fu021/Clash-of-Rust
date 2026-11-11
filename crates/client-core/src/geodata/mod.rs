@@ -151,11 +151,39 @@ struct ReleaseAsset {
     browser_download_url: String,
 }
 
+struct DownloadRoute {
+    label: &'static str,
+    client: Result<reqwest::Client>,
+}
+
+impl DownloadRoute {
+    fn new(route: &crate::network::Route) -> Self {
+        Self {
+            label: route.label,
+            client: download_client(route),
+        }
+    }
+
+    fn client(&self) -> Result<&reqwest::Client> {
+        self.client
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error:#}"))
+    }
+}
+
 pub async fn download_geo(
     destination: &Path,
     proxy_port: Option<crate::network::DownloadPorts>,
 ) -> Result<GeoManifest> {
     let routes = crate::network::download_routes(proxy_port, None);
+    download_geo_via(destination, &routes).await
+}
+
+pub async fn download_geo_via(
+    destination: &Path,
+    routes: &[crate::network::Route],
+) -> Result<GeoManifest> {
+    let routes: Vec<_> = routes.iter().map(DownloadRoute::new).collect();
     let mut release = None;
     let mut errors = Vec::new();
     for route in &routes {
@@ -230,8 +258,9 @@ fn download_client(route: &crate::network::Route) -> Result<reqwest::Client> {
         .build()?)
 }
 
-async fn fetch_release(route: &crate::network::Route) -> Result<Release> {
-    let mut response = download_client(route)?
+async fn fetch_release(route: &DownloadRoute) -> Result<Release> {
+    let mut response = route
+        .client()?
         .get(RELEASE)
         .timeout(Duration::from_secs(30))
         .send()
@@ -250,12 +279,13 @@ async fn fetch_release(route: &crate::network::Route) -> Result<Release> {
 async fn download_asset(
     asset: &ReleaseAsset,
     destination: &Path,
-    routes: &[crate::network::Route],
+    routes: &[DownloadRoute],
 ) -> Result<()> {
     let mut errors = Vec::new();
     for (index, route) in routes.iter().enumerate() {
         let attempt = async {
-            let mut response = download_client(route)?
+            let mut response = route
+                .client()?
                 .get(&asset.browser_download_url)
                 .send()
                 .await?
@@ -592,6 +622,54 @@ pub fn recover(runtime: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn a_geo_batch_reuses_its_route_connection_across_files() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            for _ in 0..2 {
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert!(count > 0 && request.len() + count <= 8192);
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ngeo!")
+                    .await
+                    .unwrap();
+            }
+        });
+        let asset = ReleaseAsset {
+            name: "geoip.dat".into(),
+            size: 4,
+            digest: Some(format!(
+                "sha256:{}",
+                crate::file_hash::hex(Sha256::digest(b"geo!"))
+            )),
+            browser_download_url: format!("http://{address}/geo"),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let routes = [DownloadRoute::new(&crate::network::Route {
+            label: "测试网络",
+            proxy: None,
+        })];
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for name in ["GeoIP.dat", "GeoSite.dat"] {
+                download_asset(&asset, &directory.path().join(name), &routes)
+                    .await
+                    .unwrap();
+                assert_eq!(std::fs::read(directory.path().join(name)).unwrap(), b"geo!");
+            }
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
     async fn asset_server(bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -644,7 +722,7 @@ mod tests {
             proxy: Some(bad_url),
         };
         assert!(
-            download_asset(&asset, &destination, std::slice::from_ref(&proxy))
+            download_asset(&asset, &destination, &[DownloadRoute::new(&proxy)])
                 .await
                 .is_err()
         );
@@ -663,6 +741,7 @@ mod tests {
                 proxy: None,
             },
         ];
+        let routes: Vec<_> = routes.iter().map(DownloadRoute::new).collect();
         download_asset(&asset, &destination, &routes).await.unwrap();
         bad.await.unwrap();
         good.await.unwrap();

@@ -8,7 +8,6 @@ use clash_of_rust::claude_check::{
 pub enum Guide {
     Supplement,
     Protection,
-    Diagnostics,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultKind {
@@ -21,10 +20,6 @@ pub enum Event {
     Start,
     Protection(bool),
     ConfirmProtection,
-    ReputationKey(String),
-    SaveReputationKey,
-    Additional(check::additional::Kind),
-    AdditionalResult(u64, Result<Vec<Signal>, String>),
     Cancel,
     ResultsPage(usize),
     ResultsFilter(Option<ResultKind>),
@@ -67,8 +62,6 @@ pub struct State {
     pub(super) session_starting: bool,
     pub status: String,
     pub error: bool,
-    pub(super) reputation_key: String,
-    pub(super) additional_busy: bool,
 }
 pub(super) enum Entry<'a> {
     Config(&'a check::audit::Finding),
@@ -238,7 +231,6 @@ impl State {
             || self.audit_busy
             || self.session_starting
             || self.importing
-            || self.additional_busy
     }
     pub fn close(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -257,7 +249,6 @@ impl State {
         self.network_busy = false;
         self.browser_busy = false;
         self.importing = false;
-        self.additional_busy = false;
     }
     pub fn shutdown(&mut self) {
         self.close();
@@ -307,78 +298,6 @@ impl App {
     pub(crate) fn claude_event(&mut self, event: Event) -> Task<Message> {
         let wrap = |event| Message::Claude(event);
         match event {
-            Event::Additional(kind) => {
-                if self.claude.busy() || self.working || self.exiting {
-                    return Task::none();
-                }
-                let Some(port) = self.snapshot.running.then_some(self.settings.mixed_port) else {
-                    self.claude.status = "请先启动内核并完成一次检测。".into();
-                    self.claude.error = true;
-                    return Task::none();
-                };
-                let ip = self.claude.reports[index(Environment::Core)]
-                    .as_ref()
-                    .and_then(|report| {
-                        report
-                            .signals
-                            .iter()
-                            .find(|s| !s.ip.is_empty() && s.group == Group::Exit)
-                    })
-                    .map(|signal| signal.ip.clone())
-                    .unwrap_or_default();
-                self.claude.guide = None;
-                self.claude.additional_busy = true;
-                self.claude.error = false;
-                self.claude.status = format!("正在进行{}…", kind.title());
-                let generation = self.claude.generation;
-                let (aborter, registration) = AbortHandle::new_pair();
-                self.claude.aborters.push(aborter);
-                return Task::perform(
-                    async move {
-                        Abortable::new(
-                            async move {
-                                let client =
-                                    check::client(Some(port)).map_err(|e| e.to_string())?;
-                                check::additional::run(&client, kind, &ip)
-                                    .await
-                                    .map_err(|e| e.to_string())
-                            },
-                            registration,
-                        )
-                        .await
-                        .unwrap_or_else(|_| Err("补充检测已取消".into()))
-                    },
-                    move |result| wrap(Event::AdditionalResult(generation, result)),
-                );
-            }
-            Event::AdditionalResult(generation, result) if generation == self.claude.generation => {
-                self.claude.additional_busy = false;
-                match result {
-                    Ok(signals) => {
-                        let report = self.claude.reports[index(Environment::Core)]
-                            .get_or_insert_with(|| {
-                                Report::new(Environment::Core, "内核探测与补充检测")
-                            });
-                        report
-                            .signals
-                            .retain(|old| !signals.iter().any(|new| new.title == old.title));
-                        let remaining = 80usize.saturating_sub(report.signals.len());
-                        report.signals.extend(signals.into_iter().take(remaining));
-                        self.claude.status = "补充检测完成，结果已加入报告。".into();
-                    }
-                    Err(error) => {
-                        self.claude.status = error;
-                        self.claude.error = true;
-                    }
-                }
-            }
-            Event::ReputationKey(value) => self.claude.reputation_key = value,
-            Event::SaveReputationKey => {
-                let key = self.claude.reputation_key.trim().to_owned();
-                self.claude.reputation_key.clear();
-                self.claude.guide = None;
-                return self.dispatch(Action::ReputationKey((!key.is_empty()).then_some(key)));
-            }
             Event::Protection(enabled) => {
                 if self.working || self.exiting || self.claude.busy() {
                     return Task::none();
@@ -440,7 +359,7 @@ impl App {
                             report.signals.extend(check::enhanced::configuration(&clash_of_rust::api::Api::new(&detection_settings).map_err(|e|e.to_string())?, &detection_settings).await);
                             if let Ok(routes)=clash_of_rust::api::Api::new(&detection_settings).map_err(|e|e.to_string())?.get::<check::ObservedConnections>("connections").await {report.routes=routes.connections;}
                             report.signals.extend(check::system_dns(&client, "本机系统解析器；结果查询通过内核").await);
-                            check::enhanced::extend(&client,&mut report,detection_settings.ip_reputation_key.as_deref()).await;
+                            check::enhanced::extend(&client,&mut report).await;
                         } else {
                             report.signals.push(Signal::unknown(Group::Exit, "内核出口", "内核探测", "内核未运行，没有回退到直连；仍可检测浏览器和 Code 的实际环境。"));
                         }
@@ -477,15 +396,7 @@ impl App {
                 self.claude.results_filter = filter;
                 self.claude.results_page = 0;
             }
-            Event::Guide(guide) => {
-                if matches!(guide, Some(Guide::Diagnostics)) {
-                    self.claude.reputation_key =
-                        self.settings.ip_reputation_key.clone().unwrap_or_default();
-                } else {
-                    self.claude.reputation_key.clear();
-                }
-                self.claude.guide = guide;
-            }
+            Event::Guide(guide) => self.claude.guide = guide,
             Event::Audit(generation, audit) if generation == self.claude.generation => {
                 self.claude.audit_busy = false;
                 self.claude.scan = None;

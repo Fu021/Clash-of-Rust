@@ -92,6 +92,7 @@ final class ApplicationCatalog {
                     && visibleWithoutComponents(application, launchable.contains(application.packageName),
                         saved.packages.contains(application.packageName))) other++;
             entries.add(new JSONObject().put("name", label).put("package", application.packageName)
+                .put("uid", application.uid)
                 .put("icon", image)
                 .put("system", (application.flags & ApplicationInfo.FLAG_SYSTEM) != 0)
                 .put("launchable", launchable.contains(application.packageName)));

@@ -346,12 +346,20 @@ fn parse_tun_configuration(raw: &str) -> Value {
         "inet6_address":tun["inet6-address"],
         "stack":tun["stack"],
         "auto_route":tun["auto-route"],
+        "auto_redirect":tun["auto-redirect"],
         "auto_detect_interface":tun["auto-detect-interface"],
         "strict_route":tun["strict-route"],
         "mtu":tun["mtu"],
         "route_address":tun["route-address"],
         "inet4_route_address":tun["inet4-route-address"],
         "inet6_route_address":tun["inet6-route-address"],
+        "route_exclude_address":tun["route-exclude-address"],
+        "include_uid":tun["include-uid"],
+        "include_uid_range":tun["include-uid-range"],
+        "exclude_uid":tun["exclude-uid"],
+        "exclude_uid_range":tun["exclude-uid-range"],
+        "include_interface":tun["include-interface"],
+        "exclude_interface":tun["exclude-interface"],
         "dns_hijack":tun["dns-hijack"],
         "dns_enhanced_mode":dns["enhanced-mode"],
         "fake_ip_range":dns["fake-ip-range"]
@@ -602,6 +610,21 @@ mod tests {
         ] {
             assert!(!report.to_string().contains(secret));
         }
+    }
+
+    #[test]
+    fn tun_diagnostic_keeps_user_and_interface_routing_restrictions() {
+        let value = parse_tun_configuration(
+            "tun:\n  auto-redirect: true\n  include-uid: [0]\n  exclude-uid: [1000]\n  include-uid-range: ['0:999']\n  exclude-uid-range: ['1000:65535']\n  include-interface: [eth0]\n  exclude-interface: [tailscale0]\n  route-exclude-address: [10.0.0.0/8]\n",
+        );
+        assert_eq!(value["auto_redirect"], true);
+        assert_eq!(value["include_uid"], json!([0]));
+        assert_eq!(value["exclude_uid"], json!([1000]));
+        assert_eq!(value["include_uid_range"], json!(["0:999"]));
+        assert_eq!(value["exclude_uid_range"], json!(["1000:65535"]));
+        assert_eq!(value["include_interface"], json!(["eth0"]));
+        assert_eq!(value["exclude_interface"], json!(["tailscale0"]));
+        assert_eq!(value["route_exclude_address"], json!(["10.0.0.0/8"]));
     }
 
     #[test]

@@ -55,6 +55,15 @@ export component AndroidPreview inherits Window {
         AndroidData.authorization-status = "已允许";
         MobileData.protection-supported = true;
         AndroidData.applications-loaded = true;
+        AndroidData.policies-supported = true;
+        AndroidData.policies-profile = "示例订阅";
+        AndroidData.policies-status = "只作用于进入 VPN 的应用；未指定的应用跟随配置。";
+        AndroidData.policies-applications = ["浏览器 · org.example.browser", "地图 · org.example.maps"];
+        AndroidData.policies-targets = ["跟随配置", "直连", "拦截", "策略组 · 自动选择", "节点 · 日本 01"];
+        AndroidData.policies = [
+            {package: "org.example.browser", name: "浏览器", target: "策略组 · 自动选择", status: "新连接生效"},
+            {package: "org.example.maps", name: "地图", target: "节点 · 已移除节点", status: "目标失效 · 跟随配置"}
+        ];
         AndroidData.applications-total = 6;
         AndroidData.applications-selected = 2;
         AndroidData.applications-mode = 1;

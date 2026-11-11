@@ -1,37 +1,68 @@
-//! Explicit supplementary probes; no automatic bandwidth tests or remote pings.
-use super::{Evidence, Group, Signal, public_ip, response_bytes};
+//! Bounded supplementary evidence for a measured public exit.
+use super::{Evidence, Group, Report, Signal, public_ip, response_bytes};
 use anyhow::{Result, bail, ensure};
 use reqwest::Client;
 use serde_json::Value;
-use std::{
-    net::IpAddr,
-    time::{Duration, Instant},
-};
+use std::{net::IpAddr, time::Duration};
 
-#[derive(Debug, Clone, Copy)]
-pub enum Kind {
-    Registration,
-    GlobalPing,
-    Speed,
+fn exit_ip(report: &Report) -> Option<IpAddr> {
+    report
+        .signals
+        .iter()
+        .filter(|signal| signal.group == Group::Exit && signal.evidence == Evidence::Measured)
+        .filter_map(|signal| signal.ip.parse::<IpAddr>().ok())
+        .find(|ip| public_ip(*ip))
 }
-impl Kind {
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Registration => "注册信息",
-            Self::GlobalPing => "全球探针",
-            Self::Speed => "小流量测速",
-        }
-    }
+
+pub async fn extend(client: &Client, report: &mut Report) {
+    let Some(ip) = exit_ip(report) else {
+        report.signals.extend([
+            Signal::unknown(
+                Group::Quality,
+                "IP 注册信息",
+                "RDAP",
+                "未取得实测公网出口 IP，未发起注册查询。",
+            ),
+            Signal::unknown(
+                Group::Connectivity,
+                "全球连通性",
+                "Globalping 远端探针",
+                "未取得实测公网出口 IP，未发起远端探测。",
+            ),
+        ]);
+        return;
+    };
+    let ip = ip.to_string();
+    let (registration, ping) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(15), registration(client, &ip)),
+        tokio::time::timeout(Duration::from_secs(30), global_ping(client, &ip)),
+    );
+    report
+        .signals
+        .extend(registration.ok().and_then(Result::ok).unwrap_or_else(|| {
+            vec![Signal::unknown(
+                Group::Quality,
+                "IP 注册信息",
+                "RDAP",
+                "注册服务超时、拒绝请求或未返回有效记录；不影响其他检测结果。",
+            )]
+        }));
+    report
+        .signals
+        .extend(ping.ok().and_then(Result::ok).unwrap_or_else(|| {
+            vec![Signal::unknown(
+                Group::Connectivity,
+                "全球连通性",
+                "Globalping 远端探针",
+                "远端探测超时、额度不足或服务不可用；不能据此判定出口故障。",
+            )]
+        }));
 }
-pub async fn run(client: &Client, kind: Kind, ip: &str) -> Result<Vec<Signal>> {
-    match kind {
-        Kind::Registration => registration(client, ip).await,
-        Kind::GlobalPing => global_ping(client, ip).await,
-        Kind::Speed => speed(client).await,
-    }
-}
+
 fn valid_target(ip: &str) -> Result<IpAddr> {
-    let ip: IpAddr = ip.parse()?;
+    let ip: IpAddr = ip
+        .parse()
+        .map_err(|_| anyhow::anyhow!("尚未取得有效公网出口 IP"))?;
     ensure!(public_ip(ip), "请先检测并获得有效公网出口 IP");
     Ok(ip)
 }
@@ -116,7 +147,7 @@ fn registration_record(record: &Value, ip: &str, source: &str) -> Result<Vec<Sig
         .unwrap_or_default();
     Ok(vec![Signal::new(
         Group::Quality,
-        "IP 注册与归属",
+        "IP 注册信息",
         format!("{name} · {start}–{end} · 注册地区 {country}"),
         source,
         Evidence::Measured,
@@ -153,70 +184,53 @@ pub async fn global_ping(client: &Client, ip: &str) -> Result<Vec<Signal>> {
     bail!("全球探针尚未完成，请稍后重试；没有将超时判定为节点故障")
 }
 fn ping_results(record: &Value, ip: &str) -> Vec<Signal> {
-    record["results"].as_array().into_iter().flatten().take(20).map(|entry| {
-        let probe=&entry["probe"];
-        let stats=&entry["result"]["stats"];
-        let title=format!("全球探针 · {} / {}",probe["country"].as_str().unwrap_or("未提供"),probe["city"].as_str().unwrap_or("未提供"));
-        let numbers=["min","avg","max","loss"].map(|key|stats[key].as_f64().filter(|v|v.is_finite() && *v>=0.0));
-        if let [Some(min),Some(avg),Some(max),Some(loss)]=numbers {Signal::new(Group::Connectivity,&title,format!("最小 {min:.1} · 平均 {avg:.1} · 最大 {max:.1} ms · 丢包 {loss:.0}%"),"Globalping 远端探针",Evidence::Measured,&format!("探针到出口 IP {ip} 的 ICMP 测量，不是本机到 Claude 的延迟；出口防火墙可拒绝 ICMP。"))}
-        else {Signal::unknown(Group::Connectivity,&title,"Globalping 远端探针","没有获得完整测量，可能受 ICMP、防火墙或探针可用性影响。")}
-    }).collect()
-}
-pub async fn speed(client: &Client) -> Result<Vec<Signal>> {
-    let download = download_rate(
-        client,
-        "https://speed.cloudflare.com/__down?bytes=10485760",
-        10 * 1024 * 1024,
-    )
-    .await?;
-    let started = Instant::now();
-    let chunks =
-        futures_util::stream::iter((0..32).map(|_| Ok::<_, std::io::Error>(vec![0u8; 64 * 1024])));
-    let response = client
-        .post("https://speed.cloudflare.com/__up")
-        .timeout(Duration::from_secs(30))
-        .header(reqwest::header::CONTENT_LENGTH, 2 * 1024 * 1024)
-        .body(reqwest::Body::wrap_stream(chunks))
-        .send()
-        .await?;
-    ensure!(response.status().is_success(), "上传测量未完成");
-    let upload = (2 * 1024 * 1024) as f64 * 8.0
-        / started.elapsed().as_secs_f64().max(0.000001)
-        / 1_000_000.0;
-    Ok(vec![
-        Signal::new(
-            Group::Connectivity,
-            "小流量下载测量",
-            format!("{download:.2} Mbps"),
-            "Cloudflare speed endpoint",
-            Evidence::Measured,
-            "读取并立即丢弃最多 10 MiB 数据；含连接开销，小样本不代表最大带宽。",
-        ),
-        Signal::new(
-            Group::Connectivity,
-            "小流量上传测量",
-            format!("{upload:.2} Mbps"),
-            "Cloudflare speed endpoint",
-            Evidence::Measured,
-            "以 64 KiB 块上传 2 MiB 数据；只测试当前探测线路，不向 Claude 上传数据。",
-        ),
-    ])
-}
-async fn download_rate(client: &Client, url: &str, limit: usize) -> Result<f64> {
-    let started = Instant::now();
-    let mut response = client
-        .get(url)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await?;
-    ensure!(response.status().is_success(), "下载测量未完成");
-    let mut size = 0;
-    while let Some(chunk) = response.chunk().await? {
-        size += chunk.len();
-        ensure!(size <= limit, "测速响应超过流量限制");
+    let results: Vec<_> = record["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(20)
+        .collect();
+    let mut delays = Vec::new();
+    for entry in &results {
+        let stats = &entry["result"]["stats"];
+        let average = stats["avg"]
+            .as_f64()
+            .filter(|value| value.is_finite() && *value >= 0.0);
+        let loss = stats["loss"]
+            .as_f64()
+            .filter(|value| value.is_finite() && (0.0..=100.0).contains(value));
+        if let (Some(average), Some(loss)) = (average, loss)
+            && loss < 100.0
+        {
+            delays.push(average);
+        }
     }
-    ensure!(size == limit, "下载测量未收到完整样本");
-    Ok(size as f64 * 8.0 / started.elapsed().as_secs_f64().max(0.000001) / 1_000_000.0)
+    if delays.is_empty() {
+        return vec![Signal::unknown(
+            Group::Connectivity,
+            "全球连通性",
+            "Globalping 远端探针",
+            "未取得有效 ICMP 响应；可能受出口防火墙、探针或服务可用性影响，不能据此判定出口故障。",
+        )];
+    }
+    delays.sort_by(f64::total_cmp);
+    vec![Signal::new(
+        Group::Connectivity,
+        "全球连通性",
+        format!(
+            "{}/{} 个探针取得响应 · 中位 {:.1} ms",
+            delays.len(),
+            results.len(),
+            delays[delays.len() / 2]
+        ),
+        "Globalping 远端探针",
+        Evidence::Measured,
+        &format!(
+            "远端探针到出口 IP {ip} 的 ICMP 测量，不是本机到 Claude 的延迟。有效探针平均延迟范围 {:.1}–{:.1} ms；其余探针未取得有效响应，可能受防火墙或探针可用性影响。",
+            delays[0],
+            delays[delays.len() - 1],
+        ),
+    )]
 }
 #[cfg(test)]
 mod tests {
@@ -234,7 +248,46 @@ mod tests {
             "1.2.3.4",
         );
         assert_eq!(signals[0].evidence, Evidence::Measured);
-        assert_eq!(signals[1].evidence, Evidence::Unknown);
+        assert_eq!(signals.len(), 1);
+        assert!(signals[0].value.starts_with("1/2"));
+        assert_eq!(
+            ping_results(&serde_json::json!({}), "1.2.3.4")[0].evidence,
+            Evidence::Unknown
+        );
+        assert_eq!(
+            ping_results(
+                &serde_json::json!({"results":[{"result":{"stats":{"avg":0,"loss":100}}}]}),
+                "1.2.3.4"
+            )[0]
+            .evidence,
+            Evidence::Unknown
+        );
         assert!(signals.iter().all(|s| s.country.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn missing_or_unmeasured_exit_skips_external_queries() {
+        let client = Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:1").unwrap())
+            .build()
+            .unwrap();
+        for (ip, evidence) in [
+            ("", Evidence::Measured),
+            ("invalid", Evidence::Measured),
+            ("127.0.0.1", Evidence::Measured),
+            ("1.2.3.4", Evidence::Inferred),
+        ] {
+            let mut report = Report::new(super::super::Environment::Core, "fixture");
+            let mut exit = Signal::new(Group::Exit, "出口", ip, "fixture", evidence, "");
+            exit.ip = ip.into();
+            report.signals.push(exit);
+            extend(&client, &mut report).await;
+            assert_eq!(report.signals.len(), 3);
+            assert!(report.signals[1..].iter().all(|signal| {
+                signal.evidence == Evidence::Unknown
+                    && !signal.title.is_empty()
+                    && signal.detail.contains("未发起")
+            }));
+        }
     }
 }

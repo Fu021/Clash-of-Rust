@@ -340,7 +340,7 @@ async fn diagnose(args: &Args) -> Result<()> {
         if args.flag("offline") {
             let (report, routes) = tokio::join!(
                 crate::diagnostics::collect(args),
-                crate::host_network::observe(args)
+                crate::host_network::diagnose(args)
             );
             let mut report = report?;
             report["offline"] = json!(true);
@@ -441,7 +441,7 @@ async fn diagnose(args: &Args) -> Result<()> {
         bounded_probe(clash_client_core::probe::dns(host.into())),
         bounded_probe(clash_client_core::probe::website_system_route(url.into())),
         backend_probes,
-        crate::host_network::observe(args),
+        crate::host_network::diagnose(args),
         local
     );
     let (backend, backend_error) = match backend_result {
@@ -674,12 +674,7 @@ async fn claude(args: &Args) -> Result<()> {
     }
     let mut report = claude_check::system::local(claude_check::Environment::Core).await;
     claude_check::network(&client, &mut report, "内核代理").await;
-    claude_check::enhanced::extend(
-        &client,
-        &mut report,
-        meta.settings.ip_reputation_key.as_deref(),
-    )
-    .await;
+    claude_check::enhanced::extend(&client, &mut report).await;
     if let Ok(observed) = Api::new(&meta.settings)?
         .get::<claude_check::ObservedConnections>("connections")
         .await

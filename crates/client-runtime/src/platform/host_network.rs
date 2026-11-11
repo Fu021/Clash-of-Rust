@@ -69,6 +69,141 @@ async fn route(family: &str, destination: &str) -> Value {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn parse_policy(output: &[u8]) -> Value {
+    if output.len() > 64 * 1024 {
+        return json!({"state":"unknown","reason":"policy_response_too_large"});
+    }
+    let Ok(Value::Array(entries)) = serde_json::from_slice::<Value>(output) else {
+        return json!({"state":"unknown","reason":"invalid_policy_response"});
+    };
+    if entries.iter().any(|entry| !entry.is_object()) {
+        return json!({"state":"unknown","reason":"invalid_policy_response"});
+    }
+    let count = entries.len();
+    let rules: Vec<Value> = entries
+        .into_iter()
+        .take(256)
+        .map(|entry| {
+            let fields = [
+                "priority",
+                "table",
+                "action",
+                "goto",
+                "not",
+                "uidrange",
+                "fwmark",
+                "fwmask",
+                "ipproto",
+                "sport",
+                "dport",
+                "iif",
+                "oif",
+                "suppress_prefixlen",
+            ];
+            Value::Object(
+                fields
+                    .into_iter()
+                    .filter_map(|field| {
+                        entry.get(field).cloned().map(|value| (field.into(), value))
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    json!({"state":if count > 256 {"partial"} else {"observed"},"total":count,"rules":rules})
+}
+
+#[cfg(target_os = "linux")]
+async fn policy(family: &str) -> Value {
+    let mut command = tokio::process::Command::new("ip");
+    command
+        .args(["-j", family, "rule", "show"])
+        .kill_on_drop(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(2), command.output()).await {
+        Ok(Ok(output)) if output.status.success() => parse_policy(&output.stdout),
+        Ok(Ok(_)) => json!({"state":"unknown","reason":"policy_unavailable"}),
+        Ok(Err(_)) => json!({"state":"unknown","reason":"ip_command_unavailable"}),
+        Err(_) => json!({"state":"unknown","reason":"policy_query_timeout"}),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tcp_route_command(family: &str, destination: &str, uid: u32) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("ip");
+    command
+        .args([
+            "-j",
+            family,
+            "route",
+            "get",
+            destination,
+            "uid",
+            &uid.to_string(),
+            "ipproto",
+            "tcp",
+            "dport",
+            "443",
+        ])
+        .kill_on_drop(true);
+    command
+}
+
+#[cfg(target_os = "linux")]
+async fn tcp_route(family: &str, destination: &str, uid: u32) -> Value {
+    let mut command = tcp_route_command(family, destination, uid);
+    match tokio::time::timeout(std::time::Duration::from_secs(2), command.output()).await {
+        Ok(Ok(output)) if output.status.success() => {
+            parse_route(&output.stdout, std::path::Path::new("/sys/class/net"))
+        }
+        Ok(Ok(_)) => json!({"state":"unknown","reason":"tcp_route_unavailable"}),
+        Ok(Err(_)) => json!({"state":"unknown","reason":"ip_command_unavailable"}),
+        Err(_) => json!({"state":"unknown","reason":"route_query_timeout"}),
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn tcp_sample(uid: u32) -> Value {
+    let (ipv4, ipv6) = tokio::join!(
+        tcp_route("-4", "1.1.1.1", uid),
+        tcp_route("-6", "2606:4700:4700::1111", uid)
+    );
+    json!({"uid":uid,"protocol":"tcp","destination_port":443,"ipv4":ipv4,"ipv6":ipv6})
+}
+
+pub async fn diagnose(holder_scope: HolderScope) -> Value {
+    let mut routes = observe_scope(holder_scope).await;
+    #[cfg(target_os = "linux")]
+    {
+        let observer = unsafe { libc::geteuid() };
+        let other = if observer == 0 {
+            std::env::var("SUDO_UID")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|uid| *uid != observer)
+        } else {
+            Some(0)
+        };
+        let samples = async {
+            if let Some(uid) = other {
+                Some(tcp_sample(uid).await)
+            } else {
+                None
+            }
+        };
+        let (ipv4, ipv6, sample) = tokio::join!(policy("-4"), policy("-6"), samples);
+        routes["policy_rules"] = json!({"ipv4":ipv4,"ipv6":ipv6});
+        if let Some(sample) = sample
+            && let Some(samples) = routes["tcp_uid_samples"].as_array_mut()
+        {
+            samples.push(sample);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = &mut routes;
+    routes
+}
+
 pub async fn observe() -> Value {
     observe_scope(HolderScope::CurrentUser).await
 }
@@ -80,14 +215,19 @@ pub async fn observe_all_users() -> Value {
 async fn observe_scope(holder_scope: HolderScope) -> Value {
     #[cfg(target_os = "linux")]
     {
-        let (ipv4, ipv6) =
-            tokio::join!(route("-4", "1.1.1.1"), route("-6", "2606:4700:4700::1111"));
+        let observer = unsafe { libc::geteuid() };
+        let (ipv4, ipv6, tcp) = tokio::join!(
+            route("-4", "1.1.1.1"),
+            route("-6", "2606:4700:4700::1111"),
+            tcp_sample(observer)
+        );
         let routes = json!({
             "scope":"current_network_namespace",
-            "observer_uid":unsafe { libc::geteuid() },
+            "observer_uid":observer,
             "holder_scope":holder_scope.label(),
             "ipv4":ipv4,
-            "ipv6":ipv6
+            "ipv6":ipv6,
+            "tcp_uid_samples":[tcp]
         });
         let fallback = routes.clone();
         tokio::task::spawn_blocking(move || linux::attach_holders(routes, holder_scope))
@@ -108,31 +248,67 @@ async fn observe_scope(holder_scope: HolderScope) -> Value {
     }
 }
 
+fn current_route<'a>(routes: &'a Value, family: &str) -> Option<&'a Value> {
+    let Some(samples) = routes.get("tcp_uid_samples") else {
+        return routes.get(family);
+    };
+    let uid = routes["observer_uid"].as_u64()?;
+    samples
+        .as_array()?
+        .iter()
+        .find(|sample| {
+            sample["uid"].as_u64() == Some(uid)
+                && sample["protocol"] == "tcp"
+                && sample["destination_port"] == 443
+        })?
+        .get(family)
+}
+
 pub fn with_proxy_context(mut routes: Value, proxy: Option<crate::engine::ProxyMode>) -> Value {
     use crate::engine::ProxyMode;
 
-    let samples = [&routes["ipv4"], &routes["ipv6"]];
+    let samples = ["ipv4", "ipv6"].map(|family| current_route(&routes, family));
     let tun = samples
         .iter()
+        .flatten()
         .any(|route| route["state"] == "observed" && route["kind"] == "tun");
     let other = samples
         .iter()
+        .flatten()
         .any(|route| route["state"] == "observed" && route["kind"] == "other");
+    let observed_tun = tun
+        || ["ipv4", "ipv6"]
+            .into_iter()
+            .any(|family| routes[family]["state"] == "observed" && routes[family]["kind"] == "tun");
     let mut warnings = Vec::new();
-    if tun && proxy.is_none() {
+    if observed_tun && proxy.is_none() {
         warnings.push("tun_current_proxy_unknown");
-    } else if tun && proxy != Some(ProxyMode::Tun) {
+    } else if observed_tun && proxy != Some(ProxyMode::Tun) {
         warnings.push("tun_owner_unconfirmed");
     } else if !tun && other && proxy == Some(ProxyMode::Tun) {
         warnings.push("sample_routes_not_tun");
     }
     if proxy == Some(ProxyMode::Tun) && tun {
-        if routes["ipv4"]["state"] == "observed" && routes["ipv4"]["kind"] == "other" {
-            warnings.push("tun_ipv4_route_bypass");
+        for (family, warning) in [
+            ("ipv4", "tun_ipv4_route_bypass"),
+            ("ipv6", "tun_ipv6_route_bypass"),
+        ] {
+            if current_route(&routes, family)
+                .is_some_and(|route| route["state"] == "observed" && route["kind"] == "other")
+            {
+                warnings.push(warning);
+            }
         }
-        if routes["ipv6"]["state"] == "observed" && routes["ipv6"]["kind"] == "other" {
-            warnings.push("tun_ipv6_route_bypass");
-        }
+    }
+    if routes.get("tcp_uid_samples").is_some()
+        && ["ipv4", "ipv6"].into_iter().any(|family| {
+            routes[family]["state"] == "observed"
+                && routes[family]["kind"] == "tun"
+                && current_route(&routes, family)
+                    .is_some_and(|route| route["state"] == "observed" && route["kind"] == "other")
+        })
+    {
+        warnings.push("tun_current_uid_route_bypass");
     }
     routes["warnings"] = json!(warnings);
     routes
@@ -156,16 +332,33 @@ pub fn coverage_issue(routes: &Value, config: &Value, require_ipv6: bool) -> Opt
     let ipv6_expected = require_ipv6 || ipv6_tun_configured(config).unwrap_or(true);
     let mut issues = Vec::new();
     for (family, label, expected) in [("ipv4", "IPv4", true), ("ipv6", "IPv6", ipv6_expected)] {
-        let route = &routes[family];
+        let uid_sample = config["tun"]["auto-redirect"].as_bool() != Some(true)
+            && routes.get("tcp_uid_samples").is_some();
+        let route = if uid_sample {
+            current_route(routes, family)
+        } else {
+            routes.get(family)
+        };
+        let Some(route) = route else {
+            continue;
+        };
         if !expected || route["state"] != "observed" || route["kind"] != "other" {
             continue;
         }
         let interface = route["interface"].as_str().unwrap_or("物理接口");
-        issues.push(format!("示例 {label} 路由仍经过 {interface}"));
+        let sample = if uid_sample {
+            format!(
+                "当前 UID {} 的 TCP/443 {label} 样本",
+                routes["observer_uid"]
+            )
+        } else {
+            format!("示例 {label} 路由")
+        };
+        issues.push(format!("{sample}仍经过 {interface}"));
     }
     (!issues.is_empty()).then(|| {
         format!(
-            "TUN 已开启，但{}；部分程序可能绕过 TUN，请导出诊断检查 route-address、strict-route 与 DNS 覆盖",
+            "TUN 已开启，但{}；部分程序可能绕过 TUN，请导出诊断检查 UID、路由与 DNS 覆盖",
             issues.join("，")
         )
     })
@@ -194,8 +387,11 @@ pub fn holder_summary(routes: &Value) -> Option<String> {
     }
     let mut interfaces = std::collections::BTreeSet::new();
     let mut evidence = Vec::new();
-    for family in ["ipv4", "ipv6"] {
-        let route = &routes[family];
+    for route in ["ipv4", "ipv6"]
+        .into_iter()
+        .flat_map(|family| [routes.get(family), current_route(routes, family)])
+        .flatten()
+    {
         if route["state"] != "observed" || route["kind"] != "tun" {
             continue;
         }
@@ -242,7 +438,12 @@ pub fn notice(routes: &Value) -> Option<String> {
     let bypass = warnings.iter().any(|warning| {
         matches!(
             warning.as_str(),
-            Some("sample_routes_not_tun" | "tun_ipv4_route_bypass" | "tun_ipv6_route_bypass")
+            Some(
+                "sample_routes_not_tun"
+                    | "tun_ipv4_route_bypass"
+                    | "tun_ipv6_route_bypass"
+                    | "tun_current_uid_route_bypass"
+            )
         )
     });
     if !external && !bypass {
@@ -251,7 +452,9 @@ pub fn notice(routes: &Value) -> Option<String> {
     let mut interfaces = std::collections::BTreeSet::new();
     let mut evidence = Vec::new();
     for family in ["ipv4", "ipv6"] {
-        let route = &routes[family];
+        let Some(route) = current_route(routes, family) else {
+            continue;
+        };
         if route["state"] != "observed" {
             continue;
         }
@@ -296,7 +499,12 @@ pub fn notice(routes: &Value) -> Option<String> {
     let uncertain = warnings
         .iter()
         .any(|warning| warning == "tun_current_proxy_unknown");
-    let message = if bypass && external {
+    let uid_bypass = warnings
+        .iter()
+        .any(|warning| warning == "tun_current_uid_route_bypass");
+    let message = if uid_bypass {
+        "检测到 TUN 路由，但当前用户的 TCP/443 样本仍绕过 TUN"
+    } else if bypass && external {
         "检测到 TUN 路由异常，同时存在外部 TUN 接管"
     } else if bypass {
         "TUN 已开启，但示例路由显示仍有流量绕过 TUN"
@@ -337,12 +545,203 @@ mod tests {
             "unknown"
         );
     }
+
+    #[test]
+    fn policy_evidence_keeps_user_selectors_without_exporting_arbitrary_fields() {
+        let value = parse_policy(
+            br#"[{"priority":10,"uidrange":{"start":0,"end":0},"table":2022,"private":"hidden"},{"priority":20,"fwmark":"0x80000","fwmask":"0xff0000","table":"main"}]"#,
+        );
+        assert_eq!(value["state"], "observed");
+        assert_eq!(value["rules"][0]["uidrange"]["end"], 0);
+        assert_eq!(value["rules"][1]["fwmark"], "0x80000");
+        assert!(!value.to_string().contains("hidden"));
+        assert_eq!(parse_policy(b"[]")["state"], "observed");
+        for invalid in [b"{}".as_slice(), b"null", b"[null]", b"not json"] {
+            assert_eq!(parse_policy(invalid)["state"], "unknown");
+        }
+        assert_eq!(parse_policy(&vec![b' '; 65537])["state"], "unknown");
+        assert_eq!(
+            parse_policy(&serde_json::to_vec(&vec![json!({"priority":10}); 257]).unwrap())["state"],
+            "partial"
+        );
+    }
+
+    #[test]
+    fn tcp_route_queries_select_the_user_protocol_and_destination_port() {
+        for (family, destination) in [("-4", "1.1.1.1"), ("-6", "2606:4700:4700::1111")] {
+            for uid in [0, 1000] {
+                let command = tcp_route_command(family, destination, uid);
+                let args: Vec<_> = command
+                    .as_std()
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect();
+                assert_eq!(
+                    args,
+                    [
+                        "-j".to_owned(),
+                        family.into(),
+                        "route".into(),
+                        "get".into(),
+                        destination.into(),
+                        "uid".into(),
+                        uid.to_string(),
+                        "ipproto".into(),
+                        "tcp".into(),
+                        "dport".into(),
+                        "443".into(),
+                    ]
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod context_tests {
     use super::*;
     use crate::engine::ProxyMode;
+
+    fn uid_routes(current: Value, other: Value) -> Value {
+        json!({
+            "scope":"current_network_namespace",
+            "observer_uid":1000,
+            "holder_scope":"current_user",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"unknown"},
+            "tcp_uid_samples":[
+                {"uid":0,"protocol":"tcp","destination_port":443,"ipv4":other,"ipv6":{"state":"unknown"}},
+                {"uid":1000,"protocol":"tcp","destination_port":443,"ipv4":current,"ipv6":{"state":"unknown"}}
+            ]
+        })
+    }
+
+    #[test]
+    fn a_generic_tun_route_does_not_hide_current_user_tcp_bypass() {
+        let routes = uid_routes(
+            json!({"state":"observed","kind":"other","interface":"eth0"}),
+            json!({"state":"observed","kind":"tun","interface":"Meta"}),
+        );
+        let config = json!({"tun":{"inet6-address":[]}});
+        let issue = coverage_issue(&routes, &config, false).unwrap();
+        assert!(issue.contains("UID 1000"));
+        assert!(issue.contains("TCP/443 IPv4"));
+        assert!(issue.contains("eth0"));
+        for proxy in [None, Some(ProxyMode::Off), Some(ProxyMode::Tun)] {
+            let context = with_proxy_context(routes.clone(), proxy);
+            assert!(
+                context["warnings"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("tun_current_uid_route_bypass"))
+            );
+            let message = notice(&context).unwrap();
+            assert!(message.contains("当前用户"));
+            assert!(message.contains("eth0"));
+            assert!(message.contains("绕过 TUN"));
+        }
+    }
+
+    #[test]
+    fn current_user_tcp_tun_takes_precedence_over_a_generic_physical_route() {
+        let mut routes = uid_routes(
+            json!({"state":"observed","kind":"tun","interface":"Meta"}),
+            json!({"state":"observed","kind":"other","interface":"eth0"}),
+        );
+        routes["ipv4"] = json!({"state":"observed","kind":"other","interface":"eth0"});
+        assert!(coverage_issue(&routes, &json!({}), false).is_none());
+        let context = with_proxy_context(routes.clone(), Some(ProxyMode::Tun));
+        assert_eq!(context["warnings"], json!([]));
+        assert!(notice(&context).is_none());
+        routes["holder_scope"] = "all_users".into();
+        routes["tun_holders"] = json!({
+            "state":"complete","interfaces":{"Meta":[{"pid":42,"uid":0}]}
+        });
+        let owners = holder_summary(&routes).unwrap();
+        assert!(owners.contains("Meta"));
+        assert!(owners.contains("root · PID 42"));
+        let external = with_proxy_context(routes, Some(ProxyMode::Off));
+        assert_eq!(external["warnings"], json!(["tun_owner_unconfirmed"]));
+        assert!(notice(&external).unwrap().contains("Meta"));
+    }
+
+    #[test]
+    fn unavailable_current_user_samples_cannot_borrow_root_or_generic_evidence() {
+        let mut routes = uid_routes(
+            json!({"state":"unknown","reason":"tcp_route_unavailable"}),
+            json!({"state":"observed","kind":"tun","interface":"Meta"}),
+        );
+        routes["ipv4"] = json!({"state":"observed","kind":"other","interface":"eth0"});
+        let original = routes.clone();
+        for replacement in [
+            json!({"state":"unknown","reason":"route_query_timeout"}),
+            json!({"state":"unknown","reason":"ip_command_unavailable"}),
+        ] {
+            routes["tcp_uid_samples"][1]["ipv4"] = replacement;
+            assert!(coverage_issue(&routes, &json!({}), true).is_none());
+            assert_eq!(
+                with_proxy_context(routes.clone(), Some(ProxyMode::Tun))["warnings"],
+                json!([])
+            );
+        }
+        for (field, invalid) in [
+            ("uid", json!(2000)),
+            ("protocol", json!("udp")),
+            ("destination_port", json!(53)),
+        ] {
+            let mut routes = original.clone();
+            routes["tcp_uid_samples"][1][field] = invalid;
+            assert!(coverage_issue(&routes, &json!({}), true).is_none());
+            assert_eq!(
+                with_proxy_context(routes, Some(ProxyMode::Tun))["warnings"],
+                json!([])
+            );
+        }
+        for invalid in [json!(null), json!([]), json!({})] {
+            let mut routes = original.clone();
+            routes["tcp_uid_samples"] = invalid;
+            assert!(coverage_issue(&routes, &json!({}), true).is_none());
+        }
+    }
+
+    #[test]
+    fn uid_specific_ipv6_bypass_respects_the_configured_address_family() {
+        let mut routes = uid_routes(
+            json!({"state":"observed","kind":"tun","interface":"Meta"}),
+            json!({"state":"observed","kind":"tun","interface":"Meta"}),
+        );
+        routes["ipv6"] = json!({"state":"observed","kind":"tun","interface":"Meta"});
+        routes["tcp_uid_samples"][1]["ipv6"] =
+            json!({"state":"observed","kind":"other","interface":"eth0"});
+        let ipv4_only = json!({"tun":{"inet6-address":[]}});
+        assert!(coverage_issue(&routes, &ipv4_only, false).is_none());
+        assert!(
+            coverage_issue(&routes, &ipv4_only, true)
+                .unwrap()
+                .contains("TCP/443 IPv6")
+        );
+        let context = with_proxy_context(routes, Some(ProxyMode::Tun));
+        assert_eq!(
+            context["warnings"],
+            json!(["tun_ipv6_route_bypass", "tun_current_uid_route_bypass"])
+        );
+    }
+
+    #[test]
+    fn tcp_redirect_does_not_treat_a_lookup_without_packet_marks_as_a_bypass_verdict() {
+        let mut routes = uid_routes(
+            json!({"state":"observed","kind":"other","interface":"eth0"}),
+            json!({"state":"observed","kind":"tun","interface":"Meta"}),
+        );
+        let config = json!({"tun":{"auto-redirect":true,"inet6-address":[]}});
+        assert!(coverage_issue(&routes, &config, false).is_none());
+        routes["ipv6"] = json!({"state":"observed","kind":"other","interface":"eth0"});
+        assert!(
+            coverage_issue(&routes, &config, true)
+                .unwrap()
+                .contains("IPv6")
+        );
+    }
 
     #[test]
     fn notices_require_observed_tun_and_do_not_mislabel_our_privileged_helper() {

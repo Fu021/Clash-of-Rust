@@ -16,6 +16,7 @@ public final class CoreBridge {
     private CoreBridge() {}
 
     public static synchronized String start(Context context, String raw, boolean ipv6) throws Exception {
+        ApplicationOwners.install(context);
         File home = new File(context.getFilesDir(), "client/runtime");
         if (!home.isDirectory() && !home.mkdirs()) throw new IOException("无法创建内核目录");
         // Seed only absent files; keep complete user updates across app upgrades.
@@ -76,6 +77,7 @@ public final class CoreBridge {
             .put("vpn_pending", TunnelService.pending())
             .put("vpn_generation", TunnelService.generation())
             .put("protection", ProtectionRuntime.state())
+            .put("application_routing", new JSONObject(Mobile.applicationRoutingDiagnostics()))
             .put("vpn_error", TunnelService.error());
     }
 }

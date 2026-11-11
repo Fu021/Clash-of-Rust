@@ -19,11 +19,12 @@
 
 | 想做什么 | 阅读位置 |
 | --- | --- |
-| 找代码、理解模块与数据流 | [开发与验证](development.md)，含目录职责、平台边界、占用锁与验证要求 |
+| 找代码、理解模块与数据流 | [开发与验证](development.md)，含平台边界、占用锁与验证要求；[全仓职责树](structure-review.md#目录与职责) |
+| 校正文档冲突、拆分大文件或规划目录重构 | [文档与代码结构复查](structure-review.md) |
 | 贡献代码或文档 | [贡献者须知](../.github/CONTRIBUTING.md)；agent 另读[开发约束](../AGENTS.md) |
 | 修改桌面或移动界面、预览正式组件 | [界面设计与审阅](ui-design.md)；[Slint 界面说明](../crates/client-ui/README.md)；[预览与本地工具](workflows/local-development.md) |
 | 修改 Android 宿主、VPN 或输入法 | [Android 开发说明](../apps/android/README.md)；[输入法兼容性复盘](agent-failures/android-ime.md) |
-| 完成功能或修复后的循环审查 | [loop 工作流](loop-workflow.md)；[代表尺寸与 UI 检查](loop-ui.md) |
+| 完成功能或修复后的循环审查 | [loop 工作流](loop-workflow.md)、[逐项清单](loop-checklist.md)及[代表尺寸与 UI 检查](loop-ui.md) |
 | 查构建脚本入口、职责与调用关系 | [脚本维护说明](../scripts/README.md) |
 
 iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、可连接的客户端。平台支持和设备验证以项目首页及各端说明为准。
@@ -41,6 +42,7 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 | 在本机编译、打包与预览 | [本地开发](workflows/local-development.md) |
 | 理解版本、更新通道与依赖快照 | [版本和依赖](workflows/versions.md)；[版本管理](development.md#版本管理) |
 | 排查测速失败与 Android 断网 | [内部诊断与错误码](diagnostics.md)；[故障报告导出](cli/runtime.md#故障反馈与诊断报告) |
+| 对比各平台更新、Geo、测速和跨用户 TUN 路径 | [网络链路与取证边界](network-paths.md) |
 | 理解 GitHub 与私网的缓存分工 | [缓存覆盖](workflows/cache-coverage.md)、[保留白名单](workflows/cache-retention.md)、[服务边界与协议](workflows/cache-server.md) |
 | 对接 Ubuntu 20.04 预装测试环境镜像 | [镜像复用与测速及验收证据](workflows/prepared-vm-images.md)、[v1 对接约定及共用向量](workflows/prepared-vm-protocol.md) |
 
@@ -51,6 +53,6 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 - [`releases/`](releases/)仅保留当前正式版、最近公开预发布、当前开发版本及[文案模板](releases/TEMPLATE.md)；旧版文案查 Git 历史或 GitHub Releases。已发布正式版入口见[项目首页](../README.md)，开发分支说明不等于已发布版本。
 - 排查已知失败模式从[复盘索引](agent-failures/README.md)进入；[最近复盘](agent-failures/reviews.md)记录证据和验证范围，较早记录在[历史复盘](agent-failures/reviews-archive.md)。
 - 软件、字体及数据的许可见[第三方声明](../resources/THIRD-PARTY-NOTICES.txt)；[字体来源](../resources/fonts/SOURCE.md)、[国家和地区数据](../resources/countries/SOURCE.md)、[IP 检测来源](../resources/ip-check/SOURCE.md)分别保留来源与修改说明。
-- Slint 的局部兼容修复见 [Android 后端补丁](../vendor/slint-android-activity/PATCHES.md)和[软件渲染补丁](../vendor/slint-renderer-software/PATCHES.md)。
+- 界面依赖的局部兼容修复见 [Android 后端补丁](../vendor/slint-android-activity/PATCHES.md)、[软件渲染补丁](../vendor/slint-renderer-software/PATCHES.md)和 [winit X11 同步补丁](../vendor/winit/PATCHES.md)。
 
 这里维护查阅入口。命令、行为和协议只在对应主题文档中说明；修改时更新主题及必要链接，避免在多个入口复制整套规则。

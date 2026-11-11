@@ -66,7 +66,7 @@ export component SettingsPage inherits PageSurface {
                         }
                         Divider { }
                         FormRow { title: "托盘显示上传与下载速度";
-                            Toggle { checked: UiData.tray-speed; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; toggled(value) => { UiActions.dispatch(Intent.tray-speed, value ? "true" : "false", ""); } }
+                            Toggle { checked: UiData.tray-speed; enabled: !UiData.working; toggled(value) => { UiActions.dispatch(Intent.tray-speed, value ? "true" : "false", ""); } }
                         }
                     }
                 }
@@ -109,24 +109,24 @@ export component SettingsPage inherits PageSurface {
                                 available-width: 220px * Theme.text-scale; horizontal-stretch: 0;
                                 options: ["浅色", "深色", "跟随系统"];
                                 selected: UiData.appearance == 1 ? 0 : UiData.appearance == 0 ? 1 : 2;
-                                enabled: !UiData.exiting && !UiData.protected && !UiData.protection-pending;
+                                enabled: !UiData.exiting;
                                 chosen(index) => { UiActions.dispatch(Intent.appearance, index == 0 ? "1" : index == 1 ? "0" : "2", ""); }
                             }
                         }
                         Divider { }
                         FormRow { title: "强调色";
-                            AccentSwatches { selected: UiData.accent; enabled: !UiData.exiting && !UiData.protected && !UiData.protection-pending; chosen(index) => { UiActions.dispatch(Intent.accent-color, "" + index, ""); } }
+                            AccentSwatches { selected: UiData.accent; enabled: !UiData.exiting; chosen(index) => { UiActions.dispatch(Intent.accent-color, "" + index, ""); } }
                         }
                         Divider { }
                         FormRow { title: "字号";
-                            Select { geometry-key: "text-scale"; width: 100px; horizontal-stretch: 0; value: "" + UiData.text-scale + "%"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; enabled: !UiData.protected && !UiData.protection-pending; selected(index, value) => { UiActions.dispatch(Intent.text-scale, value, ""); } }
+                            Select { geometry-key: "text-scale"; width: 100px; horizontal-stretch: 0; value: "" + UiData.text-scale + "%"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; enabled: !UiData.exiting; selected(index, value) => { UiActions.dispatch(Intent.text-scale, value, ""); } }
                         }
                         Divider { }
                         FormRow { title: "窗口大小";
-                            Field { width: 76px; horizontal-stretch: 0; text <=> UiData.window-width; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.window-width, value, ""); } }
+                            Field { width: 76px; horizontal-stretch: 0; text <=> UiData.window-width; enabled: !UiData.exiting; edited(value) => { UiActions.dispatch(Intent.window-width, value, ""); } }
                             Caption { text: "×"; horizontal-stretch: 0; }
-                            Field { width: 76px; horizontal-stretch: 0; text <=> UiData.window-height; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.window-height, value, ""); } }
-                            ActionButton { text: "恢复默认"; compact: true; quiet: true; enabled: !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.reset-window, "", ""); } }
+                            Field { width: 76px; horizontal-stretch: 0; text <=> UiData.window-height; enabled: !UiData.exiting; edited(value) => { UiActions.dispatch(Intent.window-height, value, ""); } }
+                            ActionButton { text: "恢复默认"; compact: true; quiet: true; enabled: !UiData.exiting; clicked => { UiActions.dispatch(Intent.reset-window, "", ""); } }
                         }
                     }
                 }

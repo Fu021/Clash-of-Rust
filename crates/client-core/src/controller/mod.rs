@@ -537,6 +537,36 @@ fn count_connections<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 impl Api {
+    pub async fn application_provider_targets(&self) -> Result<BTreeMap<String, Vec<String>>> {
+        #[derive(Deserialize)]
+        struct Node {
+            name: String,
+        }
+        #[derive(Deserialize)]
+        struct Provider {
+            #[serde(default)]
+            proxies: Vec<Node>,
+        }
+        #[derive(Deserialize)]
+        struct Providers {
+            providers: BTreeMap<String, Provider>,
+        }
+        let response = self
+            .read_response(self.url(&["providers", "proxies"])?)
+            .await?;
+        let providers: Providers = decode_json(Self::checked(response).await?).await?;
+        Ok(providers
+            .providers
+            .into_iter()
+            .map(|(name, provider)| {
+                (
+                    name,
+                    provider.proxies.into_iter().map(|node| node.name).collect(),
+                )
+            })
+            .collect())
+    }
+
     pub async fn provider_leaf(&self, name: &str) -> Result<Option<(String, String)>> {
         #[derive(Deserialize)]
         struct Node {

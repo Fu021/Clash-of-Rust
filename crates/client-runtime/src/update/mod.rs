@@ -521,7 +521,7 @@ async fn download_package(
         package.asset.size,
         &expected,
         &path,
-        (api.cloned(), proxy.is_none(), retry_slow),
+        (api.cloned(), retry_slow),
         report,
     )
     .await?;
@@ -539,7 +539,7 @@ async fn transfer(
     size: u64,
     expected: &str,
     path: &std::path::Path,
-    observe: (Option<crate::api::Api>, bool, bool),
+    observe: (Option<crate::api::Api>, bool),
     mut report: impl FnMut(Progress),
 ) -> Result<()> {
     let mut response = client
@@ -558,8 +558,8 @@ async fn transfer(
     {
         bail!("安装包大小与 Release 不一致");
     }
-    let (api, direct, retry_slow) = observe;
-    let observer = clash_client_core::update::RouteObserver::new(&response, api, direct);
+    let (api, retry_slow) = observe;
+    let observer = clash_client_core::update::RouteObserver::new(&response, api);
     let file = tokio::fs::File::create(path)
         .await
         .context("无法写入安装包，请检查磁盘空间与权限")?;
@@ -934,7 +934,7 @@ mod tests {
                     256 * 1024,
                     &expected,
                     &path,
-                    (None, true, false),
+                    (None, false),
                     |value| {
                         let _ = progress.send(value.received);
                     },
@@ -996,7 +996,7 @@ mod tests {
             body.len() as u64,
             &expected,
             &path,
-            (None, true, false),
+            (None, false),
             |value| progress.push(value),
         )
         .await
@@ -1047,7 +1047,7 @@ mod tests {
                     size,
                     &expected,
                     &path,
-                    (None, true, false),
+                    (None, false),
                     |_| {}
                 )
                 .await
@@ -1095,7 +1095,7 @@ mod tests {
             3,
             &clash_client_core::file_hash::hex(Sha256::digest(b"abc")),
             &directory.path().join("package"),
-            (None, false, false),
+            (None, false),
             |_| {},
         )
         .await

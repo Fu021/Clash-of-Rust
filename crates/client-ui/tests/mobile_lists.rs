@@ -22,9 +22,10 @@ slint::slint! {
     import { MobileFrame } from "../ui/mobile/shared/frame.slint";
     import { MobileView } from "../ui/mobile/shared/state.slint";
     import { MobileData } from "../ui/mobile/shared/state.slint";
-    import { MobileSubscriptions, MobileRules, RulesRow } from "../ui/mobile/shared/pages.slint";
+    import { MobileSubscriptions, MobileConnections, MobileRules, RulesRow } from "../ui/mobile/shared/pages.slint";
     import { AndroidSurface } from "../ui/mobile/android/app.slint";
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
+    import { AndroidApplicationPolicies } from "../ui/mobile/android/application-policies.slint";
     import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
     export { ApplicationItem } from "../ui/mobile/android/state.slint";
     export { AndroidData, AndroidActions, AndroidIntent } from "../ui/mobile/android/state.slint";
@@ -32,9 +33,11 @@ slint::slint! {
     import { PageViews } from "../ui/components/view-toggle.slint";
     import { NoticeCountdown } from "../ui/components/motion.slint";
     export { ProfileItem } from "../ui/state.slint";
+    export { ConnectionItem } from "../ui/state.slint";
+    export { ReportItem } from "../ui/state.slint";
     export { MobileActions, MobileIntent } from "../ui/mobile/shared/state.slint";
     import { SettingsPage, SettingsNavigation } from "../ui/pages/settings.slint";
-    import { UiData, ProfileItem } from "../ui/state.slint";
+    import { UiData, ProfileItem, ConnectionItem, ReportItem } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
     export { UiGeometry } from "../ui/components/geometry.slint";
 
@@ -97,6 +100,20 @@ slint::slint! {
         }
     }
 
+    export component MobileConnectionsProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <[ConnectionItem]> connections <=> MobileData.connections;
+        in-out property <string> query <=> MobileView.query;
+        in-out property <int> detail <=> MobileView.detail;
+        in-out property <bool> protected <=> MobileData.protected;
+        init => {
+            MobileData.connection-count = "12";
+            MobileData.connection-page = "1 / 1 · 12 条";
+        }
+        MobileConnections { width: parent.width; height: parent.height; }
+    }
+
     export component MobileRulesProbe inherits Window {
         preferred-width: 393px; preferred-height: 720px;
         in-out property <float> text-scale <=> Theme.text-scale;
@@ -141,6 +158,26 @@ slint::slint! {
         in-out property <bool> core-running <=> MobileData.core-running;
         if !root.use-ios: AndroidSurface { width: parent.width; height: parent.height; }
         if root.use-ios: IosSurface { width: parent.width; height: parent.height; }
+    }
+
+    export component ApplicationPoliciesProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in-out property <bool> supported <=> AndroidData.policies-supported;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> protection-pending <=> MobileData.protection-pending;
+        in-out property <bool> dirty <=> MobileView.draft-dirty;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <length> offset <=> AndroidData.policies-scroll-y;
+        in-out property <bool> opened: true;
+        init => {
+            AndroidData.policies-profile = "A very long subscription name";
+            AndroidData.policies-applications = ["Browser · org.example.browser"];
+            AndroidData.policies-application = "Browser · org.example.browser";
+            AndroidData.policies-targets = ["跟随配置", "直连", "拦截"];
+            AndroidData.policies-target = "直连";
+            AndroidData.policies-status = "只作用于进入 VPN 的应用；未指定的应用跟随配置。";
+        }
+        if root.opened: AndroidApplicationPolicies { width: parent.width; height: parent.height; }
     }
 
     export component SettingsScrollProbe inherits Window {
@@ -198,6 +235,7 @@ slint::slint! {
         in-out property <int> page <=> MobileView.page;
         out property <[length]> close-target <=> surface.notice-close-target;
         in-out property <int> detail <=> MobileView.detail;
+        in-out property <[ReportItem]> reports <=> MobileData.claude-results;
         in-out property <string> draft <=> MobileView.profile-name;
         public function notify(message: string) { MobileView.notify(message); }
         surface := MobileFrame {
@@ -392,6 +430,230 @@ fn headless(width: u32, height: u32) -> (Rc<MinimalSoftwareWindow>, Rc<Cell<Dura
     slint::platform::set_platform(Box::new(Headless(adapter.clone(), clock.clone()))).unwrap();
     adapter.set_size(slint::PhysicalSize::new(width, height));
     (adapter, clock)
+}
+
+#[test]
+fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = MobileConnectionsProbe::new().unwrap();
+    let connections = Rc::new(slint::VecModel::from(
+        (0..12)
+            .map(|index| ConnectionItem {
+                id: index.to_string().into(),
+                host: "very-long-service-name.api.github.example.com:443".into(),
+                detail: "TCP · 10:31:20".into(),
+                route: "Proxy → Very long subscription and node name".into(),
+                rule: "DOMAIN-SUFFIX very-long-service-name.example.com".into(),
+                down: "128.9 MiB/s".into(),
+                up: "128.9 KiB/s".into(),
+                download: "123.4 GiB".into(),
+                upload: "123.4 MiB".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    ));
+    probe.set_connections(connections.clone().into());
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, subject, _| {
+            recorded.borrow_mut().push((intent, subject.to_string()));
+        });
+    probe.show().unwrap();
+    let render = || {
+        advance(&clock, Duration::from_millis(300));
+        let size = probe.window().size();
+        frame(&adapter, size.width as usize, size.height as usize);
+        targets.borrow_mut().clear();
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        advance(&clock, Duration::ZERO);
+        frame(&adapter, size.width as usize, size.height as usize);
+    };
+    for (width, height, text_scale) in [(393, 852, 1.), (320, 568, 1.3), (1280, 800, 1.)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(text_scale);
+        probe.set_query(format!("viewport-{width}").into());
+        probe.set_detail(0);
+        render();
+        let bounds = |key: &str| targets.borrow()[key].clone();
+        let panel = bounds("connections-card");
+        let list = bounds("connections-list");
+        assert!(panel[0] >= 0. && panel[0] + panel[2] <= width as f32 + 1.);
+        assert!(list[0] > panel[0] && list[0] + list[2] < panel[0] + panel[2]);
+        let first = bounds("connection-row:0");
+        let name = bounds("connection-name:0");
+        let close = bounds("connection-close:0");
+        let sort = bounds("connections-sort");
+        let close_all = bounds("connections-close-all");
+        assert!(first[1] >= panel[1]);
+        assert!(close[2] >= 48. && close[3] >= 48.);
+        assert!(name[2] > 0. && name[0] + name[2] <= close[0]);
+        for control in [close.clone(), sort, close_all] {
+            assert!(control[0] >= panel[0]);
+            assert!(control[0] + control[2] <= panel[0] + panel[2] + 1.);
+            assert!(control[1] + control[3] <= first[1] + first[3] + 1.);
+        }
+        let click = |target: &[f32]| {
+            let position =
+                LogicalPosition::new(target[0] + target[2] / 2., target[1] + target[3] / 2.);
+            probe.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            advance(&clock, Duration::from_millis(50));
+            probe.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            render();
+        };
+        events.borrow_mut().clear();
+        click(&close);
+        assert_eq!(
+            &*events.borrow(),
+            &[(MobileIntent::CloseConnection, "0".to_owned())]
+        );
+        assert_eq!(probe.get_detail(), 0);
+        probe.set_protected(true);
+        events.borrow_mut().clear();
+        click(&close);
+        assert!(events.borrow().is_empty());
+        probe.set_protected(false);
+        click(&name);
+        assert_eq!(probe.get_detail(), 5);
+        assert_eq!(
+            &*events.borrow(),
+            &[(MobileIntent::ConnectionDetail, "0".to_owned())]
+        );
+        probe.set_detail(0);
+        for _ in 0..8 {
+            probe.window().dispatch_event(WindowEvent::PointerScrolled {
+                position: LogicalPosition::new(list[0] + list[2] / 2., list[1] + list[3] / 2.),
+                delta_x: 0.,
+                delta_y: -(height as f32),
+            });
+            render();
+        }
+        let last = bounds("connection-row:11");
+        assert!(last[1] >= list[1] - 1.);
+        assert!(last[1] + last[3] <= list[1] + list[3] + 1.);
+    }
+    connections.set_vec(Vec::new());
+    probe.set_query("no-matching-connections".into());
+    render();
+    let search = targets.borrow()["connections-search"].clone();
+    assert!(search[2] > 0. && search[3] >= 48.);
+    assert!(!targets.borrow().contains_key("connection-row:0"));
+    probe.hide().unwrap();
+}
+
+#[test]
+fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = MobileNoticeProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.set_page(8);
+    let tones = [1, 3, 2, 3, 1];
+    probe.set_reports(
+        Rc::new(slint::VecModel::from(
+            tones
+                .iter()
+                .map(|tone| ReportItem {
+                    title: "检测项目".into(),
+                    value: "2001:db8:1234:5678:abcd:ef01:2345:6789".into(),
+                    country: "香港".into(),
+                    flag: "🇨🇳".into(),
+                    flagged: true,
+                    detail: "说明：检测结果的说明按可用宽度换行。".into(),
+                    source: "固定测试来源".into(),
+                    delay: "218 ms".into(),
+                    delay_tone: 1,
+                    tone: *tone,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    probe.show().unwrap();
+    for (width, height) in [(393, 852), (800, 1280), (1280, 800)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        for (detail, tone) in [(7, 1), (1, 3), (9, 2)] {
+            targets.borrow_mut().clear();
+            probe.set_detail(detail);
+            advance(&clock, Duration::from_millis(300));
+            frame(&adapter, width as usize, height as usize);
+            let geometry = probe.global::<UiGeometry>();
+            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+            advance(&clock, Duration::ZERO);
+            frame(&adapter, width as usize, height as usize);
+            let measured = targets.borrow();
+            let panel = &measured["claude-report"];
+            let mut previous_bottom = None;
+            for (index, item_tone) in tones.iter().enumerate() {
+                let bounds = &measured[&format!("claude-result:{index}")];
+                if *item_tone != tone {
+                    assert!(bounds[3] < 1., "filtered records must occupy no space");
+                    continue;
+                }
+                assert!(bounds[2] > if width > 1000 { 800. } else { 250. });
+                assert!(bounds[3] > 0.);
+                assert!((bounds[0] - panel[0]).abs() < 1.);
+                assert!((bounds[2] - panel[2]).abs() < 1.);
+                if let Some(bottom) = previous_bottom {
+                    assert!(
+                        (bounds[1] - bottom).abs() < 1.,
+                        "visible rows must remain adjacent inside the single panel"
+                    );
+                } else {
+                    assert!((bounds[1] - panel[1]).abs() < 1.);
+                }
+                previous_bottom = Some(bounds[1] + bounds[3]);
+            }
+            assert!(
+                (previous_bottom.unwrap() - panel[1] - panel[3]).abs() < 1.,
+                "the panel must end with the last visible row"
+            );
+        }
+    }
+    targets.borrow_mut().clear();
+    probe.set_reports(Default::default());
+    advance(&clock, Duration::from_millis(300));
+    frame(&adapter, 1280, 800);
+    let geometry = probe.global::<UiGeometry>();
+    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+    advance(&clock, Duration::ZERO);
+    frame(&adapter, 1280, 800);
+    assert!(
+        targets.borrow()["claude-report"][3] < 1.,
+        "clearing results must not leave an empty report card"
+    );
+    probe.hide().unwrap();
 }
 
 #[test]
@@ -746,6 +1008,105 @@ fn applications_reopen_with_active_geometry_observers_across_modes_and_sizes() {
             }
         }
     }
+    probe.hide().unwrap();
+}
+
+#[test]
+fn application_policy_form_respects_platform_protection_and_scrolls() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = ApplicationPoliciesProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let recorded = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, action, value| {
+            recorded
+                .borrow_mut()
+                .push((intent, action.to_string(), value.to_string()));
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.set_supported(true);
+    probe.show().unwrap();
+    for (width, height, scale) in [
+        (393, 852, 1.),
+        (320, 568, 1.5),
+        (852, 320, 1.),
+        (800, 1280, 1.),
+    ] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        probe.set_offset(0.);
+        probe.set_dirty(true);
+        advance(&clock, Duration::from_millis(300));
+        frame(&adapter, width as usize, height as usize);
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        advance(&clock, Duration::ZERO);
+        frame(&adapter, width as usize, height as usize);
+        let bounds = targets.borrow()["application-policy-save"].clone();
+        probe.set_offset(-(bounds[1] + bounds[3] - height as f32 + 24.).max(0.));
+        advance(&clock, Duration::from_millis(300));
+        frame(&adapter, width as usize, height as usize);
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        advance(&clock, Duration::ZERO);
+        frame(&adapter, width as usize, height as usize);
+        let bounds = targets.borrow()["application-policy-save"].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        assert!(bounds[2] > 0. && bounds[3] >= 48.);
+        assert!(position.x > 0. && position.x < width as f32);
+        assert!(position.y > 0. && position.y < height as f32);
+        for (protected, pending, expected) in
+            [(false, false, 1), (true, false, 0), (false, true, 0)]
+        {
+            probe.set_protected(protected);
+            probe.set_protection_pending(pending);
+            requests.borrow_mut().clear();
+            frame(&adapter, width as usize, height as usize);
+            for event in [
+                WindowEvent::PointerPressed {
+                    position,
+                    button: PointerEventButton::Left,
+                },
+                WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                },
+            ] {
+                probe.window().dispatch_event(event);
+            }
+            advance(&clock, Duration::from_millis(50));
+            assert_eq!(requests.borrow().len(), expected);
+            if expected == 1 {
+                assert_eq!(
+                    requests.borrow()[0],
+                    (
+                        MobileIntent::ApplicationPolicy,
+                        "save".into(),
+                        "Browser · org.example.browser\n直连\nfalse".into(),
+                    )
+                );
+            }
+        }
+        probe.set_protection_pending(false);
+    }
+    probe.set_supported(false);
+    probe.set_opened(false);
+    frame(&adapter, 800, 1280);
+    targets.borrow_mut().clear();
+    probe.set_opened(true);
+    frame(&adapter, 800, 1280);
+    assert!(!targets.borrow().contains_key("application-policy-save"));
     probe.hide().unwrap();
 }
 

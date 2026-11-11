@@ -20,7 +20,7 @@
 | `claude protect [on\|off] [--yes]` | 可逆保护、锁定节点、TUN/DNS/规则覆盖及实时异常流量拦截；开启时关闭已有内核连接 |
 | `claude watch [--interval 1]` | 只读观察 Claude 相关请求的真实线路，同时输出共享 `protection_status` 接管状态及拦截记录 |
 
-`config set` 支持 `mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`update_prereleases`、`update_check_interval_minutes`、`dns_override`、`fake_ip`、`fake_ip_exclusions`、`fake_ip_disabled_defaults`、`ipv6`、`udp`、`ip_reputation_key`、`delay_interval_minutes`、`subscription_update_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。控制端口由后台自动选择并处理冲突，不提供手动设置；混合端口仍可修改。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。
+`config set` 支持 `mixed_port`、`secret`、`dark`、`theme_mode`、`accent_color`、`text_scale`、`tray_speed`、`update_prereleases`、`update_check_interval_minutes`、`dns_override`、`fake_ip`、`fake_ip_exclusions`、`fake_ip_disabled_defaults`、`ipv6`、`udp`、`delay_interval_minutes`、`subscription_update_interval_minutes`、`node_sort`。值先按 JSON 解析，否则视为字符串，例如 `cor config set ipv6 false`、`cor config set theme_mode dark`。控制端口由后台自动选择并处理冲突，不提供手动设置；混合端口仍可修改。枚举取值见 `config get`；模式、订阅、规则、保护必须使用各自命令，不能绕过保护锁定。
 
 `subscription_update_interval_minutes` 为远程订阅自动更新间隔，默认 360，允许 0–10080，0 关闭；不会更新本地 YAML，失败保留原状态，细则见[订阅自动更新](../subscriptions.md)。
 

@@ -40,7 +40,6 @@ pub const READABLE_SETTINGS: &[&str] = &[
     "ipv6",
     "udp",
     "claude_protection",
-    "ip_reputation_key",
     "delay_interval_minutes",
     "subscription_update_interval_minutes",
     "active_profile",
@@ -49,6 +48,7 @@ pub const READABLE_SETTINGS: &[&str] = &[
     "node_sort",
     "rule_overrides",
     "rule_profiles",
+    "application_rules",
 ];
 
 /// Settings accepted by `cor config set`; lifecycle settings use dedicated
@@ -69,7 +69,6 @@ pub const MUTABLE_SETTINGS: &[&str] = &[
     "fake_ip_disabled_defaults",
     "ipv6",
     "udp",
-    "ip_reputation_key",
     "delay_interval_minutes",
     "subscription_update_interval_minutes",
     "node_sort",
@@ -167,7 +166,7 @@ fn validate_fake_ip_exclusion(value: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub controller_port: u16,
@@ -189,7 +188,6 @@ pub struct Settings {
     pub ipv6: bool,
     pub udp: bool,
     pub claude_protection: Option<std::sync::Arc<crate::claude_check::protection::Protection>>,
-    pub ip_reputation_key: Option<String>,
     pub delay_interval_minutes: u32,
     pub subscription_update_interval_minutes: u32,
     pub active_profile: Option<String>,
@@ -199,6 +197,8 @@ pub struct Settings {
     pub rule_overrides: RuleOverrides,
     pub rule_profiles:
         std::collections::BTreeMap<String, std::sync::Arc<crate::rule_manager::ProfileRules>>,
+    pub application_rules:
+        std::collections::BTreeMap<String, std::sync::Arc<Vec<crate::application_rules::Rule>>>,
 }
 
 impl Default for Settings {
@@ -233,7 +233,6 @@ impl Default for Settings {
             ipv6: true,
             udp: true,
             claude_protection: None,
-            ip_reputation_key: None,
             delay_interval_minutes: 5,
             subscription_update_interval_minutes: 360,
             active_profile: None,
@@ -242,11 +241,30 @@ impl Default for Settings {
             node_sort: crate::proxy_order::NodeSort::default(),
             rule_overrides: RuleOverrides::default(),
             rule_profiles: Default::default(),
+            application_rules: Default::default(),
         }
     }
 }
 
 impl Settings {
+    pub fn presentation_change_only(&self, next: &Self) -> bool {
+        let mut proposed = next.clone();
+        proposed.dark = self.dark;
+        proposed.theme_mode = self.theme_mode;
+        proposed.accent_color = self.accent_color;
+        proposed.text_scale = self.text_scale;
+        proposed.tray_speed = self.tray_speed;
+        proposed.node_sort = self.node_sort;
+        *self == proposed
+    }
+
+    pub fn require_settings_change(&self, next: &Self) -> Result<()> {
+        if self.claude_protection.is_some() && !self.presentation_change_only(next) {
+            self.require_mutable()?;
+        }
+        Ok(())
+    }
+
     pub fn require_mutable(&self) -> Result<()> {
         ensure!(
             self.claude_protection.is_none(),
@@ -441,16 +459,13 @@ impl Settings {
         if self.secret.is_empty() {
             bail!("控制接口密钥不能为空");
         }
-        if self
-            .ip_reputation_key
-            .as_ref()
-            .is_some_and(|key| key.len() > 512 || key.chars().any(char::is_control))
-        {
-            bail!("IP 信誉服务密钥格式无效");
-        }
         for (id, rules) in &self.rule_profiles {
             uuid::Uuid::parse_str(id).context("规则所属的订阅 ID 无效")?;
             rules.validate()?;
+        }
+        for (id, rules) in &self.application_rules {
+            uuid::Uuid::parse_str(id).context("应用规则所属的订阅 ID 无效")?;
+            crate::application_rules::validate(rules)?;
         }
         if let Some(protection) = &self.claude_protection {
             protection.validate()?;
@@ -705,6 +720,7 @@ pub fn runtime_config_with_rules(
         "external-controller-cors",
         "listeners",
         "authentication",
+        "cor-application-rules",
     ] {
         map.remove(Value::from(key));
     }
@@ -946,6 +962,89 @@ fn apply_rules(map: &mut Mapping, overrides: &RuleOverrides) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn protection_accepts_presentation_changes_and_rejects_each_other_setting() {
+        use crate::protection::{Previous, Protection};
+        use serde_json::json;
+
+        let profile = uuid::Uuid::new_v4().to_string();
+        let before = Settings {
+            active_profile: Some(profile.clone()),
+            claude_protection: Some(std::sync::Arc::new(Protection::new(
+                profile.clone(),
+                "fixture".into(),
+                Previous {
+                    mode: "rule".into(),
+                    proxy_mode: crate::model::ProxyMode::Tun,
+                    selectors: Default::default(),
+                },
+            ))),
+            ..Settings::default()
+        };
+        let mut appearance = before.clone();
+        appearance.dark = !before.dark;
+        appearance.theme_mode = Some(ThemeMode::Light);
+        appearance.accent_color = AccentColor::Blue;
+        appearance.text_scale = 125;
+        appearance.tray_speed = true;
+        appearance.node_sort = crate::proxy_order::NodeSort::LatencyAscending;
+        assert!(before.require_settings_change(&appearance).is_ok());
+        assert_eq!(appearance.claude_protection, before.claude_protection);
+
+        for (key, value) in [
+            ("controller_port", json!(before.controller_port + 1)),
+            ("mixed_port", json!(before.mixed_port + 1)),
+            ("direct_download_port", json!(12345)),
+            ("secret", json!("changed-fixture")),
+            ("update_prereleases", json!(true)),
+            ("update_check_interval_minutes", json!(0)),
+            ("dns_override", json!(false)),
+            ("fake_ip", json!(false)),
+            ("fake_ip_exclusions", json!(["example.test"])),
+            ("fake_ip_disabled_defaults", json!(["example.test"])),
+            ("ipv6", json!(false)),
+            ("udp", json!(false)),
+            ("claude_protection", json!(null)),
+            ("delay_interval_minutes", json!(0)),
+            ("subscription_update_interval_minutes", json!(0)),
+            ("active_profile", json!(null)),
+            ("run_mode", json!("direct")),
+            ("proxy_mode", json!("tun")),
+            (
+                "rule_overrides",
+                json!({"enabled": [true, false, false, false, false]}),
+            ),
+            ("rule_profiles", json!({profile.clone(): {}})),
+            ("application_rules", json!({profile: []})),
+        ] {
+            let mut proposed = serde_json::to_value(&appearance).unwrap();
+            proposed[key] = value;
+            let proposed: Settings = serde_json::from_value(proposed).unwrap();
+            assert_ne!(before, proposed, "{key}");
+            assert!(before.require_settings_change(&proposed).is_err(), "{key}");
+        }
+        let mut unprotected = before;
+        unprotected.claude_protection = None;
+        appearance.claude_protection = None;
+        appearance.ipv6 = false;
+        assert!(unprotected.require_settings_change(&appearance).is_ok());
+    }
+
+    #[test]
+    fn retired_reputation_key_is_ignored_and_not_saved_again() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "ip_reputation_key": "retired-fixture",
+            "mixed_port": 7897,
+            "update_check_interval_minutes": 240
+        }))
+        .unwrap();
+        assert_eq!(settings.mixed_port, 7897);
+        assert_eq!(settings.update_check_interval_minutes, 240);
+        let saved = serde_json::to_value(settings).unwrap();
+        assert!(saved.get("ip_reputation_key").is_none());
+        assert!(!READABLE_SETTINGS.contains(&"ip_reputation_key"));
+        assert!(!MUTABLE_SETTINGS.contains(&"ip_reputation_key"));
+    }
     #[test]
     fn completion_and_mutation_keys_cover_the_settings_schema() {
         let settings = serde_json::to_value(Settings::default()).unwrap();

@@ -122,16 +122,6 @@ export component AppDialog inherits Rectangle {
                             if UiData.browser-session: ActionButton { modal-control: true; text: "关闭回传"; clicked => { UiActions.dispatch(Intent.claude-close-session, "", ""); } }
                             ActionButton { modal-control: true; text: "打开采样页"; clicked => { UiActions.dispatch(Intent.claude-browser, "", ""); } }
                         }
-                        if root.kind == 9: VerticalLayout {
-                            spacing: Theme.page-gap;
-                            Field { modal-control: true; accepted => { if UiData.modal-can-accept && !UiData.working && !UiData.exiting { UiActions.dispatch(Intent.confirm, "", ""); } } secret: true; placeholder: "可选：ipapi.is API 密钥"; text <=> UiData.reputation-key; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.claude-key, value, ""); } }
-                            ActionButton { modal-control: true; text: "保存密钥"; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.claude-save-key, "", ""); } }
-                            HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                                ActionButton { modal-control: true; text: "注册信息"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "registration", ""); } }
-                                ActionButton { modal-control: true; text: "全球探针"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "global-ping", ""); } }
-                                ActionButton { modal-control: true; text: "小流量测速"; enabled: UiData.running && !UiData.claude-busy; clicked => { UiActions.dispatch(Intent.claude-additional, "speed", ""); } }
-                            }
-                        }
                         if root.kind == 10: VerticalLayout {
                             alignment: start; spacing: 0px;
                             for item[i] in UiData.connection-details: VerticalLayout {

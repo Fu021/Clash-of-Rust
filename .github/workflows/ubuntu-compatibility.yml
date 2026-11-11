@@ -1,4 +1,4 @@
-name: Android UI Previews
+name: Ubuntu Compatibility
 on:
   workflow_dispatch:
     inputs:
@@ -6,28 +6,20 @@ on:
         description: Successful CI run for the selected branch commit
         required: true
         type: string
-      verify_diagnostics:
-        description: Explicitly verify measurement and diagnostic export on all Android versions instead of screenshots
-        default: false
-        type: boolean
-  pull_request:
-    types: [labeled]
 env:
   BUILD_INPUTS_DIR: dependency-snapshot
   PYTHONDONTWRITEBYTECODE: '1'
+  COR_CI_EXTENDED_TESTS: 'false'
+  COR_CI_LINUX_USER_TESTS: 'false'
 permissions:
   actions: read
   contents: read
 concurrency:
-  group: android-previews-${{ github.event.pull_request.number || github.ref }}
+  group: ubuntu-compatibility-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   resolve:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.label.name == 'android-previews' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
-    name: Resolve verified Android inputs
+    name: Resolve verified Ubuntu inputs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -37,31 +29,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Resolve the verified CI source
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ inputs.run_id }}
-          VERIFY_DIAGNOSTICS: ${{ inputs.verify_diagnostics && 'true' || 'false' }}
-        run: |
-          args=()
-          if [[ -n "$SOURCE_RUN" ]]; then args+=(--run-id "$SOURCE_RUN"); fi
-          if [[ "$VERIFY_DIAGNOSTICS" == true ]]; then args+=(--verify-diagnostics); fi
-          python3 scripts/android_previews.py "${args[@]}"
-  screenshots:
-    name: Android ${{ matrix.android }} ${{ inputs.verify_diagnostics && 'diagnostic verification' || 'UI screenshots' }}
+        run: python3 scripts/compatibility.py resolve --suite ubuntu --run-id "$SOURCE_RUN"
+  ubuntu:
+    name: Ubuntu 20.04-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     permissions:
       actions: read
       contents: read
       id-token: write
     strategy:
       fail-fast: false
-      max-parallel: 3
       matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -81,12 +66,12 @@ jobs:
           github-token: ${{ github.token }}
       - name: Apply frozen inputs
         run: python3 scripts/build_inputs.py apply
-      - name: Connect for original-download fallback
+      - name: Connect to private Linux download cache
         id: tailnet
         if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
         uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        continue-on-error: true
         timeout-minutes: 3
+        continue-on-error: true
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
@@ -104,42 +89,71 @@ jobs:
         with:
           url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
           token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
+      - name: Configure VM originals before prepared-image lookup
+        uses: ./.github/actions/linux-download-cache
+        timeout-minutes: 15
+        continue-on-error: true
         with:
-          distribution: temurin
-          java-version: ${{ env.COR_JAVA }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: build-android-x64
-          path: android-preview-input
-          run-id: ${{ needs.resolve.outputs.ci_run_id }}
-          github-token: ${{ github.token }}
-      - name: Start Android ${{ matrix.android }} preview device
+          vm: 'true'
+          download-originals: 'false'
+      - name: Install virtual machine tools
+        shell: python
+        env:
+          QEMU_PACKAGES: ${{ matrix.qemu }}
         run: |
-          sudo chmod a+rw /dev/kvm
-          python3 scripts/android.py emulator --arch x64 --api ${{ matrix.api }}
-      - name: Submit verified emulator downloads
+          import os, pathlib, subprocess
+          import sys
+          sys.path.insert(0, 'scripts')
+          from linux_apt import OPTIONS, privileged, install
+          os.environ['COR_LINUX_APT_CACHE'] = os.environ['COR_HOST_APT_CACHE']
+          privileged([*OPTIONS, 'update'], 300)
+          install([*os.environ['QEMU_PACKAGES'].split(), 'qemu-utils', 'cloud-image-utils'])
+          if pathlib.Path('/dev/kvm').exists():
+              subprocess.run(['sudo', 'chmod', 'a+rw', '/dev/kvm'], check=True)
+          else:
+              print('KVM is unavailable; keeping TCG software emulation.')
+      - name: Enqueue verified VM originals before boot
         continue-on-error: true
         uses: ./.github/actions/upstream-report
         with:
           checkpoint: 'true'
-      - name: Capture pages or perform explicitly requested diagnostic verification
+      - name: Restore Ubuntu 20.04 and verify the selected CI candidate
         env:
-          VERIFY_DIAGNOSTICS: ${{ inputs.verify_diagnostics && 'true' || 'false' }}
-        run: |
-          args=()
-          if [[ "$VERIFY_DIAGNOSTICS" == true ]]; then args+=(--verify-diagnostics); fi
-          python3 scripts/android.py application-preview --arch x64 --api '${{ matrix.api }}' --build android-preview-input "${args[@]}"
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.ci_run_id }}
+        run: python3 scripts/linux_ci.py vm --package-run-id "$SOURCE_RUN"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
+        if: always() && hashFiles('target/linux-report/**') != ''
         with:
-          name: android-${{ matrix.android }}-${{ inputs.verify_diagnostics && 'measurement-diagnostics' || 'ui-screenshots' }}
-          path: target/android-report
-          if-no-files-found: error
-          retention-days: 7
+          name: linux-package-report-ubuntu20-${{ matrix.arch }}
+          path: target/linux-report
+          if-no-files-found: warn
+          retention-days: 3
       - name: Preserve original download inventory
         if: ${{ !cancelled() }}
         continue-on-error: true
         uses: ./.github/actions/upstream-report
         with:
-          name: upstream-downloads-applications-${{ matrix.api }}
+          name: upstream-downloads-ubuntu-${{ matrix.arch }}
+  record:
+    name: Record Ubuntu compatibility
+    needs: [resolve, ubuntu]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          persist-credentials: false
+      - name: Bind passing compatibility checks to the CI artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ needs.resolve.outputs.ci_run_id }}
+        run: python3 scripts/compatibility.py record --suite ubuntu --run-id "$SOURCE_RUN"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ubuntu-compatibility-attempt-${{ github.run_attempt }}
+          path: target/compatibility
+          if-no-files-found: error
+          retention-days: 3

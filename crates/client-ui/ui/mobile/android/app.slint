@@ -4,6 +4,7 @@ import { MobileFrame } from "../shared/frame.slint";
 import { MobileHome, MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileLogs, MobileNetwork, MobileIpCheck, MobileAiCheck, MobileTools } from "../shared/pages.slint";
 import { AndroidSettings } from "settings.slint";
 import { AndroidApplications } from "applications.slint";
+import { AndroidApplicationPolicies } from "application-policies.slint";
 
 // Android owns this composition and may replace/add pages without iOS changes.
 export component AndroidSurface inherits MobileFrame {
@@ -13,8 +14,12 @@ export component AndroidSurface inherits MobileFrame {
     grouped-tools: false;
     tab-pill: true; title-size: 26px; sidebar-width: 236px; tab-height: 56px;
     compact-system-insets: true;
-    standalone-detail: MobileView.detail == 18 || (MobileView.detail == 12 && MobileView.pending-detail == 18);
-    standalone-title: "应用分流";
+    property <bool> policies-visible: MobileView.detail == 19 || (MobileView.detail == 12 && MobileView.pending-detail == 19);
+    changed policies-visible => {
+        if !root.policies-visible { MobileActions.request(MobileIntent.application-policy, "close", ""); }
+    }
+    standalone-detail: MobileView.detail == 18 || MobileView.detail == 19 || (MobileView.detail == 12 && (MobileView.pending-detail == 18 || MobileView.pending-detail == 19));
+    standalone-title: MobileView.detail == 19 || (MobileView.detail == 12 && MobileView.pending-detail == 19) ? "应用规则" : "应用分流";
     centered-modal: false;
     update-available: AndroidData.update-available;
     update-busy: AndroidData.update-busy;
@@ -37,6 +42,7 @@ export component AndroidSurface inherits MobileFrame {
     if MobileView.page == 7: MobileIpCheck { }
     if MobileView.page == 8: MobileAiCheck { }
     if MobileView.page == 9 && !root.standalone-detail: AndroidSettings { }
-    if root.standalone-detail: AndroidApplications { }
+    if root.standalone-detail && root.standalone-title == "应用分流": AndroidApplications { }
+    if root.standalone-detail && root.standalone-title == "应用规则": AndroidApplicationPolicies { }
     if MobileView.page == 10: MobileTools { }
 }

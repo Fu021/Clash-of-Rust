@@ -31,6 +31,8 @@ def main():
     if not extended and linux_user_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for package, target, case in (
                 ('clash-client-runtime', ['--lib'], 'platform::linux_tun::'),
+                ('clash-client-runtime', ['--lib'], 'platform::host_network::'),
+                ('clash-client-runtime', ['--lib'], 'control::tests::'),
                 ('clash-cli', ['--bin', 'cor'], 'backend::tests::')):
             run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
                  case, '--', '--test-threads=1'])
@@ -49,20 +51,28 @@ def main():
             run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
                  'update_preparation_releases_owner', '--', '--test-threads=1'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
-        for case in ('resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions',
-                     'shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release',
-                     'appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it'):
+        for case in ('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions',
+                     'application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release',
+                     'application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it',
+                     'application::ui_tests::protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change',
+                     'application::ui_tests::protection_rejects_confirmations_that_would_save_or_delete',
+                     'application::ui_tests::a_locked_rules_page_still_accepts_the_global_exit_confirmation',
+                     'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
-                 '--locked', 'application::ui_tests::' + case, '--', '--exact', '--test-threads=1'])
+                 '--locked', case, '--', '--exact', '--test-threads=1'])
         for case in ('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes',
                      'notice_countdown_restarts_and_expires_after_five_seconds',
-                     'applications_scroll_across_phone_and_tablet_viewports'):
+                     'applications_scroll_across_phone_and_tablet_viewports',
+                     'application_policy_form_respects_platform_protection_and_scrolls',
+                     'mobile_connections_keep_actions_reachable_and_scroll_with_long_names',
+                     'report_categories_share_one_panel_without_gaps_from_hidden_rows',
+                     'mobile_rules_drag_real_rows_at_phone_pad_and_large_text_sizes'):
             run(['cargo', 'test', '-p', 'clash-client-ui', '--test', 'mobile_lists', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])
         for package, target, cases in (
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
-                ('clash-client-core', ['--lib'], ['api::', 'overview::tests::'])):
+                ('clash-client-core', ['--lib'], [''])):
             for case in cases:
                 run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
                      *([case] if case else []), '--', '--test-threads=1'])

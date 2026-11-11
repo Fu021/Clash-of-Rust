@@ -13,7 +13,7 @@ export component AppearanceSettings inherits VerticalLayout {
         GridLayout { spacing: MobileTypography.small-gap;
             for label[i] in ["深色", "浅色", "跟随系统"]: MButton { text: label; selected: Theme.appearance == i;
                 col: root.stack-themes ? 0 : i; row: root.stack-themes ? i : 0;
-                enabled: !MobileData.protected && !MobileData.protection-pending;
+                geometry-key: "appearance-theme:" + i;
                 clicked => { Theme.appearance = i; MobileActions.request(MobileIntent.appearance, "" + i, ""); }
             }
         }
@@ -30,7 +30,7 @@ export component AppearanceSettings inherits VerticalLayout {
                 col: mod(index, swatches.columns); row: floor(index / swatches.columns);
                 min-width: 48px;
                 text: ""; quiet: true; selected: Theme.accent-index == index;
-                enabled: !MobileData.protected && !MobileData.protection-pending;
+                geometry-key: "appearance-accent:" + index;
                 accessible-role: button; accessible-label: AccentPalette.accent-names[index];
                 Rectangle { x: (parent.width - 20px) / 2; y: (parent.height - 20px) / 2; width: 20px; height: 20px; border-radius: 10px;
                     background: Theme.dark ? AccentPalette.dark-colors[index] : AccentPalette.accent-colors[index];
@@ -43,7 +43,7 @@ export component AppearanceSettings inherits VerticalLayout {
             MText { text: "字号"; }
             MSelect { width: 128px; horizontal-stretch: 0; options: ["80%", "90%", "100%", "110%", "125%", "150%"];
                 value: "" + round(Theme.text-scale * 100) + "%";
-                enabled: !MobileData.protected && !MobileData.protection-pending;
+                geometry-key: "appearance-scale";
                 selected(index, value) => { Theme.text-scale = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5][index]; MobileActions.request(MobileIntent.text-scale, value, ""); }
             }
         }

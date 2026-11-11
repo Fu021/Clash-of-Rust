@@ -82,7 +82,8 @@ export component MobileFrame inherits Rectangle {
     property <length> bottom-height: root.nav-content-height + (root.compact-system-insets ? max(8px, MobileView.safe-bottom) : MobileView.safe-bottom);
     property <bool> detail-page: MobileView.detail > 0 && !MobileView.modal && !root.standalone-detail;
     property <bool> has-back: root.standalone-detail || (root.detail-page && !root.pane) || ((!root.expanded || root.grouped-tools) && MobileView.page >= 3 && MobileView.page <= 8);
-    property <bool> pane: body.width >= 880px && root.detail-page && MobileView.detail != 2 && MobileView.detail != 3;
+    property <bool> report-detail: MobileView.detail == 1 || MobileView.detail == 7 || MobileView.detail == 9;
+    property <bool> pane: body.width >= 880px && root.detail-page && !root.report-detail && MobileView.detail != 2 && MobileView.detail != 3;
     property <bool> modal-notice: MobileView.notice-modal;
     property <string> rule-profile: MobileData.rule-profile;
     property <string> previous-rule-profile;
@@ -91,7 +92,7 @@ export component MobileFrame inherits Rectangle {
         root.previous-rule-profile = root.rule-profile;
     }
     changed modal-notice => { if self.modal-notice { keys.focus(); } }
-    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP" : MobileView.detail == 15 ? "规则操作" : MobileView.detail == 16 ? "检测详情" : MobileView.detail == 17 ? "检测选项" : MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? (MobileView.category == "all" ? "全部检测结果" : MobileView.category) : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
+    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP" : MobileView.detail == 15 ? "规则操作" : MobileView.detail == 16 ? "检测详情" : MobileView.detail == 1 ? "风险项目" : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? (MobileView.category == "all" ? "全部检测结果" : MobileView.category) : MobileView.detail == 7 ? "正常项目" : MobileView.detail == 9 ? "其他线索" : "日志详情";
     property <duration> notice-start;
     property <int> notice-revision: MobileView.notice-revision;
     property <float> notice-elapsed: MobileView.notice-elapsed;

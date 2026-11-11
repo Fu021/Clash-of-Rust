@@ -1039,11 +1039,14 @@ public class ProxyTunTest {
         throw new IOException("Default network did not recover after VPN disconnect; "+networkState(),last);
     }
     private static void assertTunSocket(String controller,String secret) throws Exception {
+        assertTunSocket(controller,secret,"198.51.100.1",false);
+    }
+    private static void assertTunSocket(String controller,String secret,String destination,boolean verifyOwner) throws Exception {
         // The physical network cannot reach this reserved address. Only the
         // test core's explicit HTTP outbound can relay it to the host origin.
         // Keep a fresh socket open and require its exact TUN source port too.
         try (Socket connection=new Socket(java.net.Proxy.NO_PROXY)) {
-            connection.connect(new InetSocketAddress("198.51.100.1",18081),5000);
+            connection.connect(new InetSocketAddress(destination,18081),5000);
             connection.setSoTimeout(5000);
             connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\nContent-Length: 1\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
@@ -1061,6 +1064,7 @@ public class ProxyTunTest {
                         if (metadata.optString("type").equalsIgnoreCase("Tun")
                             && metadata.optInt("sourcePort")==connection.getLocalPort()
                             && metadata.optInt("destinationPort")==18081
+                            && (!verifyOwner || metadata.optInt("uid")==android.os.Process.myUid())
                             && "CI-TUN-origin".equals(chains.optString(chain))) {
                             connection.getOutputStream().write('!');
                             return;
@@ -1631,6 +1635,7 @@ public class ProxyTunTest {
             tunCarriesSocket(controller, secret);
             shell("input keyevent KEYCODE_BACK");
             await("Saved all-applications editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            verifyApplicationOutbounds(context, controller, secret);
             openApplicationRouting();
             assertEquals(0, MainActivity.diagnostics().getInt("applications_mode"));
             assertEquals(0, MainActivity.diagnostics().getInt("applications_visible"));
@@ -1700,6 +1705,78 @@ public class ProxyTunTest {
             await("Application routing cleanup did not stop VPN", () -> !TunnelService.connected() && !TunnelService.pending());
             original.persist(preferences);
             assertTrue(migration.edit().clear().commit());
+        }
+    }
+
+    private static String applicationOutboundConfig(String raw,String packageName,String target,boolean rejectMissing) {
+        String runtime=raw.replace("find-process-mode: off","find-process-mode: strict")
+            .replace("find-process-mode: 'off'","find-process-mode: strict")
+            .replace("find-process-mode: \"off\"","find-process-mode: strict");
+        String effective="missing-node".equals(target) ? (rejectMissing ? "REJECT" : "") : target;
+        if (!effective.isEmpty()) runtime=runtime.replace("rules:\n","rules:\n- PROCESS-NAME,"+packageName+","+effective+"\n- PROCESS-NAME,"+packageName+",REJECT\n");
+        runtime=runtime.replace("rules:\n","rules:\n- PROCESS-NAME,cor-reject:"+packageName+",REJECT\n");
+        return runtime+"\ncor-application-rules:\n  schema: 1\n  routes:\n"
+            +"    - {package: "+packageName+", target: '"+target+"', reject_missing: "+rejectMissing+"}\n";
+    }
+
+    private static void verifyApplicationOutbounds(Context context,String controller,String secret) throws Exception {
+        assertEquals(Build.VERSION.SDK_INT>=29,ApplicationOwners.capability().getBoolean("supported"));
+        openApplicationRouting();
+        previewTarget("application-policies-open");
+        await("Application policies did not load the current profile", () ->
+            MainActivity.diagnostics().optInt("detail")==19
+                && MainActivity.diagnostics().optBoolean("application_policies_loaded"));
+        assertEquals("Application policy UI must follow the actual Android capability",
+            Build.VERSION.SDK_INT>=29,MainActivity.diagnostics().getBoolean("application_policies_supported"));
+        if (Build.VERSION.SDK_INT<29)
+            assertNull("Unsupported Android must not offer a writable application rule form",
+                previewBounds(MainActivity.diagnostics(),"application-policy-save"));
+        shell("input keyevent KEYCODE_BACK");
+        await("Application policies did not close", () ->
+            MainActivity.diagnostics().optInt("detail",-1)==0
+                && !MainActivity.diagnostics().optBoolean("application_policies_loaded"));
+        if (Build.VERSION.SDK_INT<29) return;
+        String original=CoreBridge.config();
+        String restrictive=original.replace("198.51.100.1/32","203.0.113.1/32")
+            .replace("MATCH,DIRECT","MATCH,REJECT");
+        String self=context.getPackageName();
+        try {
+            CoreBridge.reload(applicationOutboundConfig(restrictive,self,"CI-TUN-origin",false));
+            assertTunSocket(controller,secret,"198.51.100.1",true);
+            assertTunSocket(controller,secret,"application-policy.test",true);
+            long rejectedBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                .getLong("udp_rejected");
+            try (DatagramSocket socket=new DatagramSocket()) {
+                socket.connect(InetAddress.getByName("198.51.100.1"),18081);
+                socket.send(new DatagramPacket(new byte[]{1},1));
+                await("Application UDP must not fall through to another outbound",
+                    ()->new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                        .getLong("udp_rejected")>rejectedBefore);
+            }
+            CoreBridge.reload(applicationOutboundConfig(restrictive,self,"DIRECT",false));
+            assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
+            CoreBridge.reload(applicationOutboundConfig(original,self,"REJECT",false));
+            boolean blocked=false;
+            try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
+            catch (IOException expected) {blocked=true;}
+            assertTrue("An application reject rule must override the subscription",blocked);
+            CoreBridge.reload(applicationOutboundConfig(original,self,"missing-node",false));
+            assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
+            CoreBridge.reload(applicationOutboundConfig(original,self,"missing-node",true));
+            blocked=false;
+            try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
+            catch (IOException expected) {blocked=true;}
+            assertTrue("A missing target with blocking enabled must not use DIRECT",blocked);
+            CoreBridge.reload(applicationOutboundConfig(restrictive,"com.android.shell","CI-TUN-origin",false));
+            String response=shell("printf 'GET /probe HTTP/1.1\\r\\nHost: 198.51.100.1\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 3 198.51.100.1 18081");
+            assertTrue("A different UID did not use its assigned outbound: "+response,response.contains("cor-android-network-ok"));
+            blocked=false;
+            try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
+            catch (IOException expected) {blocked=true;}
+            assertTrue("Another application's assignment must not affect this UID",blocked);
+            assertTrue(new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics()).getLong("matches")>0);
+        } finally {
+            CoreBridge.reload(original);
         }
     }
 

@@ -24,7 +24,10 @@ impl App {
         });
         Task::perform(
             async move {
-                let routes = platform::host_network::observe().await;
+                let routes = platform::host_network::diagnose(
+                    platform::host_network::HolderScope::CurrentUser,
+                )
+                .await;
                 let engine = if let Some(engine) = engine {
                     tokio::time::timeout(Duration::from_secs(5), engine.lock_owned())
                         .await

@@ -12,3 +12,13 @@ pub(crate) async fn observe(args: &Args) -> Value {
         clash_client_runtime::platform::host_network::observe().await
     }
 }
+
+pub(crate) async fn diagnose(args: &Args) -> Value {
+    use clash_client_runtime::platform::host_network::{HolderScope, diagnose};
+    diagnose(if args.flag("all-users") {
+        HolderScope::AllUsers
+    } else {
+        HolderScope::CurrentUser
+    })
+    .await
+}

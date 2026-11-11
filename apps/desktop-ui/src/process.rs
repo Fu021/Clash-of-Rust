@@ -267,7 +267,7 @@ pub fn run() -> anyhow::Result<()> {
                 }
                 WindowEvent::Resized(size) => {
                     let s = size.to_logical::<f32>(f64::from(native_window.scale_factor()));
-                    repaint::invalidate_size(native_window, s.width, s.height);
+                    repaint::resized(native_window, s.width, s.height);
                     let weak = window.as_weak();
                     let output = native.clone();
                     geometry_timer.start(

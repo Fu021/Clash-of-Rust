@@ -303,7 +303,7 @@ pub async fn download(
                     .is_none_or(|size| size == package.size),
                 "安装包大小与发布信息不一致"
             );
-            let observer = RouteObserver::new(&response, api.cloned(), route.proxy.is_none());
+            let observer = RouteObserver::new(&response, api.cloned());
             let temporary = tempfile::NamedTempFile::new_in(parent)?;
             let file = tokio::fs::File::from_std(temporary.reopen()?);
             let mut file =

@@ -51,11 +51,17 @@ def proxy_benchmark():
 def select(paths, extended=False):
     android = any(
         path.startswith(('apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting',
+                         'apps/android/app/src/main/java/org/clashofrust/android/ApplicationOwners.java',
+                         'apps/android/core/',
+                         'apps/android/native/src/application_policies',
                          'apps/android/app/src/main/java/org/clashofrust/android/ApplicationCatalog.java',
                          'apps/android/native/src/application_routing',
                          'crates/client-ui/ui/mobile/android/applications.slint',
                          'apps/android/app/src/main/java/org/clashofrust/android/TunnelService.java',
                          'apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java'))
+        or path.startswith(('crates/client-core/src/application_rules.rs',
+                             'crates/mobile-ffi/src/application_rules.rs',
+                             'crates/client-ui/ui/mobile/android/application-policies.slint'))
         or path in ('scripts/android.py', 'scripts/ci_test_policy.py')
         for path in paths
     )
@@ -75,7 +81,7 @@ def select(paths, extended=False):
                       or path in ('scripts/android.py', 'scripts/ci_test_policy.py')
                       for path in paths)
     desktop_ui = any(
-        path.startswith(('crates/client-ui/', 'apps/desktop-ui/src/',
+        path.startswith(('crates/client-ui/', 'apps/desktop-ui/src/', 'vendor/winit/',
                          'apps/desktop/src/application/'))
         for path in paths
     )

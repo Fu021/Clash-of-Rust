@@ -18,24 +18,24 @@
 
 从修复分支发布时，选择该分支，填写其成功 CI 编号，设置 `check_only=false`、`prerelease=true`。流程照常验证九平台安装包与来源，最终以预发布标签公开，不更新稳定版 latest、不合并或删除来源分支。上传结束还会重新核对该来源分支头；期间分支前移则保留未公开草稿并失败。未显式选择预发布时，公开发布仍只接受 main 的 push CI。预发布与正式发布使用相同的发行签名要求，Android 不能用临时 CI 测试签名冒充发行签名。
 
-维护者委派给 Agent 的任务按[收尾规则](../../AGENTS.md#actions提交与发布)持续跟进：最终推送后等待该提交的全部必需 CI job 成功，日常验收以其 `ci_run_id` 和 `check_only=true` 启动本流程。经授权的正式版发布流程完成同提交验证后，不再在发布后追加不发布核验。失败先定位最早失败步骤，修复后跟进对应提交的后续运行，不把已触发、排队或运行中视为完成。核验结束后复核来源 CI 中各平台安装、Ubuntu 兼容结果，以及九组安装包、SHA256 和安装收据；不发布验收须确认没有创建或修改 Release，外部阻塞须明确说明。
+维护者委派给 Agent 的任务按[收尾规则](../../AGENTS.md#actions提交与发布)持续跟进：最终推送后等待同提交 CI 和两套独立兼容验证成功，再以该 `ci_run_id` 和 `check_only=true` 核验候选包。经授权的公开发布完成同提交验证后，不追加重复核验。失败先定位最早失败步骤，修复后验证新提交，不以已触发、排队或运行中收尾。最终核对平台安装、兼容回执、九组包、SHA256 和安装收据；不发布模式还须确认 Release 未变，外部阻塞明确说明。
 
 复盘和其他文档随功能改动纳入最终提交，再启动验证；完成后的运行编号、来源提交和附件结果写入最终汇报，不为补写成功记录再次推送。后续纯文档补充按[收尾规则](../../AGENTS.md#actions提交与发布)保留本地；确需修复代码时，以新提交重新完成 CI 与不发布打包。
 
-流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台、三种 Android ABI 和三个 Ubuntu 兼容 job 的成功记录与产物身份，不重新编译或下载应用资源。候选包、源码产物及收据保留 3 天；过期或旧格式产物需要重新运行当前代码的 CI。完整测试职责见[安装验收](install-validation.md)。
+流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台、三种 Android ABI、Ubuntu latest 和两套独立兼容性结果，不重新编译或下载应用资源。候选包、源码产物及回执保留 3 天；过期或旧格式证据需要重新运行当前代码。完整测试职责见[安装验收](install-validation.md)。
 
-Ubuntu 20.04 ARM64 和 x64 的模板准备、恢复及安装验证均归 CI，按线上 `vm_limits` 明确声明的架构启用[私网预装环境镜像](prepared-vm-images.md)，不满足条件时冷回退。双架构真实上传、暖恢复及安装后验证已有[首轮证据](prepared-vm-images.md#首次双架构暖恢复证据)，不能替代新提交的应用验证或代表所有故障路径通过。SSH 短时超时在总预算内重试，不由缓存命中代替就绪检查。Publish Release 读取这些 CI 结果，不再启动 VM；预装镜像、基础盘及测试写入层均不进入 GitHub Cache、artifact 或 Release。
+Ubuntu 20.04 ARM64 和 x64 的模板准备、恢复及安装验证归独立 [Ubuntu Compatibility](ubuntu-compatibility.md)，按线上 `vm_limits` 明确声明的架构启用[私网预装环境镜像](prepared-vm-images.md)，不满足条件时冷回退。SSH 短时超时在总预算内重试，不由缓存命中代替就绪检查。Publish Release 只核对兼容结果，不重启 VM；预装镜像、基础盘及写入层均不进入 GitHub Cache、artifact 或 Release。
 
 从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
 
-1. 前置解析要求同提交 CI 的全部必需 job 成功，九组候选包和九组构建附件唯一、未过期，冻结来源与依赖快照。
+1. 前置解析要求同提交 CI 及两套兼容性检查成功，九组候选包和九组构建附件唯一、未过期，冻结来源与依赖快照。
 2. 不发布模式直接校验 CI 内已通过安装测试的九组候选包，不申请平台或虚拟机 runner。
 3. 公开模式复用六组桌面候选包；三个 Android job 取得独立发行签名凭据，重新签名 CI 的实际 APK 与 instrumentation，核对签名、架构、16 KiB 对齐，并在 x64 最终签名包执行基础代理/TUN 验证。开发签名候选包不能作为发行签名证据；不运行生命周期、键盘或截图专项。
 4. 最终 job 核对九组包、外层 artifact digest、安装收据、来源构建身份及包摘要，输出九份安装包和对应 SHA256。公开模式才创建 Release；开发版本标记为 prerelease，不覆盖稳定版 latest。
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
-打包与安装验证所需原包遵循[三条工作流的缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，下载 job 在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 环境准备与安装矩阵已归 CI，具体范围见[CI 缓存边界](ci.md#ubuntu-2004-环境下载缓存)与[安装验收](install-validation.md)。
+打包与安装验证所需原包遵循[工作流缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，下载 job 在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 环境准备与安装矩阵见[独立兼容验证](ubuntu-compatibility.md)与[安装验收](install-validation.md)。
 
 只有最终发布 job 有 `contents: write`。桌面 CI 向 `scripts/build-installer.py --prebuilt` 传入已验证的本地构建产物；本地打包沿用相同入口。打包器只校验与组装，不隐式调用 Cargo。
 
@@ -43,9 +43,17 @@ Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果
 
 ### 候选包验收前移
 
-安装包生成、安装后检查和 Linux 兼容矩阵在 CI 内执行，CI 成功同时要求候选包验收成功。平台范围、环境隔离、权限和收据约定统一见[安装验收](install-validation.md)；新接线尚未取得同提交 Actions 结果时，不能写成平台验收已经通过。未来桌面引入发行签名时，也须按实际字节重新验证，不沿用签名前收据。
+安装包生成、平台安装后检查和 Ubuntu latest 在 CI 内执行，Ubuntu 20.04 和多版本 Android 则在独立兼容性工作流中复用候选包。CI 成功不等于两套兼容验证已通过。平台范围、环境隔离、权限和收据约定见[安装验收](install-validation.md)；新接线尚未取得同提交 Actions 结果时不能写成验收通过。未来桌面引入发行签名时仍须验证实际字节。
 
 此调整会增加 CI 时长和候选包存储，目标是更早发现安装问题并减少 CI→发布失败→修改→再 CI 的重复，不承诺单次 CI 更快。发布阶段的网络或 runner 故障且没有代码改动时，可以复用同提交成功 CI，仅重试失败发布 job；实际代码或构建输入变化仍需新提交验证。
+
+### 兼容性发布门禁
+
+普通 CI 成功后，以同一 `ci_run_id` 分别运行 [Android Compatibility](android-compatibility.md) 和 [Ubuntu Compatibility](ubuntu-compatibility.md)，两者可并行。Android 8.0～16 共 11 版本与 Ubuntu 20.04 两架构的基础系统代理/TUN 均成功，且各自最终回执 job 成功后，才可运行 Publish Release。截图和诊断专项可选，不代替基础网络检查。
+
+`scripts/compatibility.py` 自动查找同提交最新的兼容运行，并核对 workflow 路径、同仓库、成功终态、所有必需 job、attempt 及回执 ZIP 的 digest。回执必须精确绑定所选 CI 的输入 artifact id/name/digest；只检查分支名、工作流绿色、旧运行成功或过期附件均不够。最新兼容运行尚未完成或失败时阻止发布，不静默退回旧结果。前置解析和最终核验都执行门禁，`check_only`、正式版与预发布一视同仁。
+
+两套验证只增加发布前验收，不随普通 push 重跑旧系统。保持来源分支不变，按顺序完成 CI → 两套兼容验证 → 不发布核验或已授权公开发布；期间新 push 需重新验证新提交。弃用的 Android UI Previews 文件已移除，维护者还需在 GitHub 禁用其旧工作流记录。
 
 ### Windows Defender 告警
 

@@ -1,5 +1,5 @@
 //! Observable region signals, with explicit provenance rather than a risk score.
-pub mod additional;
+mod additional;
 pub mod audit;
 pub mod browser;
 mod dns_geo;
@@ -117,6 +117,28 @@ pub struct Signal {
     pub challenged: bool,
 }
 impl Signal {
+    pub fn display_title(&self) -> &str {
+        if self.title.trim().is_empty() {
+            self.group.name()
+        } else {
+            self.title.trim()
+        }
+    }
+    pub fn display_value(&self) -> &str {
+        if self.value.trim().is_empty() {
+            "未确认"
+        } else {
+            self.value.trim()
+        }
+    }
+    pub fn explanation(&self) -> String {
+        [("说明", self.detail.trim()), ("建议", self.advice.trim())]
+            .into_iter()
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(label, value)| format!("{label}：{value}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
     pub fn new(
         group: Group,
         title: &str,
@@ -125,10 +147,24 @@ impl Signal {
         evidence: Evidence,
         detail: &str,
     ) -> Self {
+        let value = value.into();
+        let evidence = if value.trim().is_empty() {
+            Evidence::Unknown
+        } else {
+            evidence
+        };
         Self {
             group,
-            title: title.into(),
-            value: value.into(),
+            title: if title.trim().is_empty() {
+                group.name().into()
+            } else {
+                title.trim().into()
+            },
+            value: if value.trim().is_empty() {
+                "未确认".into()
+            } else {
+                value
+            },
             source: source.into(),
             evidence,
             detail: detail.into(),
@@ -142,7 +178,7 @@ impl Signal {
     /// A real challenge response still cannot establish service usability.
     /// Present it with other contextual observations instead of a safe verdict.
     pub fn context_only(&self) -> bool {
-        self.challenged || self.evidence != Evidence::Measured
+        self.challenged || self.evidence != Evidence::Measured || self.value.trim().is_empty()
     }
     pub fn unknown(group: Group, title: &str, source: &str, detail: impl Into<String>) -> Self {
         Self::new(
@@ -167,6 +203,25 @@ pub struct Route {
     pub outcome: String,
 }
 impl Route {
+    pub fn display_title(&self) -> &str {
+        if self.host.trim().is_empty() {
+            "连接检查"
+        } else {
+            self.host.trim()
+        }
+    }
+    pub fn explanation(&self) -> String {
+        [
+            ("规则", self.rule.trim()),
+            ("线路", self.chain.trim()),
+            ("时间", self.time.trim()),
+        ]
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(label, value)| format!("{label}：{value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+    }
     pub fn risky(&self) -> bool {
         self.outcome == "连接失败"
             || self.outcome.starts_with("异常连接")
@@ -694,6 +749,38 @@ pub async fn system_dns(client: &Client, source: &str) -> Vec<Signal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn report_labels_survive_empty_imported_fields() {
+        for group in Group::ALL {
+            let mut signal = Signal::unknown(group, "", "fixture", "");
+            assert!(!signal.title.is_empty());
+            signal.title = " \n ".into();
+            signal.value = " ".into();
+            signal.detail = " 请求未完成 ".into();
+            signal.advice = " 稍后重新检测 ".into();
+            let imported: Signal =
+                serde_json::from_value(serde_json::to_value(signal).unwrap()).unwrap();
+            assert_eq!(imported.display_title(), group.name());
+            assert_eq!(imported.display_value(), "未确认");
+            assert_eq!(
+                imported.explanation(),
+                "说明：请求未完成\n建议：稍后重新检测"
+            );
+            let empty = Signal::new(group, "", "", "fixture", Evidence::Measured, "");
+            assert_eq!(empty.evidence, Evidence::Unknown);
+            assert!(empty.context_only());
+        }
+        assert_eq!(Route::default().display_title(), "连接检查");
+        let finding = audit::Finding {
+            level: audit::Level::Incomplete,
+            field: " ".into(),
+            path: "fixture".into(),
+            value: String::new(),
+            reason: "未读取".into(),
+            advice: String::new(),
+        };
+        assert_eq!(finding.display_title(), "项目配置");
+    }
     #[test]
     fn traces_require_host_country_and_public_ip() {
         assert_eq!(

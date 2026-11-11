@@ -13,11 +13,21 @@
 | `tun_ipv6_not_configured` | 内核/客户端缓冲日志 | 允许 IPv6，但内核未创建 IPv6 TUN 地址；仅检查实际配置的地址族，不因此停止可用的 IPv4 TUN |
 | `tun_ipv4_route_bypass` | `host_routes.warnings` | IPv4 示例仍经过非 TUN 接口；启动校验失败并回滚，运行中显示绕行提示 |
 | `tun_ipv6_route_bypass` | `host_routes.warnings` | IPv6 示例仍经过非 TUN 接口；实际配置 IPv6 TUN 时启动校验失败，否则保留提示，不冒充完整接管 |
+| `tun_current_uid_route_bypass` | `host_routes.warnings` | 普通路由进 TUN，但当前 UID 的 TCP/443 路由样本走物理接口；核对 UID、mark 及重定向策略，不等于已证实 TLS 故障 |
 | `route_unavailable`／`route_query_timeout` | `host_routes.ipv4/ipv6.reason` | 未取得可判定样本；未知不是网络成功或失败 |
 
 [地址族校验与验证边界](agent-failures/network-recovery.md#linux-tun-地址族与启动校验)见网络恢复说明；不把物理 IPv6 路由单独归因于桌面环境或权限。
 
 Claude 保护不会沿用普通 IPv4-only TUN 的兼容例外：首次开启及重启时发现物理 IPv6 绕行仍拒绝提交保护并恢复原状态，避免把不完整接管显示为保护成功。
+
+Linux 的桌面导出及 `cor diagnose`／`--offline` 另保存：
+
+- `host_routes.network_namespace`：采样者所在网络命名空间，不能用另一命名空间的 TUN 证明本命名空间已接管。
+- `host_routes.tcp_uid_samples`：普通观察保留当前有效 UID 的两个固定目标 TCP/443 查询；诊断另补 root 对照，root 通过 sudo 运行时改与 `SUDO_UID` 比较。不以另一用户身份发送网络请求。
+- `host_routes.policy_rules`：两种地址族的策略表号、优先级及 UID、mark、接口、协议/端口选择条件，不导出任意字段。每族限 64 KiB、256 条，截断记 `partial`；不可读、超时及格式无效保持 `unknown`，不能推定没有限制。
+- `tun_configuration` 追加 UID/UID 范围、接口及排除地址配置，区分“没有配置限制”和“显式限制其他用户”；仍为生成文件快照，不替代实时内核状态。
+
+普通覆盖检查优先当前 UID 的有效 TCP 样本，不借用 root 或未知样本；`auto-redirect` 的转发标记例外、旧报告兼容及查询边界见[跨用户路由检查](network-paths.md#跨用户路由检查)。`tun_configuration.auto_redirect` 保留生成配置开关。只有对照用户和策略表查询限于诊断导出；`policy_unavailable`、`policy_query_timeout`、`invalid_policy_response`、`policy_response_too_large`、`tcp_route_unavailable` 是取证标记，不直接弹窗。
 
 ## 测速记录
 
@@ -50,11 +60,19 @@ Claude 保护不会沿用普通 IPv4-only TUN 的兼容例外：首次开启及�
 
 `socket_protection.required` 表示当前是否已安装保护器并要求新 socket 绕过 VPN，另有本进程累计调用/失败计数；计数来自实际 `protect(fd)` 回调和底层 socket 控制错误，不包含 FD、节点或目标地址。失败数为 0 不证明历史所有流量正常；未启用 VPN 时保护器未安装是正常状态。VPN 连接、待授权/启动、代次和最近错误分别记录，避免把内核运行当成系统 VPN 已连接。
 
+`application_routing` 保存按应用出站识别的累计计数，不包含应用清单、节点名或目标地址。`supported` 表示 Android 10+ 的宿主接口可用；`owner_queries`/`owner_failures` 为连接归属查询和失败，`matches` 为应用规则选择，`missing_targets` 为目标缺失或 PASS，`udp_rejected` 为指定目标不支持 UDP 的拦截次数。模式和保护导致规则暂停时不增加命中，累计计数非本轮结果，也不能替代逐连接的 UID/出站验证。
+
+| 内部标记 | 含义与边界 |
+| --- | --- |
+| `APP_OWNER_LOOKUP_FAILED` | 原始元组缺失、系统拒绝、隔离 UID 或无可识别连接；一分钟至多记录一次，连接跟随配置，不伪造应用归属 |
+| `missing_targets` 增加 | 当前规则目标缺失，按该规则失效策略跟随配置或拦截；不等于节点超时 |
+| `udp_rejected` 增加 | 目标仍存在但不支持 UDP，拒绝该 UDP，不能继续落到其他出站 |
+
 Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到日志的时间，不等同内核产生事件的精确时间；仍受现有缓冲及单条长度上限约束，不能恢复已丢失的历史。
 
 ## 回归与现场导出
 
-普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本专项须维护者明确选择，见[测试入口和验证边界](workflows/android-previews.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；模拟器中的确定性故障不能直接解释用户现场。
+普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本诊断专项须维护者显式选择 `verify_diagnostics`，见[测试入口和验证边界](workflows/android-compatibility.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；模拟器中的确定性故障不能直接解释用户现场。
 
 混合测速夹具经本地 HTTP 代理连接隔离源站；测速 URL 的目标必须与源站允许的 CONNECT 地址一致，否则两个节点都会真实失败，不能用于验证“一成功、一失败”。批量控制异常夹具须把节点放入策略组，确保实际发出请求，避免空批次的成功结果掩盖分类问题。
 

@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/metacubex/mihomo v1.19.33
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867
 )
 
@@ -125,7 +126,6 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	gitlab.com/go-extension/aes-ccm v0.0.0-20230221065045-e58665ef23c7 // indirect
 	gitlab.com/yawning/bsaes.git v0.0.0-20190805113838-0a714cd429ec // indirect
-	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
 	golang.org/x/crypto v0.58.0 // indirect

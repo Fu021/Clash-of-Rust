@@ -6,7 +6,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use yaml_serde::{Mapping, Value};
 
-pub const READ_ONLY_NOTICE: &str = "请先关闭 Claude 保护；保护期间暂停所有更新和设置修改";
+pub const READ_ONLY_NOTICE: &str = "请先关闭 Claude 保护；保护期间锁定网络修改和更新";
 
 pub const OWNED_DOMAINS: &[&str] = &[
     "anthropic.com",

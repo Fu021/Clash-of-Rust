@@ -921,7 +921,7 @@ impl Engine {
             return Ok(());
         }
         settings.validate()?;
-        self.settings.require_mutable()?;
+        self.settings.require_settings_change(&settings)?;
         ensure!(
             settings.claude_protection == self.settings.claude_protection,
             "请使用 Claude 保护开关"
@@ -1743,6 +1743,7 @@ impl Engine {
             .collect();
         let mut settings = self.settings.clone();
         settings.rule_profiles.remove(id);
+        settings.application_rules.remove(id);
         let payload = if active {
             let default = self
                 .profiles

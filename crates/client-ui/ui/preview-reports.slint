@@ -1,0 +1,22 @@
+import { ReportItem } from "state.slint";
+
+export global PreviewReports {
+    out property <[ReportItem]> normal: [
+        {id: "dns", title: "实际递归 DNS", value: "203.0.113.53", country: "香港", flag: "🇨🇳", flagged: true, detail: "说明：固定演示结果，不代表真实检测。", source: "浏览器采样", tone: 1},
+        {id: "registration", title: "IP 注册信息", value: "Example Network · 注册地区 AU", detail: "说明：注册地区不代表出口物理位置；固定演示结果。", source: "RDAP", tone: 1},
+        {id: "exit", title: "出口地区", value: "香港 · 固定演示结果", detail: "说明：仅用于布局预览，不代表真实检测。", source: "服务响应", tone: 1},
+        {id: "site", title: "Claude 网页", value: "网页可达", detail: "说明：未携带账户 Cookie。", source: "匿名服务响应", tone: 1}
+    ];
+    out property <[ReportItem]> risk: [
+        {id: "dns-risk", title: "实际递归 DNS", value: "2001:db8:1234:5678:abcd:ef01:2345:6789", country: "台湾", flag: "🇨🇳", flagged: true, detail: "说明：此演示国家与香港出口不同，仍按风险显示。\n建议：核对浏览器独立 DoH、系统 DNS 与实际线路。", source: "系统 DNS · 固定演示结果", tone: 3},
+        {id: "route", title: "关联服务直连", value: "assets-proxy.anthropic.com", detail: "说明：发现 DIRECT 连接，尚未启用保护。", source: "内核连接记录 · 固定演示结果", tone: 3}
+    ];
+    out property <[ReportItem]> clues: [
+        {id: "ping", title: "全球连通性", value: "未确认", detail: "说明：远端探测超时或额度不足，不代表节点故障。", source: "Globalping 远端探针", tone: 2},
+        {id: "shared", title: "共享服务域名", value: "Cloudflare 等服务也被其他应用使用", detail: "说明：广泛规则可能影响这些应用的连接。", source: "规则与网络线索", tone: 2}
+    ];
+    out property <[ReportItem]> all: [
+        self.normal[0], self.normal[1], self.clues[0], self.risk[0],
+        self.risk[1], self.normal[2], self.normal[3], self.clues[1]
+    ];
+}

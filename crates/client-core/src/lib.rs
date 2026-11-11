@@ -3,6 +3,7 @@
 pub mod active_route;
 #[path = "controller/mod.rs"]
 pub mod api;
+pub mod application_rules;
 #[path = "detection/claude/mod.rs"]
 pub mod claude_check;
 pub mod config;

@@ -41,6 +41,7 @@ export component MobileFakeIp inherits VerticalLayout {
 }
 
 export component MobileRuleActions inherits MScroll {
+    property <bool> editable: !MobileData.protected && !MobileData.protection-pending && !MobileData.working;
     VerticalLayout { spacing: MobileTypography.gap;
         MCard {
             MHeading { text: MobileView.selected-rule.value == "" ? MobileView.selected-rule.kind : MobileView.selected-rule.value; wrap: word-wrap; }
@@ -52,15 +53,18 @@ export component MobileRuleActions inherits MScroll {
             MRow { title: "复制规则原文"; clicked => { MobileActions.request(MobileIntent.copy, MobileView.selected-rule.raw, ""); } }
             MDivider { }
             MRow { title: MobileView.selected-rule.source == "自定义" ? "编辑规则" : "复制为自定义规则";
+                interactive: root.editable;
                 clicked => { MobileActions.request(MobileIntent.rule-edit, MobileView.selected-id, ""); }
             }
             if MobileView.selected-rule.source == "自定义": VerticalLayout {
                 MDivider { }
                 MRow { title: MobileView.selected-rule.enabled ? "停用规则" : "启用规则";
+                    interactive: root.editable;
                     clicked => { MobileActions.request(MobileIntent.rule-enable, MobileView.selected-id, ""); }
                 }
                 MDivider { }
                 MRow { title: "删除规则"; value-color: Theme.danger;
+                    interactive: root.editable;
                     clicked => { MobileActions.request(MobileIntent.rule-delete, MobileView.selected-id, ""); }
                 }
             }
@@ -68,12 +72,14 @@ export component MobileRuleActions inherits MScroll {
         MCard {
             MSmall { text: "长按左侧手柄拖动，靠近列表上下边缘可连续滚动；跨页可指定位置。"; wrap: word-wrap; }
             HorizontalLayout { spacing: MobileTypography.small-gap;
-                MField { text <=> MobileView.rule-position; placeholder: "目标位置"; }
+                MField { text <=> MobileView.rule-position; placeholder: "目标位置"; enabled: root.editable; }
                 MButton { text: "移动"; width: 72px; horizontal-stretch: 0;
+                    enabled: root.editable;
                     clicked => { MobileActions.request(MobileIntent.rule-move, MobileView.selected-id, MobileView.rule-position); }
                 }
             }
             MRow { title: "恢复订阅顺序"; subtitle: "保留自定义规则和快捷规则";
+                interactive: root.editable;
                 clicked => { MobileActions.request(MobileIntent.rule-restore, "", ""); }
             }
         }
@@ -118,34 +124,18 @@ export component MobileSiteResults inherits VerticalLayout {
                 }
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                     MHeading { text: result.title; }
-                    if result.flagged: Text { text: result.flag; width: 24px; height: 24px; font-size: 20px; }
                     MTag { text: result.tone == 3 ? "受限" : result.tone == 2 ? "网页可达" : result.tone == 1 ? "确认可用" : "待检测"; tone: result.tone; }
                 }
                 MParagraph { text: result.value; font-size: MobileTypography.font-size(14); }
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-                    MSmall { text: result.source; }
-                    if result.delay != "": MSmall { text: result.delay; color: Theme.tone-color(result.delay-tone); horizontal-stretch: 0; }
+                    Rectangle { width: 24px; height: 24px; horizontal-stretch: 0;
+                        if result.flagged: Text { text: result.flag; width: parent.width; height: parent.height; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    MSmall { text: result.country == "" ? result.source : result.country; min-width: 0px; preferred-width: 0px; }
+                    MSmall { text: result.delay; width: 76px * Theme.text-scale; color: Theme.tone-color(result.delay-tone); horizontal-alignment: right; horizontal-stretch: 0; }
                 }
             }
         }
     }
     if MobileData.site-results.length == 0: MParagraph { text: "没有符合筛选条件的结果。"; color: Theme.secondary; }
-}
-
-export component MobileDetectionOptions inherits MScroll {
-    VerticalLayout { spacing: MobileTypography.gap;
-        MCard {
-            MHeading { text: "Android 网络与浏览器"; }
-            MParagraph { text: "检测当前 VPN 出口、DNS、WebRTC 与浏览器线索。开始检测会打开浏览器，返回应用查看报告。"; }
-            MSmall { text: "只采集网络与公开环境线索，不读取账户、Cookie 或聊天内容。"; wrap: word-wrap; }
-        }
-        MCard {
-            MHeading { text: "IP 信誉查询"; }
-            MSmall { text: MobileData.reputation-key-saved ? "已保存自定义密钥；留空保存可清除。" : "可选填写 ipapi.is 密钥；留空使用公共查询。"; wrap: word-wrap; }
-            MField { secret: true; text <=> MobileView.reputation-key; placeholder: "可选：ipapi.is API 密钥"; enabled: !MobileData.protected && !MobileData.protection-pending; }
-            MButton { text: "保存"; enabled: !MobileData.claude-busy && !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
-                clicked => { MobileActions.request(MobileIntent.claude-key, MobileView.reputation-key, ""); }
-            }
-        }
-    }
 }

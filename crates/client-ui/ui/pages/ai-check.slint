@@ -1,31 +1,10 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
 import { DiagnosticActions } from "../components/notice.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData, UiActions, Intent, ReportItem } from "../state.slint";
-import { PageScroll, Label, Caption, Heading, Panel, ContentPanel, RowPanel, ActionButton, Toggle, Badge, Paragraph, Divider } from "../components/controls.slint";
+import { UiData, UiActions, Intent } from "../state.slint";
+import { FindingList } from "../components/report.slint";
+import { PageScroll, Caption, Heading, Panel, ContentPanel, RowPanel, ActionButton, Toggle, Paragraph } from "../components/controls.slint";
 import { ToolHeading, SummaryMetric } from "../components/sections.slint";
-component FindingRow inherits Rectangle {
-    in property <ReportItem> item;
-    height: content.preferred-height;
-    content := HorizontalLayout {
-        padding: 16px; spacing: 12px; cross-axis-alignment: start;
-        Rectangle {
-            width: 30px; height: 30px; border-radius: 8px; background: Theme.inset;
-            if root.item.flagged: Text { width: parent.width; height: parent.height; text: root.item.flag; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
-            if !root.item.flagged: Image { x: 7px; y: 7px; width: 16px; height: 16px; source: @image-url("../icons/ai.svg"); colorize: Theme.secondary; }
-        }
-        VerticalLayout {
-            min-width: 0px; spacing: 5px;
-            Label { text: root.item.title; font-weight: 600; }
-            Paragraph { text: root.item.value; font-size: Theme.detail-size; }
-            if root.item.country != "": Caption { text: root.item.country; }
-            if root.item.detail != "": Paragraph { text: root.item.detail; font-size: Theme.detail-size; color: Theme.secondary; }
-            if root.item.source != "": Caption { text: root.item.source; wrap: word-wrap; color: Theme.muted; }
-        }
-        Badge { text: root.item.tone == 1 ? "正常" : root.item.tone == 3 ? "风险" : "线索"; tone: root.item.tone; }
-    }
-    Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.subtle-line; }
-}
 export component AiCheckPage inherits PageSurface {
     motion-revision: UiData.claude-filter + 1;
     PageScroll {
@@ -46,7 +25,6 @@ export component AiCheckPage inherits PageSurface {
             }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 Heading { text: UiData.claude-busy ? "正在检测…" : "地区线索检测"; }
-                ActionButton { text: "检测选项"; clicked => { UiActions.dispatch(Intent.claude-guide, "diagnostics", ""); } }
                 ActionButton { text: "导出报告"; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.claude-export, "", ""); } }
                 ActionButton { text: UiData.claude-busy ? "取消" : "开始检测"; primary: true; enabled: UiData.running; clicked => { UiActions.dispatch(UiData.claude-busy ? Intent.claude-cancel : Intent.claude-start, "", ""); } }
             }
@@ -70,9 +48,7 @@ export component AiCheckPage inherits PageSurface {
             if UiData.claude-filter < 0 && UiData.claude-results.length > 0: VerticalLayout {
                 spacing: 8px;
                 Heading { text: "检测结果"; }
-                Panel { height: findings.preferred-height;
-                    findings := VerticalLayout { spacing: 0px; for result in UiData.claude-results: FindingRow { item: result; } }
-                }
+                FindingList { items: UiData.claude-results; }
                 HorizontalLayout {
                     Caption { text: UiData.claude-result-status; }
                     ActionButton { text: "查看风险项目"; quiet: true; compact: true; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
@@ -84,9 +60,7 @@ export component AiCheckPage inherits PageSurface {
                     ActionButton { text: "← 返回报告"; clicked => { UiActions.dispatch(Intent.claude-filter, "-1", ""); } }
                     Caption { text: UiData.claude-result-status; horizontal-alignment: right; }
                 }
-                Panel { height: filtered.preferred-height;
-                    filtered := VerticalLayout { spacing: 0px; for result in UiData.claude-results: FindingRow { item: result; } }
-                }
+                FindingList { items: UiData.claude-results; }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Caption { text: UiData.claude-result-status; }
                     ActionButton { text: "上一页"; compact: true; enabled: UiData.claude-previous; clicked => { UiActions.dispatch(Intent.claude-page, "" + (UiData.claude-result-page - 1), ""); } }

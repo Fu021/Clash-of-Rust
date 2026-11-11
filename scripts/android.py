@@ -329,12 +329,12 @@ def apk_identity(metadata, version):
 
 def build(arch):
     from action_cache import workspace_sources
-    from ci_test_policy import extended_tests
+    from ci_test_policy import enabled, extended_tests
     workspace_sources(ROOT)
     packages = ['-p', 'clash-mobile-runtime', '-p', 'clash-android']
     targets = ['--all-targets'] if extended_tests() else ['--lib']
     cargo_build(['cargo', 'clippy', *packages, '--release', *targets, '--locked', '--', '-D', 'warnings'], cwd=ROOT)
-    if extended_tests():
+    if extended_tests() or enabled('COR_CI_ANDROID_ROUTING_TESTS'):
         run(['cargo', 'test', *packages, '--release', '--locked', '--lib',
              '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT)
     else:
@@ -383,6 +383,8 @@ def build(arch):
     env['ANDROID_NDK_HOME'] = str(ndk)
     core = ANDROID/'core'
     run(['go', 'mod', 'tidy', '-diff'], cwd=core, env=env)
+    if arch == 'x64' and (extended_tests() or enabled('COR_CI_ANDROID_ROUTING_TESTS')):
+        run(['go', 'test', '-tags', 'cmfa,with_gvisor', '-count=1', '.'], cwd=core, env=env)
     aar = ANDROID/'app/libs/mihomo.aar'
     aar.parent.mkdir(parents=True, exist_ok=True)
     run(['gomobile', 'bind', '-target', 'android/'+go_arch, '-androidapi', '26',
@@ -711,7 +713,7 @@ def network_origin_handler():
         protocol_version = 'HTTP/1.1'
 
         def do_CONNECT(self):
-            if self.path != '198.51.100.1:18081':
+            if self.path not in ('198.51.100.1:18081', 'application-policy.test:18081'):
                 self.send_error(403)
                 return
             self.send_response(200, 'Connection established')
@@ -750,10 +752,11 @@ def network_origin_handler():
 
 
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
-         ime_rounds=1, applications_only=False, diagnostics_only=False):
+         ime_rounds=1, applications_only=False, diagnostics_only=False, basic_only=False,
+         routing_only=False):
     if not 1 <= ime_rounds <= 3 or ((ime_probe or ime_rounds != 1) and not ime_only):
         raise ValueError('IME probe options require IME-only testing and one to three rounds')
-    if sum((ime_only, applications_only, diagnostics_only)) > 1:
+    if sum((ime_only, applications_only, diagnostics_only, basic_only, routing_only)) > 1:
         raise ValueError('Application screenshots, diagnostic verification and input-method tests are separate')
     network_tests = not (ime_only or applications_only)
     if arch != 'x64':
@@ -770,9 +773,11 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         threading.Thread(target=server.serve_forever,daemon=True).start()
     # Exercise Android's real first-use dialog; pre-granting consent hides
     # ordering bugs between authorization, protection DNS and VPN startup.
-    if network_tests:
+    if network_tests and not routing_only:
         run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','default'])
     report=ROOT/'target/android-report'/arch
+    if routing_only:
+        report = report / 'application-rules'
     if ime_only:
         api=device_property('ro.build.version.sdk')
         if not api.isdigit():
@@ -809,12 +814,13 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     try:
         outputs=[]
         from ci_test_policy import android_cases
-        cases=(('androidUiPreviewCapturesPagesAndApplications',) if applications_only else
+        cases=(('applicationRoutingPersistsAndKeepsOtherAppsOnline',) if routing_only else
+               ('androidUiPreviewCapturesPagesAndApplications',) if applications_only else
                ('basicSystemProxyAndTun', 'measurementDiagnosticsDistinguishFailuresAndExport')
                if diagnostics_only else
                ('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
-               if ime_only else android_cases())
+               if ime_only else ('basicSystemProxyAndTun',) if basic_only else android_cases())
         failures=[]
         for iteration in range(1,ime_rounds+1):
             if ime_only:
@@ -1096,7 +1102,8 @@ def validate_measurement_diagnostics(directory, api):
                          'This isolated fixture does not reproduce a reported public subscription failure or a vendor ROM.\n')
 
 
-def application_preview(build, api, verify_diagnostics=False):
+def application_preview(build, api, verify_diagnostics=False, compatibility=False,
+                        screenshots=False, verify_application_rules=False):
     from workflow_artifacts import extract_build
     actual_api = device_property('ro.build.version.sdk')
     if actual_api != str(api):
@@ -1111,8 +1118,18 @@ def application_preview(build, api, verify_diagnostics=False):
     root.mkdir(parents=True, exist_ok=False)
     extract_build(archive, root)
     verify_build(root, 'x64', commit())
-    test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
-         applications_only=not verify_diagnostics, diagnostics_only=verify_diagnostics)
+    if compatibility and not verify_diagnostics:
+        test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
+             basic_only=True)
+    if verify_application_rules:
+        test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
+             routing_only=True)
+    if verify_diagnostics or screenshots or not compatibility:
+        test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
+             applications_only=not verify_diagnostics, diagnostics_only=verify_diagnostics)
+    if screenshots and verify_diagnostics:
+        test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
+             applications_only=True)
 
 
 def package(arch, run_id, check_only, build=None):
@@ -1166,6 +1183,12 @@ def main():
     parser.add_argument('operation',choices=('build','export','test','package','emulator','application-preview'))
     parser.add_argument('--verify-diagnostics', action='store_true',
                         help='Run explicitly requested diagnostic verification instead of UI screenshots')
+    parser.add_argument('--compatibility', action='store_true',
+                        help='Verify basic proxy/TUN using the selected CI APK')
+    parser.add_argument('--screenshots', action='store_true',
+                        help='Also capture pages after compatibility verification')
+    parser.add_argument('--verify-application-rules', action='store_true',
+                        help='Verify application scope and outbound routing after basic compatibility')
     parser.add_argument('--arch',choices=ABIS,required=True)
     parser.add_argument('--run-id',type=int)
     parser.add_argument('--check',action='store_true')
@@ -1176,6 +1199,12 @@ def main():
     args=parser.parse_args()
     if args.verify_diagnostics and args.operation != 'application-preview':
         parser.error('--verify-diagnostics requires application-preview')
+    if (args.compatibility or args.screenshots) and args.operation != 'application-preview':
+        parser.error('--compatibility and --screenshots require application-preview')
+    if args.screenshots and not args.compatibility:
+        parser.error('--screenshots requires --compatibility')
+    if args.verify_application_rules and (args.operation != 'application-preview' or not args.compatibility):
+        parser.error('--verify-application-rules requires application-preview --compatibility')
     if args.build is not None and args.operation != 'application-preview' and (args.operation!='package' or not args.check):
         parser.error('--build requires package --check or application-preview')
     if args.operation == 'application-preview' and (args.arch != 'x64' or args.build is None or args.api is None):
@@ -1234,7 +1263,9 @@ def main():
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
-    elif args.operation=='application-preview': application_preview(args.build, args.api, args.verify_diagnostics)
+    elif args.operation=='application-preview':
+        application_preview(args.build, args.api, args.verify_diagnostics,
+                            args.compatibility, args.screenshots, args.verify_application_rules)
     else: package(args.arch,args.run_id,args.check,args.build)
 
 

@@ -24,15 +24,15 @@ component AndroidConnection inherits VerticalLayout {
     MCard {
         MRow { title: "VPN 设置"; value: AndroidData.authorization-status; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
         MDivider { }
-        MRow { geometry-key: "preview-application-routing"; title: "应用分流"; value: AndroidData.application-scope; interactive: !MobileData.protected && !MobileData.protection-pending;
+        MRow { geometry-key: "preview-application-routing"; title: "应用分流"; value: AndroidData.application-scope;
             clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); }
         }
         MDivider { }
-        MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds; enabled: !MobileData.protected && !MobileData.protection-pending;
+        MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds;
             toggled(value) => { AndroidActions.request(AndroidIntent.notification-speeds, value ? "true" : "false"); }
         }
         MDivider { }
-        MRow { title: "电池与后台运行"; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
+        MRow { title: "电池与后台运行"; clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
     }
 }
 component AndroidUpdates inherits VerticalLayout {

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/metacubex/mihomo/component/dialer"
+	"github.com/metacubex/mihomo/component/process"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub"
 	LC "github.com/metacubex/mihomo/listener/config"
@@ -33,6 +34,7 @@ var (
 )
 
 func init() {
+	process.DefaultPackageNameResolver = applicationPackage
 	// Installed once: replacing the global hook during active dials would race.
 	dialer.DefaultSocketHook = func(network, address string, conn syscall.RawConn) error {
 		p := allowed.Load()
@@ -62,9 +64,19 @@ func init() {
 func Start(home, raw string) error {
 	lifecycle.Lock()
 	defer lifecycle.Unlock()
-	if started { return errors.New("core is already running") }
+	if started {
+		return errors.New("core is already running")
+	}
 	C.SetHomeDir(home)
-	if err := hub.Parse([]byte(raw)); err != nil { return err }
+	routes, err := parseApplicationRules(raw)
+	if err != nil {
+		return err
+	}
+	if err := hub.Parse([]byte(raw)); err != nil {
+		return err
+	}
+	routes.proxies = tunnel.Proxies()
+	applicationRoutes.Store(routes)
 	started = true
 	return nil
 }
@@ -72,13 +84,28 @@ func Start(home, raw string) error {
 func Reload(raw string) error {
 	lifecycle.Lock()
 	defer lifecycle.Unlock()
-	if !started { return errors.New("core is not running") }
+	if !started {
+		return errors.New("core is not running")
+	}
 	// Rebind the controller if its port changes. The Android TUN is owned separately.
-	return hub.Parse([]byte(raw))
+	routes, err := parseApplicationRules(raw)
+	if err != nil {
+		return err
+	}
+	if err := hub.Parse([]byte(raw)); err != nil {
+		return err
+	}
+	routes.proxies = tunnel.Proxies()
+	applicationRoutes.Store(routes)
+	return nil
 }
 
 func SetProtector(value Protector) {
-	if value == nil { allowed.Store(nil) } else { allowed.Store(&protectorHolder{value}) }
+	if value == nil {
+		allowed.Store(nil)
+	} else {
+		allowed.Store(&protectorHolder{value})
+	}
 }
 
 func SocketDiagnostics() string {
@@ -90,12 +117,20 @@ func SocketDiagnostics() string {
 func StartTun(fd int32, ipv6 bool) error {
 	lifecycle.Lock()
 	defer lifecycle.Unlock()
-	if !started || allowed.Load() == nil { return errors.New("core or socket protector is not ready") }
-	if tun != nil { return errors.New("VPN tunnel already exists") }
+	if !started || allowed.Load() == nil {
+		return errors.New("core or socket protector is not ready")
+	}
+	if tun != nil {
+		return errors.New("VPN tunnel already exists")
+	}
 	copyFD, err := syscall.Dup(int(fd))
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	v6 := []netip.Prefix{}
-	if ipv6 { v6 = append(v6, netip.MustParsePrefix("fdfe:dcba:9876::1/126")) }
+	if ipv6 {
+		v6 = append(v6, netip.MustParsePrefix("fdfe:dcba:9876::1/126"))
+	}
 	options := LC.Tun{
 		Enable: true, Device: "ClashOfRust", Stack: C.TunGvisor,
 		AutoRoute: false, AutoDetectInterface: false, MTU: 1500,
@@ -105,7 +140,9 @@ func StartTun(fd int32, ipv6 bool) error {
 	}
 	// Fixed valid options reach tunNew, which takes ownership of copyFD.
 	listener, err := sing_tun.New(options, tunnel.Tunnel)
-	if err != nil { return fmt.Errorf("Android TUN: %w", err) }
+	if err != nil {
+		return fmt.Errorf("Android TUN: %w", err)
+	}
 	tun = listener
 	return nil
 }
@@ -113,7 +150,9 @@ func StartTun(fd int32, ipv6 bool) error {
 func StopTun() error {
 	lifecycle.Lock()
 	defer lifecycle.Unlock()
-	if tun == nil { return nil }
+	if tun == nil {
+		return nil
+	}
 	err := tun.Close()
 	tun = nil
 	return err

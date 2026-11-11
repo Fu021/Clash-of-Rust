@@ -170,6 +170,14 @@ pub enum Command {
 
 impl Command {
     pub(crate) fn check_protection(&self, settings: &Settings) -> anyhow::Result<()> {
+        match self {
+            Self::Settings { settings: next, .. } => return settings.require_settings_change(next),
+            Self::ConfigSet { key, value } => {
+                let next = mutations::setting(settings, key, value.clone())?;
+                return settings.require_settings_change(&next);
+            }
+            _ => {}
+        }
         if !matches!(
             self,
             Self::Meta
@@ -178,7 +186,7 @@ impl Command {
                 | Self::TrayNodes
                 | Self::Delay { .. }
                 | Self::RecoverUnreachable
-                | Self::Logs { clear: false }
+                | Self::Logs { .. }
                 | Self::ExportLogs
                 | Self::RecordFailure { .. }
                 | Self::CheckConfig
@@ -226,6 +234,52 @@ mod tests {
     }
 
     #[test]
+    fn protection_accepts_display_patches_but_rejects_combined_network_changes() {
+        let settings = protected_settings();
+        for (key, value) in [
+            ("theme_mode", serde_json::json!("light")),
+            ("accent_color", serde_json::json!("blue")),
+            ("text_scale", serde_json::json!(125)),
+            ("tray_speed", serde_json::json!(true)),
+        ] {
+            assert!(
+                Command::ConfigSet {
+                    key: key.into(),
+                    value
+                }
+                .check_protection(&settings)
+                .is_ok()
+            );
+        }
+        let mut next = settings.clone();
+        next.text_scale = 125;
+        assert!(
+            Command::Settings {
+                settings: next.clone(),
+                expected: None
+            }
+            .check_protection(&settings)
+            .is_ok()
+        );
+        next.application_rules.insert(
+            "profile".into(),
+            std::sync::Arc::new(vec![clash_client_core::application_rules::Rule {
+                package: "org.example.browser".into(),
+                target: clash_client_core::application_rules::Target::default(),
+                reject_missing: false,
+            }]),
+        );
+        assert!(
+            Command::Settings {
+                settings: next,
+                expected: None
+            }
+            .check_protection(&settings)
+            .is_err()
+        );
+    }
+
+    #[test]
     fn protection_rejects_mutations_but_keeps_observation_and_disable_available() {
         let settings = protected_settings();
         for allowed in [
@@ -244,6 +298,7 @@ mod tests {
             },
             Command::RecoverUnreachable,
             Command::Logs { clear: false },
+            Command::Logs { clear: true },
             Command::ExportLogs,
             Command::RecordFailure {
                 message: "fixture".into(),
@@ -334,7 +389,6 @@ mod tests {
             },
             Command::Protect { enabled: true },
             Command::Close { id: None },
-            Command::Logs { clear: true },
             Command::Autostart {
                 enabled: Some(false),
             },

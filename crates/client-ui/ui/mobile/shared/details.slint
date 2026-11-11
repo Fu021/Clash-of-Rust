@@ -3,7 +3,8 @@ import { MobileTypography } from "typography.slint";
 import { Theme, AccentPalette } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll, MCopyButton, MSwitch } from "controls.slint";
-import { MobileFakeIp, MobileRuleActions, MobileSiteResults, MobileDetectionOptions } from "editors.slint";
+import { MobileFakeIp, MobileRuleActions, MobileSiteResults } from "editors.slint";
+import { MobileReport } from "reports.slint";
 
 component MobileEditorActions inherits HorizontalLayout {
     spacing: MobileTypography.small-gap;
@@ -28,8 +29,7 @@ export component MobileDetails inherits PageSurface {
     if MobileView.detail == 14: MobileFakeIp { }
     if MobileView.detail == 15: MobileRuleActions { }
     if MobileView.detail == 6: MobileSiteResults { }
-    if MobileView.detail == 17: MobileDetectionOptions { }
-    if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6 && MobileView.detail != 17: VerticalLayout { spacing: MobileTypography.gap;
+    if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6: VerticalLayout { spacing: MobileTypography.gap;
         details-scroll := MScroll {
             content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message;
             property <[length]> viewport: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
@@ -118,32 +118,16 @@ export component MobileDetails inherits PageSurface {
                 }
                 if MobileData.profile-busy: MSmall { text: "正在保存订阅，请稍候…"; wrap: word-wrap; }
             }
-            if MobileView.detail == 16: VerticalLayout { spacing: MobileTypography.gap;
-                for row in MobileData.site-details: MCard {
+            if MobileView.detail == 16 && MobileData.site-details.length > 0: MCard {
+                for row[index] in MobileData.site-details: VerticalLayout { spacing: MobileTypography.small-gap;
                     MSmall { text: row.label; }
                     MParagraph { text: row.value; }
+                    if index + 1 < MobileData.site-details.length: MDivider { }
                 }
             }
-            if MobileView.detail == 1 || MobileView.detail == 7 || MobileView.detail == 9: VerticalLayout { spacing: MobileTypography.gap;
-                for result in MobileData.claude-results: VerticalLayout {
-                  if MobileView.detail == 1 ? result.tone == 3 : MobileView.detail == 7 ? result.tone == 1 : result.tone == 2: MCard {
-                    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-                        MHeading { text: result.title; }
-                        MTag { text: result.tone == 3 ? "风险" : result.tone == 1 ? "正常" : "线索"; tone: result.tone; }
-                    }
-                    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-                        MParagraph { text: result.value; min-width: 0px; horizontal-stretch: result.country == "" ? 1 : 0; }
-                        if result.country != "": HorizontalLayout { spacing: 6px; cross-axis-alignment: center; horizontal-stretch: 0;
-                            if result.flagged: Text { text: result.flag; width: 24px; height: 24px; font-size: 20px; }
-                            MParagraph { text: result.country; wrap: no-wrap; min-width: self.preferred-width; horizontal-stretch: 0; }
-                        }
-                        if result.country != "": Rectangle { horizontal-stretch: 1; }
-                    }
-                    MSmall { text: result.detail; wrap: word-wrap; }
-                    MSmall { text: result.source; wrap: word-wrap; }
-                    if result.delay != "": MSmall { text: result.delay; color: Theme.tone-color(result.delay-tone); }
-                  }
-                }
+            if MobileView.detail == 1 || MobileView.detail == 7 || MobileView.detail == 9: MobileReport {
+                items: MobileData.claude-results;
+                tone: MobileView.detail == 1 ? 3 : MobileView.detail == 7 ? 1 : 2;
             }
             if root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         } }

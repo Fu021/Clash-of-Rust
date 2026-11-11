@@ -20,14 +20,13 @@ import urllib.request
 import zipfile
 
 from build_support import ROOT, opener, sha256, validate_version, manifest_version
+import compatibility
 
 CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
 CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64', 'Actions cache budget', 'Resolve build inputs'}
-CI_JOBS |= {'Ubuntu latest-x64 proxy and TUN',
-            'Ubuntu 20.04-x64 installed proxy and TUN',
-            'Ubuntu 20.04-arm64 installed proxy and TUN'}
+CI_JOBS |= {'Ubuntu latest-x64 proxy and TUN'}
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',
@@ -446,6 +445,8 @@ def main():
     client = GitHub(repo, credential(repo), args.proxy)
     commit = git('rev-parse', 'HEAD')
     run = verified_run(client, commit, args.run_id, check_only=args.check, prerelease=args.prerelease)
+    for suite in compatibility.WORKFLOWS:
+        compatibility.verified_suite(client, run, suite)
     version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check, prerelease=args.prerelease)
     if args.resolve:
         build_artifacts(client, run['id'])

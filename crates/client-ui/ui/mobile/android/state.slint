@@ -2,7 +2,20 @@
 export enum AndroidIntent { vpn-settings, application-routing, application-query, application-system, application-filter, application-mode, application-toggle, application-select, application-revert, application-save, application-refresh, application-permissions, notification-speeds, battery-settings, check-update, save-ports, background }
 export global AndroidActions { callback request(AndroidIntent, string); }
 export struct ApplicationItem { name: string, package: string, selected: bool, icon: image, has-icon: bool }
+export struct ApplicationPolicyItem { package: string, name: string, target: string, status: string }
 export global AndroidData {
+    in-out property <bool> policies-supported;
+    in-out property <string> policies-profile;
+    in-out property <string> policies-status;
+    in-out property <[string]> policies-applications;
+    in-out property <[string]> policies-targets;
+    in-out property <[ApplicationPolicyItem]> policies;
+    in-out property <string> policies-query;
+    in-out property <string> policies-application;
+    in-out property <string> policies-target: "跟随配置";
+    in-out property <bool> policies-reject-missing;
+    in-out property <int> policies-revision: -1;
+    in-out property <length> policies-scroll-y;
     in-out property <[ApplicationItem]> applications;
     in-out property <bool> applications-loading;
     in-out property <bool> applications-saving;

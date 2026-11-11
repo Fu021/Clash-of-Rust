@@ -5,6 +5,19 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
     matches!(
         intent,
         Intent::Navigate
+            | Intent::Appearance
+            | Intent::AccentPicker
+            | Intent::AccentColor
+            | Intent::TextScale
+            | Intent::TraySpeed
+            | Intent::NodeSort
+            | Intent::WindowWidth
+            | Intent::WindowHeight
+            | Intent::ResetWindow
+            | Intent::RuleSelect
+            | Intent::RuleFilter
+            | Intent::RuleProfile
+            | Intent::RuleConfirmProfile
             | Intent::Query
             | Intent::DismissNotice
             | Intent::SystemNotification
@@ -21,6 +34,7 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
             | Intent::ExportDiagnostics
             | Intent::ReportIssue
             | Intent::LogLevel
+            | Intent::ClearLogs
             | Intent::LogDetail
             | Intent::TestUrl
             | Intent::DnsHost
@@ -46,7 +60,6 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
             | Intent::ClaudeBrowser
             | Intent::ClaudeCopyScript
             | Intent::ClaudeExport
-            | Intent::ClaudeAdditional
             | Intent::RuleCloseEditor
             | Intent::RuleCancelProfile
             | Intent::Confirm
@@ -105,24 +118,7 @@ impl App {
                     | Intent::FakeIpRestoreDefaults
                     | Intent::Ipv6
                     | Intent::Udp
-            ) || (self.page == Page::Rules
-                && !matches!(
-                    intent,
-                    Intent::Navigate
-                        | Intent::Quit
-                        | Intent::DismissNotice
-                        | Intent::SystemNotification
-                        | Intent::Escape
-                        | Intent::RuleCloseEditor
-                        | Intent::RuleCancelProfile
-                        | Intent::Confirm
-                        | Intent::CancelConfirm
-                        | Intent::ClaudeProtection
-                        | Intent::CloseDetail
-                        | Intent::Copy
-                        | Intent::ExportDiagnostics
-                        | Intent::ReportIssue
-                )))
+            ))
         {
             return Task::none();
         }
@@ -290,7 +286,6 @@ impl App {
             })),
             Intent::ClaudePage => Message::Claude(C::ResultsPage(a.parse().unwrap_or(0))),
             Intent::ClaudeGuide => Message::Claude(C::Guide(match a {
-                "diagnostics" => Some(claude_view::Guide::Diagnostics),
                 "supplement" => Some(claude_view::Guide::Supplement),
                 _ => None,
             })),
@@ -298,13 +293,6 @@ impl App {
             Intent::ClaudeCopyScript => Message::Claude(C::CopySiteScript),
             Intent::ClaudeImport => Message::Claude(C::Import),
             Intent::ClaudeExport => Message::Claude(C::Export),
-            Intent::ClaudeKey => Message::Claude(C::ReputationKey(a.into())),
-            Intent::ClaudeSaveKey => Message::Claude(C::SaveReputationKey),
-            Intent::ClaudeAdditional => Message::Claude(C::Additional(match a {
-                "registration" => clash_of_rust::claude_check::additional::Kind::Registration,
-                "global-ping" => clash_of_rust::claude_check::additional::Kind::GlobalPing,
-                _ => clash_of_rust::claude_check::additional::Kind::Speed,
-            })),
             Intent::Appearance => Message::Appearance(match a {
                 "0" => ThemeMode::Dark,
                 "1" => ThemeMode::Light,

@@ -30,7 +30,7 @@ import tun_dns_fixture
 import build_inputs
 import ci_test_policy
 import proxy_benchmark
-import android_previews
+import compatibility
 import os
 import copy
 import importlib.util
@@ -376,6 +376,7 @@ class PreparedVmTests(unittest.TestCase):
                 report = Path(temporary)
                 guest = object.__new__(linux_ci.VmGuest)
                 guest.ssh = ['ssh', 'guest']
+                guest.directory = report / 'warm'
 
                 def transfer(command, **kwargs):
                     kwargs['stdout'].write(body)
@@ -385,6 +386,7 @@ class PreparedVmTests(unittest.TestCase):
 
                 with patch.object(linux_ci, 'REPORT', report), \
                         patch.object(linux_ci, 'guest_receipts') as receipts, \
+                        patch.object(guest, 'output', return_value='boot analysis\n'), \
                         patch.object(linux_ci.subprocess, 'run', side_effect=transfer):
                     guest.preserve()
                 self.assertEqual(json.loads((report/'focal-guest-report-status.json').read_text()),
@@ -394,6 +396,7 @@ class PreparedVmTests(unittest.TestCase):
                 if state == 'saved':
                     self.assertEqual(archive.read_bytes(), body)
                 receipts.assert_called_once_with(guest.ssh)
+                self.assertEqual((report / 'warm-cloud-init.txt').read_text(), 'boot analysis\n')
                 self.assertFalse(list(report.glob('guest-report-*')))
 
     def test_private_restore_is_atomic_and_preserves_existing_file_on_bad_bytes(self):
@@ -602,8 +605,10 @@ class PreparedVmTests(unittest.TestCase):
         client.restore.return_value = self.receipt(record)
         guest = MagicMock(kernel='5.4.0-216-generic',
                           architecture='aarch64' if arch == 'arm64' else 'x86_64',
-                          kvm=arch == 'x64', boot_seconds=0.1)
+                          kvm=arch == 'x64', boot_seconds=0.1,
+                          stage_seconds=0.1, inspect_seconds=0.1)
         guest.inspect.return_value = record['environment']
+        (Path(temporary) / 'source.tar.gz').touch()
         with patch.dict(os.environ, {'RUNNER_TEMP': temporary}, clear=False), \
                 patch.object(linux_ci, 'require_actions'), \
                 patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
@@ -618,6 +623,8 @@ class PreparedVmTests(unittest.TestCase):
                 patch.object(linux_ci, 'VmGuest', return_value=guest), \
                 patch.object(linux_ci, 'download') as download, \
                 patch.object(linux_ci, 'prepare_vm_guest') as prepare, \
+                patch.object(linux_ci, 'fetch_vm_package',
+                             return_value=Path(temporary)/'package.tar.gz'), \
                 patch.object(linux_ci, 'verify_vm_package') as application:
             yield client, guest, download, prepare, application
 
@@ -635,6 +642,66 @@ class PreparedVmTests(unittest.TestCase):
                 self.assertEqual(application.call_args.args[2], 123)
                 guest.preserve.assert_called_once()
                 guest.close.assert_called_once()
+
+    def test_vm_starts_candidate_download_before_private_lookup_and_boot(self):
+        from concurrent.futures import Future
+        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
+            client, _, _, _, application = context
+            downloaded = threading.Event()
+            def fetch(*args):
+                downloaded.set()
+                return Path(temporary) / 'package.tar.gz'
+            def restore(*args):
+                self.assertTrue(downloaded.wait(5), 'Package download did not overlap VM lookup')
+                return self.receipt(self.manifest())
+            client.restore.side_effect = restore
+            with patch.object(linux_ci, 'fetch_vm_package', side_effect=fetch):
+                linux_ci.vm_test(123)
+            self.assertIsInstance(application.call_args.kwargs['package_future'], Future)
+
+    def test_vm_candidate_download_failure_prevents_guest_tests(self):
+        from concurrent.futures import Future
+        failed = Future()
+        failed.set_exception(ValueError('Package receipt mismatch'))
+        guest = MagicMock()
+        timings = {}
+        with self.assertRaisesRegex(ValueError, 'receipt mismatch'):
+            linux_ci.verify_vm_package(guest, Path('/unused'), 123,
+                                       package_future=failed, timings=timings)
+        guest.remote.assert_not_called()
+        self.assertIn('package_remaining_wait', timings)
+
+    def test_vm_archive_omits_git_history_builds_and_other_architecture_indexes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / 'snapshot'
+            snapshot.mkdir()
+            (snapshot / 'inputs.json').write_text('{}')
+            for arch in ('x64', 'arm64'):
+                indexes = snapshot / 'vm-environment' / arch
+                indexes.mkdir(parents=True)
+                (indexes / 'index').write_text(arch)
+            with patch.dict(os.environ, {'BUILD_INPUTS_DIR': str(snapshot)}), \
+                    patch.object(linux_ci, 'host_arch', return_value='arm64'):
+                archive = linux_ci.vm_source_archive(root)
+            with tarfile.open(archive) as packed:
+                names = packed.getnames()
+                self.assertFalse(any(name.startswith(('.git/', 'crates/', 'dist/', 'target/'))
+                                     for name in names))
+                self.assertNotIn('dependency-snapshot/vm-environment/x64/index', names)
+                self.assertIn('dependency-snapshot/vm-environment/arm64/index', names)
+                self.assertIn('scripts/test-linux-tun.py', names)
+                self.assertIn('scripts/tun_dns_fixture.py', names)
+                source = packed.extractfile('source-commit.txt').read().decode().strip()
+                extracted = root / 'guest'
+                packed.extractall(extracted, filter='data')
+            environment = dict(os.environ, COR_LINUX_GUEST='true', GITHUB_ACTIONS='true')
+            actual = subprocess.check_output([
+                sys.executable, '-B', '-c',
+                "import sys; sys.path.insert(0, 'scripts'); "
+                "from workflow_artifacts import commit; print(commit())"],
+                cwd=extracted, env=environment, text=True).strip()
+            self.assertEqual(actual, source)
 
     def test_missing_service_capability_keeps_frozen_inputs_on_the_cold_path(self):
         with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
@@ -1012,6 +1079,9 @@ class BuildTests(unittest.TestCase):
             self.assertTrue(ci_test_policy.select([
                 'crates/client-ui/ui/pages/proxies.slint'
             ])['desktop_ui_tests'])
+            self.assertTrue(ci_test_policy.select([
+                'vendor/winit/src/platform_impl/linux/x11/resize_sync.rs'
+            ])['desktop_ui_tests'])
             for path in ('crates/client-runtime/src/update/install/terminal.rs',
                          'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py'):
                 self.assertTrue(ci_test_policy.select([path])['update_tests'])
@@ -1252,7 +1322,6 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         ui_checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
-        self.assertEqual(len(ui_checks), 10)
         self.assertTrue(any('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions'
                             in command for command in ui_checks))
         self.assertTrue(any('application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release'
@@ -1268,12 +1337,18 @@ class BuildTests(unittest.TestCase):
         focused = [command for command in ui_checks if
                    command[command.index('-p')+1] == 'clash-of-rust'
                    or 'mobile_lists' in command]
-        self.assertEqual(len(focused), 6)
+        for case in (
+                'application::ui_tests::protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change',
+                'application::ui_tests::protection_rejects_confirmations_that_would_save_or_delete',
+                'application::ui_tests::a_locked_rules_page_still_accepts_the_global_exit_confirmation',
+                'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
+            self.assertTrue(any(case in command for command in focused), case)
+        self.assertTrue(any('application_policy_form_respects_platform_protection_and_scrolls'
+                            in command for command in focused))
         self.assertTrue(all('--exact' in command for command in focused))
         for package, target in (('clash-client-ui', 'ui_models'),
                                 ('clash-desktop-ui', '--lib'),
-                                ('clash-client-core', 'api::'),
-                                ('clash-client-core', 'overview::tests::')):
+                                ('clash-client-core', '--lib')):
             self.assertTrue(any(command[command.index('-p')+1] == package and target in command
                                 for command in ui_checks), (package, target))
         with patch.dict(os.environ, {'COR_CI_DESKTOP_UI_TESTS': 'true'}), \
@@ -1302,8 +1377,10 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
-        self.assertEqual(len(checks), 2)
+        self.assertEqual(len(checks), 4)
         for package, case in (('clash-client-runtime', 'platform::linux_tun::'),
+                              ('clash-client-runtime', 'platform::host_network::'),
+                              ('clash-client-runtime', 'control::tests::'),
                               ('clash-cli', 'backend::tests::')):
             self.assertTrue(any(command[command.index('-p')+1] == package and case in command
                                 for command in checks), (package, case))
@@ -1898,6 +1975,19 @@ Private_Clean: 2 kB
         classified = memory_benchmark.memory_maps(text, '/private/path/program')
         self.assertEqual(classified['executable']['rss_bytes'],12288)
         self.assertNotIn('/private/path',json.dumps(classified))
+
+    def test_mapping_peaks_preserve_missing_samples_and_use_simultaneous_private_totals(self):
+        snapshots = [
+            {'roles': {'gui': {'heap': {'private_bytes': 100},
+                               'anonymous': {'private_bytes': 10}}}, 'unavailable_processes': 0},
+            {'roles': {}, 'unavailable_processes': 2},
+            {'roles': {'gui': {'heap': {'private_bytes': 20},
+                               'anonymous': {'private_bytes': 70}}}, 'unavailable_processes': 0},
+        ]
+        self.assertEqual(memory_benchmark.mapping_peaks(snapshots)['gui']['heap']['private_bytes'], 100)
+        self.assertEqual(memory_benchmark.mapping_peaks(snapshots)['gui']['anonymous']['private_bytes'], 70)
+        self.assertEqual(memory_benchmark.mapping_private_peaks(snapshots), {'gui': 110})
+        self.assertEqual(memory_benchmark.mapping_private_peaks([snapshots[1]]), {})
 
     def test_renderer_bundle_is_an_agent_before_launch_and_signed_inside_out(self):
         import macos_package as mac
@@ -3675,7 +3765,7 @@ runpy.run_path(str(script), run_name='__main__')
         apis = set(map(int, versions['ime_system_images']))
         apis.update(int(versions[name].split(';')[1].removeprefix('android-'))
                     for name in ('system_image', 'legacy_system_image'))
-        matrix = android_previews.matrix()['include']
+        matrix = compatibility.matrix()['include']
         self.assertEqual([item['api'] for item in matrix], sorted(apis))
         self.assertEqual(next(item['android'] for item in matrix if item['api'] == 27), '8.1')
         self.assertEqual(next(item['android'] for item in matrix if item['api'] == 31), '12')
@@ -3686,32 +3776,32 @@ runpy.run_path(str(script), run_name='__main__')
                   'repository': {'full_name': 'example/project'},
                   'head_repository': {'full_name': 'example/project'},
                   'status': 'completed', 'conclusion': 'success', 'event': 'pull_request'}
-        self.assertEqual(android_previews.validate_run(source, 'example/project', 'a' * 40), 123)
+        self.assertEqual(compatibility.validate_run(source, 'example/project', 'a' * 40), 123)
         for changes in ({'status': 'in_progress'}, {'conclusion': 'failure'}, {'head_sha': 'b' * 40},
-                        {'path': '.github/workflows/android-previews.yml'}, {'event': 'workflow_run'},
+                        {'path': '.github/workflows/android-compatibility.yml'}, {'event': 'workflow_run'},
                         {'head_repository': {'full_name': 'external/fork'}},
                         {'repository': {'full_name': 'other/project'}}, {'id': True}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
-                android_previews.validate_run(source | changes, 'example/project', 'a' * 40)
+                compatibility.validate_run(source | changes, 'example/project', 'a' * 40)
 
     def test_preview_source_requires_unique_live_same_run_inputs(self):
         source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': 'a' * 40,
                   'repository': {'full_name': 'example/project'},
                   'head_repository': {'full_name': 'example/project'},
                   'status': 'completed', 'conclusion': 'success', 'event': 'pull_request'}
-        artifacts = [{'name': name, 'expired': False,
+        artifacts = [{'id': number, 'name': name, 'expired': False, 'digest': 'sha256:' + 'c' * 64,
                       'workflow_run': {'id': 123, 'head_sha': 'a' * 40}}
-                     for name in ('build-android-x64', 'dependency-snapshot')]
+                     for number, name in enumerate(('build-android-x64', 'dependency-snapshot'), 1)]
         def client(items):
             return lambda path: {'artifacts': items} if '/artifacts?' in path else source
-        self.assertEqual(android_previews.resolve(client(artifacts), 'example/project', 'a' * 40, 123)
+        self.assertEqual(compatibility.resolve(client(artifacts), 'example/project', 'a' * 40, 123)
                          ['ci_run_id'], 123)
         for items in (artifacts[:1], artifacts + [artifacts[0]],
                       [artifacts[0] | {'expired': True}, artifacts[1]],
                       [artifacts[0] | {'workflow_run': {'id': 124, 'head_sha': 'a' * 40}}, artifacts[1]],
                       [artifacts[0] | {'workflow_run': {'id': 123, 'head_sha': 'b' * 40}}, artifacts[1]]):
             with self.subTest(items=items), self.assertRaises(ValueError):
-                android_previews.resolve(client(items), 'example/project', 'a' * 40, 123)
+                compatibility.resolve(client(items), 'example/project', 'a' * 40, 123)
 
     def test_android_preview_requires_all_pages_real_applications_and_matching_version(self):
         base = {'live': True, 'vpn': False, 'vpn_pending': False, 'detail': 0,
@@ -3888,6 +3978,35 @@ runpy.run_path(str(script), run_name='__main__')
             prepare.assert_not_called()
             self.assertTrue(run_test.call_args.kwargs['applications_only'])
 
+    def test_android_compatibility_reuses_ci_build_and_skips_screenshot_and_extended_tests(self):
+        for diagnostics, screenshots, expected in (
+                (False, False, [{'basic_only': True}]),
+                (False, True, [{'basic_only': True}, {'applications_only': True, 'diagnostics_only': False}]),
+                (True, False, [{'applications_only': False, 'diagnostics_only': True}]),
+                (True, True, [{'applications_only': False, 'diagnostics_only': True},
+                              {'applications_only': True}])):
+            with self.subTest(diagnostics=diagnostics, screenshots=screenshots), \
+                    tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / 'build'
+                source.mkdir()
+                (source / 'build.tar.gz').write_bytes(b'archive')
+                (source / 'build.tar.gz.sha256').write_text('a' * 64)
+                (root / 'aapt2').touch()
+                with patch.object(android_build, 'ROOT', root), \
+                        patch.object(android_build, 'sdk_tools', return_value=root), \
+                        patch.object(android_build, 'device_property', return_value='31'), \
+                        patch.object(android_build, 'sha256', return_value='a' * 64), \
+                        patch('workflow_artifacts.extract_build'), \
+                        patch.object(android_build, 'verify_build'), \
+                        patch.object(android_build, 'commit', return_value='b' * 40), \
+                        patch.object(android_build, 'test') as run_test:
+                    android_build.application_preview(source, 31, diagnostics, True, screenshots)
+                self.assertEqual(
+                    [{key: value for key, value in call.kwargs.items()
+                      if key not in ('apk', 'test_apk')} for call in run_test.call_args_list],
+                    expected)
+
     def test_application_preview_never_starts_network_tests_and_requires_exported_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -3919,6 +4038,57 @@ runpy.run_path(str(script), run_name='__main__')
                     '/sdcard/Android/data/org.clashofrust.android/files/application-preview',
                     root/'target/android-report/x64/applications-api-31',
                     required=True, name='application-preview')
+
+    def test_android_application_rules_preserve_consent_and_prior_network_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = root/'target/android-report/x64'
+            report.mkdir(parents=True)
+            (report/'instrumentation.txt').write_text('basic proxy and TUN evidence')
+            commands = []
+            def execute(command, **kwargs):
+                commands.append(list(map(str, command)))
+                return subprocess.CompletedProcess(command, 0, 'OK (1 test)', '')
+            with patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build, 'run', side_effect=execute), \
+                    patch.object(android_build.subprocess, 'run', side_effect=execute), \
+                    patch.object(android_build, 'device_property', return_value='31'), \
+                    patch('http.server.ThreadingHTTPServer'), \
+                    patch.object(android_build, 'start_test_log'), \
+                    patch.object(android_build, 'finish_test_log', return_value=('', None)):
+                android_build.test('x64', root/'app.apk', root/'test.apk', routing_only=True)
+            self.assertEqual((report/'instrumentation.txt').read_text(), 'basic proxy and TUN evidence')
+            self.assertTrue((report/'application-rules/runtime-status.json').is_file())
+            self.assertFalse(any('ACTIVATE_VPN' in command for command in commands))
+            instruments = [command for command in commands if 'instrument' in command]
+            self.assertEqual(len(instruments), 1)
+            self.assertIn('org.clashofrust.android.ProxyTunTest#applicationRoutingPersistsAndKeepsOtherAppsOnline',
+                          instruments[0])
+
+    def test_android_apk_validation_records_badging_without_test_mode_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = bytearray(120)
+            image[:6] = b'\x7fELF\x02\x01'
+            struct.pack_into('<H', image, 18, 62)
+            struct.pack_into('<Q', image, 32, 64)
+            struct.pack_into('<HH', image, 54, 56, 1)
+            struct.pack_into('<I', image, 64, 1)
+            struct.pack_into('<Q', image, 112, 16384)
+            apk = root/'app.apk'
+            with zipfile.ZipFile(apk, 'w') as archive:
+                for name in ('libclash_mobile.so', 'libgojni.so'):
+                    archive.writestr('lib/x86_64/'+name, image)
+            metadata = ("package: name='org.clashofrust.android' versionCode='123' versionName='1.2.3'\n"
+                        "sdkVersion:'26'\ntargetSdkVersion:'36'\n")
+            with patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build, 'sdk_tools', return_value=root), \
+                    patch.object(android_build, 'package_version', return_value='1.2.3'), \
+                    patch.object(android_build.subprocess, 'check_output', return_value=metadata):
+                result = android_build.validate_apk(apk, 'x64')
+            self.assertEqual(result['version_code'], 123)
+            self.assertEqual(result['native_bytes'], 240)
+            self.assertEqual((root/'target/android-report/x64/apk-badging.txt').read_text(), metadata)
 
     def test_android_runtime_report_separates_adjacent_app_and_system_ui_crashes(self):
         log=('E AndroidRuntime: FATAL EXCEPTION: main\n'
@@ -5326,6 +5496,125 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual(build.validate_version(version),version)
 
 
+class CompatibilityTests(unittest.TestCase):
+    source_commit = 'a' * 40
+    repository = 'example/project'
+
+    def client(self, suite, run_changes=None, jobs=None, receipt_changes=None,
+               bad_digest=False, expired=False, missing_input=False):
+        source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': self.source_commit,
+                  'repository': {'full_name': self.repository},
+                  'head_repository': {'full_name': self.repository},
+                  'status': 'completed', 'conclusion': 'success', 'event': 'push',
+                  'head_branch': 'main'}
+        run = source | {'id': 456, 'event': 'workflow_dispatch', 'run_attempt': 2,
+                        'head_branch': 'different-ref',
+                        'path': '.github/workflows/' + compatibility.WORKFLOWS[suite]}
+        run.update(run_changes or {})
+        inputs = [{'id': number, 'name': name, 'digest': 'sha256:' + 'b' * 64,
+                   'expired': False, 'workflow_run': {'id': 123, 'head_sha': self.source_commit}}
+                  for number, name in enumerate(compatibility.input_names(suite), 1)]
+        receipt = {'schema': 1, 'suite': suite, 'commit': self.source_commit,
+                   'ci_run_id': 123, 'run_id': 456, 'run_attempt': 2,
+                   'checks': ['system_proxy', 'tun'],
+                   'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs]}
+        receipt.update(receipt_changes or {})
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w') as archive:
+            archive.writestr('compatibility.json', json.dumps(receipt))
+        blob = stream.getvalue()
+        artifact = {'id': 789, 'name': compatibility.report_name(suite, 2), 'expired': expired,
+                    'size_in_bytes': len(blob),
+                    'digest': 'sha256:' + ('0' * 64 if bad_digest else hashlib.sha256(blob).hexdigest()),
+                    'workflow_run': {'id': 456, 'head_sha': self.source_commit}}
+        records = jobs if jobs is not None else [
+            {'name': name, 'status': 'completed', 'conclusion': 'success'}
+            for name in compatibility.required_jobs(suite) | {compatibility.REPORT_JOBS[suite]}]
+
+        def request(path, raw=False):
+            if path.startswith('/actions/workflows/'):
+                return {'workflow_runs': [run]}
+            if path == '/actions/runs/123':
+                return source
+            if path == '/actions/runs/456':
+                return run
+            if path.startswith('/actions/runs/123/artifacts?'):
+                return {'artifacts': inputs[:-1] if missing_input else inputs}
+            if path.startswith('/actions/runs/456/artifacts?'):
+                return {'artifacts': [artifact]}
+            if '/jobs?' in path:
+                return {'jobs': records, 'total_count': len(records)}
+            if path == '/actions/artifacts/789/zip' and raw:
+                return blob
+            self.fail('Unexpected compatibility request: ' + path)
+        request.repo = self.repository
+        return request, source, receipt
+
+    def test_release_accepts_only_complete_same_source_compatibility_receipts(self):
+        for suite in compatibility.WORKFLOWS:
+            client, source, _ = self.client(suite)
+            self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
+            for change in ({'status': 'in_progress'}, {'conclusion': 'failure'},
+                           {'head_sha': 'b' * 40}, {'event': 'pull_request'},
+                           {'head_repository': {'full_name': 'external/fork'}}):
+                with self.subTest(suite=suite, change=change), self.assertRaises(ValueError):
+                    selected, source, _ = self.client(suite, run_changes=change)
+                    compatibility.verified_suite(selected, source, suite, 456)
+
+    def test_receipt_rejects_expiry_corruption_missing_inputs_and_stale_identity(self):
+        for suite in compatibility.WORKFLOWS:
+            for changes in ({'bad_digest': True}, {'expired': True}, {'missing_input': True},
+                            {'receipt_changes': {'ci_run_id': 122}},
+                            {'receipt_changes': {'run_attempt': 1}},
+                            {'receipt_changes': {'schema': True}},
+                            {'receipt_changes': {'checks': ['system_proxy']}},
+                            {'receipt_changes': {'inputs': []}},
+                            {'receipt_changes': {'commit': 'b' * 40}}):
+                with self.subTest(suite=suite, changes=changes), self.assertRaises(ValueError):
+                    client, source, _ = self.client(suite, **changes)
+                    compatibility.verified_suite(client, source, suite)
+
+    def test_compatibility_never_accepts_missing_skipped_or_failed_jobs(self):
+        for suite in compatibility.WORKFLOWS:
+            jobs = [{'name': name, 'status': 'completed', 'conclusion': 'success'}
+                    for name in sorted(compatibility.required_jobs(suite)
+                                       | {compatibility.REPORT_JOBS[suite]})]
+            for selected in (jobs[:-1],
+                             [jobs[0] | {'conclusion': 'skipped'}, *jobs[1:]],
+                             [jobs[0] | {'conclusion': 'failure'}, *jobs[1:]]):
+                with self.subTest(suite=suite, jobs=selected), self.assertRaises(ValueError):
+                    client, source, _ = self.client(suite, jobs=selected)
+                    compatibility.verified_suite(client, source, suite)
+
+    def test_record_accepts_its_own_running_job_and_binds_exact_ci_inputs(self):
+        for suite in compatibility.WORKFLOWS:
+            jobs = [{'name': name, 'status': 'completed', 'conclusion': 'success'}
+                    for name in compatibility.required_jobs(suite)]
+            jobs.append({'name': compatibility.REPORT_JOBS[suite],
+                         'status': 'in_progress', 'conclusion': None})
+            client, _, receipt = self.client(suite, jobs=jobs)
+            with tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(compatibility, 'commit', return_value=self.source_commit), \
+                    patch.dict(os.environ, {'GITHUB_RUN_ID': '456', 'GITHUB_RUN_ATTEMPT': '2',
+                                            'GITHUB_STEP_SUMMARY': ''}):
+                output = Path(temporary) / 'compatibility.json'
+                compatibility.record(client, suite, 123, output)
+                self.assertEqual(json.loads(output.read_text()), receipt)
+
+    def test_workflow_jobs_and_inputs_cover_all_android_versions_and_both_ubuntu_architectures(self):
+        self.assertEqual(len(compatibility.required_jobs('android')), 12)
+        self.assertEqual(len(compatibility.required_jobs('ubuntu')), 3)
+        for suite in compatibility.WORKFLOWS:
+            workflow = (build.ROOT / '.github/workflows' / compatibility.WORKFLOWS[suite]).read_text()
+            self.assertIn('name: ' + compatibility.REPORT_JOBS[suite], workflow)
+            self.assertIn(f'name: {suite}-compatibility-attempt-', workflow)
+            self.assertIn('COR_CI_EXTENDED_TESTS:', workflow)
+            self.assertNotIn('pull_request_target:', workflow)
+        workflow = (build.ROOT / '.github/workflows/ci.yml').read_text()
+        self.assertNotIn('  ubuntu_20:', workflow)
+        self.assertEqual(len(release.CI_JOBS), 12)
+
+
 class ReleaseTests(unittest.TestCase):
     commit = 'a' * 40
     version = '0.4.11'
@@ -5495,6 +5784,7 @@ class ReleaseTests(unittest.TestCase):
              patch.object(release,'credential',return_value='test-only-token'), \
              patch.object(release,'GitHub'), patch.object(release,'git',return_value=self.commit), \
              patch.object(release,'verified_run',return_value={'id':77,'head_branch':'main','html_url':'https://example.test/ci'}), \
+             patch.object(compatibility,'verified_suite'), \
              patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
              patch.object(release,'verified_package_run'), patch.object(release,'download_package_files',return_value={}), patch.object(release,'publish') as publishing:
             release.main()
@@ -5772,10 +6062,13 @@ class ReleaseTests(unittest.TestCase):
                  patch.object(release,'verified_run',return_value={'id':77}), \
                  patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
                  patch.object(release,'build_artifacts'),patch.object(release,'candidate_artifacts'), \
+                 patch.object(compatibility,'verified_suite') as verify_compatibility, \
                  patch.object(release,'download_package_files') as download, \
                  patch.object(release,'publish') as publishing,patch.dict(build.os.environ,{'GITHUB_OUTPUT':str(output)}):
                 release.main()
                 download.assert_not_called();publishing.assert_not_called()
+                self.assertEqual([call.args[2] for call in verify_compatibility.call_args_list],
+                                 ['android', 'ubuntu'])
             self.assertIn('commit='+self.commit,output.read_text())
             self.assertIn('ci_run_id=77',output.read_text())
 

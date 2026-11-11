@@ -239,7 +239,8 @@ export component Badge inherits Rectangle {
     // 0 accent, 1 success, 2 warning, 3 danger, 4 neutral.
     in property <int> tone: 0;
     in property <length> width-limit: 320px;
-    height: max(22px, Theme.detail-size * 1.4 + 4px);
+    in property <length> font-size: Theme.detail-size;
+    height: max(22px, root.font-size * 1.4 + 4px);
     width: min(label.preferred-width + 18px, root.width-limit);
     horizontal-stretch: 0;
     border-radius: 5px;
@@ -249,6 +250,7 @@ export component Badge inherits Rectangle {
         width: parent.width;
         height: parent.height;
         text: root.text;
+        font-size: root.font-size;
         color: root.tone == 1 ? Theme.success : root.tone == 2 ? Theme.warning : root.tone == 3 ? Theme.danger : root.tone == 4 ? Theme.secondary : Theme.accent;
         horizontal-alignment: center;
     }

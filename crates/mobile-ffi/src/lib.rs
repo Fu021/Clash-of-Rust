@@ -9,6 +9,7 @@ use core::{
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
+pub mod application_rules;
 pub mod overview;
 
 pub trait NativeHost: Send + Sync + 'static {
@@ -222,12 +223,13 @@ impl Session {
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
         let raw = core::config::read_profile(&self.store.profile_path(id)?)?;
         let rules = ProfileRules::for_profile(settings, id, false);
-        android_safe_config(&core::config::runtime_config_with_rules(
+        let raw = android_safe_config(&core::config::runtime_config_with_rules(
             &raw,
             settings,
             Some(&rules),
             false,
-        )?)
+        )?)?;
+        self.application_runtime(&raw, settings, id)
     }
     pub fn initialize(&mut self) -> Result<()> {
         let native_running = self.native.request(json!({"op":"state"}))?["running"] == true;
@@ -319,11 +321,17 @@ impl Session {
         Ok(manifest)
     }
     pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
-        self.settings.require_mutable()?;
+        self.settings.require_settings_change(&settings)?;
         ensure!(
             settings.claude_protection == self.settings.claude_protection,
             "请使用 Claude 保护开关"
         );
+        if self.settings.presentation_change_only(&settings) {
+            settings.validate()?;
+            self.store.save_settings(&settings)?;
+            self.settings = settings;
+            return Ok(());
+        }
         self.apply_settings(settings)
     }
 
@@ -631,14 +639,13 @@ impl Session {
         let old_raw = active.then(|| self.runtime(&self.settings)).transpose()?;
         let new_runtime = if active {
             let rules = ProfileRules::for_profile(&self.settings, &id, false);
-            Some(android_safe_config(
-                &core::config::runtime_config_with_rules(
-                    &raw,
-                    &self.settings,
-                    Some(&rules),
-                    false,
-                )?,
-            )?)
+            let runtime = android_safe_config(&core::config::runtime_config_with_rules(
+                &raw,
+                &self.settings,
+                Some(&rules),
+                false,
+            )?)?;
+            Some(self.application_runtime(&runtime, &self.settings, &id)?)
         } else {
             None
         };
@@ -747,6 +754,7 @@ impl Session {
         let active = self.settings.active_profile.as_deref() == Some(id);
         let mut settings = self.settings.clone();
         settings.rule_profiles.remove(id);
+        settings.application_rules.remove(id);
         if active {
             let default = self
                 .profiles
@@ -1984,9 +1992,9 @@ mod tests {
         assert!(session.set_fake_ip(false).is_err());
         let error = session.apply_rules().unwrap_err();
         assert!(error.to_string().contains("请先关闭 Claude 保护"));
-        let error = session
-            .commit_settings(before_settings.clone())
-            .unwrap_err();
+        let mut changed_network = before_settings.clone();
+        changed_network.ipv6 = !changed_network.ipv6;
+        let error = session.commit_settings(changed_network).unwrap_err();
         assert!(error.to_string().contains("请先关闭 Claude 保护"));
         assert_eq!(
             serde_json::to_value(&session.settings).unwrap(),
@@ -2009,6 +2017,16 @@ mod tests {
             std::fs::read(&files[3]).unwrap(),
             before_files[3],
             "All profile edits must leave the protected runtime unchanged"
+        );
+        let mut appearance = session.settings.clone();
+        appearance.theme_mode = Some(core::config::ThemeMode::Light);
+        appearance.accent_color = core::config::AccentColor::Blue;
+        session.commit_settings(appearance.clone()).unwrap();
+        assert_eq!(std::fs::read(&files[3]).unwrap(), before_files[3]);
+        assert_eq!(session.store.load_settings().unwrap(), appearance);
+        assert_eq!(
+            session.settings.claude_protection,
+            before_settings.claude_protection
         );
         let mode = session
             .settings

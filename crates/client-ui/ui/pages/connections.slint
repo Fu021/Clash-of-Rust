@@ -49,7 +49,9 @@ export component ConnectionsPage inherits PageSurface {
         }
         Panel {
             vertical-stretch: 1;
+            clip: true;
             VerticalLayout {
+                padding: 1px;
                 spacing: 0px;
                 table-header := Rectangle {
                     height: max(44px, Theme.detail-size * 2.6 + 8px); background: Theme.surface;

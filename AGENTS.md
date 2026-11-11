@@ -1,13 +1,13 @@
 # Agent 开发指南
 
-本文件只保留跨任务的约束与文档入口。用户当前任务授权与明确约束优先于本文。
+仅保留跨任务约束与入口；用户当前授权与明确要求优先。
 
 ## 文档与上下文
 
 - 按需查 [README](README.md)、[贡献要求](.github/CONTRIBUTING.md)、[开发指南](docs/development.md)、[工作流索引](docs/workflows.md)与[复盘索引](docs/agent-failures/README.md)。
 - 用 `rg` 定位关键词和调用者，按需读取；不重读未变化内容或重复输出大段日志。事实保留一处权威说明，其他文档链接引用。
 - 文档记录通用行为、修复结论与验证边界，不维护本仓库 issue 编号或处理状态；需要时查询 GitHub。保留解释实现和补丁所必需的上游来源。
-- 删除重复与过时说明，长文按任务拆分；本文件建议不超过 6 KiB，普通操作文档超过约 10 KiB 时复查拆分必要性。保留有效约束、证据、来源与许可证。
+- 文档冲突、精炼拆分及目录职责按[结构复查](docs/structure-review.md)处理；保留有效约束、证据、来源与许可证，整体重构先提交方案供维护者批准。
 - [最近复盘](docs/agent-failures/reviews.md)最多 20 条，每条只记结论、证据和验证范围；稳定经验归入主题页，已有模式只链接，不堆任务流水。
 
 ## 开发约束
@@ -33,10 +33,10 @@
 
 - 修复与新功能直接在 `main` 完成，确认远端状态再推送 `origin/main`；纯文档留本地随下次功能更新推送，不单独触发 CI/打包。用户指定保留分支、暂不推送等要求优先。
 - 推送前复查 diff、验证与工作区。禁止强推 `main`。分叉、冲突、凭据或权限异常时保留现场并说明阻塞。
-- 推送后跟进最终提交 CI，失败则修复并跟进新运行；通过后完成不发布打包及安装验证。正式版发布流程完成同提交验证后，不再重复不发布打包。不以运行中收尾，按[历史耗时](docs/workflows.md#actions-跟进节奏)低频查询：CI 约 10 分钟首查、之后 5 分钟；打包约 7 分钟首查、之后 2～3 分钟，排队或长步骤延长。runner 未分配导致失败时自动重试失败 job，无需再次确认。
+- 推送后跟进最终提交 CI，失败则修复并跟进新运行；通过后分别完成同提交 Android、Ubuntu 兼容验证，再做不发布核验。正式版发布流程完成同提交验证后，不再重复不发布打包。不以运行中收尾，按[历史耗时](docs/workflows.md#actions-跟进节奏)低频查询：CI 约 10 分钟首查、之后 5 分钟；打包约 7 分钟首查、之后 2～3 分钟，排队或长步骤延长。runner 未分配导致失败时自动重试失败 job，无需再次确认。
 - 最终合并前按[脚本说明](scripts/README.md)核对全仓调用关系，合并重复入口、删除弃用脚本并同步调用者。
 - [Publish Release](docs/workflows/release.md)默认用 `check_only=true`，复用同提交成功 CI 与依赖快照，核验附件及 Release 未变；流程结束前不推进来源分支。公开发布、签名、额外工作流、现有 Actions 之外的私网访问及版本调整须用户明确授权。
-- 常驻 **CI、Publish Release、Memory Benchmark**；维护者另已授权手动 [Android Application Previews](docs/workflows/android-previews.md)，只复用成功 CI 的 APK 采集多版本应用列表截图，不测试 VPN/流量。新增其他含临时工作流仍须维护者同意。源码、候选安装包及安装后验证归 CI，真实集成聚焦代理/TUN；发布复用验收结果，仅保留发行签名后的必要验证与公开发布。
+- 常驻 **CI、Publish Release、Memory Benchmark**；维护者另已授权手动 [Android Compatibility](docs/workflows/android-compatibility.md) 与 [Ubuntu Compatibility](docs/workflows/ubuntu-compatibility.md)，复用同提交成功 CI 产物验证基础代理/TUN，发布前两者必须分别通过；Android 截图和诊断为可选扩展。新增其他含临时工作流仍须维护者同意。源码与候选包归 CI；发布复用验收结果，仅保留发行签名后的必要验证与公开发布。
 - `.github/` 变更及外部 fork 每次运行须维护者审核；不绕过隔离、网络、Secrets 限制或索取私网凭据，不擅自取消他人运行、删除历史或附件。弃用工作流须删除文件并由维护者在 GitHub 禁用。
 - 工作流不修改或上传 `.github/cache-server/README.txt`，不发送 agent 协作请求或读取 agent 反馈。仅在需要用户介入或转达时汇报必要的问题、证据及验收条件，不传达常规状态；服务实现、部署及文档由服务端 agent 维护，见[缓存服务边界](docs/workflows/cache-server.md)。
 

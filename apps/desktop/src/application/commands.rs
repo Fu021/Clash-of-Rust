@@ -21,7 +21,6 @@ pub(super) enum Action {
     Ipv6(bool),
     Udp(bool),
     ClaudeProtection(bool),
-    ReputationKey(Option<String>),
     Autostart(bool),
     DelayInterval(u32),
     SubscriptionInterval(u32),
@@ -49,10 +48,16 @@ impl Action {
         matches!(
             self,
             Self::Refresh
+                | Self::Appearance(_)
+                | Self::Accent(_)
+                | Self::TextScale(_)
+                | Self::TraySpeed(_)
+                | Self::NodeSort(_)
                 | Self::LoadRules(_)
                 | Self::RefreshTray
                 | Self::OpenProfiles
                 | Self::Delay(_)
+                | Self::ClearLogs
                 | Self::ExportLogs
                 | Self::ClaudeProtection(false)
         )
@@ -347,14 +352,6 @@ pub(super) async fn execute(
                 }
                 .into())
             }
-            Action::ReputationKey(ip_reputation_key) => {
-                let settings = Settings {
-                    ip_reputation_key,
-                    ..engine.settings.clone()
-                };
-                engine.save_settings(settings).await?;
-                Ok("检测服务设置已保存；密钥不会写入报告".into())
-            }
             Action::Autostart(enabled) => {
                 tokio::task::spawn_blocking(move || platform::set_autostart(enabled)).await??;
                 Ok(if enabled {
@@ -541,17 +538,19 @@ mod synchronization_tests {
             Action::OpenProfiles,
             Action::Delay("node".into()),
             Action::ExportLogs,
+            Action::ClearLogs,
             Action::ClaudeProtection(false),
+            Action::Appearance(clash_client_core::config::ThemeMode::Dark),
+            Action::Accent(clash_client_core::config::AccentColor::Blue),
+            Action::TextScale(125),
+            Action::TraySpeed(true),
+            Action::NodeSort(proxy_order::NodeSort::Name),
         ] {
             assert!(allowed.allowed_during_protection());
         }
         for blocked in [
             Action::Start,
             Action::SavePorts(7897),
-            Action::Appearance(clash_client_core::config::ThemeMode::Dark),
-            Action::Accent(clash_client_core::config::AccentColor::Blue),
-            Action::TextScale(125),
-            Action::TraySpeed(true),
             Action::UpdatePrereleases(true),
             Action::DnsOverride(true),
             Action::FakeIp(true),
@@ -567,18 +566,15 @@ mod synchronization_tests {
                 "https://example.test".into(),
             ),
             Action::UpdateProfile("fixture".into()),
-            Action::ReputationKey(Some("fixture".into())),
             Action::Autostart(true),
             Action::DelayInterval(30),
             Action::SubscriptionInterval(360),
             Action::UpdateInterval(360),
-            Action::NodeSort(proxy_order::NodeSort::Name),
             Action::Mode("rule".into()),
             Action::ProxyMode(ProxyMode::Tun),
             Action::Select("GLOBAL".into(), "DIRECT".into()),
             Action::Close("fixture".into()),
             Action::CloseAll,
-            Action::ClearLogs,
             Action::ClaudeProtection(true),
         ] {
             assert!(!blocked.allowed_during_protection());

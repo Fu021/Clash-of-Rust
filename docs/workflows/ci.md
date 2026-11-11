@@ -28,9 +28,9 @@ macOS x64 上一轮构建全部测试程序耗时 20 分 32 秒，本轮只准�
 
 工作流已移除输入法专项的参数、APK 中转和多版本矩阵。保留 `scripts/android.py test --arch x64 --ime-only` 等手工调查脚本与既有证据，只有维护者明确要求重新调查时才使用，不因版本升级或 loop 自动恢复到 CI；缺图、日志边界丢失和输入法崩溃仍使手工专项失败。历史十版本范围、证据要求及 MIUI/实机边界见[输入法专页](../agent-failures/android-ime.md#当前修复与待验收)。
 
-### Android 界面预览
+### 发布前独立兼容验证
 
-维护者授权的独立 [Android UI Previews](android-previews.md) 复用成功 CI 的 x64 APK，按安卓版本采集主要页面、分流列表及手机、平板尺寸截图。它不自动随常规 CI 启动，不保存分流、不申请 VPN、不验证流量或键盘；常规 Android job 的基础代理/TUN 范围保持独立。版本范围、触发方法、来源门禁与附件见该专页。
+常规 CI 已移出 Ubuntu 20.04 双架构 VM，保留 Ubuntu latest，必需 job 从 14 项减至 12 项。成功后手动运行 [Android Compatibility](android-compatibility.md) 与 [Ubuntu Compatibility](ubuntu-compatibility.md)，复用同提交、同源 CI 候选包，分别验证 Android 8.0～16 及 Ubuntu 20.04 的基础代理/TUN；发布前两套均必需。Android 默认不截图，截图和诊断专项显式选择。两套可并行，不重新编译，大 VM 镜像仅存私网，发布自动核对[兼容性回执](release.md#兼容性发布门禁)。
 
 ### 桌面代理回环测速
 
@@ -68,7 +68,7 @@ Go 审计只查询声明的模块路径，不执行更新。Android 公共任务
 
 CI 的 Linux 编译和 Ubuntu 兼容 job 通过 `.github/actions/linux-download-cache` 准备独立 Python 与原始云镜像，冻结上游校验值；Publish Release 不再重复准备这些环境。Linux CI 在宿主先准备并校验内核与 Geo 文件，再将工作区挂载给不含私网凭据的构建容器；容器再次核验已有资源。`.github/actions/linux-build-cache` 在编译前校验或冷构建固定 digest 的 Docker 编译环境，并单独保存 GitHub 缓存；不包含 VM、应用或运行状态。详细身份、校验和保留边界见[覆盖清单](cache-coverage.md)。
 
-共享输入阶段还会分别冻结 [Ubuntu 20.04 ARM64 和 x64 预装镜像环境](prepared-vm-images.md)的包版本、原包和签名索引，供同提交安装验证复用。此阶段只解析官方环境，不依赖私网能力，不启动 VM 或制作镜像；CI 的 VM job 再按 health 的 `vm_limits` 检查本机架构，未就绪时冷准备。镜像始终只存私网，不计入 GitHub 编译缓存；历史模板就绪不能替代本提交的恢复和安装验证。
+共享输入阶段仍冻结 [Ubuntu 20.04 双架构预装环境](prepared-vm-images.md)的包版本、原包和签名索引，供独立 Ubuntu Compatibility 复用，不因拆分改用实时依赖。该阶段只解析官方环境，不依赖私网能力、不启动 VM；兼容 job 按 health 的 `vm_limits` 检查本机架构，未就绪时冷准备。镜像始终只存私网；历史模板就绪不能替代本提交验收。
 
 Python 和原始云镜像使用官方优先、原包私网回退，全部新导入共用 `upstream/files`；旧类别只作为服务端迁移候选。虚拟机下载目录只在本 job 使用，不回传其目录快照。
 
@@ -79,7 +79,7 @@ Python 和原始云镜像使用官方优先、原包私网回退，全部新导�
 修改前后的入口、状态、坐标及进程生命周期审查见[测试契约](test-contracts.md)。推送前核对受影响的全部测试调用者，不以预览或上一提交通过结果代替当前验收。
 
 - 六种桌面平台使用 Release profile 完成格式检查、桌面相关包的 Clippy 和发行构建，常规只额外编译 `core_integration` 供代理/TUN 检查；扩展模式构建并运行全部桌面源码测试。桌面范围排除移动宿主，Android 三个 ABI job 自行执行移动相关 Clippy、Android 宿主单元测试及实际 Slint/Java/Go 构建；扩展模式追加共享移动运行时的源码测试。iOS 不参与构建。
-- Linux x64/ARM64 在同一轮冻结的 Ubuntu 20.04 镜像中构建；独立 Python 与镜像按上游校验值固定。逐个检查发行 ELF 与集成测试程序的依赖和 `GLIBC` 符号上限 2.31，将镜像、系统依赖及文件摘要写入产物；基线安装检查 `pkexec` 与终端代理均可用。镜像共享宿主内核，旧内核的安装和代理/TUN 验证由同轮 CI 虚拟机完成，GUI 按需检查，见[安装验收](install-validation.md)。
+- Linux x64/ARM64 在同一轮冻结的 Ubuntu 20.04 镜像中构建；独立 Python 与镜像按上游校验值固定。逐个检查发行 ELF 与集成测试程序的依赖和 `GLIBC` 符号上限 2.31，将镜像、系统依赖及文件摘要写入产物；基线安装检查 `pkexec` 与终端代理均可用。容器共享宿主内核，旧内核的安装及代理/TUN 验证由独立 Ubuntu Compatibility 完成，见[安装验收](install-validation.md)。
 - 单元测试仍保留配置、网络、认证脱敏、状态恢复、列表和界面交互等回归，完整集合在扩展模式执行。界面路径变化时，Linux x64 另执行窗口缩放、快捷规则草稿、内联强调色、通知倒计时及应用分流四尺寸滚动的五项定向回归，同时核对共享模型、窗口桥接及控制 API／概览探测源码测试，不增加完整桌面测试矩阵。Rust panic 保留调用栈，Linux 基线构建容器也传递 `RUST_BACKTRACE=1`；扩展测试使用 `--no-fail-fast`，失败不能进入候选包生成。Slint Viewer 预览不能代替生成 Rust 后的布局回归。
 - 更新或共享配置路径变化时，Linux x64 另执行共享更新调度、配置保存与 CLI／GUI 更新设置回归；覆盖 0 关闭、旧配置默认值、手动检查、非法输入及失败保留草稿。仍复用现有源码单元测试，不增加模拟器或临时工作流。
 - 真实系统集成测试只运行系统代理与 TUN：验证代理设置写入、HTTP 转发、TUN 接管无显式代理的流量、模式恢复及关闭清理。Linux 使用隔离网络命名空间和 GSettings 内存后端；macOS 使用真实 launchd 网络助手；Windows 先注册服务，再以普通用户令牌运行代理/TUN、恢复和服务清理检查。
@@ -101,6 +101,6 @@ macOS 失败日志、系统与网络状态、崩溃报告保存在 `macos-ci-rep
 
 ## 审核与缓存边界
 
-测速控制器、共享诊断和 Android 宿主相关改动由 `android_diagnostics_tests` 选择真实 APK 的测速／诊断导出回归，不在每次文档或无关改动时重跑。场景、故障夹具及多版本专项边界见[Android 测速与诊断专项](android-previews.md#测速与诊断专项)。
+测速控制器、共享诊断和 Android 宿主相关改动由 `android_diagnostics_tests` 选择真实 APK 的测速／诊断导出回归，不在每次文档或无关改动时重跑。场景、故障夹具及多版本专项边界见[Android 测速与诊断专项](android-compatibility.md#测速与诊断专项)。
 
 外部 fork 每次运行须维护者批准，不绕过隔离、网络或 Secrets 限制；贡献者使用自己的工具链和缓存，不索取维护者私网凭据。附件保留 3 天，缓存沿用现有版本身份、校验与容量预算；新增工作流先经维护者同意，不擅自取消他人运行或删除 Actions 历史、附件与缓存。

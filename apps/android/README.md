@@ -1,6 +1,6 @@
 # Android 宿主
 
-版本取自根 [Cargo.toml](../../Cargo.toml) workspace，[分支规则](../../docs/development.md#分支版本)统一维护。最低安装版本 Android 8.0（API 26），提供 ARM64、ARMv7 和 x86_64 包；iOS 仅为宿主占位。
+版本取自根 [Cargo.toml](../../Cargo.toml) workspace，[版本规则](../../docs/development.md#版本管理)统一维护。最低安装版本 Android 8.0（API 26），提供 ARM64、ARMv7 和 x86_64 包；iOS 仅为宿主占位。
 
 ## 兼容性与验证范围
 
@@ -8,7 +8,7 @@
 
 输入法兼容性、显示时序、键盘高度同步与验证边界统一见[输入法专题](../../docs/agent-failures/android-ime.md)。模拟器现象不能直接证明厂商 ROM 的故障原因，也不能以部分系统通过代替完整兼容验收。
 
-常规 CI 与打包只自动运行代理/TUN 相关集成验证，不重复已完成的键盘与多版本截图专项；再次调查须维护者明确要求。按需[应用列表截图](../../docs/workflows/android-previews.md)覆盖 Android 8.0、8.1、9～16 及 12L；截图本身不证明 VPN 或系统稳定性。本轮另经授权完成这 11 个版本的[真实应用分流专项](../../docs/android-application-routing.md#范围与验证)，其临时多版本流量入口已移除。厂商 ROM、ARM 实机、真实网络、休眠与重启仍需单独验收，见[验证范围](../../docs/workflows/ci.md#ci)。
+常规 CI 与打包集成聚焦代理/TUN，按变更选择分流与诊断专项，不重复键盘或多版本截图。[Android Compatibility](../../docs/workflows/android-compatibility.md) 复用同提交成功 CI，在 Android 8.0～16 共 11 版本默认验证基础代理/TUN，发布前必需；应用列表截图与全版本诊断显式按需选择。历史[真实分流专项](../../docs/android-application-routing.md#范围与验证)不替代新提交验收；厂商 ROM、ARM 实机、真实网络、休眠与重启仍需单独验证。
 
 ## 结构
 
@@ -39,7 +39,7 @@ Geo 与安装包下载复用[共享下载约束](../../docs/development.md#修�
 
 下拉系统快捷设置并编辑磁贴，可添加 Clash of Rust 开关；首次需要 VPN 授权时会进入应用，后续直接连接/断开，包括应用进程已退出的情况；磁贴实时更新连接状态。
 
-手动测速使用自动策略组自己的测试地址，完成后让内核按该组配置重新选优；测速结果直接更新列表。Claude 保护开启时整个客户端只读，不能切换节点、编辑、更新或删除任何订阅；运行配置冻结自动组，关闭后恢复原订阅的自动策略。订阅校验由共享会话执行。
+手动测速使用自动策略组自己的测试地址，完成后让内核按该组配置重新选优；测速结果直接更新列表。Claude 保护开启时按[操作权限](../../docs/claude-protection.md#操作权限)锁定网络修改，不能切换节点、编辑、更新或删除订阅；主题、强调色、字号和浏览仍可用。运行配置冻结自动组，关闭后恢复原订阅的自动策略。订阅校验由共享会话执行。
 
 Claude 保护先取得系统 VPN 授权，再应用保护配置；等待授权或取消时保留原网络和 DNS，已取消操作不会因迟到的授权而连接。启用时固定当前具体节点，临时启用 VPN、IPv6、UDP、代理加密 DNS 与实时拦截，并覆盖应用分流；关闭后恢复原设置与应用分流。连接就绪后在有限时间内重试同一代理加密 DNS 路径，冷启动尚未完成时不立即判定失败。网络或授权失败会恢复；恢复记录持久化，后台服务冷启动先恢复未完成的配置事务。图标通知测试与拦截通知使用相同系统通知通道。
 
@@ -51,7 +51,7 @@ Fake-IP 开关、来源与还原见[配置说明](../../docs/cli/maintenance.md#
 
 VPN 重建先建立新接口，等待系统网络回调确认新接口、地址与默认路由就绪后，再交接内核收包栈并报告连接完成，最后释放旧接口；授权仍有效时，新接口创建失败会保留原连接。
 
-A÷检测支持网络、DNS、WebRTC 和自动浏览器采样，可在检测选项中保存/清除可选的 ipapi.is 密钥，检测中可停止，保留上次完成的报告。离开检测页会取消当前采样并忽略迟到结果；开启 Claude 保护成功后自动检测，关闭或启动恢复时不自动打开浏览器。Android 不扫描 Claude Desktop、CLI 或桌面项目文件，也不提供桌面终端命令。保护线程停止或拦截失败等明确错误仍进入风险；控制接口实际恢复后清除暂时错误，保留历史异常记录。
+A÷检测支持网络、DNS、WebRTC 和自动浏览器采样，无需开启 Claude 保护。IP 注册与全球连通性自动并入检测，信誉使用公共查询，不提供密钥或带宽测速入口；报告标题、说明及来源与桌面共用规则，用途与隐私边界见[扩展检测](../../docs/claude-region-detection.md#扩展检测)。检测中可停止，保留上次完成的报告。离开检测页会取消当前采样并忽略迟到结果；开启 Claude 保护成功后自动检测，关闭或启动恢复时不自动打开浏览器。Android 不扫描 Claude Desktop、CLI 或桌面项目文件，也不提供桌面终端命令。保护线程停止或拦截失败等明确错误仍进入风险；控制接口实际恢复后清除暂时错误，保留历史异常记录。
 
 内核运行时按设置页“计划任务”的分钟间隔自动检查更新，默认 360，0 关闭；旧配置保留默认值，Claude 保护期间暂停，见[自动检查更新](../../docs/workflows/versions.md#自动检查更新)。也可手动检查；默认仅正式版，可开启“包含预发布版本”，安装预发布版前需阅读风险提示并等待 3 秒确认，确认页以红字提醒无法保证在保留数据的情况下恢复正式版。两个通道均只提示比本地更高的版本，不提供“返回正式版”或降级安装入口，见[更新通道](../../docs/workflows/versions.md#版本与更新通道)。Android 仍会拒绝较低 versionCode 的 APK；应用不会自动卸载或删除数据。按当前架构下载并验证 SHA256、包名、签名、版本与架构后交给 Android 安装界面确认，首次安装需允许应用安装更新。APK 保存在应用缓存，升级完成后清理。前台服务支持系统回收后的恢复，可在系统 VPN 设置中启用 Always-on VPN；厂商额外的电池限制可通过“电池与后台运行”调整，强行停止应用仍会中断连接。
 
@@ -75,7 +75,7 @@ CI 在三个 ABI 编译、执行 Gradle lint，生成候选 APK、SHA256 及安�
 
 开发 CI 使用固定签名：`ANDROID_DEV_KEYSTORE`（base64 PKCS12）与 `ANDROID_DEV_KEYSTORE_PASSWORD`，别名 `cor-android-dev`。这些值只存 Actions Secrets；私钥不进入仓库或附件。无密钥的外部 PR 使用临时测试签名。正式发布另需 `ANDROID_KEYSTORE`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`，签名不同时不能直接覆盖已有 APK。
 
-Slint 界面可用 `python3 scripts/preview-slint.py --mobile --platform android --check` 静态检查；预览固定数据不代替真实 VPN 测试。多版本页面与真实应用列表使用按需 [Android UI Previews](../../docs/workflows/android-previews.md)，复用成功 CI 的 APK，仅采集界面截图。
+Slint 界面可用 `python3 scripts/preview-slint.py --mobile --platform android --check` 静态检查；固定数据预览不代替真实 VPN 测试。多版本页面与真实应用列表在 [Android Compatibility](../../docs/workflows/android-compatibility.md) 选择 `capture_screenshots`，复用成功 CI 的 APK。
 
 ## 连接超时排查
 

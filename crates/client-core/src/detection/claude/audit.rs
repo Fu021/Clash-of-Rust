@@ -68,6 +68,23 @@ pub struct Finding {
     pub reason: String,
     pub advice: String,
 }
+impl Finding {
+    pub fn display_title(&self) -> &str {
+        if self.field.trim().is_empty() {
+            "项目配置"
+        } else {
+            self.field.trim()
+        }
+    }
+    pub fn explanation(&self) -> String {
+        [("说明", self.reason.trim()), ("建议", self.advice.trim())]
+            .into_iter()
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(label, value)| format!("{label}：{value}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Audit {
     pub projects: usize,
