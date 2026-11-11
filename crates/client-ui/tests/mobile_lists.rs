@@ -24,6 +24,7 @@ slint::slint! {
     import { MobileData } from "../ui/mobile/shared/state.slint";
     import { MobileSubscriptions, MobileConnections, MobileRules, RulesRow } from "../ui/mobile/shared/pages.slint";
     import { MobileModal } from "../ui/mobile/shared/details.slint";
+    import { AppearanceSettings } from "../ui/mobile/shared/settings.slint";
     import { AndroidSurface } from "../ui/mobile/android/app.slint";
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
     import { AndroidApplicationPolicies } from "../ui/mobile/android/application-policies.slint";
@@ -185,9 +186,20 @@ slint::slint! {
         preferred-width: 393px; preferred-height: 852px;
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> protection-pending <=> MobileData.protection-pending;
-        in-out property <bool> modal <=> MobileView.modal;
         in-out property <int> detail <=> MobileView.detail;
         MobileModal { width: parent.width; height: parent.height; }
+    }
+
+    export component AppearanceSettingsProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> protection-pending <=> MobileData.protection-pending;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <bool> opened;
+        VerticalLayout {
+            alignment: start; padding: 12px;
+            if root.opened: AppearanceSettings { }
+        }
     }
 
     export component SettingsScrollProbe inherits Window {
@@ -2421,7 +2433,6 @@ fn mobile_accent_picker_remains_usable_while_protected() {
         advance(&clock, Duration::ZERO);
         frame(&adapter, size.width as usize, size.height as usize);
     };
-    probe.set_modal(true);
     probe.set_detail(11);
     for (protected, pending) in [(false, false), (false, true), (true, false), (true, true)] {
         probe.set_protected(protected);
@@ -2446,5 +2457,93 @@ fn mobile_accent_picker_remains_usable_while_protected() {
             &[(MobileIntent::Accent, "2".to_owned())],
             "protected={protected}, pending={pending}"
         );
+    }
+}
+
+#[test]
+fn mobile_appearance_settings_reopen_with_geometry_and_protection() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = AppearanceSettingsProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, subject, _| {
+            recorded.borrow_mut().push((intent, subject.to_string()));
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.show().unwrap();
+    let render = || {
+        advance(&clock, Duration::from_millis(300));
+        let size = probe.window().size();
+        frame(&adapter, size.width as usize, size.height as usize);
+        targets.borrow_mut().clear();
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        advance(&clock, Duration::ZERO);
+        frame(&adapter, size.width as usize, size.height as usize);
+    };
+    for (width, height, scale) in [
+        (393, 852, 1.),
+        (320, 568, 1.5),
+        (852, 393, 1.),
+        (800, 1280, 1.),
+    ] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        for (protected, pending) in [(false, false), (false, true), (true, false), (true, true)] {
+            probe.set_protected(protected);
+            probe.set_protection_pending(pending);
+            for _ in 0..2 {
+                probe.set_opened(false);
+                render();
+                assert!(targets.borrow().is_empty());
+                probe.set_opened(true);
+                render();
+                for (action, prefix, count) in [
+                    (MobileIntent::Appearance, "appearance-theme", 3),
+                    (MobileIntent::Accent, "appearance-accent", 6),
+                ] {
+                    for index in 0..count {
+                        let key = format!("{prefix}:{index}");
+                        let bounds = targets.borrow()[&key].clone();
+                        let position = LogicalPosition::new(
+                            bounds[0] + bounds[2] / 2.,
+                            bounds[1] + bounds[3] / 2.,
+                        );
+                        assert!(bounds[2] >= 48. && bounds[3] >= 48., "{key}: {bounds:?}");
+                        assert!(bounds[0] >= 0. && bounds[0] + bounds[2] <= width as f32 + 1.);
+                        assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= height as f32 + 1.);
+                        events.borrow_mut().clear();
+                        probe.window().dispatch_event(WindowEvent::PointerPressed {
+                            position,
+                            button: PointerEventButton::Left,
+                        });
+                        advance(&clock, Duration::from_millis(50));
+                        probe.window().dispatch_event(WindowEvent::PointerReleased {
+                            position,
+                            button: PointerEventButton::Left,
+                        });
+                        render();
+                        assert_eq!(
+                            events.borrow().as_slice(),
+                            &[(action, index.to_string())],
+                            "{key}: protected={protected}, pending={pending}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

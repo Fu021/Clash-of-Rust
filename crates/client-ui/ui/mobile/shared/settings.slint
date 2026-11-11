@@ -3,6 +3,26 @@ import { Theme, AccentPalette } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MParagraph, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect } from "controls.slint";
 
+component AppearanceThemeButton inherits MButton {
+    in property <int> index;
+    text: root.index == 0 ? "深色" : root.index == 1 ? "浅色" : "跟随系统";
+    selected: Theme.appearance == root.index;
+    geometry-key: "appearance-theme:" + root.index;
+    clicked => { Theme.appearance = root.index; MobileActions.request(MobileIntent.appearance, "" + root.index, ""); }
+}
+
+component AppearanceAccentButton inherits MButton {
+    in property <int> index;
+    min-width: 48px;
+    text: ""; quiet: true; selected: Theme.accent-index == root.index;
+    geometry-key: "appearance-accent:" + root.index;
+    accessible-role: button; accessible-label: AccentPalette.accent-names[root.index];
+    Rectangle { x: (parent.width - 20px) / 2; y: (parent.height - 20px) / 2; width: 20px; height: 20px; border-radius: 10px;
+        background: Theme.dark ? AccentPalette.dark-colors[root.index] : AccentPalette.accent-colors[root.index];
+    }
+    clicked => { Theme.accent-index = root.index; MobileActions.request(MobileIntent.accent, "" + root.index, ""); }
+}
+
 export component AppearanceSettings inherits VerticalLayout {
     in property <bool> custom-font-size: true;
     property <bool> stack-themes: Theme.text-scale >= 1.25;
@@ -11,11 +31,9 @@ export component AppearanceSettings inherits VerticalLayout {
     MCard {
         MSmall { text: "主题"; }
         GridLayout { spacing: MobileTypography.small-gap;
-            for label[i] in ["深色", "浅色", "跟随系统"]: MButton { text: label; selected: Theme.appearance == i;
-                col: root.stack-themes ? 0 : i; row: root.stack-themes ? i : 0;
-                geometry-key: "appearance-theme:" + i;
-                clicked => { Theme.appearance = i; MobileActions.request(MobileIntent.appearance, "" + i, ""); }
-            }
+            AppearanceThemeButton { index: 0; col: 0; row: 0; }
+            AppearanceThemeButton { index: 1; col: root.stack-themes ? 0 : 1; row: root.stack-themes ? 1 : 0; }
+            AppearanceThemeButton { index: 2; col: root.stack-themes ? 0 : 2; row: root.stack-themes ? 2 : 0; }
         }
         MDivider { }
         HorizontalLayout {
@@ -26,17 +44,12 @@ export component AppearanceSettings inherits VerticalLayout {
         swatches := GridLayout {
             property <int> columns: self.width >= 308px ? 6 : 3;
             spacing: 4px;
-            for index in 6: MButton {
-                col: mod(index, swatches.columns); row: floor(index / swatches.columns);
-                min-width: 48px;
-                text: ""; quiet: true; selected: Theme.accent-index == index;
-                geometry-key: "appearance-accent:" + index;
-                accessible-role: button; accessible-label: AccentPalette.accent-names[index];
-                Rectangle { x: (parent.width - 20px) / 2; y: (parent.height - 20px) / 2; width: 20px; height: 20px; border-radius: 10px;
-                    background: Theme.dark ? AccentPalette.dark-colors[index] : AccentPalette.accent-colors[index];
-                }
-                clicked => { Theme.accent-index = index; MobileActions.request(MobileIntent.accent, "" + index, ""); }
-            }
+            AppearanceAccentButton { index: 0; col: 0; row: 0; }
+            AppearanceAccentButton { index: 1; col: 1; row: 0; }
+            AppearanceAccentButton { index: 2; col: 2; row: 0; }
+            AppearanceAccentButton { index: 3; col: swatches.columns == 6 ? 3 : 0; row: swatches.columns == 6 ? 0 : 1; }
+            AppearanceAccentButton { index: 4; col: swatches.columns == 6 ? 4 : 1; row: swatches.columns == 6 ? 0 : 1; }
+            AppearanceAccentButton { index: 5; col: swatches.columns == 6 ? 5 : 2; row: swatches.columns == 6 ? 0 : 1; }
         }
         if root.custom-font-size: MDivider { }
         if root.custom-font-size: HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.gap;

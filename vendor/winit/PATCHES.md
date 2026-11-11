@@ -1,10 +1,12 @@
 # Winit X11 resize synchronization
 
 This directory contains the published `winit` 0.30.13 crate, with its original
-MIT license and sources. The archive SHA-256 is
+Apache-2.0 license and sources. The archive SHA-256 is
 `a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d`;
 its source commit is `e9809ef54b18499bb4f2cac945719ecc2a61061b`.
 The crate's standalone lockfile is omitted; the root `Cargo.lock` is authoritative.
+The README contribution link points to that source commit because its target is
+not included in the published crate.
 
 The X11-only changes adapt the protocol introduced by upstream
 [PR #3771](https://github.com/rust-windowing/winit/pull/3771), commit

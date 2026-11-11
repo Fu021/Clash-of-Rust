@@ -65,6 +65,7 @@ def main():
                      'applications_scroll_across_phone_and_tablet_viewports',
                      'application_policy_form_respects_platform_protection_and_scrolls',
                      'mobile_accent_picker_remains_usable_while_protected',
+                     'mobile_appearance_settings_reopen_with_geometry_and_protection',
                      'mobile_connections_keep_actions_reachable_and_scroll_with_long_names',
                      'report_categories_share_one_panel_without_gaps_from_hidden_rows',
                      'mobile_rules_drag_real_rows_at_phone_pad_and_large_text_sizes'):

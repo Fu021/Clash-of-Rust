@@ -35,7 +35,7 @@ another library.
 
 ## CONTRIBUTING
 
-For contributing guidelines see [CONTRIBUTING.md](./CONTRIBUTING.md).
+For contributing guidelines see [CONTRIBUTING.md](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/CONTRIBUTING.md).
 
 ## MSRV Policy
 

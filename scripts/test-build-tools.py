@@ -1345,6 +1345,8 @@ class BuildTests(unittest.TestCase):
                             in command for command in ui_checks))
         self.assertTrue(any('mobile_accent_picker_remains_usable_while_protected'
                             in command for command in ui_checks))
+        self.assertTrue(any('mobile_appearance_settings_reopen_with_geometry_and_protection'
+                            in command for command in ui_checks))
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
                             and 'control::tests::' in command for command in ui_checks))
         self.assertTrue(any('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes'
