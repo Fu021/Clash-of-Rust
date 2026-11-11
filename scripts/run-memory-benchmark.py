@@ -1,5 +1,6 @@
 """Measure one selected checkout: isolated API workloads and reproducible GUI scenes."""
 import argparse
+from collections import Counter
 import ctypes as c
 import datetime
 import json
@@ -173,25 +174,49 @@ def memory_maps(text, executable=None):
     return totals
 
 
-def mapping_snapshot(processes):
+def process_start_ticks(text):
+    return int(text[text.rindex(')')+2:].split()[19])
+
+
+def mapping_snapshot(processes, proc_root=Path('/proc')):
     roles, unavailable = {}, 0
+    reasons = Counter()
+    try:
+        boot_time = next(int(line.split()[1]) for line in (proc_root/'stat').read_text().splitlines()
+                         if line.startswith('btime '))
+        ticks_per_second = os.sysconf('SC_CLK_TCK')
+        if ticks_per_second <= 0:
+            raise ValueError('Invalid clock frequency')
+    except (OSError, ValueError, IndexError, StopIteration):
+        return {'roles': {}, 'unavailable_processes': len(processes),
+                'unavailable_reasons': {'clock_unavailable': len(processes)} if processes else {}}
     for process in processes:
-        root = Path('/proc') / str(process['pid'])
+        root = proc_root / str(process['pid'])
         try:
-            stat = (root/'stat').read_text()
-            if int(stat[stat.rindex(')')+2:].split()[19]) != process['start_time']:
-                raise ValueError('Process identity changed')
+            start_ticks = process_start_ticks((root/'stat').read_text())
+            if boot_time + start_ticks // ticks_per_second != process['start_time']:
+                unavailable += 1
+                reasons['process_identity_changed'] += 1
+                continue
             categories = memory_maps((root/'smaps').read_text(), os.readlink(root/'exe'))
+            if process_start_ticks((root/'stat').read_text()) != start_ticks:
+                unavailable += 1
+                reasons['process_identity_changed'] += 1
+                continue
             if not categories:
                 raise ValueError('Empty memory mapping')
-        except (OSError, ValueError, IndexError):
+        except (OSError, ValueError, IndexError) as error:
             unavailable += 1
+            reasons['permission_denied' if isinstance(error, PermissionError)
+                    else 'process_gone' if isinstance(error, (FileNotFoundError, ProcessLookupError))
+                    else 'proc_read_failed' if isinstance(error, OSError)
+                    else 'invalid_proc_data'] += 1
             continue
         for category, values in categories.items():
             totals = roles.setdefault(process['role'], {}).setdefault(category, dict.fromkeys(values, 0))
             for field, value in values.items():
                 totals[field] += value
-    return {'roles': roles, 'unavailable_processes': unavailable}
+    return {'roles': roles, 'unavailable_processes': unavailable, 'unavailable_reasons': dict(reasons)}
 
 
 def mapping_peaks(snapshots):
@@ -258,16 +283,15 @@ def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
         'anonymous_heap_private_peak': mapping_private_peaks(snapshots),
         'final': snapshots[-1] if snapshots else None,
         'unavailable_samples': sum(row['unavailable_processes'] > 0 for row in snapshots),
+        'unavailable_reasons': dict(sum((Counter(row['unavailable_reasons']) for row in snapshots),
+                                        Counter())),
     })
     with (output/(name+'-mapping-samples.jsonl')).open('x') as stream:
         for row in snapshots:
             stream.write(json.dumps(row)+'\n')
-    maps = []
-    for process in rows[-1]['processes']:
-        path = Path(f"/proc/{process['pid']}/smaps")
-        if path.exists():
-            executable = os.readlink(path.parent/'exe')
-            maps.append({'role': process['role'], 'categories': memory_maps(path.read_text(), executable)})
+    final_mapping = mapping_snapshot(rows[-1]['processes'])
+    maps = [{'role': role, 'categories': categories}
+            for role, categories in final_mapping['roles'].items()]
     write_json(output/(name+'-mappings.json'), maps)
     return rows
 
@@ -514,6 +538,10 @@ def summarize(output, metadata):
               '| --- | --- | ---: | ---: | ---: |']
     for path in sorted(output.glob('*-mapping-peaks.json')):
         mapping = json.loads(path.read_text())
+        if mapping.get('unavailable_reasons'):
+            lines.append(f"| {path.name.removesuffix('-mapping-peaks.json')} | unavailable: "
+                         f"{json.dumps(mapping['unavailable_reasons'], sort_keys=True)} | unknown | unknown | "
+                         f"{mapping['unavailable_samples']} |")
         for role, categories in mapping['peak'].items():
             peak = mapping['anonymous_heap_private_peak'][role]
             final = (mapping.get('final') or {}).get('roles', {}).get(role)

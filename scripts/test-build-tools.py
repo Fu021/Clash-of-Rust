@@ -1345,6 +1345,8 @@ class BuildTests(unittest.TestCase):
                             in command for command in ui_checks))
         self.assertTrue(any('mobile_accent_picker_remains_usable_while_protected'
                             in command for command in ui_checks))
+        self.assertTrue(any('application_controls_distinguish_scope_filter_save_and_protection'
+                            in command for command in ui_checks))
         self.assertTrue(any('mobile_appearance_settings_reopen_with_geometry_and_protection'
                             in command for command in ui_checks))
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
@@ -2005,6 +2007,66 @@ Private_Clean: 2 kB
         self.assertEqual(memory_benchmark.mapping_peaks(snapshots)['gui']['anonymous']['private_bytes'], 70)
         self.assertEqual(memory_benchmark.mapping_private_peaks(snapshots), {'gui': 110})
         self.assertEqual(memory_benchmark.mapping_private_peaks([snapshots[1]]), {})
+
+    def test_mapping_snapshot_matches_epoch_identity_and_rejects_reused_processes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'stat').write_text('btime 1700000000\n')
+            process = root/'42'
+            process.mkdir()
+            fields = ['S'] + ['0']*18 + ['12345']
+            stat = '42 (name with ) parentheses) '+' '.join(fields)
+            (process/'stat').write_text(stat)
+            (process/'smaps').write_text('1000-2000 rw-p 0 00:00 0\nRss: 8 kB\nPrivate_Dirty: 4 kB\n')
+            (process/'exe').symlink_to('/private/example/program')
+            observed = {'pid': 42, 'role': 'gui', 'start_time': 1700000123}
+            with patch.object(memory_benchmark.os, 'sysconf', return_value=100):
+                result = memory_benchmark.mapping_snapshot([observed], root)
+                self.assertEqual(result['roles']['gui']['anonymous']['private_bytes'], 4096)
+                self.assertEqual(result['unavailable_processes'], 0)
+                self.assertEqual(result['unavailable_reasons'], {})
+                self.assertNotIn('/private', json.dumps(result))
+                mismatch = dict(observed, start_time=12345)
+                result = memory_benchmark.mapping_snapshot([mismatch], root)
+                self.assertEqual(result['roles'], {})
+                self.assertEqual(result['unavailable_reasons'], {'process_identity_changed': 1})
+                original_read = Path.read_text
+                def replaced(path, *args, **kwargs):
+                    content = original_read(path, *args, **kwargs)
+                    if path == process/'smaps':
+                        (process/'stat').write_text(stat.replace('12345', '12346'))
+                    return content
+                with patch.object(Path, 'read_text', replaced):
+                    result = memory_benchmark.mapping_snapshot([observed], root)
+                self.assertEqual(result['roles'], {})
+                self.assertEqual(result['unavailable_reasons'], {'process_identity_changed': 1})
+
+    def test_mapping_snapshot_records_missing_denied_and_invalid_observations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            observed = {'pid': 42, 'role': 'gui', 'start_time': 1700000123}
+            result = memory_benchmark.mapping_snapshot([observed], root)
+            self.assertEqual(result['unavailable_reasons'], {'clock_unavailable': 1})
+            (root/'stat').write_text('btime 1700000000\n')
+            with patch.object(memory_benchmark.os, 'sysconf', return_value=100):
+                result = memory_benchmark.mapping_snapshot([observed], root)
+                self.assertEqual(result['unavailable_reasons'], {'process_gone': 1})
+                process = root/'42'
+                process.mkdir()
+                (process/'stat').write_text('invalid')
+                result = memory_benchmark.mapping_snapshot([observed], root)
+                self.assertEqual(result['unavailable_reasons'], {'invalid_proc_data': 1})
+                original_read = Path.read_text
+                def denied(path, *args, **kwargs):
+                    if path == process/'stat':
+                        raise PermissionError('/private/proc/path')
+                    return original_read(path, *args, **kwargs)
+                with patch.object(Path, 'read_text', denied):
+                    result = memory_benchmark.mapping_snapshot([observed], root)
+                self.assertEqual(result['roles'], {})
+                self.assertEqual(result['unavailable_processes'], 1)
+                self.assertEqual(result['unavailable_reasons'], {'permission_denied': 1})
+                self.assertNotIn('/private', json.dumps(result))
 
     def test_renderer_bundle_is_an_agent_before_launch_and_signed_inside_out(self):
         import macos_package as mac

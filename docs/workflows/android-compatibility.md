@@ -59,3 +59,5 @@ VPN 前后导出生产诊断报告，经生产文件写入回调写入模拟器�
 维护者选择 `verify_application_rules=true` 时，在基础代理/TUN 后执行应用范围与指定出口回归。与诊断同时启用时，先执行包含基础代理/TUN 的诊断组，再执行应用规则；可选截图始终最后执行。复用已经完成的 VPN 授权，报告另存 `x64/application-rules/`，不覆盖基础网络证据。Android 8/9 核对实际能力、页面不支持状态及范围分流；Android 10+ 另外检查指定节点、DIRECT、REJECT、Fake-IP 原始元组、缺失目标、UDP 拒绝和不同 UID。
 
 该选项默认关闭，仅在相关功能验收时使用。它不等于验证所有厂商 ROM 或每一种应用进程模型；UI、持久化及内核选路分别保留源码与设备回归。
+
+不同 UID 的流量由 `app_process` 从测试 APK 启动独立 Java 探针，核对实际 UID、源站正文和新增规则命中。`UiAutomation.executeShellCommand` 不解释 shell 管道，不能把带 `printf | nc` 的字符串当作已发出的 HTTP 请求；探针仅存在于测试 APK，不进入发行应用。

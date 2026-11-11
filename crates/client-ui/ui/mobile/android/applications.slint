@@ -77,7 +77,9 @@ component ApplicationModeButton inherits MButton {
 
 export component AndroidApplications inherits PageSurface {
     property <bool> protection-locked: MobileData.protected || MobileData.protection-pending;
-    property <bool> editable: AndroidData.applications-loaded && !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked && !MobileView.modal && !MobileView.notice-modal;
+    property <bool> observable: !AndroidData.applications-loading && !AndroidData.applications-saving && !MobileView.modal && !MobileView.notice-modal;
+    property <bool> browsable: AndroidData.applications-loaded && root.observable;
+    property <bool> editable: root.browsable && !root.protection-locked;
     property <bool> selectable: root.editable && AndroidData.applications-mode != 0;
     init => { AndroidData.applications-scroll-y = 0px; }
     saved := ApplicationSaveCard { x: 0px; y: 0px; width: parent.width; editable: root.editable; protection-locked: root.protection-locked; }
@@ -124,28 +126,28 @@ export component AndroidApplications inherits PageSurface {
                         clicked => { AndroidActions.request(AndroidIntent.application-permissions, ""); }
                     }
                     if AndroidData.applications-error == "": MButton { text: "刷新"; compact: true; busy: AndroidData.applications-loading;
-                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
+                        enabled: root.observable;
                         clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
                     }
                 }
                 if AndroidData.applications-mode != 0: VerticalLayout { alignment: start; spacing: 10px;
-                MField { placeholder: "搜索应用名称或包名"; text <=> AndroidData.applications-query; enabled: root.editable;
+                MField { placeholder: "搜索应用名称或包名"; text <=> AndroidData.applications-query; enabled: root.browsable;
                     edited(value) => { AndroidActions.request(AndroidIntent.application-query, value); }
                 }
                 HorizontalLayout { spacing: 4px; cross-axis-alignment: center;
                     for label[index] in ["全部", "已选", "未选"]: MButton {
                         geometry-key: "preview-applications-filter:" + index;
                         text: label; quiet: true; compact: true; selected: AndroidData.applications-filter == index;
-                        enabled: root.editable;
+                        enabled: root.browsable;
                         clicked => { AndroidActions.request(AndroidIntent.application-filter, "" + index); }
                     }
                     MButton { text: "刷新"; quiet: true; compact: true;
                         busy: AndroidData.applications-loading;
-                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
+                        enabled: root.observable;
                         clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
                     }
                 }
-                MSwitch { geometry-key: "preview-applications-system"; title: "显示系统组件"; checked: AndroidData.applications-system; enabled: root.editable;
+                MSwitch { geometry-key: "preview-applications-system"; title: "显示系统组件"; checked: AndroidData.applications-system; enabled: root.browsable;
                     toggled(value) => { AndroidActions.request(AndroidIntent.application-system, value ? "true" : "false"); }
                 }
                 HorizontalLayout { spacing: 4px;
@@ -168,7 +170,7 @@ export component AndroidApplications inherits PageSurface {
                 if AndroidData.applications-error != "": HorizontalLayout { spacing: 6px;
                     MButton { geometry-key: "preview-applications-retry"; text: "重试"; compact: true;
                         busy: AndroidData.applications-loading;
-                        enabled: !AndroidData.applications-loading && !AndroidData.applications-saving && !root.protection-locked;
+                        enabled: root.observable;
                         clicked => { AndroidActions.request(AndroidIntent.application-refresh, ""); }
                     }
                     MButton { text: "导出诊断"; compact: true;

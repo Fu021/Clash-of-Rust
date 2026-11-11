@@ -1768,8 +1768,19 @@ public class ProxyTunTest {
             catch (IOException expected) {blocked=true;}
             assertTrue("A missing target with blocking enabled must not use DIRECT",blocked);
             CoreBridge.reload(applicationOutboundConfig(restrictive,"com.android.shell","CI-TUN-origin",false));
-            String response=shell("printf 'GET /probe HTTP/1.1\\r\\nHost: 198.51.100.1\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 3 198.51.100.1 18081");
-            assertTrue("A different UID did not use its assigned outbound: "+response,response.contains("cor-android-network-ok"));
+            long matchesBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                .getLong("matches");
+            String probeApk=InstrumentationRegistry.getInstrumentation().getContext().getApplicationInfo().sourceDir;
+            JSONObject response=new JSONObject(shell("app_process -Djava.class.path="+probeApk
+                +" /system/bin org.clashofrust.android.ApplicationUidProbe").trim());
+            assertEquals("The independent probe must run as the assigned UID",
+                context.getPackageManager().getApplicationInfo("com.android.shell",0).uid,response.getInt("uid"));
+            assertEquals("A different UID did not use its assigned outbound: "+response,
+                "cor-android-network-ok",response.optString("body"));
+            assertEquals(200,response.getInt("status"));
+            assertTrue("The independent UID must produce a fresh application rule match",
+                new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                    .getLong("matches")>matchesBefore);
             blocked=false;
             try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
             catch (IOException expected) {blocked=true;}

@@ -79,6 +79,7 @@ slint::slint! {
         preferred-width: 393px; preferred-height: 400px;
         in-out property <float> text-scale <=> Theme.text-scale;
         in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> protection-pending <=> MobileData.protection-pending;
         in-out property <int> detail <=> MobileView.detail;
         in-out property <string> selected-id <=> MobileView.selected-id;
         out property <length> viewport-width: root.width;
@@ -197,9 +198,9 @@ slint::slint! {
         in-out property <bool> protection-pending <=> MobileData.protection-pending;
         in-out property <float> text-scale <=> Theme.text-scale;
         in-out property <bool> opened;
-        VerticalLayout {
-            alignment: start; padding: 12px;
-            if root.opened: AppearanceSettings { }
+        Rectangle {
+            x: 12px; y: 12px; width: parent.width - 24px; height: parent.height - 24px;
+            if root.opened: AppearanceSettings { width: parent.width; }
         }
     }
 
@@ -806,13 +807,17 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
     click("rule-detail:shortcut");
     assert_eq!(probe.get_detail(), 15);
     assert_eq!(probe.get_selected_id().as_str(), "shortcut");
-    probe.set_detail(0);
-    probe.set_protected(true);
-    frame(&adapter, 320, 400);
-    click("rule-switch:custom");
-    click("rule-detail:shortcut");
-    assert_eq!(requests.borrow().len(), 1);
-    assert_eq!(probe.get_detail(), 0);
+    for (protected, pending) in [(true, false), (false, true), (true, true)] {
+        probe.set_detail(0);
+        probe.set_protected(protected);
+        probe.set_protection_pending(pending);
+        frame(&adapter, 320, 400);
+        click("rule-switch:custom");
+        click("rule-detail:shortcut");
+        assert_eq!(requests.borrow().len(), 1);
+        assert_eq!(probe.get_detail(), 15);
+        assert_eq!(probe.get_selected_id().as_str(), "shortcut");
+    }
     probe.hide().unwrap();
 }
 
@@ -975,18 +980,25 @@ fn application_controls_distinguish_scope_filter_save_and_protection() {
     probe.set_error("".into());
     probe.set_loaded(true);
     probe.set_mode(1);
-    let before = requests.borrow().len();
     for pending in [false, true] {
+        let before = requests.borrow().len();
         probe.set_protected(!pending);
         probe.set_protection_pending(pending);
-        for key in [
-            "preview-applications-save",
-            "preview-applications-mode:1",
-            "preview-applications-filter:0",
-        ] {
+        for key in ["preview-applications-save", "preview-applications-mode:1"] {
             click(key);
         }
         assert_eq!(requests.borrow().len(), before);
+        click("preview-applications-filter:0");
+        assert_eq!(
+            requests.borrow().last().unwrap(),
+            &(AndroidIntent::ApplicationFilter, "0".to_string())
+        );
+        click("preview-applications-system");
+        assert_eq!(
+            requests.borrow().last().unwrap(),
+            &(AndroidIntent::ApplicationSystem, "true".to_string())
+        );
+        assert_eq!(requests.borrow().len(), before + 2);
     }
     probe.hide().unwrap();
 }
