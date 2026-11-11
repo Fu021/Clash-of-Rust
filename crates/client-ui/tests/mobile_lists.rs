@@ -23,6 +23,7 @@ slint::slint! {
     import { MobileView } from "../ui/mobile/shared/state.slint";
     import { MobileData } from "../ui/mobile/shared/state.slint";
     import { MobileSubscriptions, MobileConnections, MobileRules, RulesRow } from "../ui/mobile/shared/pages.slint";
+    import { MobileModal } from "../ui/mobile/shared/details.slint";
     import { AndroidSurface } from "../ui/mobile/android/app.slint";
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
     import { AndroidApplicationPolicies } from "../ui/mobile/android/application-policies.slint";
@@ -178,6 +179,15 @@ slint::slint! {
             AndroidData.policies-status = "只作用于进入 VPN 的应用；未指定的应用跟随配置。";
         }
         if root.opened: AndroidApplicationPolicies { width: parent.width; height: parent.height; }
+    }
+
+    export component MobileAccentProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> protection-pending <=> MobileData.protection-pending;
+        in-out property <bool> modal <=> MobileView.modal;
+        in-out property <int> detail <=> MobileView.detail;
+        MobileModal { width: parent.width; height: parent.height; }
     }
 
     export component SettingsScrollProbe inherits Window {
@@ -2375,4 +2385,62 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     assert_eq!(profiles.get_detail(), 3);
     assert_eq!(profiles.get_selected_id(), "remote");
     profiles.hide().unwrap();
+}
+
+#[test]
+fn mobile_accent_picker_remains_usable_while_protected() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = MobileAccentProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, subject, _| {
+            recorded.borrow_mut().push((intent, subject.to_string()));
+        });
+    probe.show().unwrap();
+    let render = || {
+        advance(&clock, Duration::from_millis(300));
+        let size = probe.window().size();
+        frame(&adapter, size.width as usize, size.height as usize);
+        targets.borrow_mut().clear();
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        advance(&clock, Duration::ZERO);
+        frame(&adapter, size.width as usize, size.height as usize);
+    };
+    probe.set_modal(true);
+    probe.set_detail(11);
+    probe.set_protected(true);
+    probe.set_protection_pending(false);
+    render();
+    let swatch = targets.borrow()["accent-swatch:2"].clone();
+    assert!(swatch[2] >= 48. && swatch[3] >= 48.);
+    let position = LogicalPosition::new(swatch[0] + swatch[2] / 2., swatch[1] + swatch[3] / 2.);
+    probe.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    advance(&clock, Duration::from_millis(50));
+    probe.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+    render();
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(MobileIntent::Accent, "2".to_owned())]
+    );
 }

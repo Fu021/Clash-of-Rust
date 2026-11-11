@@ -151,6 +151,11 @@ func applicationPackage(metadata *C.Metadata) (string, error) {
 	if !exists {
 		return "", nil
 	}
+	currentUID, identityErr := owner.value.PackageUID(rule.Package)
+	if identityErr != nil || currentUID != uid {
+		ownerFailures.Add(1)
+		return "", errors.New("APP_OWNER_IDENTITY_CHANGED")
+	}
 	proxy, available := rules.proxies[rule.Target]
 	pass, supportsUDP := false, false
 	if available {

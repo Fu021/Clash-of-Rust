@@ -197,8 +197,8 @@ export component MobileModal inherits Rectangle {
                     if root.kind == 11: VerticalLayout { spacing: MobileTypography.small-gap;
                         for row in [0, 1, 2]: HorizontalLayout { spacing: MobileTypography.small-gap;
                             for column in [0, 1]: MButton { modal-control: true; text: AccentPalette.accent-names[row * 2 + column]; selected: Theme.accent-index == row * 2 + column;
+                                geometry-key: "accent-swatch:" + (row * 2 + column);
                                 show-swatch: true; swatch: Theme.dark ? AccentPalette.dark-colors[row * 2 + column] : AccentPalette.accent-colors[row * 2 + column];
-                                enabled: !MobileData.protected && !MobileData.protection-pending;
                                 clicked => { Theme.accent-index = row * 2 + column; MobileActions.request(MobileIntent.accent, "" + Theme.accent-index, ""); }
                             }
                         }

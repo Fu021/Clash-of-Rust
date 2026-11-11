@@ -65,6 +65,7 @@ Linux 的桌面导出及 `cor diagnose`／`--offline` 另保存：
 | 内部标记 | 含义与边界 |
 | --- | --- |
 | `APP_OWNER_LOOKUP_FAILED` | 原始元组缺失、系统拒绝、隔离 UID 或无可识别连接；一分钟至多记录一次，连接跟随配置，不伪造应用归属 |
+| `APP_OWNER_IDENTITY_CHANGED` | 绑定包名已卸载或其当前 UID 与连接不符；计入归属失败，连接跟随配置，避免 UID 复用继承旧绑定 |
 | `missing_targets` 增加 | 当前规则目标缺失，按该规则失效策略跟随配置或拦截；不等于节点超时 |
 | `udp_rejected` 增加 | 目标仍存在但不支持 UDP，拒绝该 UDP，不能继续落到其他出站 |
 

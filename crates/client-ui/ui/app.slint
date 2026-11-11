@@ -185,7 +185,7 @@ export component AppWindow inherits Window {
                 horizontal-padding: 12px; vertical-padding: 8px;
                 HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
                     Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.success; horizontal-stretch: 0; }
-                    Paragraph { text: "Claude 保护期间为只读状态，更新、切换与设置修改已暂停。"; horizontal-stretch: 1; min-width: 0px; }
+                    Paragraph { text: "Claude 保护已锁定网络修改和更新。"; horizontal-stretch: 1; min-width: 0px; }
                     ActionButton {
                         text: "关闭保护"; compact: true; quiet: true;
                         enabled: !UiData.protection-pending && !UiData.working;

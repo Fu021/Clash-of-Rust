@@ -45,7 +45,7 @@ func TestApplicationIdentitiesRejectSharedUIDConflictsAndSkipRemovedPackages(t *
 
 func TestOwnerLookupUsesOriginalTupleAfterFakeIPMetadataWasRewritten(t *testing.T) {
 	tunnel.SetMode(tunnel.Rule)
-	owner := &fixtureOwner{}
+	owner := &fixtureOwner{packages: map[string]int32{"org.example.first": 10001}}
 	SetConnectionOwner(owner)
 	applicationRoutes.Store(&resolvedApplicationRules{owners: map[uint32]applicationRule{10001: {Package: "org.example.first", Target: "missing"}}})
 	defer SetConnectionOwner(nil)
@@ -70,6 +70,14 @@ func TestOwnerLookupUsesOriginalTupleAfterFakeIPMetadataWasRewritten(t *testing.
 	}})
 	if result, err := applicationPackage(metadata); err != nil || result != "cor-reject:org.example.first" {
 		t.Fatalf("missing-target rejection lost its independent matching identity: %q %v", result, err)
+	}
+	owner.packages["org.example.first"] = -1
+	if result, err := applicationPackage(metadata); err == nil || result != "" {
+		t.Fatalf("an uninstalled application's assignment survived UID reuse: %q %v", result, err)
+	}
+	owner.packages["org.example.first"] = 10002
+	if result, err := applicationPackage(metadata); err == nil || result != "" {
+		t.Fatalf("a reassigned UID inherited another application's assignment: %q %v", result, err)
 	}
 	owner.fail = true
 	if _, err := applicationPackage(metadata); err == nil {
