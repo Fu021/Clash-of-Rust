@@ -10,8 +10,12 @@ use std::{
 const JSON_LIMIT: u64 = 1024 * 1024;
 const LOG_LIMIT: u64 = 64 * 1024;
 
+pub fn timestamp() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 pub fn incident(message: &str) -> Value {
-    json!({"error":message,"time":chrono::Utc::now().to_rfc3339()})
+    json!({"error":message,"time":timestamp()})
 }
 
 pub fn ip_results(results: &[crate::ip_report::ResultSlot]) -> Value {
@@ -43,6 +47,7 @@ pub fn has_failure(value: &Value) -> bool {
                 key.as_str(),
                 "error" | "Err" | "backend_error" | "local_evidence_error"
             ) && !value.is_null()
+                && value.as_bool() != Some(false)
                 && value.as_str() != Some(""))
                 || (matches!(key.as_str(), "state" | "status")
                     && value.as_str().is_some_and(|state| {
@@ -294,7 +299,7 @@ pub fn collect(root: &Path) -> Value {
     json!({
         "version":crate::VERSION,
         "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
-        "captured_at":chrono::Utc::now().to_rfc3339(),
+        "captured_at":timestamp(),
         "executable":std::env::current_exe().ok(),
         "data_directory":root,
         "local_evidence":evidence(root)
@@ -469,6 +474,17 @@ mod tests {
         assert_eq!(report[1]["error"], "connection timed out");
         assert_eq!(report[2]["state"], "pending");
         assert!(!report[0]["service"].is_null());
+    }
+
+    #[test]
+    fn update_success_with_false_error_flag_does_not_request_a_diagnostic_report() {
+        assert!(!has_failure(&json!({
+            "state":"succeeded","version":"0.7.1","error":false
+        })));
+        assert!(!has_failure(&json!([{"result":{"error":false}}])));
+        assert!(has_failure(&json!({"error":true})));
+        assert!(has_failure(&json!({"state":"failed","error":false})));
+        assert!(has_failure(&json!({"error":"installation failed"})));
     }
 
     #[test]

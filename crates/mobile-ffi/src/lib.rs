@@ -1088,45 +1088,6 @@ pub async fn prepare_protection(
 /// OS routing belongs to VpnService, never to subscription YAML or Linux ioctls.
 pub fn android_safe_config(raw: &str) -> Result<String> {
     let mut value: yaml_serde::Value = yaml_serde::from_str(raw)?;
-    let map = value.as_mapping_mut().context("内核配置必须是对象")?;
-    for key in ["interface-name", "routing-mark"] {
-        map.remove(yaml_serde::Value::from(key));
-    }
-    for section in ["proxies", "proxy-groups"] {
-        if let Some(entries) = map
-            .get_mut(section)
-            .and_then(yaml_serde::Value::as_sequence_mut)
-        {
-            for entry in entries {
-                if let Some(entry) = entry.as_mapping_mut() {
-                    for key in ["interface-name", "routing-mark"] {
-                        entry.remove(yaml_serde::Value::from(key));
-                    }
-                }
-            }
-        }
-    }
-    if let Some(providers) = map
-        .get_mut("proxy-providers")
-        .and_then(yaml_serde::Value::as_mapping_mut)
-    {
-        for provider in providers.values_mut() {
-            let provider = provider
-                .as_mapping_mut()
-                .context("代理集合配置必须是对象")?;
-            let overrides = provider
-                .entry(yaml_serde::Value::from("override"))
-                .or_insert(yaml_serde::Value::Null);
-            if overrides.is_null() {
-                *overrides = yaml_serde::Value::Mapping(Default::default());
-            }
-            let overrides = overrides
-                .as_mapping_mut()
-                .context("代理集合 override 必须是对象")?;
-            overrides.insert("interface-name".into(), "".into());
-            overrides.insert("routing-mark".into(), 0.into());
-        }
-    }
     let tun = value["tun"].as_mapping_mut().context("TUN 配置无效")?;
     tun.clear();
     tun.insert("enable".into(), false.into());
@@ -2269,41 +2230,6 @@ mod tests {
         assert_eq!(value["secret"], settings.secret);
     }
 
-    #[test]
-    fn android_outbounds_do_not_inherit_desktop_interface_or_socket_marks() {
-        let raw = concat!(
-            "interface-name: eth0\nrouting-mark: 1234\n",
-            "proxies:\n  - {name: node, type: socks5, server: example.test, port: 1080, interface-name: en0, routing-mark: 42, dialer-proxy: upstream}\n",
-            "proxy-groups:\n  - {name: main, type: select, proxies: [node], interface-name: eth1}\n",
-            "proxy-providers:\n  remote: {type: http, url: 'https://example.test/nodes', override: {udp: true, additional-prefix: test}}\n",
-            "  embedded: {type: inline, payload: [], override: null}\n",
-            "tun: {enable: false}\ndns: {nameserver: [9.9.9.9]}\n",
-        );
-        let value: yaml_serde::Value =
-            yaml_serde::from_str(&android_safe_config(raw).unwrap()).unwrap();
-        assert!(value["interface-name"].is_null());
-        assert!(value["routing-mark"].is_null());
-        assert!(value["proxies"][0]["interface-name"].is_null());
-        assert!(value["proxies"][0]["routing-mark"].is_null());
-        assert_eq!(value["proxies"][0]["dialer-proxy"], "upstream");
-        assert!(value["proxy-groups"][0]["interface-name"].is_null());
-        for provider in ["remote", "embedded"] {
-            assert_eq!(
-                value["proxy-providers"][provider]["override"]["interface-name"],
-                ""
-            );
-            assert_eq!(
-                value["proxy-providers"][provider]["override"]["routing-mark"],
-                0
-            );
-        }
-        assert_eq!(value["proxy-providers"]["remote"]["override"]["udp"], true);
-        assert_eq!(
-            value["proxy-providers"]["remote"]["override"]["additional-prefix"],
-            "test"
-        );
-        assert_eq!(value["dns"]["nameserver"][0], "9.9.9.9");
-    }
     #[test]
     fn mobile_data_is_explicit_and_invalid_sources_do_not_replace_it() {
         let root = tempfile::tempdir().unwrap();

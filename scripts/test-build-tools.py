@@ -5459,6 +5459,12 @@ class ReleaseTests(unittest.TestCase):
                 tag = 'v' + version
                 notes = release.release_notes_with_downloads(self.notes, 'example/project', version, tag)
                 self.assertTrue(notes.startswith(self.notes.rstrip()))
+                rows = [line.split('|')[1].strip() for line in notes.splitlines()
+                        if line.startswith('| ')][2:]
+                self.assertEqual(rows, ['Windows', 'Linux', 'macOS', 'Android'])
+                self.assertEqual(notes.count('（多数手机和平板）'), 1)
+                self.assertIn(f'-android-arm64.apk)（多数手机和平板） '
+                              '[![Android ARM64 downloads]', notes)
                 self.assertEqual(notes.count('https://img.shields.io/badge/'), len(release.PACKAGES))
                 self.assertEqual(notes.count('https://img.shields.io/github/downloads/'), len(release.PACKAGES))
                 self.assertEqual(notes.count('displayAssetName=false'), len(release.PACKAGES))

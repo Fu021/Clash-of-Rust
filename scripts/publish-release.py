@@ -40,15 +40,15 @@ PACKAGES = {
     'package-android-x64': 'android-x64.apk',
 }
 DOWNLOAD_BUTTONS = (
+    ('Windows', 'package-windows-x64', 'Setup', 'x64', '0078D4', ''),
+    ('Windows', 'package-windows-arm64', 'Setup', 'ARM64', '0078D4', ''),
+    ('Linux', 'package-linux-x64', 'DEB', 'x64', 'E95420', 'linux'),
+    ('Linux', 'package-linux-arm64', 'DEB', 'ARM64', 'E95420', 'linux'),
+    ('macOS', 'package-macos-arm64', 'DMG', 'Apple_Silicon', '555555', 'apple'),
+    ('macOS', 'package-macos-x64', 'DMG', 'Intel_x64', '555555', 'apple'),
     ('Android', 'package-android-arm64', 'APK', 'ARM64', '3DDC84', 'android'),
     ('Android', 'package-android-armv7', 'APK', 'ARMv7', '3DDC84', 'android'),
     ('Android', 'package-android-x64', 'APK', 'x64', '3DDC84', 'android'),
-    ('Windows', 'package-windows-x64', 'Setup', 'x64', '0078D4', ''),
-    ('Windows', 'package-windows-arm64', 'Setup', 'ARM64', '0078D4', ''),
-    ('macOS', 'package-macos-arm64', 'DMG', 'Apple_Silicon', '555555', 'apple'),
-    ('macOS', 'package-macos-x64', 'DMG', 'Intel_x64', '555555', 'apple'),
-    ('Linux', 'package-linux-x64', 'DEB', 'x64', 'E95420', 'linux'),
-    ('Linux', 'package-linux-arm64', 'DEB', 'ARM64', 'E95420', 'linux'),
 )
 PACKAGE_JOBS = {name for name in PACKAGES if name.startswith('package-android-')}
 
@@ -229,6 +229,8 @@ def release_notes_with_downloads(notes, repo, version, tag):
                  '?label=downloads&displayAssetName=false')
         label = architecture.replace('_', ' ')
         text = f'[![{system} {kind} {label}]({badge})]({download})'
+        if system == 'Android' and architecture == 'ARM64':
+            text += '（多数手机和平板）'
         text += f' [![{system} {label} downloads]({count})]({download})'
         rows.setdefault(system, []).append(text)
     table = ['## 下载', '', '| 平台 | 安装包与下载次数 |', '| --- | --- |']

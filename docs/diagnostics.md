@@ -41,4 +41,4 @@ Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到�
 
 [Issue #38](https://github.com/Fu021/Clash-of-Rust/issues/38) 的 0.7.0 报告来自 HONOR Android 16，采集时内核运行、VPN 未连接；“90 个节点不可达”的界面错误比报告早约 146 秒。67 行内核日志含 DIRECT 拨号拒绝、IPv4/IPv6 超时，但没有逐节点测速请求状态和套接字保护结果。183 项检测为 pending，不能当作这些检测已失败。
 
-已确认旧测速路径丢失错误分类，Android 运行配置也未清除桌面网卡绑定和 socket 路由标记。修复分别保留真实测速原因，以及在 Android 临时配置和 provider override 中清除这些平台参数；订阅原文、节点协议、DNS、证书验证和出站链仍保留。前者是明确的诊断/误判缺陷，后者是可复现的配置兼容风险；现有附件不足以证明后者就是该用户的唯一根因。后续应先取得新版同一次复现的报告，核对阶段、HTTP 分类、VPN 和保护计数，再决定是否需要具体节点协议或 DNS 专项。
+已确认旧测速路径丢失错误分类，本轮修复保留真实测速原因。上游 [`dialer.go`](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/component/dialer/dialer.go) 在安装 `DefaultSocketHook` 后，TCP/UDP 拨号已跳过 `interface-name` 与 `routing-mark`；本应用初始化时就安装该 hook，不能仅凭订阅含桌面网卡字段认定它导致 Android 故障。没有据此改写订阅或 provider override，也未改变节点协议、DNS、证书验证及出站链。现有附件不足以定位该用户的唯一根因；后续应先取得新版同一次复现的报告，核对阶段、HTTP 分类、VPN 和保护计数，再决定是否需要具体节点协议或 DNS 专项。

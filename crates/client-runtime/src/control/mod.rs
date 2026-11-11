@@ -39,7 +39,7 @@ pub struct Meta {
     #[serde(default)]
     pub view_revision: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub measurements: Vec<clash_client_core::controller::MeasurementDiagnostic>,
+    pub measurements: Vec<clash_client_core::api::MeasurementDiagnostic>,
     pub settings: Settings,
     pub profiles: Vec<Profile>,
     pub geo: GeoManifest,

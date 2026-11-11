@@ -1341,7 +1341,7 @@ async fn run_loop(
                                         .chars()
                                         .take(8192)
                                         .collect();
-                                    let time = chrono::Utc::now().to_rfc3339();
+                                    let time = core::support::timestamp();
                                     let _ = send.try_send(Update::Log(
                                         level,
                                         format!("[observed_at={time}] {text}"),
