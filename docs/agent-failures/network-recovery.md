@@ -55,7 +55,11 @@
 
 外部采集器不得通过 `cor logs` 等入口观察另一用户，以免自动创建该用户的后台；应发现已有实例后直接只读访问经过认证的控制接口。受限采集服务内派生的 root 后台可能继承 `NoNewPrivs`。TUN 环境检查允许已经持有必要有效网络 capabilities 的 root 继续使用这些权限，仍拒绝普通用户在禁止提权的环境中获取权限，并核对 capability 边界；不把采集器作为启动内核的宿主。
 
-重装或订阅更新后仍出现部分应用不走代理时，先运行 `cor diagnose --offline --output cor-tun-local.json`，核对报告中的 `host_routes` 与 `tun_configuration`：前者显示示例目标当前经过哪个接口，后者显示 `strict-route`、`route-address`、`dns-hijack` 是否限制了 TUN 范围。Linux 启用 TUN 时会在短重试后检查 IPv4 样本，并在内核启用 IPv6 时检查 IPv6 样本；观察到物理接口会报覆盖失败并回退，但未知或权限不足的样本不会被伪报为成功或失败。该检查仍只覆盖两个示例地址，不能替代真实应用错误、目标域名解析和完整路由表。
+## Linux TUN 地址族与启动校验
+
+重装或订阅更新后仍出现部分应用不走代理时，先运行 `cor diagnose --offline --output cor-tun-local.json`，核对报告中的 `host_routes` 与 `tun_configuration`：前者显示示例目标当前经过哪个接口，后者显示生成配置中的 IPv6 偏好、TUN 地址、`strict-route`、`route-address`、`dns-hijack`；该文件快照不等于内核当前采用的配置。Linux 启用 TUN 时会在短重试后检查 IPv4 样本，仅在内核 `/configs` 实际含非空 `tun.inet6-address` 时要求 IPv6 样本也进入 TUN；实际应接管的地址族经过物理接口仍会报错并回退，未知或权限不足的样本不会被伪报为成功或失败。该检查仍只覆盖两个示例地址，不能替代真实应用错误、目标域名解析和完整路由表。
+
+[#40](https://github.com/Fu021/Clash-of-Rust/issues/40) 的 0.7.0 报告显示内核和控制器已启动，TUN 日志只有 IPv4 地址，客户端却因物理 IPv6 路由回滚并停止内核。上游在关闭 IPv6、启动时未发现全局 IPv6 地址或配置明确为空时可不创建 IPv6 TUN，因此不能以客户端的 IPv6 偏好代替实际地址族。缺少 IPv6 TUN 时保留可工作的 IPv4，日志记 `tun_ipv6_not_configured`；若系统 IPv6 样本仍绕行，原有绕行警告继续显示，不能声称 IPv6 已被接管。报告未包含原始配置和当时接口地址，尚不能确定上游省略 IPv6 地址的具体原因，也未在用户 COSMIC 会话复验。
 
 ## IPv6 节点域名解析
 

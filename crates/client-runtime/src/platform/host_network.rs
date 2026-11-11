@@ -138,13 +138,22 @@ pub fn with_proxy_context(mut routes: Value, proxy: Option<crate::engine::ProxyM
     routes
 }
 
+pub fn ipv6_tun_configured(config: &Value) -> Option<bool> {
+    match &config["tun"]["inet6-address"] {
+        Value::Null => Some(false),
+        Value::Array(addresses) => Some(!addresses.is_empty()),
+        _ => None,
+    }
+}
+
 /// A positive sample of a non-TUN route while this process owns TUN means the
 /// host may still send some traffic outside the tunnel. Unknown or unavailable
 /// samples are deliberately not treated as proof either way.
-pub fn coverage_issue(routes: &Value, ipv6_expected: bool) -> Option<String> {
+pub fn coverage_issue(routes: &Value, config: &Value) -> Option<String> {
     if routes["scope"] != "current_network_namespace" {
         return None;
     }
+    let ipv6_expected = ipv6_tun_configured(config).unwrap_or(true);
     let mut issues = Vec::new();
     for (family, label, expected) in [("ipv4", "IPv4", true), ("ipv6", "IPv6", ipv6_expected)] {
         let route = &routes[family];
@@ -400,14 +409,67 @@ mod context_tests {
         let notice = notice(&context).unwrap();
         assert!(notice.contains("绕过 TUN"));
         assert!(notice.contains("eth0"));
-        assert!(coverage_issue(&routes, true).unwrap().contains("IPv4"));
+        let dual_stack = json!({
+            "ipv6":true,
+            "tun":{"inet6-address":["fdfe:dcba:9876::1/126"]}
+        });
+        assert!(
+            coverage_issue(&routes, &dual_stack)
+                .unwrap()
+                .contains("IPv4")
+        );
         let ipv6_only = json!({
             "scope":"current_network_namespace",
             "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
             "ipv6":{"state":"observed","kind":"other","interface":"eth0"}
         });
-        assert!(coverage_issue(&ipv6_only, false).is_none());
-        assert!(coverage_issue(&ipv6_only, true).unwrap().contains("IPv6"));
+        assert!(
+            coverage_issue(&ipv6_only, &dual_stack)
+                .unwrap()
+                .contains("IPv6")
+        );
+    }
+
+    #[test]
+    fn ipv4_tun_starts_when_core_disables_ipv6_but_keeps_bypass_visible() {
+        let routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"observed","kind":"other","interface":"wlan0"}
+        });
+        for tun in [
+            json!({"enable":true,"inet4-address":["198.18.0.1/30"]}),
+            json!({"enable":true,"inet6-address":[]}),
+        ] {
+            let config = json!({"ipv6":true,"tun":tun});
+            assert!(coverage_issue(&routes, &config).is_none());
+            let context = with_proxy_context(routes.clone(), Some(ProxyMode::Tun));
+            assert_eq!(context["warnings"], json!(["tun_ipv6_route_bypass"]));
+            assert!(notice(&context).unwrap().contains("绕过 TUN"));
+            let mut bypass = routes.clone();
+            bypass["ipv4"]["kind"] = "other".into();
+            assert!(coverage_issue(&bypass, &config).unwrap().contains("IPv4"));
+        }
+    }
+
+    #[test]
+    fn missing_route_evidence_is_unknown_but_invalid_address_metadata_cannot_skip_checks() {
+        let routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"observed","kind":"other","interface":"eth0"}
+        });
+        let mut config = json!({
+            "ipv6":true,
+            "tun":{"enable":true,"inet6-address":["fdfe:dcba:9876::1/126"]}
+        });
+        assert!(coverage_issue(&routes, &config).unwrap().contains("IPv6"));
+        config["tun"]["inet6-address"] = "invalid".into();
+        assert!(coverage_issue(&routes, &config).unwrap().contains("IPv6"));
+        let mut unknown = routes.clone();
+        unknown["ipv6"] = json!({"state":"unknown","reason":"route_unavailable"});
+        assert!(coverage_issue(&unknown, &config).is_none());
+        assert!(coverage_issue(&json!({"scope":"unsupported"}), &config).is_none());
     }
 
     #[test]

@@ -2221,11 +2221,18 @@ impl Engine {
         }
         #[cfg(target_os = "linux")]
         if enabled {
-            let ipv6_expected = self.settings.ipv6;
+            if config["ipv6"].as_bool() == Some(true)
+                && crate::platform::host_network::ipv6_tun_configured(&config) == Some(false)
+            {
+                append(
+                    &self.logs,
+                    "[客户端] TUN 未配置 IPv6 地址（tun_ipv6_not_configured）；本次仅验证 IPv4 接管，IPv6 流量可能绕过 TUN",
+                );
+            }
             let mut issue = None;
             for attempt in 0..6 {
                 let routes = crate::platform::host_network::observe().await;
-                issue = crate::platform::host_network::coverage_issue(&routes, ipv6_expected);
+                issue = crate::platform::host_network::coverage_issue(&routes, &config);
                 if issue.is_none() {
                     break;
                 }

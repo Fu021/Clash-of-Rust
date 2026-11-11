@@ -295,6 +295,69 @@ fn json_record(path: &Path) -> Value {
         .unwrap_or_else(failure)
 }
 
+fn tun_configuration(root: &Path) -> Value {
+    const LIMIT: u64 = 4 * 1024 * 1024;
+    let path = root.join("runtime/config.yaml");
+    let file = match open_regular(&path) {
+        Ok(file) => file,
+        Err(error) => {
+            let missing = error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|cause| cause.kind() == std::io::ErrorKind::NotFound)
+            });
+            return if missing {
+                json!({"state":"not_generated"})
+            } else {
+                json!({"state":"unavailable","reason":"read_failed"})
+            };
+        }
+    };
+    if !file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() <= LIMIT)
+    {
+        return json!({"state":"unavailable","reason":"file_invalid_or_too_large"});
+    }
+    let mut raw = String::new();
+    if file.take(LIMIT + 1).read_to_string(&mut raw).is_err() {
+        return json!({"state":"unavailable","reason":"read_failed"});
+    }
+    if raw.len() as u64 > LIMIT {
+        return json!({"state":"unavailable","reason":"file_invalid_or_too_large"});
+    }
+    parse_tun_configuration(&raw)
+}
+
+fn parse_tun_configuration(raw: &str) -> Value {
+    let Ok(config) = yaml_serde::from_str::<Value>(raw) else {
+        return json!({"state":"unavailable","reason":"invalid_runtime_config"});
+    };
+    let tun = &config["tun"];
+    if !tun.is_object() {
+        return json!({"state":"unavailable","reason":"invalid_tun_config"});
+    }
+    let dns = &config["dns"];
+    json!({
+        "state":"observed",
+        "source":"generated_runtime_config",
+        "ipv6_enabled":config["ipv6"],
+        "inet4_address":tun["inet4-address"],
+        "inet6_address":tun["inet6-address"],
+        "stack":tun["stack"],
+        "auto_route":tun["auto-route"],
+        "auto_detect_interface":tun["auto-detect-interface"],
+        "strict_route":tun["strict-route"],
+        "mtu":tun["mtu"],
+        "route_address":tun["route-address"],
+        "inet4_route_address":tun["inet4-route-address"],
+        "inet6_route_address":tun["inet6-route-address"],
+        "dns_hijack":tun["dns-hijack"],
+        "dns_enhanced_mode":dns["enhanced-mode"],
+        "fake_ip_range":dns["fake-ip-range"]
+    })
+}
+
 pub fn collect(root: &Path) -> Value {
     json!({
         "version":crate::VERSION,
@@ -302,7 +365,8 @@ pub fn collect(root: &Path) -> Value {
         "captured_at":timestamp(),
         "executable":std::env::current_exe().ok(),
         "data_directory":root,
-        "local_evidence":evidence(root)
+        "local_evidence":evidence(root),
+        "tun_configuration":tun_configuration(root)
     })
 }
 
@@ -509,6 +573,64 @@ mod tests {
         let value = evidence(&root);
         assert_eq!(value["runtime_files"]["state"], "missing");
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn tun_diagnostic_keeps_address_families_and_drops_resolvers_and_credentials() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temporary.path().join("runtime")).unwrap();
+        std::fs::write(
+            temporary.path().join("runtime/config.yaml"),
+            "ipv6: true\nsecret: private-controller-key\nproxies: [{name: private-node, password: private-password}]\ntun:\n  stack: mips\n  auto-route: true\n  strict-route: false\n  inet6-address: []\n  route-address: [0.0.0.0/1, 128.0.0.0/1]\n  dns-hijack: [any:53]\ndns:\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  nameserver: ['https://private.example/dns-query']\n",
+        )
+        .unwrap();
+        let report = collect(temporary.path());
+        let tun = &report["tun_configuration"];
+        assert_eq!(tun["state"], "observed");
+        assert_eq!(tun["source"], "generated_runtime_config");
+        assert_eq!(tun["ipv6_enabled"], true);
+        assert_eq!(tun["inet6_address"], json!([]));
+        assert_eq!(tun["auto_route"], true);
+        assert_eq!(tun["strict_route"], false);
+        assert_eq!(tun["dns_hijack"][0], "any:53");
+        assert_eq!(tun["dns_enhanced_mode"], "fake-ip");
+        for secret in [
+            "private-controller-key",
+            "private-node",
+            "private-password",
+            "private.example",
+        ] {
+            assert!(!report.to_string().contains(secret));
+        }
+    }
+
+    #[test]
+    fn tun_diagnostics_distinguish_missing_invalid_and_oversized_configuration() {
+        let temporary = tempfile::tempdir().unwrap();
+        assert_eq!(
+            tun_configuration(temporary.path())["state"],
+            "not_generated"
+        );
+        std::fs::create_dir(temporary.path().join("runtime")).unwrap();
+        let path = temporary.path().join("runtime/config.yaml");
+        std::fs::write(&path, "tun: [").unwrap();
+        assert_eq!(
+            tun_configuration(temporary.path())["reason"],
+            "invalid_runtime_config"
+        );
+        std::fs::write(&path, "tun: []").unwrap();
+        assert_eq!(
+            tun_configuration(temporary.path())["reason"],
+            "invalid_tun_config"
+        );
+        File::create(&path)
+            .unwrap()
+            .set_len(4 * 1024 * 1024 + 1)
+            .unwrap();
+        assert_eq!(
+            tun_configuration(temporary.path())["reason"],
+            "file_invalid_or_too_large"
+        );
     }
 
     #[test]

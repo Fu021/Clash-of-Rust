@@ -38,7 +38,6 @@ pub async fn next() -> Option<Command> {
 pub struct Startup {
     ready: mpsc::Receiver<Result<Guard, String>>,
     cancel: mpsc::Sender<()>,
-    started: Instant,
 }
 
 impl Startup {
@@ -75,29 +74,20 @@ impl Startup {
                 }
             }
         });
-        Self {
-            ready,
-            cancel,
-            started,
-        }
+        Self { ready, cancel }
     }
 
     #[cfg(target_os = "macos")]
     pub fn new(timeout: Duration) -> Self {
         let (sender, ready) = mpsc::channel();
         let (cancel, cancelled) = mpsc::channel();
-        let started = Instant::now();
         MAC_PENDING.lock().unwrap().push(MacPending {
             ready: sender,
             cancelled,
             timeout,
             deadline: None,
         });
-        Self {
-            ready,
-            cancel,
-            started,
-        }
+        Self { ready, cancel }
     }
 
     pub fn poll(&self) -> Option<Result<Guard, String>> {
@@ -106,10 +96,6 @@ impl Startup {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => Some(Err("托盘初始化线程已结束".into())),
         }
-    }
-
-    pub fn elapsed(&self) -> Duration {
-        self.started.elapsed()
     }
 }
 

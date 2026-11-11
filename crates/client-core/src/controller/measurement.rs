@@ -345,7 +345,10 @@ mod tests {
                         request.extend_from_slice(&buffer[..count]);
                     }
                     let (status, body) = if request.starts_with(b"GET /proxies HTTP") {
-                        ("200 OK", r#"{"proxies":{"node":{"type":"Socks5"}}}"#)
+                        (
+                            "200 OK",
+                            r#"{"proxies":{"group":{"type":"Selector","all":["node"]},"node":{"type":"Socks5"}}}"#,
+                        )
                     } else {
                         assert!(request.starts_with(b"GET /proxies/node/delay?"));
                         (status, "private-response")

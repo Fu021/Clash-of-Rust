@@ -188,7 +188,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 &[("文件", "name"), ("大小", "size")],
             )
         }
-        "autostart" => field(out, "桌面程序登录自启", &text(value, "enabled")),
+        "autostart" => field(out, "桌面程序后台自启", &text(value, "enabled")),
         "service install" | "service remove" | "service status" => {
             let installed = value["installed"]
                 .as_bool()

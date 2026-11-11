@@ -1831,7 +1831,7 @@ public class ProxyTunTest {
             "  - {name: CI-diagnostics-offline, type: http, server: 127.0.0.1, port: 1}\n"
             + "proxy-groups:\n  - name: CI-diagnostics\n    type: url-test\n"
             + "    proxies: [CI-TUN-origin, CI-diagnostics-offline]\n"
-            + "    url: http://10.0.2.2:18081/diagnostic-probe?token=ci-only-url-secret\n"
+            + "    url: http://198.51.100.1:18081/diagnostic-probe?token=ci-only-url-secret\n"
             + "    expected-status: 200\n    interval: 3600\n    lazy: true\nrules:\n");
         java.nio.file.Files.write(profile.toPath(), source.getBytes(StandardCharsets.UTF_8));
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));

@@ -45,7 +45,7 @@
 | `update download -o FILE` | 下载并校验当前平台安装包，不安装 |
 | `update install --yes` | 下载并校验后安装；Linux 无窗口时在当前终端授权并等待结果，安装失败尝试恢复原后台；成功后用 `cor start` 启动。有窗口及其他桌面平台沿用系统安装助手 |
 | `update status` | 不启动后台，读取本账户和数据目录中的最近安装结果；区分准备、安装中、成功与失败 |
-| `autostart [on\|off]` | 普通桌面程序登录自启 |
+| `autostart [on\|off]` | 桌面程序登录后在后台启动，不主动打开窗口 |
 | `service install --yes` | 为当前用户配置 CLI 后台登录自启 |
 | `service remove --yes` / `service status` | 删除或查询 CLI 后台登录自启 |
 | `notify [MESSAGE]` | 与 Claude 拦截共用系统通知接口，默认“喵!” |
@@ -56,6 +56,8 @@ Geo 状态区分数据版本、数据准备时间和本机上次成功更新时�
 Geo 更新后后台因备份缺失无法启动时，启动恢复仅保留通过整组校验的当前数据，并保存原事务、清单及残余备份；不把此前更新记为成功。未通过校验时保留现场并报错，详见[Geo 恢复与启动](../agent-failures/downloads.md#geo-恢复与启动)。资源缺失报错会列出实际程序及资源查找目录，可核对完整安装位置或 `--resources PATH`，不要直接删除恢复记录。
 
 后台请求超时或中断会取消尚未提交的订阅、Geo 和客户端更新下载；安装交接一旦开始，系统安装程序可能已经启动。慢网可用 `--timeout N` 延长请求等待，详见[下载任务](../agent-failures/downloads.md)。
+
+桌面三平台的自启均带 `--background`：Linux 使用用户 `.desktop`，Windows 使用当前用户登录任务，macOS 使用 LaunchAgent。登录后恢复后台和已保存的网络模式，点击托盘或手动打开程序才显示窗口；托盘在登录阶段最多等待 120 秒，只有最终失败才打开窗口提示，避免后台无法操作。不在等待期间提前弹窗，也不重复弹出管理员授权。该设置是登录自启，不是登录前的系统服务。
 
 CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用户登录任务（无窗口入口启动 `cor`，系统受限时沿用原有注册表回退）。`service install` 配置下次登录启动，当前会话用 `cor start`；`service remove` 只取消自启，停止当前后台用 `cor stop`。不是 Linux 系统级 root 服务，也不自动启用 linger。配置时记录可执行文件和数据目录，移动程序后应重新安装服务。建议桌面自启与 CLI 自启选择一种。卸载或更换安装目录前，对自定义 `--data-dir` 先执行 `cor stop` 和 `cor service remove --yes`；Windows 安装包也会清理默认目录的后台与当前安装的 CLI 自启项。
 

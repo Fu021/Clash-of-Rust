@@ -1958,9 +1958,6 @@ impl App {
                                 }
                             }
                         }
-                    } else if !self.visible && startup.elapsed() >= Duration::from_secs(3) {
-                        // Keep an app with no usable tray accessible while retrying.
-                        return desktop_runtime::window::latest().map(Message::ShowWindow);
                     }
                 }
                 if self.updates.install_pending || self.updates.installing.is_some() {

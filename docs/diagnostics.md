@@ -4,6 +4,19 @@
 
 错误码供维护者分析 JSON 报告，不作为界面标签或要求用户理解的提示。GUI 和 CLI 仍显示具体、可读的失败原因，提供导出诊断入口；不会自动上传日志或修改网络。
 
+## 桌面 TUN 启动与覆盖
+
+桌面导出和 `cor diagnose`／`--offline` 共用 `data.tun_configuration`，只提取生成运行配置的地址族及路由/DNS 覆盖字段，最多读取 4 MiB，不读取链接或特殊文件，不输出订阅节点、密码、控制密钥或上游 DNS 正文。`source=generated_runtime_config` 明确它是文件快照；`ipv6_enabled` 不证明实际存在 IPv6 TUN，启动校验另以控制接口的实时 `tun.inet6-address` 为依据。缺少、不可读、过大与无效文件分开记录。
+
+| 内部标记 | 保存位置 | 含义与处理 |
+| --- | --- | --- |
+| `tun_ipv6_not_configured` | 内核/客户端缓冲日志 | 允许 IPv6，但内核未创建 IPv6 TUN 地址；仅检查实际配置的地址族，不因此停止可用的 IPv4 TUN |
+| `tun_ipv4_route_bypass` | `host_routes.warnings` | IPv4 示例仍经过非 TUN 接口；启动校验失败并回滚，运行中显示绕行提示 |
+| `tun_ipv6_route_bypass` | `host_routes.warnings` | IPv6 示例仍经过非 TUN 接口；实际配置 IPv6 TUN 时启动校验失败，否则保留提示，不冒充完整接管 |
+| `route_unavailable`／`route_query_timeout` | `host_routes.ipv4/ipv6.reason` | 未取得可判定样本；未知不是网络成功或失败 |
+
+[#40 的现场及验证边界](agent-failures/network-recovery.md#linux-tun-地址族与启动校验)见网络恢复说明；不把物理 IPv6 路由单独归因于桌面环境或权限。
+
 ## 测速记录
 
 桌面和 Android 报告的 `data.context.measurements`、`cor diagnose` 的 `data.measurements` 保存当前进程/后台最近四次已完成的测速摘要。CLI 后台通过可选 `Meta.measurements` 传给附加前端；旧后台没有该字段时视为无记录。当前进程中重新应用设置或切换控制端口会保留记录，进程退出后不保证仍有这些内存记录。
@@ -40,6 +53,8 @@ Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到�
 ## 回归与现场导出
 
 普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本专项须维护者明确选择，见[测试入口和验证边界](workflows/android-previews.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；不会把模拟器中的确定性故障当成 #38 唯一根因。
+
+混合测速夹具经本地 HTTP 代理连接隔离源站；测速 URL 的目标必须与源站允许的 CONNECT 地址一致，否则两个节点都会真实失败，不能用于验证“一成功、一失败”。批量控制异常夹具须把节点放入策略组，确保实际发出请求，避免空批次的成功结果掩盖分类问题。
 
 用户复现后应尽快在日志页点“诊断”保存 `cor-diagnose.json`，附上操作步骤和发生时间；不要先重启进程再导出，否则可能失去内存中的测速摘要。CLI 对应 `cor diagnose --output cor-diagnose.json`，后台无法连接时用 `cor diagnose --offline --output cor-diagnose.json`。报告留在本地，分享前检查敏感内容。
 

@@ -3405,8 +3405,10 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertTrue((report/'ime-report/state.json').is_file())
 
     def test_android_tun_origin_keeps_the_probe_live_until_controller_verification(self):
-        for path, acknowledgement in (('/probe', None), ('/hold', b'!'), ('/hold', b'?')):
-            with self.subTest(path=path, acknowledgement=acknowledgement):
+        for path, acknowledgement, tunnel in (
+                ('/probe', None, False), ('/hold', b'!', False), ('/hold', b'?', False),
+                ('/diagnostic-probe?token=ci-only-url-secret', None, True)):
+            with self.subTest(path=path, acknowledgement=acknowledgement, tunnel=tunnel):
                 server, client = socket.socketpair()
                 client.settimeout(1)
                 errors = []
@@ -3419,6 +3421,17 @@ runpy.run_path(str(script), run_name='__main__')
                 worker = threading.Thread(target=serve, daemon=True)
                 worker.start()
                 try:
+                    if tunnel:
+                        client.sendall(
+                            b'CONNECT 198.51.100.1:18081 HTTP/1.1\r\n'
+                            b'Host: 198.51.100.1:18081\r\n\r\n'
+                        )
+                        response = bytearray()
+                        while not response.endswith(b'\r\n\r\n'):
+                            fragment = client.recv(1)
+                            self.assertTrue(fragment, 'Origin rejected the diagnostic proxy tunnel')
+                            response.extend(fragment)
+                        self.assertTrue(response.startswith(b'HTTP/1.1 200 '))
                     client.sendall(
                         f'GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\nContent-Length: 1\r\n\r\n'.encode()
                     )
