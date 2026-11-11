@@ -243,13 +243,13 @@ jobs:
         continue-on-error: true
         id: rust_github
         with:
-          prefix-key: android-v2-${{ matrix.arch }}
+          prefix-key: android-main-v1-${{ matrix.arch }}
           key: workspace-${{ hashFiles('.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**') }}
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: true
           cache-directories: ${{ github.workspace }}/.workspace-sources
-          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
         shell: python
@@ -281,8 +281,11 @@ jobs:
             ${{ steps.android_paths.outputs.registry }}
             ${{ steps.android_paths.outputs.git }}
             ${{ steps.android_paths.outputs.target }}
-          key: android-v2-${{ matrix.arch }}-migration-${{ github.run_id }}
-          restore-keys: android-v2-${{ matrix.arch }}-
+            ${{ github.workspace }}/.workspace-sources
+          key: android-main-v1-${{ matrix.arch }}-migration-${{ github.run_id }}
+          restore-keys: |
+            android-main-v1-${{ matrix.arch }}-
+            ${{ github.ref == 'refs/heads/main' && format('android-v2-{0}-', matrix.arch) || '' }}
       - name: Discard interrupted previous Android restore
         if: steps.android_legacy.outcome == 'failure'
         shell: python
@@ -291,6 +294,14 @@ jobs:
           sys.path.insert(0, 'scripts')
           from action_cache import discard_restore
           discard_restore({'kind': 'rust', 'source': '.'})
+      - name: Restore Android branch compiler changes
+        id: branch_cache
+        if: github.ref != 'refs/heads/main' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (steps.android_paths.outputs.needed == 'false' || startsWith(steps.android_legacy.outputs.cache-matched-key, format('android-main-v1-{0}-', matrix.arch)))
+        uses: ./.github/actions/branch-cache-restore
+        timeout-minutes: 5
+        with:
+          family: android-${{ matrix.arch }}
+          sources: ${{ github.workspace }}/.workspace-sources
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: android-shared-dependencies
@@ -356,7 +367,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/android.py build --arch ${{ matrix.arch }}
       - name: Save Android Go compilation
-        if: steps.go_cache.outputs.cache-hit != 'true' && steps.go_cache.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: github.ref == 'refs/heads/main' && steps.go_cache.outputs.cache-hit != 'true' && steps.go_cache.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 3
@@ -403,6 +414,14 @@ jobs:
             dist/package-receipt.json
           if-no-files-found: error
           retention-days: 3
+      - name: Save Android branch compiler changes
+        if: steps.branch_cache.outputs.ready == 'true' && steps.branch_cache.outputs.hit != 'true'
+        uses: ./.github/actions/branch-cache-save
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          sources: ${{ github.workspace }}/.workspace-sources
+          key: ${{ steps.branch_cache.outputs.key }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
@@ -549,7 +568,7 @@ jobs:
         continue-on-error: true
         id: rust_github
         with:
-          prefix-key: ${{ runner.os == 'Linux' && 'native-release-ubuntu20-v1-' || 'native-release-v2-' }}${{ matrix.os }}
+          prefix-key: native-main-v1-${{ matrix.os }}
           key: ${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
           cache-on-failure: false
           cache-bin: false
@@ -557,7 +576,7 @@ jobs:
           # crates are invalidated explicitly, even for an older source branch.
           cache-workspace-crates: ${{ matrix.os != 'windows-11-arm' }}
           cache-directories: ${{ runner.temp }}/workspace-sources
-          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
         run: |
@@ -592,8 +611,10 @@ jobs:
             ${{ steps.rust_paths.outputs.git }}
             ${{ steps.rust_paths.outputs.target }}
             ${{ runner.temp }}/workspace-sources
-          key: ${{ runner.os == 'Linux' && 'native-release-ubuntu20-v1-' || 'native-release-v2-' }}${{ matrix.os }}-fallback-${{ github.run_id }}
-          restore-keys: ${{ runner.os == 'Linux' && 'native-release-ubuntu20-v1-' || 'native-release-v2-' }}${{ matrix.os }}-
+          key: native-main-v1-${{ matrix.os }}-fallback-${{ github.run_id }}
+          restore-keys: |
+            native-main-v1-${{ matrix.os }}-
+            ${{ github.ref == 'refs/heads/main' && format('{0}{1}-', runner.os == 'Linux' && 'native-release-ubuntu20-v1-' || 'native-release-v2-', matrix.os) || '' }}
       - name: Discard interrupted compatible GitHub restore
         if: steps.rust_fallback.outcome == 'failure'
         run: |
@@ -601,6 +622,14 @@ jobs:
           sys.path.insert(0, 'scripts')
           from action_cache import discard_restore
           discard_restore({'kind': 'rust', 'source': '.'})
+      - name: Restore native branch compiler changes
+        id: branch_cache
+        if: github.ref != 'refs/heads/main' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (steps.rust_paths.outputs.needed == 'false' || startsWith(steps.rust_fallback.outputs.cache-matched-key, format('native-main-v1-{0}-', matrix.os)))
+        uses: ./.github/actions/branch-cache-restore
+        timeout-minutes: 5
+        with:
+          family: native-${{ matrix.os }}
+          sources: ${{ runner.temp }}/workspace-sources
       - name: Verify native architecture
         run: |
           import subprocess, sys
@@ -692,6 +721,14 @@ jobs:
             dist/package-receipt.json
           if-no-files-found: error
           retention-days: 3
+      - name: Save native branch compiler changes
+        if: steps.branch_cache.outputs.ready == 'true' && steps.branch_cache.outputs.hit != 'true'
+        uses: ./.github/actions/branch-cache-save
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          sources: ${{ runner.temp }}/workspace-sources
+          key: ${{ steps.branch_cache.outputs.key }}
       - name: Collect macOS failure diagnostics
         if: failure() && runner.os == 'macOS'
         run: |
@@ -946,15 +983,23 @@ jobs:
           path: target/dependency-audit
           retention-days: 3
           if-no-files-found: error
-      - name: Keep the latest cache per target within 20 GiB across branches
+      - name: Load the trusted main cache policy
+        if: github.ref != 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          path: .cache-policy-main
+          persist-credentials: false
+      - name: Protect main caches and limit branch caches
         shell: python
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_READ_ONLY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          CACHE_POLICY_SCRIPT: ${{ github.ref == 'refs/heads/main' && 'scripts/workflow_storage.py' || '.cache-policy-main/scripts/workflow_storage.py' }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           import os, subprocess, sys
-          command = [sys.executable, 'scripts/workflow_storage.py']
+          command = [sys.executable, os.environ['CACHE_POLICY_SCRIPT']]
           if os.environ['CACHE_READ_ONLY'] == 'true': command.append('--read-only')
           subprocess.run(command, check=True)
       - name: Connect for final private cache inventory

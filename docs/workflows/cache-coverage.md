@@ -10,7 +10,7 @@ CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache�
 
 仓库缓存上限为 **24 GB**（API 字段 `max_cache_size_gb=24`），工作流热缓存保留预算为 **20 GiB**，为保存期间的新旧对象交替留余量。维护者本轮授权的每月缓存预算为 **1 美元**；账户预算、仓库上限和工作流保留预算分别设置。GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及设置依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
 
-CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台的新编译缓存；Memory Benchmark 不再限定主分支保存。精确键已存在时由不可变缓存规则复用，未命中正常编译；fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。优先缩短 CI 的实际关键路径：macOS Tailscale 二进制很小且能省去源码编译，因此优先保留；Rust 对象中 macOS ARM64 仍按维护者要求最高优先，减少稀缺 runner 分配后重新编译的损失。其余编译目标按最近六次成功完整 CI 的恢复与编译耗时保留：
+CI 的 main 构建保存各平台完整 Rust 基线，同仓库开发分支与 PR 在恢复兼容的 main 基线后只尝试保存有大小上限的对象差异。Memory Benchmark 仅在 main 工作流测量当前 main 提交时保存完整基线，其他分支使用差异包；选择旧版本时不覆盖 main 基线。fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。以下是此前六次成功 CI 的耗时依据；当前 main 缓存均受保护，不能据此宣称某个 main 对象一定会被淘汰：
 
 | 保留优先级 | 平台或工具 | 恢复／编译耗时依据 |
 | --- | --- | --- |
@@ -28,24 +28,24 @@ CI 的主分支、开发分支及同仓库 PR 成功后均尝试保存各平台�
 
 2026-11-10 按六轮完整成功 CI 核对，恢复与编译分别取中位数，策略不随每轮数据自动变化。采样来源、Tailscale 冷暖对照及测量边界见[耗时依据](cache-capacity.md#近期-ci-耗时依据)。
 
-全仓同一平台/架构的逻辑键组只留最新成功保存的一代，不为 main、开发分支及 PR 分别保留；内存基准按 profile 区分。Windows/macOS 不同源码的 workspace 键归入同一平台族，编译器或依赖摘要变化也不额外保留旧代。按创建时间选择最新缓存，同时间按缓存 ID 决定；访问旧缓存不会让它取代新代。尚未保存成功的新缓存不替换已有记录，容量不足仍按上表淘汰，不向私网复制。`rust-cache` 自带的 Cargo registry/Git 数据与 Rust 对象一起管理，不再另建下载缓存。测试报告和安装包仅使用短期 artifact。
+清理脚本不删除 main 的任何条目。其他 ref 的完整编译归档退出保留，每个 ref、平台及 profile 最多保留最新一代差异包；与 main 的 key 和 cache version 均相同的分支副本也会删除。CI 的分支任务与 Memory 清理任务从 main 加载保留策略，避免旧分支的脚本删除 main 基线；旧分支仍需同步工作流本身以采用新规则。超出 20 GiB 工作预算时先回收其他 ref；若 main 本身已超预算，只报告警告，不删除 main。GitHub 自身的过期与仓库容量淘汰不受此保护，20 GiB 因而是工作预算而非绝对上限。`rust-cache` 的 Cargo registry/Git 数据与 main 对象一起管理；测试报告和安装包仅使用短期 artifact。
 
 这是保留规则，不会改变 GitHub 的[缓存读取作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)：PR 的 merge ref 缓存仍不能被 main 或其他 PR 读取，切换运行分支可能冷编译。不能通过同名 key 将 PR 缓存迁移到主分支，也不扩大不可信 PR 的写权限。
 
-共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。受信任的 main CI 可生成公共基线，但当前“全仓每目标只留最新一代”会在 PR 保存新代后删除旧 main 基线，不保证多个并行 PR 长期共享。后续可由工作流实现[main 基线与分支差异包](cache-capacity.md#后续方案main-基线与分支差异包)，只保存新增或变化的对象；该方案尚未启用，不能把 GitHub 的分支可读性当成自动差异合并。当前不通过切换触发事件或提升 PR 权限绕过作用域。
+共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。[差异包](cache-capacity.md#main-基线与分支差异包)由独立的恢复步骤校验、叠加，GitHub 不会自动合并两份归档；缺少基线、损坏或超过上限时正常重编。新命名空间只由可信 main 写入完整基线，首次 main 运行可从旧 main 归档迁移；不通过切换触发事件或提升 PR 权限绕过作用域。
 
 Linux 和 Android 保留 workspace 编译结果及经过内容核对的源码时间戳，不再精确命中旧依赖缓存后永久跳过新对象保存；Linux 容器同时挂载源码回执，避免宿主和容器读取不同位置。Windows ARM64 保留依赖缓存，只在本地 vendor 源码变化时更新键，不因每次业务源码变动重压整个 workspace；其他桌面端继续保留 workspace。全部使用 zstd 快速压缩级别 1，缓存仍不可变，首次填充和后续暖恢复需分别测量。
 
 缓存 Action 默认会删除 workspace 根目录内、却不属于成员的 path 依赖，两个本地 Slint 修复库因此曾每轮重编并连带重建 UI。现在按包名把这两库的编译对象、构建输出及指纹保留在现有源码回执目录内；恢复先核对完整文件清单及摘要，缺失、损坏或越界时整体忽略，源码改变后仍失效相应 crate。不会把第三方库加入项目测试成员或关闭其告警；迁移首次仍可恢复旧归档中的兼容依赖。
 
-新增两类 GitHub 编译辅助缓存，均按架构只保留最新代：Android `GOCACHE` 按工具版本、Go 源码及锁文件分键；Linux 编译容器按官方基础 digest、Python 摘要、Dockerfile 和构建 UID/GID 分键。容器归档只含编译环境，不含应用、测试写入层或 VM；恢复先校验归档长度、SHA256 和环境身份，再核对 Docker 加载结果，失效则冷准备。Gradle 转换、工具安装目录及资源目录仍不缓存。
+Android `GOCACHE` 按工具版本、Go 源码及锁文件分键；Linux 编译容器按官方基础 digest、Python 摘要、Dockerfile 和构建 UID/GID 分键。这两类完整对象只由 main 保存，分支未命中时正常生成而不保存完整副本。容器归档只含编译环境，不含应用、测试写入层或 VM；恢复先校验归档长度、SHA256 和环境身份，再核对 Docker 加载结果，失效则冷准备。Gradle 转换、工具安装目录及资源目录仍不缓存。
 
 macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS job 开启该 Action 自带的 GitHub 二进制缓存；内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存按架构保留最近版本，计入 20 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
 | 工作流 | GitHub 编译缓存与收尾 | 私网预装镜像 |
 | --- | --- | --- |
-| CI | 六种桌面与三个 Android ABI 的 Rust，加 Linux 编译容器与 Android Go；全仓按目标保留最新一代，按 20 GiB 统一清理 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
-| Memory Benchmark | 恢复/保存本次 profile 的 Rust；使用同一预算，优先让出空间 | 不使用 |
+| CI | 九个目标的 main Rust 基线及受限分支差异，加 main 的 Linux 编译容器与 Android Go；优先保护 main | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
+| Memory Benchmark | main 当前提交保存 profile 基线，其他分支保存受限差异；使用同一预算 | 不使用 |
 | Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 复用 CI 验收结果，不下载或上传 VM |
 | Android UI Previews（按需） | 复用成功 CI 的 APK，只留截图 artifact | 不使用 |
 

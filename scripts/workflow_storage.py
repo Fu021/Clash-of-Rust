@@ -1,4 +1,4 @@
-"""Keep the latest cache per target across refs within 20 GiB."""
+"""Protect main caches and limit other refs to a 20 GiB working budget."""
 import argparse
 import os
 from pathlib import Path
@@ -23,6 +23,8 @@ def caches(client):
 
 
 def lineage(key):
+    if key.startswith('branch-delta-v1-'):
+        return re.sub(r'-[0-9a-f]{64}-[0-9a-f]{40}$', '', key)
     key = re.sub(r'-(?:workspace|vendor)-[0-9a-f]{64}', '', key)
     key = re.sub(r'-local-deps-v\d+', '', key)
     if key.startswith('linux-build-linux-image-ubuntu20-'):
@@ -104,26 +106,38 @@ def retired(key):
     ))
 
 
+def branch_full_cache(key):
+    return key.startswith((
+        'native-release-', 'native-main-', 'android-v2-', 'android-main-',
+        'memory-ubuntu22-', 'memory-main-', 'android-go-', 'linux-build-linux-image-ubuntu20-',
+    ))
+
+
 def eviction_plan(entries, budget=BUDGET):
     if budget <= 0:
         raise ValueError('Cache budget must be positive')
     recent = sorted(entries, key=lambda c: (c['created_at'], c['id']), reverse=True)
     seen = set()
-    keep = []
+    keep = [entry for entry in recent if entry['ref'] == 'refs/heads/main']
+    main_versions = {(entry['key'], entry['version']) for entry in keep if entry.get('version')}
     remove = []
     for entry in recent:
-        if retired(entry['key']):
+        if entry['ref'] == 'refs/heads/main':
+            continue
+        duplicate_main = entry.get('version') and (entry['key'], entry['version']) in main_versions
+        if retired(entry['key']) or branch_full_cache(entry['key']) or duplicate_main:
             remove.append(entry)
             continue
-        family = lineage(entry['key'])
+        family = (entry['ref'], lineage(entry['key']))
         if family in seen:
             remove.append(entry)
         else:
             seen.add(family)
             keep.append(entry)
     size = sum(c['size_in_bytes'] for c in keep)
-    for entry in sorted(keep, key=lambda c: (priority(c), c['last_accessed_at'],
-                                           c['created_at'], c['id'])):
+    candidates = (entry for entry in keep if entry['ref'] != 'refs/heads/main')
+    for entry in sorted(candidates, key=lambda c: (priority(c), c['last_accessed_at'],
+                                                 c['created_at'], c['id'])):
         if size <= budget:
             break
         remove.append(entry)
@@ -154,7 +168,8 @@ def prune(client, budget=BUDGET, read_only=False):
         current = caches(client)
     after = sum(c['size_in_bytes'] for c in current)
     if not read_only and after > budget:
-        raise RuntimeError(f'Actions cache still exceeds budget: {after} > {budget} bytes')
+        print(f'::warning::Protected main caches exceed the {budget / 1024**3:.0f} GiB '
+              'working budget; GitHub may enforce its own storage limit.', flush=True)
     report = (f'Actions cache: {before / 1024**3:.2f} → {after / 1024**3:.2f} GiB; '
               f'budget {budget / 1024**3:.0f} GiB; removed {removed} entries'
               + (' (read-only fork report)' if read_only else ''))

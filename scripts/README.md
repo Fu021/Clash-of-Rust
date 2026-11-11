@@ -16,6 +16,7 @@
 | `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验及清单。 |
 | `cache_shards.py` | 历史协议辅助 | 旧 Rust 分片的离线兼容回归；当前工作流不调用。 |
 | `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
+| `workflow_cache_delta.py` | CLI / 模块 | 核验 main Rust 基线并生成、恢复有界的分支对象差异。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
 | `android.py` | CLI | Android 编译、模拟器测试、产物导出与已测试 APK 打包；默认只运行基础代理/TUN，分流和生命周期由 CI 策略按需选择。`application-preview --arch x64 --api LEVEL --build DIRECTORY` 校验设备版本及本轮归档，再采集主要页面和实际应用列表截图，不启动 VPN；版本范围与入口见[Android 界面预览](../docs/workflows/ci.md#android-界面预览)。输入法调查仍需明确要求，使用 `emulator --legacy` / `--api` 和 `test --ime-only`。 |

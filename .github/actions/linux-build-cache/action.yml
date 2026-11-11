@@ -21,7 +21,7 @@ runs:
         COR_LINUX_BUILD_CACHE: ${{ runner.temp }}/cor-linux-build-cache
       run: python3 scripts/linux_ci.py cache-image
     - name: Save compiler container
-      if: steps.prepare.outputs.ready == 'true' && steps.restore.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      if: github.ref == 'refs/heads/main' && steps.prepare.outputs.ready == 'true' && steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       continue-on-error: true
       with:

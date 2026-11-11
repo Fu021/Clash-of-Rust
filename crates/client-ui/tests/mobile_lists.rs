@@ -71,7 +71,7 @@ slint::slint! {
     }
 
     export component MobileRuleRowsProbe inherits Window {
-        preferred-width: 393px; preferred-height: 400px;
+        width: 393px; height: 400px;
         in-out property <float> text-scale <=> Theme.text-scale;
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <int> detail <=> MobileView.detail;
@@ -79,16 +79,19 @@ slint::slint! {
         out property <length> custom-height: custom.height;
         out property <length> subscription-height: subscription.height;
         out property <length> shortcut-height: shortcut.height;
-        VerticalLayout {
-            alignment: start; spacing: 1px;
-            custom := RulesRow {
-                item: { id: "custom", position: "1", kind: "DOMAIN-SUFFIX", value: "a-very-long-domain-name.example.com", policy: "DIRECT", source: "自定义", enabled: true };
-            }
-            subscription := RulesRow {
-                item: { id: "subscription", position: "2", kind: "MATCH", policy: "A very long policy name", source: "订阅", enabled: true };
-            }
-            shortcut := RulesRow {
-                item: { id: "shortcut", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "快捷规则", enabled: true };
+        Rectangle {
+            width: parent.width; height: parent.height;
+            VerticalLayout {
+                alignment: start; spacing: 1px;
+                custom := RulesRow {
+                    item: { id: "custom", position: "1", kind: "DOMAIN-SUFFIX", value: "a-very-long-domain-name.example.com", policy: "DIRECT", source: "自定义", enabled: true };
+                }
+                subscription := RulesRow {
+                    item: { id: "subscription", position: "2", kind: "MATCH", policy: "A very long policy name", source: "订阅", enabled: true };
+                }
+                shortcut := RulesRow {
+                    item: { id: "shortcut", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "快捷规则", enabled: true };
+                }
             }
         }
     }

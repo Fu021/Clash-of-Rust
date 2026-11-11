@@ -54,7 +54,8 @@ def main():
                      'appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
                  '--locked', 'application::ui_tests::' + case, '--', '--exact', '--test-threads=1'])
-        for case in ('notice_countdown_restarts_and_expires_after_five_seconds',
+        for case in ('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes',
+                     'notice_countdown_restarts_and_expires_after_five_seconds',
                      'applications_scroll_across_phone_and_tablet_viewports'):
             run(['cargo', 'test', '-p', 'clash-client-ui', '--test', 'mobile_lists', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])

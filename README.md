@@ -24,7 +24,7 @@
 
 | 浅色首页 | 深色首页 |
 | --- | --- |
-| [![浅色首页](docs/images/home-light.png)](docs/images/home-light.png) | [![深色首页](docs/images/home-dark.png)](docs/images/home-dark.png) |
+| [![浅色首页](docs/images/home-0.7.0-light.png)](docs/images/home-0.7.0-light.png) | [![深色首页](docs/images/home-0.7.0-dark.png)](docs/images/home-0.7.0-dark.png) |
 
 ## 安装与使用
 
