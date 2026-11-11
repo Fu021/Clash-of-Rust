@@ -1739,6 +1739,48 @@ public class ProxyTunTest {
         });
     }
 
+    private static boolean pickerFocused(android.app.UiAutomation automation, String packageName) {
+        for (android.view.accessibility.AccessibilityWindowInfo window : automation.getWindows()) {
+            if (window.getType() != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
+                    || !window.isFocused()) continue;
+            android.view.accessibility.AccessibilityNodeInfo root = window.getRoot();
+            if (root != null && android.text.TextUtils.equals(root.getPackageName(), packageName)) return true;
+        }
+        return false;
+    }
+
+    private static void closeDiagnosticPicker() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        ComponentName picker = new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json")
+            .addCategory(Intent.CATEGORY_OPENABLE).resolveActivity(context.getPackageManager());
+        assertNotNull("No system document picker resolves the diagnostic export", picker);
+        android.app.UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        android.accessibilityservice.AccessibilityServiceInfo service = automation.getServiceInfo();
+        assertNotNull("Android accessibility automation is unavailable", service);
+        int originalFlags = service.flags;
+        service.flags |= android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        automation.setServiceInfo(service);
+        try {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                await("Neither the document picker nor the application has window focus", () ->
+                    inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true)
+                        || pickerFocused(automation, picker.getPackageName()));
+                if (inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true)) return;
+                shell("input keyevent KEYCODE_BACK");
+                long deadline = SystemClock.uptimeMillis() + 2000;
+                while (SystemClock.uptimeMillis() < deadline) {
+                    if (inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true)) return;
+                    SystemClock.sleep(100);
+                }
+            }
+            await("The document picker did not return to the application",
+                () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        } finally {
+            service.flags = originalFlags;
+            automation.setServiceInfo(service);
+        }
+    }
+
     private static JSONObject exportMeasurementReport(File directory, String name) throws Exception {
         dismissErrorDialogIfPresent(false);
         previewTool(5);
@@ -1769,9 +1811,7 @@ public class ProxyTunTest {
                 return true;
             } catch (JSONException error) { return false; }
         });
-        shell("input keyevent KEYCODE_BACK");
-        await("The document picker did not return to the application",
-            () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        closeDiagnosticPicker();
         waitForAppWindow();
         String saved = new String(java.nio.file.Files.readAllBytes(destination.toPath()), StandardCharsets.UTF_8);
         assertEquals("Exported bytes differ from the actual report payload", content.get(), saved);

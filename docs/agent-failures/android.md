@@ -64,6 +64,7 @@
 - 测试辅助状态必须有稳定来源，等待状态变化而不是固定 sleep。
 - 应用分流先通过公开 `PackageManager.getApplicationInfo` 核对安装状态，再交给 VPN Builder；不能只依赖 Builder 的 `NameNotFoundException`。[CI 42587460890](https://github.com/Fu021/Clash-of-Rust/actions/runs/42587460890) 在仅选中模式建立 VPN 后仍保留不存在的包名；[AOSP 的 `verifyApp`](https://android.googlesource.com/platform/frameworks/base/+/master/core/java/android/net/VpnService.java#785) 未处理 Binder 查询返回空值，可能不抛文档所述异常。回归核对三种模式的真实路由、卸载清理、有效选择保留，以及全部选中项失效时拒绝建立 VPN。
 - VPN 授权测试不能把无障碍 `ACTION_CLICK` 返回成功当作对话框已关闭；要等应用窗口实际恢复前台与焦点，再发起下一次授权，避免连续拒绝/允许误点正在退出的旧窗口。证据见 [CI 40161810492](https://github.com/Fu021/Clash-of-Rust/actions/runs/40161810492) 的 Android x64 logcat。
+- Android 8.0／8.1 的系统文档保存器在宿主已暂停后仍可能未取得窗口焦点。诊断专项 `43024366989` 已写出 JSON，但返回键早于保存器显示，8.0 日志明确记录 `Dropping event due to no window focus`。操作前按实际解析的保存器包等待前台应用窗口焦点，退出时有界处理返回层级，再严格等待宿主焦点和 Slint 几何恢复；不以固定延时或文件已写出代替完整恢复验收。
 - 焦点等待失败时同时检查宿主生命周期与模拟器系统窗口。[打包 40524184066](https://github.com/Fu021/Clash-of-Rust/actions/runs/40524184066) 的 Google Messages、[打包 41812352411](https://github.com/Fu021/Clash-of-Rust/actions/runs/41812352411) 的 SystemUI/Google 服务均曾在应用外出现 ANR，挡住已 `RESUMED` 的应用焦点；不能改写应用生命周期或删除焦点断言。后者冷启动时 CPU 压力约 89%、负载约 17.5；可丢弃模拟器改为 4 GiB RAM、至多使用宿主的 4 个 CPU，并保存窗口、Activity、电源诊断；显式传入 `-no-metrics`，避免后续交互式遥测确认。`2ac829d` 的 CI `41823452467` 与不发布打包 `41828458776` 均通过真实代理/TUN 和授权检查；这不能认定旧 ANR 的唯一根因或代替实机验收。
 - 保护只读校验放在共享会话，在下载、保存或重载前拒绝所有订阅编辑、更新和设置修改；界面禁用按钮只提供反馈，不能代替业务校验。
 - 网络开关同步移动协议、宿主投影、持久化与预览；依赖项被规范化关闭后要有重新开启入口。回归覆盖 DNS 覆盖关闭、重开、Fake-IP 手动恢复和重启保留，见[移动会话测试](../../crates/mobile-ffi/src/lib.rs)。
