@@ -77,7 +77,10 @@ final class NetworkOverview implements AutoCloseable {
                     .put("cellular", capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))
                     .put("ethernet", capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
                     .put("validated", capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
-                    .put("dns_ipv4", dns4).put("dns_ipv6", dns6).put("mtu", properties.getMtu());
+                    .put("dns_ipv4", dns4).put("dns_ipv6", dns6);
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    record.put("mtu", properties.getMtu());
+                }
                 if (android.os.Build.VERSION.SDK_INT >= 28) {
                     record.put("private_dns_active", properties.isPrivateDnsActive())
                         .put("private_dns_strict", properties.getPrivateDnsServerName() != null);

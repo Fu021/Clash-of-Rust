@@ -1742,6 +1742,17 @@ public class ProxyTunTest {
             assertTrue("VPN probes did not observe protected outbound sockets", protection.getLong("attempts") > 0);
             assertEquals("Android rejected outbound socket protection", 0, protection.getLong("failures"));
             assertTrue(diagnostics.getJSONObject("vpn").getBoolean("connected"));
+            JSONArray[] observed = new JSONArray[1];
+            await("Network diagnostics did not observe an underlying network", () -> {
+                observed[0] = new JSONObject(activity.request("{\"op\":\"diagnostics\"}"))
+                    .getJSONObject("network").getJSONArray("physical_networks");
+                return observed[0].length() > 0;
+            });
+            JSONArray networks = observed[0];
+            for (int index = 0; index < networks.length(); index++) {
+                assertEquals("MTU diagnostics must respect the Android API version",
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q, networks.getJSONObject(index).has("mtu"));
+            }
         } finally {
             TunnelService.stop(context);
         }

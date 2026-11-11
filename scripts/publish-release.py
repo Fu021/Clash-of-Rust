@@ -229,9 +229,9 @@ def release_notes_with_downloads(notes, repo, version, tag):
                  '?label=downloads&displayAssetName=false')
         label = architecture.replace('_', ' ')
         text = f'[![{system} {kind} {label}]({badge})]({download})'
-        if system == 'Android' and architecture == 'ARM64':
-            text += '（多数手机和平板）'
         text += f' [![{system} {label} downloads]({count})]({download})'
+        if system == 'Android' and architecture == 'ARM64':
+            text += ' （多数手机和平板）'
         rows.setdefault(system, []).append(text)
     table = ['## 下载', '', '| 平台 | 安装包与下载次数 |', '| --- | --- |']
     table.extend(f"| {system} | {'<br>'.join(buttons)} |" for system, buttons in rows.items())
