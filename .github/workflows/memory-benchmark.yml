@@ -142,7 +142,7 @@ jobs:
           discard_restore({'kind': 'rust', 'source': 'source'})
       - name: Identify restored benchmark compiler objects
         id: benchmark_cache
-        if: github.ref != 'refs/heads/main' && steps.rust_github.outcome == 'success'
+        if: github.ref != 'refs/heads/main' && steps.source.outputs.commit == github.sha && steps.rust_github.outcome == 'success'
         shell: python
         run: |
           import os, sys

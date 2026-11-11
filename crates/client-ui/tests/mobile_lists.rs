@@ -71,27 +71,28 @@ slint::slint! {
     }
 
     export component MobileRuleRowsProbe inherits Window {
-        width: 393px; height: 400px;
+        preferred-width: 393px; preferred-height: 400px;
         in-out property <float> text-scale <=> Theme.text-scale;
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <int> detail <=> MobileView.detail;
         in-out property <string> selected-id <=> MobileView.selected-id;
+        out property <length> viewport-width: root.width;
         out property <length> custom-height: custom.height;
         out property <length> subscription-height: subscription.height;
         out property <length> shortcut-height: shortcut.height;
         Rectangle {
             width: parent.width; height: parent.height;
-            VerticalLayout {
-                alignment: start; spacing: 1px;
-                custom := RulesRow {
-                    item: { id: "custom", position: "1", kind: "DOMAIN-SUFFIX", value: "a-very-long-domain-name.example.com", policy: "DIRECT", source: "自定义", enabled: true };
-                }
-                subscription := RulesRow {
-                    item: { id: "subscription", position: "2", kind: "MATCH", policy: "A very long policy name", source: "订阅", enabled: true };
-                }
-                shortcut := RulesRow {
-                    item: { id: "shortcut", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "快捷规则", enabled: true };
-                }
+            custom := RulesRow {
+                x: 0px; y: 0px; width: parent.width;
+                item: { id: "custom", position: "1", kind: "DOMAIN-SUFFIX", value: "a-very-long-domain-name.example.com", policy: "DIRECT", source: "自定义", enabled: true };
+            }
+            subscription := RulesRow {
+                x: 0px; y: custom.y + custom.height + 1px; width: parent.width;
+                item: { id: "subscription", position: "2", kind: "MATCH", policy: "A very long policy name", source: "订阅", enabled: true };
+            }
+            shortcut := RulesRow {
+                x: 0px; y: subscription.y + subscription.height + 1px; width: parent.width;
+                item: { id: "shortcut", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "快捷规则", enabled: true };
             }
         }
     }
@@ -464,6 +465,11 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
         geometry.set_revision(geometry.get_revision().wrapping_add(1));
         frame(&adapter, width as usize, 400);
         advance(&clock, Duration::ZERO);
+        assert!(
+            (probe.get_viewport_width() - width as f32).abs() < 1.,
+            "rule probe width {} does not match requested width {width}",
+            probe.get_viewport_width()
+        );
         let heights = [
             probe.get_custom_height(),
             probe.get_subscription_height(),
@@ -477,8 +483,14 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
             let toggle = &targets[&format!("rule-switch:{id}")];
             let detail = &targets[&format!("rule-detail:{id}")];
             for target in [toggle, detail] {
-                assert!(target[2] >= 48. && target[3] >= 48.);
-                assert!(target[0] >= 0. && target[0] + target[2] <= width as f32 + 1.);
+                assert!(
+                    target[2] >= 48. && target[3] >= 48.,
+                    "{id} target is too small at width {width}, scale {scale}: {target:?}"
+                );
+                assert!(
+                    target[0] >= 0. && target[0] + target[2] <= width as f32 + 1.,
+                    "{id} target is outside width {width}, scale {scale}: {target:?}"
+                );
             }
             assert!(toggle[0] + toggle[2] <= detail[0] + 1.);
         }
