@@ -192,6 +192,7 @@ slint::slint! {
 
     export component AppearanceSettingsProbe inherits Window {
         preferred-width: 393px; preferred-height: 852px;
+        min-width: 0px; min-height: 0px;
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> protection-pending <=> MobileData.protection-pending;
         in-out property <float> text-scale <=> Theme.text-scale;
@@ -636,7 +637,7 @@ fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
             frame(&adapter, width as usize, height as usize);
             let measured = targets.borrow();
             let panel = &measured["claude-report"];
-            let mut previous_bottom = None;
+            let mut previous_bottom: Option<f32> = None;
             for (index, item_tone) in tones.iter().enumerate() {
                 let bounds = &measured[&format!("claude-result:{index}")];
                 if *item_tone != tone {

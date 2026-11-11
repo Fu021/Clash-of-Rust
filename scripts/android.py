@@ -1121,13 +1121,13 @@ def application_preview(build, api, verify_diagnostics=False, compatibility=Fals
     if compatibility and not verify_diagnostics:
         test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
              basic_only=True)
+    if verify_diagnostics:
+        test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
+             applications_only=False, diagnostics_only=True)
     if verify_application_rules:
         test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
              routing_only=True)
-    if verify_diagnostics or screenshots or not compatibility:
-        test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
-             applications_only=not verify_diagnostics, diagnostics_only=verify_diagnostics)
-    if screenshots and verify_diagnostics:
+    if screenshots or (not compatibility and not verify_diagnostics):
         test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
              applications_only=True)
 

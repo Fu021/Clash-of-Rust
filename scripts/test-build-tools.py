@@ -3996,13 +3996,20 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertTrue(run_test.call_args.kwargs['applications_only'])
 
     def test_android_compatibility_reuses_ci_build_and_skips_screenshot_and_extended_tests(self):
-        for diagnostics, screenshots, expected in (
-                (False, False, [{'basic_only': True}]),
-                (False, True, [{'basic_only': True}, {'applications_only': True, 'diagnostics_only': False}]),
-                (True, False, [{'applications_only': False, 'diagnostics_only': True}]),
-                (True, True, [{'applications_only': False, 'diagnostics_only': True},
-                              {'applications_only': True}])):
-            with self.subTest(diagnostics=diagnostics, screenshots=screenshots), \
+        for diagnostics, screenshots, routing, expected in (
+                (False, False, False, [{'basic_only': True}]),
+                (False, True, False, [{'basic_only': True}, {'applications_only': True}]),
+                (True, False, False, [{'applications_only': False, 'diagnostics_only': True}]),
+                (True, True, False, [{'applications_only': False, 'diagnostics_only': True},
+                                     {'applications_only': True}]),
+                (False, False, True, [{'basic_only': True}, {'routing_only': True}]),
+                (False, True, True, [{'basic_only': True}, {'routing_only': True},
+                                     {'applications_only': True}]),
+                (True, False, True, [{'applications_only': False, 'diagnostics_only': True},
+                                     {'routing_only': True}]),
+                (True, True, True, [{'applications_only': False, 'diagnostics_only': True},
+                                    {'routing_only': True}, {'applications_only': True}])):
+            with self.subTest(diagnostics=diagnostics, screenshots=screenshots, routing=routing), \
                     tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source = root / 'build'
@@ -4018,7 +4025,7 @@ runpy.run_path(str(script), run_name='__main__')
                         patch.object(android_build, 'verify_build'), \
                         patch.object(android_build, 'commit', return_value='b' * 40), \
                         patch.object(android_build, 'test') as run_test:
-                    android_build.application_preview(source, 31, diagnostics, True, screenshots)
+                    android_build.application_preview(source, 31, diagnostics, True, screenshots, routing)
                 self.assertEqual(
                     [{key: value for key, value in call.kwargs.items()
                       if key not in ('apk', 'test_apk')} for call in run_test.call_args_list],
