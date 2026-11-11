@@ -1,4 +1,4 @@
-"""Resolve an existing successful CI for Android UI screenshots."""
+"""Resolve verified CI inputs for Android previews and opt-in diagnostic checks."""
 import argparse
 import json
 import os
@@ -73,6 +73,7 @@ def resolve(client, repository, expected_commit, run_id=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-id', type=int)
+    parser.add_argument('--verify-diagnostics', action='store_true')
     args = parser.parse_args()
     module = release_module()
     repository = module.repository()
@@ -85,8 +86,9 @@ def main():
                 stream.write(name + '=' + (json.dumps(value) if isinstance(value, dict) else str(value)) + '\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(summary).open('a') as stream:
-            stream.write(f'\nAndroid UI screenshots. Source CI: {plan["ci_run_id"]}; '
-                         f'commit: `{plan["commit"]}`. No VPN or traffic-routing checks.\n')
+            mode = ('Explicit Android measurement and diagnostic verification, including isolated VPN probes.'
+                    if args.verify_diagnostics else 'Android UI screenshots. No VPN or traffic-routing checks.')
+            stream.write(f'\n{mode} Source CI: {plan["ci_run_id"]}; commit: `{plan["commit"]}`.\n')
 
 
 if __name__ == '__main__':

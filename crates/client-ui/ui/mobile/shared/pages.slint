@@ -167,6 +167,7 @@ export component MobileProxies inherits PageSurface {
                 }
                 if root.width > 580px: MTag { text: group.current; width-limit: 180px; }
                 MButton { text: group.testing ? "测速中…" : "组测速"; compact: true; busy: group.testing; width: max(72px, MobileTypography.font-size(13) * 3 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
+                    GeometryTarget { key: "preview-measure-group:" + group.id; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
                     clicked => { MobileActions.request(MobileIntent.group-delay, group.id, ""); }
                 }
             }
@@ -550,7 +551,10 @@ component LogsToolbar inherits VerticalLayout {
         }
         MButton { text: "导出"; quiet: true; width: 56px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-logs, "", ""); } }
         MButton { text: "清空"; quiet: true; width: 56px; horizontal-stretch: 0; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.clear-logs, "", ""); } }
-        MButton { text: "诊断"; quiet: true; width: 56px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.export-diagnostics, "", ""); } }
+        MButton { text: "诊断"; quiet: true; width: 56px; horizontal-stretch: 0;
+            GeometryTarget { key: "preview-export-diagnostics"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+            clicked => { MobileActions.request(MobileIntent.export-diagnostics, "", ""); }
+        }
     }
 }
 component LogsRow inherits MCard {

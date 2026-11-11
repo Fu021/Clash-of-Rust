@@ -721,6 +721,8 @@ def network_origin_handler():
             self.handle_one_request()
 
         def do_GET(self):
+            if '/diagnostic-probe?' in self.path:
+                time.sleep(0.04)
             held = self.path == '/hold'
             if held and self.headers.get('Content-Length') != '1':
                 self.send_error(400)
@@ -748,11 +750,11 @@ def network_origin_handler():
 
 
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
-         ime_rounds=1, applications_only=False):
+         ime_rounds=1, applications_only=False, diagnostics_only=False):
     if not 1 <= ime_rounds <= 3 or ((ime_probe or ime_rounds != 1) and not ime_only):
         raise ValueError('IME probe options require IME-only testing and one to three rounds')
-    if ime_only and applications_only:
-        raise ValueError('Application screenshots and input-method tests are separate')
+    if sum((ime_only, applications_only, diagnostics_only)) > 1:
+        raise ValueError('Application screenshots, diagnostic verification and input-method tests are separate')
     network_tests = not (ime_only or applications_only)
     if arch != 'x64':
         return
@@ -782,6 +784,11 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         if not api.isdigit():
             raise ValueError('Could not identify the Android application preview version')
         report = report / ('applications-api-' + api)
+    if diagnostics_only:
+        api = device_property('ro.build.version.sdk')
+        if not api.isdigit():
+            raise ValueError('Could not identify the Android diagnostic verification version')
+        report = report / ('diagnostics-api-' + api)
     report.mkdir(parents=True,exist_ok=True)
     properties={}
     for name in ('ro.build.version.sdk','ro.build.version.release','ro.build.fingerprint',
@@ -803,6 +810,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         outputs=[]
         from ci_test_policy import android_cases
         cases=(('androidUiPreviewCapturesPagesAndApplications',) if applications_only else
+               ('basicSystemProxyAndTun', 'measurementDiagnosticsDistinguishFailuresAndExport')
+               if diagnostics_only else
                ('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
                if ime_only else android_cases())
@@ -852,6 +861,11 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         remote_report+='/'+('production' if ime_probe else 'regression')
         capture_error=None
         try:
+            if 'measurementDiagnosticsDistinguishFailuresAndExport' in cases:
+                pull_device_report('/sdcard/Android/data/org.clashofrust.android/files/measurement-diagnostics',
+                                   report, required=True, name='measurement-diagnostics')
+                validate_measurement_diagnostics(report / 'measurement-diagnostics',
+                                                 int(properties['ro.build.version.sdk']))
             if applications_only:
                 destination = report / 'application-preview'
                 pull_device_report('/sdcard/Android/data/org.clashofrust.android/files/application-preview',
@@ -1033,7 +1047,55 @@ def validate_application_preview(directory, api):
         raise ValueError('Android preview application modes did not invert the full selection')
 
 
-def application_preview(build, api):
+def validate_measurement_diagnostics(directory, api):
+    receipt = json.loads((directory / 'result.json').read_text())
+    cases = ['without-vpn', 'with-vpn', 'controller-authentication', 'recovered']
+    if (receipt.get('schema') != 1 or receipt.get('sdk') != api
+            or receipt.get('passed') is not True or receipt.get('cases') != cases):
+        raise ValueError('Android measurement diagnostic receipt is incomplete')
+    previous = None
+    for name in cases:
+        text = (directory / (name + '.json')).read_text()
+        report = json.loads(text)
+        if report.get('schema') != 1 or report.get('command') != 'diagnose':
+            raise ValueError('Invalid exported Android diagnostic report')
+        context = report['data']['context']
+        measurements = context['measurements']
+        platform = context['platform']['Ok']
+        if not 1 <= len(measurements) <= 4 or platform.get('sdk') != api:
+            raise ValueError('Diagnostic history or platform version mismatch')
+        latest = measurements[-1]
+        if previous is not None and latest['started_at'] <= previous:
+            raise ValueError('Diagnostic export reused an earlier measurement')
+        previous = latest['started_at']
+        if name == 'controller-authentication':
+            if (latest.get('completed') is not False or latest.get('node_failures') != 0
+                    or latest.get('failure') != {'code': 'controller_authentication', 'http_status': 401}):
+                raise ValueError('Controller failure was mistaken for node failure')
+        elif (latest.get('completed') is not True or latest.get('attempted') != 2
+                or latest.get('succeeded') != 1 or latest.get('node_failures') != 1
+                or latest.get('request_failures') != 0):
+            raise ValueError('Mixed successful and refused node results did not survive export')
+        if platform['vpn'].get('connected') is not (name == 'with-vpn'):
+            raise ValueError('Diagnostic VPN state differs from the verified scenario')
+        networks = platform['network']['physical_networks']
+        if not 1 <= len(networks) <= 8 or any(
+                ('mtu' in network) != (api >= 29)
+                or ('private_dns_active' in network) != (api >= 28)
+                for network in networks):
+            raise ValueError('Android diagnostic fields violate the OS compatibility boundary')
+        if 'ci-only-url-secret' in text or 'ci-controller-rejected' in text:
+            raise ValueError('An isolated test credential leaked into diagnostics')
+        if name == 'recovered' and len(measurements) != 4:
+            raise ValueError('Measurement history was not bounded to four reports')
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(summary, 'a') as stream:
+            stream.write(f'\nAndroid API {api}: measurement success/refusal, controller authentication failure, '
+                         'VPN on/off, recovery and actual diagnostic-file writes verified. '
+                         'This isolated fixture does not reproduce issue #38 or a vendor ROM.\n')
+
+
+def application_preview(build, api, verify_diagnostics=False):
     from workflow_artifacts import extract_build
     actual_api = device_property('ro.build.version.sdk')
     if actual_api != str(api):
@@ -1049,7 +1111,7 @@ def application_preview(build, api):
     extract_build(archive, root)
     verify_build(root, 'x64', commit())
     test('x64', apk=root / 'payload/app.apk', test_apk=root / 'tests/androidTest.apk',
-         applications_only=True)
+         applications_only=not verify_diagnostics, diagnostics_only=verify_diagnostics)
 
 
 def package(arch, run_id, check_only, build=None):
@@ -1101,6 +1163,8 @@ def package(arch, run_id, check_only, build=None):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation',choices=('build','export','test','package','emulator','application-preview'))
+    parser.add_argument('--verify-diagnostics', action='store_true',
+                        help='Run explicitly requested diagnostic verification instead of UI screenshots')
     parser.add_argument('--arch',choices=ABIS,required=True)
     parser.add_argument('--run-id',type=int)
     parser.add_argument('--check',action='store_true')
@@ -1109,6 +1173,8 @@ def main():
     parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
     parser.add_argument('--api',type=int,help='Use an approved Android test image')
     args=parser.parse_args()
+    if args.verify_diagnostics and args.operation != 'application-preview':
+        parser.error('--verify-diagnostics requires application-preview')
     if args.build is not None and args.operation != 'application-preview' and (args.operation!='package' or not args.check):
         parser.error('--build requires package --check or application-preview')
     if args.operation == 'application-preview' and (args.arch != 'x64' or args.build is None or args.api is None):
@@ -1167,7 +1233,7 @@ def main():
     elif args.operation=='build': build(args.arch)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
-    elif args.operation=='application-preview': application_preview(args.build, args.api)
+    elif args.operation=='application-preview': application_preview(args.build, args.api, args.verify_diagnostics)
     else: package(args.arch,args.run_id,args.check,args.build)
 
 

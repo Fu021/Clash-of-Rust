@@ -1703,6 +1703,198 @@ public class ProxyTunTest {
         }
     }
 
+    private static void measureDiagnosticGroup() throws Exception {
+        dismissErrorDialogIfPresent(false);
+        previewNavigate(1);
+        dismissErrorDialogIfPresent(false);
+        if (MainActivity.diagnostics().optBoolean("notice_active")) {
+            tapTarget("notice_close_target");
+            await("The previous notification did not close",
+                () -> !MainActivity.diagnostics().optBoolean("notice_active"));
+        }
+        for (int attempt = 0; attempt < 10; attempt++) {
+            JSONObject ui = MainActivity.diagnostics();
+            JSONArray target = previewBounds(ui, "preview-measure-group:CI-diagnostics");
+            JSONArray viewport = previewBounds(ui, "preview-content");
+            if (target != null && viewport != null) {
+                double center = target.getDouble(1) + target.getDouble(3) / 2;
+                if (center > viewport.getDouble(1)
+                        && center < viewport.getDouble(1) + viewport.getDouble(3)) break;
+                previewSwipe(center >= viewport.getDouble(1) + viewport.getDouble(3));
+            } else SystemClock.sleep(200);
+        }
+        previewTarget("preview-measure-group:CI-diagnostics");
+        await("Group measurement did not finish", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("notice_active") && !ui.optBoolean("delay_busy");
+        });
+    }
+
+    private static JSONObject exportMeasurementReport(File directory, String name) throws Exception {
+        dismissErrorDialogIfPresent(false);
+        previewTool(5);
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        previewTarget("preview-export-diagnostics");
+        java.lang.reflect.Field pending = MainActivity.class.getDeclaredField("exportContent");
+        pending.setAccessible(true);
+        java.util.concurrent.atomic.AtomicReference<String> content = new java.util.concurrent.atomic.AtomicReference<>();
+        await("The real diagnostic export did not reach the document picker", () -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                try { content.set((String)pending.get(activity)); }
+                catch (IllegalAccessException error) { throw new AssertionError(error); }
+            });
+            return content.get() != null;
+        });
+        await("The diagnostic document picker did not open",
+            () -> !inStage(androidx.test.runner.lifecycle.Stage.RESUMED, false));
+        assertTrue(directory.isDirectory() || directory.mkdirs());
+        File destination = new File(directory, name + ".json");
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+            activity.onActivityResult(12, android.app.Activity.RESULT_OK,
+                new Intent().setData(Uri.fromFile(destination))));
+        await("Diagnostic export did not finish writing valid JSON", () -> {
+            if (!destination.isFile()) return false;
+            try {
+                new JSONObject(new String(java.nio.file.Files.readAllBytes(destination.toPath()), StandardCharsets.UTF_8));
+                return true;
+            } catch (JSONException error) { return false; }
+        });
+        shell("input keyevent KEYCODE_BACK");
+        await("The document picker did not return to the application",
+            () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        waitForAppWindow();
+        String saved = new String(java.nio.file.Files.readAllBytes(destination.toPath()), StandardCharsets.UTF_8);
+        assertEquals("Exported bytes differ from the actual report payload", content.get(), saved);
+        assertFalse("The custom measurement URL leaked into diagnostics", saved.contains("ci-only-url-secret"));
+        JSONObject report = new JSONObject(saved);
+        assertEquals(1, report.getInt("schema"));
+        assertEquals("diagnose", report.getString("command"));
+        JSONObject data = report.getJSONObject("data");
+        assertEquals("collected", data.getJSONObject("core_logs").getString("state"));
+        JSONObject context = data.getJSONObject("context");
+        JSONArray measurements = context.getJSONArray("measurements");
+        assertTrue(measurements.length() > 0 && measurements.length() <= 4);
+        for (int index = 0; index < measurements.length(); index++) {
+            JSONObject measurement = measurements.getJSONObject(index);
+            assertEquals(1, measurement.getInt("schema"));
+            assertFalse(measurement.getString("started_at").isEmpty());
+            assertTrue(measurement.getLong("duration_ms") >= 0);
+            assertEquals(5000, measurement.getInt("probe_timeout_ms"));
+            assertEquals(6, measurement.getInt("concurrency"));
+        }
+        return report;
+    }
+
+    private static JSONObject latestMeasurement(JSONObject report) throws Exception {
+        JSONArray measurements = report.getJSONObject("data").getJSONObject("context").getJSONArray("measurements");
+        return measurements.getJSONObject(measurements.length() - 1);
+    }
+
+    private static void assertMixedMeasurement(JSONObject report, boolean vpn) throws Exception {
+        JSONObject measurement = latestMeasurement(report);
+        assertEquals("group", measurement.getString("scope"));
+        assertTrue(measurement.getBoolean("completed"));
+        assertEquals("complete", measurement.getString("phase"));
+        assertEquals(2, measurement.getInt("attempted"));
+        assertEquals(1, measurement.getInt("succeeded"));
+        assertEquals(1, measurement.getInt("node_failures"));
+        assertEquals(0, measurement.getInt("request_failures"));
+        assertEquals(1, measurement.getJSONObject("codes").getInt("node_failed"));
+        assertEquals("subscription_custom", measurement.getJSONArray("targets").getString(0));
+        JSONObject context = report.getJSONObject("data").getJSONObject("context");
+        JSONObject platform = context.getJSONObject("platform").getJSONObject("Ok");
+        assertEquals(Build.VERSION.SDK_INT, platform.getInt("sdk"));
+        assertEquals(vpn, platform.getJSONObject("vpn").getBoolean("connected"));
+        JSONObject protection = platform.getJSONObject("socket_protection");
+        assertEquals(vpn, protection.getBoolean("required"));
+        assertEquals(0, protection.getLong("failures"));
+        if (vpn) assertTrue(protection.getLong("attempts") > 0);
+        JSONArray networks = platform.getJSONObject("network").getJSONArray("physical_networks");
+        assertTrue(networks.length() > 0 && networks.length() <= 8);
+        for (int index = 0; index < networks.length(); index++) {
+            JSONObject network = networks.getJSONObject(index);
+            assertEquals(Build.VERSION.SDK_INT >= 29, network.has("mtu"));
+            assertEquals(Build.VERSION.SDK_INT >= 28, network.has("private_dns_active"));
+            assertFalse(network.has("dns"));
+            assertFalse(network.has("private_dns_hostname"));
+        }
+    }
+
+    @Test public void measurementDiagnosticsDistinguishFailuresAndExport() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        persistNetworkProfile(context);
+        File profile = new File(context.getFilesDir(),
+            "client/profiles/b4f7a20e-402d-4739-90dd-4b517591e653.yaml");
+        String source = new String(java.nio.file.Files.readAllBytes(profile.toPath()), StandardCharsets.UTF_8);
+        source = source.replace("rules:\n",
+            "  - {name: CI-diagnostics-offline, type: http, server: 127.0.0.1, port: 1}\n"
+            + "proxy-groups:\n  - name: CI-diagnostics\n    type: url-test\n"
+            + "    proxies: [CI-TUN-origin, CI-diagnostics-offline]\n"
+            + "    url: http://10.0.2.2:18081/diagnostic-probe?token=ci-only-url-secret\n"
+            + "    expected-status: 200\n    interval: 3600\n    lazy: true\nrules:\n");
+        java.nio.file.Files.write(profile.toPath(), source.getBytes(StandardCharsets.UTF_8));
+        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await("The measurement test core did not start", CoreBridge::ready);
+        await("The measurement Activity did not receive focus",
+            () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        waitForAppWindow();
+        String raw = CoreBridge.config();
+        String secret = value(raw, "secret");
+        File directory = new File(context.getExternalFilesDir(null), "measurement-diagnostics");
+        ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+        try {
+            await("The measurement diagnostic has no underlying network", () ->
+                new JSONObject(resumedActivity().request("{\"op\":\"diagnostics\"}"))
+                    .getJSONObject("network").getJSONArray("physical_networks").length() > 0);
+            measureDiagnosticGroup();
+            measureDiagnosticGroup();
+            JSONObject direct = exportMeasurementReport(directory, "without-vpn");
+            assertMixedMeasurement(direct, false);
+            assertNull("The preceding network test must grant real VPN consent", VpnService.prepare(context));
+            TunnelService.start(context, false);
+            await("VPN did not connect for the measurement test", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected() && vpnActive(connectivity);
+            });
+            measureDiagnosticGroup();
+            JSONObject vpn = exportMeasurementReport(directory, "with-vpn");
+            assertMixedMeasurement(vpn, true);
+            assertTrue("Received core logs have no observation timestamp",
+                vpn.getJSONObject("data").getJSONObject("core_logs").getString("contents").contains("[observed_at="));
+            TunnelService.stop(context);
+            awaitDirectRecovery(connectivity);
+            String rejected = raw.replaceFirst("(?m)^secret:.*$", "secret: ci-controller-rejected");
+            assertNotEquals("No controller secret was changed for the isolated failure", raw, rejected);
+            CoreBridge.reload(rejected);
+            measureDiagnosticGroup();
+            JSONObject authentication = exportMeasurementReport(directory, "controller-authentication");
+            JSONObject failed = latestMeasurement(authentication);
+            assertFalse(failed.getBoolean("completed"));
+            assertEquals("controller_authentication", failed.getJSONObject("failure").getString("code"));
+            assertEquals(401, failed.getJSONObject("failure").getInt("http_status"));
+            assertEquals(0, failed.getInt("node_failures"));
+            CoreBridge.reload(raw);
+            measureDiagnosticGroup();
+            JSONObject recovered = exportMeasurementReport(directory, "recovered");
+            assertMixedMeasurement(recovered, false);
+            assertEquals(4, recovered.getJSONObject("data").getJSONObject("context")
+                .getJSONArray("measurements").length());
+            for (JSONObject report : new JSONObject[]{direct, vpn, authentication, recovered}) {
+                assertFalse("The live controller credential leaked into the exported report", report.toString().contains(secret));
+                assertFalse(report.toString().contains("ci-controller-rejected"));
+            }
+            JSONObject receipt = new JSONObject().put("schema", 1).put("sdk", Build.VERSION.SDK_INT)
+                .put("cases", new JSONArray(new String[]{"without-vpn", "with-vpn",
+                    "controller-authentication", "recovered"})).put("passed", true);
+            java.nio.file.Files.write(new File(directory, "result.json").toPath(),
+                receipt.toString().getBytes(StandardCharsets.UTF_8));
+        } finally {
+            CoreBridge.reload(raw);
+            TunnelService.stop(context);
+        }
+    }
+
     @Test public void basicSystemProxyAndTun() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         persistNetworkProfile(context);

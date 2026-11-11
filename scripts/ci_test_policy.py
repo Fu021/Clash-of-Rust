@@ -22,10 +22,13 @@ def android_cases():
     if extended_tests():
         return ('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
                 'applicationRoutingPersistsAndKeepsOtherAppsOnline',
-                'quickTileRestoresColdCoreWithoutOpeningTheActivity')
+                'quickTileRestoresColdCoreWithoutOpeningTheActivity',
+                'measurementDiagnosticsDistinguishFailuresAndExport')
     cases = ('basicSystemProxyAndTun',)
     if enabled('COR_CI_ANDROID_ROUTING_TESTS'):
         cases += ('applicationRoutingPersistsAndKeepsOtherAppsOnline',)
+    if enabled('COR_CI_ANDROID_DIAGNOSTICS_TESTS'):
+        cases += ('measurementDiagnosticsDistinguishFailuresAndExport',)
     return cases
 
 
@@ -63,6 +66,14 @@ def select(paths, extended=False):
         or path == 'scripts/test-linux-tun.py'
         for path in paths
     )
+    diagnostics = any(path.startswith(('crates/client-core/src/controller/',
+                                      'crates/client-core/src/support.rs',
+                                      'apps/android/native/',
+                                      'apps/android/app/src/main/java/org/clashofrust/android/NetworkOverview.java',
+                                      'apps/android/app/src/main/java/org/clashofrust/android/MainActivity.java',
+                                      'apps/android/app/src/androidTest/'))
+                      or path in ('scripts/android.py', 'scripts/ci_test_policy.py')
+                      for path in paths)
     desktop_ui = any(
         path.startswith(('crates/client-ui/', 'apps/desktop-ui/src/',
                          'apps/desktop/src/application/'))
@@ -88,6 +99,7 @@ def select(paths, extended=False):
         for path in paths
     )
     return {'extended_tests': extended, 'android_routing_tests': extended or android,
+            'android_diagnostics_tests': extended or diagnostics,
             'linux_user_tests': extended or linux, 'desktop_ui_tests': extended or desktop_ui,
             'proxy_benchmark': benchmark, 'update_tests': extended or update}
 
@@ -113,7 +125,7 @@ def main():
     print(json.dumps(plan))
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
-            for key in ('extended_tests', 'android_routing_tests', 'linux_user_tests',
+            for key in ('extended_tests', 'android_routing_tests', 'android_diagnostics_tests', 'linux_user_tests',
                         'desktop_ui_tests', 'proxy_benchmark', 'update_tests'):
                 stream.write(f'{key}={str(plan[key]).lower()}\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):

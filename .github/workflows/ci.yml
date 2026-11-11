@@ -45,6 +45,7 @@ jobs:
       nsis: ${{ steps.resolve.outputs.nsis }}
       extended_tests: ${{ steps.test_policy.outputs.extended_tests }}
       android_routing_tests: ${{ steps.test_policy.outputs.android_routing_tests }}
+      android_diagnostics_tests: ${{ steps.test_policy.outputs.android_diagnostics_tests }}
       linux_user_tests: ${{ steps.test_policy.outputs.linux_user_tests }}
       desktop_ui_tests: ${{ steps.test_policy.outputs.desktop_ui_tests }}
       proxy_benchmark: ${{ steps.test_policy.outputs.proxy_benchmark }}
@@ -180,6 +181,7 @@ jobs:
       WORKSPACE_SOURCE_CACHE: ${{ github.workspace }}/.workspace-sources/source.json
       COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
       COR_CI_ANDROID_ROUTING_TESTS: ${{ needs.inputs.outputs.android_routing_tests }}
+      COR_CI_ANDROID_DIAGNOSTICS_TESTS: ${{ needs.inputs.outputs.android_diagnostics_tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

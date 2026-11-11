@@ -6,6 +6,10 @@ on:
         description: Successful CI run for the selected branch commit
         required: true
         type: string
+      verify_diagnostics:
+        description: Explicitly verify measurement and diagnostic export on all Android versions instead of screenshots
+        default: false
+        type: boolean
   pull_request:
     types: [labeled]
 env:
@@ -23,7 +27,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.label.name == 'android-previews' &&
        github.event.pull_request.head.repo.full_name == github.repository)
-    name: Resolve screenshot inputs
+    name: Resolve verified Android inputs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -40,12 +44,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ inputs.run_id }}
+          VERIFY_DIAGNOSTICS: ${{ inputs.verify_diagnostics && 'true' || 'false' }}
         run: |
           args=()
           if [[ -n "$SOURCE_RUN" ]]; then args+=(--run-id "$SOURCE_RUN"); fi
+          if [[ "$VERIFY_DIAGNOSTICS" == true ]]; then args+=(--verify-diagnostics); fi
           python3 scripts/android_previews.py "${args[@]}"
   screenshots:
-    name: Android ${{ matrix.android }} UI screenshots
+    name: Android ${{ matrix.android }} ${{ inputs.verify_diagnostics && 'diagnostic verification' || 'UI screenshots' }}
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -117,12 +123,17 @@ jobs:
         uses: ./.github/actions/upstream-report
         with:
           checkpoint: 'true'
-      - name: Capture Slint pages and application routing UI
-        run: python3 scripts/android.py application-preview --arch x64 --api '${{ matrix.api }}' --build android-preview-input
+      - name: Capture pages or perform explicitly requested diagnostic verification
+        env:
+          VERIFY_DIAGNOSTICS: ${{ inputs.verify_diagnostics && 'true' || 'false' }}
+        run: |
+          args=()
+          if [[ "$VERIFY_DIAGNOSTICS" == true ]]; then args+=(--verify-diagnostics); fi
+          python3 scripts/android.py application-preview --arch x64 --api '${{ matrix.api }}' --build android-preview-input "${args[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: android-${{ matrix.android }}-ui-screenshots
+          name: android-${{ matrix.android }}-${{ inputs.verify_diagnostics && 'measurement-diagnostics' || 'ui-screenshots' }}
           path: target/android-report
           if-no-files-found: error
           retention-days: 7

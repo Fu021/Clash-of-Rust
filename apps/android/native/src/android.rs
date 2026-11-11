@@ -3546,6 +3546,7 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
             "vpn_pending":data.get_vpn_pending(),
+            "delay_busy":data.get_delay_busy(),
             "logs":data.get_logs().row_count(),"dark":theme.get_dark(),"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),
             "body_size":ui.global::<MobileTypography>().invoke_font_size(16),
             "width":size.width as f32/scale,"height":size.height as f32/scale,"scale":scale,

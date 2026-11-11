@@ -982,11 +982,13 @@ class BuildTests(unittest.TestCase):
         routing = 'applicationRoutingPersistsAndKeepsOtherAppsOnline'
         lifecycle = 'localProxyAndRealTunCarryTrafficAndDisconnectCleanly'
         tile = 'quickTileRestoresColdCoreWithoutOpeningTheActivity'
+        diagnostic = 'measurementDiagnosticsDistinguishFailuresAndExport'
         source = (build.ROOT/'apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java').read_text()
-        for name in (basic, routing, lifecycle, tile):
+        for name in (basic, routing, lifecycle, tile, diagnostic):
             self.assertRegex(source, r'@Test\s+public\s+void\s+'+name+r'\s*\(')
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
                                      'COR_CI_ANDROID_ROUTING_TESTS': 'false',
+                                     'COR_CI_ANDROID_DIAGNOSTICS_TESTS': 'false',
                                      'COR_CI_LINUX_USER_TESTS': 'false',
                                      'COR_CI_UPDATE_TESTS': 'false',
                                      'COR_CI_DESKTOP_UI_TESTS': 'false'}):
@@ -995,7 +997,8 @@ class BuildTests(unittest.TestCase):
             self.assertFalse(ci_test_policy.desktop_ui_tests())
             self.assertFalse(ci_test_policy.update_tests())
             self.assertEqual(ci_test_policy.select([]), {
-                'extended_tests': False, 'android_routing_tests': False, 'linux_user_tests': False,
+                'extended_tests': False, 'android_routing_tests': False, 'android_diagnostics_tests': False,
+                'linux_user_tests': False,
                 'desktop_ui_tests': False, 'proxy_benchmark': False, 'update_tests': False})
             self.assertTrue(ci_test_policy.select([
                 'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
@@ -1013,10 +1016,19 @@ class BuildTests(unittest.TestCase):
                          'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py'):
                 self.assertTrue(ci_test_policy.select([path])['update_tests'])
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
-                                     'COR_CI_ANDROID_ROUTING_TESTS': 'true'}):
+                                     'COR_CI_ANDROID_ROUTING_TESTS': 'true',
+                                     'COR_CI_ANDROID_DIAGNOSTICS_TESTS': 'false'}):
             self.assertEqual(ci_test_policy.android_cases(), (basic, routing))
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_ANDROID_ROUTING_TESTS': 'false',
+                                     'COR_CI_ANDROID_DIAGNOSTICS_TESTS': 'true'}):
+            self.assertEqual(ci_test_policy.android_cases(), (basic, diagnostic))
+            for path in ('crates/client-core/src/controller/measurement.rs',
+                         'apps/android/app/src/main/java/org/clashofrust/android/NetworkOverview.java',
+                         'apps/android/native/src/android.rs'):
+                self.assertTrue(ci_test_policy.select([path])['android_diagnostics_tests'])
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}):
-            self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile))
+            self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile, diagnostic))
             self.assertTrue(ci_test_policy.linux_user_tests())
             self.assertTrue(ci_test_policy.desktop_ui_tests())
             self.assertTrue(ci_test_policy.update_tests())
@@ -3441,12 +3453,14 @@ runpy.run_path(str(script), run_name='__main__')
     def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
         network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
                        'applicationRoutingPersistsAndKeepsOtherAppsOnline',
-                       'quickTileRestoresColdCoreWithoutOpeningTheActivity')
+                       'quickTileRestoresColdCoreWithoutOpeningTheActivity',
+                       'measurementDiagnosticsDistinguishFailuresAndExport')
         for failed_case, log_error, captured_log in (
                 (None,None,'network test complete'),
                 (network_cases[0],None,'network test failed'),
                 (network_cases[1],None,'application routing test failed'),
                 (network_cases[2],None,'tile test failed'),
+                (network_cases[3],None,'diagnostic export test failed'),
                 (None,RuntimeError('Android test log end marker is missing'),'partial log'),
                 (None,None,'Mobile runtime stopped: core failure')):
             with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \
@@ -3470,6 +3484,7 @@ runpy.run_path(str(script), run_name='__main__')
                         patch.object(android_build,'start_test_log'), \
                         patch.object(android_build,'finish_test_log',return_value=(captured_log,log_error)), \
                         patch.object(android_build,'pull_device_report') as pull, \
+                        patch.object(android_build,'validate_measurement_diagnostics') as validate, \
                         patch.object(android_build,'input_method_crashes') as ime_crashes:
                     if failed_case or log_error or 'Mobile runtime stopped:' in captured_log:
                         with self.assertRaises(RuntimeError):
@@ -3479,13 +3494,66 @@ runpy.run_path(str(script), run_name='__main__')
                     self.assertEqual(cases,list(network_cases))
                     self.assertTrue(all('getprop' in call.args[0] for call in properties.call_args_list))
                     self.assertFalse(any('input_method' in call.args[0] for call in commands.call_args_list))
-                    pull.assert_not_called()
+                    pull.assert_called_once()
+                    validate.assert_called_once()
                     ime_crashes.assert_not_called()
                     server.return_value.shutdown.assert_called_once()
                     server.return_value.server_close.assert_called_once()
                 report=root/'target/android-report/x64'
                 self.assertFalse((report/'input-method-status.json').exists())
                 self.assertTrue((report/'instrumentation.txt').is_file())
+
+    def test_android_measurement_reports_reject_stale_misclassified_or_incompatible_evidence(self):
+        cases = ['without-vpn', 'with-vpn', 'controller-authentication', 'recovered']
+        def reports(api):
+            result = {}
+            for index, name in enumerate(cases):
+                measurement = {'started_at': f'2026-11-11T00:00:0{index}Z',
+                               'completed': name != 'controller-authentication',
+                               'attempted': 2, 'succeeded': 1, 'node_failures': 1, 'request_failures': 0}
+                if name == 'controller-authentication':
+                    measurement.update(node_failures=0, failure={
+                        'code': 'controller_authentication', 'http_status': 401})
+                network = {}
+                if api >= 29:
+                    network['mtu'] = 1500
+                if api >= 28:
+                    network['private_dns_active'] = False
+                history = [dict(measurement) for _ in range(4 if name == 'recovered' else 1)]
+                result[name] = {'schema': 1, 'command': 'diagnose', 'data': {'context': {
+                    'measurements': history, 'platform': {'Ok': {'sdk': api,
+                        'vpn': {'connected': name == 'with-vpn'},
+                        'network': {'physical_networks': [network]}}}}}}
+            return result
+        for api in (26, 28, 29, 36):
+            for mutation in ('valid', 'false_node_failure', 'stale', 'mtu', 'credential', 'unbounded'):
+                with self.subTest(api=api, mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary)
+                    values = reports(api)
+                    if mutation == 'false_node_failure':
+                        values['controller-authentication']['data']['context']['measurements'][-1]['node_failures'] = 2
+                    elif mutation == 'stale':
+                        values['with-vpn']['data']['context']['measurements'][-1]['started_at'] = '2026-11-11T00:00:00Z'
+                    elif mutation == 'mtu':
+                        network = values['without-vpn']['data']['context']['platform']['Ok']['network']['physical_networks'][0]
+                        if api >= 29:
+                            network.pop('mtu')
+                        else:
+                            network['mtu'] = 1500
+                    elif mutation == 'credential':
+                        values['recovered']['unexpected'] = 'ci-controller-rejected'
+                    elif mutation == 'unbounded':
+                        history = values['recovered']['data']['context']['measurements']
+                        history.append(copy.deepcopy(history[-1]))
+                    (directory / 'result.json').write_text(json.dumps({
+                        'schema': 1, 'sdk': api, 'cases': cases, 'passed': True}))
+                    for name, report in values.items():
+                        (directory / (name + '.json')).write_text(json.dumps(report))
+                    if mutation == 'valid':
+                        android_build.validate_measurement_diagnostics(directory, api)
+                    else:
+                        with self.assertRaises(ValueError):
+                            android_build.validate_measurement_diagnostics(directory, api)
 
     def test_android_routing_policy_requires_both_real_network_cases(self):
         cases = ('basicSystemProxyAndTun', 'applicationRoutingPersistsAndKeepsOtherAppsOnline')

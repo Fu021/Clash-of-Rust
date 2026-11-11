@@ -37,6 +37,12 @@
 
 Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到日志的时间，不等同内核产生事件的精确时间；仍受现有缓冲及单条长度上限约束，不能恢复已丢失的历史。
 
+## 回归与现场导出
+
+普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本专项须维护者明确选择，见[测试入口和验证边界](workflows/android-previews.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；不会把模拟器中的确定性故障当成 #38 唯一根因。
+
+用户复现后应尽快在日志页点“诊断”保存 `cor-diagnose.json`，附上操作步骤和发生时间；不要先重启进程再导出，否则可能失去内存中的测速摘要。CLI 对应 `cor diagnose --output cor-diagnose.json`，后台无法连接时用 `cor diagnose --offline --output cor-diagnose.json`。报告留在本地，分享前检查敏感内容。
+
 ## #38 的证据边界
 
 [Issue #38](https://github.com/Fu021/Clash-of-Rust/issues/38) 的 0.7.0 报告来自 HONOR Android 16，采集时内核运行、VPN 未连接；“90 个节点不可达”的界面错误比报告早约 146 秒。67 行内核日志含 DIRECT 拨号拒绝、IPv4/IPv6 超时，但没有逐节点测速请求状态和套接字保护结果。183 项检测为 pending，不能当作这些检测已失败。
