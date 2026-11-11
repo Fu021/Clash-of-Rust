@@ -355,7 +355,7 @@ component RulesToolbar inherits VerticalLayout {
     alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
     HorizontalLayout { spacing: MobileTypography.small-gap;
         MSelect { enabled: !MobileData.protected && !MobileData.protection-pending; options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
-        MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 4; }
+        MTag { text: MobileData.rule-dirty ? "尚未应用" : "已载入"; tone: MobileData.rule-dirty ? 2 : 1; }
     }
     GridLayout { spacing: MobileTypography.small-gap;
         property <bool> narrow: root.width < 420px || Theme.text-scale > 1.25;
@@ -373,18 +373,23 @@ component RulesToolbar inherits VerticalLayout {
         }
     }
     if !root.short: MSmall { text: "长按手柄排序 · 靠近边缘自动滚动"; wrap: word-wrap; }
+    if MobileData.rule-warning != "": MCard {
+        MSmall { text: MobileData.rule-warning; color: Theme.warning; wrap: word-wrap; }
+    }
 }
-component RulesRow inherits MCard {
+export component RulesRow inherits MCard {
     in property <RuleItem> item;
     in property <int> row-index;
     in property <bool> floating;
-    border-radius: root.floating ? 12px : 0px; border-width: root.floating ? 1px : 0px;
-    vertical-padding: 8px; horizontal-padding: 8px; gap: 0px;
+    property <bool> narrow: root.width < 300px || Theme.text-scale > 1.25;
+    border-radius: root.floating ? 6px : 0px;
+    border-width: root.floating ? 1px : 0px;
+    vertical-padding: 8px; horizontal-padding: 4px; gap: 0px;
     selected: root.floating || MobileView.rule-drag-target == root.item.id || (MobileView.rule-selected && MobileView.selected-id == root.item.id);
     callback select();
     select => { MobileView.rule-selected = true; MobileView.selected-rule = root.item; MobileView.selected-id = root.item.id; MobileView.rule-position = root.item.position; }
-    HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-        MDragHandle { row-height: root.height + 1px; enabled: !MobileData.protected && !MobileData.protection-pending && !root.floating && !MobileData.working;
+    GridLayout { spacing: 2px;
+        MDragHandle { col: 0; row: 0; rowspan: 2; row-height: root.height + 1px; enabled: !MobileData.protected && !MobileData.protection-pending && !root.floating && !MobileData.working;
             started => { root.select(); MobileView.rule-drag-id = root.item.id; MobileView.rule-drag-target = root.item.id; }
             dragged(delta) => { MobileView.rule-drag-target = MobileData.rules[clamp(root.row-index + delta, 0, MobileData.rules.length - 1)].id; }
             dropped(delta) => {
@@ -393,19 +398,15 @@ component RulesRow inherits MCard {
             }
             cancelled => { MobileView.rule-drag-id = ""; MobileView.rule-drag-target = ""; }
         }
-        VerticalLayout { spacing: 5px; min-width: 0px;
-            HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
-                MSmall { text: root.item.position + " · " + root.item.kind; font-size: MobileTypography.font-size(11); }
-                MTag { text: root.item.policy; width-limit: 90px; }
-            }
-            MText { text: root.item.value == "" ? root.item.kind : root.item.value; font-size: MobileTypography.font-size(13); opacity: root.item.enabled ? 1 : 0.5; }
-            if root.item.source == "自定义": MSmall { text: "自定义"; font-size: MobileTypography.font-size(11); }
-        }
-        MSwitch { width: 48px; horizontal-stretch: 0; checked: root.item.enabled;
+        MSmall { col: 1; row: 0; rowspan: 2; text: root.item.position; width: 18px; horizontal-stretch: 0; font-size: MobileTypography.font-size(11); }
+        MText { col: 2; row: 0; colspan: root.narrow ? 3 : 1; text: root.item.value == "" ? root.item.kind : root.item.value; preferred-width: 0px; font-size: MobileTypography.font-size(14); opacity: root.item.enabled ? 1 : 0.5; }
+        MSmall { col: 2; row: 1; colspan: 2; text: root.item.kind + " · " + root.item.source; font-size: MobileTypography.font-size(11); }
+        MTag { col: root.narrow ? 5 : 3; row: 0; text: root.item.policy; width-limit: min(90px, max(72px, root.width * 0.2)); }
+        MSwitch { col: 4; row: root.narrow ? 1 : 0; rowspan: root.narrow ? 1 : 2; geometry-key: root.floating ? "" : "rule-switch:" + root.item.id; width: 48px; horizontal-stretch: 0; checked: root.item.enabled;
             enabled: root.item.source == "自定义" && !MobileData.protected && !MobileData.protection-pending && !root.floating && !MobileData.working;
             toggled(value) => { MobileActions.request(MobileIntent.rule-enable, root.item.id, ""); }
         }
-        MButton { text: ""; quiet: true; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0; enabled: !MobileData.protected && !MobileData.protection-pending && !root.floating;
+        MButton { col: 5; row: root.narrow ? 1 : 0; rowspan: root.narrow ? 1 : 2; geometry-key: root.floating ? "" : "rule-detail:" + root.item.id; text: ""; quiet: true; accessible-role: button; accessible-label: "规则详情与操作"; width: 48px; horizontal-stretch: 0; enabled: !MobileData.protected && !MobileData.protection-pending && !root.floating;
             Image { source: @image-url("../../icons/chevron-right.svg"); colorize: Theme.secondary; width: 18px; height: 18px;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             }
@@ -440,27 +441,50 @@ component RulesFooter inherits GridLayout {
 export component MobileRules inherits PageSurface {
     locked: MobileData.protected || MobileData.protection-pending;
     property <RuleItem> drag-item;
-    property <length> row-extent: 120px;
+    property <length> row-extent: measurement.height + Theme.content-gap;
     property <length> toolbar-extent: header.header-height;
     property <int> displayed-rows: max(1, MobileData.rules.length);
+    property <length> card-padding: root.width < 420px ? 8px : Theme.card-padding;
     property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25 || MobileView.keyboard-inset > 0px;
     VerticalLayout { spacing: MobileTypography.gap;
         Rectangle {
             clip: true;
+            measurement := RulesRow {
+                visible: false; floating: true;
+                width: max(0px, list.visible-width - root.card-padding * 2);
+                item: { position: "1", kind: "DOMAIN-SUFFIX", value: "example.com", policy: "DIRECT", source: "订阅", enabled: true };
+            }
+            Rectangle {
+                x: 0px; y: header.header-height + list.content-y;
+                width: list.visible-width;
+                height: root.displayed-rows * root.row-extent - Theme.content-gap + root.card-padding * 2;
+                background: Theme.surface; border-color: Theme.line;
+                border-width: 1px; border-radius: 12px;
+                drop-shadow-blur: 6px; drop-shadow-offset-y: 1px;
+                drop-shadow-color: Theme.dark ? #00000018 : #00000008;
+            }
             list := ListView {
                 width: parent.width; height: parent.height;
                 content-key: MobileData.rule-page-index + "/" + MobileView.query + "/" + MobileData.rule-profile + "/" + MobileView.rule-source;
                 mouse-drag-pan-enabled: !gesture.reordering;
                 content-y <=> MobileView.rules-scroll-y;
                 for index in root.displayed-rows + (root.scrolling-footer ? 2 : 1): Rectangle {
-                    height: index == 0 ? header.header-height : content.preferred-height + 1px;
-                    content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
+                    height: index == 0 ? header.header-height : content.preferred-height
+                        + (index == 1 ? root.card-padding : 0px)
+                        + (index == root.displayed-rows ? root.card-padding : index < root.displayed-rows ? Theme.content-gap : 0px);
+                    content := VerticalLayout {
+                        x: index <= root.displayed-rows ? root.card-padding : 0px;
+                        y: index == 1 ? root.card-padding : 0px;
+                        width: parent.width - self.x * 2; height: self.preferred-height;
+                        alignment: start; spacing: 0px;
                         if index > 0 && index <= MobileData.rules.length: RulesRow {
                             item: MobileData.rules[index - 1]; row-index: index - 1;
                             opacity: gesture.reordering && gesture.drag-index == index - 1 ? 0.25 : 1;
-                            changed height => { root.row-extent = self.height + 1px; }
                         }
-                        if index == 1 && MobileData.rules.length == 0: MSmall { text: "没有匹配的规则"; }
+                        if index == 1 && MobileData.rules.length == 0: MSmall {
+                            text: "没有匹配的规则";
+                            height: root.row-extent - Theme.content-gap;
+                        }
                         if root.scrolling-footer && index == root.displayed-rows + 1: RulesFooter { }
                     }
                 }
@@ -471,20 +495,24 @@ export component MobileRules inherits PageSurface {
                 RulesToolbar { available-height: root.height; }
             }
             ListReorderPreview {
-                x: 0px; y: 0px; width: list.visible-width; height: list.visible-height;
-                active: gesture.reordering; row-y: gesture.drag-y; row-height: root.row-extent - 1px;
+                x: root.card-padding; y: 0px; width: list.visible-width - root.card-padding * 2; height: list.visible-height;
+                active: gesture.reordering; row-y: gesture.drag-y; row-height: root.row-extent - Theme.content-gap;
                 if gesture.reordering: RulesRow {
-                    x: 0px; y: 0px; width: parent.width; height: root.row-extent - 1px;
+                    x: 0px; y: 0px; width: parent.width; height: root.row-extent - Theme.content-gap;
                     item: root.drag-item; floating: true;
                 }
             }
             gesture := ListReorderGesture {
-                x: 0px; y: 0px; height: list.visible-height;
+                GeometryTarget {
+                    key: "mobile-rule-drag";
+                    bounds: [gesture.absolute-position.x, gesture.absolute-position.y + gesture.header-height + gesture.scroll-y, gesture.width, gesture.row-height];
+                }
+                x: root.card-padding; y: 0px; height: list.visible-height;
                 enabled: !MobileData.protected && !MobileData.protection-pending && !MobileData.working && !MobileView.modal;
                 cancel-requested: MobileView.rule-drag-id == "";
                 context: list.content-key + "/" + MobileView.detail + "/" + (root.width / 1px) + "/" + Theme.text-scale;
                 row-count: MobileData.rules.length; row-height: root.row-extent;
-                header-height: root.toolbar-extent;
+                header-height: root.toolbar-extent + root.card-padding;
                 scroll-content-height: list.content-height; scroll-y <=> list.content-y;
                 started(index) => {
                     root.drag-item = MobileData.rules[index];

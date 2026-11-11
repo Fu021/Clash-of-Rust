@@ -280,6 +280,7 @@ struct State {
     connection_page: usize,
     rule_page: usize,
     rule_rows: Option<Vec<rule_manager::Row>>,
+    rule_warnings: Vec<String>,
     rule_form: Option<RuleForm>,
     rule_editor: Option<RuleEditor>,
     update_package: Option<core::update::Package>,
@@ -582,6 +583,7 @@ async fn run_loop(
         connection_page: 0,
         rule_page: 0,
         rule_rows: None,
+        rule_warnings: Vec::new(),
         rule_form: None,
         rule_editor: None,
         update_package: None,
@@ -1378,10 +1380,13 @@ async fn run_loop(
         }
         if state.page == 4 {
             if state.rule_rows.is_none() {
-                state.rule_rows = Some(state.session.document().rows(&state.session.draft).0);
+                let (rows, warnings) = state.session.document().rows(&state.session.draft);
+                state.rule_rows = Some(rows);
+                state.rule_warnings = warnings;
             }
         } else {
             state.rule_rows = None;
+            state.rule_warnings.clear();
         }
         let view = project(&state);
         state.completed = None;
@@ -2452,6 +2457,7 @@ struct Projection {
     shortcuts: [bool; 5],
     shortcut_available: [bool; 5],
     dirty: bool,
+    rule_warning: String,
     logs: Vec<(String, String)>,
     details: Vec<(String, String)>,
     rates: (String, String),
@@ -2919,6 +2925,7 @@ fn project(state: &State) -> Projection {
             document.is_some_and(|doc| !doc.builtin && !doc.included[index])
         }),
         dirty: s.draft != *saved,
+        rule_warning: state.rule_warnings.join("\n"),
         logs: state
             .logs
             .iter()
@@ -3267,6 +3274,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         },
     );
     data.set_rule_dirty(p.dirty);
+    data.set_rule_warning(p.rule_warning.into());
     data.set_shortcuts(stable(
         data.get_shortcuts(),
         rows(

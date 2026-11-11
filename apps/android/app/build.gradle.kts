@@ -1,6 +1,6 @@
 plugins { id("com.android.application") }
 
-val appVersion = providers.gradleProperty("appVersion").orElse("0.6.7-fix.10.memory-projection").get()
+val appVersion = providers.gradleProperty("appVersion").orElse("0.7.0").get()
 val appVersionCode = providers.gradleProperty("appVersionCode").orElse("605000").get().toInt()
 val selectedAbi = providers.gradleProperty("appAbi").orNull
 val selectedNdkVersion = providers.gradleProperty("appNdkVersion").orNull

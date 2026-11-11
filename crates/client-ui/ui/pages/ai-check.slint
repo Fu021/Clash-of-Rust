@@ -37,9 +37,8 @@ export component AiCheckPage inherits PageSurface {
             ContentPanel {
                 border-color: UiData.protected ? Theme.accent : Theme.line;
                 ToolHeading { title: "Claude 保护"; icon: @image-url("../icons/ai.svg");
-                    Badge { text: UiData.protection-pending ? "切换中…" : UiData.protected ? "已开启" : "未开启"; tone: UiData.protected ? 1 : 4; }
                     Rectangle { horizontal-stretch: 1; }
-                    Toggle { enabled: !UiData.working && !UiData.exiting && !UiData.claude-busy && (UiData.running || UiData.protected); checked: UiData.protected; toggled(value) => { UiActions.dispatch(Intent.claude-protection, value ? "true" : "false", ""); } }
+                    Toggle { enabled: !UiData.working && !UiData.exiting && !UiData.claude-busy && !UiData.protection-pending && (UiData.running || UiData.protected); checked: UiData.protected; toggled(value) => { UiActions.dispatch(Intent.claude-protection, value ? "true" : "false", ""); } }
                 }
                 Caption { text: UiData.protection-pending ? UiData.protection-status : UiData.protected ? "保护节点：" + UiData.protection-node : "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"; }
                 if UiData.protection-pending: ProgressTrack { indeterminate: true; track: Theme.subtle-line; fill: Theme.accent; }

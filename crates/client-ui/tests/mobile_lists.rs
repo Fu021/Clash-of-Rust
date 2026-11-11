@@ -22,7 +22,7 @@ slint::slint! {
     import { MobileFrame } from "../ui/mobile/shared/frame.slint";
     import { MobileView } from "../ui/mobile/shared/state.slint";
     import { MobileData } from "../ui/mobile/shared/state.slint";
-    import { MobileSubscriptions } from "../ui/mobile/shared/pages.slint";
+    import { MobileSubscriptions, MobileRules, RulesRow } from "../ui/mobile/shared/pages.slint";
     import { AndroidSurface } from "../ui/mobile/android/app.slint";
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
     import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
@@ -68,6 +68,47 @@ slint::slint! {
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> busy <=> MobileData.profile-busy;
         MobileSubscriptions { width: parent.width; height: parent.height; }
+    }
+
+    export component MobileRuleRowsProbe inherits Window {
+        preferred-width: 393px; preferred-height: 400px;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <int> detail <=> MobileView.detail;
+        in-out property <string> selected-id <=> MobileView.selected-id;
+        out property <length> custom-height: custom.height;
+        out property <length> subscription-height: subscription.height;
+        out property <length> shortcut-height: shortcut.height;
+        VerticalLayout {
+            alignment: start; spacing: 1px;
+            custom := RulesRow {
+                item: { id: "custom", position: "1", kind: "DOMAIN-SUFFIX", value: "a-very-long-domain-name.example.com", policy: "DIRECT", source: "自定义", enabled: true };
+            }
+            subscription := RulesRow {
+                item: { id: "subscription", position: "2", kind: "MATCH", policy: "A very long policy name", source: "订阅", enabled: true };
+            }
+            shortcut := RulesRow {
+                item: { id: "shortcut", position: "3", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "快捷规则", enabled: true };
+            }
+        }
+    }
+
+    export component MobileRulesProbe inherits Window {
+        preferred-width: 393px; preferred-height: 720px;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <string> query <=> MobileView.query;
+        out property <string> drag-id <=> MobileView.rule-drag-id;
+        out property <string> drag-target <=> MobileView.rule-drag-target;
+        init => {
+            MobileData.rule-profiles = ["我的订阅"];
+            MobileData.rule-profile = "我的订阅";
+            MobileData.rules = [
+                { id: "first", position: "1", kind: "DOMAIN-SUFFIX", value: "first.test", policy: "DIRECT", source: "自定义", enabled: true },
+                { id: "second", position: "2", kind: "DOMAIN-SUFFIX", value: "second.test", policy: "Proxy", source: "订阅", enabled: true },
+                { id: "third", position: "3", kind: "MATCH", policy: "DIRECT", source: "订阅", enabled: true }
+            ];
+        }
+        MobileRules { width: parent.width; height: parent.height; }
     }
 
     export component ApplicationsProbe inherits Window {
@@ -385,6 +426,158 @@ fn mobile_list_stacks_rows_and_keeps_sparse_content_at_the_top() {
     assert_eq!(pixels[110 * 900 + 700], slint::Rgb8Pixel::new(0, 0, 255));
     probe.hide().unwrap();
     drop(probe);
+}
+
+#[test]
+fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
+    let (adapter, clock) = headless(393, 400);
+    let probe = MobileRuleRowsProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, first, second| {
+            captured.borrow_mut().push((intent, first, second));
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.show().unwrap();
+    for (width, scale) in [(320, 1.), (393, 1.), (800, 1.), (320, 1.3)] {
+        adapter.set_size(slint::PhysicalSize::new(width, 400));
+        probe.set_text_scale(scale);
+        advance(&clock, Duration::from_millis(300));
+        targets.borrow_mut().clear();
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        frame(&adapter, width as usize, 400);
+        advance(&clock, Duration::ZERO);
+        let heights = [
+            probe.get_custom_height(),
+            probe.get_subscription_height(),
+            probe.get_shortcut_height(),
+        ];
+        assert!(heights[0] >= 48.);
+        assert!((heights[0] - heights[1]).abs() < 1.);
+        assert!((heights[0] - heights[2]).abs() < 1.);
+        for id in ["custom", "subscription", "shortcut"] {
+            let targets = targets.borrow();
+            let toggle = &targets[&format!("rule-switch:{id}")];
+            let detail = &targets[&format!("rule-detail:{id}")];
+            for target in [toggle, detail] {
+                assert!(target[2] >= 48. && target[3] >= 48.);
+                assert!(target[0] >= 0. && target[0] + target[2] <= width as f32 + 1.);
+            }
+            assert!(toggle[0] + toggle[2] <= detail[0] + 1.);
+        }
+    }
+    let click = |key: &str| {
+        let bounds = targets.borrow()[key].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            probe.window().dispatch_event(event);
+        }
+        advance(&clock, Duration::from_millis(50));
+    };
+    click("rule-switch:custom");
+    assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(requests.borrow()[0].0, MobileIntent::RuleEnable);
+    assert_eq!(requests.borrow()[0].1.as_str(), "custom");
+    click("rule-switch:subscription");
+    assert_eq!(requests.borrow().len(), 1);
+    click("rule-detail:shortcut");
+    assert_eq!(probe.get_detail(), 15);
+    assert_eq!(probe.get_selected_id().as_str(), "shortcut");
+    probe.set_detail(0);
+    probe.set_protected(true);
+    frame(&adapter, 320, 400);
+    click("rule-switch:custom");
+    click("rule-detail:shortcut");
+    assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(probe.get_detail(), 0);
+    probe.hide().unwrap();
+}
+
+#[test]
+fn mobile_rules_drag_real_rows_at_phone_pad_and_large_text_sizes() {
+    let (adapter, clock) = headless(393, 720);
+    let probe = MobileRulesProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, first, second| {
+            captured.borrow_mut().push((intent, first, second));
+        });
+    probe.show().unwrap();
+    probe.global::<UiGeometry>().set_enabled(true);
+    for (width, height, scale) in [(393, 720, 1.), (800, 720, 1.), (320, 568, 1.3)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        advance(&clock, Duration::from_millis(300));
+        targets.borrow_mut().clear();
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        frame(&adapter, width as usize, height as usize);
+        advance(&clock, Duration::ZERO);
+        let bounds = targets.borrow()["mobile-rule-drag"].clone();
+        let start = LogicalPosition::new(bounds[0] + 8., bounds[1] + bounds[3] / 2.);
+        let end = LogicalPosition::new(start.x, start.y + bounds[3]);
+        probe.window().dispatch_event(WindowEvent::PointerPressed {
+            position: start,
+            button: PointerEventButton::Left,
+        });
+        advance(&clock, Duration::from_millis(500));
+        assert!(probe.get_drag_id().is_empty());
+        advance(&clock, Duration::from_millis(200));
+        assert_eq!(probe.get_drag_id().as_str(), "first");
+        probe
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: end });
+        advance(&clock, Duration::from_millis(20));
+        assert_eq!(probe.get_drag_target().as_str(), "second");
+        frame(&adapter, width as usize, height as usize);
+        probe.window().dispatch_event(WindowEvent::PointerReleased {
+            position: end,
+            button: PointerEventButton::Left,
+        });
+        let requests = requests.borrow();
+        let last = requests.last().expect("dragging must dispatch a rule move");
+        assert_eq!(last.0, MobileIntent::RuleDrop);
+        assert_eq!(last.1.as_str(), "first");
+        assert_eq!(last.2.as_str(), "second");
+        assert!(probe.get_drag_id().is_empty());
+    }
+    probe.hide().unwrap();
 }
 
 #[test]
