@@ -83,6 +83,8 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 使用 `cor config set update_prereleases true` 将预发布版纳入检查，默认 `false`。关闭时所有用户都以线上最新正式版为目标，即使本地为 `0.999.0` 等更高版本，也可检查、下载并确认返回正式版；版本相同时不重复提示。开启后才纳入预发布版，且只提供比本地更高的版本。GUI 与 CLI 共用此设置，细则见[更新通道](../workflows/versions.md#版本与更新通道)。
 
+`update install` 先检查并显示实际目标版本，再确认安装；只有本次目标是预发布版时才附风险提示，开启预发布通道后安装正式版不会显示该警告。后台在下载前核对已确认的版本及预发布标记；候选改变时停止并要求重新确认，不静默换包。旧后台不支持此交接时会拒绝安装，先退出旧后台后重试。
+
 设置保存在当前实例的数据目录 `settings.json`。`--data-dir`、`CLASH_OF_RUST_DATA_DIR`、普通用户默认目录和 root 自有目录是不同实例，不能假设它们共享更新通道或其他设置。桌面自动更新重启时会显式继承原数据目录；若更新后仍看到旧设置，先核对 `cor diagnose --offline --output cor-diagnose.json` 中的 `data_directory`，再比较同一目录的 `settings.json`。
 
 检查更新遇到网络错误或附件暂未完整时，会重新获取发布信息，最多尝试 4 次，总等待不超过约 75 秒；仍缺少当前平台安装包或校验文件时会明确报错。

@@ -38,6 +38,8 @@ pub enum Owner {
 pub struct Meta {
     #[serde(default)]
     pub view_revision: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub measurements: Vec<clash_client_core::controller::MeasurementDiagnostic>,
     pub settings: Settings,
     pub profiles: Vec<Profile>,
     pub geo: GeoManifest,
@@ -156,6 +158,11 @@ pub enum Command {
     },
     UpdateInstall,
     UpdatePrepareTerminal,
+    UpdateSelected {
+        version: String,
+        preview: bool,
+        terminal: bool,
+    },
     UpdateCommitTerminal {
         directory: PathBuf,
     },
@@ -265,6 +272,11 @@ mod tests {
             },
             Command::UpdateInstall,
             Command::UpdatePrepareTerminal,
+            Command::UpdateSelected {
+                version: "0.7.1".into(),
+                preview: false,
+                terminal: true,
+            },
             Command::UpdateCommitTerminal {
                 directory: "/tmp/update".into(),
             },

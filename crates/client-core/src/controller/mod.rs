@@ -6,9 +6,23 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
 mod connection_preview;
+mod measurement;
 pub use connection_preview::{CONNECTION_PREVIEW_LIMIT, ConnectionPreview};
+use measurement::{Measurement, MeasurementFailure, MeasurementHistory};
+pub use measurement::{MeasurementCode, MeasurementDiagnostic};
 
 const JSON_LIMIT: usize = 32 * 1024 * 1024;
+
+#[derive(Debug)]
+struct ApiResponseError(reqwest::StatusCode);
+
+impl std::fmt::Display for ApiResponseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "mihomo API 返回 {}", self.0)
+    }
+}
+
+impl std::error::Error for ApiResponseError {}
 
 // Backpressure bounds queued response chunks. Dropping the request closes the
 // sender, so a cancelled request also wakes the blocking JSON parser.
@@ -128,6 +142,7 @@ pub struct Api {
     pub client: Client,
     base: Url,
     secret: String,
+    measurements: MeasurementHistory,
 }
 
 // The pool belongs to one deserialized document, never to the process lifetime.
@@ -566,7 +581,13 @@ impl Api {
                 .build()?,
             base: Url::parse(&format!("http://127.0.0.1:{}/", settings.controller_port))?,
             secret: settings.secret.clone(),
+            measurements: Default::default(),
         })
+    }
+    pub fn reconfigured(&self, settings: &Settings) -> Result<Self> {
+        let mut api = Self::new(settings)?;
+        api.measurements = self.measurements.clone();
+        Ok(api)
     }
     pub fn url(&self, segments: &[&str]) -> Result<Url> {
         let mut url = self.base.clone();
@@ -603,7 +624,7 @@ impl Api {
         let status = response.status();
         if !status.is_success() {
             // Do not include arbitrary server bodies or subscription URLs in diagnostics.
-            bail!("mihomo API 返回 {status}");
+            return Err(ApiResponseError(status).into());
         }
         Ok(response)
     }
@@ -783,8 +804,12 @@ impl Api {
         Ok(())
     }
     pub async fn delay(&self, name: &str) -> Result<u32> {
-        self.delay_at(name, "https://www.gstatic.com/generate_204", "")
-            .await
+        let mut measurement = Measurement::new("node");
+        measurement.phase("measure");
+        let target = "https://www.gstatic.com/generate_204";
+        let result = measurement.observe(self.delay_at(name, target, "").await, target);
+        self.finish_measurement(measurement, &result);
+        result
     }
     async fn delay_at(&self, name: &str, test_url: &str, expected: &str) -> Result<u32> {
         let mut url = self.url(&["proxies", name, "delay"])?;
@@ -794,13 +819,15 @@ impl Api {
             .append_pair("expected", expected);
         let response = self.request(Method::GET, url).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            let (provider, _) = self.provider_leaf(name).await?.context("测速节点不存在")?;
+            let (provider, _) = self
+                .provider_leaf(name)
+                .await?
+                .ok_or_else(|| MeasurementFailure::new(MeasurementCode::MissingNode, Some(404)))?;
             return self
                 .provider_delay(name, test_url, expected, &provider)
                 .await;
         }
-        let response = Self::checked(response).await?;
-        Ok(response.json::<Delay>().await?.delay)
+        Self::measurement_response(response).await
     }
 
     async fn provider_delay(
@@ -815,8 +842,7 @@ impl Api {
             .append_pair("url", test_url)
             .append_pair("timeout", "5000")
             .append_pair("expected", expected);
-        let response = Self::checked(self.request(Method::GET, url).send().await?).await?;
-        Ok(response.json::<Delay>().await?.delay)
+        Self::measurement_response(self.request(Method::GET, url).send().await?).await
     }
 
     async fn provider_routes(
@@ -855,6 +881,17 @@ impl Api {
     }
 
     pub async fn delay_group(&self, group: &str) -> Result<BTreeMap<String, u32>> {
+        let mut measurement = Measurement::new("group");
+        let result = self.delay_group_measured(group, &mut measurement).await;
+        self.finish_measurement(measurement, &result);
+        result
+    }
+
+    async fn delay_group_measured(
+        &self,
+        group: &str,
+        measurement: &mut Measurement,
+    ) -> Result<BTreeMap<String, u32>> {
         let proxies: Proxies = self.get("proxies").await?;
         let current = proxies
             .proxies
@@ -866,10 +903,20 @@ impl Api {
         } else {
             current.all.clone()
         };
-        self.delay_batch(proxies, roots, true).await
+        self.delay_batch(proxies, roots, true, measurement).await
     }
 
     pub async fn delay_all_nodes(&self) -> Result<BTreeMap<String, u32>> {
+        let mut measurement = Measurement::new("all");
+        let result = self.delay_all_measured(&mut measurement).await;
+        self.finish_measurement(measurement, &result);
+        result
+    }
+
+    async fn delay_all_measured(
+        &self,
+        measurement: &mut Measurement,
+    ) -> Result<BTreeMap<String, u32>> {
         let proxies: Proxies = self.get("proxies").await?;
         let names: std::collections::BTreeSet<_> = proxies
             .proxies
@@ -893,11 +940,18 @@ impl Api {
             })
             .cloned()
             .collect();
-        self.delay_batch(proxies, names.into_iter().collect(), false)
+        self.delay_batch(proxies, names.into_iter().collect(), false, measurement)
             .await
     }
 
     pub async fn confirm_all_nodes_unreachable(&self) -> Result<bool> {
+        let mut measurement = Measurement::new("confirmation");
+        let result = self.confirm_unreachable_measured(&mut measurement).await;
+        self.finish_measurement(measurement, &result);
+        result
+    }
+
+    async fn confirm_unreachable_measured(&self, measurement: &mut Measurement) -> Result<bool> {
         let proxies: Proxies = self.get("proxies").await?;
         let targets = recovery_targets(&proxies);
         if targets.is_empty() {
@@ -908,6 +962,7 @@ impl Api {
             .filter(|name| !proxies.proxies.contains_key(name.as_str()))
             .cloned()
             .collect();
+        measurement.phase("query_providers");
         let providers = self.provider_routes(&missing).await?;
         let measured = self
             .measure_delays(
@@ -915,8 +970,9 @@ impl Api {
                 "https://www.gstatic.com/generate_204",
                 "204",
                 &providers,
+                measurement,
             )
-            .await;
+            .await?;
         if measured.values().any(|delay| *delay > 0) {
             return Ok(false);
         }
@@ -926,8 +982,10 @@ impl Api {
                 "https://www.cloudflare.com/cdn-cgi/trace",
                 "200",
                 &providers,
+                measurement,
             )
-            .await;
+            .await?;
+        measurement.phase("verify_controller");
         let current: Proxies = self.get("proxies").await?;
         let _: ConfigStatus = self.get("configs").await?;
         Ok(recovery_targets(&current) == targets
@@ -936,15 +994,21 @@ impl Api {
     }
 
     pub async fn delay_node(&self, name: &str) -> Result<BTreeMap<String, u32>> {
-        let proxy = self.proxy_selection(name).await?;
-        if proxy.is_some_and(|p| matches!(p.kind.as_str(), "URLTest" | "Fallback")) {
-            self.delay_group(name).await
-        } else {
-            Ok(BTreeMap::from([(
-                name.to_owned(),
-                self.delay(name).await.unwrap_or(0),
-            )]))
+        let mut measurement = Measurement::new("node");
+        let result = async {
+            let proxy = self.proxy_selection(name).await?;
+            if proxy.is_some_and(|p| matches!(p.kind.as_str(), "URLTest" | "Fallback")) {
+                self.delay_group_measured(name, &mut measurement).await
+            } else {
+                measurement.phase("measure");
+                let target = "https://www.gstatic.com/generate_204";
+                let delay = measurement.observe(self.delay_at(name, target, "").await, target)?;
+                Ok(BTreeMap::from([(name.to_owned(), delay)]))
+            }
         }
+        .await;
+        self.finish_measurement(measurement, &result);
+        result
     }
 
     pub async fn restore_automatic_groups(
@@ -989,21 +1053,42 @@ impl Api {
         url: &str,
         expected: &str,
         providers: &BTreeMap<Text, Text>,
-    ) -> BTreeMap<String, u32> {
+        measurement: &mut Measurement,
+    ) -> Result<BTreeMap<String, u32>> {
         use futures_util::{StreamExt, stream};
-        stream::iter(names.into_iter().map(|name| async move {
+        measurement.phase("measure");
+        let mut pending = stream::iter(names.into_iter().map(|name| async move {
             (
                 name.to_string(),
                 match providers.get(name.as_str()) {
                     Some(provider) => self.provider_delay(&name, url, expected, provider).await,
                     None => self.delay_at(&name, url, expected).await,
-                }
-                .unwrap_or(0),
+                },
             )
         }))
-        .buffer_unordered(6)
-        .collect()
-        .await
+        .buffer_unordered(6);
+        let mut values = BTreeMap::new();
+        let mut failure = None;
+        let mut failed_requests = 0;
+        while let Some((name, result)) = pending.next().await {
+            match measurement.observe(result, url) {
+                Ok(delay) => {
+                    values.insert(name, delay);
+                }
+                Err(error) => {
+                    failed_requests += 1;
+                    if failure.is_none() {
+                        failure = Some(error);
+                    }
+                }
+            }
+        }
+        if let Some(error) = failure {
+            return Err(error.context(format!(
+                "{failed_requests} 项测速请求未完成，未判定节点失联"
+            )));
+        }
+        Ok(values)
     }
 
     async fn delay_batch(
@@ -1011,6 +1096,7 @@ impl Api {
         proxies: Proxies,
         roots: Vec<Text>,
         direct: bool,
+        measurement: &mut Measurement,
     ) -> Result<BTreeMap<String, u32>> {
         // Visit child groups first, without recursion or an unbounded fan-out.
         // Native /group/{name}/delay probes every member concurrently; keeping
@@ -1044,6 +1130,7 @@ impl Api {
         let providers = if missing.is_empty() {
             BTreeMap::new()
         } else {
+            measurement.phase("query_providers");
             self.provider_routes(&missing).await?
         };
         let covered: std::collections::BTreeSet<_> = automatic_groups
@@ -1084,12 +1171,15 @@ impl Api {
                     url,
                     &group.expected_status,
                     &providers,
+                    measurement,
                 )
-                .await;
+                .await?;
             // Clears both a previous manual override and URLTest's cached winner
             // AFTER its own URL has fresh measurements. Selector groups created
             // by Claude protection never enter this branch.
+            measurement.phase("reset_automatic_group");
             self.unfix(&name).await?;
+            measurement.phase("read_automatic_selection");
             let current = self.proxy_nodes(&name).await?;
             let delay = values.get(current.now.as_str()).copied().unwrap_or(0);
             delays.extend(values);
@@ -1102,8 +1192,9 @@ impl Api {
                 "https://www.gstatic.com/generate_204",
                 "",
                 &providers,
+                measurement,
             )
-            .await,
+            .await?,
         );
         Ok(delays)
     }
@@ -1512,7 +1603,9 @@ rules: ['MATCH,group']\n";
         assert_eq!(proxies.proxies["node"].delay, Some(0));
     }
 
-    async fn mock_response(wire: Vec<u8>) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
+    pub(super) async fn mock_response(
+        wire: Vec<u8>,
+    ) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

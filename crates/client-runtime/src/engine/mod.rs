@@ -521,7 +521,7 @@ impl Engine {
         if port != self.settings.controller_port {
             let mut settings = self.settings.clone();
             settings.controller_port = port;
-            let api = Api::new(&settings)?;
+            let api = self.api.reconfigured(&settings)?;
             self.store.save_settings(&settings)?;
             self.settings = settings;
             self.api = api;
@@ -974,7 +974,7 @@ impl Engine {
         }
         let changed = async {
             self.store.save_settings(&settings)?;
-            self.api = Api::new(&settings)?;
+            self.api = self.api.reconfigured(&settings)?;
             self.settings = settings;
             if let Some(state) = &state {
                 self.resume(state).await?;
@@ -985,7 +985,7 @@ impl Engine {
         if let Err(error) = changed {
             self.stop().await.context("设置应用失败，停止新内核失败")?;
             self.store.save_settings(&old)?;
-            self.api = Api::new(&old)?;
+            self.api = self.api.reconfigured(&old)?;
             self.settings = old;
             if let Some(state) = &state {
                 self.resume(state)

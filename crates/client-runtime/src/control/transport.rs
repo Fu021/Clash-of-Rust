@@ -290,6 +290,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                     Command::GeoUpdate
                         | Command::UpdateInstall
                         | Command::UpdatePrepareTerminal
+                        | Command::UpdateSelected { .. }
                         | Command::Import { .. }
                 ) {
                     let (cancellation, disconnected) = watch::channel(false);

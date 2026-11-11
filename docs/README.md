@@ -39,7 +39,8 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 | 不发布打包、核验安装包或公开发布 | [Publish Release](workflows/release.md)；[发布文案模板](releases/TEMPLATE.md) |
 | 测量内存和窗口关闭后的资源释放 | [Memory Benchmark](workflows/memory.md) |
 | 在本机编译、打包与预览 | [本地开发](workflows/local-development.md) |
-| 理解版本、更新通道与依赖快照 | [版本和依赖](workflows/versions.md)；[分支版本规则](development.md#分支版本) |
+| 理解版本、更新通道与依赖快照 | [版本和依赖](workflows/versions.md)；[版本管理](development.md#版本管理) |
+| 排查测速失败与 Android 断网 | [内部诊断与错误码](diagnostics.md)；[故障报告导出](cli/runtime.md#故障反馈与诊断报告) |
 | 理解 GitHub 与私网的缓存分工 | [缓存覆盖](workflows/cache-coverage.md)、[保留白名单](workflows/cache-retention.md)、[服务边界与协议](workflows/cache-server.md) |
 | 对接 Ubuntu 20.04 预装测试环境镜像 | [镜像复用与测速及验收证据](workflows/prepared-vm-images.md)、[v1 对接约定及共用向量](workflows/prepared-vm-protocol.md) |
 

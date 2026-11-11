@@ -24,24 +24,37 @@ type Protector interface {
 type protectorHolder struct{ value Protector }
 
 var (
-	lifecycle sync.Mutex
-	allowed atomic.Pointer[protectorHolder]
-	tun *sing_tun.Listener
-	started bool
+	lifecycle          sync.Mutex
+	allowed            atomic.Pointer[protectorHolder]
+	protectionAttempts atomic.Uint64
+	protectionFailures atomic.Uint64
+	tun                *sing_tun.Listener
+	started            bool
 )
 
 func init() {
 	// Installed once: replacing the global hook during active dials would race.
 	dialer.DefaultSocketHook = func(network, address string, conn syscall.RawConn) error {
 		p := allowed.Load()
-		if p == nil { return nil }
+		if p == nil {
+			return nil
+		}
+		protectionAttempts.Add(1)
 		var protectErr error
 		if err := conn.Control(func(fd uintptr) {
 			ok, err := p.value.Protect(int32(fd))
-			if err != nil { protectErr = err } else if !ok {
+			if err != nil {
+				protectErr = err
+			} else if !ok {
 				protectErr = errors.New("Android rejected socket protection")
 			}
-		}); err != nil { return err }
+		}); err != nil {
+			protectionFailures.Add(1)
+			return err
+		}
+		if protectErr != nil {
+			protectionFailures.Add(1)
+		}
 		return protectErr
 	}
 }
@@ -66,6 +79,11 @@ func Reload(raw string) error {
 
 func SetProtector(value Protector) {
 	if value == nil { allowed.Store(nil) } else { allowed.Store(&protectorHolder{value}) }
+}
+
+func SocketDiagnostics() string {
+	return fmt.Sprintf(`{"required":%t,"attempts":%d,"failures":%d}`,
+		allowed.Load() != nil, protectionAttempts.Load(), protectionFailures.Load())
 }
 
 // Java owns the original descriptor. sing_tun owns only this duplicate.

@@ -210,7 +210,15 @@ public final class MainActivity extends NativeActivity {
                     .put("sdk", android.os.Build.VERSION.SDK_INT)
                     .put("release", android.os.Build.VERSION.RELEASE)
                     .put("manufacturer", android.os.Build.MANUFACTURER)
-                    .put("model", android.os.Build.MODEL).toString();
+                    .put("model", android.os.Build.MODEL)
+                    .put("network", networkOverview == null
+                        ? new JSONObject().put("state", "not_initialized")
+                        : networkOverview.diagnostics())
+                    .put("socket_protection", new JSONObject(
+                        org.clashofrust.nativecore.mobile.Mobile.socketDiagnostics()))
+                    .put("vpn", new JSONObject().put("connected", TunnelService.connected())
+                        .put("pending", TunnelService.pending()).put("generation", TunnelService.generation())
+                        .put("error", TunnelService.error())).toString();
                 case "background": runOnUiThread(() -> moveTaskToBack(true)); break;
                 case "vpn-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_VPN_SETTINGS))); break;
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;

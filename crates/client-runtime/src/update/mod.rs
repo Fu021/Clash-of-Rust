@@ -93,6 +93,18 @@ pub struct Available {
     pub package: Option<Package>,
 }
 
+impl Available {
+    pub(crate) fn require_selected(&self, expected: Option<&(String, bool)>) -> Result<()> {
+        anyhow::ensure!(
+            expected.is_none_or(|(version, preview)| {
+                self.version == *version && self.preview == *preview
+            }),
+            "可安装版本已改变，请重新执行更新并确认"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     pub checking: bool,
@@ -682,6 +694,24 @@ async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn installation_requires_the_confirmed_version_and_release_kind() {
+        let mut available = Available {
+            version: "0.7.1".into(),
+            url: RELEASES_URL.into(),
+            preview: false,
+            package: None,
+        };
+        let selected = (available.version.clone(), available.preview);
+        assert!(available.require_selected(Some(&selected)).is_ok());
+        available.preview = true;
+        assert!(available.require_selected(Some(&selected)).is_err());
+        available.preview = false;
+        available.version = "0.7.2".into();
+        assert!(available.require_selected(Some(&selected)).is_err());
+        assert!(available.require_selected(None).is_ok());
+    }
 
     #[test]
     fn preparation_retry_reuses_only_the_same_verified_download_and_cleans_it_on_drop() {

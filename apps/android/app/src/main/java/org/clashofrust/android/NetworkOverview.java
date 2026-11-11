@@ -58,5 +58,39 @@ final class NetworkOverview implements AutoCloseable {
             .put("dns", new JSONArray(new ArrayList<>(dns)));
     }
 
+    JSONObject diagnostics() throws Exception {
+        Network active = manager.getActiveNetwork();
+        NetworkCapabilities current = active == null ? null : manager.getNetworkCapabilities(active);
+        JSONArray networks = new JSONArray();
+        synchronized (links) {
+            for (Map.Entry<Network,LinkProperties> entry : links.entrySet()) {
+                if (networks.length() >= 8) break;
+                NetworkCapabilities capabilities = manager.getNetworkCapabilities(entry.getKey());
+                if (capabilities == null || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue;
+                LinkProperties properties = entry.getValue();
+                int dns4 = 0, dns6 = 0;
+                for (InetAddress address : properties.getDnsServers()) {
+                    if (address instanceof java.net.Inet6Address) dns6++; else dns4++;
+                }
+                JSONObject record = new JSONObject()
+                    .put("wifi", capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
+                    .put("cellular", capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))
+                    .put("ethernet", capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+                    .put("validated", capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+                    .put("dns_ipv4", dns4).put("dns_ipv6", dns6).put("mtu", properties.getMtu());
+                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    record.put("private_dns_active", properties.isPrivateDnsActive())
+                        .put("private_dns_strict", properties.getPrivateDnsServerName() != null);
+                }
+                networks.put(record);
+            }
+        }
+        return new JSONObject().put("schema", 1)
+            .put("active_available", current != null)
+            .put("active_vpn", current != null && current.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
+            .put("active_validated", current != null && current.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+            .put("physical_networks", networks);
+    }
+
     @Override public void close() { manager.unregisterNetworkCallback(callback); }
 }

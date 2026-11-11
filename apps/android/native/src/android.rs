@@ -1335,13 +1335,17 @@ async fn run_loop(
                                         .unwrap_or("info")
                                         .to_uppercase()
                                         .replace("WARNING", "WARN");
-                                    let text = value["payload"]
+                                    let text: String = value["payload"]
                                         .as_str()
                                         .unwrap_or("")
                                         .chars()
                                         .take(8192)
                                         .collect();
-                                    let _ = send.try_send(Update::Log(level, text));
+                                    let time = chrono::Utc::now().to_rfc3339();
+                                    let _ = send.try_send(Update::Log(
+                                        level,
+                                        format!("[observed_at={time}] {text}"),
+                                    ));
                                 }
                             });
                         }
@@ -1975,6 +1979,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             let context = json!({
                 "error":a,"events":state.issue_events,"page":state.page,
                 "core_running":session.running,"vpn_connected":session.vpn,
+                "measurements":session.api.measurement_diagnostics(),
                 "site_results":core::support::ip_results(&state.ip_results),"claude_status":state.claude_status,
                 "presentation":PRESENTATION.lock().map(|value|value.clone()).unwrap_or_default(),
                 "platform":session.native.request(json!({"op":"diagnostics"})).map_err(|error|format!("{error:#}")),

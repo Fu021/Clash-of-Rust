@@ -427,7 +427,8 @@ async fn diagnose(args: &Args) -> Result<()> {
             "http":display(http),
             "ipv4":display(v4),
             "ipv6":display(v6),
-            "core_logs":logs
+            "core_logs":logs,
+            "measurements":meta.measurements
         }))
     };
     let local = async {
@@ -465,6 +466,7 @@ async fn diagnose(args: &Args) -> Result<()> {
         "ipv4":backend["ipv4"],
         "ipv6":backend["ipv6"],
         "core_logs":backend["core_logs"],
+        "measurements":backend["measurements"],
         "backend_error":backend_error
     });
     match local {

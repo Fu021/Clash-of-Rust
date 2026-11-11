@@ -31,6 +31,7 @@ impl Engine {
             }
         };
         let api = Api::new(&meta.settings)?;
+        api.restore_measurement_diagnostics(meta.measurements);
         Ok(Some(Self {
             store: store.clone(),
             settings: meta.settings,
@@ -71,7 +72,10 @@ impl Engine {
     }
 
     pub(super) fn apply_meta(&mut self, meta: Meta) -> Result<()> {
-        self.api = Api::new(&meta.settings)?;
+        let mut measurements = self.api.measurement_diagnostics();
+        measurements.extend(meta.measurements);
+        self.api = self.api.reconfigured(&meta.settings)?;
+        self.api.restore_measurement_diagnostics(measurements);
         self.settings = meta.settings;
         self.profiles = meta.profiles;
         self.geo_manifest = meta.geo;

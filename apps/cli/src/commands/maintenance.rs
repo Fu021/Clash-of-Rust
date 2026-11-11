@@ -193,21 +193,24 @@ async fn update(args: &Args) -> Result<()> {
             (None, None, settings.update_prereleases)
         };
     if args.path == "update install" {
-        let prompt = if include_prereleases {
-            format!(
-                "{}\n按当前通道下载安装，停止当前内核和后台？",
-                clash_client_core::update::channel::PRERELEASE_WARNING
-            )
-        } else {
-            "下载并安装最新正式版（预发布版可返回正式版），停止当前内核和后台？".into()
-        };
-        output::confirm(args, &prompt).await?;
+        let available =
+            clash_client_runtime::update::check_with_prereleases(port, include_prereleases)
+                .await?
+                .context("当前更新通道没有可安装的版本")?;
+        output::confirm(args, &update_install_prompt(&available)).await?;
         if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
-            eprintln!("正在检查更新、下载安装包并校验 SHA256…");
+            eprintln!("正在下载安装包并校验 SHA256…");
         }
+        let terminal = cfg!(target_os = "linux")
+            && clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none();
+        let operation = Command::UpdateSelected {
+            version: available.version,
+            preview: available.preview,
+            terminal,
+        };
         #[cfg(target_os = "linux")]
-        if clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none() {
-            let prepared: Value = backend::request(args, Command::UpdatePrepareTerminal)
+        if terminal {
+            let prepared: Value = backend::request(args, operation)
                 .await
                 .context("终端安装准备失败；旧版后台请先退出后重试")?;
             let directory = std::path::PathBuf::from(
@@ -227,7 +230,7 @@ async fn update(args: &Args) -> Result<()> {
                 json!({"state":result.state,"version":result.version,"message":result.message,"error":false}),
             );
         }
-        return output::emit(args, backend::request(args, Command::UpdateInstall).await?);
+        return output::emit(args, backend::request(args, operation).await?);
     }
     let available =
         clash_client_runtime::update::check_with_prereleases(port, include_prereleases).await?;
@@ -277,4 +280,52 @@ async fn update(args: &Args) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn update_install_prompt(available: &clash_client_runtime::update::Available) -> String {
+    let channel = if available.preview {
+        "预发布版"
+    } else {
+        "正式版"
+    };
+    let prompt = format!(
+        "下载并安装{channel} {}，停止当前内核和后台？",
+        available.version
+    );
+    if available.preview {
+        format!(
+            "{}\n{prompt}",
+            clash_client_core::update::channel::PRERELEASE_WARNING
+        )
+    } else {
+        prompt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_install_warning_follows_the_selected_release_not_the_channel() {
+        for (version, preview) in [
+            ("0.7.1", false),
+            ("0.7.1-fix.1.example", true),
+            ("0.7.1", true),
+        ] {
+            let available = clash_client_runtime::update::Available {
+                version: version.into(),
+                preview,
+                url: clash_client_runtime::update::RELEASES_URL.into(),
+                package: None,
+            };
+            let prompt = update_install_prompt(&available);
+            assert!(prompt.contains(version));
+            assert_eq!(
+                prompt.contains(clash_client_core::update::channel::PRERELEASE_WARNING),
+                preview
+            );
+            assert_eq!(prompt.starts_with("下载并安装正式版"), !preview);
+        }
+    }
 }

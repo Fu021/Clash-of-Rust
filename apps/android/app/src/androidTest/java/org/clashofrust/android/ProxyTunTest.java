@@ -1736,6 +1736,12 @@ public class ProxyTunTest {
             await("Android did not make VPN its active network", () -> vpnActive(connectivity));
             tunCarriesSocket(controller, secret);
             tunResolvesAndCarriesHttp();
+            JSONObject diagnostics = new JSONObject(activity.request("{\"op\":\"diagnostics\"}"));
+            JSONObject protection = diagnostics.getJSONObject("socket_protection");
+            assertTrue(protection.getBoolean("required"));
+            assertTrue("VPN probes did not observe protected outbound sockets", protection.getLong("attempts") > 0);
+            assertEquals("Android rejected outbound socket protection", 0, protection.getLong("failures"));
+            assertTrue(diagnostics.getJSONObject("vpn").getBoolean("connected"));
         } finally {
             TunnelService.stop(context);
         }

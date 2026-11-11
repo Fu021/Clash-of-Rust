@@ -434,7 +434,11 @@ pub(super) async fn execute(
             }
             Action::Delay(node) => {
                 let delay = engine.api.delay(&node).await?;
-                Ok(format!("{node} · {delay} ms"))
+                Ok(if delay == 0 {
+                    format!("{node} · 测速未成功")
+                } else {
+                    format!("{node} · {delay} ms")
+                })
             }
             Action::Close(id) => {
                 engine.api.close_connection(&id).await?;

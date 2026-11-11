@@ -59,6 +59,7 @@ where
 pub(crate) fn meta(engine: &Engine, owner: Owner) -> Result<Meta> {
     Ok(Meta {
         view_revision: engine.view_revision(),
+        measurements: engine.api.measurement_diagnostics(),
         settings: engine.settings.clone(),
         profiles: engine.profiles.clone(),
         geo: engine.geo_manifest.clone(),
@@ -116,10 +117,24 @@ pub(super) async fn execute(
         return Ok(Value::Null);
     }
     if matches!(&operation, Command::UpdateInstall) {
-        return install_update(shared, disconnected, false).await;
+        return install_update(shared, disconnected, false, None).await;
     }
     if matches!(&operation, Command::UpdatePrepareTerminal) {
-        return install_update(shared, disconnected, true).await;
+        return install_update(shared, disconnected, true, None).await;
+    }
+    if let Command::UpdateSelected {
+        version,
+        preview,
+        terminal,
+    } = &operation
+    {
+        return install_update(
+            shared,
+            disconnected,
+            *terminal,
+            Some((version.clone(), *preview)),
+        )
+        .await;
     }
     if let Command::Import {
         name,
@@ -321,6 +336,7 @@ pub(super) async fn execute(
         }
         Command::UpdateInstall => unreachable!("handled before locking the owner"),
         Command::UpdatePrepareTerminal => unreachable!("handled before locking the owner"),
+        Command::UpdateSelected { .. } => unreachable!("handled before locking the owner"),
         Command::UpdateCommitTerminal { directory } => {
             #[cfg(target_os = "linux")]
             {
@@ -341,6 +357,7 @@ async fn install_update(
     shared: &Arc<Mutex<Engine>>,
     mut disconnected: Option<watch::Receiver<bool>>,
     terminal: bool,
+    expected: Option<(String, bool)>,
 ) -> Result<Value> {
     #[cfg(not(target_os = "linux"))]
     anyhow::ensure!(!terminal, "当前平台不支持 Linux 终端安装交接");
@@ -352,6 +369,7 @@ async fn install_update(
             let available = crate::update::check_with_prereleases(port, prereleases)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("当前更新通道没有可安装的版本"))?;
+            available.require_selected(expected.as_ref())?;
             crate::update::download(available, port, Some(api), |_| {}).await
         },
     )

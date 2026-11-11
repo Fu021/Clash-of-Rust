@@ -41,8 +41,13 @@ impl App {
                         Some(engine) => engine.log_snapshot().map_err(|error| format!("{error:#}")),
                         None => Err("后台未就绪或读取超时".into()),
                     };
+                    let measurements = engine
+                        .as_ref()
+                        .map(|engine| engine.api.measurement_diagnostics())
+                        .unwrap_or_default();
                     drop(engine);
                     let mut context = context;
+                    context["measurements"] = json!(measurements);
                     if let Err(error) = &logs {
                         context["log_error"] = json!(error);
                     }

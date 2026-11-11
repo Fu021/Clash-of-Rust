@@ -1216,7 +1216,7 @@ class BuildTests(unittest.TestCase):
         checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
         for package, case in (('clash-client-core', 'update'),
                               ('clash-client-runtime', 'update_check_interval'),
-                              ('clash-cli', 'update_interval'),
+                              ('clash-cli', 'update_'),
                               ('clash-of-rust', 'update_')):
             self.assertTrue(any(command[command.index('-p')+1] == package and case in command
                                 for command in checks), (package, case, checks))
@@ -1260,7 +1260,7 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(all('--exact' in command for command in focused))
         for package, target in (('clash-client-ui', 'ui_models'),
                                 ('clash-desktop-ui', '--lib'),
-                                ('clash-client-core', 'api::tests::'),
+                                ('clash-client-core', 'api::'),
                                 ('clash-client-core', 'overview::tests::')):
             self.assertTrue(any(command[command.index('-p')+1] == package and target in command
                                 for command in ui_checks), (package, target))

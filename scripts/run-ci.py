@@ -41,7 +41,7 @@ def main():
             for package, target, case in (
                     ('clash-client-core', ['--lib'], 'update'),
                     ('clash-client-runtime', ['--lib'], 'update_check_interval'),
-                    ('clash-cli', ['--bin', 'cor'], 'update_interval'),
+                    ('clash-cli', ['--bin', 'cor'], 'update_'),
                     ('clash-of-rust', ['--bin', 'clash-of-rust'], 'update_')):
                 run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
                      case, '--', '--test-threads=1'])
@@ -62,7 +62,7 @@ def main():
         for package, target, cases in (
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
-                ('clash-client-core', ['--lib'], ['api::tests::', 'overview::tests::'])):
+                ('clash-client-core', ['--lib'], ['api::', 'overview::tests::'])):
             for case in cases:
                 run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
                      *([case] if case else []), '--', '--test-threads=1'])
