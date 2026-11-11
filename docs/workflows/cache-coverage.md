@@ -10,7 +10,7 @@ CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache�
 
 仓库缓存上限为 **24 GB**（API 字段 `max_cache_size_gb=24`），工作流热缓存保留预算为 **20 GiB**，为保存期间的新旧对象交替留余量。维护者本轮授权的每月缓存预算为 **1 美元**；账户预算、仓库上限和工作流保留预算分别设置。GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及设置依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
 
-CI 的 main 构建保存各平台完整 Rust 基线，同仓库开发分支与 PR 在恢复兼容的 main 基线后只尝试保存有大小上限的对象差异。Memory Benchmark 仅在 main 工作流测量当前 main 提交时保存完整基线，其他分支测量自身当前提交时使用差异包；选择其他版本时不保存编译对象。fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。以下是此前六次成功 CI 的耗时依据；当前 main 缓存均受保护，不能据此宣称某个 main 对象一定会被淘汰：
+CI 的 main 构建保存各平台完整 Rust 基线，同仓库开发分支与 PR 在恢复兼容的 main 基线后只尝试保存有大小上限的对象差异。Memory Benchmark 仅在 main 工作流测量当前 main 提交时保存完整基线，其他分支测量自身当前提交时使用差异包；选择其他版本时不保存编译对象。fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。以下是此前六次成功 CI 的耗时依据；main 每个目标只保护最新一代：
 
 | 保留优先级 | 平台或工具 | 恢复／编译耗时依据 |
 | --- | --- | --- |
@@ -28,7 +28,11 @@ CI 的 main 构建保存各平台完整 Rust 基线，同仓库开发分支与 P
 
 2026-11-10 按六轮完整成功 CI 核对，恢复与编译分别取中位数，策略不随每轮数据自动变化。采样来源、Tailscale 冷暖对照及测量边界见[耗时依据](cache-capacity.md#近期-ci-耗时依据)。
 
-清理脚本不删除 main 的任何条目。其他 ref 的完整编译归档退出保留，每个 ref、平台及 profile 最多保留最新一代差异包；与 main 的 key 和 cache version 均相同的分支副本也会删除。CI 的分支任务与 Memory 清理任务从 main 加载保留策略，避免旧分支的脚本删除 main 基线；旧分支仍需同步工作流本身以采用新规则。超出 20 GiB 工作预算时先回收其他 ref；若 main 本身已超预算，只报告警告，不删除 main。GitHub 自身的过期与仓库容量淘汰不受此保护，20 GiB 因而是工作预算而非绝对上限。`rust-cache` 的 Cargo registry/Git 数据与 main 对象一起管理；测试报告和安装包仅使用短期 artifact。
+`workflow_storage.py` 对 main 按平台、架构和用途分组，只保留创建时间最新的一代；旧命名空间与新命名空间视为同一目标，源码、工具链或依赖摘要变化不会留下第二份完整归档。Memory 的 release/dev、两种 macOS Tailscale 架构、各 Android ABI 的 Go 对象和两种 Linux 编译容器分别计组；未识别的 main 类型仅按完全相同的 key 去重，不猜测其用途。已退役类型也清除。只在替代缓存已保存后删除旧代，不因本轮未保存就删除唯一基线。
+
+其他 ref 只保留合法的编译差异包，每个 ref、目标及 profile 最多一代；完整编译归档、工具副本和未知条目均不保留。现有 CI/Memory 不在开发分支保存完整 Rust、Go 或编译容器，Tailscale Action 若因 main 工具未命中而生成分支副本，也在收尾清除。差异未生成、超过 256 MiB 或无兼容基线时不保存，不改存完整归档。
+
+CI 的分支任务与 Memory 清理任务从 main 加载保留策略；旧分支仍需同步工作流本身以采用新规则。清理先移除旧代及不符合规则的条目，超出 20 GiB 工作预算再回收分支差异；若 main 最新代自身已超预算，只报告警告。GitHub 自身的过期与仓库容量淘汰不受此保护，20 GiB 因而是工作预算而非绝对上限。`python3 scripts/workflow_storage.py --dry-run` 使用 `GITHUB_REPOSITORY`、`GH_TOKEN` 读取清单并列出删除计划与预计容量，不执行删除；fork 的 `--read-only` 同样不删除。`rust-cache` 的 Cargo registry/Git 数据与 main 对象一起管理；测试报告和安装包仅使用短期 artifact。
 
 这是保留规则，不会改变 GitHub 的[缓存读取作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)：PR 的 merge ref 缓存仍不能被 main 或其他 PR 读取，切换运行分支可能冷编译。不能通过同名 key 将 PR 缓存迁移到主分支，也不扩大不可信 PR 的写权限。
 

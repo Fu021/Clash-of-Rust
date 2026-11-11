@@ -1,4 +1,4 @@
-"""Protect main caches and limit other refs to a 20 GiB working budget."""
+"""Keep the latest main cache per target and bounded branch deltas."""
 import argparse
 import os
 from pathlib import Path
@@ -27,6 +27,10 @@ def lineage(key):
         return re.sub(r'-[0-9a-f]{64}-[0-9a-f]{40}$', '', key)
     key = re.sub(r'-(?:workspace|vendor)-[0-9a-f]{64}', '', key)
     key = re.sub(r'-local-deps-v\d+', '', key)
+    key = re.sub(r'^native-(?:main-v\d+|release-(?:ubuntu20-)?v\d+)-', 'native-', key)
+    key = re.sub(r'^android-(?:main-v\d+|v\d+)-', 'android-', key)
+    key = re.sub(r'^memory-(?:main-v\d+|ubuntu22-v\d+)-(release|dev)(?:-benchmark-Linux-x64)?',
+                 r'memory-\1', key)
     if key.startswith('linux-build-linux-image-ubuntu20-'):
         return re.sub(r'-[0-9a-f]{64}$', '', key)
     if key.startswith('android-go-build-v1-'):
@@ -44,9 +48,7 @@ def lineage(key):
         return 'tools-nsis'
     if key.startswith('action-setup-tailscale/'):
         return 'tailscale/' + key.rsplit('/', 1)[-1]
-    # Rust caches differ by compiler/dependency hashes. Keep the newest revision
-    # per native target across branches; obsolete lockfiles must not accumulate.
-    if key.startswith(('native-release-', 'android-', 'memory-ubuntu22-')):
+    if key.startswith(('native-', 'android-', 'memory-release-', 'memory-dev-')):
         return re.sub(r'-[0-9a-f]{8,}-[0-9a-f]{8,}$', '', key)
     if key.startswith('macos-compiler-'):
         return re.sub(r'-[0-9a-f]{16}-[0-9a-f]{64}$', '', key)
@@ -58,8 +60,6 @@ def lineage(key):
         return 'source-inputs'
     if key.startswith('source-go-'):
         return 'source-go'
-    # Gradle's shared content entries reference each other: do not deduplicate
-    # those by prefix. Only the global least-recently-used budget applies.
     return key
 
 
@@ -106,11 +106,9 @@ def retired(key):
     ))
 
 
-def branch_full_cache(key):
-    return key.startswith((
-        'native-release-', 'native-main-', 'android-v2-', 'android-main-',
-        'memory-ubuntu22-', 'memory-main-', 'android-go-', 'linux-build-linux-image-ubuntu20-',
-    ))
+def branch_delta(key):
+    return re.fullmatch(r'branch-delta-v1-(?:native|android|memory)-[A-Za-z0-9_.-]+'
+                        r'-[0-9a-f]{64}-[0-9a-f]{40}', key) is not None
 
 
 def eviction_plan(entries, budget=BUDGET):
@@ -118,14 +116,12 @@ def eviction_plan(entries, budget=BUDGET):
         raise ValueError('Cache budget must be positive')
     recent = sorted(entries, key=lambda c: (c['created_at'], c['id']), reverse=True)
     seen = set()
-    keep = [entry for entry in recent if entry['ref'] == 'refs/heads/main']
-    main_versions = {(entry['key'], entry['version']) for entry in keep if entry.get('version')}
+    keep = []
     remove = []
     for entry in recent:
-        if entry['ref'] == 'refs/heads/main':
-            continue
-        duplicate_main = entry.get('version') and (entry['key'], entry['version']) in main_versions
-        if retired(entry['key']) or branch_full_cache(entry['key']) or duplicate_main:
+        main = entry['ref'] == 'refs/heads/main'
+        delta = branch_delta(entry['key'])
+        if retired(entry['key']) or (main and delta) or (not main and not delta):
             remove.append(entry)
             continue
         family = (entry['ref'], lineage(entry['key']))
@@ -145,14 +141,19 @@ def eviction_plan(entries, budget=BUDGET):
     return remove
 
 
-def prune(client, budget=BUDGET, read_only=False):
+def prune(client, budget=BUDGET, read_only=False, dry_run=False):
     initial = caches(client)
     before = sum(c['size_in_bytes'] for c in initial)
+    planned = eviction_plan(initial, budget)
+    projected = before - sum(c['size_in_bytes'] for c in planned)
+    if dry_run:
+        for entry in planned:
+            print('Would remove cache:', entry['id'], entry['key'], entry['ref'], flush=True)
     removed = 0
     current = initial
     for _ in range(4):
         plan = eviction_plan(current, budget)
-        if not plan or read_only:
+        if not plan or read_only or dry_run:
             break
         for entry in plan:
             try:
@@ -167,29 +168,34 @@ def prune(client, budget=BUDGET, read_only=False):
         time.sleep(1)
         current = caches(client)
     after = sum(c['size_in_bytes'] for c in current)
-    if not read_only and after > budget:
-        print(f'::warning::Protected main caches exceed the {budget / 1024**3:.0f} GiB '
+    if not read_only and not dry_run and after > budget:
+        print(f'::warning::Latest main caches exceed the {budget / 1024**3:.0f} GiB '
               'working budget; GitHub may enforce its own storage limit.', flush=True)
     report = (f'Actions cache: {before / 1024**3:.2f} → {after / 1024**3:.2f} GiB; '
               f'budget {budget / 1024**3:.0f} GiB; removed {removed} entries'
+              + (f'; dry run would remove {len(planned)} entries, leaving '
+                 f'{projected / 1024**3:.2f} GiB' if dry_run else '')
               + (' (read-only fork report)' if read_only else ''))
     print(report, flush=True)
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(summary).open('a', encoding='utf-8') as output:
             output.write(report + '\n')
-    return {'before': before, 'after': after, 'removed': removed}
+    return {'before': before, 'after': after, 'removed': removed,
+            'planned': len(planned), 'projected': projected}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--read-only', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--read-only', action='store_true')
+    mode.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
     repo = os.environ['GITHUB_REPOSITORY']
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
         raise ValueError('Invalid repository name')
     release = release_module()
     client = release.GitHub(repo, os.environ['GH_TOKEN'])
-    prune(client, read_only=args.read_only)
+    prune(client, read_only=args.read_only, dry_run=args.dry_run)
 
 
 if __name__ == '__main__':

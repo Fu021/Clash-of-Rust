@@ -15,7 +15,7 @@
 | `workflow_artifacts.py` | CLI / 模块 | 导出、就地暂存、下载和校验不可变 CI 产物；就地暂存绑定实际上传 id/digest，避免同 runner 再下载；同 CI 的 Linux 包就绪后启动兼容验证。 |
 | `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验及清单。 |
 | `cache_shards.py` | 历史协议辅助 | 旧 Rust 分片的离线兼容回归；当前工作流不调用。 |
-| `workflow_storage.py` | CLI | 限制 GitHub Actions 热缓存容量并保留需要的版本。 |
+| `workflow_storage.py` | CLI | main 每个目标只留最新缓存，其他 ref 只留受限编译差异；`--dry-run` 预览删除计划。 |
 | `workflow_cache_delta.py` | CLI / 模块 | 核验 main Rust 基线并生成、恢复有界的分支对象差异。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |

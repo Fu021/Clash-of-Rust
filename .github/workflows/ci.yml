@@ -990,7 +990,7 @@ jobs:
           ref: main
           path: .cache-policy-main
           persist-credentials: false
-      - name: Protect main caches and limit branch caches
+      - name: Keep latest main caches and bounded branch deltas
         shell: python
         env:
           GH_TOKEN: ${{ github.token }}

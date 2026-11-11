@@ -4506,7 +4506,7 @@ runpy.run_path(str(script), run_name='__main__')
                 spawn.assert_called_once()
                 delay.assert_not_called()
 
-    def test_cache_budget_preserves_main_even_when_over_budget(self):
+    def test_cache_budget_preserves_latest_main_and_removes_retired_caches(self):
         def entry(number, key, size, ref='refs/heads/main'):
             return {'id': number, 'key': key, 'size_in_bytes': size, 'ref': ref,
                     'last_accessed_at': f'2026-10-16T10:00:{number:02d}Z',
@@ -4515,7 +4515,7 @@ runpy.run_path(str(script), run_name='__main__')
         new = entry(2, 'native-release-linux-check-Linux-x64-aaaaaaaa-cccccccc', 30)
         go = entry(3, 'source-go-version-modules', 40)
         gradle = entry(4, 'gradle-content-unique-blob', 40)
-        self.assertEqual(storage.eviction_plan([old, new, go, gradle], 1), [])
+        self.assertEqual(storage.eviction_plan([old, new, go, gradle], 1), [gradle, go, old])
         other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
         self.assertEqual(storage.eviction_plan([new, other_branch], 100), [other_branch])
         for older,newer in (
@@ -4530,6 +4530,56 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertEqual(storage.lineage(older),storage.lineage(newer))
         with self.assertRaises(ValueError): storage.eviction_plan([], 0)
 
+    def test_cache_main_migration_keeps_one_generation_per_target(self):
+        pairs = []
+        for target in ('windows-latest', 'windows-11-arm', 'macos-latest', 'macos-15-intel',
+                       'ubuntu-22.04', 'ubuntu-22.04-arm'):
+            legacy = 'native-release-ubuntu20-v1-' if target.startswith('ubuntu') else 'native-release-v2-'
+            for qualifier in ('workspace', 'vendor'):
+                suffix = f'-{qualifier}-'+'a'*64+'-local-deps-v1-check-Host-arch-aaaaaaaa-bbbbbbbb'
+                pairs.append((legacy+target+suffix, 'native-main-v1-'+target+suffix))
+        for arch in ('arm64', 'armv7', 'x64'):
+            suffix = '-workspace-'+'a'*64+'-android-Linux-x64-aaaaaaaa-bbbbbbbb'
+            pairs.append(('android-v2-'+arch+suffix, 'android-main-v1-'+arch+suffix))
+        for profile in ('release', 'dev'):
+            pairs.append(('memory-ubuntu22-v2-'+profile+'-aaaaaaaa-bbbbbbbb',
+                          'memory-main-v1-'+profile+'-benchmark-Linux-x64-cccccccc-dddddddd'))
+        for previous_key, latest_key in pairs:
+            with self.subTest(key=latest_key):
+                previous = {'id': 1, 'key': previous_key, 'ref': 'refs/heads/main',
+                            'size_in_bytes': 10, 'created_at': '2026-11-10',
+                            'last_accessed_at': '2026-11-12'}
+                latest = dict(previous, id=2, key=latest_key, created_at='2026-11-11')
+                self.assertEqual(storage.lineage(previous_key), storage.lineage(latest_key))
+                self.assertEqual(storage.eviction_plan([previous, latest], 100), [previous])
+                changed = re.sub(r'[0-9a-f]{8,}', lambda match: 'f'*len(match[0]), latest_key)
+                newest = dict(latest, id=3, key=changed, created_at='2026-11-12')
+                self.assertEqual(storage.eviction_plan([previous, latest, newest], 100),
+                                 [latest, previous])
+
+    def test_cache_main_keeps_profiles_architectures_and_unknown_keys_separate(self):
+        keys = [
+            'native-main-v1-windows-latest-check-Windows_NT-x64-aaaaaaaa-bbbbbbbb',
+            'native-main-v1-windows-11-arm-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb',
+            'memory-main-v1-release-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
+            'memory-main-v1-dev-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
+            'action-setup-tailscale/1.104.5/macOS-arm64',
+            'action-setup-tailscale/1.104.5/macOS-amd64',
+            'future-tool-one',
+            'future-tool-two',
+        ]
+        entries = [{'id': index, 'key': key, 'ref': 'refs/heads/main',
+                    'size_in_bytes': 10, 'created_at': '2026-11-11',
+                    'last_accessed_at': '2026-11-11'}
+                   for index, key in enumerate(keys)]
+        self.assertEqual(storage.eviction_plan(entries, 1), [])
+        older_duplicate = dict(entries[-1], id=100, created_at='2026-11-10')
+        self.assertEqual(storage.eviction_plan([older_duplicate, *entries], 100),
+                         [older_duplicate])
+        newer_duplicate = dict(entries[-1], id=100, version='changed-archive-paths')
+        self.assertEqual(storage.eviction_plan([*entries, newer_duplicate], 100),
+                         [entries[-1]])
+
     def test_cache_keeps_latest_branch_delta_per_ref_despite_old_cache_reads(self):
         older = {
             'id': 1, 'key': 'branch-delta-v1-native-macos-'+'a'*64+'-'+'1'*40,
@@ -4541,9 +4591,10 @@ runpy.run_path(str(script), run_name='__main__')
                      created_at='2026-11-10T00:00:00Z', last_accessed_at='2026-11-10T00:00:00Z')
         self.assertEqual(storage.eviction_plan([older, newer], 100), [older])
         self.assertEqual(storage.eviction_plan([older, dict(newer, ref='refs/pull/35/merge')], 100), [])
-        self.assertEqual(storage.eviction_plan([dict(older, ref='refs/heads/main'), newer], 100), [])
+        main_delta = dict(older, ref='refs/heads/main')
+        self.assertEqual(storage.eviction_plan([main_delta, newer], 100), [main_delta])
 
-    def test_cache_removes_branch_duplicates_only_when_main_version_matches(self):
+    def test_cache_branch_refs_only_keep_valid_compiler_deltas(self):
         def entry(number, key, ref):
             return {'id': number, 'key': key, 'ref': ref, 'size_in_bytes': 10,
                     'created_at': f'2026-11-10T00:00:0{number}Z',
@@ -4559,7 +4610,13 @@ runpy.run_path(str(script), run_name='__main__')
             [previous, latest, tools_previous, tools_latest, tools_other_arch], 100),
             [tools_latest, latest])
         different_version = dict(tools_latest, version='different')
-        self.assertEqual(storage.eviction_plan([tools_previous, different_version], 100), [])
+        self.assertEqual(storage.eviction_plan([tools_previous, different_version], 100),
+                         [different_version])
+        for key in ('unknown-tool', 'branch-delta-v1-native-linux-short',
+                    'branch-delta-v1-unrecognized-family-'+'a'*64+'-'+'1'*40):
+            with self.subTest(key=key):
+                branch = entry(6, key, 'refs/pull/34/merge')
+                self.assertEqual(storage.eviction_plan([branch], 100), [branch])
 
     def test_cache_budget_prefers_main_and_keeps_branch_profiles_separate(self):
         def entry(number, key, ref):
@@ -4608,6 +4665,11 @@ runpy.run_path(str(script), run_name='__main__')
             report = storage.prune(client, 50, read_only=True)
             self.assertEqual(writes, [])
             self.assertEqual(report['after'], 80)
+            report = storage.prune(client, 50, dry_run=True)
+            self.assertEqual(writes, [])
+            self.assertEqual(report['after'], 80)
+            self.assertEqual(report['planned'], 1)
+            self.assertEqual(report['projected'], 50)
             report = storage.prune(client, 50)
             self.assertEqual(writes, ['/actions/caches/1'])
             self.assertEqual(report['after'], 50)
@@ -4616,7 +4678,7 @@ runpy.run_path(str(script), run_name='__main__')
                 report = storage.prune(client, 10)
             self.assertEqual(report['after'], 50)
             self.assertEqual(report['removed'], 0)
-            self.assertIn('Protected main caches exceed', output.getvalue())
+            self.assertIn('Latest main caches exceed', output.getvalue())
 
     def test_cache_inventory_reads_every_page(self):
         calls = []
@@ -6123,7 +6185,7 @@ if(mode==='main'){
         memory = entry(4, 'memory-ubuntu22-v2-release-aabbccdd-11223344')
         tool = entry(5, 'runtime-v1-java-linux-x64')
         removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
-        self.assertEqual(removed, [])
+        self.assertEqual(removed, [tool])
 
     def test_cache_priority_orders_bootstrap_and_measured_ci_bottlenecks(self):
         native_prefix = 'native-release-'+'v2-'
