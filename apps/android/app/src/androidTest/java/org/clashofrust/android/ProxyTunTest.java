@@ -1704,17 +1704,26 @@ public class ProxyTunTest {
     }
 
     private static void measureDiagnosticGroup() throws Exception {
+        measureDiagnostic(false);
+    }
+
+    private static void measureDiagnostic(boolean all) throws Exception {
         dismissErrorDialogIfPresent(false);
         previewNavigate(1);
+        if (!all) {
+            await("The measurement strategy group is not available",
+                () -> MainActivity.diagnostics().optInt("groups") > 0);
+        }
         dismissErrorDialogIfPresent(false);
         if (MainActivity.diagnostics().optBoolean("notice_active")) {
             tapTarget("notice_close_target");
             await("The previous notification did not close",
                 () -> !MainActivity.diagnostics().optBoolean("notice_active"));
         }
+        String key = all ? "preview-measure-all" : "preview-measure-group:CI-diagnostics";
         for (int attempt = 0; attempt < 10; attempt++) {
             JSONObject ui = MainActivity.diagnostics();
-            JSONArray target = previewBounds(ui, "preview-measure-group:CI-diagnostics");
+            JSONArray target = previewBounds(ui, key);
             JSONArray viewport = previewBounds(ui, "preview-content");
             if (target != null && viewport != null) {
                 double center = target.getDouble(1) + target.getDouble(3) / 2;
@@ -1723,7 +1732,7 @@ public class ProxyTunTest {
                 previewSwipe(center >= viewport.getDouble(1) + viewport.getDouble(3));
             } else SystemClock.sleep(200);
         }
-        previewTarget("preview-measure-group:CI-diagnostics");
+        previewTarget(key);
         await("Group measurement did not finish", () -> {
             JSONObject ui = MainActivity.diagnostics();
             return ui.optBoolean("notice_active") && !ui.optBoolean("delay_busy");
@@ -1867,10 +1876,13 @@ public class ProxyTunTest {
             String rejected = raw.replaceFirst("(?m)^secret:.*$", "secret: ci-controller-rejected");
             assertNotEquals("No controller secret was changed for the isolated failure", raw, rejected);
             CoreBridge.reload(rejected);
-            measureDiagnosticGroup();
+            measureDiagnostic(true);
             JSONObject authentication = exportMeasurementReport(directory, "controller-authentication");
             JSONObject failed = latestMeasurement(authentication);
             assertFalse(failed.getBoolean("completed"));
+            assertEquals("all", failed.getString("scope"));
+            assertEquals("query_nodes", failed.getString("phase"));
+            assertEquals(0, failed.getInt("attempted"));
             assertEquals("controller_authentication", failed.getJSONObject("failure").getString("code"));
             assertEquals(401, failed.getJSONObject("failure").getInt("http_status"));
             assertEquals(0, failed.getInt("node_failures"));

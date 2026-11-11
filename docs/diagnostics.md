@@ -15,7 +15,7 @@
 | `tun_ipv6_route_bypass` | `host_routes.warnings` | IPv6 示例仍经过非 TUN 接口；实际配置 IPv6 TUN 时启动校验失败，否则保留提示，不冒充完整接管 |
 | `route_unavailable`／`route_query_timeout` | `host_routes.ipv4/ipv6.reason` | 未取得可判定样本；未知不是网络成功或失败 |
 
-[#40 的现场及验证边界](agent-failures/network-recovery.md#linux-tun-地址族与启动校验)见网络恢复说明；不把物理 IPv6 路由单独归因于桌面环境或权限。
+[地址族校验与验证边界](agent-failures/network-recovery.md#linux-tun-地址族与启动校验)见网络恢复说明；不把物理 IPv6 路由单独归因于桌面环境或权限。
 
 ## 测速记录
 
@@ -52,14 +52,14 @@ Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到�
 
 ## 回归与现场导出
 
-普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本专项须维护者明确选择，见[测试入口和验证边界](workflows/android-previews.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；不会把模拟器中的确定性故障当成 #38 唯一根因。
+普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本专项须维护者明确选择，见[测试入口和验证边界](workflows/android-previews.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；模拟器中的确定性故障不能直接解释用户现场。
 
 混合测速夹具经本地 HTTP 代理连接隔离源站；测速 URL 的目标必须与源站允许的 CONNECT 地址一致，否则两个节点都会真实失败，不能用于验证“一成功、一失败”。批量控制异常夹具须把节点放入策略组，确保实际发出请求，避免空批次的成功结果掩盖分类问题。
 
 用户复现后应尽快在日志页点“诊断”保存 `cor-diagnose.json`，附上操作步骤和发生时间；不要先重启进程再导出，否则可能失去内存中的测速摘要。CLI 对应 `cor diagnose --output cor-diagnose.json`，后台无法连接时用 `cor diagnose --offline --output cor-diagnose.json`。报告留在本地，分享前检查敏感内容。
 
-## #38 的证据边界
+## 现场证据边界
 
-[Issue #38](https://github.com/Fu021/Clash-of-Rust/issues/38) 的 0.7.0 报告来自 HONOR Android 16，采集时内核运行、VPN 未连接；“90 个节点不可达”的界面错误比报告早约 146 秒。67 行内核日志含 DIRECT 拨号拒绝、IPv4/IPv6 超时，但没有逐节点测速请求状态和套接字保护结果。183 项检测为 pending，不能当作这些检测已失败。
+核对错误与采集时间、内核及 VPN 状态。稍后导出的报告不一定保留故障发生时的网络条件；DIRECT 拨号拒绝、IPv4/IPv6 超时不能代替逐节点测速状态和套接字保护结果，`pending` 也不能当作检测失败。
 
-已确认旧测速路径丢失错误分类，本轮修复保留真实测速原因。上游 [`dialer.go`](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/component/dialer/dialer.go) 在安装 `DefaultSocketHook` 后，TCP/UDP 拨号已跳过 `interface-name` 与 `routing-mark`；本应用初始化时就安装该 hook，不能仅凭订阅含桌面网卡字段认定它导致 Android 故障。没有据此改写订阅或 provider override，也未改变节点协议、DNS、证书验证及出站链。现有附件不足以定位该用户的唯一根因；后续应先取得新版同一次复现的报告，核对阶段、HTTP 分类、VPN 和保护计数，再决定是否需要具体节点协议或 DNS 专项。
+测速路径保留真实错误分类。上游 [`dialer.go`](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/component/dialer/dialer.go) 在安装 `DefaultSocketHook` 后，TCP/UDP 拨号已跳过 `interface-name` 与 `routing-mark`；本应用初始化时就安装该 hook，不能仅凭订阅含桌面网卡字段认定它导致 Android 故障。没有充分证据时不改写订阅或 provider override，也不改变节点协议、DNS、证书验证及出站链。先取得同一次复现的报告，核对阶段、HTTP 分类、VPN 和保护计数，再决定是否需要具体节点协议或 DNS 专项。

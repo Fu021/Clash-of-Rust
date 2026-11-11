@@ -1934,28 +1934,27 @@ impl App {
             }
             Message::Tick => {
                 self.offer_notification_settings();
-                if let Some(startup) = &self.tray_startup {
-                    if let Some(result) = startup.poll() {
-                        self.tray_startup = None;
-                        match result {
-                            Ok(tray) => {
-                                tray.update(&self.snapshot);
-                                tray.speed(&self.snapshot, self.settings.tray_speed);
-                                self.tray = Some(tray);
-                                if let Some(id) = self.tray_close_requested.take() {
-                                    return self.update(Message::Window((
-                                        id,
-                                        desktop_runtime::window::Event::CloseRequested,
-                                    )));
-                                }
+                if let Some(startup) = &self.tray_startup
+                    && let Some(result) = startup.poll()
+                {
+                    self.tray_startup = None;
+                    match result {
+                        Ok(tray) => {
+                            tray.update(&self.snapshot);
+                            tray.speed(&self.snapshot, self.settings.tray_speed);
+                            self.tray = Some(tray);
+                            if let Some(id) = self.tray_close_requested.take() {
+                                return self.update(Message::Window((
+                                    id,
+                                    desktop_runtime::window::Event::CloseRequested,
+                                )));
                             }
-                            Err(error) => {
-                                self.tray_close_requested = None;
-                                self.show_notice(tray_unavailable(&error), true);
-                                if !self.visible {
-                                    return desktop_runtime::window::latest()
-                                        .map(Message::ShowWindow);
-                                }
+                        }
+                        Err(error) => {
+                            self.tray_close_requested = None;
+                            self.show_notice(tray_unavailable(&error), true);
+                            if !self.visible {
+                                return desktop_runtime::window::latest().map(Message::ShowWindow);
                             }
                         }
                     }

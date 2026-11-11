@@ -155,7 +155,7 @@ export component MobileProxies inherits PageSurface {
             MSelect { options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[MobileView.node-sort];
                 selected(index, value) => { MobileView.node-sort = index; MobileActions.request(MobileIntent.node-sort, "" + index, ""); }
             }
-            MButton { text: MobileData.delay-busy ? "测速中…" : "全部测速"; compact: true; busy: MobileData.delay-busy; width: max(84px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
+            MButton { geometry-key: "preview-measure-all"; text: MobileData.delay-busy ? "测速中…" : "全部测速"; compact: true; busy: MobileData.delay-busy; width: max(84px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
                 clicked => { MobileActions.request(MobileIntent.delay-all, "", ""); }
             }
         }

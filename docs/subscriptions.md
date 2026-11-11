@@ -10,7 +10,7 @@
 
 遇到节点链接、Base64、sing-box/Xray 等其他内核配置，或 `proxies` / `proxy-providers` 结构错误时，桌面与 Android 顶部通知会明确提示“订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅”；`cor` 返回相同原因及失败退出码。不转换订阅，也不显示响应原文、节点凭据或订阅令牌。其他路线获取有效 YAML 时不报错，HTTP 拒绝和网络故障不冒充格式问题。定时更新的格式错误同样通知并记日志，桌面按事件去重，刷新不重复弹出；订阅已改变或关闭定时更新时，丢弃迟到的格式通知。
 
-实现参考 Clash Verge Rev 的[默认 UA 与自定义入口](https://github.com/clash-verge-rev/clash-verge-rev/blob/4337bd85758d54d7b9044b2da3c9ac1176eae1f3/src-tauri/src/utils/network.rs#L244)，问题来源见 [Issue #30](https://github.com/Fu021/Clash-of-Rust/issues/30)。服务端实际匹配规则及用户订阅仍需现场验证，不能仅凭截图认定故意封禁。
+实现参考 Clash Verge Rev 的[默认 UA 与自定义入口](https://github.com/clash-verge-rev/clash-verge-rev/blob/4337bd85758d54d7b9044b2da3c9ac1176eae1f3/src-tauri/src/utils/network.rs#L244)。服务端实际匹配规则及用户订阅仍需现场验证，不能仅凭截图认定故意封禁。
 
 ## 订阅操作
 

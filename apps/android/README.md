@@ -6,7 +6,7 @@
 
 最低安装版本不代表所有后续系统及厂商 ROM 已完成兼容验收。常规 CI 的完整代理/TUN 场景主要在 API 36 x86_64 模拟器执行；ARM 包完成编译、lint 和架构检查，仍需真机验证。
 
-[issue #31](https://github.com/Fu021/Clash-of-Rust/issues/31) 报告 Redmi K30 / MIUI 14.0.5 的订阅输入框有光标但不显示键盘。十个系统版本的 51 轮[输入法对照](../../docs/agent-failures/android-ime.md)已在 API 31/32 复现键盘绘制异常，并发现跨版本键盘高度同步问题。显示时序、系统栏去重及字段滚动避让修复已进入 Actions；后续专项另发现 API 28 恢复前台时的渲染表面失效及 API 31 输入法进程崩溃，当前验证状态统一见该专题。MIUI 是否同根因仍未确认，不能以部分系统通过代替完整兼容验收。
+输入法兼容性、显示时序、键盘高度同步与验证边界统一见[输入法专题](../../docs/agent-failures/android-ime.md)。模拟器现象不能直接证明厂商 ROM 的故障原因，也不能以部分系统通过代替完整兼容验收。
 
 常规 CI 与打包只自动运行代理/TUN 相关集成验证，不重复已完成的键盘与多版本截图专项；再次调查须维护者明确要求。按需[应用列表截图](../../docs/workflows/android-previews.md)覆盖 Android 8.0、8.1、9～16 及 12L；截图本身不证明 VPN 或系统稳定性。本轮另经授权完成这 11 个版本的[真实应用分流专项](../../docs/android-application-routing.md#范围与验证)，其临时多版本流量入口已移除。厂商 ROM、ARM 实机、真实网络、休眠与重启仍需单独验收，见[验证范围](../../docs/workflows/ci.md#ci)。
 

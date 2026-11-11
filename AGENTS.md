@@ -6,6 +6,7 @@
 
 - 按需查 [README](README.md)、[贡献要求](.github/CONTRIBUTING.md)、[开发指南](docs/development.md)、[工作流索引](docs/workflows.md)与[复盘索引](docs/agent-failures/README.md)。
 - 用 `rg` 定位关键词和调用者，按需读取；不重读未变化内容或重复输出大段日志。事实保留一处权威说明，其他文档链接引用。
+- 文档记录通用行为、修复结论与验证边界，不维护本仓库 issue 编号或处理状态；需要时查询 GitHub。保留解释实现和补丁所必需的上游来源。
 - 删除重复与过时说明，长文按任务拆分；本文件建议不超过 6 KiB，普通操作文档超过约 10 KiB 时复查拆分必要性。保留有效约束、证据、来源与许可证。
 - [最近复盘](docs/agent-failures/reviews.md)最多 20 条，每条只记结论、证据和验证范围；稳定经验归入主题页，已有模式只链接，不堆任务流水。
 

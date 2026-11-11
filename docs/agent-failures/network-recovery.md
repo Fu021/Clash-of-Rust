@@ -59,7 +59,7 @@
 
 重装或订阅更新后仍出现部分应用不走代理时，先运行 `cor diagnose --offline --output cor-tun-local.json`，核对报告中的 `host_routes` 与 `tun_configuration`：前者显示示例目标当前经过哪个接口，后者显示生成配置中的 IPv6 偏好、TUN 地址、`strict-route`、`route-address`、`dns-hijack`；该文件快照不等于内核当前采用的配置。Linux 启用 TUN 时会在短重试后检查 IPv4 样本，仅在内核 `/configs` 实际含非空 `tun.inet6-address` 时要求 IPv6 样本也进入 TUN；实际应接管的地址族经过物理接口仍会报错并回退，未知或权限不足的样本不会被伪报为成功或失败。该检查仍只覆盖两个示例地址，不能替代真实应用错误、目标域名解析和完整路由表。
 
-[#40](https://github.com/Fu021/Clash-of-Rust/issues/40) 的 0.7.0 报告显示内核和控制器已启动，TUN 日志只有 IPv4 地址，客户端却因物理 IPv6 路由回滚并停止内核。上游在关闭 IPv6、启动时未发现全局 IPv6 地址或配置明确为空时可不创建 IPv6 TUN，因此不能以客户端的 IPv6 偏好代替实际地址族。缺少 IPv6 TUN 时保留可工作的 IPv4，日志记 `tun_ipv6_not_configured`；若系统 IPv6 样本仍绕行，原有绕行警告继续显示，不能声称 IPv6 已被接管。报告未包含原始配置和当时接口地址，尚不能确定上游省略 IPv6 地址的具体原因，也未在用户 COSMIC 会话复验。
+内核和控制器已启动、TUN 日志只有 IPv4 地址时，不能因物理 IPv6 路由就回滚并停止内核。上游在关闭 IPv6、启动时未发现全局 IPv6 地址或配置明确为空时可不创建 IPv6 TUN，因此不能以客户端的 IPv6 偏好代替实际地址族。缺少 IPv6 TUN 时保留可工作的 IPv4，日志记 `tun_ipv6_not_configured`；若系统 IPv6 样本仍绕行，原有绕行警告继续显示，不能声称 IPv6 已被接管。未取得原始配置和同时段接口地址时，不能推断上游省略 IPv6 地址的具体原因。
 
 ## IPv6 节点域名解析
 
