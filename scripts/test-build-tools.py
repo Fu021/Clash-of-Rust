@@ -19,7 +19,6 @@ import android as android_build
 import windows_ci as windows
 import macos_ci as macos
 import workflow_storage as storage
-import workflow_cache_delta as cache_delta
 import action_cache as local_cache
 import upstream_cache
 import cache_shards
@@ -1639,10 +1638,6 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Windows-arm64'))
         self.assertEqual(storage.lineage('action-setup-tailscale/1.104.5/macOS-arm64'),
                          storage.lineage('action-setup-tailscale/1.104.1/macOS-arm64'))
-        native = 'native-release-v2-macos-26-arm64-build-' + 'a'*8 + '-' + 'b'*8
-        bootstrap = 'action-setup-tailscale/' + '1.104.5/' + 'macOS-arm64'
-        self.assertGreater(storage.priority({'key': bootstrap}),
-                           storage.priority({'key': native}))
 
     def test_guest_original_receipts_replace_slow_archive_exports_and_reject_bad_sources(self):
         record = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
@@ -4580,7 +4575,7 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual(storage.eviction_plan([*entries, newer_duplicate], 100),
                          [entries[-1]])
 
-    def test_cache_keeps_latest_branch_delta_per_ref_despite_old_cache_reads(self):
+    def test_cache_removes_branch_deltas_regardless_of_ref_or_access_time(self):
         older = {
             'id': 1, 'key': 'branch-delta-v1-native-macos-'+'a'*64+'-'+'1'*40,
             'ref': 'refs/pull/34/merge', 'size_in_bytes': 30,
@@ -4589,12 +4584,13 @@ runpy.run_path(str(script), run_name='__main__')
         newer = dict(older, id=2,
                      key='branch-delta-v1-native-macos-'+'b'*64+'-'+'2'*40,
                      created_at='2026-11-10T00:00:00Z', last_accessed_at='2026-11-10T00:00:00Z')
-        self.assertEqual(storage.eviction_plan([older, newer], 100), [older])
-        self.assertEqual(storage.eviction_plan([older, dict(newer, ref='refs/pull/35/merge')], 100), [])
+        self.assertEqual(storage.eviction_plan([older, newer], 100), [newer, older])
+        other_ref = dict(newer, ref='refs/pull/35/merge')
+        self.assertEqual(storage.eviction_plan([older, other_ref], 100), [other_ref, older])
         main_delta = dict(older, ref='refs/heads/main')
-        self.assertEqual(storage.eviction_plan([main_delta, newer], 100), [main_delta])
+        self.assertEqual(storage.eviction_plan([main_delta, newer], 100), [newer, main_delta])
 
-    def test_cache_branch_refs_only_keep_valid_compiler_deltas(self):
+    def test_cache_branch_refs_never_keep_objects_or_tool_copies(self):
         def entry(number, key, ref):
             return {'id': number, 'key': key, 'ref': ref, 'size_in_bytes': 10,
                     'created_at': f'2026-11-10T00:00:0{number}Z',
@@ -4618,7 +4614,7 @@ runpy.run_path(str(script), run_name='__main__')
                 branch = entry(6, key, 'refs/pull/34/merge')
                 self.assertEqual(storage.eviction_plan([branch], 100), [branch])
 
-    def test_cache_budget_prefers_main_and_keeps_branch_profiles_separate(self):
+    def test_cache_budget_keeps_main_and_removes_all_branch_profiles(self):
         def entry(number, key, ref):
             return {'id': number, 'key': key, 'ref': ref, 'size_in_bytes': 10,
                     'created_at': f'2026-11-10T00:00:0{number}Z',
@@ -4629,7 +4625,7 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual(storage.eviction_plan([main, pull], 10), [pull])
         release = entry(3, 'branch-delta-v1-memory-release-'+'a'*64+'-'+'1'*40, 'refs/pull/34/merge')
         dev = entry(4, 'branch-delta-v1-memory-dev-'+'a'*64+'-'+'1'*40, 'refs/pull/34/merge')
-        self.assertEqual(storage.eviction_plan([release, dev], 20), [])
+        self.assertEqual(storage.eviction_plan([release, dev], 20), [dev, release])
 
     def test_full_compiler_environments_are_not_kept_on_branch_refs(self):
         def entry(number, key):
@@ -4642,8 +4638,6 @@ runpy.run_path(str(script), run_name='__main__')
             other = entry(3, prefix+'x64-'+'c'*64)
             self.assertFalse(storage.retired(latest['key']))
             self.assertEqual(storage.eviction_plan([previous, latest, other], 100), [other, latest, previous])
-        self.assertGreater(storage.priority(entry(1, 'action-setup-tailscale/1.104.5/macOS-arm64')),
-                           storage.priority(entry(2, 'linux-build-linux-image-ubuntu20-v1-arm64-'+'a'*64)))
         previous = entry(1, 'native-release-v2-windows-11-arm-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb')
         latest = entry(2, 'native-release-v2-windows-11-arm-vendor-'+'a'*64
                        +'-local-deps-v1-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb')
@@ -6187,7 +6181,7 @@ if(mode==='main'){
         removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
         self.assertEqual(removed, [tool])
 
-    def test_cache_priority_orders_bootstrap_and_measured_ci_bottlenecks(self):
+    def test_main_targets_and_bootstrap_survive_even_when_budget_is_too_small(self):
         native_prefix = 'native-release-'+'v2-'
         keys = [
             'action-setup-tailscale/1.104.5/macOS-arm64',
@@ -6206,130 +6200,6 @@ if(mode==='main'){
                     'size_in_bytes':100,'last_accessed_at':f'{index:02d}','created_at':f'{index:02d}'}
                    for index,key in enumerate(keys)]
         self.assertEqual(storage.eviction_plan(entries, 100), [])
-        self.assertEqual(
-            [entry['id'] for entry in sorted(entries, key=storage.priority, reverse=True)],
-            list(range(len(entries))))
-        self.assertEqual(storage.priority({'key':native_prefix+'macos-13-check-13131313-11223344'}),8)
-        self.assertGreater(storage.priority({'key': keys[0]}),
-                           storage.priority({'key': keys[-1]}))
-        self.assertEqual(storage.priority({'key': keys[0]}),
-                         storage.priority({'key': 'action-setup-tailscale/' + '1.104.5/macOS-amd64'}))
-
-
-class BranchCompilerCacheTests(unittest.TestCase):
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        self.target = self.root / 'target'
-        self.sources = self.root / 'sources'
-        self.target.mkdir()
-        self.sources.mkdir()
-        self.roots = {'target': self.target, 'sources': self.sources}
-
-    def write(self, path, content):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
-
-    def test_reconstructs_changed_added_removed_objects_and_source_receipt(self):
-        original = self.target / 'release/deps/original.rlib'
-        removed = self.target / 'release/deps/remove.rlib'
-        receipt = self.sources / 'source.json'
-        self.write(original, b'before')
-        self.write(removed, b'discard')
-        self.write(receipt, b'old receipt')
-        baseline = cache_delta.snapshot(self.roots)
-        self.write(original, b'after')
-        self.write(receipt, b'new receipt')
-        added = self.target / 'release/deps/new.rlib'
-        self.write(added, b'new')
-        removed.unlink()
-        stage = self.root / 'delta'
-        self.assertTrue(cache_delta.pack(self.roots, baseline, stage)['saved'])
-        self.write(original, b'before')
-        self.write(receipt, b'old receipt')
-        self.write(removed, b'discard')
-        added.unlink()
-        self.assertEqual(cache_delta.snapshot(self.roots)['base'], baseline['base'])
-        cache_delta.apply(self.roots, baseline, stage)
-        self.assertEqual(original.read_bytes(), b'after')
-        self.assertEqual(receipt.read_bytes(), b'new receipt')
-        self.assertEqual(added.read_bytes(), b'new')
-        self.assertFalse(removed.exists())
-
-    def test_rejects_corruption_and_wrong_baseline_before_mutating(self):
-        path = self.target / 'release/deps/one.rlib'
-        self.write(path, b'old')
-        baseline = cache_delta.snapshot(self.roots)
-        self.write(path, b'new')
-        stage = self.root / 'delta'
-        cache_delta.pack(self.roots, baseline, stage)
-        self.write(path, b'old')
-        next((stage / 'blobs').iterdir()).write_bytes(b'bad')
-        with self.assertRaises(ValueError):
-            cache_delta.apply(self.roots, baseline, stage)
-        self.assertEqual(path.read_bytes(), b'old')
-        with self.assertRaises(ValueError):
-            cache_delta.apply(self.roots, {**baseline, 'base': '0' * 64}, stage)
-        self.assertEqual(path.read_bytes(), b'old')
-
-    def test_rejects_escape_unrelated_objects_and_overlapping_roots(self):
-        for path in ('../outside', '/absolute', 'a/../../outside', 'a\\outside', 'a:outside'):
-            with self.subTest(path=path), self.assertRaises(ValueError):
-                cache_delta.safe_relative(path)
-        for path in ('dependency-snapshot/lockfile', 'release/incremental/a', 'release/cor'):
-            self.assertFalse(cache_delta.target_file(path))
-        self.assertTrue(cache_delta.target_file('release/deps/something.rlib'))
-        self.assertTrue(cache_delta.target_file('aarch64-linux-android/release/deps/something.rlib'))
-        with self.assertRaises(ValueError):
-            cache_delta.root_map({'target': self.target, 'sources': self.target / 'nested'})
-
-    def test_rejects_symlink_and_concurrent_destination(self):
-        baseline = cache_delta.snapshot(self.roots)
-        path = self.target / 'release/deps/new.rlib'
-        self.write(path, b'cached')
-        stage = self.root / 'delta'
-        cache_delta.pack(self.roots, baseline, stage)
-        self.write(path, b'concurrent')
-        with self.assertRaises(ValueError):
-            cache_delta.apply(self.roots, baseline, stage)
-        self.assertEqual(path.read_bytes(), b'concurrent')
-        if os.name != 'nt':
-            path.unlink()
-            path.symlink_to(self.root / 'outside')
-            with self.assertRaises(ValueError):
-                cache_delta.apply(self.roots, baseline, stage)
-            self.assertFalse((self.root / 'outside').exists())
-
-    def test_limits_delta_size_and_ignores_unchanged_objects(self):
-        path = self.target / 'release/deps/object.rlib'
-        self.write(path, b'old')
-        baseline = cache_delta.snapshot(self.roots)
-        self.assertFalse(cache_delta.pack(self.roots, baseline, self.root / 'unchanged')['saved'])
-        self.write(path, b'too large')
-        stage = self.root / 'delta'
-        with patch.object(cache_delta, 'MAX_BLOB_BYTES', 4):
-            result = cache_delta.pack(self.roots, baseline, stage)
-        self.assertEqual(result['reason'], 'delta_too_large')
-        self.assertFalse(stage.exists())
-
-    def test_partial_apply_failure_discards_compiler_restore_on_runner(self):
-        state = self.root / 'baseline.json'
-        state.write_text('{}')
-        arguments = ['workflow_cache_delta.py', 'apply', '--source', str(self.root),
-                     '--state', str(state), '--directory', str(self.root / 'delta')]
-        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
-                patch.object(sys, 'argv', arguments), \
-                patch.object(cache_delta, 'apply', side_effect=OSError('interrupted')), \
-                patch.object(local_cache, 'discard_restore') as discard:
-            cache_delta.main()
-            discard.assert_called_once_with({'kind': 'rust', 'source': str(self.root)})
-        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
-                patch.object(sys, 'argv', arguments), \
-                patch.object(cache_delta, 'apply', side_effect=OSError('interrupted')), \
-                patch.object(local_cache, 'discard_restore', side_effect=OSError('cleanup failed')):
-            with self.assertRaisesRegex(OSError, 'cleanup failed'):
-                cache_delta.main()
 
 
 class AptCacheTests(unittest.TestCase):

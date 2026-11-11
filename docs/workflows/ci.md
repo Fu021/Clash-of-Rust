@@ -54,7 +54,7 @@ Ubuntu 20.04 构建容器使用官方 HTTPS APT 源，首次安装证书包前�
 
 每轮 loop 执行只读依赖审计，CI 在最后的缓存 job 中输出 `dependency-audit` 附件及 summary，避免候选查询阻塞平台矩阵启动。报告覆盖 Cargo 锁定包、Go 模块、Android Maven 声明、Actions、已确认工具及 Linux/资源元数据，标出撤回、弃用和上游归档信号；查询失败与未检查项单列。按[loop 更新约定](../loop-workflow.md#每轮怎么做)修改声明、锁文件、工具基线及 Actions SHA 并验证。第三方 Actions 固定官方不可变提交，版本标签保存在工具基线中供审计，不随上游标签移动自动更新。
 
-缓存容量、逐平台保留范围、优先级和费用统一见[缓存分工](cache-coverage.md#编译对象只用-github)，不在各工作流重复列数值。main 的 Linux、macOS 和 Windows x64 保存 workspace 并尝试兼容恢复；Windows ARM64 的完整基线保留依赖缓存，避免每次业务源码变化都重压大归档。开发分支按基线核验并只保存受限差异。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。Linux 容器挂载同一源码回执；测试报告和安装包不进入编译缓存，两个预装 VM 仅存私网。
+缓存容量、逐平台保留范围、优先级和费用统一见[缓存分工](cache-coverage.md#编译对象只用-github)，不在各工作流重复列数值。main 的 Linux、macOS 和 Windows x64 保存 workspace 并尝试兼容恢复；Windows ARM64 的完整基线保留依赖缓存，避免每次业务源码变化都重压大归档。开发分支只恢复兼容的 main 基线，不保存完整对象或差异包。复用时逐文件核对源码内容，相同内容才恢复旧时间戳，变化的 crate 及使用共享输入的构建脚本会失效重编，SVG 也参与源码身份。Linux 容器挂载同一源码回执；测试报告和安装包不进入编译缓存，两个预装 VM 仅存私网。
 
 Go 审计只查询声明的模块路径，不执行更新。Android 公共任务一次准备已校验的模块下载包和绑定工具，经本轮附件分发给三个 ABI；各 ABI 的 `GOCACHE` 只存 GitHub，Gradle 转换仍在 runner 重新完成。已验证的 Go 原始 ZIP/MOD 单独登记来源，不能用本轮分发的 runner tar 代替原始下载。
 

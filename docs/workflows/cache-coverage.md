@@ -10,7 +10,7 @@ CI 与 Memory Benchmark 的 Rust 对象只恢复和保存 GitHub Actions Cache�
 
 仓库缓存上限为 **24 GB**（API 字段 `max_cache_size_gb=24`），工作流热缓存保留预算为 **20 GiB**，为保存期间的新旧对象交替留余量。维护者本轮授权的每月缓存预算为 **1 美元**；账户预算、仓库上限和工作流保留预算分别设置。GitHub 自身的过期和容量淘汰仍可能先发生，工作流优先级只能约束本仓库收尾清理。容量及设置依据见[容量规划](cache-capacity.md#当前上限与保留预算)。
 
-CI 的 main 构建保存各平台完整 Rust 基线，同仓库开发分支与 PR 在恢复兼容的 main 基线后只尝试保存有大小上限的对象差异。Memory Benchmark 仅在 main 工作流测量当前 main 提交时保存完整基线，其他分支测量自身当前提交时使用差异包；选择其他版本时不保存编译对象。fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。以下是此前六次成功 CI 的耗时依据；main 每个目标只保护最新一代：
+CI 的 main 构建保存各平台完整 Rust 基线，开发分支与 PR 只读取兼容的 main 基线，不保存完整对象或差异包。Memory Benchmark 仅在 main 工作流测量当前 main 提交时保存完整基线；其他分支或选择其他版本时只恢复、不保存编译对象。fork PR 仍只读，不增加缓存保存或私网权限。Publish Release 复用 CI 候选包，不重新编译或另建 Rust 缓存。以下是此前六次成功 CI 的耗时及历史保留排序依据；当前 main 每个目标都只保护最新一代，不按此顺序删除唯一基线：
 
 | 保留优先级 | 平台或工具 | 恢复／编译耗时依据 |
 | --- | --- | --- |
@@ -30,13 +30,13 @@ CI 的 main 构建保存各平台完整 Rust 基线，同仓库开发分支与 P
 
 `workflow_storage.py` 对 main 按平台、架构和用途分组，只保留创建时间最新的一代；旧命名空间与新命名空间视为同一目标，源码、工具链或依赖摘要变化不会留下第二份完整归档。Memory 的 release/dev、两种 macOS Tailscale 架构、各 Android ABI 的 Go 对象和两种 Linux 编译容器分别计组；未识别的 main 类型仅按完全相同的 key 去重，不猜测其用途。已退役类型也清除。只在替代缓存已保存后删除旧代，不因本轮未保存就删除唯一基线。
 
-其他 ref 只保留合法的编译差异包，每个 ref、目标及 profile 最多一代；完整编译归档、工具副本和未知条目均不保留。现有 CI/Memory 不在开发分支保存完整 Rust、Go 或编译容器，Tailscale Action 若因 main 工具未命中而生成分支副本，也在收尾清除。差异未生成、超过 256 MiB 或无兼容基线时不保存，不改存完整归档。
+其他 ref 不保留缓存，包括完整编译归档、差异包、工具副本和未知条目。CI/Memory 的 Rust、Go 与 Linux 编译容器只由 main 保存；分支未命中时正常生成，不上传。macOS 分支先只读查询同版本、同架构的 Tailscale 缓存，命中才允许上游 Action 复用；未命中关闭该 Action 的缓存，避免新建分支副本。收尾清除历史分支缓存。
 
-CI 的分支任务与 Memory 清理任务从 main 加载保留策略；旧分支仍需同步工作流本身以采用新规则。清理先移除旧代及不符合规则的条目，超出 20 GiB 工作预算再回收分支差异；若 main 最新代自身已超预算，只报告警告。GitHub 自身的过期与仓库容量淘汰不受此保护，20 GiB 因而是工作预算而非绝对上限。`python3 scripts/workflow_storage.py --dry-run` 使用 `GITHUB_REPOSITORY`、`GH_TOKEN` 读取清单并列出删除计划与预计容量，不执行删除；fork 的 `--read-only` 同样不删除。`rust-cache` 的 Cargo registry/Git 数据与 main 对象一起管理；测试报告和安装包仅使用短期 artifact。
+CI 的分支任务与 Memory 清理任务从 main 加载保留策略；旧分支仍需同步工作流本身以采用新规则。清理移除旧代、全部分支缓存及已退役类型；若 main 最新代自身已超出 20 GiB 工作预算，只报告警告，不删除唯一基线。GitHub 自身的过期与仓库容量淘汰不受此保护，20 GiB 因而是工作预算而非绝对上限。`python3 scripts/workflow_storage.py --dry-run` 使用 `GITHUB_REPOSITORY`、`GH_TOKEN` 读取清单并列出删除计划与预计容量，不执行删除；fork 的 `--read-only` 同样不删除。`rust-cache` 的 Cargo registry/Git 数据与 main 对象一起管理；测试报告和安装包仅使用短期 artifact。
 
 这是保留规则，不会改变 GitHub 的[缓存读取作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)：PR 的 merge ref 缓存仍不能被 main 或其他 PR 读取，切换运行分支可能冷编译。不能通过同名 key 将 PR 缓存迁移到主分支，也不扩大不可信 PR 的写权限。
 
-共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。[差异包](cache-capacity.md#main-基线与分支差异包)由独立的恢复步骤校验、叠加，GitHub 不会自动合并两份归档；缺少基线、损坏或超过上限时正常重编。新命名空间只由可信 main 写入完整基线，首次 main 运行可从旧 main 归档迁移；不通过切换触发事件或提升 PR 权限绕过作用域。
+共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。当前[不保存分支差异](cache-capacity.md#main-基线与分支只读)；GitHub 不会自动合并归档，制作差异还需扫描完整对象并核验基线，目前没有真实运行证据证明其收益超过成本。缺少兼容基线或恢复损坏时正常重编。新命名空间只由可信 main 写入完整基线，首次 main 运行可从旧 main 归档迁移；不通过切换触发事件或提升 PR 权限绕过作用域。
 
 Linux 和 Android 保留 workspace 编译结果及经过内容核对的源码时间戳，不再精确命中旧依赖缓存后永久跳过新对象保存；Linux 容器同时挂载源码回执，避免宿主和容器读取不同位置。Windows ARM64 保留依赖缓存，只在本地 vendor 源码变化时更新键，不因每次业务源码变动重压整个 workspace；其他桌面端继续保留 workspace。全部使用 zstd 快速压缩级别 1，缓存仍不可变，首次填充和后续暖恢复需分别测量。
 
@@ -44,12 +44,12 @@ Linux 和 Android 保留 workspace 编译结果及经过内容核对的源码时
 
 Android `GOCACHE` 按工具版本、Go 源码及锁文件分键；Linux 编译容器按官方基础 digest、Python 摘要、Dockerfile 和构建 UID/GID 分键。这两类完整对象只由 main 保存，分支未命中时正常生成而不保存完整副本。容器归档只含编译环境，不含应用、测试写入层或 VM；恢复先校验归档长度、SHA256 和环境身份，再核对 Docker 加载结果，失效则冷准备。Gradle 转换、工具安装目录及资源目录仍不缓存。
 
-macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS job 开启该 Action 自带的 GitHub 二进制缓存；内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存按架构保留最近版本，计入 20 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
+macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS main job 开启该 Action 自带的 GitHub 二进制缓存，分支只复用已有的兼容缓存；内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存按架构保留最近版本，计入 20 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
 | 工作流 | GitHub 编译缓存与收尾 | 私网预装镜像 |
 | --- | --- | --- |
-| CI | 九个目标的 main Rust 基线及受限分支差异，加 main 的 Linux 编译容器与 Android Go；优先保护 main | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
-| Memory Benchmark | main 当前提交保存 profile 基线，其他分支保存受限差异；使用同一预算 | 不使用 |
+| CI | main 保存九个目标的 Rust 基线、Linux 编译容器及 Android Go；其他分支只读 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
+| Memory Benchmark | main 当前提交保存 profile 基线，其他分支只读；使用同一预算 | 不使用 |
 | Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 复用 CI 验收结果，不下载或上传 VM |
 | Android UI Previews（按需） | 复用成功 CI 的 APK，只留截图 artifact | 不使用 |
 

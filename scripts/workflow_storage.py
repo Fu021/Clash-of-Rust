@@ -1,4 +1,4 @@
-"""Keep the latest main cache per target and bounded branch deltas."""
+"""Keep the latest main cache per target and remove branch caches."""
 import argparse
 import os
 from pathlib import Path
@@ -23,8 +23,6 @@ def caches(client):
 
 
 def lineage(key):
-    if key.startswith('branch-delta-v1-'):
-        return re.sub(r'-[0-9a-f]{64}-[0-9a-f]{40}$', '', key)
     key = re.sub(r'-(?:workspace|vendor)-[0-9a-f]{64}', '', key)
     key = re.sub(r'-local-deps-v\d+', '', key)
     key = re.sub(r'^native-(?:main-v\d+|release-(?:ubuntu20-)?v\d+)-', 'native-', key)
@@ -63,52 +61,16 @@ def lineage(key):
     return key
 
 
-def priority(entry):
-    key = entry['key']
-    if re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key):
-        return 10
-    if key.startswith('linux-build-linux-image-ubuntu20-'):
-        return 8
-    if key.startswith('android-go-build-v1-'):
-        return 0
-    if key.startswith('native-release-'):
-        if 'macos' in key:
-            return 8 if 'macos-13-' in key or 'intel' in key else 9
-        if 'windows' in key and 'arm' in key:
-            return 4
-        if 'windows' in key:
-            return 2
-        if 'linux' in key or 'ubuntu' in key:
-            return 1 if 'arm' in key else 3
-        return 1
-    if key.startswith('android-v2-arm64-'):
-        return 7
-    if key.startswith('android-v2-x64-'):
-        return 5
-    if key.startswith('android-v2-armv7-'):
-        return 6
-    if key.startswith('android-v2-'):
-        return 1
-    if key.startswith('memory-'):
-        return 0
-    return -1
-
-
 def retired(key):
     if key.startswith('action-setup-tailscale/'):
         return re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key) is None
     if key.startswith('android-go-build-v1-'):
         return False
     return key.startswith((
-        'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
+        'branch-delta-', 'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
         'gradle-', 'tools-nsis-', 'skia-source-', 'linux-python-ubuntu20-',
         'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-',
     ))
-
-
-def branch_delta(key):
-    return re.fullmatch(r'branch-delta-v1-(?:native|android|memory)-[A-Za-z0-9_.-]+'
-                        r'-[0-9a-f]{64}-[0-9a-f]{40}', key) is not None
 
 
 def eviction_plan(entries, budget=BUDGET):
@@ -116,12 +78,9 @@ def eviction_plan(entries, budget=BUDGET):
         raise ValueError('Cache budget must be positive')
     recent = sorted(entries, key=lambda c: (c['created_at'], c['id']), reverse=True)
     seen = set()
-    keep = []
     remove = []
     for entry in recent:
-        main = entry['ref'] == 'refs/heads/main'
-        delta = branch_delta(entry['key'])
-        if retired(entry['key']) or (main and delta) or (not main and not delta):
+        if entry['ref'] != 'refs/heads/main' or retired(entry['key']):
             remove.append(entry)
             continue
         family = (entry['ref'], lineage(entry['key']))
@@ -129,15 +88,6 @@ def eviction_plan(entries, budget=BUDGET):
             remove.append(entry)
         else:
             seen.add(family)
-            keep.append(entry)
-    size = sum(c['size_in_bytes'] for c in keep)
-    candidates = (entry for entry in keep if entry['ref'] != 'refs/heads/main')
-    for entry in sorted(candidates, key=lambda c: (priority(c), c['last_accessed_at'],
-                                                 c['created_at'], c['id'])):
-        if size <= budget:
-            break
-        remove.append(entry)
-        size -= entry['size_in_bytes']
     return remove
 
 

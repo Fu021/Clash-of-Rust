@@ -140,25 +140,6 @@ jobs:
           sys.path.insert(0, 'scripts')
           from action_cache import discard_restore
           discard_restore({'kind': 'rust', 'source': 'source'})
-      - name: Identify restored benchmark compiler objects
-        id: benchmark_cache
-        if: github.ref != 'refs/heads/main' && steps.source.outputs.commit == github.sha && steps.rust_github.outcome == 'success'
-        shell: python
-        run: |
-          import os, sys
-          sys.path.insert(0, 'scripts')
-          from action_cache import github_restored
-          restored = github_restored({'kind': 'rust', 'source': 'source', 'github_hit': 'false'})
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('ready=' + str(restored).lower() + '\n')
-      - name: Restore benchmark branch compiler changes
-        id: branch_cache
-        if: steps.benchmark_cache.outputs.ready == 'true'
-        uses: ./.github/actions/branch-cache-restore
-        timeout-minutes: 5
-        with:
-          family: memory-${{ inputs.profile }}
-          source: source
       - name: Install benchmark dependencies
         shell: python
         run: |
@@ -189,14 +170,6 @@ jobs:
           if os.environ['BENCH_ROWS'].strip():
               command += ['--rows', os.environ['BENCH_ROWS']]
           subprocess.run(command, check=True)
-      - name: Save benchmark branch compiler changes
-        if: steps.branch_cache.outputs.ready == 'true' && steps.branch_cache.outputs.hit != 'true'
-        uses: ./.github/actions/branch-cache-save
-        continue-on-error: true
-        timeout-minutes: 5
-        with:
-          source: source
-          key: ${{ steps.branch_cache.outputs.key }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
@@ -227,7 +200,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - name: Keep latest main caches and bounded branch deltas
+      - name: Keep latest main caches and remove branch caches
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
