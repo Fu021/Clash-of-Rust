@@ -72,6 +72,7 @@ pub(crate) fn meta(engine: &Engine, owner: Owner) -> Result<Meta> {
 
 async fn start(engine: &mut Engine) -> Result<()> {
     if !engine.running() {
+        engine.settings.require_mutable()?;
         engine.start_with_proxy_mode().await?;
     }
     Ok(())
@@ -351,6 +352,132 @@ pub(super) async fn execute(
         }
     }
     Ok(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claude_check::protection::{Previous, Protection};
+    use crate::config::Store;
+
+    #[tokio::test]
+    async fn protected_measurement_cannot_start_a_stopped_core() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine =
+            crate::engine::test_support::fixture(Store::at(root.path().into()).unwrap());
+        engine.settings.claude_protection = Some(Arc::new(Protection::new(
+            uuid::Uuid::new_v4().to_string(),
+            "fixture".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        engine.settings.active_profile = engine
+            .settings
+            .claude_protection
+            .as_ref()
+            .map(|protection| protection.profile_id.clone());
+        let settings = serde_json::to_value(&engine.settings).unwrap();
+        let shared = Arc::new(Mutex::new(engine));
+        for command in [
+            Command::Delay {
+                name: None,
+                group: false,
+            },
+            Command::Delay {
+                name: Some("fixture".into()),
+                group: true,
+            },
+            Command::Delay {
+                name: Some("fixture".into()),
+                group: false,
+            },
+        ] {
+            let error = execute(&shared, command, Owner::Daemon, None)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("Claude 保护"), "{error:#}");
+            let engine = shared.lock().await;
+            assert!(!engine.running());
+            assert_eq!(serde_json::to_value(&engine.settings).unwrap(), settings);
+            assert!(!engine.store.runtime().join("config.yaml").exists());
+            assert_eq!(engine.view_revision(), 0);
+        }
+        assert!(
+            execute(&shared, Command::RecoverUnreachable, Owner::Daemon, None)
+                .await
+                .unwrap()
+                .is_null()
+        );
+        assert!(
+            execute(&shared, Command::Meta, Owner::Daemon, None)
+                .await
+                .unwrap()["settings"]["claude_protection"]
+                .is_object()
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_display_patch_persists_without_starting_or_changing_protection() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine =
+            crate::engine::test_support::fixture(Store::at(root.path().into()).unwrap());
+        let profile = uuid::Uuid::new_v4().to_string();
+        engine.settings.active_profile = Some(profile.clone());
+        engine.settings.claude_protection = Some(Arc::new(Protection::new(
+            profile,
+            "fixture".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        let protection = engine.settings.claude_protection.clone();
+        let shared = Arc::new(Mutex::new(engine));
+        execute(
+            &shared,
+            Command::ConfigSet {
+                key: "accent_color".into(),
+                value: json!("blue"),
+            },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap();
+        let settings = {
+            let engine = shared.lock().await;
+            assert!(!engine.running());
+            assert_eq!(engine.settings.claude_protection, protection);
+            assert_eq!(
+                engine.store.load_settings().unwrap().accent_color,
+                crate::config::AccentColor::Blue
+            );
+            assert!(!engine.store.runtime().join("config.yaml").exists());
+            engine.settings.clone()
+        };
+        let mut mixed = settings.clone();
+        mixed.text_scale = 125;
+        mixed.ipv6 = !mixed.ipv6;
+        let error = execute(
+            &shared,
+            Command::Settings {
+                settings: mixed,
+                expected: None,
+            },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("Claude 保护"));
+        let engine = shared.lock().await;
+        assert_eq!(engine.settings, settings);
+        assert_eq!(engine.store.load_settings().unwrap(), settings);
+    }
 }
 
 async fn install_update(

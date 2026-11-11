@@ -1,6 +1,8 @@
 mod control;
 pub(crate) mod downloads;
 mod recovery;
+#[cfg(test)]
+pub(crate) mod test_support;
 use crate::control::Command as ControlCommand;
 use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Proxies},

@@ -219,9 +219,11 @@ mod tests {
 
     fn protected_settings() -> Settings {
         use crate::claude_check::protection::{Previous, Protection};
+        let profile = uuid::Uuid::new_v4().to_string();
         Settings {
+            active_profile: Some(profile.clone()),
             claude_protection: Some(std::sync::Arc::new(Protection::new(
-                "fixture".into(),
+                profile,
                 "node".into(),
                 Previous {
                     mode: "rule".into(),
@@ -248,7 +250,8 @@ mod tests {
                     value
                 }
                 .check_protection(&settings)
-                .is_ok()
+                .is_ok(),
+                "display setting {key} must remain available"
             );
         }
         let mut next = settings.clone();

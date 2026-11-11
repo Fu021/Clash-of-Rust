@@ -1351,6 +1351,8 @@ class BuildTests(unittest.TestCase):
                             in command for command in ui_checks))
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
                             and 'control::tests::' in command for command in ui_checks))
+        self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
+                            and 'control::dispatch::tests::' in command for command in ui_checks))
         self.assertTrue(any('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes'
                             in command for command in ui_checks))
         focused = [command for command in ui_checks if

@@ -77,7 +77,8 @@ def main():
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),
                 ('clash-client-runtime', ['--lib'],
-                 [] if linux_user_tests() else ['control::tests::'])):
+                 ['control::dispatch::tests::']
+                 + ([] if linux_user_tests() else ['control::tests::']))):
             for case in cases:
                 run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
                      *([case] if case else []), '--', '--test-threads=1'])
