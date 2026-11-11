@@ -64,6 +64,7 @@ def main():
                      'notice_countdown_restarts_and_expires_after_five_seconds',
                      'applications_scroll_across_phone_and_tablet_viewports',
                      'application_policy_form_respects_platform_protection_and_scrolls',
+                     'mobile_accent_picker_remains_usable_while_protected',
                      'mobile_connections_keep_actions_reachable_and_scroll_with_long_names',
                      'report_categories_share_one_panel_without_gaps_from_hidden_rows',
                      'mobile_rules_drag_real_rows_at_phone_pad_and_large_text_sizes'):
@@ -72,7 +73,9 @@ def main():
         for package, target, cases in (
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
-                ('clash-client-core', ['--lib'], [''])):
+                ('clash-client-core', ['--lib'], ['']),
+                ('clash-client-runtime', ['--lib'],
+                 [] if linux_user_tests() else ['control::tests::'])):
             for case in cases:
                 run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
                      *([case] if case else []), '--', '--test-threads=1'])

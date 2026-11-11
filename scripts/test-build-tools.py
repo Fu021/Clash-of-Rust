@@ -1082,6 +1082,17 @@ class BuildTests(unittest.TestCase):
             self.assertTrue(ci_test_policy.select([
                 'vendor/winit/src/platform_impl/linux/x11/resize_sync.rs'
             ])['desktop_ui_tests'])
+            for path in ('crates/client-core/src/config/mod.rs',
+                         'crates/client-core/src/protection/mod.rs',
+                         'crates/client-runtime/src/control/mod.rs',
+                         'crates/mobile-ffi/src/lib.rs',
+                         'apps/android/native/src/android.rs',
+                         'apps/android/core/application_rules.go'):
+                self.assertTrue(ci_test_policy.select([path])['desktop_ui_tests'], path)
+            for path in ('crates/client-core/src/config/mod.rs',
+                         'crates/client-core/src/protection/mod.rs',
+                         'crates/mobile-ffi/src/lib.rs'):
+                self.assertTrue(ci_test_policy.select([path])['android_routing_tests'], path)
             for path in ('crates/client-runtime/src/update/install/terminal.rs',
                          'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py'):
                 self.assertTrue(ci_test_policy.select([path])['update_tests'])
@@ -1332,6 +1343,10 @@ class BuildTests(unittest.TestCase):
                             in command for command in ui_checks))
         self.assertTrue(any('applications_scroll_across_phone_and_tablet_viewports'
                             in command for command in ui_checks))
+        self.assertTrue(any('mobile_accent_picker_remains_usable_while_protected'
+                            in command for command in ui_checks))
+        self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
+                            and 'control::tests::' in command for command in ui_checks))
         self.assertTrue(any('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes'
                             in command for command in ui_checks))
         focused = [command for command in ui_checks if

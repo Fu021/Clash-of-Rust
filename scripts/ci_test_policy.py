@@ -59,8 +59,10 @@ def select(paths, extended=False):
                          'crates/client-ui/ui/mobile/android/applications.slint',
                          'apps/android/app/src/main/java/org/clashofrust/android/TunnelService.java',
                          'apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java'))
-        or path.startswith(('crates/client-core/src/application_rules.rs',
-                             'crates/mobile-ffi/src/application_rules.rs',
+        or path.startswith(('crates/client-core/src/config/',
+                             'crates/client-core/src/protection/',
+                             'crates/mobile-ffi/src/',
+                             'crates/client-core/src/application_rules.rs',
                              'crates/client-ui/ui/mobile/android/application-policies.slint'))
         or path in ('scripts/android.py', 'scripts/ci_test_policy.py')
         for path in paths
@@ -82,7 +84,11 @@ def select(paths, extended=False):
                       for path in paths)
     desktop_ui = any(
         path.startswith(('crates/client-ui/', 'apps/desktop-ui/src/', 'vendor/winit/',
-                         'apps/desktop/src/application/'))
+                         'apps/desktop/src/application/', 'crates/client-core/src/config/',
+                         'crates/client-core/src/protection/', 'crates/client-runtime/src/control/',
+                         'crates/mobile-ffi/src/', 'apps/android/native/src/',
+                         'crates/client-core/src/application_rules.rs',
+                         'apps/android/core/application_rules'))
         for path in paths
     )
     benchmark = any(

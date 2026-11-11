@@ -186,13 +186,14 @@ impl Editor {
                 "此应用未进入 VPN，请先调整应用分流范围"
             );
             for other in &self.applications {
-                if other.uid == application.uid && other.package != application.package {
-                    if let Some(rule) = rules.iter().find(|rule| rule.package == other.package) {
-                        ensure!(
-                            rule.target == target && rule.reject_missing == reject_missing,
-                            "这些应用共享系统身份，需要指定相同出站"
-                        );
-                    }
+                if other.uid == application.uid
+                    && other.package != application.package
+                    && let Some(rule) = rules.iter().find(|rule| rule.package == other.package)
+                {
+                    ensure!(
+                        rule.target == target && rule.reject_missing == reject_missing,
+                        "这些应用共享系统身份，需要指定相同出站"
+                    );
                 }
             }
             rules.retain(|rule| rule.package != application.package);

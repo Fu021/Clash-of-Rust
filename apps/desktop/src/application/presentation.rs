@@ -1061,7 +1061,7 @@ impl App {
                     let (_, flag) = clash_of_rust::flags::label(&country);
                     let (title, value, detail, source) = match entry {
                         claude_view::Entry::Config(finding) => (
-                            finding.display_title().into(),
+                            finding.display_title().to_owned(),
                             if finding.value.trim().is_empty() {
                                 "未提供".into()
                             } else {

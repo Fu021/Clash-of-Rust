@@ -2423,24 +2423,28 @@ fn mobile_accent_picker_remains_usable_while_protected() {
     };
     probe.set_modal(true);
     probe.set_detail(11);
-    probe.set_protected(true);
-    probe.set_protection_pending(false);
-    render();
-    let swatch = targets.borrow()["accent-swatch:2"].clone();
-    assert!(swatch[2] >= 48. && swatch[3] >= 48.);
-    let position = LogicalPosition::new(swatch[0] + swatch[2] / 2., swatch[1] + swatch[3] / 2.);
-    probe.window().dispatch_event(WindowEvent::PointerPressed {
-        position,
-        button: PointerEventButton::Left,
-    });
-    advance(&clock, Duration::from_millis(50));
-    probe.window().dispatch_event(WindowEvent::PointerReleased {
-        position,
-        button: PointerEventButton::Left,
-    });
-    render();
-    assert_eq!(
-        events.borrow().as_slice(),
-        &[(MobileIntent::Accent, "2".to_owned())]
-    );
+    for (protected, pending) in [(false, false), (false, true), (true, false), (true, true)] {
+        probe.set_protected(protected);
+        probe.set_protection_pending(pending);
+        events.borrow_mut().clear();
+        render();
+        let swatch = targets.borrow()["accent-swatch:2"].clone();
+        assert!(swatch[2] >= 48. && swatch[3] >= 48.);
+        let position = LogicalPosition::new(swatch[0] + swatch[2] / 2., swatch[1] + swatch[3] / 2.);
+        probe.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        advance(&clock, Duration::from_millis(50));
+        probe.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        render();
+        assert_eq!(
+            events.borrow().as_slice(),
+            &[(MobileIntent::Accent, "2".to_owned())],
+            "protected={protected}, pending={pending}"
+        );
+    }
 }
