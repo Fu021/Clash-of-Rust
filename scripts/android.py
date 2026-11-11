@@ -863,7 +863,8 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
         try:
             if 'measurementDiagnosticsDistinguishFailuresAndExport' in cases:
                 pull_device_report('/sdcard/Android/data/org.clashofrust.android/files/measurement-diagnostics',
-                                   report, required=True, name='measurement-diagnostics')
+                                   report, required=True, required_pattern='result.json',
+                                   name='measurement-diagnostics')
                 validate_measurement_diagnostics(report / 'measurement-diagnostics',
                                                  int(properties['ro.build.version.sdk']))
             if applications_only:
@@ -1092,7 +1093,7 @@ def validate_measurement_diagnostics(directory, api):
         with open(summary, 'a') as stream:
             stream.write(f'\nAndroid API {api}: measurement success/refusal, controller authentication failure, '
                          'VPN on/off, recovery and actual diagnostic-file writes verified. '
-                         'This isolated fixture does not reproduce issue #38 or a vendor ROM.\n')
+                         'This isolated fixture does not reproduce a reported public subscription failure or a vendor ROM.\n')
 
 
 def application_preview(build, api, verify_diagnostics=False):

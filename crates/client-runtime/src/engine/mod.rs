@@ -1318,6 +1318,10 @@ impl Engine {
         }
         if state.tun {
             self.tun(true).await?;
+            #[cfg(target_os = "linux")]
+            if self.settings.claude_protection.is_some() {
+                self.check_protection_tun_routes().await?;
+            }
             #[cfg(target_os = "macos")]
             self.mac_protection_dns(self.settings.claude_protection.is_some())
                 .await?;
@@ -1649,7 +1653,7 @@ impl Engine {
     ) -> Result<()> {
         #[cfg(target_os = "macos")]
         self.mac_protection_dns(false).await?;
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let _ = protected;
         self.proxy_mode(ProxyMode::Off).await?;
         self.api.reload(payload).await?;
@@ -1666,6 +1670,10 @@ impl Engine {
             ProxyMode::Off
         })
         .await?;
+        #[cfg(target_os = "linux")]
+        if protected && state.tun {
+            self.check_protection_tun_routes().await?;
+        }
         #[cfg(target_os = "macos")]
         {
             let port = if protected && state.tun {
@@ -1684,6 +1692,29 @@ impl Engine {
             };
             tokio::task::spawn_blocking(move || platform::macos::service::protection_dns_at(port))
                 .await??;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn check_protection_tun_routes(&self) -> Result<()> {
+        let config: Value = self.api.get("configs").await?;
+        self.check_tun_routes(&config, true).await
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn check_tun_routes(&self, config: &Value, require_ipv6: bool) -> Result<()> {
+        for attempt in 0..6 {
+            let routes = crate::platform::host_network::observe().await;
+            let Some(issue) =
+                crate::platform::host_network::coverage_issue(&routes, config, require_ipv6)
+            else {
+                return Ok(());
+            };
+            if attempt == 5 {
+                bail!("{issue}");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         Ok(())
     }
@@ -1957,6 +1988,8 @@ impl Engine {
             self.prepare_protection_tun(interactive).await?;
             self.mode(protection.run_mode()).await?;
             self.proxy_mode(ProxyMode::Tun).await?;
+            #[cfg(target_os = "linux")]
+            self.check_protection_tun_routes().await?;
             #[cfg(target_os = "macos")]
             self.mac_protection_dns(true).await?;
             self.start_protection_guard();
@@ -2226,23 +2259,10 @@ impl Engine {
             {
                 append(
                     &self.logs,
-                    "[客户端] TUN 未配置 IPv6 地址（tun_ipv6_not_configured）；本次仅验证 IPv4 接管，IPv6 流量可能绕过 TUN",
+                    "[客户端] TUN 未配置 IPv6 地址（tun_ipv6_not_configured）；IPv6 接管尚未建立",
                 );
             }
-            let mut issue = None;
-            for attempt in 0..6 {
-                let routes = crate::platform::host_network::observe().await;
-                issue = crate::platform::host_network::coverage_issue(&routes, &config);
-                if issue.is_none() {
-                    break;
-                }
-                if attempt < 5 {
-                    tokio::time::sleep(Duration::from_millis(250)).await;
-                }
-            }
-            if let Some(issue) = issue {
-                bail!("{issue}");
-            }
+            self.check_tun_routes(&config, false).await?;
         }
         Ok(())
     }

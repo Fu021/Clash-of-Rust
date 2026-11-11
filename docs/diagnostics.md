@@ -17,6 +17,8 @@
 
 [地址族校验与验证边界](agent-failures/network-recovery.md#linux-tun-地址族与启动校验)见网络恢复说明；不把物理 IPv6 路由单独归因于桌面环境或权限。
 
+Claude 保护不会沿用普通 IPv4-only TUN 的兼容例外：首次开启及重启时发现物理 IPv6 绕行仍拒绝提交保护并恢复原状态，避免把不完整接管显示为保护成功。
+
 ## 测速记录
 
 桌面和 Android 报告的 `data.context.measurements`、`cor diagnose` 的 `data.measurements` 保存当前进程/后台最近四次已完成的测速摘要。CLI 后台通过可选 `Meta.measurements` 传给附加前端；旧后台没有该字段时视为无记录。当前进程中重新应用设置或切换控制端口会保留记录，进程退出后不保证仍有这些内存记录。

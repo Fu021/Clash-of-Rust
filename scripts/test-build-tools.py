@@ -3404,6 +3404,25 @@ runpy.run_path(str(script), run_name='__main__')
                                               required=True,required_pattern='state.json')
             self.assertTrue((report/'ime-report/state.json').is_file())
 
+    def test_diagnostic_export_requires_a_receipt_without_requiring_screenshots(self):
+        for complete in (False, True):
+            with self.subTest(complete=complete), tempfile.TemporaryDirectory() as temporary:
+                report = Path(temporary)
+                def invoke(command, **kwargs):
+                    destination = report / 'measurement-diagnostics'
+                    (destination / 'without-vpn.json').write_text('{}')
+                    if complete:
+                        (destination / 'result.json').write_text('{"passed":true}')
+                    return subprocess.CompletedProcess(command, 0, 'files pulled', '')
+                with patch.object(android_build.subprocess, 'run', side_effect=invoke):
+                    if complete:
+                        android_build.pull_device_report('/sdcard/measurement-diagnostics', report,
+                            required=True, required_pattern='result.json', name='measurement-diagnostics')
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'evidence export failed'):
+                            android_build.pull_device_report('/sdcard/measurement-diagnostics', report,
+                                required=True, required_pattern='result.json', name='measurement-diagnostics')
+
     def test_android_tun_origin_keeps_the_probe_live_until_controller_verification(self):
         for path, acknowledgement, tunnel in (
                 ('/probe', None, False), ('/hold', b'!', False), ('/hold', b'?', False),
@@ -3507,7 +3526,10 @@ runpy.run_path(str(script), run_name='__main__')
                     self.assertEqual(cases,list(network_cases))
                     self.assertTrue(all('getprop' in call.args[0] for call in properties.call_args_list))
                     self.assertFalse(any('input_method' in call.args[0] for call in commands.call_args_list))
-                    pull.assert_called_once()
+                    pull.assert_called_once_with(
+                        '/sdcard/Android/data/org.clashofrust.android/files/measurement-diagnostics',
+                        root/'target/android-report/x64', required=True,
+                        required_pattern='result.json', name='measurement-diagnostics')
                     validate.assert_called_once()
                     ime_crashes.assert_not_called()
                     server.return_value.shutdown.assert_called_once()

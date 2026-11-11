@@ -61,6 +61,8 @@
 
 内核和控制器已启动、TUN 日志只有 IPv4 地址时，不能因物理 IPv6 路由就回滚并停止内核。上游在关闭 IPv6、启动时未发现全局 IPv6 地址或配置明确为空时可不创建 IPv6 TUN，因此不能以客户端的 IPv6 偏好代替实际地址族。缺少 IPv6 TUN 时保留可工作的 IPv4，日志记 `tun_ipv6_not_configured`；若系统 IPv6 样本仍绕行，原有绕行警告继续显示，不能声称 IPv6 已被接管。未取得原始配置和同时段接口地址时，不能推断上游省略 IPv6 地址的具体原因。
 
+Claude 保护例外：首次开启、恢复和已保存保护的重启仍拒绝已确认的 IPv6 绕行，失败沿原事务恢复旧设置与运行状态。普通 IPv4-only TUN 的兼容处理不能让保护状态误报完整接管；未取得路由证据仍明确为未知。
+
 ## IPv6 节点域名解析
 
 [不发布打包 40883823532](https://github.com/Fu021/Clash-of-Rust/actions/runs/40883823532) 的 Ubuntu 20.04 ARM64 隔离测试在保护 DNS 返回 SERVFAIL 时记录 IPv6 节点 `no ip address`。上游 [mihomo 解析器](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/dns/resolver.go)在 A 查询结束后默认只等待 AAAA 100 毫秒；慢 AAAA 是与日志吻合的可能原因，并非已证明所有现场超时都由此造成。

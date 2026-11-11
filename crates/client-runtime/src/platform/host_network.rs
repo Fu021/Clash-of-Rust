@@ -149,11 +149,11 @@ pub fn ipv6_tun_configured(config: &Value) -> Option<bool> {
 /// A positive sample of a non-TUN route while this process owns TUN means the
 /// host may still send some traffic outside the tunnel. Unknown or unavailable
 /// samples are deliberately not treated as proof either way.
-pub fn coverage_issue(routes: &Value, config: &Value) -> Option<String> {
+pub fn coverage_issue(routes: &Value, config: &Value, require_ipv6: bool) -> Option<String> {
     if routes["scope"] != "current_network_namespace" {
         return None;
     }
-    let ipv6_expected = ipv6_tun_configured(config).unwrap_or(true);
+    let ipv6_expected = require_ipv6 || ipv6_tun_configured(config).unwrap_or(true);
     let mut issues = Vec::new();
     for (family, label, expected) in [("ipv4", "IPv4", true), ("ipv6", "IPv6", ipv6_expected)] {
         let route = &routes[family];
@@ -414,7 +414,7 @@ mod context_tests {
             "tun":{"inet6-address":["fdfe:dcba:9876::1/126"]}
         });
         assert!(
-            coverage_issue(&routes, &dual_stack)
+            coverage_issue(&routes, &dual_stack, false)
                 .unwrap()
                 .contains("IPv4")
         );
@@ -424,7 +424,7 @@ mod context_tests {
             "ipv6":{"state":"observed","kind":"other","interface":"eth0"}
         });
         assert!(
-            coverage_issue(&ipv6_only, &dual_stack)
+            coverage_issue(&ipv6_only, &dual_stack, false)
                 .unwrap()
                 .contains("IPv6")
         );
@@ -442,13 +442,22 @@ mod context_tests {
             json!({"enable":true,"inet6-address":[]}),
         ] {
             let config = json!({"ipv6":true,"tun":tun});
-            assert!(coverage_issue(&routes, &config).is_none());
+            assert!(coverage_issue(&routes, &config, false).is_none());
+            assert!(
+                coverage_issue(&routes, &config, true)
+                    .unwrap()
+                    .contains("IPv6")
+            );
             let context = with_proxy_context(routes.clone(), Some(ProxyMode::Tun));
             assert_eq!(context["warnings"], json!(["tun_ipv6_route_bypass"]));
             assert!(notice(&context).unwrap().contains("绕过 TUN"));
             let mut bypass = routes.clone();
             bypass["ipv4"]["kind"] = "other".into();
-            assert!(coverage_issue(&bypass, &config).unwrap().contains("IPv4"));
+            assert!(
+                coverage_issue(&bypass, &config, false)
+                    .unwrap()
+                    .contains("IPv4")
+            );
         }
     }
 
@@ -463,13 +472,23 @@ mod context_tests {
             "ipv6":true,
             "tun":{"enable":true,"inet6-address":["fdfe:dcba:9876::1/126"]}
         });
-        assert!(coverage_issue(&routes, &config).unwrap().contains("IPv6"));
+        assert!(
+            coverage_issue(&routes, &config, false)
+                .unwrap()
+                .contains("IPv6")
+        );
         config["tun"]["inet6-address"] = "invalid".into();
-        assert!(coverage_issue(&routes, &config).unwrap().contains("IPv6"));
+        assert!(
+            coverage_issue(&routes, &config, false)
+                .unwrap()
+                .contains("IPv6")
+        );
         let mut unknown = routes.clone();
         unknown["ipv6"] = json!({"state":"unknown","reason":"route_unavailable"});
-        assert!(coverage_issue(&unknown, &config).is_none());
-        assert!(coverage_issue(&json!({"scope":"unsupported"}), &config).is_none());
+        for required in [false, true] {
+            assert!(coverage_issue(&unknown, &config, required).is_none());
+            assert!(coverage_issue(&json!({"scope":"unsupported"}), &config, required).is_none());
+        }
     }
 
     #[test]
