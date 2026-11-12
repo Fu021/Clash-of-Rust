@@ -26,6 +26,8 @@ impl Trace {
                 "wayland_display_present":std::env::var_os("WAYLAND_DISPLAY").is_some(),
                 "session_bus_address_present":std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
                 "xdg_runtime_dir_present":std::env::var_os("XDG_RUNTIME_DIR").is_some(),
+                "desktop_environment":desktop_environment(
+                    std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()),
             }),
             events: VecDeque::new(),
             discarded: 0,
@@ -115,6 +117,19 @@ impl Trace {
     }
 }
 
+fn desktop_environment(value: Option<&str>) -> &'static str {
+    for name in ["COSMIC", "GNOME", "KDE", "XFCE", "LXQT", "MATE", "CINNAMON"] {
+        if value.is_some_and(|value| {
+            value
+                .split(':')
+                .any(|component| component.trim().eq_ignore_ascii_case(name))
+        }) {
+            return name;
+        }
+    }
+    "unknown"
+}
+
 fn previous_record(path: &std::path::Path) -> Option<Vec<u8>> {
     use std::io::Read;
     if !std::fs::symlink_metadata(path).ok()?.is_file() {
@@ -161,6 +176,20 @@ impl super::App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_identity_uses_known_labels_without_exporting_arbitrary_environment_values() {
+        for (value, expected) in [
+            (Some("pop:COSMIC"), "COSMIC"),
+            (Some("COSMIC"), "COSMIC"),
+            (Some("ubuntu:GNOME"), "GNOME"),
+            (Some("plasma:KDE"), "KDE"),
+            (Some("private-session-token"), "unknown"),
+            (None, "unknown"),
+        ] {
+            assert_eq!(desktop_environment(value), expected);
+        }
+    }
 
     #[test]
     fn repeated_state_polls_do_not_fill_the_trace_and_explicit_reopen_reasons_survive() {

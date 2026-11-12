@@ -35,6 +35,7 @@ def isolated_resolved():
     # Called only after unshare --mount --net. No sockets, DNS files, routes,
     # or daemons from the host namespace are used or changed.
     run(['mount', '--make-rprivate', '/'])
+    run(['mount', '-t', 'sysfs', '-o', 'ro,nosuid,nodev,noexec', 'sysfs', '/sys'])
     run(['mount', '-t', 'tmpfs', '-o', 'mode=0755', 'tmpfs', '/run'])
     # resolved creates its own runtime directory with systemd-resolve ownership
     # before dropping root. A precreated root-owned directory makes it exit.
@@ -168,6 +169,8 @@ def isolated_uplink():
                 run([*prefix, 'ip', 'addr', 'add', v4, 'dev', interface])
                 run([*prefix, 'ip', '-6', 'addr', 'add', v6, 'dev', interface, 'nodad'])
                 run([*prefix, 'ip', 'link', 'set', interface, 'up'])
+            assert int(Path('/sys/class/net/uplink/ifindex').read_text()) == (
+                socket.if_nametoindex('uplink')), 'sysfs must observe the isolated network namespace'
             for address in (*addresses, *NODE, *WEBSITE):
                 family, length = ('-6', 128) if ':' in address else ('-4', 32)
                 run(['ip', '-n', namespace, family, 'addr', 'add', f'{address}/{length}', 'dev', 'lo'])

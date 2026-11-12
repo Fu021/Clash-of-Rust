@@ -156,7 +156,7 @@ fn tray_call(
 ) -> Result<Variant> {
     unsafe {
         let parameters = g_variant_parse(
-            std::ptr::null(),
+            std::ptr::null_mut(),
             parameters.as_ptr(),
             std::ptr::null(),
             std::ptr::null_mut(),
@@ -172,7 +172,7 @@ fn tray_call(
             interface.as_ptr(),
             method.as_ptr(),
             parameters.0,
-            std::ptr::null(),
+            std::ptr::null_mut(),
             1,
             250,
             std::ptr::null_mut(),

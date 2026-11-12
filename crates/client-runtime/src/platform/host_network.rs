@@ -365,6 +365,14 @@ fn with_tun_expectations(
     routes
 }
 
+pub fn ipv6_tun_configured(config: &Value) -> Option<bool> {
+    match &config["tun"]["inet6-address"] {
+        Value::Null => Some(false),
+        Value::Array(addresses) => Some(!addresses.is_empty()),
+        _ => None,
+    }
+}
+
 fn ipv6_expected(routes: &Value, enabled: bool) -> bool {
     enabled && routes["ipv6_uplink"]["state"] != "unavailable"
 }

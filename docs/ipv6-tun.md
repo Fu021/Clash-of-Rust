@@ -32,6 +32,8 @@ Claude 保护期间不自动改写锁定的运行配置；网络变化后重新�
 
 纯逻辑回归覆盖地址过滤、DAD、deprecated、ULA、关闭接口、无 IPv6、双栈、IPv6 开关、保护、读取失败、当前 UID 与原始路由证据，以及无 → 有 → 更换 → 无的稳定观察和重试。
 
-[`tun_ipv6_lifecycle.py`](../scripts/tun_ipv6_lifecycle.py)由现有 Linux 隔离测试调用：默认 IPv6 开启但移除上联 IPv6 时启动、重启并开启/恢复 Claude 保护；保护保持启用时分别从有、无 IPv6 开始往返切换，核对覆盖告警、IPv4 请求和锁定配置不变。普通模式恢复 IPv6 后检查自动刷新、真实 IPv4/IPv6 HTTP 和 TUN 路由，再验证 IPv6 消失、恢复及 TUN 重连，核对设置未被自动改写。仅在可丢弃网络/挂载命名空间执行，开发主机不运行。
+[`tun_ipv6_lifecycle.py`](../scripts/tun_ipv6_lifecycle.py)由现有 Linux 隔离测试调用：默认 IPv6 开启但移除上联 IPv6 时启动、重启并开启/恢复 Claude 保护；保护保持启用时分别从有、无 IPv6 开始往返切换，核对覆盖告警、IPv4 请求和锁定配置不变。普通模式恢复 IPv6 后检查自动刷新、真实 IPv4/IPv6 HTTP 和 TUN 路由，再验证 IPv6 消失、恢复及 TUN 重连，核对设置未被自动改写。
+
+测试只在可丢弃网络/挂载命名空间执行，开发主机不运行。隔离后重新挂载只读 sysfs，并核对上联接口索引，保证 `/proc`、`/sys` 与路由来自同一命名空间；sysfs 的挂载具有命名空间标记，不能沿用宿主视图来判定隔离接口，见[内核说明](https://docs.kernel.org/networking/sysfs-tagging.html)。
 
 新增 Rust 与真实网络回归尚待同提交 Actions；静态检查不等于已通过上述验收。Wi-Fi/有线切换、真实 RA/DHCPv6、休眠、IPv6-only/NAT64、厂商网络和长期保护仍需设备证据。
