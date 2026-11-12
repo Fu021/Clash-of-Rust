@@ -1144,7 +1144,10 @@ class BuildTests(unittest.TestCase):
                          'crates/client-runtime/src/platform/network/mod.rs',
                          'crates/client-runtime/src/control/network.rs',
                          'crates/client-runtime/src/engine/recovery.rs',
-                         'scripts/tun_ipv6_lifecycle.py'):
+                         'scripts/tun_ipv6_lifecycle.py',
+                         'scripts/ci_test_policy.py',
+                         'apps/desktop/tests/core_integration.rs',
+                         'apps/desktop/tests/support/protected_dns.rs'):
                 self.assertTrue(ci_test_policy.select([path])['linux_user_tests'], path)
             self.assertTrue(ci_test_policy.select([
                 'crates/client-ui/ui/pages/proxies.slint'

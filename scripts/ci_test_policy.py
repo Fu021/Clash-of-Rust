@@ -71,7 +71,9 @@ def select(paths, extended=False):
         path.startswith(('apps/cli/src/users.rs', 'apps/cli/src/host_network.rs', 'apps/cli/src/backend.rs',
                          'apps/cli/src/service.rs', 'crates/client-runtime/src/platform/linux/tun/',
                          'crates/client-runtime/src/platform/host_network'))
-        or path in ('scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py')
+        or path in ('scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py',
+                    'scripts/ci_test_policy.py', 'apps/desktop/tests/core_integration.rs',
+                    'apps/desktop/tests/support/protected_dns.rs')
         or path.startswith('crates/client-runtime/src/platform/network/')
         or path in ('crates/client-runtime/src/control/network.rs',
                     'crates/client-runtime/src/engine/recovery.rs')
