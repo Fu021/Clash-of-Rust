@@ -314,6 +314,10 @@ mod tests {
             },
             Command::Autostart { enabled: None },
             Command::Protect { enabled: false },
+            Command::ConfigSet {
+                key: "ipv6".into(),
+                value: serde_json::json!(settings.ipv6),
+            },
         ] {
             assert!(allowed.check_protection(&settings).is_ok());
         }
@@ -343,7 +347,7 @@ mod tests {
             },
             Command::ConfigSet {
                 key: "ipv6".into(),
-                value: serde_json::json!(true),
+                value: serde_json::json!(!settings.ipv6),
             },
             Command::RuleChange {
                 id: "fixture".into(),
