@@ -1885,6 +1885,11 @@ public class ProxyTunTest {
             });
             return content.get() != null;
         });
+        String expected = content.get();
+        JSONObject prepared = new JSONObject(expected);
+        assertEquals("The selected export is not a diagnostic report", "diagnose", prepared.getString("command"));
+        java.lang.reflect.Field failure = MainActivity.class.getDeclaredField("documentFailure");
+        failure.setAccessible(true);
         await("The diagnostic document picker did not open",
             () -> !inStage(androidx.test.runner.lifecycle.Stage.RESUMED, false));
         assertTrue(directory.isDirectory() || directory.mkdirs());
@@ -1893,6 +1898,8 @@ public class ProxyTunTest {
             activity.onActivityResult(12, android.app.Activity.RESULT_OK,
                 new Intent().setData(Uri.fromFile(destination))));
         await("Diagnostic export did not finish writing valid JSON", () -> {
+            String failed = (String)failure.get(activity);
+            assertNull("Diagnostic export failed: " + failed, failed);
             if (!destination.isFile()) return false;
             try {
                 new JSONObject(new String(java.nio.file.Files.readAllBytes(destination.toPath()), StandardCharsets.UTF_8));
@@ -1902,7 +1909,7 @@ public class ProxyTunTest {
         closeDiagnosticPicker();
         waitForAppWindow();
         String saved = new String(java.nio.file.Files.readAllBytes(destination.toPath()), StandardCharsets.UTF_8);
-        assertEquals("Exported bytes differ from the actual report payload", content.get(), saved);
+        assertEquals("Exported bytes differ from the actual report payload", expected, saved);
         assertFalse("The custom measurement URL leaked into diagnostics", saved.contains("ci-only-url-secret"));
         JSONObject report = new JSONObject(saved);
         assertEquals(1, report.getInt("schema"));

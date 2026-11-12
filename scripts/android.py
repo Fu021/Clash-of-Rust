@@ -65,6 +65,8 @@ def install_sdk_packages(command, device_root):
     transient = re.compile(r'Error reading Zip content from a SeekableByteChannel'
                            r'|Error on ZipFile unknown archive|Connection timed out|Read timed out'
                            r'|Could not resolve host|Failed to connect'
+                           r'|Failed to download package archive[^\r\n]*:\s*'
+                           r'(?:closed|unexpected EOF|connection reset by peer)\b'
                            r'|HTTP(?:/[0-9.]+)?\s+(?:429|50[0234])\b', re.I)
     for attempt in range(3):
         user_root = device_root/('sdk-download-'+str(attempt))
@@ -460,26 +462,55 @@ def verify_build(root, arch, expected_commit):
     return manifest
 
 
+def adb_evidence_command(command, timeout):
+    try:
+        return subprocess.run(command,capture_output=True,text=True,timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(command,255,'',f'ADB command timed out after {timeout}s')
+
+
+def wait_adb_identity(output, expected=None):
+    for attempt in range(3):
+        connected=adb_evidence_command([ADB,'wait-for-device'],30)
+        output.append(connected.stdout+connected.stderr)
+        if connected.returncode==0:
+            identity=adb_evidence_command([ADB,'shell','id','-u'],15)
+            output.append(identity.stdout+identity.stderr)
+            uid=identity.stdout.strip()
+            if identity.returncode==0 and uid.isdigit() and (expected is None or uid==expected):
+                return uid
+        if attempt<2:
+            time.sleep(attempt+1)
+    return None
+
+
 def pull_device_report(remote, report, required=False, required_pattern='*.png', name='ime-report'):
     destination=report/name
     destination.mkdir(exist_ok=True)
     command=[ADB,'pull',remote.rstrip('/')+'/.',str(destination)]
-    result=subprocess.run(command,capture_output=True,text=True,timeout=30)
+    result=adb_evidence_command(command,30)
     output=[result.stdout+result.stderr]
+    restored=True
     if result.returncode and required:
         properties=[subprocess.run([ADB,'shell','getprop',name],capture_output=True,text=True,timeout=15)
                     for name in ('ro.kernel.qemu','ro.debuggable')]
         if all(value.returncode==0 and value.stdout.strip()=='1' for value in properties):
-            restart=subprocess.run([ADB,'root'],capture_output=True,text=True,timeout=30)
-            output.append(restart.stdout+restart.stderr)
-            if restart.returncode==0:
-                connected=subprocess.run([ADB,'wait-for-device'],capture_output=True,text=True,timeout=30)
-                output.append(connected.stdout+connected.stderr)
-                if connected.returncode==0:
-                    result=subprocess.run(command,capture_output=True,text=True,timeout=30)
-                    output.append(result.stdout+result.stderr)
+            previous=wait_adb_identity(output)
+            if previous is not None and previous!='0':
+                try:
+                    restart=adb_evidence_command([ADB,'root'],30)
+                    output.append(restart.stdout+restart.stderr)
+                    if wait_adb_identity(output,'0')=='0':
+                        result=adb_evidence_command(command,30)
+                        output.append(result.stdout+result.stderr)
+                finally:
+                    restart=adb_evidence_command([ADB,'unroot'],30)
+                    output.append(restart.stdout+restart.stderr)
+                    restored=wait_adb_identity(output,previous)==previous
     pull_log = name.removesuffix('-report') + '-pull.txt'
     (report/pull_log).write_text('\n'.join(output))
+    if not restored:
+        raise RuntimeError(f'Android evidence export did not restore the original ADB identity; inspect {pull_log}')
     if required and (result.returncode or not any(destination.rglob(required_pattern))):
         evidence='screenshot' if required_pattern=='*.png' else 'evidence'
         raise RuntimeError(f'{name} {evidence} export failed; inspect {pull_log}')
@@ -502,16 +533,26 @@ def scoped_test_log(log, marker, end_marker=None):
 
 
 def start_test_log(report, marker):
-    with (report/'logcat.raw').open('wb') as output, (report/'logcat-stderr.txt').open('wb') as errors:
-        process=subprocess.Popen([ADB,'logcat','-b','main,system,crash','-v','threadtime'],
-                                 stdout=output,stderr=errors)
-    try:
-        run([ADB,'shell','log','-t','CorAndroidTest',marker],timeout=15)
-        wait_test_log_marker(process,report,marker)
-    except BaseException:
-        stop_test_log(process)
-        raise
-    return process
+    for attempt in range(3):
+        with (report/'logcat.raw').open('wb') as output, (report/'logcat-stderr.txt').open('wb') as errors:
+            process=subprocess.Popen([ADB,'logcat','-b','main,system,crash','-v','threadtime'],
+                                     stdout=output,stderr=errors)
+        try:
+            run([ADB,'shell','log','-t','CorAndroidTest',marker],timeout=15,
+                capture_output=True,text=True)
+            wait_test_log_marker(process,report,marker)
+            return process
+        except subprocess.CalledProcessError as error:
+            stop_test_log(process)
+            detail=(error.stderr or '')+(error.stdout or '')
+            if attempt==2 or (error.returncode!=255 and not re.search(
+                    r'device offline|device not found|no devices|connection.*closed',detail,re.I)):
+                raise
+            print('Transient ADB log boundary connection failure; reconnecting before tests',flush=True)
+            time.sleep(attempt+1)
+        except BaseException:
+            stop_test_log(process)
+            raise
 
 
 def stop_test_log(process):

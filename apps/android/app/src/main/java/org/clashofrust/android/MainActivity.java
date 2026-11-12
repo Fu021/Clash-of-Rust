@@ -28,6 +28,7 @@ public final class MainActivity extends NativeActivity {
     private boolean tileConnect;
     boolean waitingForInstallPermission;
     private String exportContent;
+    private volatile String documentFailure;
     private volatile NetworkOverview networkOverview;
     private String notificationTitle, notificationMessage;
     private static native void nativeEvent(String value);
@@ -195,12 +196,16 @@ public final class MainActivity extends NativeActivity {
                     runOnUiThread(() -> {
                         if (exportContent != null) { emit("export-error", "已有导出操作正在进行"); return; }
                         exportContent = content;
+                        documentFailure = null;
                         try {
                             startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
                                 .setType(name.endsWith(".json") ? "application/json" : "text/plain").addCategory(Intent.CATEGORY_OPENABLE)
                                 .putExtra(Intent.EXTRA_TITLE, name), SAVE);
                         } catch (Exception error) {
                             exportContent = null;
+                            documentFailure = error.toString();
+                            android.util.Log.e("ClashOfRust",
+                                "DOCUMENT_PICKER_FAILED (" + error.getClass().getSimpleName() + ")");
                             emit("export-error", "无法打开保存位置：" + error);
                         }
                     });
@@ -411,7 +416,13 @@ public final class MainActivity extends NativeActivity {
                         emit("file", file);
                     }
                 }
-            } catch (Exception error) { emit(request == SAVE ? "export-error" : "error", error.toString()); }
+            } catch (Exception error) {
+                documentFailure = error.toString();
+                android.util.Log.e("ClashOfRust",
+                    (request == SAVE ? "DOCUMENT_EXPORT_FAILED" : "DOCUMENT_IMPORT_FAILED")
+                        + " (" + error.getClass().getSimpleName() + ")");
+                emit(request == SAVE ? "export-error" : "error", error.toString());
+            }
         });
         worker.shutdown();
     }

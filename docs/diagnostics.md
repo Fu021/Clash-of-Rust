@@ -71,6 +71,8 @@ Linux 的桌面导出及 `cor diagnose`／`--offline` 另保存：
 
 Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到日志的时间，不等同内核产生事件的精确时间；仍受现有缓冲及单条长度上限约束，不能恢复已丢失的历史。
 
+Android 文档选择、导出和导入失败另外在应用日志中记录 `DOCUMENT_PICKER_FAILED`、`DOCUMENT_EXPORT_FAILED`、`DOCUMENT_IMPORT_FAILED` 及异常类型，不写入 URI 或文件正文。界面保留具体错误；诊断导出回归先核对实际待写入内容，再检查保存结果和写入错误，不能将空文件或文件选择器已经打开当作导出成功。
+
 ## 回归与现场导出
 
 普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本诊断专项须维护者显式选择 `verify_diagnostics`，见[测试入口和验证边界](workflows/android-compatibility.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；模拟器中的确定性故障不能直接解释用户现场。

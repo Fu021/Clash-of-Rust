@@ -3528,21 +3528,66 @@ runpy.run_path(str(script), run_name='__main__')
 
     def verify_device_report_export(self, report, name):
         commands=[]
+        uid='2000'
         def invoke(command, **kwargs):
+            nonlocal uid
             commands.append(command[1:])
+            if command[1]=='root':
+                uid='0'
+            if command[1]=='unroot':
+                uid='2000'
             if command[1]=='pull':
                 if commands.count(command[1:])==1:
                     return subprocess.CompletedProcess(command,1,'','Permission denied')
                 (report/name/'name.png').write_bytes(b'screenshot')
-            return subprocess.CompletedProcess(command,0,'1\n' if command[1]=='shell' else '','')
+            value=uid+'\n' if command[1:]==['shell','id','-u'] else '1\n' if command[1]=='shell' else ''
+            return subprocess.CompletedProcess(command,0,value,'')
         with patch.object(android_build.subprocess,'run',side_effect=invoke):
             android_build.pull_device_report('/sdcard/'+name,report,required=True,name=name)
         self.assertIn(['root'],commands)
+        self.assertIn(['unroot'],commands)
         self.assertIn(['wait-for-device'],commands)
         self.assertEqual(sum(command[0]=='pull' for command in commands),2)
-        self.assertEqual(commands[-1][1],'/sdcard/'+name+'/.')
+        self.assertEqual(commands[-1],['shell','id','-u'])
+        self.assertEqual(uid,'2000')
         pull_log = name.removesuffix('-report') + '-pull.txt'
         self.assertIn('Permission denied',(report/pull_log).read_text())
+
+    def test_android_report_export_restores_identity_after_root_disconnects_and_copy_failures(self):
+        for copy_succeeds, restore_succeeds in ((True,True),(False,True),(True,False)):
+            with self.subTest(copy=copy_succeeds,restore=restore_succeeds), \
+                    tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                commands=[]
+                uid='2000'
+                def invoke(command, **kwargs):
+                    nonlocal uid
+                    arguments=command[1:]
+                    commands.append(arguments)
+                    if arguments==['root']:
+                        uid='0'
+                        return subprocess.CompletedProcess(command,255,'','closed')
+                    if arguments==['unroot'] and restore_succeeds:
+                        uid='2000'
+                    if arguments==['shell','id','-u']:
+                        return subprocess.CompletedProcess(command,0,uid+'\n','')
+                    if arguments[0]=='shell':
+                        return subprocess.CompletedProcess(command,0,'1\n','')
+                    if arguments[0]=='pull':
+                        if uid!='0' or not copy_succeeds:
+                            return subprocess.CompletedProcess(command,1,'','Permission denied')
+                        (report/'ime-report/name.png').write_bytes(b'capture')
+                    return subprocess.CompletedProcess(command,0,'','')
+                with patch.object(android_build.subprocess,'run',side_effect=invoke), \
+                        patch.object(android_build.time,'sleep'):
+                    if copy_succeeds and restore_succeeds:
+                        android_build.pull_device_report('/sdcard/report',report,required=True)
+                    else:
+                        expected='original ADB identity' if not restore_succeeds else 'export failed'
+                        with self.assertRaisesRegex(RuntimeError,expected):
+                            android_build.pull_device_report('/sdcard/report',report,required=True)
+                self.assertIn(['unroot'],commands)
+                self.assertEqual(uid,'2000' if restore_succeeds else '0')
 
     def test_ime_export_does_not_root_a_physical_or_non_debuggable_device(self):
         for values in (('0','1'),('1','0')):
@@ -4317,6 +4362,29 @@ runpy.run_path(str(script), run_name='__main__')
             process.terminate.assert_called_once()
             process.kill.assert_called_once()
 
+    def test_android_log_start_reconnects_only_for_transport_failures(self):
+        for status, retries in ((255,True),(1,False)):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                first, second=MagicMock(),MagicMock()
+                first.poll.return_value=None
+                second.poll.return_value=None
+                failure=subprocess.CalledProcessError(status,[],stderr='')
+                with patch.object(android_build.subprocess,'Popen',side_effect=[first,second]) as spawn, \
+                        patch.object(android_build.subprocess,'run',
+                            side_effect=[failure,subprocess.CompletedProcess([],0,'','')]), \
+                        patch.object(android_build,'wait_test_log_marker') as boundary, \
+                        patch.object(android_build.time,'sleep'):
+                    if retries:
+                        self.assertIs(android_build.start_test_log(report,'boundary'),second)
+                        boundary.assert_called_once_with(second,report,'boundary')
+                    else:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            android_build.start_test_log(report,'boundary')
+                        boundary.assert_not_called()
+                self.assertEqual(spawn.call_count,2 if retries else 1)
+                first.terminate.assert_called_once()
+
     def test_android_log_stream_requires_a_captured_start_marker_before_running_tests(self):
         with tempfile.TemporaryDirectory() as temporary:
             report=Path(temporary)
@@ -4827,6 +4895,26 @@ runpy.run_path(str(script), run_name='__main__')
             with self.assertRaises(subprocess.CalledProcessError): android_build.cargo_build(command)
             spawn.assert_called_once()
             delay.assert_not_called()
+
+    def test_android_sdk_retries_closed_downloads_without_retrying_package_errors(self):
+        for detail, retries in (
+                ('Failed to download package archive for system-images/android-35: closed',True),
+                ('Failed to download package archive for emulator: unexpected EOF',True),
+                ('Failed to download package archive for emulator: connection reset by peer',True),
+                ('Package closed is not available',False)):
+            with self.subTest(detail=detail), tempfile.TemporaryDirectory() as temporary:
+                with patch.object(android_build,'streamed_command',
+                                  side_effect=[(1,detail),(0,'Installed')]) as execute, \
+                        patch.object(android_build.time,'sleep') as pause:
+                    if retries:
+                        android_build.install_sdk_packages(['android','sdk','install'],Path(temporary))
+                        self.assertEqual(execute.call_count,2)
+                        pause.assert_called_once_with(15)
+                    else:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            android_build.install_sdk_packages(['android','sdk','install'],Path(temporary))
+                        execute.assert_called_once()
+                        pause.assert_not_called()
 
     def test_android_sdk_download_retry_is_bounded_and_uses_fresh_user_caches(self):
         def process(status, output):
