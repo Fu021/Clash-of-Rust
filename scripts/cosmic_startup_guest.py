@@ -125,18 +125,76 @@ def trace(account, background, visible, *, session=None, excluded=()):
 
 def restart_login(account):
     before = command('pgrep', '-u', str(account.pw_uid), '-x', 'cosmic-session').split()
-    subprocess.run(['systemctl', 'restart', 'display-manager'], check=True, timeout=60)
+    manager = f'user@{account.pw_uid}.service'
+    previous_manager = command('systemctl', 'show', manager, '--property=InvocationID', '--value').strip()
+    if not previous_manager:
+        raise RuntimeError('The original login has no identifiable user manager')
+    subprocess.run(['systemctl', 'stop', 'display-manager'], check=True, timeout=60)
+    subprocess.run(['systemctl', 'stop', manager], check=True, timeout=60)
+    wait_for(lambda: command(
+        'systemctl', 'show', manager, '--property=ActiveState', '--value'
+    ).strip() == 'inactive', timeout=60)
+    subprocess.run(['systemctl', 'start', 'display-manager'], check=True, timeout=60)
+    current_manager = None
 
     def new_session():
+        nonlocal current_manager
         result = subprocess.run(
             ['pgrep', '-u', str(account.pw_uid), '-x', 'cosmic-session'],
             capture_output=True, text=True, timeout=10,
         )
-        return result.returncode == 0 and result.stdout.split() != before and session_environment(account)
+        current_manager = command(
+            'systemctl', 'show', manager, '--property=InvocationID', '--value'
+        ).strip()
+        return (
+            result.returncode == 0 and result.stdout.split() != before
+            and current_manager and current_manager != previous_manager
+            and session_environment(account)
+        )
     wait_for(new_session)
+    return {'previous_manager': previous_manager, 'current_manager': current_manager}
 
 
-def main(stage):
+def failure_evidence(account):
+    autostart = Path(account.pw_dir) / '.config/autostart/clash-of-rust.desktop'
+    evidence = {'startup_records': list(startup_traces(account))[:8]}
+    try:
+        evidence['autostart'] = {
+            'symlink': autostart.is_symlink(),
+            'permissions': oct(autostart.stat().st_mode & 0o777),
+            'content': autostart.read_text()[:8192],
+        }
+    except OSError as error:
+        evidence['autostart'] = {'error': type(error).__name__, 'detail': str(error)}
+    environment = [
+        'runuser', '-u', account.pw_name, '--', 'env',
+        f'XDG_RUNTIME_DIR=/run/user/{account.pw_uid}',
+        f'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{account.pw_uid}/bus',
+    ]
+    commands = {
+        'manager': ['systemctl', 'show', f'user@{account.pw_uid}.service',
+                    '--property=InvocationID,ActiveState,SubState,MainPID'],
+        'autostart_units': environment + [
+            'systemctl', '--user', 'list-units', '--all', '--no-pager', '*clash*',
+        ],
+        'application_journal': [
+            'journalctl', '-b', '--no-pager', '-n', '150',
+            f'_UID={account.pw_uid}', '--grep=clash|autostart|cosmic-session.target',
+        ],
+    }
+    for name, arguments in commands.items():
+        try:
+            result = subprocess.run(arguments, capture_output=True, text=True, timeout=15)
+            evidence[name] = {
+                'exit_code': result.returncode,
+                'stdout': result.stdout[-24000:], 'stderr': result.stderr[-4000:],
+            }
+        except (OSError, subprocess.SubprocessError) as error:
+            evidence[name] = {'error': type(error).__name__, 'detail': str(error)}
+    return evidence
+
+
+def main(stage, report):
     if os.geteuid() != 0 or not Path('/mnt/cor-test/candidate.deb').is_file():
         raise RuntimeError('This probe is restricted to its disposable VM')
     os_release = Path('/etc/os-release').read_text()
@@ -145,8 +203,10 @@ def main(stage):
     account = wait_for(user, timeout=300)
     environment = wait_for(lambda: session_environment(account))
     autostart = Path(account.pw_dir) / '.config/autostart/clash-of-rust.desktop'
-    report = {'stage': stage, 'kernel': command('uname', '-r').strip(),
-              'system': os_release, 'desktop': 'COSMIC', 'session_type': 'wayland'}
+    report.update({
+        'stage': stage, 'kernel': command('uname', '-r').strip(), 'uid': account.pw_uid,
+        'system': os_release, 'desktop': 'COSMIC', 'session_type': 'wayland',
+    })
     if stage == 'prepare':
         apt('update', timeout=300)
         apt('install', '--no-install-recommends', '-y', '/mnt/cor-test/candidate.deb', timeout=300)
@@ -168,7 +228,7 @@ def main(stage):
         report['seeded_menu_link'] = True
     elif stage in ('first-login', 'background-login'):
         previous = {value.get('session_id') for value in startup_traces(account)}
-        restart_login(account)
+        report['login_transition'] = restart_login(account)
         background = stage == 'background-login'
         report['startup'] = wait_for(
             lambda: trace(account, background, not background, excluded=previous)
@@ -207,10 +267,15 @@ def main(stage):
 
 
 if __name__ == '__main__':
+    report = {'stage': sys.argv[1]}
     try:
-        main(sys.argv[1])
+        main(sys.argv[1], report)
     except Exception as error:
-        Path('/var/tmp/cor-startup-' + sys.argv[1] + '.json').write_text(json.dumps({
-            'stage': sys.argv[1], 'error': type(error).__name__, 'detail': str(error),
-        }))
+        report.update({'error': type(error).__name__, 'detail': str(error)})
+        if 'uid' in report:
+            try:
+                report['failure_evidence'] = failure_evidence(pwd.getpwuid(report['uid']))
+            except Exception as evidence_error:
+                report['evidence_error'] = type(evidence_error).__name__ + ': ' + str(evidence_error)
+        Path('/var/tmp/cor-startup-' + sys.argv[1] + '.json').write_text(json.dumps(report))
         raise

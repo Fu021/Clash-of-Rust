@@ -6987,6 +6987,69 @@ class AptCacheTests(unittest.TestCase):
 
 
 class CosmicStartupInvestigationTests(unittest.TestCase):
+    def test_login_requires_a_new_user_manager_as_well_as_a_new_compositor(self):
+        account = SimpleNamespace(pw_uid=1000)
+        state = {'active': 'active', 'manager': 'previous', 'pid': '11', 'environment': None}
+        expected = {'WAYLAND_DISPLAY': 'wayland-1'}
+
+        def command(*arguments):
+            if arguments[0] == 'pgrep':
+                return '11\n'
+            return state['active'] if '--property=ActiveState' in arguments else state['manager']
+
+        def run(arguments, **options):
+            if arguments[0] == 'pgrep':
+                return subprocess.CompletedProcess(arguments, 0, state['pid'] + '\n', '')
+            return subprocess.CompletedProcess(arguments, 0, '', '')
+
+        def wait(read, **options):
+            if read.__name__ != 'new_session':
+                self.assertFalse(read())
+                state['active'] = 'inactive'
+                return read()
+            self.assertFalse(read())
+            state['pid'] = '22'
+            self.assertFalse(read())
+            state['manager'] = 'current'
+            self.assertFalse(read())
+            state['environment'] = expected
+            return read()
+
+        with patch.object(cosmic_startup_guest, 'command', side_effect=command), \
+                patch.object(cosmic_startup_guest.subprocess, 'run', side_effect=run) as invoke, \
+                patch.object(cosmic_startup_guest, 'wait_for', side_effect=wait), \
+                patch.object(cosmic_startup_guest, 'session_environment',
+                             side_effect=lambda account: state['environment']):
+            result = cosmic_startup_guest.restart_login(account)
+        self.assertEqual(result, {'previous_manager': 'previous', 'current_manager': 'current'})
+        lifecycle = [call.args[0] for call in invoke.call_args_list if call.args[0][0] == 'systemctl']
+        self.assertEqual(lifecycle, [
+            ['systemctl', 'stop', 'display-manager'],
+            ['systemctl', 'stop', 'user@1000.service'],
+            ['systemctl', 'start', 'display-manager'],
+        ])
+
+    def test_login_without_an_identifiable_manager_does_not_stop_the_session(self):
+        with patch.object(cosmic_startup_guest, 'command', side_effect=['11\n', '']), \
+                patch.object(cosmic_startup_guest.subprocess, 'run') as invoke:
+            with self.assertRaisesRegex(RuntimeError, 'no identifiable user manager'):
+                cosmic_startup_guest.restart_login(SimpleNamespace(pw_uid=1000))
+        invoke.assert_not_called()
+
+    def test_failed_stage_preserves_startup_records_and_missing_entry_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            account = SimpleNamespace(pw_uid=1000, pw_name='example', pw_dir=temporary)
+            record = {'session_id': 'observed', 'status': {'tray_state': 'pending'}}
+            missing = subprocess.CompletedProcess([], 1, '', 'User bus is unavailable')
+            with patch.object(cosmic_startup_guest, 'startup_traces', return_value=iter([record])), \
+                    patch.object(cosmic_startup_guest.subprocess, 'run', return_value=missing):
+                evidence = cosmic_startup_guest.failure_evidence(account)
+            self.assertEqual(evidence['startup_records'], [record])
+            self.assertEqual(evidence['autostart']['error'], 'FileNotFoundError')
+            for field in ('manager', 'autostart_units', 'application_journal'):
+                self.assertEqual(evidence[field]['exit_code'], 1)
+                self.assertEqual(evidence[field]['stderr'], 'User bus is unavailable')
+
     @unittest.skipUnless(sys.platform.startswith('linux'), 'Requires a Linux terminal')
     def test_serial_probe_recovers_from_an_incomplete_command_in_a_real_terminal(self):
         import pty

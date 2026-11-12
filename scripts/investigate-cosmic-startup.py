@@ -224,10 +224,10 @@ def main():
     ]
     console = monitor = None
     environment = {**os.environ, 'DISPLAY': ':93', 'LIBGL_ALWAYS_SOFTWARE': '1',
-                   'SDL_VIDEODRIVER': 'x11'}
+                   'SDL_VIDEODRIVER': 'x11', 'SDL_VIDEO_WINDOW_POS': '0,0'}
     with (REPORT / 'qemu.log').open('w') as log, (REPORT / 'xvfb.log').open('w') as display_log:
         display = subprocess.Popen(
-            ['Xvfb', ':93', '-screen', '0', '1280x800x24', '+extension', 'GLX', '-nolisten', 'tcp'],
+            ['Xvfb', ':93', '-screen', '0', '1920x1200x24', '+extension', 'GLX', '-nolisten', 'tcp'],
             stdout=display_log, stderr=subprocess.STDOUT,
         )
         display_deadline = time.monotonic() + 20
