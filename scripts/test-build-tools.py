@@ -1,5 +1,6 @@
 """Offline tests for resource validation and clean package staging."""
 import ast
+import contextlib
 import hashlib
 import json
 import logging
@@ -43,6 +44,7 @@ import urllib.parse
 import zipfile
 import tarfile
 from contextlib import contextmanager, nullcontext
+from types import SimpleNamespace
 
 _spec = importlib.util.spec_from_file_location('publish_release', build.ROOT/'scripts/publish-release.py')
 release = importlib.util.module_from_spec(_spec)
@@ -71,6 +73,11 @@ _linux_tun_spec = importlib.util.spec_from_file_location(
     'linux_tun_test', build.ROOT/'scripts/test-linux-tun.py')
 linux_tun_test = importlib.util.module_from_spec(_linux_tun_spec)
 _linux_tun_spec.loader.exec_module(linux_tun_test)
+
+_cosmic_startup_guest_spec = importlib.util.spec_from_file_location(
+    'cosmic_startup_guest', build.ROOT/'scripts/cosmic_startup_guest.py')
+cosmic_startup_guest = importlib.util.module_from_spec(_cosmic_startup_guest_spec)
+_cosmic_startup_guest_spec.loader.exec_module(cosmic_startup_guest)
 
 
 class TunDnsFixtureTests(unittest.TestCase):
@@ -6972,6 +6979,113 @@ class AptCacheTests(unittest.TestCase):
                 with self.assertRaises(subprocess.CalledProcessError) as failure:
                     linux_apt.install(['pkg'])
                 self.assertEqual(failure.exception.returncode, 101)
+
+
+class CosmicStartupInvestigationTests(unittest.TestCase):
+    def test_package_manager_lock_wait_is_bounded_and_does_not_hide_dependency_errors(self):
+        lock = 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1254 (apt-get)\n'
+        clock = [0]
+        results = [
+            subprocess.CompletedProcess(['apt-get'], 100, lock),
+            subprocess.CompletedProcess(['apt-get'], 0, 'Fetched package lists\n'),
+        ]
+        with patch.object(cosmic_startup_guest.subprocess, 'run', side_effect=results) as invoke, \
+                patch.object(cosmic_startup_guest.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(cosmic_startup_guest.time, 'sleep',
+                             side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            cosmic_startup_guest.apt('update', timeout=30)
+        self.assertEqual(invoke.call_count, 2)
+        command = invoke.call_args.args[0]
+        self.assertEqual(command[:2], ['apt-get', '-o'])
+        self.assertEqual(command[-1], 'update')
+        self.assertEqual(invoke.call_args.kwargs['env']['LC_ALL'], 'C')
+        failure = subprocess.CompletedProcess(['apt-get'], 100, 'E: Unmet dependencies\n')
+        with patch.object(cosmic_startup_guest.subprocess, 'run', return_value=failure) as invoke, \
+                patch.object(cosmic_startup_guest.time, 'sleep') as pause, \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(subprocess.CalledProcessError):
+                cosmic_startup_guest.apt('install', 'missing')
+        self.assertEqual(invoke.call_count, 1)
+        pause.assert_not_called()
+        clock[0] = 0
+        with patch.object(cosmic_startup_guest.subprocess, 'run', return_value=results[0]) as invoke, \
+                patch.object(cosmic_startup_guest.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(cosmic_startup_guest.time, 'sleep',
+                             side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(TimeoutError):
+                cosmic_startup_guest.apt('update', timeout=10)
+        self.assertEqual(invoke.call_count, 2)
+        self.assertEqual(clock[0], 10)
+
+    def test_session_environment_uses_a_real_compositor_process(self):
+        account = SimpleNamespace(pw_uid=os.getuid(), pw_dir='/home/example', pw_name='example')
+        with tempfile.TemporaryDirectory() as temporary:
+            processes = Path(temporary)
+
+            def process(pid, command, environment):
+                directory = processes/str(pid)
+                directory.mkdir()
+                (directory/'comm').write_text(command+'\n')
+                (directory/'environ').write_text(
+                    '\0'.join(key+'='+value for key, value in environment.items()))
+
+            process(10, 'cosmic-session', {})
+            process(20, 'cosmic-panel', {
+                'DISPLAY': ':1', 'WAYLAND_DISPLAY': 'wayland-1', 'PASSWORD': 'not-exported',
+            })
+            with patch.object(Path, 'is_socket', return_value=True):
+                environment = cosmic_startup_guest.session_environment(account, processes)
+            self.assertEqual(environment['DISPLAY'], ':1')
+            self.assertEqual(environment['WAYLAND_DISPLAY'], 'wayland-1')
+            self.assertEqual(environment['XDG_RUNTIME_DIR'], f'/run/user/{account.pw_uid}')
+            self.assertNotIn('PASSWORD', environment)
+            with patch.object(Path, 'is_socket', return_value=False):
+                self.assertIsNone(cosmic_startup_guest.session_environment(account, processes))
+            account.pw_uid += 1
+            with patch.object(Path, 'is_socket', return_value=True):
+                self.assertIsNone(cosmic_startup_guest.session_environment(account, processes))
+            account.pw_uid -= 1
+            shutil.rmtree(processes/'10')
+            shutil.rmtree(processes/'20')
+            process(30, 'browser', {'DISPLAY': ':1', 'WAYLAND_DISPLAY': 'wayland-1'})
+            with patch.object(Path, 'is_socket', return_value=True):
+                self.assertIsNone(cosmic_startup_guest.session_environment(account, processes))
+
+    def test_startup_record_requires_a_new_live_session_and_reused_manual_process(self):
+        account = SimpleNamespace(pw_uid=os.getuid())
+
+        def record(session, *, background=True, visible=True, pid=None):
+            return {
+                'schema': 1, 'kind': 'desktop_startup', 'session_id': session,
+                'pid': os.getpid() if pid is None else pid,
+                'background_requested': background,
+                'status': {'window_visible': visible, 'tray_state': 'created'},
+            }
+
+        def trace(records, **arguments):
+            with patch.object(cosmic_startup_guest, 'startup_traces',
+                              return_value=iter(records)):
+                return cosmic_startup_guest.trace(account, **arguments)
+
+        old = record('old')
+        new = record('new', visible=False)
+        self.assertIs(trace([old, new], background=True, visible=False,
+                            excluded={'old'}), new)
+        self.assertIsNone(trace([old], background=True, visible=False, excluded={'old'}))
+        background = record('background', visible=False)
+        manual = record('background', visible=True)
+        self.assertIs(trace([manual], background=True, visible=True,
+                            session='background'), manual)
+        self.assertIsNone(trace([manual], background=True, visible=True, session='other'))
+        self.assertIsNone(trace([record('dead', pid=999999999)],
+                                background=True, visible=True))
+        missing = record('missing')
+        missing['status']['tray_state'] = 'failed'
+        self.assertIsNone(trace([missing], background=True, visible=True))
+        with self.assertRaises(RuntimeError):
+            trace([record('one'), record('two')], background=True, visible=True)
 
 
 if __name__ == '__main__':

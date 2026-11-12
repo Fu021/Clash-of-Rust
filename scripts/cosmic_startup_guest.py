@@ -57,19 +57,25 @@ def user():
     return None
 
 
-def session_environment(account):
-    for entry in Path('/proc').iterdir():
+def session_environment(account, processes=Path('/proc')):
+    for entry in processes.iterdir():
         if not entry.name.isdigit():
             continue
         try:
-            if entry.stat().st_uid != account.pw_uid or (entry / 'comm').read_text().strip() != 'cosmic-session':
+            if (entry.stat().st_uid != account.pw_uid
+                    or (entry / 'comm').read_text().strip() not in ('cosmic-session', 'cosmic-panel', 'cosmic-bg')):
                 continue
             values = dict(item.split('=', 1) for item in
                           (entry / 'environ').read_bytes().decode().split('\0') if '=' in item)
+            runtime = Path('/run/user', str(account.pw_uid))
+            if not values.get('DISPLAY') or not values.get('WAYLAND_DISPLAY'):
+                continue
+            if not (runtime / values['WAYLAND_DISPLAY']).is_socket():
+                continue
             return {
                 'HOME': account.pw_dir, 'USER': account.pw_name,
-                'XDG_RUNTIME_DIR': '/run/user/' + str(account.pw_uid),
-                'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(account.pw_uid) + '/bus',
+                'XDG_RUNTIME_DIR': str(runtime),
+                'DBUS_SESSION_BUS_ADDRESS': 'unix:path=' + str(runtime / 'bus'),
                 'XDG_CURRENT_DESKTOP': 'COSMIC', 'XDG_SESSION_TYPE': 'wayland',
                 **{key: values[key] for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY') if key in values},
             }
@@ -78,19 +84,43 @@ def session_environment(account):
     return None
 
 
-def trace(account, background, visible):
+def startup_traces(account):
     for path in (Path(account.pw_dir) / '.local/share').glob('*/desktop-startup.json'):
         try:
             value = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        status = value.get('status', {})
-        if (value.get('background_requested') is background
-                and status.get('tray_state') == 'created'
-                and status.get('window_visible') is visible
-                and Path('/proc', str(value.get('pid'))).is_dir()):
-            return value
-    return None
+        if value.get('schema') == 1 and value.get('kind') == 'desktop_startup':
+            yield value
+
+
+def matches_startup(value, background, visible, *, session=None, excluded=()):
+    session_id = value.get('session_id')
+    status = value.get('status', {})
+    return (
+        isinstance(session_id, str) and bool(session_id)
+        and session_id not in excluded
+        and (session is None or session_id == session)
+        and value.get('background_requested') is background
+        and status.get('tray_state') == 'created'
+        and status.get('window_visible') is visible
+    )
+
+
+def trace(account, background, visible, *, session=None, excluded=()):
+    matches = []
+    for value in startup_traces(account):
+        if not matches_startup(value, background, visible, session=session, excluded=excluded):
+            continue
+        try:
+            pid = int(value.get('pid'))
+            if Path('/proc', str(pid)).stat().st_uid == account.pw_uid:
+                matches.append(value)
+        except (OSError, TypeError, ValueError):
+            continue
+    if len(matches) > 1:
+        raise RuntimeError('More than one live startup record matches the login stage')
+    return matches[0] if matches else None
 
 
 def restart_login(account):
@@ -137,9 +167,14 @@ def main(stage):
         os.lchown(autostart, account.pw_uid, account.pw_gid)
         report['seeded_menu_link'] = True
     elif stage in ('first-login', 'background-login'):
+        previous = {value.get('session_id') for value in startup_traces(account)}
         restart_login(account)
         background = stage == 'background-login'
-        report['startup'] = wait_for(lambda: trace(account, background, not background))
+        report['startup'] = wait_for(
+            lambda: trace(account, background, not background, excluded=previous)
+        )
+        if report['startup'].get('session_id') in previous:
+            raise AssertionError('The login reused an earlier startup session')
         if autostart.is_symlink() or '--background' not in autostart.read_text():
             raise AssertionError('The menu link was not migrated to background autostart')
         if autostart.stat().st_mode & 0o777 != 0o600:
@@ -151,10 +186,20 @@ def main(stage):
         if not report['menu_unchanged']:
             raise AssertionError('Autostart migration changed the application menu')
     elif stage == 'manual-launch':
+        previous = json.loads(Path('/var/tmp/cor-startup-background-login.json').read_text())
+        startup = previous.get('startup', {})
+        session = startup.get('session_id')
+        pid = startup.get('pid')
+        if not isinstance(session, str) or not session or not isinstance(pid, int):
+            raise AssertionError('The background login did not record its live application')
         command('runuser', '-u', account.pw_name, '--', 'env',
                 *(key + '=' + value for key, value in environment.items()),
                 'gtk-launch', 'clash-of-rust')
-        report['startup'] = wait_for(lambda: trace(account, True, True))
+        report['startup'] = wait_for(
+            lambda: trace(account, True, True, session=session)
+        )
+        if report['startup'].get('pid') != pid:
+            raise AssertionError('Manual launch created a different application process')
     else:
         raise ValueError('Unknown probe stage')
     Path('/var/tmp/cor-startup-' + stage + '.json').write_text(json.dumps(report))
