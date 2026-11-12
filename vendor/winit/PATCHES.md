@@ -55,13 +55,16 @@ These tests do not prove compositor behavior. Changes in this override select
 the existing desktop UI regression group; no workflow or permanent test matrix
 is added.
 
-Before declaring the Ubuntu symptom fixed, verify the built application in
+The maintainer confirmed on 2026-11-13 that the reported Linux rapid-resize
+symptom is fixed in the current version, recorded in the 0.7.1 release notes.
+This does not establish a unique cause or cover every compositor and scale
+combination. Before extending that conclusion to other environments, verify the built application in
 GNOME X11, XWayland and native Wayland, with rapid edge/corner resizing, both
 growth and shrink, fractional scaling, maximization and window recreation.
 Capture actual presentation timing and frames; Xvfb screenshots alone are
 insufficient. Local resource limits permit parsing and static checks only.
 The desktop builds and eight synchronization state regressions passed in CI;
-actual compositor validation remains pending. Current evidence is recorded in
+the full compositor matrix remains unverified. Current evidence is recorded in
 [the review log](../../docs/agent-failures/reviews.md).
 
 Remove this override when a compatible Slint/winit release provides the same
