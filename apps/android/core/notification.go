@@ -62,10 +62,11 @@ selected:
 	}
 	up, down := statistic.DefaultManager.Now()
 	data, _ := json.Marshal(struct {
-		Mode string `json:"mode"`
-		Node string `json:"node"`
-		Up   int64  `json:"up"`
-		Down int64  `json:"down"`
-	}{mode, name, up, down})
+		Mode                       string `json:"mode"`
+		Node                       string `json:"node"`
+		Up                         int64  `json:"up"`
+		Down                       int64  `json:"down"`
+		ApplicationMissingRejected uint64 `json:"application_missing_rejected"`
+	}{mode, name, up, down, applicationMissingRejected.Load()})
 	return string(data)
 }

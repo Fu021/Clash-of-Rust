@@ -42,6 +42,8 @@ export component AndroidPreview inherits Window {
     in-out property <float> preview-update-progress <=> AndroidData.update-progress;
     in-out property <int> preview-applications-mode <=> AndroidData.applications-mode;
     in-out property <int> preview-applications-filter <=> AndroidData.applications-filter;
+    in-out property <bool> preview-policies-editing <=> AndroidData.policies-editing;
+    in-out property <bool> preview-policies-choosing <=> AndroidData.policies-choosing;
     in-out property <bool> preview-applications-limited <=> AndroidData.applications-visibility-limited;
     in-out property <bool> preview-applications-dirty <=> MobileView.draft-dirty;
     in-out property <length> preview-settings-scroll <=> MobileView.settings-scroll-y;
@@ -58,11 +60,22 @@ export component AndroidPreview inherits Window {
         AndroidData.policies-supported = true;
         AndroidData.policies-profile = "示例订阅";
         AndroidData.policies-status = "只作用于进入 VPN 的应用；未指定的应用跟随配置。";
-        AndroidData.policies-applications = ["浏览器 · org.example.browser", "地图 · org.example.maps"];
-        AndroidData.policies-targets = ["跟随配置", "直连", "拦截", "策略组 · 自动选择", "节点 · 日本 01"];
+        AndroidData.policies-applications = [
+            { name: "浏览器", package: "org.example.browser", selected: true, available: true },
+            { name: "视频", package: "org.example.video", selected: true, available: true },
+            { name: "音乐", package: "org.example.music", selected: true, available: true },
+            { name: "地图", package: "org.example.maps", selected: false, available: false, assignment: "属于 日常直连" },
+            { name: "天气", package: "org.example.weather", selected: false, available: false, assignment: "属于 日常直连" },
+            { name: "工作聊天", package: "org.example.chat", selected: false, available: false, assignment: "未进入 VPN" }
+        ];
+        AndroidData.policies-name = "视频与浏览";
+        AndroidData.policies-target = "策略组 · 自动选择";
+        AndroidData.policies-selected = 3;
+        AndroidData.policies-targets = ["直连", "拦截", "策略组 · 自动选择", "节点 · 日本 01"];
         AndroidData.policies = [
-            {package: "org.example.browser", name: "浏览器", target: "策略组 · 自动选择", status: "新连接生效"},
-            {package: "org.example.maps", name: "地图", target: "节点 · 已移除节点", status: "目标失效 · 跟随配置"}
+            {id: "media", name: "视频与浏览", target: "策略组 · 自动选择", status: "已应用 · 新连接生效", count: 3, applications: "浏览器、视频、音乐"},
+            {id: "maps", name: "日常直连", target: "直连", status: "已应用 · 新连接生效", count: 2, applications: "地图、天气"},
+            {id: "work", name: "工作应用", target: "节点 · 已移除节点", status: "目标失效 · 阻止连接", count: 1, applications: "工作聊天"}
         ];
         AndroidData.applications-total = 6;
         AndroidData.applications-selected = 2;

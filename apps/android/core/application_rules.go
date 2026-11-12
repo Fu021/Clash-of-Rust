@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,7 @@ type applicationRule struct {
 	Package       string `yaml:"package"`
 	Target        string `yaml:"target"`
 	RejectMissing bool   `yaml:"reject_missing"`
+	MissingTarget bool   `yaml:"missing_target"`
 }
 type applicationRules struct {
 	Schema int               `yaml:"schema"`
@@ -34,14 +36,16 @@ type resolvedApplicationRules struct {
 }
 
 var (
-	connectionOwner        atomic.Pointer[ownerHolder]
-	applicationRoutes      atomic.Pointer[resolvedApplicationRules]
-	ownerQueries           atomic.Uint64
-	ownerFailures          atomic.Uint64
-	applicationMatches     atomic.Uint64
-	applicationMissing     atomic.Uint64
-	applicationUDPRejected atomic.Uint64
-	lastOwnerWarning       atomic.Int64
+	connectionOwner            atomic.Pointer[ownerHolder]
+	applicationRoutes          atomic.Pointer[resolvedApplicationRules]
+	ownerQueries               atomic.Uint64
+	ownerFailures              atomic.Uint64
+	applicationMatches         atomic.Uint64
+	applicationMissing         atomic.Uint64
+	applicationMissingRejected atomic.Uint64
+	applicationUDPRejected     atomic.Uint64
+	lastOwnerWarning           atomic.Int64
+	lastMissingWarning         atomic.Int64
 )
 
 func SetConnectionOwner(value ConnectionOwner) {
@@ -79,7 +83,8 @@ func parseApplicationRules(raw string) (*resolvedApplicationRules, error) {
 			continue
 		}
 		if previous, exists := resolved.owners[uint32(uid)]; exists &&
-			(previous.Target != rule.Target || previous.RejectMissing != rule.RejectMissing) {
+			(previous.Target != rule.Target || previous.RejectMissing != rule.RejectMissing ||
+				previous.MissingTarget != rule.MissingTarget) {
 			return nil, errors.New("applications sharing a UID must use the same outbound")
 		}
 		resolved.owners[uint32(uid)] = rule
@@ -89,18 +94,22 @@ func parseApplicationRules(raw string) (*resolvedApplicationRules, error) {
 
 func ApplicationRoutingDiagnostics() string {
 	value, _ := json.Marshal(map[string]any{
-		"supported":       connectionOwner.Load() != nil,
-		"owner_queries":   ownerQueries.Load(),
-		"owner_failures":  ownerFailures.Load(),
-		"matches":         applicationMatches.Load(),
-		"missing_targets": applicationMissing.Load(),
-		"udp_rejected":    applicationUDPRejected.Load(),
+		"supported":        connectionOwner.Load() != nil,
+		"owner_queries":    ownerQueries.Load(),
+		"owner_failures":   ownerFailures.Load(),
+		"matches":          applicationMatches.Load(),
+		"missing_targets":  applicationMissing.Load(),
+		"missing_rejected": applicationMissingRejected.Load(),
+		"udp_rejected":     applicationUDPRejected.Load(),
 	})
 	return string(value)
 }
 
 func applicationTarget(rule applicationRule, available, pass, udp, supportsUDP bool) string {
-	if rule.Target == "" || !available || pass {
+	if !rule.MissingTarget && (rule.Target == "DIRECT" || rule.Target == "REJECT") {
+		return rule.Target
+	}
+	if rule.MissingTarget || rule.Target == "" || !available || pass {
 		if rule.RejectMissing {
 			return "REJECT"
 		}
@@ -157,8 +166,13 @@ func applicationPackage(metadata *C.Metadata) (string, error) {
 		return "", errors.New("APP_OWNER_IDENTITY_CHANGED")
 	}
 	proxy, available := rules.proxies[rule.Target]
+	if available && applicationEmptyTarget(proxy) {
+		available = false
+	}
 	pass, supportsUDP := false, false
-	if available {
+	if !rule.MissingTarget && (rule.Target == "DIRECT" || rule.Target == "REJECT") {
+		available, supportsUDP = true, true
+	} else if available {
 		supportsUDP = proxy.SupportUDP()
 		visited := 0
 		for adapter := C.ProxyAdapter(proxy); adapter != nil; adapter = adapter.Unwrap(metadata, false) {
@@ -174,8 +188,16 @@ func applicationPackage(metadata *C.Metadata) (string, error) {
 		}
 	}
 	target := applicationTarget(rule, available, pass, metadata.NetWork == C.UDP, supportsUDP)
-	if !available || pass || rule.Target == "" {
+	if rule.MissingTarget || !available || pass || rule.Target == "" {
 		applicationMissing.Add(1)
+		if rule.RejectMissing {
+			applicationMissingRejected.Add(1)
+			now := time.Now().Unix()
+			previous := lastMissingWarning.Load()
+			if now-previous >= 60 && lastMissingWarning.CompareAndSwap(previous, now) {
+				log.Warnln("[ApplicationRouting] APP_TARGET_MISSING_REJECTED; application connection blocked")
+			}
+		}
 	}
 	if metadata.NetWork == C.UDP && available && !pass && !supportsUDP {
 		applicationUDPRejected.Add(1)
@@ -188,4 +210,19 @@ func applicationPackage(metadata *C.Metadata) (string, error) {
 		return rule.Package, nil
 	}
 	return "", nil
+}
+
+func applicationEmptyTarget(proxy C.Proxy) bool {
+	if !strings.HasPrefix(proxy.Name(), "cor-application-") {
+		return false
+	}
+	group, ok := proxy.Adapter().(interface {
+		Proxies() []C.Proxy
+		EmptyFallback() C.Proxy
+	})
+	if !ok {
+		return false
+	}
+	proxies := group.Proxies()
+	return len(proxies) == 1 && proxies[0] == group.EmptyFallback()
 }

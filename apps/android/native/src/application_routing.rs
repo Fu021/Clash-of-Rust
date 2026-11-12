@@ -123,6 +123,12 @@ pub(super) fn handles(intent: AndroidIntent) -> bool {
     )
 }
 
+pub(super) fn report_error(host: &dyn NativeHost, message: &str) {
+    if let Err(error) = host.request(json!({"op":"report-error","message":message})) {
+        log::warn!("Application routing error notification unavailable: {error:#}");
+    }
+}
+
 pub(super) fn request(
     editor: &Arc<Mutex<Editor>>,
     host: Arc<dyn NativeHost>,
@@ -177,6 +183,9 @@ pub(super) fn request(
                 let result = host
                     .request(json!({"op":"applications-list"}))
                     .and_then(|value| Ok(serde_json::from_value::<Catalog>(value)?));
+                if let Err(error) = &result {
+                    report_error(host.as_ref(), &format!("读取应用列表失败：{error:#}"));
+                }
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(ui) = weak.upgrade() else {
                         return;
@@ -234,6 +243,13 @@ pub(super) fn request(
             .name("application-routing-save".into())
             .spawn(move || {
                 let result = host.request(input);
+                if let Err(error) = &result {
+                    report_error(host.as_ref(), &format!("保存应用分流失败：{error:#}"));
+                } else if let Ok(value) = &result
+                    && let Some(error) = value["reconnect_error"].as_str().filter(|value| !value.is_empty())
+                {
+                    report_error(host.as_ref(), &format!("应用分流已保存，但 VPN 重连失败：{error}"));
+                }
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(ui) = weak.upgrade() else {
                         return;

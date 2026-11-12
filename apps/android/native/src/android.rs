@@ -248,6 +248,7 @@ struct State {
     notice_network_recovery: bool,
     notice_followup: bool,
     issue_events: VecDeque<Value>,
+    system_incident_seen: u64,
     copied: (i32, Arc<str>),
     logs: VecDeque<(String, String)>,
     log_level: String,
@@ -439,6 +440,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                 {
                     ui.global::<AndroidData>()
                         .set_applications_error(format!("{error:#}").into());
+                    application_routing::report_error(host.as_ref(), &format!("{error:#}"));
                 }
                 return;
             }
@@ -553,6 +555,7 @@ async fn run_loop(
         notice_network_recovery: false,
         notice_followup: false,
         issue_events: VecDeque::new(),
+        system_incident_seen: 0,
         copied: Default::default(),
         logs: VecDeque::new(),
         log_level: "全部等级".into(),
@@ -1397,6 +1400,21 @@ async fn run_loop(
             state.rule_rows = None;
             state.rule_warnings.clear();
         }
+        let incident = &state.session.platform["incident_notifications"];
+        let sequence = incident["sequence"].as_u64().unwrap_or(0);
+        let mut system_notice = false;
+        if sequence > state.system_incident_seen && state.notice.is_empty() {
+            state.system_incident_seen = sequence;
+            state.notice = incident["message"].as_str().unwrap_or("").into();
+            state.notice_error = true;
+            state.notice_critical = incident["critical"].as_bool().unwrap_or(false);
+            system_notice = true;
+            if let Err(error) = state.session.native.request(json!({
+                "op":"acknowledge-incident","sequence":sequence
+            })) {
+                log::warn!("Incident acknowledgement unavailable: {error:#}");
+            }
+        }
         let view = project(&state);
         state.completed = None;
         state.rule_form = None;
@@ -1407,6 +1425,13 @@ async fn run_loop(
         let notice_network_recovery = std::mem::take(&mut state.notice_network_recovery);
         let notice_followup = std::mem::take(&mut state.notice_followup);
         if notice_error && !notice.is_empty() {
+            if !system_notice
+                && let Err(error) = state.session.native.request(json!({
+                    "op":"notify-incident","critical":notice_critical
+                }))
+            {
+                log::warn!("Incident notification unavailable: {error:#}");
+            }
             state
                 .issue_events
                 .push_back(core::support::incident(&notice));
@@ -2357,7 +2382,10 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::OpenRelease
     ) || (intent == MobileIntent::ClaudeProtection && value == "false")
         || (intent == MobileIntent::ApplicationPolicy
-            && matches!(value, "open" | "refresh" | "query" | "edit" | "close"))
+            && matches!(
+                value,
+                "open" | "refresh" | "query" | "filter" | "system" | "edit" | "cancel" | "close"
+            ))
 }
 
 fn rows<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
@@ -2973,7 +3001,22 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             p.application_policies
                 .applications
                 .into_iter()
-                .map(Into::into)
+                .map(|application| {
+                    let icon = if application.icon.is_empty() {
+                        None
+                    } else {
+                        slint::Image::load_from_path(std::path::Path::new(&application.icon)).ok()
+                    };
+                    ApplicationPolicyApp {
+                        name: application.name.into(),
+                        package: application.package.into(),
+                        selected: application.selected,
+                        available: application.available,
+                        assignment: application.assignment.into(),
+                        has_icon: icon.is_some(),
+                        icon: icon.unwrap_or_default(),
+                    }
+                })
                 .collect(),
         ),
     ));
@@ -2993,25 +3036,34 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             p.application_policies
                 .rules
                 .into_iter()
-                .map(|(package, name, target, status)| ApplicationPolicyItem {
-                    package: package.into(),
-                    name: name.into(),
-                    target: target.into(),
-                    status: status.into(),
-                })
+                .map(
+                    |(id, name, target, status, count, applications)| ApplicationPolicyItem {
+                        id: id.into(),
+                        name: name.into(),
+                        target: target.into(),
+                        status: status.into(),
+                        count,
+                        applications: applications.into(),
+                    },
+                )
                 .collect(),
         ),
     ));
     if policies.get_policies_revision() != p.application_policies.revision {
         policies.set_policies_revision(p.application_policies.revision);
-        policies.set_policies_application(p.application_policies.form.0.into());
+        policies.set_policies_name(p.application_policies.form.0.into());
         policies.set_policies_target(p.application_policies.form.1.into());
         policies.set_policies_reject_missing(p.application_policies.form.2);
-        policies.set_policies_query("".into());
+        policies.set_policies_editing(p.application_policies.editing);
+        policies.set_policies_choosing(false);
+        policies.set_policies_query(p.application_policies.query.into());
         if view.get_detail() == 19 {
             view.set_draft_dirty(false);
         }
     }
+    policies.set_policies_filter(p.application_policies.filter);
+    policies.set_policies_system(p.application_policies.show_system);
+    policies.set_policies_selected(p.application_policies.selected);
     let overview_row = |entry: core::overview::Item| OverviewItem {
         id: entry.id.into(),
         title: entry.title.into(),
@@ -3646,7 +3698,12 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
     let policies = json!({
         "application_policies_loaded":!android.get_policies_profile().is_empty(),
         "application_policies_supported":android.get_policies_supported(),
-        "application_policies_count":android.get_policies().row_count()
+        "application_policies_count":android.get_policies().row_count(),
+        "application_policies_editing":android.get_policies_editing(),
+        "application_policies_choosing":android.get_policies_choosing(),
+        "application_policies_selected":android.get_policies_selected(),
+        "application_policies_target_selected":!android.get_policies_target().is_empty(),
+        "application_policies_reject_missing":android.get_policies_reject_missing()
     });
     for section in [targets, applications, policies] {
         if let Value::Object(fields) = section {

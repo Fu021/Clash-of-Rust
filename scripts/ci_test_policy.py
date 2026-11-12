@@ -58,11 +58,13 @@ def select(paths, extended=False):
                          'apps/android/native/src/application_routing',
                          'crates/client-ui/ui/mobile/android/applications.slint',
                          'apps/android/app/src/main/java/org/clashofrust/android/TunnelService.java',
+                         'apps/android/app/src/main/java/org/clashofrust/android/IncidentNotifications.java',
                          'apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java'))
         or path.startswith(('crates/client-core/src/config/',
                              'crates/client-core/src/protection/',
                              'crates/mobile-ffi/src/',
                              'crates/client-core/src/application_rules.rs',
+                             'crates/client-core/src/application_rules/',
                              'crates/client-ui/ui/mobile/android/application-policies.slint'))
         or path in ('scripts/android.py', 'scripts/ci_test_policy.py')
         for path in paths
@@ -84,6 +86,7 @@ def select(paths, extended=False):
                                       'apps/android/native/',
                                       'apps/android/app/src/main/java/org/clashofrust/android/NetworkOverview.java',
                                       'apps/android/app/src/main/java/org/clashofrust/android/MainActivity.java',
+                                      'apps/android/app/src/main/java/org/clashofrust/android/IncidentNotifications.java',
                                       'apps/android/app/src/androidTest/'))
                       or path in ('scripts/android.py', 'scripts/ci_test_policy.py')
                       for path in paths)
@@ -93,6 +96,7 @@ def select(paths, extended=False):
                          'crates/client-core/src/protection/', 'crates/client-runtime/src/control/',
                          'crates/mobile-ffi/src/', 'apps/android/native/src/',
                          'crates/client-core/src/application_rules.rs',
+                         'crates/client-core/src/application_rules/',
                          'apps/android/core/application_rules'))
         for path in paths
     )

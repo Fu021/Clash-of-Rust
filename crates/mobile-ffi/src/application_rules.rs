@@ -95,6 +95,7 @@ mod tests {
                 ..Default::default()
             },
             reject_missing: true,
+            group: None,
         };
         session
             .save_application_rules(&profile, vec![rule.clone()])
@@ -147,6 +148,68 @@ mod tests {
         assert_eq!(
             std::fs::read(root.path().join("settings.json")).unwrap(),
             before
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_application_rules_survive_reopen_and_group_editing() {
+        use core::application_rules::groups;
+        let root = tempfile::tempdir().unwrap();
+        let native: Arc<dyn NativeHost> = Arc::new(Host(true));
+        let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+        session
+            .save_profile(
+                None,
+                "Legacy",
+                "",
+                Some("proxies: []\nrules: ['MATCH,DIRECT']\n"),
+            )
+            .await
+            .unwrap();
+        let profile = session.profiles.last().unwrap().id.clone();
+        session.activate(&profile).unwrap();
+        let source = std::fs::read(session.store.profile_path(&profile).unwrap()).unwrap();
+        let legacy: Vec<Rule> = serde_json::from_str(
+            r#"[{"package":"org.example.first","target":{"kind":"direct"}},
+                {"package":"org.example.second","target":{"kind":"reject"},"reject_missing":true}]"#,
+        )
+        .unwrap();
+        session
+            .save_application_rules(&profile, legacy.clone())
+            .unwrap();
+        drop(session);
+
+        let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+        assert_eq!(
+            session.settings.application_rules[&profile].as_ref(),
+            &legacy
+        );
+        let before = groups::list(&legacy);
+        assert_eq!(before.len(), 2);
+        assert!(!before[0].reject_missing);
+        assert!(before[1].reject_missing);
+        let mut edited = before[0].clone();
+        edited.packages.insert("org.example.third".into());
+        let changed = groups::replace(&legacy, &edited).unwrap();
+        session
+            .save_application_rules(&profile, changed.clone())
+            .unwrap();
+        drop(session);
+
+        let session = Session::open(root.path().into(), native).unwrap();
+        assert_eq!(
+            session.settings.application_rules[&profile].as_ref(),
+            &changed
+        );
+        assert_eq!(
+            groups::list(&changed)
+                .iter()
+                .find(|group| group.label.id == before[1].label.id),
+            Some(&before[1])
+        );
+        assert_eq!(
+            std::fs::read(session.store.profile_path(&profile).unwrap()).unwrap(),
+            source
         );
     }
 }

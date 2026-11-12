@@ -1160,11 +1160,14 @@ class BuildTests(unittest.TestCase):
                          'crates/client-runtime/src/control/mod.rs',
                          'crates/mobile-ffi/src/lib.rs',
                          'apps/android/native/src/android.rs',
+                         'crates/client-core/src/application_rules/groups.rs',
                          'apps/android/core/application_rules.go'):
                 self.assertTrue(ci_test_policy.select([path])['desktop_ui_tests'], path)
             for path in ('crates/client-core/src/config/mod.rs',
                          'crates/client-core/src/protection/mod.rs',
-                         'crates/mobile-ffi/src/lib.rs'):
+                         'crates/mobile-ffi/src/lib.rs',
+                         'crates/client-core/src/application_rules/groups.rs',
+                         'apps/android/app/src/main/java/org/clashofrust/android/IncidentNotifications.java'):
                 self.assertTrue(ci_test_policy.select([path])['android_routing_tests'], path)
             for path in ('crates/client-runtime/src/update/install/terminal.rs',
                          'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py'):
@@ -1179,7 +1182,8 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(ci_test_policy.android_cases(), (basic, diagnostic))
             for path in ('crates/client-core/src/controller/measurement.rs',
                          'apps/android/app/src/main/java/org/clashofrust/android/NetworkOverview.java',
-                         'apps/android/native/src/android.rs'):
+                         'apps/android/native/src/android.rs',
+                         'apps/android/app/src/main/java/org/clashofrust/android/IncidentNotifications.java'):
                 self.assertTrue(ci_test_policy.select([path])['android_diagnostics_tests'])
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}):
             self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile, diagnostic))

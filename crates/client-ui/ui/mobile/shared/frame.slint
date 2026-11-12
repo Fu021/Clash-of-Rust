@@ -38,6 +38,11 @@ component HeaderStatus inherits VerticalLayout {
 }
 
 export component MobileFrame inherits Rectangle {
+    callback go-back();
+    go-back => {
+        if root.detail-page || root.standalone-detail { MobileView.back(); }
+        else { MobileView.navigate(10); }
+    }
     forward-focus: keys;
     out property <[length]> notice-close-target: notice-panel.close-target;
     MotionScope { }
@@ -126,7 +131,7 @@ export component MobileFrame inherits Rectangle {
                 MobileView.rule-drag-id = ""; MobileView.rule-drag-target = ""; return accept;
             }
             if event.text == Key.Escape && !MobileView.modal {
-                if root.detail-page || root.standalone-detail { MobileView.back(); }
+                if root.detail-page || root.standalone-detail { root.go-back(); }
                 else if MobileView.page >= 3 && MobileView.page <= 8 { MobileView.navigate(10); }
                 return accept;
             }
@@ -188,7 +193,7 @@ export component MobileFrame inherits Rectangle {
               y: 8px; width: parent.width; height: self.preferred-height; spacing: MobileTypography.small-gap;
               HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
                 if root.has-back: MBackButton {
-                    clicked => { if root.detail-page || root.standalone-detail { MobileView.back(); } else { MobileView.navigate(10); } }
+                    clicked => { root.go-back(); }
                 }
                 MHeading { text: root.standalone-detail ? root.standalone-title : root.detail-page && !root.pane ? root.detail-title : root.titles[MobileView.page];
                     font-size: root.short ? MobileTypography.font-size(21) : root.usable-width < 360px ? MobileTypography.font-size(20) : MobileTypography.font-size(round(root.title-size / 1px));

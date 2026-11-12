@@ -270,6 +270,7 @@ mod tests {
                 package: "org.example.browser".into(),
                 target: clash_client_core::application_rules::Target::default(),
                 reject_missing: false,
+                group: None,
             }]),
         );
         assert!(

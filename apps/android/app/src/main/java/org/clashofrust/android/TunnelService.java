@@ -20,6 +20,7 @@ public final class TunnelService extends VpnService {
     private static volatile boolean connected;
     private static volatile String lastError = "";
     private static volatile long generation;
+    private static long lastApplicationMissingRejected;
     // One process-wide queue also orders cleanup against a newly created service.
     private static final ScheduledExecutorService serial = Executors.newSingleThreadScheduledExecutor();
     private ScheduledFuture<?> notificationTask;
@@ -187,6 +188,7 @@ public final class TunnelService extends VpnService {
                     getSystemService(NotificationManager.class).notify(1, notification("VPN 重建失败，原连接已保留"));
                 } catch (RuntimeException status) { android.util.Log.w("ClashOfRust", "Update preserved VPN status", status); }
                 MainActivity.emit(protectionRestored ? "error" : "critical", "VPN 重建失败，原连接已保留：" + lastError);
+                IncidentNotifications.publish(this, protectionRestored ? "recovery" : "critical", true);
                 return;
             }
             if (previous != null) {
@@ -194,6 +196,7 @@ public final class TunnelService extends VpnService {
                 if (descriptor == previous) descriptor = null;
             }
             MainActivity.emit("critical", "VPN 启动失败：" + lastError);
+            IncidentNotifications.publish(this, "critical", true);
             disconnect(request);
         }
     }
@@ -231,6 +234,8 @@ public final class TunnelService extends VpnService {
     }
     @Override public void onRevoke() {
         lastError = "VPN 授权已被系统撤回";
+        MainActivity.emit("error", lastError);
+        IncidentNotifications.publish(this, "recovery", true);
         stop(this);
     }
     @Override public void onDestroy() {
@@ -275,14 +280,18 @@ public final class TunnelService extends VpnService {
     }
     private void updateStatus() {
         if (instance != this || !connected || stopping) return;
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
         try {
             String raw = Mobile.notificationStatus();
             if (!raw.isEmpty()) networkStatus = new JSONObject(raw);
+            long rejected = networkStatus.optLong("application_missing_rejected");
+            if (rejected > lastApplicationMissingRejected) {
+                lastApplicationMissingRejected = rejected;
+                IncidentNotifications.publish(this, "application-target-missing", true);
+            }
         } catch (Exception error) {
             android.util.Log.w("ClashOfRust", "VPN notification counters unavailable", error);
         }
+        if (!SystemNotifications.permitted(this)) return;
         try {
             String text = statusText(speed(networkStatus.optLong("down")), speed(networkStatus.optLong("up")),
                 networkStatus.optString("node"), networkStatus.optString("mode"),

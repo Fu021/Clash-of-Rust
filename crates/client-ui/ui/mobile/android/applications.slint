@@ -3,11 +3,16 @@ import { Theme } from "../../theme/palette.slint";
 import { MobileTypography } from "../shared/typography.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidData, AndroidActions, AndroidIntent, ApplicationItem } from "state.slint";
+import { GeometryTarget } from "../../components/geometry.slint";
 import { MText, MSmall, MParagraph, MCard, MButton, MField, MSwitch, MScroll } from "../shared/controls.slint";
 
-component ApplicationRow inherits Rectangle {
+export component ApplicationRow inherits Rectangle {
     in property <ApplicationItem> item;
     in property <bool> editable;
+    in property <string> subtitle: root.item.package;
+    in property <string> geometry-key;
+    callback toggled(string);
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     height: max(64px, row.preferred-height + 16px);
     background: root.item.selected ? Theme.accent-wash : Theme.surface;
     border-radius: 10px;
@@ -15,7 +20,7 @@ component ApplicationRow inherits Rectangle {
     accessible-label: root.item.name + " · " + root.item.package;
     accessible-checked: root.item.selected;
     accessible-enabled: root.editable;
-    accessible-action-default => { if root.editable { AndroidActions.request(AndroidIntent.application-toggle, root.item.package); } }
+    accessible-action-default => { if root.editable { root.toggled(root.item.package); } }
     row := HorizontalLayout { x: 12px; y: 8px; width: parent.width - 24px; height: self.preferred-height;
         spacing: 12px; cross-axis-alignment: center;
         Rectangle { width: 36px; height: 36px; border-radius: 10px; background: Theme.inset; horizontal-stretch: 0;
@@ -24,14 +29,14 @@ component ApplicationRow inherits Rectangle {
         }
         VerticalLayout { spacing: 4px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
             MText { text: root.item.name; font-size: MobileTypography.font-size(14); }
-            MSmall { text: root.item.package; font-size: MobileTypography.font-size(11); }
+            MSmall { text: root.subtitle; font-size: MobileTypography.font-size(11); }
         }
         MSmall { text: root.item.selected ? "已选" : "未选";
             color: root.item.selected ? Theme.accent : Theme.secondary;
             width: max(32px, MobileTypography.font-size(12) * 2); horizontal-stretch: 0; horizontal-alignment: center;
         }
     }
-    TouchArea { enabled: root.editable; clicked => { AndroidActions.request(AndroidIntent.application-toggle, root.item.package); } }
+    TouchArea { enabled: root.editable; clicked => { root.toggled(root.item.package); } }
 }
 
 component ApplicationSaveCard inherits MCard {
@@ -164,7 +169,9 @@ export component AndroidApplications inherits PageSurface {
                     text: AndroidData.applications-total == 0 ? "未读取到应用，请刷新重试" : AndroidData.applications-filter == 1 ? "没有匹配的已选应用，可切回全部查看。" : "没有匹配的应用，可调整搜索或筛选。";
                     color: Theme.secondary;
                 }
-                for application in AndroidData.applications: ApplicationRow { item: application; editable: root.selectable; }
+                for application in AndroidData.applications: ApplicationRow { item: application; editable: root.selectable;
+                    toggled(package) => { AndroidActions.request(AndroidIntent.application-toggle, package); }
+                }
                 }
                 if AndroidData.applications-error != "": MParagraph { text: AndroidData.applications-error; color: Theme.danger; }
                 if AndroidData.applications-error != "": HorizontalLayout { spacing: 6px;

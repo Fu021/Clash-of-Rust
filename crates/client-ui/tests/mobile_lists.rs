@@ -29,7 +29,7 @@ slint::slint! {
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
     import { AndroidApplicationPolicies } from "../ui/mobile/android/application-policies.slint";
     import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
-    export { ApplicationItem } from "../ui/mobile/android/state.slint";
+    export { ApplicationItem, ApplicationPolicyApp } from "../ui/mobile/android/state.slint";
     export { AndroidData, AndroidActions, AndroidIntent } from "../ui/mobile/android/state.slint";
     import { IosSurface } from "../ui/mobile/ios/app.slint";
     import { PageViews } from "../ui/components/view-toggle.slint";
@@ -169,14 +169,17 @@ slint::slint! {
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> protection-pending <=> MobileData.protection-pending;
         in-out property <bool> dirty <=> MobileView.draft-dirty;
+        in-out property <bool> choosing <=> AndroidData.policies-choosing;
         in-out property <float> text-scale <=> Theme.text-scale;
         in-out property <length> offset <=> AndroidData.policies-scroll-y;
         in-out property <bool> opened: true;
         init => {
             AndroidData.policies-profile = "A very long subscription name";
-            AndroidData.policies-applications = ["Browser · org.example.browser"];
-            AndroidData.policies-application = "Browser · org.example.browser";
-            AndroidData.policies-targets = ["跟随配置", "直连", "拦截"];
+            AndroidData.policies-applications = [{ name: "Browser", package: "org.example.browser", selected: true, available: true }];
+            AndroidData.policies-name = "浏览器规则";
+            AndroidData.policies-editing = true;
+            AndroidData.policies-selected = 1;
+            AndroidData.policies-targets = ["直连", "拦截"];
             AndroidData.policies-target = "直连";
             AndroidData.policies-status = "只作用于进入 VPN 的应用；未指定的应用跟随配置。";
         }
@@ -1128,7 +1131,7 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
                     (
                         MobileIntent::ApplicationPolicy,
                         "save".into(),
-                        "Browser · org.example.browser\n直连\nfalse".into(),
+                        "浏览器规则\n直连\ntrue".into(),
                     )
                 );
             }
@@ -1142,6 +1145,120 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
     probe.set_opened(true);
     frame(&adapter, 800, 1280);
     assert!(!targets.borrow().contains_key("application-policy-save"));
+    probe.hide().unwrap();
+}
+
+#[test]
+fn application_policy_picker_keeps_the_form_and_rejects_locked_selection() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = ApplicationPoliciesProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let recorded = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, action, value| {
+            recorded
+                .borrow_mut()
+                .push((intent, action.to_string(), value.to_string()));
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.set_supported(true);
+    probe.show().unwrap();
+    probe.set_choosing(true);
+    let applications = Rc::new(slint::VecModel::from(vec![
+        ApplicationPolicyApp {
+            name: "Browser".into(),
+            package: "org.example.browser".into(),
+            selected: true,
+            available: true,
+            ..Default::default()
+        },
+        ApplicationPolicyApp {
+            name: "Other".into(),
+            package: "org.example.other".into(),
+            available: false,
+            assignment: "属于其他规则".into(),
+            ..Default::default()
+        },
+    ]));
+    probe
+        .global::<AndroidData>()
+        .set_policies_applications(applications.into());
+    for (width, height, scale) in [
+        (393, 852, 1.),
+        (320, 568, 1.5),
+        (852, 393, 1.),
+        (800, 1280, 1.),
+    ] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        for (protected, pending, package, expected) in [
+            (false, false, "org.example.browser", 1),
+            (true, false, "org.example.browser", 0),
+            (false, true, "org.example.browser", 0),
+            (false, false, "org.example.other", 0),
+        ] {
+            probe.set_protected(protected);
+            probe.set_protection_pending(pending);
+            probe.set_offset(0.);
+            advance(&clock, Duration::from_millis(300));
+            frame(&adapter, width as usize, height as usize);
+            let geometry = probe.global::<UiGeometry>();
+            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+            advance(&clock, Duration::ZERO);
+            frame(&adapter, width as usize, height as usize);
+            let key = format!("application-policy-app:{package}");
+            let bounds = targets.borrow()[&key].clone();
+            probe.set_offset(-(bounds[1] + bounds[3] - height as f32 + 16.).max(0.));
+            advance(&clock, Duration::from_millis(300));
+            frame(&adapter, width as usize, height as usize);
+            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+            advance(&clock, Duration::ZERO);
+            frame(&adapter, width as usize, height as usize);
+            let bounds = targets.borrow()[&key].clone();
+            let position =
+                LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+            assert!(position.y >= 0. && position.y < height as f32);
+            requests.borrow_mut().clear();
+            probe.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            probe.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            advance(&clock, Duration::from_millis(50));
+            assert_eq!(requests.borrow().len(), expected);
+            if expected == 1 {
+                assert_eq!(
+                    requests.borrow()[0],
+                    (
+                        MobileIntent::ApplicationPolicy,
+                        "toggle".into(),
+                        package.into()
+                    )
+                );
+            }
+        }
+        assert_eq!(
+            probe.global::<AndroidData>().get_policies_name(),
+            "浏览器规则"
+        );
+        assert_eq!(probe.global::<AndroidData>().get_policies_target(), "直连");
+        assert!(probe.global::<AndroidData>().get_policies_reject_missing());
+    }
     probe.hide().unwrap();
 }
 

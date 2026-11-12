@@ -15,7 +15,7 @@
 
 路线依次为内核代理、不同的系统代理、独立内核 DIRECT、系统网络，相同代理去重。桌面备用代理分别读取 Windows 当前用户 Internet Settings、macOS SystemConfiguration、Linux GNOME/KDE；不把环境代理隐式叠加进已经选择的路线。受管 mixed 入口都是本机 HTTP 代理，HTTPS 经 CONNECT；DIRECT 入口使用 `socks5h` 传递原域名，由内核解析并直连。没有应用层代理不代表绕过系统 TUN。
 
-Geo 原先没有读取桌面备用系统代理，元数据及每个文件也各自创建客户端；本地修改已补齐备用路线并复用同批连接池。缓冲写盘减少小网络块触发的磁盘任务。以上是可落实的调用链改进，尚待同提交 Actions 验证，不能据此宣称已解决 Windows 慢速。
+Geo 原先没有读取桌面备用系统代理，元数据及每个文件也各自创建客户端；现已补齐备用路线并复用同批连接池。缓冲写盘减少小网络块触发的磁盘任务。相关源码回归和桌面基础代理/TUN 已通过，证据见[最近复盘](agent-failures/reviews.md)；没有真实跨平台同时间下载对照，不能据此宣称已解决 Windows 慢速。
 
 Android VPN 由系统建立接口和应用范围，内核新 socket 通过 `protect(fd)` 绕过自身 VPN。普通 Rust 请求与内核出站不是同一个 socket；仅应用分流、系统 DNS 和 VPN 状态也可能改变前者的系统网络路线。保护器失败计数保留在[诊断](diagnostics.md#android-现场)，不以 VPN 图标或内核运行为成功依据。
 

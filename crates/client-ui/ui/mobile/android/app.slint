@@ -8,6 +8,14 @@ import { AndroidApplicationPolicies } from "application-policies.slint";
 
 // Android owns this composition and may replace/add pages without iOS changes.
 export component AndroidSurface inherits MobileFrame {
+    go-back => {
+        if MobileView.detail == 19 && AndroidData.policies-choosing {
+            AndroidData.policies-choosing = false; AndroidData.policies-scroll-y = 0px;
+        } else if MobileView.detail == 19 && AndroidData.policies-editing && !MobileView.draft-dirty {
+            MobileActions.request(MobileIntent.application-policy, "cancel", "");
+        } else if (MobileView.detail > 0 && !MobileView.modal) || root.standalone-detail { MobileView.back(); }
+        else { MobileView.navigate(10); }
+    }
     primary-pages: [0, 1, 2, 10, 9];
     sidebar-pages: [0, 1, 2, 3, 4, 5, 6, 7, 8];
     sidebar-footer-pages: [9];

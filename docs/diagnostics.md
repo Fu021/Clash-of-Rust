@@ -68,14 +68,17 @@ Linux 的桌面导出及 `cor diagnose`／`--offline` 另保存：
 
 `socket_protection.required` 表示当前是否已安装保护器并要求新 socket 绕过 VPN，另有本进程累计调用/失败计数；计数来自实际 `protect(fd)` 回调和底层 socket 控制错误，不包含 FD、节点或目标地址。失败数为 0 不证明历史所有流量正常；未启用 VPN 时保护器未安装是正常状态。VPN 连接、待授权/启动、代次和最近错误分别记录，避免把内核运行当成系统 VPN 已连接。
 
-`application_routing` 保存按应用出站识别的累计计数，不包含应用清单、节点名或目标地址。`supported` 表示 Android 10+ 的宿主接口可用；`owner_queries`/`owner_failures` 为连接归属查询和失败，`matches` 为应用规则选择，`missing_targets` 为目标缺失或 PASS，`udp_rejected` 为指定目标不支持 UDP 的拦截次数。模式和保护导致规则暂停时不增加命中，累计计数非本轮结果，也不能替代逐连接的 UID/出站验证。
+`application_routing` 保存按应用出站识别的累计计数，不包含应用清单、节点名或目标地址。`supported` 表示 Android 10+ 的宿主接口可用；`owner_queries`/`owner_failures` 为连接归属查询和失败，`matches` 为应用规则选择，`missing_targets` 为目标缺失或 PASS，`missing_rejected` 为其中实际按失效策略拦截的连接，`udp_rejected` 为指定目标不支持 UDP 的拦截次数。模式和保护导致规则暂停时不增加命中，累计计数非本轮结果，也不能替代逐连接的 UID/出站验证。
 
 | 内部标记 | 含义与边界 |
 | --- | --- |
 | `APP_OWNER_LOOKUP_FAILED` | 原始元组缺失、系统拒绝、隔离 UID 或无可识别连接；一分钟至多记录一次，连接跟随配置，不伪造应用归属 |
 | `APP_OWNER_IDENTITY_CHANGED` | 绑定包名已卸载或其当前 UID 与连接不符；计入归属失败，连接跟随配置，避免 UID 复用继承旧绑定 |
 | `missing_targets` 增加 | 当前规则目标缺失，按该规则失效策略跟随配置或拦截；不等于节点超时 |
+| `APP_TARGET_MISSING_REJECTED` / `missing_rejected` 增加 | 实际连接因失效策略被拦截；日志每分钟至多一条，后台服务触发可恢复提醒；显式 REJECT、测速失败及 UDP 能力不足不计入 |
 | `udp_rejected` 增加 | 目标仍存在但不支持 UDP，拒绝该 UDP，不能继续落到其他出站 |
+
+`incident_notifications` 保留尝试、已投递、限频和被拒绝次数，最近投递状态（`posted`、`rate_limited`、`permission_denied`、`notifications_disabled`、`channel_disabled`、`delivery_failed`）、系统通知权限及两类通道状态。服务事件仅持久保存类型、严重度及待查看序号，应用确认后不反复播放；系统通知点击可重新显示对应简要警告。不保存错误原文、应用列表、节点或订阅地址，详细原因仍在应用错误记录与服务日志中。通知被限频或拒绝不等于已显示，更不改变网络规则。
 
 Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到日志的时间，不等同内核产生事件的精确时间；仍受现有缓冲及单条长度上限约束，不能恢复已丢失的历史。
 

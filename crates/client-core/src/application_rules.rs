@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use yaml_serde::{Mapping, Value};
 
 pub const LIMIT: usize = 256;
+pub mod groups;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,11 +47,15 @@ pub struct Rule {
     pub target: Target,
     #[serde(default)]
     pub reject_missing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<groups::Label>,
 }
 
 pub fn validate(rules: &[Rule]) -> Result<()> {
     ensure!(rules.len() <= LIMIT, "应用规则最多 {LIMIT} 条");
     let mut packages = BTreeSet::new();
+    let mut groups = std::collections::BTreeMap::new();
+    let mut group_names = std::collections::BTreeMap::new();
     for rule in rules {
         ensure!(
             !rule.package.is_empty()
@@ -64,6 +69,19 @@ pub fn validate(rules: &[Rule]) -> Result<()> {
             "应用包名无效"
         );
         ensure!(packages.insert(&rule.package), "同一应用只能有一条应用规则");
+        if let Some(group) = &rule.group {
+            groups::validate_label(group)?;
+            if let Some(previous) = group_names.insert(group.name.to_lowercase(), &group.id) {
+                ensure!(previous == &group.id, "规则名称已存在，请换一个名称");
+            }
+            let identity = (&group.name, &rule.target, rule.reject_missing);
+            if let Some(previous) = groups.insert(&group.id, identity) {
+                ensure!(
+                    previous == identity,
+                    "同一规则组的名称、出口和失效策略必须一致"
+                );
+            }
+        }
         ensure!(
             rule.target.name.len() <= 512
                 && rule.target.provider.len() <= 512
@@ -258,7 +276,7 @@ pub fn runtime(raw: &str, settings: &Settings, profile: &str, supported: bool) -
             "PROCESS-NAME,cor-reject:{},REJECT",
             rule.package
         )));
-        routes.push(serde_json::json!({"package":rule.package,"target":target,"reject_missing":rule.reject_missing}));
+        routes.push(serde_json::json!({"package":rule.package,"target":target,"reject_missing":rule.reject_missing,"missing_target":!present}));
     }
     if let Some(Value::Sequence(original)) = value
         .as_mapping_mut()
@@ -286,6 +304,7 @@ mod tests {
                 package: "org.example.browser".into(),
                 target,
                 reject_missing,
+                group: None,
             }]),
         );
         settings
@@ -355,6 +374,7 @@ mod tests {
             package: "org.example.app".into(),
             target: Target::default(),
             reject_missing: false,
+            group: None,
         };
         assert!(validate(&[rule.clone(), rule.clone()]).is_err());
         rule.target.name = "bad\nname".into();

@@ -146,6 +146,57 @@ public class ProxyTunTest {
         waitForAppWindow();
         verifyPresentation();
     }
+    @Test public void incidentNotificationsKeepSeverityPermissionAndRateLimitsSeparate() throws Exception {
+        assertTrue(IncidentNotifications.eligible(-1, 0));
+        assertFalse(IncidentNotifications.eligible(10, 60_009));
+        assertTrue(IncidentNotifications.eligible(10, 60_010));
+        assertTrue(IncidentNotifications.eligible(100, 50));
+        assertTrue(IncidentNotifications.message("application-target-missing").contains("被拦截"));
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        if (Build.VERSION.SDK_INT >= 33)
+            shell("pm grant " + context.getPackageName() + " android.permission.POST_NOTIFICATIONS");
+        boolean posted = IncidentNotifications.publish(context, "recovery", false);
+        assertTrue("Recovery notification was not accepted: " + IncidentNotifications.state(context), posted);
+        long sent = IncidentNotifications.state(context).getLong("sent");
+        assertFalse(IncidentNotifications.publish(context, "recovery", false));
+        assertEquals(sent, IncidentNotifications.state(context).getLong("sent"));
+        if (posted) {
+            boolean found = false;
+            android.app.NotificationManager manager = context.getSystemService(android.app.NotificationManager.class);
+            for (android.service.notification.StatusBarNotification entry : manager.getActiveNotifications()) {
+                if (entry.getId() != IncidentNotifications.RECOVERY_ID) continue;
+                found = true;
+                android.app.Notification notification = entry.getNotification();
+                assertEquals(IncidentNotifications.RECOVERY_CHANNEL, notification.getChannelId());
+                assertEquals(android.app.Notification.VISIBILITY_PRIVATE, notification.visibility);
+                assertNotNull(notification.contentIntent);
+                assertEquals(0, notification.flags & android.app.Notification.FLAG_ONGOING_EVENT);
+            }
+            assertTrue("The accepted recovery notification was not posted", found);
+            manager.cancel(IncidentNotifications.RECOVERY_ID);
+        }
+        assertNotEquals(IncidentNotifications.RECOVERY_CHANNEL, IncidentNotifications.CRITICAL_CHANNEL);
+        assertNotEquals(IncidentNotifications.RECOVERY_ID, IncidentNotifications.APPLICATION_ID);
+        if (Build.VERSION.SDK_INT >= 33) {
+            Context denied = new ContextWrapper(context) {
+                @Override public int checkSelfPermission(String permission) {
+                    return android.Manifest.permission.POST_NOTIFICATIONS.equals(permission)
+                        ? android.content.pm.PackageManager.PERMISSION_DENIED : super.checkSelfPermission(permission);
+                }
+                @Override public SharedPreferences getSharedPreferences(String name, int mode) {
+                    return context.getSharedPreferences("incident-regression-" + name, mode);
+                }
+            };
+            assertFalse(IncidentNotifications.publish(denied, "critical", true));
+            JSONObject state = IncidentNotifications.state(denied);
+            assertEquals("permission_denied", state.getString("delivery"));
+            assertTrue(state.getBoolean("critical"));
+            assertTrue("Denied notification lost its in-app reminder", state.getLong("sequence") > 0);
+            IncidentNotifications.acknowledge(denied, state.getLong("sequence"));
+            assertEquals(0, IncidentNotifications.state(denied).getLong("sequence"));
+        }
+    }
+
     private static void verifyPresentation() throws Exception {
         new ProxyTunTest().notificationShowsModeAndNodeWithOptionalSpeeds();
         new ProxyTunTest().heldResponseClassifiesTruncationAsTransportFailure();
@@ -1363,6 +1414,8 @@ public class ProxyTunTest {
     private static void previewApplications(Context context, File directory, JSONArray cases,
             String prefix, boolean modes) throws Exception {
         openApplicationRouting();
+        previewApplicationPolicies(directory, cases, prefix);
+        openApplicationRouting();
         previewApplicationCatalog(context);
         applicationMode(0);
         capturePreview(directory, cases, prefix + "-applications-all");
@@ -1507,6 +1560,7 @@ public class ProxyTunTest {
         }
     }
     @Test public void applicationRoutingPersistsAndKeepsOtherAppsOnline() throws Exception {
+        incidentNotificationsKeepSeverityPermissionAndRateLimitsSeparate();
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         android.content.pm.ApplicationInfo bundled = new android.content.pm.ApplicationInfo();
         bundled.flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM;
@@ -1719,22 +1773,56 @@ public class ProxyTunTest {
             +"    - {package: "+packageName+", target: '"+target+"', reject_missing: "+rejectMissing+"}\n";
     }
 
-    private static void verifyApplicationOutbounds(Context context,String controller,String secret) throws Exception {
-        assertEquals(Build.VERSION.SDK_INT>=29,ApplicationOwners.capability().getBoolean("supported"));
-        openApplicationRouting();
+    private static void previewApplicationPolicies(File directory, JSONArray cases, String prefix) throws Exception {
         previewTarget("application-policies-open");
         await("Application policies did not load the current profile", () ->
             MainActivity.diagnostics().optInt("detail")==19
                 && MainActivity.diagnostics().optBoolean("application_policies_loaded"));
         assertEquals("Application policy UI must follow the actual Android capability",
             Build.VERSION.SDK_INT>=29,MainActivity.diagnostics().getBoolean("application_policies_supported"));
-        if (Build.VERSION.SDK_INT<29)
+        int before = MainActivity.diagnostics().getInt("application_policies_count");
+        if (directory != null) capturePreview(directory, cases, prefix + "-application-policy-groups");
+        if (Build.VERSION.SDK_INT<29) {
             assertNull("Unsupported Android must not offer a writable application rule form",
                 previewBounds(MainActivity.diagnostics(),"application-policy-save"));
+        } else {
+            previewTarget("application-policy-new");
+            await("New application rule group did not open", () ->
+                MainActivity.diagnostics().optBoolean("application_policies_editing"));
+            assertTrue(MainActivity.diagnostics().getBoolean("application_policies_reject_missing"));
+            assertFalse("New groups must not silently choose an outbound",
+                MainActivity.diagnostics().getBoolean("application_policies_target_selected"));
+            assertEquals(0, MainActivity.diagnostics().getInt("application_policies_selected"));
+            if (directory != null) capturePreview(directory, cases, prefix + "-application-policy-editor");
+            await("Application picker control was outside its scroll viewport", () -> {
+                if (tryPreviewTarget("application-policy-application")) return true;
+                previewSwipe(true);
+                return false;
+            });
+            await("Application rule picker did not open", () ->
+                MainActivity.diagnostics().optBoolean("application_policies_choosing"));
+            if (directory != null) capturePreview(directory, cases, prefix + "-application-policy-picker");
+            shell("input keyevent KEYCODE_BACK");
+            await("Back must return from application picker to the same draft", () ->
+                !MainActivity.diagnostics().optBoolean("application_policies_choosing")
+                    && MainActivity.diagnostics().optBoolean("application_policies_editing"));
+            assertTrue(MainActivity.diagnostics().getBoolean("application_policies_reject_missing"));
+            shell("input keyevent KEYCODE_BACK");
+            await("Back did not cancel the unchanged group draft", () ->
+                !MainActivity.diagnostics().optBoolean("application_policies_editing"));
+            assertEquals("Cancelled groups must not change saved rules", before,
+                MainActivity.diagnostics().getInt("application_policies_count"));
+        }
         shell("input keyevent KEYCODE_BACK");
         await("Application policies did not close", () ->
             MainActivity.diagnostics().optInt("detail",-1)==0
                 && !MainActivity.diagnostics().optBoolean("application_policies_loaded"));
+    }
+
+    private static void verifyApplicationOutbounds(Context context,String controller,String secret) throws Exception {
+        assertEquals(Build.VERSION.SDK_INT>=29,ApplicationOwners.capability().getBoolean("supported"));
+        openApplicationRouting();
+        previewApplicationPolicies(null, null, "");
         if (Build.VERSION.SDK_INT<29) return;
         String original=CoreBridge.config();
         String restrictive=original.replace("198.51.100.1/32","203.0.113.1/32")
@@ -1755,11 +1843,16 @@ public class ProxyTunTest {
             }
             CoreBridge.reload(applicationOutboundConfig(restrictive,self,"DIRECT",false));
             assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
+            long missingRejectedBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                .getLong("missing_rejected");
             CoreBridge.reload(applicationOutboundConfig(original,self,"REJECT",false));
             boolean blocked=false;
             try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
             catch (IOException expected) {blocked=true;}
             assertTrue("An application reject rule must override the subscription",blocked);
+            assertEquals("Explicit rejection must not be reported as an unavailable target",
+                missingRejectedBefore,new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                    .getLong("missing_rejected"));
             CoreBridge.reload(applicationOutboundConfig(original,self,"missing-node",false));
             assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
             CoreBridge.reload(applicationOutboundConfig(original,self,"missing-node",true));
@@ -1767,6 +1860,11 @@ public class ProxyTunTest {
             try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
             catch (IOException expected) {blocked=true;}
             assertTrue("A missing target with blocking enabled must not use DIRECT",blocked);
+            assertTrue("Missing-target rejection did not reach the incident notification counter",
+                new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                    .getLong("missing_rejected")>missingRejectedBefore);
+            await("Missing-target rejection did not leave a recovery reminder", () ->
+                "application-target-missing".equals(IncidentNotifications.state(context).optString("code")));
             CoreBridge.reload(applicationOutboundConfig(restrictive,"com.android.shell","CI-TUN-origin",false));
             long matchesBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                 .getLong("matches");

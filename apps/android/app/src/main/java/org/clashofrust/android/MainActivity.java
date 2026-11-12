@@ -46,6 +46,7 @@ public final class MainActivity extends NativeActivity {
         setTheme(dark ? R.style.ClientDark : R.style.ClientLight);
         tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
         super.onCreate(state);
+        IncidentNotifications.opened(this, getIntent());
         try { networkOverview = new NetworkOverview(this); }
         catch (RuntimeException error) { android.util.Log.w("ClashOfRust", "Network overview unavailable", error); }
         UpdateInstaller.pruneInstalled(this);
@@ -58,6 +59,7 @@ public final class MainActivity extends NativeActivity {
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
+        IncidentNotifications.opened(this, intent);
         if (VpnTileService.CONNECT.equals(intent.getAction())) { tileConnect=true; connectFromTile(); }
     }
     private void connectFromTile() {
@@ -131,6 +133,7 @@ public final class MainActivity extends NativeActivity {
                     .put("font_sizes",systemFontSizes())
                     .put("dark", Appearance.systemDark(this))
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
+                    .put("incident_notifications", IncidentNotifications.state(this))
                     .put("application_scope",ApplicationRouting.load(this).summary()).toString();
                 case "network-info": {
                     NetworkOverview current = networkOverview;
@@ -245,6 +248,14 @@ public final class MainActivity extends NativeActivity {
                     break;
                 case "notification-speeds":
                     getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("notification-speeds", data.getBoolean("value")).apply(); break;
+                case "notify-incident":
+                    return new JSONObject().put("posted", IncidentNotifications.publish(this,
+                        data.getBoolean("critical") ? "critical" : "recovery", false)).toString();
+                case "report-error":
+                    IncidentNotifications.publish(this, "recovery", false);
+                    emit("error", data.getString("message")); break;
+                case "acknowledge-incident":
+                    IncidentNotifications.acknowledge(this, data.getLong("sequence")); break;
                 case "notify": {
                     String title = data.optString("title", "Clash of Rust"), message = data.optString("message", "喵!");
                     if (!SystemNotifications.permitted(this) && data.optBoolean("request_permission")) {

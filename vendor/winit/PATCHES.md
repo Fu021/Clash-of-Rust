@@ -59,8 +59,10 @@ Before declaring the Ubuntu symptom fixed, verify the built application in
 GNOME X11, XWayland and native Wayland, with rapid edge/corner resizing, both
 growth and shrink, fractional scaling, maximization and window recreation.
 Capture actual presentation timing and frames; Xvfb screenshots alone are
-insufficient. Local resource limits currently permit parsing and static checks
-only; compilation and compositor validation remain pending.
+insufficient. Local resource limits permit parsing and static checks only.
+The desktop builds and eight synchronization state regressions passed in CI;
+actual compositor validation remains pending. Current evidence is recorded in
+[the review log](../../docs/agent-failures/reviews.md).
 
 Remove this override when a compatible Slint/winit release provides the same
 post-render synchronization, after passing the existing desktop lifecycle
