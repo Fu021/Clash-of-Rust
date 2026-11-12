@@ -1182,21 +1182,36 @@ fn reveal_policy_control(
             (viewport[2] - width as f32).abs() < 1. && (viewport[3] - height as f32).abs() < 1.,
             "policy page {viewport:?} does not match {width}x{height}"
         );
+        let scroll = targets.borrow()["application-policy-scroll"].clone();
+        assert!(
+            (scroll[2] - width as f32).abs() < 1.
+                && scroll[3] > 0.
+                && scroll[1] >= 0.
+                && scroll[1] + scroll[3] <= height as f32 + 1.,
+            "policy scroll {scroll:?} does not fit {width}x{height}"
+        );
+        let content = targets.borrow()["application-policy-content"].clone();
+        assert!(
+            (content[2] - width as f32).abs() < 1. && content[3] > 0.,
+            "policy content {content:?} does not reflow at {width}x{height}"
+        );
         let bounds = targets.borrow()[key].clone();
-        if bounds[1] >= 0. && bounds[1] + bounds[3] <= height as f32 {
+        if bounds[1] >= scroll[1] && bounds[1] + bounds[3] <= scroll[1] + scroll[3] {
             return bounds;
         }
         probe.window().dispatch_event(WindowEvent::PointerScrolled {
-            position: LogicalPosition::new(width as f32 - 4., height as f32 / 2.),
+            position: LogicalPosition::new(scroll[0] + scroll[2] - 4., scroll[1] + scroll[3] / 2.),
             delta_x: 0.,
-            delta_y: if bounds[1] < 0. { 1. } else { -1. } * height as f32 / 2.,
+            delta_y: if bounds[1] < scroll[1] { 1. } else { -1. } * scroll[3] / 2.,
         });
         advance(clock, Duration::from_millis(300));
     }
     panic!(
-        "{key} cannot be reached at {width}x{height}: {:?}, offset {}",
+        "{key} cannot be reached at {width}x{height}: {:?}, offset {}, scroll {:?}, content {:?}",
         targets.borrow().get(key),
-        probe.get_offset()
+        probe.get_offset(),
+        targets.borrow().get("application-policy-scroll"),
+        targets.borrow().get("application-policy-content")
     );
 }
 
