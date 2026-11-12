@@ -15,7 +15,7 @@ import struct
 import shutil
 import subprocess
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 import build_support as build
 import android as android_build
 import windows_ci as windows
@@ -6987,6 +6987,38 @@ class AptCacheTests(unittest.TestCase):
 
 
 class CosmicStartupInvestigationTests(unittest.TestCase):
+    def test_monitor_negotiates_before_using_the_short_command_timeout(self):
+        stream = io.BytesIO(b'{"QMP": {"version": {}, "capabilities": []}}\r\n'
+                            b'{"return": {}}\r\n')
+        connection = MagicMock()
+        connection.makefile.return_value = stream
+        with patch.object(cosmic_startup_host.socket, 'socket', return_value=connection):
+            monitor = cosmic_startup_host.Monitor(Path('/fixture/qmp.sock'), ':93')
+        self.assertEqual(connection.settimeout.call_args_list, [call(60), call(10)])
+        request = json.loads(connection.sendall.call_args.args[0])
+        self.assertEqual(request['execute'], 'qmp_capabilities')
+        connection.close.assert_not_called()
+        monitor.close()
+        self.assertTrue(stream.closed)
+        connection.close.assert_called_once()
+
+    def test_monitor_startup_failure_closes_the_socket_and_stream(self):
+        for greeting, failure in [
+            (b'{"QMP": {}}\n', TimeoutError('capability negotiation timed out')),
+            (b'{"return": {}}\n', None),
+        ]:
+            with self.subTest(failure=failure):
+                connection = MagicMock()
+                stream = MagicMock()
+                connection.makefile.return_value = stream
+                stream.readline.side_effect = [greeting, failure] if failure else [greeting]
+                with patch.object(cosmic_startup_host.socket, 'socket', return_value=connection):
+                    with self.assertRaises((TimeoutError, RuntimeError)):
+                        cosmic_startup_host.Monitor(Path('/fixture/qmp.sock'), ':93')
+                stream.close.assert_called_once()
+                connection.close.assert_called_once()
+                self.assertEqual(connection.settimeout.call_args_list, [call(60)])
+
     def test_login_requires_a_new_user_manager_as_well_as_a_new_compositor(self):
         account = SimpleNamespace(pw_uid=1000)
         state = {'active': 'active', 'manager': 'previous', 'pid': '11', 'environment': None}

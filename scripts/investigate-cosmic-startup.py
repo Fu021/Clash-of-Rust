@@ -1,4 +1,4 @@
-"""Temporary official Pop!_OS live VM; no private cache or guest credentials."""
+"""On-demand official Pop!_OS live VM; no private cache or guest credentials."""
 import argparse
 import base64
 import hashlib
@@ -32,11 +32,20 @@ class Monitor:
         self.display = display
         self.captures = {}
         self.connection = socket.socket(socket.AF_UNIX)
-        self.connection.settimeout(10)
-        self.connection.connect(str(path))
-        self.stream = self.connection.makefile('rb')
-        self.read()
-        self.execute('qmp_capabilities')
+        self.stream = None
+        try:
+            self.connection.settimeout(60)
+            self.connection.connect(str(path))
+            self.stream = self.connection.makefile('rb')
+            if 'QMP' not in self.read():
+                raise RuntimeError('QEMU monitor did not send its protocol greeting')
+            self.execute('qmp_capabilities')
+            self.connection.settimeout(10)
+        except Exception:
+            if self.stream is not None:
+                self.stream.close()
+            self.connection.close()
+            raise
 
     def read(self):
         while True:
@@ -244,9 +253,11 @@ def main():
                 if process.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError('QEMU socket initialization failed')
                 time.sleep(.2)
-            monitor = Monitor(qmp_path, environment['DISPLAY'])
             console = Console(serial_path)
+            print('Waiting for the live guest serial console', flush=True)
             console.wait_shell(process)
+            print('Negotiating the QEMU monitor after guest startup', flush=True)
+            monitor = Monitor(qmp_path, environment['DISPLAY'])
             console.command('mkdir -p /mnt/cor-test && mount -t 9p '
                             '-o trans=virtio,version=9p2000.L,ro cor-test /mnt/cor-test')
             reports = {}

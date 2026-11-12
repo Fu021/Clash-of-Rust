@@ -1,4 +1,4 @@
-name: Temporary COSMIC Startup Investigation
+name: COSMIC Startup Investigation
 on:
   workflow_dispatch:
     inputs:

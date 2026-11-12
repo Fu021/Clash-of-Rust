@@ -39,6 +39,7 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 | 核对候选安装包、平台安装检查与成功收据 | [CI 候选包与安装验收](workflows/install-validation.md) |
 | 不发布打包、核验安装包或公开发布 | [Publish Release](workflows/release.md)；[发布文案模板](releases/TEMPLATE.md) |
 | 测量内存和窗口关闭后的资源释放 | [Memory Benchmark](workflows/memory.md) |
+| 复现 COSMIC 登录、自启动入口迁移与后台窗口行为 | [COSMIC 启动诊断](workflows/cosmic-startup.md)，按需手动执行 |
 | 在本机编译、打包与预览 | [本地开发](workflows/local-development.md) |
 | 理解版本、更新通道与依赖快照 | [版本和依赖](workflows/versions.md)；[版本管理](development.md#版本管理) |
 | 排查测速失败与 Android 断网 | [内部诊断与错误码](diagnostics.md)；[故障报告导出](cli/runtime.md#故障反馈与诊断报告) |
