@@ -1,4 +1,5 @@
 """Offline tests for resource validation and clean package staging."""
+import ast
 import hashlib
 import json
 import logging
@@ -1162,7 +1163,9 @@ class BuildTests(unittest.TestCase):
                          'crates/mobile-ffi/src/lib.rs',
                          'apps/android/native/src/android.rs',
                          'crates/client-core/src/application_rules/groups.rs',
-                         'apps/android/core/application_rules.go'):
+                         'apps/android/core/application_rules.go',
+                         'scripts/run-ci.py',
+                         'scripts/ci_test_policy.py'):
                 self.assertTrue(ci_test_policy.select([path])['desktop_ui_tests'], path)
             for path in ('crates/client-core/src/config/mod.rs',
                          'crates/client-core/src/protection/mod.rs',
@@ -1191,6 +1194,30 @@ class BuildTests(unittest.TestCase):
             self.assertTrue(ci_test_policy.linux_user_tests())
             self.assertTrue(ci_test_policy.desktop_ui_tests())
             self.assertTrue(ci_test_policy.update_tests())
+
+    def test_ci_mobile_ui_filters_name_existing_tests(self):
+        source = (build.ROOT/'scripts/run-ci.py').read_text()
+        loops = []
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
+                continue
+            for call in ast.walk(node):
+                if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+                    continue
+                if call.func.id != 'run' or not call.args or not isinstance(call.args[0], ast.List):
+                    continue
+                if any(isinstance(item, ast.Constant) and item.value == 'mobile_lists'
+                       for item in call.args[0].elts):
+                    loops.append(node)
+        self.assertEqual(len(loops), 1)
+        cases = [ast.literal_eval(item) for item in loops[0].iter.elts]
+        self.assertTrue(cases)
+        self.assertEqual(len(cases), len(set(cases)))
+        tests = re.findall(r'#\[test\]\s*fn\s+([A-Za-z_][A-Za-z_0-9]*)',
+                           (build.ROOT/'crates/client-ui/tests/mobile_lists.rs').read_text())
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertEqual(tests.count(case), 1)
 
     def test_linux_network_selection_survives_sudo(self):
         specification = importlib.util.spec_from_file_location(

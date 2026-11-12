@@ -1091,31 +1091,36 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
         probe.set_text_scale(scale);
         probe.set_offset(0.);
         probe.set_dirty(true);
-        advance(&clock, Duration::from_millis(300));
-        frame(&adapter, width as usize, height as usize);
-        let bounds = reveal_policy_control(
-            &probe,
-            &adapter,
-            &clock,
-            &targets,
-            "application-policy-save",
-            (width, height),
-        );
-        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
-        assert!(bounds[2] > 0. && bounds[3] >= 48.);
-        assert!(
-            bounds[2] >= width as f32 * 0.35,
-            "save button did not reflow at {width}x{height}: {bounds:?}"
-        );
-        assert!(position.x > 0. && position.x < width as f32);
-        assert!(position.y > 0. && position.y < height as f32);
-        for (protected, pending, expected) in
-            [(false, false, 1), (true, false, 0), (false, true, 0)]
-        {
+        for (protected, pending, expected) in [
+            (false, false, 1),
+            (true, false, 0),
+            (false, true, 0),
+            (true, true, 0),
+            (false, false, 1),
+        ] {
             probe.set_protected(protected);
             probe.set_protection_pending(pending);
             requests.borrow_mut().clear();
+            advance(&clock, Duration::from_millis(300));
             frame(&adapter, width as usize, height as usize);
+            assert!(!probe.get_choosing());
+            let bounds = reveal_policy_control(
+                &probe,
+                &adapter,
+                &clock,
+                &targets,
+                "application-policy-save",
+                (width, height),
+            );
+            let position =
+                LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+            assert!(bounds[2] > 0. && bounds[3] >= 48.);
+            assert!(
+                bounds[2] >= width as f32 * 0.35,
+                "save button did not reflow at {width}x{height}: {bounds:?}"
+            );
+            assert!(position.x > 0. && position.x < width as f32);
+            assert!(position.y > 0. && position.y < height as f32);
             for event in [
                 WindowEvent::PointerPressed {
                     position,
@@ -1129,6 +1134,10 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
                 probe.window().dispatch_event(event);
             }
             advance(&clock, Duration::from_millis(50));
+            assert!(
+                !probe.get_choosing(),
+                "save click opened the application picker"
+            );
             assert_eq!(requests.borrow().len(), expected);
             if expected == 1 {
                 assert_eq!(
@@ -1145,10 +1154,10 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
     }
     probe.set_supported(false);
     probe.set_opened(false);
-    frame(&adapter, 800, 1280);
+    frame(&adapter, 393, 852);
     targets.borrow_mut().clear();
     probe.set_opened(true);
-    frame(&adapter, 800, 1280);
+    frame(&adapter, 393, 852);
     assert!(!targets.borrow().contains_key("application-policy-save"));
     probe.hide().unwrap();
 }
@@ -1172,17 +1181,18 @@ fn reveal_policy_control(
             probe.get_viewport_width(),
             probe.get_viewport_height()
         );
+        targets.borrow_mut().remove(key);
+        targets.borrow_mut().remove("application-policy-scroll");
         let geometry = probe.global::<UiGeometry>();
         geometry.set_revision(geometry.get_revision().wrapping_add(1));
         frame(adapter, width as usize, height as usize);
         advance(clock, Duration::from_millis(20));
         frame(adapter, width as usize, height as usize);
-        let viewport = targets.borrow()["application-policy-viewport"].clone();
-        assert!(
-            (viewport[2] - width as f32).abs() < 1. && (viewport[3] - height as f32).abs() < 1.,
-            "policy page {viewport:?} does not match {width}x{height}"
-        );
-        let scroll = targets.borrow()["application-policy-scroll"].clone();
+        let scroll = targets
+            .borrow()
+            .get("application-policy-scroll")
+            .expect("the current policy scroll viewport was not measured")
+            .clone();
         assert!(
             (scroll[2] - width as f32).abs() < 1.
                 && scroll[3] > 0.
@@ -1190,12 +1200,18 @@ fn reveal_policy_control(
                 && scroll[1] + scroll[3] <= height as f32 + 1.,
             "policy scroll {scroll:?} does not fit {width}x{height}"
         );
-        let content = targets.borrow()["application-policy-content"].clone();
+        let bounds = targets
+            .borrow()
+            .get(key)
+            .unwrap_or_else(|| panic!("{key} is absent; choosing={}", probe.get_choosing()))
+            .clone();
         assert!(
-            (content[2] - width as f32).abs() < 1. && content[3] > 0.,
-            "policy content {content:?} does not reflow at {width}x{height}"
+            bounds[2] > 0.
+                && bounds[3] > 0.
+                && bounds[0] >= scroll[0]
+                && bounds[0] + bounds[2] <= scroll[0] + scroll[2] + 1.,
+            "{key} {bounds:?} does not fit horizontally inside {scroll:?}"
         );
-        let bounds = targets.borrow()[key].clone();
         if bounds[1] >= scroll[1] && bounds[1] + bounds[3] <= scroll[1] + scroll[3] {
             return bounds;
         }
@@ -1207,11 +1223,11 @@ fn reveal_policy_control(
         advance(clock, Duration::from_millis(300));
     }
     panic!(
-        "{key} cannot be reached at {width}x{height}: {:?}, offset {}, scroll {:?}, content {:?}",
+        "{key} cannot be reached at {width}x{height}: {:?}, offset {}, scroll {:?}, choosing {}",
         targets.borrow().get(key),
         probe.get_offset(),
         targets.borrow().get("application-policy-scroll"),
-        targets.borrow().get("application-policy-content")
+        probe.get_choosing()
     );
 }
 
@@ -1316,6 +1332,64 @@ fn application_policy_picker_keeps_the_form_and_rejects_locked_selection() {
         assert_eq!(probe.global::<AndroidData>().get_policies_target(), "直连");
         assert!(probe.global::<AndroidData>().get_policies_reject_missing());
     }
+    targets
+        .borrow_mut()
+        .remove("application-policy-picker-done");
+    let geometry = probe.global::<UiGeometry>();
+    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+    frame(&adapter, 800, 1280);
+    advance(&clock, Duration::from_millis(20));
+    frame(&adapter, 800, 1280);
+    let bounds = targets.borrow()["application-policy-picker-done"].clone();
+    let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+    for event in [
+        WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        },
+        WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        },
+    ] {
+        probe.window().dispatch_event(event);
+    }
+    advance(&clock, Duration::from_millis(50));
+    assert!(
+        !probe.get_choosing(),
+        "done did not return to the rule form"
+    );
+    assert_eq!(
+        probe.global::<AndroidData>().get_policies_name(),
+        "浏览器规则"
+    );
+    assert_eq!(probe.global::<AndroidData>().get_policies_target(), "直连");
+    assert!(probe.get_dirty());
+
+    let bounds = reveal_policy_control(
+        &probe,
+        &adapter,
+        &clock,
+        &targets,
+        "application-policy-application",
+        (800, 1280),
+    );
+    let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+    for event in [
+        WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        },
+        WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        },
+    ] {
+        probe.window().dispatch_event(event);
+    }
+    advance(&clock, Duration::from_millis(50));
+    assert!(probe.get_choosing(), "application picker did not reopen");
+    assert!(probe.get_dirty());
     probe.hide().unwrap();
 }
 

@@ -435,7 +435,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "autostart",
-        "读取或配置桌面程序后台自启动",
+        "读取或配置后台自启动",
         "autostart [on|off]",
         0,
         1,

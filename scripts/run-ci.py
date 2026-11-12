@@ -64,6 +64,7 @@ def main():
         for case in ('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes',
                      'notice_countdown_restarts_and_expires_after_five_seconds',
                      'application_controls_distinguish_scope_filter_save_and_protection',
+                     'applications_reopen_with_active_geometry_observers_across_modes_and_sizes',
                      'applications_scroll_across_phone_and_tablet_viewports',
                      'application_policy_form_respects_platform_protection_and_scrolls',
                      'application_policy_picker_keeps_the_form_and_rejects_locked_selection',

@@ -68,6 +68,8 @@ export component MToolHeading inherits HorizontalLayout {
 // ScrollView whose generated wrapper can constrain conditional layouts to the
 // visible height, leaving Android with no scrollable overflow.
 export component MScroll inherits Flickable {
+    in property <string> geometry-key;
+    GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <string> content-key;
     out property <length> content-preferred-height: content.preferred-height;
     property <length> bottom: min(0px, self.height - self.content-height);
