@@ -21,8 +21,8 @@ export component AndroidApplicationPolicies inherits PageSurface {
     property <bool> observable: !MobileData.working && !MobileView.modal && !MobileView.notice-modal;
     property <bool> editable: AndroidData.policies-supported && !root.protection-locked && root.observable;
     property <string> delete-id;
-    if AndroidData.policies-choosing: VerticalLayout { width: root.width; height: root.height; spacing: 10px;
-        MCard { vertical-padding: 8px; horizontal-padding: 12px;
+    VerticalLayout { width: root.width; height: root.height; spacing: 10px;
+        if AndroidData.policies-choosing: MCard { vertical-padding: 8px; horizontal-padding: 12px;
             HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
                 VerticalLayout { min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; spacing: 4px;
                     MText { text: "选择应用"; font-weight: 600; }
@@ -37,8 +37,12 @@ export component AndroidApplicationPolicies inherits PageSurface {
         }
         MScroll {
             content-y <=> AndroidData.policies-scroll-y;
-            content-key: AndroidData.policies-query + "/" + AndroidData.policies-filter + (AndroidData.policies-system ? "/system" : "/apps");
-            VerticalLayout { alignment: start; spacing: 8px; padding-bottom: 12px;
+            content-key: AndroidData.policies-choosing
+                ? "picker/" + AndroidData.policies-query + "/" + AndroidData.policies-filter + (AndroidData.policies-system ? "/system" : "/apps")
+                : AndroidData.policies-profile + (AndroidData.policies-editing ? "/edit" : "/groups");
+            if AndroidData.policies-choosing: VerticalLayout {
+                width: root.width; height: self.preferred-height;
+                alignment: start; spacing: 8px; padding-bottom: 12px;
                 MField { placeholder: "搜索应用名称或包名"; text <=> AndroidData.policies-query; enabled: root.observable;
                     edited(value) => { MobileActions.request(MobileIntent.application-policy, "query", value); }
                 }
@@ -74,94 +78,91 @@ export component AndroidApplicationPolicies inherits PageSurface {
                     }
                 }
             }
-        }
-    }
-    if !AndroidData.policies-choosing: MScroll {
-        width: root.width; height: root.height;
-        content-y <=> AndroidData.policies-scroll-y;
-        content-key: AndroidData.policies-profile + (AndroidData.policies-editing ? "/edit" : "/groups");
-        VerticalLayout { alignment: start; spacing: 10px; padding-bottom: 12px;
-            MCard { gap: 6px;
-                HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
-                    VerticalLayout { spacing: 4px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
-                        MText { text: "当前订阅 · " + AndroidData.policies-profile; font-weight: 600; }
-                        MSmall { text: AndroidData.policies-status; wrap: word-wrap; }
-                    }
-                    if !AndroidData.policies-editing: MButton { text: "刷新"; compact: true; enabled: root.observable;
-                        width: max(64px, MobileTypography.font-size(14) * 2 + 24px); horizontal-stretch: 0;
-                        clicked => { MobileActions.request(MobileIntent.application-policy, "refresh", ""); }
-                    }
-                }
-                if root.protection-locked: MParagraph { text: "Claude 保护期间规则暂停，只能查看。"; color: Theme.secondary; }
-            }
-            if AndroidData.policies-supported && !AndroidData.policies-editing: MButton {
-                text: "新建规则组"; primary: true; compact: true; enabled: root.editable;
-                geometry-key: "application-policy-new";
-                clicked => { MobileActions.request(MobileIntent.application-policy, "new", ""); }
-            }
-            if AndroidData.policies-supported && AndroidData.policies-editing: MCard { gap: 8px;
-                MSmall { text: "规则名称"; }
-                MField { placeholder: "例如：视频应用"; text <=> AndroidData.policies-name; enabled: root.editable;
-                    edited(value) => { MobileView.draft-dirty = true; }
-                }
-                MSmall { text: "出口"; }
-                MSelect { options: AndroidData.policies-targets; value: AndroidData.policies-target == "" ? "请选择出口" : AndroidData.policies-target; enabled: root.editable;
-                    geometry-key: "application-policy-target";
-                    selected(index, value) => { AndroidData.policies-target = value; MobileView.draft-dirty = true; }
-                }
-                MSmall { text: "选中的应用优先使用此出口。"; wrap: word-wrap; }
-                MButton { text: "选择应用 · " + AndroidData.policies-selected + " 个"; compact: true; enabled: root.observable;
-                    geometry-key: "application-policy-application";
-                    clicked => { AndroidData.policies-choosing = true; AndroidData.policies-scroll-y = 0px; }
-                }
-                if AndroidData.policies-target != "直连" && AndroidData.policies-target != "拦截": VerticalLayout { spacing: 6px;
-                    MSwitch { title: "目标失效时阻止连接"; checked: AndroidData.policies-reject-missing; enabled: root.editable;
-                        toggled(value) => { AndroidData.policies-reject-missing = value; MobileView.draft-dirty = true; }
-                    }
-                    MSmall { text: AndroidData.policies-reject-missing ? "目标消失时拦截并提醒；超时不会自动换线。" : "目标消失时跟随订阅规则。"; wrap: word-wrap; }
-                }
-                HorizontalLayout { spacing: 6px;
-                    MButton { text: "撤销修改"; compact: true; enabled: root.observable;
-                        geometry-key: "application-policy-cancel";
-                        clicked => { MobileActions.request(MobileIntent.application-policy, "cancel", ""); }
-                    }
-                    MButton { text: MobileData.vpn-connected ? "保存并重连" : "保存"; primary: true; compact: true;
-                        geometry-key: "application-policy-save";
-                        enabled: root.editable && AndroidData.policies-name != "" && AndroidData.policies-target != "" && AndroidData.policies-selected > 0 && MobileView.draft-dirty;
-                        clicked => {
-                            MobileActions.request(MobileIntent.application-policy, "save",
-                                AndroidData.policies-name + "\n" + AndroidData.policies-target + "\n" + (AndroidData.policies-reject-missing ? "true" : "false"));
-                        }
-                    }
-                }
-            }
-            if !AndroidData.policies-editing: MSmall { text: "已保存 · " + AndroidData.policies.length + " 组"; }
-            if !AndroidData.policies-editing && AndroidData.policies.length == 0: MCard {
-                MParagraph { text: "尚未指定应用出口，进入 VPN 的应用跟随订阅规则。"; color: Theme.secondary; }
-            }
-            if !AndroidData.policies-editing: VerticalLayout { alignment: start; spacing: 10px;
-                for policy in AndroidData.policies: MCard { gap: 6px;
+            if !AndroidData.policies-choosing: VerticalLayout {
+                width: root.width; height: self.preferred-height;
+                alignment: start; spacing: 10px; padding-bottom: 12px;
+                MCard { gap: 6px;
                     HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
-                        MText { text: policy.name; font-weight: 600; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; }
-                        MSmall { text: policy.count + " 个应用"; horizontal-stretch: 0; }
+                        VerticalLayout { spacing: 4px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+                            MText { text: "当前订阅 · " + AndroidData.policies-profile; font-weight: 600; }
+                            MSmall { text: AndroidData.policies-status; wrap: word-wrap; }
+                        }
+                        if !AndroidData.policies-editing: MButton { text: "刷新"; compact: true; enabled: root.observable;
+                            width: max(64px, MobileTypography.font-size(14) * 2 + 24px); horizontal-stretch: 0;
+                            clicked => { MobileActions.request(MobileIntent.application-policy, "refresh", ""); }
+                        }
                     }
-                    MText { text: policy.target; color: Theme.accent; }
-                    MSmall { text: policy.applications; }
-                    MSmall { text: policy.status; wrap: word-wrap; }
+                    if root.protection-locked: MParagraph { text: "Claude 保护期间规则暂停，只能查看。"; color: Theme.secondary; }
+                }
+                if AndroidData.policies-supported && !AndroidData.policies-editing: MButton {
+                    text: "新建规则组"; primary: true; compact: true; enabled: root.editable;
+                    geometry-key: "application-policy-new";
+                    clicked => { MobileActions.request(MobileIntent.application-policy, "new", ""); }
+                }
+                if AndroidData.policies-supported && AndroidData.policies-editing: MCard { gap: 8px;
+                    MSmall { text: "规则名称"; }
+                    MField { placeholder: "例如：视频应用"; text <=> AndroidData.policies-name; enabled: root.editable;
+                        edited(value) => { MobileView.draft-dirty = true; }
+                    }
+                    MSmall { text: "出口"; }
+                    MSelect { options: AndroidData.policies-targets; value: AndroidData.policies-target == "" ? "请选择出口" : AndroidData.policies-target; enabled: root.editable;
+                        geometry-key: "application-policy-target";
+                        selected(index, value) => { AndroidData.policies-target = value; MobileView.draft-dirty = true; }
+                    }
+                    MSmall { text: "选中的应用优先使用此出口。"; wrap: word-wrap; }
+                    MButton { text: "选择应用 · " + AndroidData.policies-selected + " 个"; compact: true; enabled: root.observable;
+                        geometry-key: "application-policy-application";
+                        clicked => { AndroidData.policies-choosing = true; AndroidData.policies-scroll-y = 0px; }
+                    }
+                    if AndroidData.policies-target != "直连" && AndroidData.policies-target != "拦截": VerticalLayout { spacing: 6px;
+                        MSwitch { title: "目标失效时阻止连接"; checked: AndroidData.policies-reject-missing; enabled: root.editable;
+                            toggled(value) => { AndroidData.policies-reject-missing = value; MobileView.draft-dirty = true; }
+                        }
+                        MSmall { text: AndroidData.policies-reject-missing ? "目标消失时拦截并提醒；超时不会自动换线。" : "目标消失时跟随订阅规则。"; wrap: word-wrap; }
+                    }
                     HorizontalLayout { spacing: 6px;
-                        MButton { text: root.protection-locked ? "查看" : "编辑"; compact: true; enabled: root.observable && AndroidData.policies-supported;
-                            clicked => { MobileActions.request(MobileIntent.application-policy, "edit", policy.id); }
+                        MButton { text: "撤销修改"; compact: true; enabled: root.observable;
+                            geometry-key: "application-policy-cancel";
+                            clicked => { MobileActions.request(MobileIntent.application-policy, "cancel", ""); }
                         }
-                        MButton { text: "移除"; compact: true; enabled: root.editable;
-                            clicked => { root.delete-id = policy.id; }
+                        MButton { text: MobileData.vpn-connected ? "保存并重连" : "保存"; primary: true; compact: true;
+                            geometry-key: "application-policy-save";
+                            enabled: root.editable && AndroidData.policies-name != "" && AndroidData.policies-target != "" && AndroidData.policies-selected > 0 && MobileView.draft-dirty;
+                            clicked => {
+                                MobileActions.request(MobileIntent.application-policy, "save",
+                                    AndroidData.policies-name + "\n" + AndroidData.policies-target + "\n" + (AndroidData.policies-reject-missing ? "true" : "false"));
+                            }
                         }
                     }
-                    if root.delete-id == policy.id: VerticalLayout { spacing: 6px;
-                        MSmall { text: "移除后，这些应用将跟随订阅规则。"; wrap: word-wrap; color: Theme.warning; }
+                }
+                if !AndroidData.policies-editing: MSmall { text: "已保存 · " + AndroidData.policies.length + " 组"; }
+                if !AndroidData.policies-editing && AndroidData.policies.length == 0: MCard {
+                    MParagraph { text: "尚未指定应用出口，进入 VPN 的应用跟随订阅规则。"; color: Theme.secondary; }
+                }
+                if !AndroidData.policies-editing: VerticalLayout { alignment: start; spacing: 10px;
+                    for policy in AndroidData.policies: MCard { gap: 6px;
+                        HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+                            MText { text: policy.name; font-weight: 600; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; }
+                            MSmall { text: policy.count + " 个应用"; horizontal-stretch: 0; }
+                        }
+                        MText { text: policy.target; color: Theme.accent; }
+                        MSmall { text: policy.applications; }
+                        MSmall { text: policy.status; wrap: word-wrap; }
                         HorizontalLayout { spacing: 6px;
-                            MButton { text: "取消"; compact: true; clicked => { root.delete-id = ""; } }
-                            MButton { text: "确认移除"; compact: true; enabled: root.editable;
-                                clicked => { MobileActions.request(MobileIntent.application-policy, "delete", policy.id); root.delete-id = ""; }
+                            MButton { text: root.protection-locked ? "查看" : "编辑"; compact: true; enabled: root.observable && AndroidData.policies-supported;
+                                clicked => { MobileActions.request(MobileIntent.application-policy, "edit", policy.id); }
+                            }
+                            MButton { text: "移除"; compact: true; enabled: root.editable;
+                                clicked => { root.delete-id = policy.id; }
+                            }
+                        }
+                        if root.delete-id == policy.id: VerticalLayout { spacing: 6px;
+                            MSmall { text: "移除后，这些应用将跟随订阅规则。"; wrap: word-wrap; color: Theme.warning; }
+                            HorizontalLayout { spacing: 6px;
+                                MButton { text: "取消"; compact: true; clicked => { root.delete-id = ""; } }
+                                MButton { text: "确认移除"; compact: true; enabled: root.editable;
+                                    clicked => { MobileActions.request(MobileIntent.application-policy, "delete", policy.id); root.delete-id = ""; }
+                                }
                             }
                         }
                     }

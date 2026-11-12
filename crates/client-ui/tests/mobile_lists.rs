@@ -1084,6 +1084,8 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
         (320, 568, 1.5),
         (852, 320, 1.),
         (800, 1280, 1.),
+        (320, 568, 1.5),
+        (393, 852, 1.),
     ] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
         probe.set_text_scale(scale);
@@ -1101,6 +1103,10 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
         );
         let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
         assert!(bounds[2] > 0. && bounds[3] >= 48.);
+        assert!(
+            bounds[2] >= width as f32 * 0.35,
+            "save button did not reflow at {width}x{height}: {bounds:?}"
+        );
         assert!(position.x > 0. && position.x < width as f32);
         assert!(position.y > 0. && position.y < height as f32);
         for (protected, pending, expected) in

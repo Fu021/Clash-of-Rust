@@ -161,19 +161,25 @@ public class ProxyTunTest {
         assertFalse(IncidentNotifications.publish(context, "recovery", false));
         assertEquals(sent, IncidentNotifications.state(context).getLong("sent"));
         if (posted) {
-            boolean found = false;
             android.app.NotificationManager manager = context.getSystemService(android.app.NotificationManager.class);
-            for (android.service.notification.StatusBarNotification entry : manager.getActiveNotifications()) {
-                if (entry.getId() != IncidentNotifications.RECOVERY_ID) continue;
-                found = true;
-                android.app.Notification notification = entry.getNotification();
+            android.app.Notification[] delivered = new android.app.Notification[1];
+            try {
+                await("The accepted recovery notification was not posted", () -> {
+                    for (android.service.notification.StatusBarNotification entry : manager.getActiveNotifications()) {
+                        if (entry.getId() != IncidentNotifications.RECOVERY_ID) continue;
+                        delivered[0] = entry.getNotification();
+                        return true;
+                    }
+                    return false;
+                });
+                android.app.Notification notification = delivered[0];
                 assertEquals(IncidentNotifications.RECOVERY_CHANNEL, notification.getChannelId());
                 assertEquals(android.app.Notification.VISIBILITY_PRIVATE, notification.visibility);
                 assertNotNull(notification.contentIntent);
                 assertEquals(0, notification.flags & android.app.Notification.FLAG_ONGOING_EVENT);
+            } finally {
+                manager.cancel(IncidentNotifications.RECOVERY_ID);
             }
-            assertTrue("The accepted recovery notification was not posted", found);
-            manager.cancel(IncidentNotifications.RECOVERY_ID);
         }
         assertNotEquals(IncidentNotifications.RECOVERY_CHANNEL, IncidentNotifications.CRITICAL_CHANNEL);
         assertNotEquals(IncidentNotifications.RECOVERY_ID, IncidentNotifications.APPLICATION_ID);
