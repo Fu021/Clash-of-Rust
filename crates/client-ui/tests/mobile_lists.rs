@@ -186,7 +186,7 @@ slint::slint! {
             AndroidData.policies-target = "直连";
             AndroidData.policies-status = "只作用于进入 VPN 的应用；未指定的应用跟随配置。";
         }
-        if root.opened: AndroidApplicationPolicies { width: parent.width; height: parent.height; }
+        if root.opened: AndroidApplicationPolicies { width: root.width; height: root.height; }
     }
 
     export component MobileAccentProbe inherits Window {
@@ -1171,6 +1171,11 @@ fn reveal_policy_control(
         frame(adapter, width as usize, height as usize);
         advance(clock, Duration::from_millis(20));
         frame(adapter, width as usize, height as usize);
+        let viewport = targets.borrow()["application-policy-viewport"].clone();
+        assert!(
+            (viewport[2] - width as f32).abs() < 1. && (viewport[3] - height as f32).abs() < 1.,
+            "policy page {viewport:?} does not match {width}x{height}"
+        );
         let bounds = targets.borrow()[key].clone();
         if bounds[1] >= 0. && bounds[1] + bounds[3] <= height as f32 {
             return bounds;
