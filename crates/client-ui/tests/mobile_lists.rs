@@ -1088,18 +1088,14 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
         probe.set_dirty(true);
         advance(&clock, Duration::from_millis(300));
         frame(&adapter, width as usize, height as usize);
-        let geometry = probe.global::<UiGeometry>();
-        geometry.set_revision(geometry.get_revision().wrapping_add(1));
-        advance(&clock, Duration::ZERO);
-        frame(&adapter, width as usize, height as usize);
-        let bounds = targets.borrow()["application-policy-save"].clone();
-        probe.set_offset(-(bounds[1] + bounds[3] - height as f32 + 24.).max(0.));
-        advance(&clock, Duration::from_millis(300));
-        frame(&adapter, width as usize, height as usize);
-        geometry.set_revision(geometry.get_revision().wrapping_add(1));
-        advance(&clock, Duration::ZERO);
-        frame(&adapter, width as usize, height as usize);
-        let bounds = targets.borrow()["application-policy-save"].clone();
+        let bounds = reveal_policy_control(
+            &probe,
+            &adapter,
+            &clock,
+            &targets,
+            "application-policy-save",
+            (width, height),
+        );
         let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
         assert!(bounds[2] > 0. && bounds[3] >= 48.);
         assert!(position.x > 0. && position.x < width as f32);
@@ -1146,6 +1142,39 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
     frame(&adapter, 800, 1280);
     assert!(!targets.borrow().contains_key("application-policy-save"));
     probe.hide().unwrap();
+}
+
+fn reveal_policy_control(
+    probe: &ApplicationPoliciesProbe,
+    adapter: &MinimalSoftwareWindow,
+    clock: &Cell<Duration>,
+    targets: &RefCell<std::collections::BTreeMap<String, Vec<f32>>>,
+    key: &str,
+    size: (u32, u32),
+) -> Vec<f32> {
+    let (width, height) = size;
+    for _ in 0..12 {
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        frame(adapter, width as usize, height as usize);
+        advance(clock, Duration::ZERO);
+        frame(adapter, width as usize, height as usize);
+        let bounds = targets.borrow()[key].clone();
+        if bounds[1] >= 0. && bounds[1] + bounds[3] <= height as f32 {
+            return bounds;
+        }
+        probe.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(width as f32 / 2., height as f32 / 2.),
+            delta_x: 0.,
+            delta_y: if bounds[1] < 0. { 1. } else { -1. } * height as f32 / 2.,
+        });
+        advance(clock, Duration::from_millis(300));
+    }
+    panic!(
+        "{key} cannot be reached at {width}x{height}: {:?}, offset {}",
+        targets.borrow().get(key),
+        probe.get_offset()
+    );
 }
 
 #[test]
@@ -1214,19 +1243,9 @@ fn application_policy_picker_keeps_the_form_and_rejects_locked_selection() {
             probe.set_offset(0.);
             advance(&clock, Duration::from_millis(300));
             frame(&adapter, width as usize, height as usize);
-            let geometry = probe.global::<UiGeometry>();
-            geometry.set_revision(geometry.get_revision().wrapping_add(1));
-            advance(&clock, Duration::ZERO);
-            frame(&adapter, width as usize, height as usize);
             let key = format!("application-policy-app:{package}");
-            let bounds = targets.borrow()[&key].clone();
-            probe.set_offset(-(bounds[1] + bounds[3] - height as f32 + 16.).max(0.));
-            advance(&clock, Duration::from_millis(300));
-            frame(&adapter, width as usize, height as usize);
-            geometry.set_revision(geometry.get_revision().wrapping_add(1));
-            advance(&clock, Duration::ZERO);
-            frame(&adapter, width as usize, height as usize);
-            let bounds = targets.borrow()[&key].clone();
+            let bounds =
+                reveal_policy_control(&probe, &adapter, &clock, &targets, &key, (width, height));
             let position =
                 LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
             assert!(position.y >= 0. && position.y < height as f32);

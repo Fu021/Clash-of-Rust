@@ -153,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_application_rules_survive_reopen_and_group_editing() {
-        use core::application_rules::groups;
+        use super::core::application_rules::groups;
         let root = tempfile::tempdir().unwrap();
         let native: Arc<dyn NativeHost> = Arc::new(Host(true));
         let mut session = Session::open(root.path().into(), native.clone()).unwrap();

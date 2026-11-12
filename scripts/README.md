@@ -2,6 +2,8 @@
 
 本目录只保留构建、验证、打包、缓存、内存基准和 UI 预览入口。应用运行时不依赖这些脚本；新增脚本前先检查能否扩展现有共享模块或入口，不要为单次排障复制包装脚本。
 
+维护者本次授权的 `cosmic-startup-investigation.yml` 临时调用 `investigate-cosmic-startup.py` 与 VM 内的 `cosmic_startup_guest.py`，使用官方 Pop!_OS live 镜像复现 COSMIC 登录、菜单链接迁移和手动启动；复用同提交成功 CI 安装包，不访问私网缓存、不传递凭据。验证结束后删除这三个临时入口，通用结论保留在[静默自启动与托盘告警](../docs/agent-failures/desktop.md#静默自启动与托盘告警)。
+
 ## 职责清单
 
 | 脚本 | 类型 | 职责 |

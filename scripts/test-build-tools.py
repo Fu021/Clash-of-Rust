@@ -1141,6 +1141,7 @@ class BuildTests(unittest.TestCase):
                 'crates/client-runtime/src/platform/host_network/linux.rs'
             ])['linux_user_tests'])
             for path in ('crates/client-runtime/src/platform/host_network/ipv6.rs',
+                         'crates/client-runtime/src/platform/linux/startup.rs',
                          'crates/client-runtime/src/platform/network/mod.rs',
                          'crates/client-runtime/src/control/network.rs',
                          'crates/client-runtime/src/engine/recovery.rs',
@@ -1475,8 +1476,9 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
-        self.assertEqual(len(checks), 4)
+        self.assertEqual(len(checks), 5)
         for package, case in (('clash-client-runtime', 'platform::linux_tun::'),
+                              ('clash-client-runtime', 'platform::linux_startup::'),
                               ('clash-client-runtime', 'platform::host_network::'),
                               ('clash-client-runtime', 'control::tests::'),
                               ('clash-cli', 'backend::tests::')):

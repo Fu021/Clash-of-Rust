@@ -19,7 +19,9 @@
 
 COSMIC 的托盘由会话 D-Bus 的 StatusNotifier 宿主提供，不能单凭 Wayland 认定不支持。上游分别报告过[宿主已注册但调用不响应](https://github.com/pop-os/cosmic-applets/issues/1317)和[自启动时应用未注册、单独重启后出现](https://github.com/pop-os/cosmic-applets/issues/1528)；后者的登录时序竞争尚属报告者推测，不能作为本应用现场的已证根因。当前 [tray-icon KSNI 后端](https://github.com/tauri-apps/tray-icon/blob/tray-icon-v0.26.0/src/platform_impl/ksni/mod.rs)默认假设 SNI 可用，因此保留本应用的宿主检查，并联合核对实际注册项和启动事件；对象创建、宿主声明就绪及面板最终显示是三个不同证据。
 
-Linux 仅迁移与旧版生成格式及当前可执行文件完全一致、只缺少 `--background` 的自启动条目；自定义参数、不同路径、隐藏或额外字段一律保留。迁移不能解释所有窗口自动打开：诊断还须核对实际收到的参数、显示请求来源、托盘重试和 D-Bus 注册，CLI 离线导出可带上已持久化的两次启动记录。
+Linux 的应用内自启动入口带 `--background`，普通应用菜单入口保持前台启动。[COSMIC 添加自启动应用](https://github.com/pop-os/cosmic-settings/blob/master/cosmic-settings/src/pages/applications/startup_apps.rs)会链接普通菜单文件，因此不能只凭升级版本推定自启动参数已更新。迁移只接受与旧版生成格式一致的条目，或本应用标准菜单字段、当前可执行文件且没有额外参数的入口；安装时的可执行符号链接须解析到同一个文件。自启动项本身为符号链接时，原子替换该链接为权限 `0600`、带后台参数的普通文件，不改菜单目标；已带参数、隐藏、禁用、自定义字段、其他程序和损坏链接保持不变。迁移影响下次登录，不把本次正常前台启动强行隐藏。
+
+诊断分别保留自启动链接、解析状态、后台参数和当前进程实际收到的参数；链接不可读不等于没有自启动。窗口显示仍需联合显示请求来源、托盘重试和 D-Bus 注册判断，CLI 离线导出可带上已持久化的两次启动记录。
 
 ## 断网启动与联网恢复
 

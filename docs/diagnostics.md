@@ -8,7 +8,7 @@
 
 桌面窗口导出的 `data.context.desktop_startup` 保存本进程是否收到 `--background`、是否为更新后重启、窗口可见状态和会话类型。`autostart` 在导出时读取实际配置，区分 `collected` 与 `unavailable`，读取失败不视作未启用。`tray_state` 区分 `initializing`、`created`、`failed`、`not_started`，`tray_error` 保留本次托盘初始化失败的原因；用户关闭警告后仍保留。`created` 只说明原生托盘对象创建成功，不保证用户能在桌面面板看见图标。
 
-`history` 保留至多 96 项启动/显示事件、来源、接收时间和状态变化；重复未变化轮询不填满记录，丢弃数单列。无需先导出，数据目录的 `desktop-startup.json` 与 `desktop-startup.previous.json` 即保留当前/上次记录，CLI 的在线与离线诊断也会读取。`tray_initialization` 保存尝试次数、时限、首尾错误和完成耗时。Linux 导出另有 `linux.autostart`（存在、大小、修改时间、后台参数、是否匹配当前入口、隐藏/禁用）和 `linux.tray_bus`（host、watcher owner、最多 16 个注册项及 PID、是否本进程）。启动时异步采集的同类快照写入 `linux_at_startup`，与导出时的现场分开；查询失败分别记未知。
+`history` 保留至多 96 项启动/显示事件、来源、接收时间和状态变化；重复未变化轮询不填满记录，丢弃数单列。无需先导出，数据目录的 `desktop-startup.json` 与 `desktop-startup.previous.json` 即保留当前/上次记录，CLI 的在线与离线诊断也会读取。`tray_initialization` 保存尝试次数、时限、首尾错误和完成耗时。Linux 导出另有 `linux.autostart`（存在、大小、修改时间、后台参数、是否匹配当前入口、隐藏/禁用）和 `linux.tray_bus`（host、watcher owner、最多 16 个注册项及 PID、是否本进程）。自启动的 `symlink` 标记入口是否为符号链接，`link_resolved` 仅对链接记录解析成功或失败，普通文件为 `null`；未解析链接用 `autostart_link_unresolved` 区分于 `autostart_read_failed`，不导出链接目标。启动时异步采集的同类快照写入 `linux_at_startup`，与导出时的现场分开；查询失败分别记未知。
 
 报告不包含完整命令行、环境变量正文、D-Bus 连接地址或自启动文件正文。`desktop_environment` 仅保留识别到的 COSMIC、GNOME 等固定标签，未知值不原样导出。注册项是有界 D-Bus 标识，不包含订阅或控制凭据。自启动配置存在不证明登录会话实际传入了后台参数；原生对象创建成功也不能反推托盘从未故障。旧报告缺少这些字段时保持未知，不凭“内核启动成功”或没有错误条幅认定托盘就绪。排查入口及行为见[静默自启动与托盘告警](agent-failures/desktop.md#静默自启动与托盘告警)。
 

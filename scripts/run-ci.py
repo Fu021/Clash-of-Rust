@@ -31,6 +31,7 @@ def main():
     if not extended and linux_user_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for package, target, case in (
                 ('clash-client-runtime', ['--lib'], 'platform::linux_tun::'),
+                ('clash-client-runtime', ['--lib'], 'platform::linux_startup::'),
                 ('clash-client-runtime', ['--lib'], 'platform::host_network::'),
                 ('clash-client-runtime', ['--lib'], 'control::tests::'),
                 ('clash-cli', ['--bin', 'cor'], 'backend::tests::')):
@@ -65,6 +66,7 @@ def main():
                      'application_controls_distinguish_scope_filter_save_and_protection',
                      'applications_scroll_across_phone_and_tablet_viewports',
                      'application_policy_form_respects_platform_protection_and_scrolls',
+                     'application_policy_picker_keeps_the_form_and_rejects_locked_selection',
                      'mobile_accent_picker_remains_usable_while_protected',
                      'mobile_appearance_settings_reopen_with_geometry_and_protection',
                      'mobile_connections_keep_actions_reachable_and_scroll_with_long_names',

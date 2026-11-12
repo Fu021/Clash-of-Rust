@@ -1,0 +1,45 @@
+name: Temporary COSMIC Startup Investigation
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful CI for this exact commit
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: cosmic-startup-investigation
+  cancel-in-progress: false
+jobs:
+  cosmic:
+    name: Pop!_OS 24.04 COSMIC login and autostart
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify and fetch the exact CI candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+        run: python3 scripts/investigate-cosmic-startup.py fetch
+      - name: Install disposable VM tools
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y qemu-system-x86 qemu-system-gui libgl1-mesa-dri libarchive-tools python3-pil xvfb
+          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Verify official Pop image and reproduce both login paths
+        run: python3 scripts/investigate-cosmic-startup.py
+      - name: Preserve startup evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cosmic-startup-investigation
+          path: target/cosmic-startup-report
+          if-no-files-found: error
+          retention-days: 3
