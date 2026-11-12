@@ -575,15 +575,21 @@ async fn basic_system_proxy_and_tun() {
     #[cfg(target_os = "linux")]
     {
         use futures_util::FutureExt;
-        if let Err(panic) = std::panic::AssertUnwindSafe(protected_dns::run(&mut engine, &profile))
-            .catch_unwind()
-            .await
+        let original_profile = engine.settings.active_profile.clone().unwrap();
+        let original_source = std::fs::read(&profile).unwrap();
+        let protected_profile = temporary.path().join("protected-dns.yaml");
+        if let Err(panic) =
+            std::panic::AssertUnwindSafe(protected_dns::run(&mut engine, &protected_profile))
+                .catch_unwind()
+                .await
         {
             for line in engine.poll(Scope::Logs).await.unwrap().logs {
                 eprintln!("{line}");
             }
             std::panic::resume_unwind(panic);
         }
+        engine.activate(original_profile).await.unwrap();
+        assert_eq!(std::fs::read(&profile).unwrap(), original_source);
     }
     #[cfg(target_os = "macos")]
     macos_dns::run(&mut engine, &profile).await;
