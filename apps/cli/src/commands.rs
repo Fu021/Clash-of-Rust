@@ -106,9 +106,10 @@ pub async fn execute(args: &Args) -> Result<()> {
                 .as_ref()
                 .filter(|poll| poll.snapshot.running)
                 .map_or(ProxyMode::Off, |poll| poll.snapshot.proxy_mode());
-            let routes = crate::host_network::with_proxy_context(
+            let routes = crate::host_network::with_settings_context(
                 crate::host_network::observe(args).await,
                 Some(proxy),
+                poll.as_ref().map(|poll| &poll.meta.settings),
             );
             output::emit(args, json!({"proxy":proxy,"host_routes":routes}))
         }
@@ -152,6 +153,7 @@ async fn status(args: &Args) -> Result<()> {
             observed_at = std::time::Instant::now();
         }
         let mut failure = None;
+        let mut network_settings = None;
         let mut value = if let Some(poll) = match current_snapshot(args, Scope::Home, true).await {
             Ok(poll) => poll,
             Err(error) => {
@@ -164,11 +166,13 @@ async fn status(args: &Args) -> Result<()> {
                 .profiles
                 .iter()
                 .find(|p| Some(&p.id) == poll.meta.settings.active_profile.as_ref());
-            json!({"running":poll.snapshot.running,"owner":poll.meta.owner,"version":poll.meta.version,
+            let value = json!({"running":poll.snapshot.running,"owner":poll.meta.owner,"version":poll.meta.version,
                 "profile":profile.map(|p|&p.name),"node":poll.snapshot.active_node,"mode":poll.snapshot.mode,
                 "proxy":poll.snapshot.proxy_mode(),"protected":poll.meta.settings.claude_protection.is_some(),
                 "connections":poll.snapshot.connection_count,"upload_rate":poll.snapshot.upload_rate,
-                "download_rate":poll.snapshot.download_rate})
+                "download_rate":poll.snapshot.download_rate});
+            network_settings = Some(poll.meta.settings);
+            value
         } else {
             json!({"running":false,"owner":null})
         };
@@ -181,7 +185,11 @@ async fn status(args: &Args) -> Result<()> {
         } else {
             Some(ProxyMode::Off)
         };
-        value["host_routes"] = crate::host_network::with_proxy_context(routes.clone(), proxy);
+        value["host_routes"] = crate::host_network::with_settings_context(
+            routes.clone(),
+            proxy,
+            network_settings.as_ref(),
+        );
         output::emit(args, value)?;
         if !args.flag("watch") {
             if let Some(error) = failure {

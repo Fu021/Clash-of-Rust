@@ -4,21 +4,29 @@
 
 错误码供维护者分析 JSON 报告，不作为界面标签或要求用户理解的提示。GUI 和 CLI 仍显示具体、可读的失败原因，提供导出诊断入口；不会自动上传日志或修改网络。
 
+## 桌面启动与托盘
+
+桌面窗口导出的 `data.context.desktop_startup` 保存本进程是否收到 `--background`、是否为更新后重启、窗口可见状态和会话类型。`autostart` 在导出时读取实际配置，区分 `collected` 与 `unavailable`，读取失败不视作未启用。`tray_state` 区分 `initializing`、`created`、`failed`、`not_started`，`tray_error` 保留本次托盘初始化失败的原因；用户关闭警告后仍保留。`created` 只说明原生托盘对象创建成功，不保证用户能在桌面面板看见图标。
+
+`history` 保留至多 96 项启动/显示事件、来源、接收时间和状态变化；重复未变化轮询不填满记录，丢弃数单列。无需先导出，数据目录的 `desktop-startup.json` 与 `desktop-startup.previous.json` 即保留当前/上次记录，CLI 的在线与离线诊断也会读取。`tray_initialization` 保存尝试次数、时限、首尾错误和完成耗时。Linux 导出另有 `linux.autostart`（存在、大小、修改时间、后台参数、是否匹配当前入口、隐藏/禁用）和 `linux.tray_bus`（host、watcher owner、最多 16 个注册项及 PID、是否本进程）。启动时异步采集的同类快照写入 `linux_at_startup`，与导出时的现场分开；查询失败分别记未知。
+
+报告不包含完整命令行、环境变量、D-Bus 连接地址或自启动文件正文。注册项是有界 D-Bus 标识，不包含订阅或控制凭据。自启动配置存在不证明登录会话实际传入了后台参数；原生对象创建成功也不能反推托盘从未故障。旧报告缺少这些字段时保持未知，不凭“内核启动成功”或没有错误条幅认定托盘就绪。排查入口及行为见[静默自启动与托盘告警](agent-failures/desktop.md#静默自启动与托盘告警)。
+
 ## 桌面 TUN 启动与覆盖
 
-桌面导出和 `cor diagnose`／`--offline` 共用 `data.tun_configuration`，只提取生成运行配置的地址族及路由/DNS 覆盖字段，最多读取 4 MiB，不读取链接或特殊文件，不输出订阅节点、密码、控制密钥或上游 DNS 正文。`source=generated_runtime_config` 明确它是文件快照；`ipv6_enabled` 不证明实际存在 IPv6 TUN，启动校验另以控制接口的实时 `tun.inet6-address` 为依据。缺少、不可读、过大与无效文件分开记录。
+桌面导出和 `cor diagnose`／`--offline` 共用 `data.tun_configuration`，只提取生成运行配置的地址族及路由/DNS 覆盖字段，最多读取 4 MiB，不读取链接或特殊文件，不输出订阅节点、密码、控制密钥或上游 DNS 正文。`source=generated_runtime_config` 明确它是文件快照；`ipv6_enabled` 不证明实际存在 IPv6 TUN。启动校验结合控制接口实际配置、上联 IPv6 地址条件和路由，`tun.inet6-address` 为空不能独自证明本机没有 IPv6。缺少、不可读、过大与无效文件分开记录。
 
 | 内部标记 | 保存位置 | 含义与处理 |
 | --- | --- | --- |
-| `tun_ipv6_not_configured` | 内核/客户端缓冲日志 | 允许 IPv6，但内核未创建 IPv6 TUN 地址；仅检查实际配置的地址族，不因此停止可用的 IPv4 TUN |
+| `tun_ipv6_not_configured` | 内核/客户端缓冲日志 | 允许 IPv6，但内核未创建 IPv6 TUN 地址；结合上联地址和实际路由判断，不单凭此项停止 IPv4 TUN |
 | `tun_ipv4_route_bypass` | `host_routes.warnings` | IPv4 示例仍经过非 TUN 接口；启动校验失败并回滚，运行中显示绕行提示 |
-| `tun_ipv6_route_bypass` | `host_routes.warnings` | IPv6 示例仍经过非 TUN 接口；实际配置 IPv6 TUN 时启动校验失败，否则保留提示，不冒充完整接管 |
+| `tun_ipv6_route_bypass` | `host_routes.warnings` | 当前需要接管的 IPv6 样本经过非 TUN 接口；本机确认没有可用 IPv6 时不生成，保护期间同样适用 |
 | `tun_current_uid_route_bypass` | `host_routes.warnings` | 普通路由进 TUN，但当前 UID 的 TCP/443 路由样本走物理接口；核对 UID、mark 及重定向策略，不等于已证实 TLS 故障 |
 | `route_unavailable`／`route_query_timeout` | `host_routes.ipv4/ipv6.reason` | 未取得可判定样本；未知不是网络成功或失败 |
 
 [地址族校验与验证边界](agent-failures/network-recovery.md#linux-tun-地址族与启动校验)见网络恢复说明；不把物理 IPv6 路由单独归因于桌面环境或权限。
 
-Claude 保护不会沿用普通 IPv4-only TUN 的兼容例外：首次开启及重启时发现物理 IPv6 绕行仍拒绝提交保护并恢复原状态，避免把不完整接管显示为保护成功。
+`host_routes.ipv6_uplink` 保存本机上联地址条件及每接口可用、tentative、重复地址计数，不导出完整地址；地址读取失败为 `unknown`。`coverage_expectations` 保存本次检查要求和来源（`no_uplink_ipv6`、`ipv6_disabled`、`claude_protection`、`current_settings`、`unknown`）。缺失 IPv6 与 IPv6 绕行是不同状态，普通 TUN 和保护均按[同一边界](ipv6-tun.md#判定)判断。
 
 Linux 的桌面导出及 `cor diagnose`／`--offline` 另保存：
 

@@ -2,7 +2,7 @@ use crate::args::Args;
 use serde_json::Value;
 
 pub(crate) use clash_client_runtime::platform::host_network::{
-    holder_summary, notice, with_proxy_context,
+    holder_summary, notice, with_proxy_context, with_settings_context,
 };
 
 pub(crate) async fn observe(args: &Args) -> Value {

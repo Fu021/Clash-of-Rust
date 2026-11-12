@@ -46,10 +46,11 @@ impl Watch {
         }
     }
 
-    pub(super) fn notice(&self) -> String {
-        host_network::notice(&host_network::with_proxy_context(
+    pub(super) fn notice(&self, settings: Option<&Settings>) -> String {
+        host_network::notice(&host_network::with_settings_context(
             self.routes.clone(),
             self.proxy,
+            settings,
         ))
         .unwrap_or_default()
     }
@@ -89,14 +90,14 @@ mod tests {
         assert!(watch.begin().is_none());
         watch.proxy(Some(ProxyMode::Off));
         watch.finish(revision, routes());
-        assert!(watch.notice().is_empty());
+        assert!(watch.notice(None).is_empty());
         let revision = watch.begin().unwrap();
         watch.finish(revision, routes());
-        assert!(watch.notice().contains("外部 TUN"));
-        assert!(watch.notice().contains("root · PID 42"));
+        assert!(watch.notice(None).contains("外部 TUN"));
+        assert!(watch.notice(None).contains("root · PID 42"));
         assert!(watch.begin().is_none());
         watch.proxy(Some(ProxyMode::Tun));
-        assert!(watch.notice().is_empty());
+        assert!(watch.notice(None).is_empty());
         assert!(watch.begin().is_some());
     }
 
@@ -106,7 +107,7 @@ mod tests {
         watch.proxy(Some(ProxyMode::Off));
         let revision = watch.begin().unwrap();
         watch.finish(revision, routes());
-        assert!(!watch.notice().is_empty());
+        assert!(!watch.notice(None).is_empty());
         watch.checked_at = None;
         let revision = watch.begin().unwrap();
         watch.finish(
@@ -116,6 +117,54 @@ mod tests {
                 "ipv4":{"state":"observed","interface":"eth0","kind":"other"}
             }),
         );
-        assert!(watch.notice().is_empty());
+        assert!(watch.notice(None).is_empty());
+    }
+
+    #[test]
+    fn changing_ipv6_preference_reclassifies_the_existing_sample() {
+        let mut watch = Watch::default();
+        watch.proxy(Some(ProxyMode::Tun));
+        let revision = watch.begin().unwrap();
+        watch.finish(
+            revision,
+            json!({
+                "scope":"current_network_namespace",
+                "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                "ipv6":{"state":"observed","interface":"wlp3s0","kind":"other"}
+            }),
+        );
+        let mut settings = Settings {
+            ipv6: true,
+            ..Default::default()
+        };
+        assert!(!watch.notice(Some(&settings)).is_empty());
+        settings.ipv6 = false;
+        assert!(watch.notice(Some(&settings)).is_empty());
+        settings.ipv6 = true;
+        assert!(!watch.notice(Some(&settings)).is_empty());
+    }
+
+    #[test]
+    fn an_ipv6_warning_tracks_uplink_arrival_and_disappearance() {
+        let mut watch = Watch::default();
+        watch.proxy(Some(ProxyMode::Tun));
+        let settings = Settings::default();
+        for state in ["unavailable", "available", "unavailable"] {
+            watch.checked_at = None;
+            let revision = watch.begin().unwrap();
+            watch.finish(
+                revision,
+                json!({
+                    "scope":"current_network_namespace",
+                    "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                    "ipv6":{"state":"observed","interface":"eth0","kind":"other"},
+                    "ipv6_uplink":{"state":state}
+                }),
+            );
+            assert_eq!(
+                watch.notice(Some(&settings)).is_empty(),
+                state == "unavailable"
+            );
+        }
     }
 }

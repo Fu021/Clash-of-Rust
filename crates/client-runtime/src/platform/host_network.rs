@@ -1,6 +1,8 @@
 use serde_json::{Value, json};
 
 #[cfg(target_os = "linux")]
+pub(crate) mod ipv6;
+#[cfg(target_os = "linux")]
 mod linux;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,16 +232,20 @@ async fn observe_scope(holder_scope: HolderScope) -> Value {
             "tcp_uid_samples":[tcp]
         });
         let fallback = routes.clone();
-        tokio::task::spawn_blocking(move || linux::attach_holders(routes, holder_scope))
-            .await
-            .unwrap_or_else(|_| {
-                let mut routes = fallback;
-                routes["tun_holders"] = json!({
-                    "state":"unavailable","reason":"owner_query_failed",
-                    "scope":holder_scope.label()
-                });
-                routes
-            })
+        tokio::task::spawn_blocking(move || {
+            let mut routes = linux::attach_holders(routes, holder_scope);
+            routes["ipv6_uplink"] = ipv6::Observation::report();
+            routes
+        })
+        .await
+        .unwrap_or_else(|_| {
+            let mut routes = fallback;
+            routes["tun_holders"] = json!({
+                "state":"unavailable","reason":"owner_query_failed",
+                "scope":holder_scope.label()
+            });
+            routes
+        })
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -264,10 +270,48 @@ fn current_route<'a>(routes: &'a Value, family: &str) -> Option<&'a Value> {
         .get(family)
 }
 
-pub fn with_proxy_context(mut routes: Value, proxy: Option<crate::engine::ProxyMode>) -> Value {
+pub fn with_proxy_context(routes: Value, proxy: Option<crate::engine::ProxyMode>) -> Value {
+    with_tun_expectations(routes, proxy, None)
+}
+
+pub fn with_settings_context(
+    routes: Value,
+    proxy: Option<crate::engine::ProxyMode>,
+    settings: Option<&crate::config::Settings>,
+) -> Value {
+    let expected = settings.map(|settings| {
+        ipv6_expected(
+            &routes,
+            settings.claude_protection.is_some() || settings.ipv6,
+        )
+    });
+    let source = match settings {
+        Some(_) if routes["ipv6_uplink"]["state"] == "unavailable" => "no_uplink_ipv6",
+        Some(settings) if settings.claude_protection.is_some() => "claude_protection",
+        Some(settings) if !settings.ipv6 => "ipv6_disabled",
+        Some(_) => "current_settings",
+        None => "unknown",
+    };
+    let mut routes = with_tun_expectations(routes, proxy, expected);
+    routes["coverage_expectations"]["source"] = json!(source);
+    routes
+}
+
+fn with_tun_expectations(
+    mut routes: Value,
+    proxy: Option<crate::engine::ProxyMode>,
+    ipv6_expected: Option<bool>,
+) -> Value {
     use crate::engine::ProxyMode;
 
-    let samples = ["ipv4", "ipv6"].map(|family| current_route(&routes, family));
+    let expected = |family: &str| {
+        proxy != Some(ProxyMode::Tun) || family != "ipv6" || ipv6_expected != Some(false)
+    };
+    let samples = ["ipv4", "ipv6"].map(|family| {
+        expected(family)
+            .then(|| current_route(&routes, family))
+            .flatten()
+    });
     let tun = samples
         .iter()
         .flatten()
@@ -293,8 +337,9 @@ pub fn with_proxy_context(mut routes: Value, proxy: Option<crate::engine::ProxyM
             ("ipv4", "tun_ipv4_route_bypass"),
             ("ipv6", "tun_ipv6_route_bypass"),
         ] {
-            if current_route(&routes, family)
-                .is_some_and(|route| route["state"] == "observed" && route["kind"] == "other")
+            if expected(family)
+                && current_route(&routes, family)
+                    .is_some_and(|route| route["state"] == "observed" && route["kind"] == "other")
             {
                 warnings.push(warning);
             }
@@ -302,7 +347,8 @@ pub fn with_proxy_context(mut routes: Value, proxy: Option<crate::engine::ProxyM
     }
     if routes.get("tcp_uid_samples").is_some()
         && ["ipv4", "ipv6"].into_iter().any(|family| {
-            routes[family]["state"] == "observed"
+            expected(family)
+                && routes[family]["state"] == "observed"
                 && routes[family]["kind"] == "tun"
                 && current_route(&routes, family)
                     .is_some_and(|route| route["state"] == "observed" && route["kind"] == "other")
@@ -310,16 +356,17 @@ pub fn with_proxy_context(mut routes: Value, proxy: Option<crate::engine::ProxyM
     {
         warnings.push("tun_current_uid_route_bypass");
     }
+    routes["coverage_expectations"] = json!({"ipv4":true,"ipv6":ipv6_expected,"source":if ipv6_expected.is_some() {
+        "current_settings"
+    } else {
+        "unknown"
+    }});
     routes["warnings"] = json!(warnings);
     routes
 }
 
-pub fn ipv6_tun_configured(config: &Value) -> Option<bool> {
-    match &config["tun"]["inet6-address"] {
-        Value::Null => Some(false),
-        Value::Array(addresses) => Some(!addresses.is_empty()),
-        _ => None,
-    }
+fn ipv6_expected(routes: &Value, enabled: bool) -> bool {
+    enabled && routes["ipv6_uplink"]["state"] != "unavailable"
 }
 
 /// A positive sample of a non-TUN route while this process owns TUN means the
@@ -329,7 +376,7 @@ pub fn coverage_issue(routes: &Value, config: &Value, require_ipv6: bool) -> Opt
     if routes["scope"] != "current_network_namespace" {
         return None;
     }
-    let ipv6_expected = require_ipv6 || ipv6_tun_configured(config).unwrap_or(true);
+    let ipv6_expected = ipv6_expected(routes, require_ipv6 || config["ipv6"] != false);
     let mut issues = Vec::new();
     for (family, label, expected) in [("ipv4", "IPv4", true), ("ipv6", "IPv6", ipv6_expected)] {
         let uid_sample = config["tun"]["auto-redirect"].as_bool() != Some(true)
@@ -713,7 +760,7 @@ mod context_tests {
         routes["ipv6"] = json!({"state":"observed","kind":"tun","interface":"Meta"});
         routes["tcp_uid_samples"][1]["ipv6"] =
             json!({"state":"observed","kind":"other","interface":"eth0"});
-        let ipv4_only = json!({"tun":{"inet6-address":[]}});
+        let ipv4_only = json!({"ipv6":false,"tun":{"inet6-address":[]}});
         assert!(coverage_issue(&routes, &ipv4_only, false).is_none());
         assert!(
             coverage_issue(&routes, &ipv4_only, true)
@@ -830,26 +877,28 @@ mod context_tests {
     }
 
     #[test]
-    fn ipv4_tun_starts_when_core_disables_ipv6_but_keeps_bypass_visible() {
+    fn absent_uplink_allows_ipv4_tun_and_protection_without_hiding_ipv4_bypass() {
         let routes = json!({
             "scope":"current_network_namespace",
             "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
-            "ipv6":{"state":"observed","kind":"other","interface":"wlan0"}
+            "ipv6":{"state":"observed","kind":"other","interface":"wlan0"},
+            "ipv6_uplink":{"state":"unavailable"}
         });
         for tun in [
             json!({"enable":true,"inet4-address":["198.18.0.1/30"]}),
             json!({"enable":true,"inet6-address":[]}),
         ] {
             let config = json!({"ipv6":true,"tun":tun});
-            assert!(coverage_issue(&routes, &config, false).is_none());
-            assert!(
-                coverage_issue(&routes, &config, true)
-                    .unwrap()
-                    .contains("IPv6")
+            for required in [false, true] {
+                assert!(coverage_issue(&routes, &config, required).is_none());
+            }
+            let context = with_settings_context(
+                routes.clone(),
+                Some(ProxyMode::Tun),
+                Some(&crate::config::Settings::default()),
             );
-            let context = with_proxy_context(routes.clone(), Some(ProxyMode::Tun));
-            assert_eq!(context["warnings"], json!(["tun_ipv6_route_bypass"]));
-            assert!(notice(&context).unwrap().contains("绕过 TUN"));
+            assert_eq!(context["warnings"], json!([]));
+            assert!(notice(&context).is_none());
             let mut bypass = routes.clone();
             bypass["ipv4"]["kind"] = "other".into();
             assert!(
@@ -858,6 +907,176 @@ mod context_tests {
                     .contains("IPv4")
             );
         }
+    }
+
+    #[test]
+    fn configured_ipv4_only_tun_keeps_raw_ipv6_evidence_without_a_false_alarm() {
+        use crate::engine::ProxyMode;
+        let routes = json!({
+            "scope":"current_network_namespace",
+            "observer_uid":1000,
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"observed","kind":"other","interface":"wlp3s0"},
+            "tcp_uid_samples":[{
+                "uid":1000,"protocol":"tcp","destination_port":443,
+                "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+                "ipv6":{"state":"observed","kind":"other","interface":"wlp3s0"}
+            }]
+        });
+        let mut settings = crate::config::Settings {
+            ipv6: false,
+            ..Default::default()
+        };
+        let context = with_settings_context(routes.clone(), Some(ProxyMode::Tun), Some(&settings));
+        assert!(notice(&context).is_none());
+        assert_eq!(context["ipv6"]["interface"], "wlp3s0");
+        assert_eq!(context["coverage_expectations"]["ipv6"], false);
+        settings.ipv6 = true;
+        assert!(
+            notice(&with_settings_context(
+                routes.clone(),
+                Some(ProxyMode::Tun),
+                Some(&settings)
+            ))
+            .is_some()
+        );
+        assert!(
+            notice(&with_settings_context(
+                routes.clone(),
+                Some(ProxyMode::Tun),
+                None
+            ))
+            .is_some()
+        );
+        settings.ipv6 = false;
+        settings.claude_protection = Some(std::sync::Arc::new(
+            crate::claude_check::protection::Protection::new(
+                "fixture".into(),
+                "fixture".into(),
+                crate::claude_check::protection::Previous {
+                    mode: "rule".into(),
+                    proxy_mode: ProxyMode::Off,
+                    selectors: Default::default(),
+                },
+            ),
+        ));
+        assert!(
+            notice(&with_settings_context(
+                routes.clone(),
+                Some(ProxyMode::Tun),
+                Some(&settings)
+            ))
+            .is_some()
+        );
+        let mut absent = routes.clone();
+        absent["ipv6_uplink"] = json!({"state":"unavailable"});
+        let context = with_settings_context(absent.clone(), Some(ProxyMode::Tun), Some(&settings));
+        assert!(notice(&context).is_none());
+        assert_eq!(context["coverage_expectations"]["source"], "no_uplink_ipv6");
+        assert!(coverage_issue(&absent, &json!({"tun":{"enable":true}}), true).is_none());
+        absent["ipv6_uplink"]["state"] = json!("available");
+        assert!(
+            notice(&with_settings_context(
+                absent,
+                Some(ProxyMode::Tun),
+                Some(&settings)
+            ))
+            .is_some()
+        );
+        let mut bypass = routes;
+        bypass["tcp_uid_samples"][0]["ipv4"]["kind"] = json!("other");
+        settings.claude_protection = None;
+        assert!(
+            notice(&with_settings_context(
+                bypass,
+                Some(ProxyMode::Tun),
+                Some(&settings)
+            ))
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn default_ipv6_handles_absence_arrival_loss_and_unknown_uplink_without_hiding_bypass() {
+        let settings = crate::config::Settings::default();
+        assert!(settings.ipv6);
+        let mut routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"observed","kind":"other","interface":"eth0"}
+        });
+        let config = json!({"ipv6":true,"tun":{"enable":true,"inet6-address":[]}});
+        for state in ["unavailable", "available", "unavailable", "unknown"] {
+            routes["ipv6_uplink"] = json!({"state":state});
+            let context =
+                with_settings_context(routes.clone(), Some(ProxyMode::Tun), Some(&settings));
+            assert_eq!(notice(&context).is_some(), state != "unavailable");
+            assert_eq!(context["ipv6"], routes["ipv6"]);
+            assert_eq!(
+                coverage_issue(&routes, &config, false).is_some(),
+                state != "unavailable"
+            );
+            assert_eq!(
+                coverage_issue(&routes, &config, true).is_some(),
+                state != "unavailable"
+            );
+        }
+        routes["ipv6_uplink"]["state"] = json!("available");
+        routes["ipv6"]["kind"] = json!("tun");
+        routes["ipv6"]["interface"] = json!("Meta");
+        assert!(coverage_issue(&routes, &config, false).is_none());
+        assert!(
+            notice(&with_settings_context(
+                routes.clone(),
+                Some(ProxyMode::Tun),
+                Some(&settings)
+            ))
+            .is_none()
+        );
+        routes["ipv4"]["kind"] = json!("other");
+        routes["ipv6_uplink"]["state"] = json!("unavailable");
+        assert!(
+            coverage_issue(&routes, &config, false)
+                .unwrap()
+                .contains("IPv4")
+        );
+        assert!(
+            notice(&with_settings_context(
+                routes,
+                Some(ProxyMode::Tun),
+                Some(&settings)
+            ))
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn disabled_ipv6_is_not_required_even_on_a_dual_stack_uplink_but_protection_is_strict() {
+        let routes = json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","kind":"tun","interface":"Meta"},
+            "ipv6":{"state":"observed","kind":"other","interface":"eth0"},
+            "ipv6_uplink":{"state":"available"}
+        });
+        let config = json!({"ipv6":false,"tun":{"inet6-address":[]}});
+        assert!(coverage_issue(&routes, &config, false).is_none());
+        assert!(
+            coverage_issue(&routes, &config, true)
+                .unwrap()
+                .contains("IPv6")
+        );
+        let settings = crate::config::Settings {
+            ipv6: false,
+            ..Default::default()
+        };
+        assert!(
+            notice(&with_settings_context(
+                routes,
+                Some(ProxyMode::Tun),
+                Some(&settings)
+            ))
+            .is_none()
+        );
     }
 
     #[test]

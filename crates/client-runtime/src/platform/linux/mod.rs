@@ -29,7 +29,7 @@ pub fn configured_proxy(scheme: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn startup_path() -> Result<std::path::PathBuf> {
+pub(super) fn startup_path() -> Result<std::path::PathBuf> {
     let base = if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
         std::path::PathBuf::from(path)
     } else {
@@ -50,14 +50,10 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
     let path = startup_path()?;
     if enabled {
         std::fs::create_dir_all(path.parent().context("自启路径无效")?)?;
-        let executable = crate::platform::autostart_executable()?
-            .to_string_lossy()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('`', "\\`")
-            .replace('$', "\\$")
-            .replace('%', "%%");
-        atomic_write(&path, format!("[Desktop Entry]\nType=Application\nName=Clash of Rust\nExec=\"{executable}\" --background\nIcon=clash-of-rust\nStartupWMClass=clash-of-rust\nTerminal=false\n").as_bytes())?;
+        atomic_write(
+            &path,
+            super::linux_startup::entry(&crate::platform::autostart_executable()?).as_bytes(),
+        )?;
     } else if path.exists() {
         std::fs::remove_file(path)?;
     }

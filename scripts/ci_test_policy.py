@@ -71,7 +71,10 @@ def select(paths, extended=False):
         path.startswith(('apps/cli/src/users.rs', 'apps/cli/src/host_network.rs', 'apps/cli/src/backend.rs',
                          'apps/cli/src/service.rs', 'crates/client-runtime/src/platform/linux/tun/',
                          'crates/client-runtime/src/platform/host_network'))
-        or path == 'scripts/test-linux-tun.py'
+        or path in ('scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py')
+        or path.startswith('crates/client-runtime/src/platform/network/')
+        or path in ('crates/client-runtime/src/control/network.rs',
+                    'crates/client-runtime/src/engine/recovery.rs')
         for path in paths
     )
     diagnostics = any(path.startswith(('crates/client-core/src/controller/',

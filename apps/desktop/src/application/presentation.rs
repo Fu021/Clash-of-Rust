@@ -280,7 +280,7 @@ impl App {
         text!(
             get_network_alert,
             set_network_alert,
-            self.network_watch.notice()
+            self.network_watch.notice(Some(&self.settings))
         );
         self.present_protection(data);
         set!(get_working, set_working, self.working);

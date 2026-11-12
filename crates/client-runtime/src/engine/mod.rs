@@ -503,7 +503,7 @@ impl Engine {
         if self.running() {
             bail!("内核已启动");
         }
-        let routes = tokio::task::spawn_blocking(platform::network::snapshot)
+        let routes = tokio::task::spawn_blocking(platform::network::recovery_snapshot)
             .await?
             .ok();
         self.network_monitor.seed(routes);

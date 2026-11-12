@@ -61,11 +61,9 @@
 
 ## Linux TUN 地址族与启动校验
 
-重装或订阅更新后仍出现部分应用不走代理时，先运行 `cor diagnose --offline --output cor-tun-local.json`，核对报告中的 `host_routes` 与 `tun_configuration`：前者显示示例目标当前经过哪个接口，后者显示生成配置中的 IPv6 偏好、TUN 地址、`strict-route`、`route-address`、`dns-hijack`；该文件快照不等于内核当前采用的配置。Linux 启用 TUN 时会在短重试后检查 IPv4 样本，仅在内核 `/configs` 实际含非空 `tun.inet6-address` 时要求 IPv6 样本也进入 TUN；实际应接管的地址族经过物理接口仍会报错并回退，未知或权限不足的样本不会被伪报为成功或失败。该检查仍只覆盖两个示例地址，不能替代真实应用错误、目标域名解析和完整路由表。
+重装或订阅更新后仍出现部分应用不走代理时，先运行 `cor diagnose --offline --output cor-tun-local.json`，核对 `host_routes` 与 `tun_configuration`，后者是生成文件快照，不等于实际内核配置。IPv6 偏好、本机上联地址、内核实际 TUN 地址和路由证据应分别记录；默认开启 IPv6 不意味着本机一定具备 IPv6。
 
-内核和控制器已启动、TUN 日志只有 IPv4 地址时，不能因物理 IPv6 路由就回滚并停止内核。上游在关闭 IPv6、启动时未发现全局 IPv6 地址或配置明确为空时可不创建 IPv6 TUN，因此不能以客户端的 IPv6 偏好代替实际地址族。缺少 IPv6 TUN 时保留可工作的 IPv4，日志记 `tun_ipv6_not_configured`；若系统 IPv6 样本仍绕行，原有绕行警告继续显示，不能声称 IPv6 已被接管。未取得原始配置和同时段接口地址时，不能推断上游省略 IPv6 地址的具体原因。
-
-Claude 保护例外：首次开启、恢复和已保存保护的重启仍拒绝已确认的 IPv6 绕行，失败沿原事务恢复旧设置与运行状态。普通 IPv4-only TUN 的兼容处理不能让保护状态误报完整接管；未取得路由证据仍明确为未知。
+普通 TUN 和 Claude 保护均不能把确认不存在的 IPv6 当成绕行。读取失败保持未知，有 IPv6 时仍核对接管，不以缺失配置放过确认绕行。判定矩阵、网络变化、上游来源及测试边界集中在 [Linux IPv6 与 TUN 覆盖](../ipv6-tun.md)，避免启动门禁和日常警告采用不同标准。
 
 ## IPv6 节点域名解析
 

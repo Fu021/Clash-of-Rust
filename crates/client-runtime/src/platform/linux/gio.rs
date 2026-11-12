@@ -53,6 +53,7 @@ unsafe extern "C" {
         cancellable: Pointer,
         error: *mut Pointer,
     ) -> c_int;
+    fn g_dbus_error_get_remote_error(error: Pointer) -> *mut c_char;
 }
 #[link(name = "glib-2.0")]
 unsafe extern "C" {
@@ -62,6 +63,9 @@ unsafe extern "C" {
     fn g_variant_get_child_value(value: Pointer, index: usize) -> Pointer;
     fn g_variant_get_variant(value: Pointer) -> Pointer;
     fn g_variant_get_boolean(value: Pointer) -> c_int;
+    fn g_variant_get_string(value: Pointer, length: *mut usize) -> *const c_char;
+    fn g_variant_get_uint32(value: Pointer) -> u32;
+    fn g_variant_n_children(value: Pointer) -> usize;
     fn g_variant_parse(
         kind: Pointer,
         text: *const c_char,
@@ -72,6 +76,7 @@ unsafe extern "C" {
     fn g_variant_ref_sink(value: Pointer) -> Pointer;
     fn g_variant_unref(value: Pointer);
     fn g_free(pointer: Pointer);
+    fn g_error_free(error: Pointer);
 }
 #[link(name = "gobject-2.0")]
 unsafe extern "C" {
@@ -139,6 +144,171 @@ pub(super) fn ensure_tray_available() -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn tray_call(
+    bus: &Object,
+    destination: &CStr,
+    path: &CStr,
+    interface: &CStr,
+    method: &CStr,
+    parameters: &CStr,
+) -> Result<Variant> {
+    unsafe {
+        let parameters = g_variant_parse(
+            std::ptr::null(),
+            parameters.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        ensure!(!parameters.is_null(), "invalid_query");
+        let parameters = Variant(g_variant_ref_sink(parameters));
+        let mut error = std::ptr::null_mut();
+        let reply = g_dbus_connection_call_sync(
+            bus.0,
+            destination.as_ptr(),
+            path.as_ptr(),
+            interface.as_ptr(),
+            method.as_ptr(),
+            parameters.0,
+            std::ptr::null(),
+            1,
+            250,
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        if reply.is_null() {
+            let reason = if error.is_null() {
+                "dbus_query_failed".into()
+            } else {
+                let remote = g_dbus_error_get_remote_error(error);
+                let reason = if remote.is_null() {
+                    "dbus_transport_or_timeout".into()
+                } else {
+                    let reason = CStr::from_ptr(remote).to_string_lossy().into_owned();
+                    g_free(remote.cast());
+                    reason
+                };
+                g_error_free(error);
+                reason
+            };
+            bail!("{reason}");
+        }
+        Ok(Variant(reply))
+    }
+}
+
+pub(super) fn tray_diagnostics() -> serde_json::Value {
+    use serde_json::{Value, json};
+    unsafe {
+        let bus = g_bus_get_sync(2, std::ptr::null_mut(), std::ptr::null_mut());
+        if bus.is_null() {
+            return json!({"state":"unavailable","reason":"session_bus_unavailable"});
+        }
+        let bus = Object(bus);
+        let query = |parameters: &CStr| -> Result<Variant> {
+            let reply = tray_call(
+                &bus,
+                c"org.kde.StatusNotifierWatcher",
+                c"/StatusNotifierWatcher",
+                c"org.freedesktop.DBus.Properties",
+                c"Get",
+                parameters,
+            )?;
+            ensure!(
+                CStr::from_ptr(g_variant_get_type_string(reply.0)).to_bytes() == b"(v)",
+                "invalid_reply"
+            );
+            let wrapped = Variant(g_variant_get_child_value(reply.0, 0));
+            Ok(Variant(g_variant_get_variant(wrapped.0)))
+        };
+        let host =
+            match query(c"('org.kde.StatusNotifierWatcher', 'IsStatusNotifierHostRegistered')") {
+                Ok(value)
+                    if CStr::from_ptr(g_variant_get_type_string(value.0)).to_bytes() == b"b" =>
+                {
+                    json!({"state":"observed","registered":g_variant_get_boolean(value.0) != 0})
+                }
+                Ok(_) => json!({"state":"unknown","reason":"invalid_reply"}),
+                Err(error) => json!({"state":"unknown","reason":error.to_string()}),
+            };
+        let items =
+            match query(c"('org.kde.StatusNotifierWatcher', 'RegisteredStatusNotifierItems')") {
+                Ok(value)
+                    if CStr::from_ptr(g_variant_get_type_string(value.0)).to_bytes() == b"as" =>
+                {
+                    let total = g_variant_n_children(value.0);
+                    let mut entries = Vec::new();
+                    for index in 0..total.min(16) {
+                        let entry = Variant(g_variant_get_child_value(value.0, index));
+                        let name =
+                            CStr::from_ptr(g_variant_get_string(entry.0, std::ptr::null_mut()))
+                                .to_string_lossy();
+                        if name.len() > 256
+                            || !name.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || b"._-:/".contains(&byte)
+                            })
+                        {
+                            entries
+                                .push(json!({"state":"unknown","reason":"invalid_item_identity"}));
+                            continue;
+                        }
+                        let service = name.split('/').next().unwrap_or_default();
+                        let parameters = CString::new(format!("('{service}',)")).unwrap();
+                        let pid = tray_call(
+                            &bus,
+                            c"org.freedesktop.DBus",
+                            c"/org/freedesktop/DBus",
+                            c"org.freedesktop.DBus",
+                            c"GetConnectionUnixProcessID",
+                            &parameters,
+                        )
+                        .and_then(|reply| {
+                            ensure!(
+                                CStr::from_ptr(g_variant_get_type_string(reply.0)).to_bytes()
+                                    == b"(u)",
+                                "invalid_reply"
+                            );
+                            Ok(g_variant_get_uint32(
+                                Variant(g_variant_get_child_value(reply.0, 0)).0,
+                            ))
+                        });
+                        entries.push(match pid {
+                        Ok(pid) => json!({"identity":name,"state":"observed","pid":pid,
+                            "current_process":pid == std::process::id()}),
+                        Err(error) => {
+                            json!({"identity":name,"state":"unknown","reason":error.to_string()})
+                        }
+                    });
+                    }
+                    json!({"state":if total > 16 {"partial"} else {"observed"},
+                    "total":total,"items":entries})
+                }
+                Ok(_) => json!({"state":"unknown","reason":"invalid_reply"}),
+                Err(error) => json!({"state":"unknown","reason":error.to_string()}),
+            };
+        let owner: Value = match tray_call(
+            &bus,
+            c"org.freedesktop.DBus",
+            c"/org/freedesktop/DBus",
+            c"org.freedesktop.DBus",
+            c"GetNameOwner",
+            c"('org.kde.StatusNotifierWatcher',)",
+        ) {
+            Ok(reply)
+                if CStr::from_ptr(g_variant_get_type_string(reply.0)).to_bytes() == b"(s)" =>
+            {
+                let name = Variant(g_variant_get_child_value(reply.0, 0));
+                json!({"state":"observed","name":CStr::from_ptr(
+                    g_variant_get_string(name.0, std::ptr::null_mut())).to_string_lossy()})
+            }
+            Ok(_) => json!({"state":"unknown","reason":"invalid_reply"}),
+            Err(error) => json!({"state":"unknown","reason":error.to_string()}),
+        };
+        json!({"state":"collected","host":host,"watcher_owner":owner,
+            "registered_items":items,"application_pid":std::process::id()})
+    }
 }
 
 pub(super) fn setting(args: &[&str]) -> Result<String> {

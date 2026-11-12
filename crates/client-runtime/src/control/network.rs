@@ -1,7 +1,7 @@
 //! One network watcher belongs to the GUI/CLI owner, independent of its windows.
 use crate::{
     engine::Engine,
-    platform::network::{self, Routes},
+    platform::network::{self, Snapshot},
 };
 use std::{
     sync::Weak,
@@ -11,21 +11,30 @@ use tokio::sync::{Mutex, watch};
 
 #[derive(Default)]
 pub(crate) struct Monitor {
-    baseline: Option<Routes>,
-    pending: Option<Routes>,
+    baseline: Option<Snapshot>,
+    pending: Option<Snapshot>,
     retry_at: Option<Instant>,
     failures: u32,
 }
 
 impl Monitor {
-    pub(crate) fn seed(&mut self, routes: Option<Routes>) {
+    pub(crate) fn seed(&mut self, routes: Option<Snapshot>) {
         *self = Self {
             baseline: routes,
             ..Default::default()
         };
     }
 
-    pub(crate) fn observe(&mut self, routes: Routes, now: Instant) -> bool {
+    pub(crate) fn observe(&mut self, routes: Snapshot, now: Instant) -> bool {
+        #[cfg(target_os = "linux")]
+        let routes = Snapshot {
+            ipv6: routes.ipv6.or_else(|| {
+                self.baseline
+                    .as_ref()
+                    .and_then(|baseline| baseline.ipv6.clone())
+            }),
+            ..routes
+        };
         if self.baseline.is_none() || routes.is_empty() {
             self.seed(Some(routes));
             return false;
@@ -83,7 +92,7 @@ pub(super) fn start(
                 continue;
             };
             // Native reads and route-table allocation happen outside the owner lock.
-            let routes = tokio::task::spawn_blocking(network::snapshot).await;
+            let routes = tokio::task::spawn_blocking(network::recovery_snapshot).await;
             if *shutdown.borrow() {
                 break;
             }
@@ -111,23 +120,33 @@ mod tests {
     use super::*;
     use crate::platform::network::Route;
 
-    fn online(gateway: &str) -> Routes {
-        vec![Route {
-            interface: "physical".into(),
-            gateway: gateway.into(),
-        }]
+    fn online(gateway: &str) -> Snapshot {
+        Snapshot {
+            routes: vec![Route {
+                interface: "physical".into(),
+                gateway: gateway.into(),
+            }],
+            #[cfg(target_os = "linux")]
+            ipv6: None,
+        }
+    }
+
+    fn offline() -> Snapshot {
+        let mut snapshot = online("a");
+        snapshot.routes.clear();
+        snapshot
     }
 
     #[test]
     fn offline_start_recovers_once_after_the_route_settles() {
         let mut monitor = Monitor::default();
-        monitor.seed(Some(Vec::new()));
+        monitor.seed(Some(offline()));
         let now = Instant::now();
         assert!(!monitor.observe(online("a"), now));
         assert!(monitor.observe(online("a"), now));
         monitor.finish(true, now);
         assert!(!monitor.observe(online("a"), now));
-        assert!(!monitor.observe(Vec::new(), now));
+        assert!(!monitor.observe(offline(), now));
         assert!(!monitor.observe(online("a"), now));
         assert!(monitor.observe(online("a"), now));
     }
@@ -172,5 +191,44 @@ mod tests {
         monitor.seed(None);
         assert!(!monitor.observe(online("b"), now));
         assert!(!monitor.observe(online("b"), now));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ipv6_arrival_loss_and_address_changes_refresh_once_after_stabilizing() {
+        use crate::platform::host_network::ipv6;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("eth0")).unwrap();
+        std::fs::write(root.path().join("eth0/flags"), "0x1").unwrap();
+        let mut absent = online("a");
+        absent.ipv6 = Some(ipv6::parse("", root.path()).unwrap());
+        let mut present = absent.clone();
+        present.ipv6 = Some(
+            ipv6::parse(
+                "20010db8000000000000000000000001 02 40 00 80 eth0\n",
+                root.path(),
+            )
+            .unwrap(),
+        );
+        let mut changed = present.clone();
+        changed.ipv6 = Some(
+            ipv6::parse(
+                "20010db8000000000000000000000002 02 40 00 80 eth0\n",
+                root.path(),
+            )
+            .unwrap(),
+        );
+        let now = Instant::now();
+        let mut monitor = Monitor::default();
+        monitor.seed(Some(absent.clone()));
+        for next in [present, changed, absent] {
+            assert!(!monitor.observe(next.clone(), now));
+            assert!(monitor.observe(next.clone(), now));
+            monitor.finish(true, now);
+            assert!(!monitor.observe(next, now));
+        }
+        let mut unreadable = online("a");
+        unreadable.ipv6 = None;
+        assert!(!monitor.observe(unreadable, now));
     }
 }

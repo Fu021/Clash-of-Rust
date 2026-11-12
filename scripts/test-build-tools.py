@@ -692,6 +692,7 @@ class PreparedVmTests(unittest.TestCase):
                 self.assertIn('dependency-snapshot/vm-environment/arm64/index', names)
                 self.assertIn('scripts/test-linux-tun.py', names)
                 self.assertIn('scripts/tun_dns_fixture.py', names)
+                self.assertIn('scripts/tun_ipv6_lifecycle.py', names)
                 source = packed.extractfile('source-commit.txt').read().decode().strip()
                 extracted = root / 'guest'
                 packed.extractall(extracted, filter='data')
@@ -1076,6 +1077,12 @@ class BuildTests(unittest.TestCase):
             self.assertTrue(ci_test_policy.select([
                 'crates/client-runtime/src/platform/host_network/linux.rs'
             ])['linux_user_tests'])
+            for path in ('crates/client-runtime/src/platform/host_network/ipv6.rs',
+                         'crates/client-runtime/src/platform/network/mod.rs',
+                         'crates/client-runtime/src/control/network.rs',
+                         'crates/client-runtime/src/engine/recovery.rs',
+                         'scripts/tun_ipv6_lifecycle.py'):
+                self.assertTrue(ci_test_policy.select([path])['linux_user_tests'], path)
             self.assertTrue(ci_test_policy.select([
                 'crates/client-ui/ui/pages/proxies.slint'
             ])['desktop_ui_tests'])

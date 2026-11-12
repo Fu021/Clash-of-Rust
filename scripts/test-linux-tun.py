@@ -299,6 +299,8 @@ def root_cli_smoke():
                                     capture_output=True, text=True, timeout=45)
             if success:
                 assert output.returncode == 0, f'root cor {arguments}: {output.stderr}'
+                if arguments[:1] == ('logs',):
+                    return [json.loads(line)['data'] for line in output.stdout.splitlines() if line]
                 return json.loads(output.stdout)['data']
             assert output.returncode != 0, f'Invalid configuration was accepted: {arguments}'
             return output.stderr
@@ -376,6 +378,8 @@ def root_cli_smoke():
             # A fresh root daemon must also restore a persisted TUN mode.
             assert invoke('start')['running'] and api('configs')['tun']['enable']
             verify_tun_http()
+            from tun_ipv6_lifecycle import verify
+            verify(directory, invoke, api, http)
             unavailable = directory/'unavailable.yaml'
             unavailable.write_text(
                 'proxies: [{name: Unavailable, type: socks5, server: 203.0.113.10, port: 9}]\n'

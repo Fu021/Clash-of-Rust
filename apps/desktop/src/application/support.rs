@@ -2,6 +2,29 @@ use super::*;
 use serde_json::json;
 
 impl App {
+    fn startup_diagnostics(&self) -> serde_json::Value {
+        let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+        json!({
+            "background_requested":background_start(),
+            "update_restart":update_restart(),
+            "window_visible":self.visible,
+            "tray_state":if self.tray.is_some() {"created"}
+                else if self.tray_startup.is_some() {"initializing"}
+                else if self.tray_failure.is_some() {"failed"}
+                else {"not_started"},
+            "tray_error":self.tray_failure,
+            "tray_initialization":self.tray_startup.as_ref()
+                .map(tray::Startup::diagnostics).unwrap_or_else(||self.tray_startup_report.clone()),
+            "history":self.startup_trace.snapshot(),
+            "session_type":match session_type.as_deref() {
+                Some("wayland") => "wayland",
+                Some("x11") => "x11",
+                Some("tty") => "tty",
+                _ => "unknown",
+            },
+        })
+    }
+
     pub(super) fn export_diagnostics(&mut self, context: &str) -> Task<Message> {
         self.prepare_diagnostics(context, false)
     }
@@ -16,11 +39,12 @@ impl App {
             "error":context,"notice":self.notice,"core_failure":self.core_failure,
             "page":format!("{:?}",self.page),"running":self.snapshot.running,
             "proxy":format!("{:?}",self.snapshot.proxy_mode()),
-            "network_alert":self.network_watch.notice(),"network_tests":self.test_results,
+            "network_alert":self.network_watch.notice(Some(&self.settings)),"network_tests":self.test_results,
             "site_results":clash_client_core::support::ip_results(&self.site_results),
             "claude_status":self.claude.status,
             "geo_status":self.geo_status,
             "events":self.issue_events,
+            "desktop_startup":self.startup_diagnostics(),
         });
         Task::perform(
             async move {
@@ -50,6 +74,15 @@ impl App {
                         .unwrap_or_default();
                     drop(engine);
                     let mut context = context;
+                    context["desktop_startup"]["autostart"] = match platform::autostart_enabled() {
+                        Ok(enabled) => json!({"state":"collected","enabled":enabled}),
+                        Err(error) => json!({"state":"unavailable","error":format!("{error:#}")}),
+                    };
+                    #[cfg(target_os = "linux")]
+                    {
+                        context["desktop_startup"]["linux"] =
+                            platform::desktop_startup_diagnostics();
+                    }
                     context["measurements"] = json!(measurements);
                     if let Err(error) = &logs {
                         context["log_error"] = json!(error);
@@ -76,5 +109,23 @@ impl App {
             },
             Message::DiagnosticsExported,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dismissing_a_tray_warning_keeps_the_failure_in_diagnostics() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        app.tray_failure = Some("当前桌面没有可用托盘宿主".into());
+        app.prepare_initialization();
+        app.dismiss_notice();
+        let startup = app.startup_diagnostics();
+        assert_eq!(startup["tray_state"], "failed");
+        assert_eq!(startup["tray_error"], "当前桌面没有可用托盘宿主");
+        assert!(!app.notice_visible);
+        assert!(app.core_failure.is_none());
     }
 }

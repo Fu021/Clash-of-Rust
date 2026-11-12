@@ -34,6 +34,9 @@ mod kde;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+#[path = "linux/startup.rs"]
+mod linux_startup;
+#[cfg(target_os = "linux")]
 #[path = "linux/tun/mod.rs"]
 mod linux_tun;
 #[cfg(windows)]
@@ -97,6 +100,14 @@ pub unsafe fn initialize_desktop() {
 #[cfg(target_os = "linux")]
 pub fn ensure_tray_available() -> Result<()> {
     gio::ensure_tray_available()
+}
+#[cfg(target_os = "linux")]
+pub fn desktop_startup_diagnostics() -> serde_json::Value {
+    serde_json::json!({"autostart":linux_startup::diagnostics(),"tray_bus":gio::tray_diagnostics()})
+}
+#[cfg(target_os = "linux")]
+pub fn migrate_autostart() {
+    let _ = linux_startup::migrate();
 }
 #[cfg(windows)]
 pub fn ensure_tray_available() -> Result<()> {

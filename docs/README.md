@@ -43,6 +43,7 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 | 理解版本、更新通道与依赖快照 | [版本和依赖](workflows/versions.md)；[版本管理](development.md#版本管理) |
 | 排查测速失败与 Android 断网 | [内部诊断与错误码](diagnostics.md)；[故障报告导出](cli/runtime.md#故障反馈与诊断报告) |
 | 对比各平台更新、Geo、测速和跨用户 TUN 路径 | [网络链路与取证边界](network-paths.md) |
+| 排查无 IPv6、双栈与 TUN 地址族变化 | [IPv6 判定、保护与网络切换](ipv6-tun.md) |
 | 理解 GitHub 与私网的缓存分工 | [缓存覆盖](workflows/cache-coverage.md)、[保留白名单](workflows/cache-retention.md)、[服务边界与协议](workflows/cache-server.md) |
 | 对接 Ubuntu 20.04 预装测试环境镜像 | [镜像复用与测速及验收证据](workflows/prepared-vm-images.md)、[v1 对接约定及共用向量](workflows/prepared-vm-protocol.md) |
 

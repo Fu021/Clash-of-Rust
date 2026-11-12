@@ -75,7 +75,7 @@ impl Engine {
         self.child.as_ref().and_then(Child::id)
     }
 
-    pub(crate) async fn network_changed(&mut self, routes: platform::network::Routes) {
+    pub(crate) async fn network_changed(&mut self, routes: platform::network::Snapshot) {
         if !self.network_monitor.observe(routes, Instant::now()) {
             return;
         }
@@ -84,6 +84,12 @@ impl Engine {
                 &self.logs,
                 "[客户端] Claude 保护期间网络发生变化，已暂停自动刷新内核出站与 DNS",
             );
+            #[cfg(target_os = "linux")]
+            if let Err(error) = self.check_protection_tun_routes().await {
+                self.record_failure(&format!(
+                    "网络变化后 Claude 保护的 TUN 覆盖不完整：{error:#}"
+                ));
+            }
             self.network_monitor.finish(true, Instant::now());
             return;
         }
@@ -126,6 +132,14 @@ impl Engine {
         let payload = read_runtime_config(&self.store.runtime().join("config.yaml"))?;
         self.api.refresh_network(&payload).await?;
         self.healthy().await?;
+        #[cfg(target_os = "linux")]
+        {
+            let config: Value = self.api.get("configs").await?;
+            if config["tun"]["enable"] == true {
+                self.check_tun_routes(&config, self.settings.claude_protection.is_some())
+                    .await?;
+            }
+        }
         self.last_totals = None;
         self.node_root.lock().expect("header route lock").take();
         Ok(())

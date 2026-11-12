@@ -18,6 +18,7 @@ mod notice;
 mod overview;
 mod presentation;
 mod rules;
+mod startup;
 mod support;
 #[cfg(test)]
 mod ui_testing;
@@ -181,6 +182,8 @@ enum Message {
     Claude(claude_view::Event),
     RestartCore,
     CoreReady(Result<CoreHandle, String>),
+    #[cfg(target_os = "linux")]
+    StartupEnvironment(serde_json::Value),
     DismissNotice,
     NoticeExpired(u64),
     UnreachableRecovered(u64, Result<Option<String>, String>),
@@ -338,6 +341,9 @@ struct App {
     recovery_aborter: Option<AbortHandle>,
     tray: Option<tray::Guard>,
     tray_startup: Option<tray::Startup>,
+    tray_failure: Option<String>,
+    tray_startup_report: serde_json::Value,
+    startup_trace: startup::Trace,
     tray_close_requested: Option<desktop_runtime::window::Id>,
     #[cfg(target_os = "macos")]
     mac_reopen_ready: bool,
@@ -422,11 +428,11 @@ impl App {
         }
         app.set_window_size(window_state.size());
         app.window_state = window_state;
-        app.core_failure = None;
-        app.error = false;
-        app.notice_visible = false;
-        app.busy = true;
-        app.working = true;
+        app.prepare_initialization();
+        app.trace_startup("process_start");
+        if let Ok(store) = startup_store() {
+            app.startup_trace.persist(store.root);
+        }
         let task = Task::perform(
             async {
                 initialize_engine()
@@ -439,10 +445,33 @@ impl App {
             app,
             Task::batch([
                 task,
+                #[cfg(target_os = "linux")]
+                Task::perform(
+                    async {
+                        tokio::task::spawn_blocking(platform::desktop_startup_diagnostics)
+                            .await
+                            .unwrap_or_else(|_| serde_json::json!({
+                                "state":"unavailable","reason":"startup_environment_worker_failed"
+                            }))
+                    },
+                    Message::StartupEnvironment,
+                ),
                 desktop_runtime::window::latest().map(Message::ReadWindowSize),
                 desktop_runtime::system::theme().map(Message::SystemTheme),
             ]),
         )
+    }
+
+    fn prepare_initialization(&mut self) {
+        self.core_failure = None;
+        self.error = false;
+        self.notice_visible = false;
+        self.notice_critical = false;
+        self.busy = true;
+        self.working = true;
+        if let Some(error) = self.tray_failure.clone() {
+            self.show_notice(tray_unavailable(&error), true);
+        }
     }
 
     fn initial_state(
@@ -472,17 +501,22 @@ impl App {
                 true,
             ),
         };
-        let (tray, notice, error) = match tray_startup.as_ref().and_then(tray::Startup::poll) {
-            Some(Ok(tray)) => {
-                tray_startup = None;
-                (Some(tray), notice, error)
-            }
-            Some(Err(e)) => {
-                tray_startup = None;
-                (None, format!("{notice} {}", tray_unavailable(&e)), true)
-            }
-            None => (None, notice, error),
-        };
+        let mut tray_startup_report = serde_json::Value::Null;
+        let (tray, tray_failure, notice, error) =
+            match tray_startup.as_ref().and_then(tray::Startup::poll) {
+                Some(Ok(tray)) => {
+                    tray_startup_report = tray_startup.as_ref().unwrap().diagnostics();
+                    tray_startup = None;
+                    (Some(tray), None, notice, error)
+                }
+                Some(Err(e)) => {
+                    tray_startup_report = tray_startup.as_ref().unwrap().diagnostics();
+                    tray_startup = None;
+                    let notice = format!("{notice} {}", tray_unavailable(&e));
+                    (None, Some(e), notice, true)
+                }
+                None => (None, None, notice, error),
+            };
         let core_failure = engine.is_none().then(|| notice.clone());
         let mut app = Self {
             confirmation: None,
@@ -564,6 +598,9 @@ impl App {
             recovery_aborter: None,
             tray,
             tray_startup,
+            tray_failure,
+            tray_startup_report,
+            startup_trace: startup::Trace::new(background_start(), update_restart()),
             tray_close_requested: None,
             #[cfg(target_os = "macos")]
             mac_reopen_ready: false,
@@ -796,6 +833,16 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let startup_source = match &message {
+            Message::ShowWindow(_) => "show_window",
+            Message::Tray(_) => "tray_command",
+            Message::CoreReady(_) => "core_ready",
+            Message::Window((_, desktop_runtime::window::Event::Focused)) => "window_focused",
+            Message::Window((_, desktop_runtime::window::Event::CloseRequested)) => "window_close",
+            Message::Window((_, desktop_runtime::window::Event::Opened { .. })) => "window_opened",
+            Message::Finished(_) => "backend_reply",
+            _ => "tick",
+        };
         let notice_revision = self.notice_revision;
         #[cfg(target_os = "macos")]
         let pump = matches!(
@@ -814,6 +861,7 @@ impl App {
             Message::Tick | Message::Finished(_) | Message::ShowWindow(_)
         );
         let task = self.update_message(message);
+        self.trace_startup(startup_source);
         let task = if observe_network {
             Task::batch([task, self.observe_network()])
         } else {
@@ -883,6 +931,10 @@ impl App {
                         return self.request_exit();
                     }
                     if events.reopen && !self.exiting {
+                        self.startup_trace.record(
+                            "show_requested",
+                            serde_json::json!({"source":"macos_reopen"}),
+                        );
                         return desktop_runtime::window::latest().map(Message::ShowWindow);
                     }
                 }
@@ -1885,6 +1937,10 @@ impl App {
                 }
                 return self.start_site_queue();
             }
+            #[cfg(target_os = "linux")]
+            Message::StartupEnvironment(report) => {
+                self.startup_trace.environment(report);
+            }
             Message::Tray(command) => {
                 // Native check items toggle on click; keep marks tied to confirmed core state.
                 if let Some(tray) = &self.tray {
@@ -1892,6 +1948,8 @@ impl App {
                 }
                 match command {
                     tray::Command::Show => {
+                        self.startup_trace
+                            .record("show_requested", serde_json::json!({"source":"tray_click"}));
                         return desktop_runtime::window::latest().map(Message::ShowWindow);
                     }
                     tray::Command::Exit => return self.request_exit(),
@@ -1937,9 +1995,11 @@ impl App {
                 if let Some(startup) = &self.tray_startup
                     && let Some(result) = startup.poll()
                 {
+                    self.tray_startup_report = startup.diagnostics();
                     self.tray_startup = None;
                     match result {
                         Ok(tray) => {
+                            self.tray_failure = None;
                             tray.update(&self.snapshot);
                             tray.speed(&self.snapshot, self.settings.tray_speed);
                             self.tray = Some(tray);
@@ -1951,9 +2011,14 @@ impl App {
                             }
                         }
                         Err(error) => {
+                            self.tray_failure = Some(error.clone());
                             self.tray_close_requested = None;
                             self.show_notice(tray_unavailable(&error), true);
                             if !self.visible {
+                                self.startup_trace.record(
+                                    "show_requested",
+                                    serde_json::json!({"source":"tray_failed"}),
+                                );
                                 return desktop_runtime::window::latest().map(Message::ShowWindow);
                             }
                         }
@@ -1989,6 +2054,10 @@ impl App {
                     return self.exit();
                 }
                 if platform::show_requested() {
+                    self.startup_trace.record(
+                        "show_requested",
+                        serde_json::json!({"source":"external_show_marker"}),
+                    );
                     return desktop_runtime::window::latest().map(Message::ShowWindow);
                 }
                 if !self.visible && !self.settings.tray_speed {
@@ -3132,6 +3201,22 @@ mod async_state_tests {
     fn app() -> App {
         App::initial_state(Err(anyhow::anyhow!("state test")), None)
     }
+    #[test]
+    fn core_initialization_preserves_a_tray_failure_as_a_recoverable_warning() {
+        let mut app = app();
+        app.tray_failure = Some("当前桌面没有可用托盘宿主".into());
+        app.prepare_initialization();
+        assert!(app.core_failure.is_none());
+        assert!(app.error && app.notice_visible);
+        assert!(!app.notice_critical);
+        assert!(app.notice.contains("托盘不可用"));
+        assert!(app.notice.contains("当前桌面没有可用托盘宿主"));
+        assert!(app.busy && app.working);
+        app.show_notice("内核已启动".into(), false);
+        assert!(app.error && app.notice_visible);
+        assert!(app.notice.contains("托盘不可用"));
+    }
+
     #[test]
     fn retry_after_initialization_failure_is_available_and_not_queued_twice() {
         let mut app = app();

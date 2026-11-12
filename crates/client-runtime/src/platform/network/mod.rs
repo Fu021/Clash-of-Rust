@@ -17,6 +17,27 @@ pub(crate) struct Route {
 
 pub(crate) type Routes = Vec<Route>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Snapshot {
+    pub routes: Routes,
+    #[cfg(target_os = "linux")]
+    pub ipv6: Option<crate::platform::host_network::ipv6::Observation>,
+}
+
+impl Snapshot {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+}
+
+pub(crate) fn recovery_snapshot() -> Result<Snapshot> {
+    Ok(Snapshot {
+        routes: snapshot()?,
+        #[cfg(target_os = "linux")]
+        ipv6: crate::platform::host_network::ipv6::Observation::read().ok(),
+    })
+}
+
 pub(crate) fn snapshot() -> Result<Routes> {
     #[cfg(target_os = "linux")]
     let mut routes = linux::read()?;

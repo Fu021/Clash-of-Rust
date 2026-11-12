@@ -8,6 +8,7 @@ use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu},
 };
+mod startup_diagnostics;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -38,6 +39,7 @@ pub async fn next() -> Option<Command> {
 pub struct Startup {
     ready: mpsc::Receiver<Result<Guard, String>>,
     cancel: mpsc::Sender<()>,
+    diagnostics: std::sync::Arc<std::sync::Mutex<startup_diagnostics::Diagnostics>>,
 }
 
 impl Startup {
@@ -46,20 +48,30 @@ impl Startup {
         let (ready_tx, ready) = mpsc::channel();
         let (cancel, cancelled) = mpsc::channel();
         let started = Instant::now();
+        let diagnostics = std::sync::Arc::new(std::sync::Mutex::new(
+            startup_diagnostics::Diagnostics::new(timeout),
+        ));
+        let report = diagnostics.clone();
         std::thread::spawn(move || {
             let deadline = started + timeout;
             loop {
                 if !matches!(cancelled.try_recv(), Err(mpsc::TryRecvError::Empty)) {
                     return;
                 }
+                report.lock().unwrap().attempt();
                 match start() {
                     Ok(guard) => {
+                        report.lock().unwrap().success();
                         // A dropped receiver also drops the guard and native icon.
                         let _ = ready_tx.send(Ok(guard));
                         return;
                     }
                     Err(error) => {
                         let remaining = deadline.saturating_duration_since(Instant::now());
+                        report
+                            .lock()
+                            .unwrap()
+                            .failure(&error.to_string(), remaining.is_zero());
                         if remaining.is_zero() {
                             let _ = ready_tx.send(Err(error.to_string()));
                             return;
@@ -74,20 +86,36 @@ impl Startup {
                 }
             }
         });
-        Self { ready, cancel }
+        Self {
+            ready,
+            cancel,
+            diagnostics,
+        }
     }
 
     #[cfg(target_os = "macos")]
     pub fn new(timeout: Duration) -> Self {
         let (sender, ready) = mpsc::channel();
         let (cancel, cancelled) = mpsc::channel();
+        let diagnostics = std::sync::Arc::new(std::sync::Mutex::new(
+            startup_diagnostics::Diagnostics::new(timeout),
+        ));
         MAC_PENDING.lock().unwrap().push(MacPending {
             ready: sender,
             cancelled,
             timeout,
             deadline: None,
+            diagnostics: diagnostics.clone(),
         });
-        Self { ready, cancel }
+        Self {
+            ready,
+            cancel,
+            diagnostics,
+        }
+    }
+
+    pub fn diagnostics(&self) -> serde_json::Value {
+        self.diagnostics.lock().unwrap().snapshot()
     }
 
     pub fn poll(&self) -> Option<Result<Guard, String>> {
@@ -546,6 +574,7 @@ struct MacPending {
     cancelled: mpsc::Receiver<()>,
     timeout: Duration,
     deadline: Option<Instant>,
+    diagnostics: std::sync::Arc<std::sync::Mutex<startup_diagnostics::Diagnostics>>,
 }
 #[cfg(target_os = "macos")]
 static MAC_PENDING: std::sync::Mutex<Vec<MacPending>> = std::sync::Mutex::new(Vec::new());
@@ -609,16 +638,30 @@ pub fn pump() {
         let deadline = *pending
             .deadline
             .get_or_insert_with(|| Instant::now() + pending.timeout);
+        pending.diagnostics.lock().unwrap().attempt();
         match start() {
             Ok(guard) => {
+                pending.diagnostics.lock().unwrap().success();
                 let _ = pending.ready.send(Ok(guard));
                 false
             }
             Err(error) if Instant::now() >= deadline => {
+                pending
+                    .diagnostics
+                    .lock()
+                    .unwrap()
+                    .failure(&error.to_string(), true);
                 let _ = pending.ready.send(Err(error.to_string()));
                 false
             }
-            Err(_) => true,
+            Err(error) => {
+                pending
+                    .diagnostics
+                    .lock()
+                    .unwrap()
+                    .failure(&error.to_string(), false);
+                true
+            }
         }
     });
 }
