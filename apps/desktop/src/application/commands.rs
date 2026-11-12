@@ -355,9 +355,9 @@ pub(super) async fn execute(
             Action::Autostart(enabled) => {
                 tokio::task::spawn_blocking(move || platform::set_autostart(enabled)).await??;
                 Ok(if enabled {
-                    "已开启开机自启，将在后台启动"
+                    "已开启后台自启动"
                 } else {
-                    "已关闭开机自启"
+                    "已关闭后台自启动"
                 }
                 .into())
             }

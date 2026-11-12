@@ -57,7 +57,7 @@ Geo 更新后后台因备份缺失无法启动时，启动恢复仅保留通过�
 
 后台请求超时或中断会取消尚未提交的订阅、Geo 和客户端更新下载；安装交接一旦开始，系统安装程序可能已经启动。慢网可用 `--timeout N` 延长请求等待，详见[下载任务](../agent-failures/downloads.md)。
 
-桌面三平台的自启均带 `--background`：Linux 使用用户 `.desktop`，Windows 使用当前用户登录任务，macOS 使用 LaunchAgent。登录后恢复后台和已保存的网络模式，点击托盘或手动打开程序才显示窗口；托盘在登录阶段最多等待 120 秒，只有最终失败才打开窗口提示，避免后台无法操作。不在等待期间提前弹窗，也不重复弹出管理员授权。该设置是登录自启，不是登录前的系统服务。
+设置中的“后台自启动”在桌面三平台均带 `--background`：Linux 使用用户 `.desktop`，Windows 使用当前用户登录任务，macOS 使用 LaunchAgent。登录后恢复后台和已保存的网络模式，点击托盘或手动打开程序才显示窗口；托盘在登录阶段最多等待 120 秒，只有最终失败才打开窗口提示，避免后台无法操作。不在等待期间提前弹窗，也不重复弹出管理员授权。该设置是登录自启，不是登录前的系统服务。
 
 CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用户登录任务（无窗口入口启动 `cor`，系统受限时沿用原有注册表回退）。`service install` 配置下次登录启动，当前会话用 `cor start`；`service remove` 只取消自启，停止当前后台用 `cor stop`。不是 Linux 系统级 root 服务，也不自动启用 linger。配置时记录可执行文件和数据目录，移动程序后应重新安装服务。建议桌面自启与 CLI 自启选择一种。卸载或更换安装目录前，对自定义 `--data-dir` 先执行 `cor stop` 和 `cor service remove --yes`；Windows 安装包也会清理默认目录的后台与当前安装的 CLI 自启项。
 

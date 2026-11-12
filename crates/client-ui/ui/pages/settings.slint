@@ -61,7 +61,7 @@ export component SettingsPage inherits PageSurface {
                 general-section := SettingsSection {
                     title: "常规";
                     ListPanel {
-                        FormRow { title: "登录后后台自启";
+                        FormRow { title: "后台自启动";
                             Toggle { checked: UiData.autostart; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; toggled(value) => { UiActions.dispatch(Intent.autostart, value ? "true" : "false", ""); } }
                         }
                         Divider { }

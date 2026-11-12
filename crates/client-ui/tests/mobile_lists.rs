@@ -165,6 +165,9 @@ slint::slint! {
 
     export component ApplicationPoliciesProbe inherits Window {
         preferred-width: 393px; preferred-height: 852px;
+        min-width: 0px; min-height: 0px;
+        out property <length> viewport-width: root.width;
+        out property <length> viewport-height: root.height;
         in-out property <bool> supported <=> AndroidData.policies-supported;
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> protection-pending <=> MobileData.protection-pending;
@@ -1154,17 +1157,26 @@ fn reveal_policy_control(
 ) -> Vec<f32> {
     let (width, height) = size;
     for _ in 0..12 {
+        frame(adapter, width as usize, height as usize);
+        advance(clock, Duration::from_millis(20));
+        assert!(
+            (probe.get_viewport_width() - width as f32).abs() < 1.
+                && (probe.get_viewport_height() - height as f32).abs() < 1.,
+            "policy viewport {}x{} does not match {width}x{height}",
+            probe.get_viewport_width(),
+            probe.get_viewport_height()
+        );
         let geometry = probe.global::<UiGeometry>();
         geometry.set_revision(geometry.get_revision().wrapping_add(1));
         frame(adapter, width as usize, height as usize);
-        advance(clock, Duration::ZERO);
+        advance(clock, Duration::from_millis(20));
         frame(adapter, width as usize, height as usize);
         let bounds = targets.borrow()[key].clone();
         if bounds[1] >= 0. && bounds[1] + bounds[3] <= height as f32 {
             return bounds;
         }
         probe.window().dispatch_event(WindowEvent::PointerScrolled {
-            position: LogicalPosition::new(width as f32 / 2., height as f32 / 2.),
+            position: LogicalPosition::new(width as f32 - 4., height as f32 / 2.),
             delta_x: 0.,
             delta_y: if bounds[1] < 0. { 1. } else { -1. } * height as f32 / 2.,
         });

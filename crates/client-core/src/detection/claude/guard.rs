@@ -10,6 +10,7 @@ use std::{
 
 const CONTROLLER_UNAVAILABLE: &str = "控制接口暂不可用，实时拦截未确认；保护规则仍保留。";
 const GUARD_STOPPED: &str = "实时拦截已停止，请重新开启 Claude 保护。";
+const CONTROLLER_FAILURE_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -21,6 +22,28 @@ pub struct Snapshot {
     pub connected: bool,
     pub error: String,
     pub routes: VecDeque<Route>,
+}
+#[derive(Default)]
+struct ControllerHealth {
+    unavailable_since: Option<Instant>,
+}
+impl ControllerHealth {
+    fn observe(&mut self, state: &mut Snapshot, available: bool, now: Instant) {
+        state.connected = available;
+        if available {
+            self.unavailable_since = None;
+            if state.error == CONTROLLER_UNAVAILABLE {
+                state.error.clear();
+            }
+        } else {
+            let since = *self.unavailable_since.get_or_insert(now);
+            if now.saturating_duration_since(since) >= CONTROLLER_FAILURE_DELAY
+                && state.error.is_empty()
+            {
+                state.error = CONTROLLER_UNAVAILABLE.into();
+            }
+        }
+    }
 }
 struct Inner {
     task: tokio::task::JoinHandle<()>,
@@ -86,6 +109,7 @@ impl Guard {
             let mut next_scan = Instant::now();
             let mut last_alert = Instant::now().checked_sub(Duration::from_secs(60)).unwrap();
             let mut notification = AlertTask(None);
+            let mut controller = ControllerHealth::default();
             loop {
                 tick.tick().await;
                 if notification.0.as_ref().is_some_and(|n| n.is_finished())
@@ -113,7 +137,6 @@ impl Guard {
                         (events.total.saturating_sub(seen_total) as usize).min(events.routes.len());
                     seen_total = events.total;
                     if let Ok(mut state) = captured.lock() {
-                        state.connected = events.connected;
                         state.total = events.total;
                         for route in events.routes.iter().skip(events.routes.len() - new_count) {
                             if suspicious_route(route, &node) {
@@ -136,18 +159,12 @@ impl Guard {
                     .await
                 else {
                     if let Ok(mut state) = captured.lock() {
-                        state.connected = false;
-                        if state.error.is_empty() {
-                            state.error = CONTROLLER_UNAVAILABLE.into();
-                        }
+                        controller.observe(&mut state, false, Instant::now());
                     }
                     continue;
                 };
                 if let Ok(mut state) = captured.lock() {
-                    state.connected = true;
-                    if state.error == CONTROLLER_UNAVAILABLE {
-                        state.error.clear();
-                    }
+                    controller.observe(&mut state, true, Instant::now());
                 }
                 let mut alert_hosts = BTreeSet::new();
                 for connection in connections {
@@ -424,6 +441,68 @@ pub(crate) fn decode(reader: impl std::io::Read, node: &str) -> serde_json::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transient_controller_outages_stay_checking_and_recovery_resets_the_deadline() {
+        use crate::protection::status::{State, Status};
+        let mut controller = ControllerHealth::default();
+        let mut snapshot = Snapshot::default();
+        let now = Instant::now();
+        for started in [now, now + Duration::from_secs(10)] {
+            controller.observe(&mut snapshot, false, started);
+            controller.observe(
+                &mut snapshot,
+                false,
+                started + CONTROLLER_FAILURE_DELAY - Duration::from_millis(1),
+            );
+            assert!(!snapshot.connected);
+            assert!(snapshot.error.is_empty());
+            assert_eq!(
+                Status::observe(
+                    true,
+                    false,
+                    true,
+                    true,
+                    Some((snapshot.connected, &snapshot.error)),
+                )
+                .state,
+                State::Checking
+            );
+            controller.observe(&mut snapshot, true, started + CONTROLLER_FAILURE_DELAY);
+            assert!(snapshot.connected);
+            assert!(snapshot.error.is_empty());
+        }
+    }
+
+    #[test]
+    fn sustained_controller_failure_alerts_and_does_not_erase_enforcement_errors() {
+        let mut controller = ControllerHealth::default();
+        let mut snapshot = Snapshot {
+            blocked: 1,
+            routes: VecDeque::from([Route {
+                outcome: "异常连接已关闭".into(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let now = Instant::now();
+        controller.observe(&mut snapshot, false, now);
+        controller.observe(&mut snapshot, false, now + CONTROLLER_FAILURE_DELAY);
+        assert_eq!(snapshot.error, CONTROLLER_UNAVAILABLE);
+        controller.observe(&mut snapshot, true, now + Duration::from_secs(4));
+        assert!(snapshot.error.is_empty());
+        for error in ["异常连接关闭失败", "系统通知失败"] {
+            snapshot.error = error.into();
+            controller.observe(&mut snapshot, false, now + Duration::from_secs(5));
+            assert_eq!(snapshot.error, error);
+            controller.observe(&mut snapshot, false, now + Duration::from_secs(9));
+            assert_eq!(snapshot.error, error);
+            controller.observe(&mut snapshot, true, now + Duration::from_secs(10));
+            assert_eq!(snapshot.error, error);
+        }
+        assert_eq!(snapshot.blocked, 1);
+        assert_eq!(snapshot.routes[0].outcome, "异常连接已关闭");
+    }
+
     #[tokio::test]
     async fn a_stopped_guard_cannot_keep_the_last_connected_state() {
         let task = tokio::spawn(async {});

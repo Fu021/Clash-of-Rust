@@ -1,3 +1,54 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Clash of Rust · 浏览器地区检测</title><link rel="stylesheet" href="browser.css"><script src="browser.js" defer></script></head>
-<body><main><header><strong>Clash of Rust</strong><span>本地检测入口</span></header><h1>浏览器地区线索检测</h1><p>页面打开后会自动检测并回传结果。请使用平时访问 Claude 的浏览器与同一用户配置，检测出口、时区、语言、字体、WebRTC 和实际 DNS。</p><p class="muted">此页面与 Claude 网站的定位权限、扩展和站点设置可能不同。需要确认网站内环境时，在应用中复制 Claude 页面采样脚本。</p><div class="actions"><button id="clash-region-start">重新检测</button><button id="clash-region-location" class="secondary">主动检测定位</button><button id="clash-region-download" class="secondary" disabled>保存采样 JSON</button></div><p class="muted">检测会联系 ipify、IP.SB、bash.ws 和 Cloudflare STUN；不会读取 Claude 账号、Cookie 或密钥。定位默认不请求。</p><p id="clash-region-status" role="status">正在准备自动检测…</p><progress id="clash-region-progress" max="4" value="0"></progress><pre id="clash-region-results">检测结束后，这里显示原始采样结果。</pre><footer>关闭应用内的检测入口后，本页面将无法继续回传。未知结果不等同于没有泄漏。</footer></main></body></html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Clash of Rust · 浏览器地区检测</title>
+    <link rel="stylesheet" href="browser.css">
+    <script src="browser.js" defer></script>
+</head>
+<body>
+<main>
+    <header>
+        <svg class="wordmark" viewBox="0 0 116 19" role="img" aria-label="Clash of Rust">
+            <path d="M9.6 8.5A5 5 0 1 0 9.6 15.5 M13.4 2V17 M16.8 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0 M26.8 7V17 M35.8 8.6C34.8 7.1 29.8 6.7 29.8 9.6C29.8 12.2 36.2 11.5 36.2 14.3C36.2 17.6 30.6 17.5 29.4 15.6 M39.6 2V17 M39.6 12a4 4.6 0 0 1 8 0V17 M80.8 7V17 M80.8 11.8a4.6 4.6 0 0 1 5 -4.5 M89.2 7V12a4 4.6 0 0 0 8 0 M97.2 7V17 M106.2 8.6C105.2 7.1 100.2 6.7 100.2 9.6C100.2 12.2 106.6 11.5 106.6 14.3C106.6 17.6 101 17.5 99.8 15.6 M111 3.4V13.6a3 3 0 0 0 3.9 3 M109 8H114.4"/>
+            <path d="M55.2 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0 M68.8 17V6.2a3.5 3.5 0 0 1 4.4 -3.4 M66.8 8H72"/>
+        </svg>
+        <span class="badge">本地检测</span>
+    </header>
+    <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">A÷ 检测</p>
+        <h1 id="page-title">浏览器地区线索</h1>
+        <p class="description">使用你平时访问 Claude 的浏览器，结果会自动回传到应用。</p>
+    </section>
+    <section class="card sampling" aria-label="检测进度">
+        <p id="clash-region-status" role="status" aria-live="polite">正在准备自动检测…</p>
+        <progress id="clash-region-progress" max="4" value="0" aria-label="检测进度"></progress>
+        <div class="actions">
+            <button id="clash-region-start">重新检测</button>
+            <button id="clash-region-download" class="secondary" disabled>保存采样 JSON</button>
+        </div>
+        <div class="scope" aria-label="采样范围">
+            <span>网络出口</span><span>DNS</span><span>WebRTC</span>
+            <span>时区与语言</span><span>字体</span>
+        </div>
+    </section>
+    <section class="card privacy" aria-labelledby="privacy-title">
+        <div>
+            <h2 id="privacy-title">定位由你决定</h2>
+            <p>默认不请求定位，也不读取 Claude 账号、Cookie 或密钥。</p>
+        </div>
+        <button id="clash-region-location" class="secondary">主动检测定位</button>
+    </section>
+    <details class="card raw">
+        <summary>原始采样</summary>
+        <pre id="clash-region-results">检测结束后，这里显示采样 JSON。</pre>
+    </details>
+    <footer>
+        <p>检测会联系 ipify、bash.ws 和 Cloudflare。关闭应用内检测入口后，页面将无法继续回传。</p>
+        <p>本页与 Claude 网站的权限、扩展和站点设置可能不同；未知结果不代表没有泄漏。需要站点内采样时，请使用应用中的“补充采样”。</p>
+    </footer>
+</main>
+</body>
+</html>
