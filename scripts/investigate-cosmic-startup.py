@@ -21,8 +21,16 @@ IMAGE_SIZE = 2955067392
 IMAGE_SHA256 = 'a0ef3842ab710db4f4407cf3499560b59dddbbcd59bee17beab7b0e99dc22b4c'
 
 
+class MonitorError(RuntimeError):
+    def __init__(self, response):
+        self.response = response
+        super().__init__(str(response))
+
+
 class Monitor:
-    def __init__(self, path):
+    def __init__(self, path, display):
+        self.display = display
+        self.captures = {}
         self.connection = socket.socket(socket.AF_UNIX)
         self.connection.settimeout(10)
         self.connection.connect(str(path))
@@ -45,16 +53,27 @@ class Monitor:
         }).encode() + b'\n')
         result = self.read()
         if 'error' in result:
-            raise RuntimeError(str(result['error']))
+            raise MonitorError(result['error'])
         return result.get('return')
 
     def screenshot(self, name):
-        from PIL import Image
+        from PIL import Image, ImageGrab
         path = REPORT / (name + '.ppm')
-        self.execute('screendump', {'filename': str(path)})
-        with Image.open(path) as image:
+        try:
+            self.execute('screendump', {'filename': str(path)})
+        except MonitorError as error:
+            if error.response.get('desc') != 'no surface':
+                raise
+            image = ImageGrab.grab(xdisplay=self.display)
+            method = 'host-x11-display'
+        else:
+            image = Image.open(path)
+            method = 'qmp-screendump'
+        with image:
             image.save(path.with_suffix('.png'))
-        path.unlink()
+            self.captures[name] = {'method': method, 'size': list(image.size)}
+        path.unlink(missing_ok=True)
+        (REPORT / 'captures.json').write_text(json.dumps(self.captures, indent=2))
 
     def close(self):
         self.stream.close()
@@ -225,7 +244,7 @@ def main():
                 if process.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError('QEMU socket initialization failed')
                 time.sleep(.2)
-            monitor = Monitor(qmp_path)
+            monitor = Monitor(qmp_path, environment['DISPLAY'])
             console = Console(serial_path)
             console.wait_shell(process)
             console.command('mkdir -p /mnt/cor-test && mount -t 9p '
@@ -233,15 +252,32 @@ def main():
             reports = {}
             for stage in ('prepare', 'first-login', 'background-login', 'manual-launch'):
                 print('Starting COSMIC stage:', stage, flush=True)
+                failure = None
                 try:
                     console.command('python3 /mnt/cor-test/guest.py ' + shlex.quote(stage), timeout=900)
-                finally:
-                    monitor.screenshot(stage)
+                except Exception as error:
+                    failure = error
+                evidence_errors = {}
+                try:
                     encoded = console.command(
                         'base64 -w0 /var/tmp/cor-startup-' + stage + '.json', timeout=30
                     ).strip()
                     reports[stage] = json.loads(base64.b64decode(encoded, validate=True))
                     (REPORT / (stage + '.json')).write_text(json.dumps(reports[stage], indent=2))
+                except Exception as error:
+                    evidence_errors['report'] = type(error).__name__ + ': ' + str(error)
+                try:
+                    monitor.screenshot(stage)
+                except Exception as error:
+                    evidence_errors['screenshot'] = type(error).__name__ + ': ' + str(error)
+                if evidence_errors:
+                    (REPORT / (stage + '-evidence-errors.json')).write_text(
+                        json.dumps(evidence_errors, indent=2)
+                    )
+                if failure is not None:
+                    raise failure
+                if evidence_errors:
+                    raise RuntimeError('COSMIC stage evidence is incomplete: ' + str(evidence_errors))
                 print(stage, 'verified', flush=True)
             (REPORT / 'result.json').write_text(json.dumps({
                 'complete': True, 'platform': 'Pop!_OS 24.04 live COSMIC Wayland',

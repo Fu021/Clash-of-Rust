@@ -22,6 +22,26 @@ def wait_for(read, timeout=180):
     raise TimeoutError('COSMIC login condition did not become ready')
 
 
+def apt(*arguments, timeout=600):
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('The live session package-manager lock did not become available')
+        result = subprocess.run(
+            ['apt-get', '-o', 'DPkg::Lock::Timeout=60', '-o', 'Dpkg::Use-Pty=0',
+             '-o', 'APT::Color=0', *arguments],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=remaining,
+            env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive', 'LC_ALL': 'C'},
+        )
+        print(result.stdout, end='', flush=True)
+        if result.returncode == 0:
+            return
+        if not ('Could not get lock ' in result.stdout and 'held by process ' in result.stdout):
+            raise subprocess.CalledProcessError(result.returncode, result.args, output=result.stdout)
+        time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
 def user():
     for entry in Path('/proc').iterdir():
         if not entry.name.isdigit():
@@ -98,11 +118,8 @@ def main(stage):
     report = {'stage': stage, 'kernel': command('uname', '-r').strip(),
               'system': os_release, 'desktop': 'COSMIC', 'session_type': 'wayland'}
     if stage == 'prepare':
-        subprocess.run(['apt-get', 'update'], check=True, timeout=300)
-        subprocess.run(
-            ['apt-get', 'install', '--no-install-recommends', '-y', '/mnt/cor-test/candidate.deb'],
-            check=True, timeout=300, env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'},
-        )
+        apt('update', timeout=300)
+        apt('install', '--no-install-recommends', '-y', '/mnt/cor-test/candidate.deb', timeout=300)
         report['packages'] = command(
             'dpkg-query', '-W', '-f=${Package} ${Version}\\n',
             'cosmic-session', 'cosmic-comp', 'cosmic-panel', 'cosmic-settings',
