@@ -588,7 +588,7 @@ def account_cli_matrix():
                        'rules: ["MATCH,Route"]\n'
                        'dns: {enable: true, enhanced-mode: fake-ip, '
                        'nameserver: ["https://192.0.2.254/dns-query#DIRECT"]}\n'
-                       f'tun: {{device: CorMatrix{user["uid"]}, route-address: [203.0.113.0/24], dns-hijack: []}}\n')
+                       f'tun: {{device: CorMatrix{user["uid"]}, dns-hijack: []}}\n')
                 source = user['home']/'source.yaml'
                 source.write_text(raw)
                 source.chmod(0o600)

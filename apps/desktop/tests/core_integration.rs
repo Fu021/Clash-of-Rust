@@ -208,6 +208,11 @@ async fn basic_system_proxy_and_tun() {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     assert_eq!(std::env::var("CLASH_PROXY_SMOKE").as_deref(), Ok("1"));
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        std::env::var("CLASH_TUN_TEST_NAMESPACE").as_deref(),
+        Ok("1")
+    );
     #[cfg(windows)]
     {
         assert_eq!(std::env::var("CLASH_EXPECT_UNELEVATED").as_deref(), Ok("1"));
@@ -295,8 +300,13 @@ async fn basic_system_proxy_and_tun() {
             dns.send_to(&response, peer).await.unwrap();
         }
     });
-    // Route only this documentation subnet. The runner's control traffic and
-    // Internet default route remain outside TUN even if a test aborts.
+    // Linux checks default-route coverage inside its isolated namespace.
+    // Other runners keep their control traffic outside the test subnet.
+    let tun_routes = if cfg!(target_os = "linux") {
+        ""
+    } else {
+        "  route-address: [203.0.113.0/24]\n"
+    };
     let proxies = if std::env::var_os("CLASH_PROXY_BENCHMARK_FIXTURE").is_some() {
         format!(
             "proxies: [{{name: CI-Loopback, type: socks5, server: 127.0.0.1, port: {mixed_port}}}]"
@@ -304,7 +314,7 @@ async fn basic_system_proxy_and_tun() {
     } else {
         "proxies: []".into()
     };
-    std::fs::write(&profile, format!("{proxies}\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['{dns_address}']}}\ntun:\n  device: {device}\n  stack: system\n  route-address: [203.0.113.0/24]\n  dns-hijack: []\n")).unwrap();
+    std::fs::write(&profile, format!("{proxies}\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['{dns_address}']}}\ntun:\n  device: {device}\n  stack: system\n{tun_routes}  dns-hijack: []\n")).unwrap();
     engine
         .import("Proxy smoke".into(), profile.display().to_string(), None)
         .await
