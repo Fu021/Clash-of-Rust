@@ -35,8 +35,13 @@ def isolated_resolved():
     # Called only after unshare --mount --net. No sockets, DNS files, routes,
     # or daemons from the host namespace are used or changed.
     run(['mount', '--make-rprivate', '/'])
-    run(['mount', '-t', 'sysfs', '-o', 'ro,nosuid,nodev,noexec', 'sysfs', '/sys'])
     run(['mount', '-t', 'tmpfs', '-o', 'mode=0755', 'tmpfs', '/run'])
+    isolated_sysfs = Path('/run/cor-isolated-sysfs')
+    isolated_sysfs.mkdir()
+    run(['mount', '-t', 'sysfs', '-o', 'ro,nosuid,nodev,noexec', 'sysfs', isolated_sysfs])
+    # Replace only the tagged network view. Overmounting all of /sys would hide
+    # cgroup and other host mounts that systemd-resolved needs during startup.
+    run(['mount', '--bind', isolated_sysfs/'class/net', '/sys/class/net'])
     # resolved creates its own runtime directory with systemd-resolve ownership
     # before dropping root. A precreated root-owned directory makes it exit.
     for directory in ('/run/dbus', '/run/systemd/netif/links'):
