@@ -42,6 +42,7 @@ def isolated_resolved():
     # Replace only the tagged network view. Overmounting all of /sys would hide
     # cgroup and other host mounts that systemd-resolved needs during startup.
     run(['mount', '--bind', isolated_sysfs/'class/net', '/sys/class/net'])
+    run(['mount', '--bind', isolated_sysfs/'devices/virtual/net', '/sys/devices/virtual/net'])
     # resolved creates its own runtime directory with systemd-resolve ownership
     # before dropping root. A precreated root-owned directory makes it exit.
     for directory in ('/run/dbus', '/run/systemd/netif/links'):
