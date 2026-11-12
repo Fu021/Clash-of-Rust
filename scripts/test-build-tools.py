@@ -79,6 +79,11 @@ _cosmic_startup_guest_spec = importlib.util.spec_from_file_location(
 cosmic_startup_guest = importlib.util.module_from_spec(_cosmic_startup_guest_spec)
 _cosmic_startup_guest_spec.loader.exec_module(cosmic_startup_guest)
 
+_cosmic_startup_host_spec = importlib.util.spec_from_file_location(
+    'cosmic_startup_host', build.ROOT/'scripts/investigate-cosmic-startup.py')
+cosmic_startup_host = importlib.util.module_from_spec(_cosmic_startup_host_spec)
+_cosmic_startup_host_spec.loader.exec_module(cosmic_startup_host)
+
 
 class TunDnsFixtureTests(unittest.TestCase):
     def query(self, name, kind):
@@ -6982,6 +6987,53 @@ class AptCacheTests(unittest.TestCase):
 
 
 class CosmicStartupInvestigationTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Requires a Linux terminal')
+    def test_serial_probe_recovers_from_an_incomplete_command_in_a_real_terminal(self):
+        import pty
+        import select
+        import signal
+        import time
+
+        child, terminal = pty.fork()
+        if child == 0:
+            os.execve('/bin/bash', ['bash', '--noprofile', '--norc', '-i'], {
+                **os.environ, 'PS1': 'fixture-ready> ', 'PS2': 'fixture-incomplete> ',
+                'PROMPT_COMMAND': '', 'TERM': 'dumb',
+            })
+        try:
+            def receive():
+                return os.read(terminal, 65536) if select.select([terminal], [], [], .05)[0] else b''
+
+            def expect(marker):
+                output = b''
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    output += receive()
+                    if marker in output:
+                        return
+                self.fail('The terminal fixture did not reach its expected prompt')
+
+            expect(b'fixture-ready> ')
+            os.write(terminal, b"id() { printf '0\\n'; }\n")
+            expect(b'fixture-ready> ')
+            os.write(terminal, b"printf '\n")
+            expect(b'fixture-incomplete> ')
+            console = object.__new__(cosmic_startup_host.Console)
+            console.connection = SimpleNamespace(sendall=lambda payload: os.write(terminal, payload))
+            console.receive = receive
+            real_clock = time.monotonic
+            started = real_clock()
+            with patch.object(cosmic_startup_host.time, 'monotonic',
+                              side_effect=lambda: started + (real_clock() - started) * 200):
+                console.wait_shell(SimpleNamespace(poll=lambda: None))
+        finally:
+            os.close(terminal)
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(child, 0)
+
     def test_package_manager_lock_wait_is_bounded_and_does_not_hide_dependency_errors(self):
         lock = 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1254 (apt-get)\n'
         clock = [0]

@@ -132,7 +132,7 @@ class Console:
             if process.poll() is not None:
                 raise RuntimeError('QEMU exited before the login probe')
             if time.monotonic() >= next_probe:
-                self.connection.sendall(b"\nprintf '\\nCOR_ROOT_READY:%s\\n' \"$(id -u)\"\n")
+                self.connection.sendall(b"\x03\nprintf '\\nCOR_ROOT_READY:%s\\n' \"$(id -u)\"\n")
                 next_probe = time.monotonic() + 10
             data = (data + self.receive()).replace(b'\r', b'')[-16384:]
             if b'\nCOR_ROOT_READY:0\n' in data:
