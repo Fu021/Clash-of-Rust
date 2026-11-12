@@ -32,7 +32,7 @@ Claude 保护期间不自动改写锁定的运行配置；网络变化后重新�
 
 纯逻辑回归覆盖地址过滤、DAD、deprecated、ULA、关闭接口、无 IPv6、双栈、IPv6 开关、保护、读取失败、当前 UID 与原始路由证据，以及无 → 有 → 更换 → 无的稳定观察和重试。
 
-[`tun_ipv6_lifecycle.py`](../scripts/tun_ipv6_lifecycle.py)由现有 Linux 隔离测试调用：默认 IPv6 开启但移除上联 IPv6 时启动、重启并开启/恢复 Claude 保护；保护保持启用时分别从有、无 IPv6 开始往返切换，核对覆盖告警、IPv4 请求和锁定配置不变。普通模式恢复 IPv6 后检查自动刷新、真实 IPv4/IPv6 HTTP 和 TUN 路由，再验证 IPv6 消失、恢复及 TUN 重连，核对设置未被自动改写。
+[`tun_ipv6_lifecycle.py`](../scripts/tun_ipv6_lifecycle.py)由现有 Linux 隔离测试调用：默认 IPv6 开启但移除上联 IPv6 时启动、重启，再开启 Claude 保护；核对保护期间拒绝停止内核且状态不变。保护保持启用时分别从有、无 IPv6 开始往返切换，核对覆盖告警、IPv4 请求和锁定配置不变。普通模式恢复 IPv6 后检查自动刷新、真实 IPv4/IPv6 HTTP 和 TUN 路由，再验证 IPv6 消失、恢复及 TUN 重连，核对设置未被自动改写。
 
 测试只在可丢弃网络/挂载命名空间执行，不改变开发主机网络。隔离后在独立挂载点创建只读 sysfs，同时绑定 `class/net` 与其符号链接目标 `devices/virtual/net`，保留 cgroup 等宿主子挂载供 systemd-resolved 启动；再核对上联接口索引，保证 `/proc`、网络类视图与路由来自同一命名空间。只绑定 `class/net` 会让隔离网卡的链接仍指向宿主设备树，不能用于判定隔离接口，见[内核说明](https://docs.kernel.org/networking/sysfs-tagging.html)。
 

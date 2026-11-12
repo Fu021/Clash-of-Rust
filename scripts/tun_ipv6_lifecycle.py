@@ -139,8 +139,9 @@ def verify(directory, invoke, api, http):
         check(False, expect_unconfigured=True)
         assert invoke('claude', 'protect', 'on', '--yes')['enabled']
         check(False, expect_unconfigured=True)
-        invoke('stop')
-        assert invoke('start')['running']
+        rejected = invoke('stop', success=False)
+        assert '请先关闭 Claude 保护' in rejected, rejected
+        assert invoke('status')['protected'], 'Rejected stop disabled Claude protection'
         check(False, expect_unconfigured=True)
         protected_roundtrip(False)
         assert not invoke('claude', 'protect', 'off')['enabled']
