@@ -555,6 +555,21 @@ def start_test_log(report, marker):
             raise
 
 
+def stop_app_before_test():
+    command=[ADB,'shell','am','force-stop','org.clashofrust.android']
+    for attempt in range(3):
+        try:
+            run(command,timeout=15,capture_output=True,text=True)
+            return
+        except subprocess.CalledProcessError as error:
+            detail=(error.stderr or '')+(error.stdout or '')
+            if attempt==2 or (error.returncode!=255 and not re.search(
+                    r'device offline|device not found|no devices|connection.*closed',detail,re.I)):
+                raise
+            print('Transient ADB force-stop connection failure; retrying before instrumentation',flush=True)
+            time.sleep(attempt+1)
+
+
 def stop_test_log(process):
     if process.poll() is None:
         process.terminate()
@@ -870,7 +885,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                     run([ADB,'shell','settings','put','global',setting,animation_scale])
                 print(f'IME round {iteration}: system animation scale {animation_scale}',flush=True)
             for case in cases:
-                run([ADB,'shell','am','force-stop','org.clashofrust.android'])
+                stop_app_before_test()
                 result = subprocess.run([ADB,'shell','am','instrument','-w','-e','class',
                     'org.clashofrust.android.ProxyTunTest#'+case,
                     '-e','ime_round',str(iteration),

@@ -66,6 +66,7 @@ def main():
                      'application_controls_distinguish_scope_filter_save_and_protection',
                      'applications_reopen_with_active_geometry_observers_across_modes_and_sizes',
                      'applications_scroll_across_phone_and_tablet_viewports',
+                     'application_rule_entry_remains_reachable_in_landscape',
                      'application_policy_form_respects_platform_protection_and_scrolls',
                      'application_policy_picker_keeps_the_form_and_rejects_locked_selection',
                      'mobile_accent_picker_remains_usable_while_protected',

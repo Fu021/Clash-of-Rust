@@ -1108,6 +1108,7 @@ public class ProxyTunTest {
             connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\nContent-Length: 1\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
             assertHeldResponse(connection.getInputStream());
+            connection.setSoTimeout(1);
             long deadline=SystemClock.elapsedRealtime()+5000;
             JSONObject records;
             do {
@@ -1127,6 +1128,7 @@ public class ProxyTunTest {
                             return;
                         }
                 }
+                assertHeldConnectionPending(connection.getInputStream());
                 SystemClock.sleep(100);
             } while (SystemClock.elapsedRealtime()<deadline);
             fail("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
@@ -1146,7 +1148,20 @@ public class ProxyTunTest {
         assertEquals("Held HTTP headers exceed the size limit",4,ending);
         String status=header.toString(StandardCharsets.US_ASCII.name()).split("\r\n",2)[0];
         assertTrue("Held TUN request failed: "+status,status.contains(" 200 "));
-        if (stream.read()<0) throw new EOFException("Held HTTP response returned no body");
+        byte[] expected="cor-android-network-ok".getBytes(StandardCharsets.US_ASCII);
+        for (byte value:expected) {
+            int actual=stream.read();
+            if (actual<0) throw new EOFException("Held HTTP response body was truncated");
+            assertEquals("Held HTTP response returned the wrong body",value&255,actual);
+        }
+    }
+    private static void assertHeldConnectionPending(InputStream stream) throws IOException {
+        try {
+            if (stream.read()<0) throw new EOFException("Held TUN connection closed before acknowledgement");
+            fail("Held TUN response completed before controller verification");
+        } catch (java.net.SocketTimeoutException pending) {
+            return;
+        }
     }
     @Test public void heldResponseClassifiesTruncationAsTransportFailure() throws Exception {
         for (String raw:new String[]{"", "HTTP/1.1 200 OK\r\nX-Test: 1\r\n", "HTTP/1.1 200 OK\r\n\r\n"}) {
@@ -1159,7 +1174,20 @@ public class ProxyTunTest {
         try {assertHeldResponse(new ByteArrayInputStream("HTTP/1.1 403 Forbidden\r\n\r\nx".getBytes(StandardCharsets.US_ASCII)));}
         catch (AssertionError error) {rejected=error;}
         assertNotNull("An HTTP error must fail without a readiness retry",rejected);
-        assertHeldResponse(new ByteArrayInputStream("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\nx".getBytes(StandardCharsets.US_ASCII)));
+        assertHeldResponse(new ByteArrayInputStream("HTTP/1.1 200 OK\r\nX-Test: 1\r\n\r\ncor-android-network-ok".getBytes(StandardCharsets.US_ASCII)));
+        try {
+            assertHeldConnectionPending(new ByteArrayInputStream(new byte[0]));
+            fail("Closed probes must open a fresh connection within the readiness deadline");
+        } catch (EOFException expected) {
+            assertNotNull(expected);
+        }
+        assertHeldConnectionPending(new InputStream() {
+            @Override public int read() throws IOException { throw new java.net.SocketTimeoutException(); }
+        });
+        AssertionError premature=null;
+        try { assertHeldConnectionPending(new ByteArrayInputStream(new byte[]{'!'})); }
+        catch (AssertionError error) { premature=error; }
+        assertNotNull("Premature completion must not be retried as a transport transition",premature);
     }
     private static JSONArray previewBounds(JSONObject ui, String name) {
         JSONObject targets = ui.optJSONObject("targets");
@@ -1194,10 +1222,31 @@ public class ProxyTunTest {
     private static void previewTarget(String name) throws Exception {
         await("Screenshot control was unavailable: " + name, () -> tryPreviewTarget(name));
     }
+    private static void previewScrollableTarget(String name, String viewport) throws Exception {
+        for (int attempt = 0; attempt < 12; attempt++) {
+            waitForAppWindow();
+            JSONObject ui = MainActivity.diagnostics();
+            JSONArray target = previewBounds(ui, name);
+            JSONArray bounds = previewBounds(ui, viewport);
+            if (target == null || bounds == null) {
+                SystemClock.sleep(200);
+                continue;
+            }
+            double top = Math.max(0, bounds.getDouble(1));
+            double bottom = Math.min(ui.getDouble("height"), bounds.getDouble(1) + bounds.getDouble(3));
+            double targetTop = target.getDouble(1), targetBottom = targetTop + target.getDouble(3);
+            if (targetTop >= top && targetBottom <= bottom && tryPreviewTarget(name)) return;
+            previewSwipe(viewport, targetBottom > bottom);
+        }
+        fail("Screenshot control could not be scrolled into view: " + name + "; actual UI: " + MainActivity.diagnostics());
+    }
     private static void previewSwipe(boolean forward) throws Exception {
+        previewSwipe("preview-content", forward);
+    }
+    private static void previewSwipe(String viewport, boolean forward) throws Exception {
         dismissErrorDialogIfPresent(false);
         JSONObject ui = MainActivity.diagnostics();
-        JSONArray bounds = previewBounds(ui, "preview-content");
+        JSONArray bounds = previewBounds(ui, viewport);
         assertNotNull("Screenshot content has no measured bounds", bounds);
         float scale = (float)ui.getDouble("scale");
         int[] origin = windowOrigin();
@@ -1780,7 +1829,7 @@ public class ProxyTunTest {
     }
 
     private static void previewApplicationPolicies(File directory, JSONArray cases, String prefix) throws Exception {
-        previewTarget("application-policies-open");
+        previewScrollableTarget("application-policies-open", "preview-applications-scroll");
         await("Application policies did not load the current profile", () ->
             MainActivity.diagnostics().optInt("detail")==19
                 && MainActivity.diagnostics().optBoolean("application_policies_loaded"));
@@ -2147,6 +2196,7 @@ public class ProxyTunTest {
     }
 
     @Test public void basicSystemProxyAndTun() throws Exception {
+        heldResponseClassifiesTruncationAsTransportFailure();
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         persistNetworkProfile(context);
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));

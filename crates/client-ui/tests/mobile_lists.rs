@@ -148,6 +148,7 @@ slint::slint! {
         in-out property <string> error <=> AndroidData.applications-error;
         in-out property <int> mode <=> AndroidData.applications-mode;
         in-out property <int> filter <=> AndroidData.applications-filter;
+        in-out property <int> detail <=> MobileView.detail;
         in-out property <bool> opened: true;
         if root.opened: AndroidApplications { width: parent.width; height: parent.height; }
         init => { AndroidData.applications-loaded = true; }
@@ -1390,6 +1391,79 @@ fn application_policy_picker_keeps_the_form_and_rejects_locked_selection() {
     advance(&clock, Duration::from_millis(50));
     assert!(probe.get_choosing(), "application picker did not reopen");
     assert!(probe.get_dirty());
+    probe.hide().unwrap();
+}
+
+#[test]
+fn application_rule_entry_remains_reachable_in_landscape() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = ApplicationsProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.show().unwrap();
+    for (width, height, scale) in [
+        (393, 852, 1.),
+        (873, 301, 1.),
+        (852, 240, 1.),
+        (320, 568, 1.5),
+        (1280, 650, 1.),
+    ] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        probe.set_mode(0);
+        probe.set_offset(0.);
+        let mut visible = None;
+        for _ in 0..12 {
+            let geometry = probe.global::<UiGeometry>();
+            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+            advance(&clock, Duration::from_millis(300));
+            frame(&adapter, width as usize, height as usize);
+            let bounds = targets.borrow()["application-policies-open"].clone();
+            let scroll = targets.borrow()["preview-applications-scroll"].clone();
+            assert!(scroll[3] > 0.);
+            if bounds[1] >= scroll[1] && bounds[1] + bounds[3] <= scroll[1] + scroll[3] {
+                visible = Some(bounds);
+                break;
+            }
+            probe.window().dispatch_event(WindowEvent::PointerScrolled {
+                position: LogicalPosition::new(
+                    scroll[0] + scroll[2] / 2.,
+                    scroll[1] + scroll[3] / 2.,
+                ),
+                delta_x: 0.,
+                delta_y: -scroll[3] / 2.,
+            });
+        }
+        let bounds = visible.unwrap_or_else(|| {
+            panic!("application rules entry is unreachable at {width}x{height}, scale {scale}")
+        });
+        probe.set_detail(18);
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            probe.window().dispatch_event(event);
+        }
+        advance(&clock, Duration::from_millis(50));
+        assert_eq!(probe.get_detail(), 19);
+    }
     probe.hide().unwrap();
 }
 

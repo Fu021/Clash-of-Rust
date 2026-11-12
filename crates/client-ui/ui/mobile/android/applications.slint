@@ -93,6 +93,7 @@ export component AndroidApplications inherits PageSurface {
         clip: true;
         apps := MScroll {
             width: parent.width; height: parent.height;
+            geometry-key: "preview-applications-scroll";
             content-key: AndroidData.applications-mode + "/" + AndroidData.applications-query + "/" + AndroidData.applications-filter + (AndroidData.applications-system ? "/system" : "/apps");
             content-y <=> AndroidData.applications-scroll-y;
             VerticalLayout { alignment: start; spacing: 10px; padding-bottom: 12px;

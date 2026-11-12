@@ -1460,6 +1460,8 @@ class BuildTests(unittest.TestCase):
                             in command for command in ui_checks))
         self.assertTrue(any('applications_scroll_across_phone_and_tablet_viewports'
                             in command for command in ui_checks))
+        self.assertTrue(any('application_rule_entry_remains_reachable_in_landscape'
+                            in command for command in ui_checks))
         self.assertTrue(any('mobile_accent_picker_remains_usable_while_protected'
                             in command for command in ui_checks))
         self.assertTrue(any('application_controls_distinguish_scope_filter_save_and_protection'
@@ -4502,6 +4504,26 @@ runpy.run_path(str(script), run_name='__main__')
                         boundary.assert_not_called()
                 self.assertEqual(spawn.call_count,2 if retries else 1)
                 first.terminate.assert_called_once()
+
+    def test_android_force_stop_retries_only_bounded_transport_errors(self):
+        for status,attempts in ((255,2),(1,1)):
+            with self.subTest(status=status):
+                failure=subprocess.CalledProcessError(status,[],stderr='')
+                with patch.object(android_build,'run',
+                        side_effect=[failure,None]) as invoke, \
+                        patch.object(android_build.time,'sleep'):
+                    if status==255:
+                        android_build.stop_app_before_test()
+                    else:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            android_build.stop_app_before_test()
+                self.assertEqual(invoke.call_count,attempts)
+        with patch.object(android_build,'run',
+                side_effect=subprocess.CalledProcessError(255,[],stderr='connection closed')) as invoke, \
+                patch.object(android_build.time,'sleep'):
+            with self.assertRaises(subprocess.CalledProcessError):
+                android_build.stop_app_before_test()
+        self.assertEqual(invoke.call_count,3)
 
     def test_android_log_stream_requires_a_captured_start_marker_before_running_tests(self):
         with tempfile.TemporaryDirectory() as temporary:
