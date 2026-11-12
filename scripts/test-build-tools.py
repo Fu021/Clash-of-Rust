@@ -27,6 +27,7 @@ import linux_ci
 import prepared_vm
 import prepared_vm_environment
 import tun_dns_fixture
+import tun_ipv6_lifecycle
 import build_inputs
 import ci_test_policy
 import proxy_benchmark
@@ -134,6 +135,68 @@ class TunDnsFixtureTests(unittest.TestCase):
                     with self.assertRaises(expected):
                         linux_tun_test.socks_http('127.0.0.1', 7898, 'http://updates.fixture.test/')
                 connection.makefile.assert_not_called()
+
+
+class TunIpv6LifecycleTests(unittest.TestCase):
+    def test_protected_observed_ipv6_routes_require_the_corresponding_warning(self):
+        for kind in ('tun', 'other'):
+            for warning in (False, True):
+                with self.subTest(kind=kind, warning=warning):
+                    current = {'uid': 0, 'ipv6': {'state': 'observed', 'kind': kind}}
+                    routes = {'warnings': ['tun_ipv6_route_bypass'] if warning else []}
+                    with patch.object(tun_ipv6_lifecycle.subprocess, 'run') as probe:
+                        if warning == (kind == 'other'):
+                            tun_ipv6_lifecycle.check_protected_ipv6_route(routes, current)
+                        else:
+                            with self.assertRaises(AssertionError):
+                                tun_ipv6_lifecycle.check_protected_ipv6_route(routes, current)
+                        probe.assert_not_called()
+
+    def test_protected_unknown_ipv6_requires_an_independent_unreachable_route(self):
+        current = {'uid': 1000, 'ipv6': {'state': 'unknown', 'reason': 'tcp_route_unavailable'}}
+        result = subprocess.CompletedProcess([], 2, '', 'RTNETLINK answers: Network is unreachable\n')
+        with patch.object(tun_ipv6_lifecycle.subprocess, 'run', return_value=result) as probe:
+            tun_ipv6_lifecycle.check_protected_ipv6_route({'warnings': []}, current)
+        self.assertEqual(probe.call_args.args[0], [
+            'ip', '-j', '-6', 'route', 'get', '2606:4700:4700::1111',
+            'uid', '1000', 'ipproto', 'tcp', 'dport', '443',
+        ])
+        self.assertEqual(probe.call_args.kwargs['env']['LC_ALL'], 'C')
+        self.assertEqual(current['ipv6'], {'state': 'unknown', 'reason': 'tcp_route_unavailable'})
+
+    def test_unknown_ipv6_cannot_pass_on_permission_errors_or_a_changed_route(self):
+        current = {'uid': 0, 'ipv6': {'state': 'unknown', 'reason': 'tcp_route_unavailable'}}
+        for code, output, error in (
+                (0, '[{"dev":"uplink"}]', ''),
+                (0, '[{"dev":"CorRootTest"}]', ''),
+                (1, '', 'ip: command not found'),
+                (2, '', 'RTNETLINK answers: Permission denied'),
+                (2, '[{"dev":"uplink"}]', 'Network is unreachable')):
+            with self.subTest(code=code, output=output, error=error), \
+                    patch.object(tun_ipv6_lifecycle.subprocess, 'run',
+                                 return_value=subprocess.CompletedProcess([], code, output, error)):
+                with self.assertRaisesRegex(AssertionError, 'unconfirmed'):
+                    tun_ipv6_lifecycle.check_protected_ipv6_route({'warnings': []}, current)
+
+    def test_invalid_ipv6_samples_and_unexpected_warnings_remain_failures(self):
+        samples = (
+            {'state': 'observed'},
+            {'state': 'unknown', 'reason': 'route_query_timeout'},
+            {'state': 'unknown', 'reason': 'ip_command_unavailable'},
+        )
+        for sample in samples:
+            with self.subTest(sample=sample), \
+                    patch.object(tun_ipv6_lifecycle.subprocess, 'run') as probe:
+                with self.assertRaises(AssertionError):
+                    tun_ipv6_lifecycle.check_protected_ipv6_route(
+                        {'warnings': []}, {'uid': 0, 'ipv6': sample})
+                probe.assert_not_called()
+        result = subprocess.CompletedProcess([], 2, '', 'RTNETLINK answers: Network is unreachable\n')
+        with patch.object(tun_ipv6_lifecycle.subprocess, 'run', return_value=result), \
+                self.assertRaises(AssertionError):
+            tun_ipv6_lifecycle.check_protected_ipv6_route(
+                {'warnings': ['tun_ipv6_route_bypass']},
+                {'uid': 0, 'ipv6': {'state': 'unknown', 'reason': 'tcp_route_unavailable'}})
 
 
 class PreparedVmTests(unittest.TestCase):

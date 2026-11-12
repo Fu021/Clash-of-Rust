@@ -1,9 +1,31 @@
 """IPv6 lifecycle checks called only inside test-linux-tun's private namespaces."""
 import json
 from http.client import HTTPException
+import os
 from pathlib import Path
 import subprocess
 import time
+
+
+def check_protected_ipv6_route(routes, current):
+    sample = current['ipv6']
+    if sample['state'] == 'observed':
+        assert sample.get('kind') in ('tun', 'other'), current
+        bypass = sample['kind'] == 'other'
+        assert ('tun_ipv6_route_bypass' in routes['warnings']) == bypass, routes
+        return
+    assert sample == {'state': 'unknown', 'reason': 'tcp_route_unavailable'}, current
+    probe = subprocess.run([
+        'ip', '-j', '-6', 'route', 'get', '2606:4700:4700::1111',
+        'uid', str(current['uid']), 'ipproto', 'tcp', 'dport', '443',
+    ], capture_output=True, text=True, timeout=10, env=dict(os.environ, LC_ALL='C'))
+    assert (probe.returncode == 2 and not probe.stdout.strip()
+            and 'Network is unreachable' in probe.stderr), (
+        f'IPv6 sample remains unconfirmed: {current}; '
+        f'route query exit={probe.returncode}, stdout={probe.stdout!r}, stderr={probe.stderr!r}')
+    assert not routes['warnings'], routes
+    print('PASS: protected IPv6 sample remains unknown; an independent route query '
+          'confirms network unreachable, not an observed bypass', flush=True)
 
 
 def verify(directory, invoke, api, http):
@@ -37,9 +59,9 @@ def verify(directory, invoke, api, http):
         current = next(sample for sample in routes['tcp_uid_samples']
                        if sample['uid'] == 0 and sample['protocol'] == 'tcp'
                        and sample['destination_port'] == 443)
-        assert current['ipv4']['kind'] == 'tun', current
+        assert current['ipv4'].get('kind') == 'tun', current
         if expected_ipv6:
-            assert current['ipv6']['kind'] == 'tun', current
+            assert current['ipv6'].get('kind') == 'tun', current
         config = api('configs')
         assert config['tun']['enable'], config['tun']
         if expected_ipv6:
@@ -89,11 +111,9 @@ def verify(directory, invoke, api, http):
                 current = next(sample for sample in routes['tcp_uid_samples']
                                if sample['uid'] == 0 and sample['protocol'] == 'tcp'
                                and sample['destination_port'] == 443)
-                assert current['ipv4']['kind'] == 'tun', current
+                assert current['ipv4'].get('kind') == 'tun', current
                 if expected_ipv6:
-                    assert current['ipv6']['kind'] in ('tun', 'other'), current
-                    bypass = current['ipv6']['kind'] == 'other'
-                    assert ('tun_ipv6_route_bypass' in routes['warnings']) == bypass, routes
+                    check_protected_ipv6_route(routes, current)
                 else:
                     assert not routes['warnings'], routes
                 assert http('203.0.113.20', 80, '/auto-check') == b'protected-ok'
