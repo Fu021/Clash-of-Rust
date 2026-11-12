@@ -374,7 +374,7 @@ def root_cli_smoke():
             profile.write_text('proxies: []\nrules: ["MATCH,DIRECT"]\n'
                                'dns: {enable: true, enhanced-mode: fake-ip, '
                                'nameserver: ["https://192.0.2.254/dns-query#DIRECT"]}\n'
-                               'tun: {device: CorRootTest, route-address: [203.0.113.0/24], dns-hijack: []}\n')
+                               'tun: {device: CorRootTest, dns-hijack: []}\n')
             invoke('config', 'set', 'dns_override', 'false')
             invoke('profile', 'import', profile, '--name', 'root-network')
             invoke('profile', 'use', 'root-network')
@@ -397,7 +397,7 @@ def root_cli_smoke():
                 'nameserver: ["https://192.0.2.254/dns-query#DIRECT"], '
                 'direct-nameserver: ["https://1.1.1.1/dns-query#DIRECT"], '
                 'direct-nameserver-follow-policy: false}\n'
-                'tun: {device: CorRootTest, route-address: [203.0.113.0/24], dns-hijack: []}\n')
+                'tun: {device: CorRootTest, dns-hijack: []}\n')
             invoke('profile', 'import', unavailable, '--name', 'unavailable-nodes')
             invoke('profile', 'use', 'unavailable-nodes')
             previous = invoke('status')
