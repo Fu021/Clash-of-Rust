@@ -42,9 +42,12 @@ class Payload(BaseHTTPRequestHandler):
         if self.path != '/latency':
             self.send_error(404)
             return
+        started = time.monotonic()
         time.sleep(LATENCY_SECONDS)
+        waited_ms = (time.monotonic() - started) * 1000
         self.send_response(204)
         self.send_header('Content-Length', '0')
+        self.send_header('X-Cor-Fixture-Wait-Ms', f'{waited_ms:.6f}')
         self.end_headers()
 
     def do_GET(self):
@@ -128,13 +131,17 @@ def save_report(path):
             'Mihomo unified delay reports the repeated HEAD rather than the initial '
             'handshake when the second response succeeds; client timings include a new '
             'connection. These are not public node or DNS measurements.\n\n'
-            '| Route | Median wall time (ms) | Median reported delay (ms) |\n'
-            '| --- | ---: | ---: |\n')
+            'The measured server sleep is reported separately; scheduler delays are '
+            'not silently attributed to the proxy.\n\n'
+            '| Route | Median wall time (ms) | Median reported delay (ms) | Server sleep (ms) |\n'
+            '| --- | ---: | ---: | ---: |\n')
         for sample in delays:
             measured = sample['median_reported_delay_ms']
+            server_wait = sample.get('median_server_wait_ms')
+            wait_label = '—' if server_wait is None else f'{server_wait:.2f}'
             text += (f"| {sample['route']} | {sample['median_elapsed_ms']:.2f} | "
-                     f"{measured:.2f} |\n" if measured is not None else
-                     f"| {sample['route']} | {sample['median_elapsed_ms']:.2f} | — |\n")
+                     f"{measured:.2f} | {wait_label} |\n" if measured is not None else
+                     f"| {sample['route']} | {sample['median_elapsed_ms']:.2f} | — | {wait_label} |\n")
     destination.joinpath('summary.md').write_text(text, encoding='utf-8')
     print(text, flush=True)
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):

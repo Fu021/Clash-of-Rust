@@ -1398,6 +1398,18 @@ class BuildTests(unittest.TestCase):
             command = invoke.call_args.args[0]
             self.assertEqual('--with-user-tests' in command, selected)
 
+    def test_proxy_benchmark_selection_survives_the_linux_build_container(self):
+        for selected in ('false', 'true'):
+            with self.subTest(selected=selected), \
+                    patch.dict(os.environ, {'COR_CI_PROXY_BENCHMARK': selected}), \
+                    patch.object(linux_ci, 'build_image', return_value='fixture-image'), \
+                    patch.object(linux_ci, 'run') as invoke:
+                linux_ci.container(['python3', 'scripts/run-ci.py'])
+            command = invoke.call_args.args[0]
+            position = command.index('COR_CI_PROXY_BENCHMARK')
+            self.assertEqual(command[position - 1], '--env')
+            self.assertEqual(command[-2:], ['python3', 'scripts/run-ci.py'])
+
     def test_proxy_benchmark_is_selected_for_transport_changes_and_survives_sudo(self):
         self.assertTrue(ci_test_policy.select([
             'apps/desktop/tests/support/proxy_benchmark.rs'])['proxy_benchmark'])
@@ -1405,7 +1417,14 @@ class BuildTests(unittest.TestCase):
             'crates/client-core/src/subscription/routes.rs'])['proxy_benchmark'])
         self.assertTrue(ci_test_policy.select([
             'crates/client-core/src/controller/mod.rs'])['proxy_benchmark'])
+        for path in ('service.rs', 'tun.rs'):
+            self.assertTrue(ci_test_policy.select([
+                'crates/client-runtime/src/platform/macos/' + path])['proxy_benchmark'])
         self.assertFalse(ci_test_policy.select(['README.md'])['proxy_benchmark'])
+        self.assertTrue(ci_test_policy.select([
+            'apps/desktop/tests/support/proxy_benchmark.rs'])['linux_user_tests'])
+        self.assertTrue(ci_test_policy.select([
+            'scripts/proxy_benchmark.py'])['linux_user_tests'])
         specification = importlib.util.spec_from_file_location(
             'proxy_modes_benchmark', build.ROOT/'scripts/test-proxy-modes.py')
         module = importlib.util.module_from_spec(specification)
@@ -1458,6 +1477,8 @@ class BuildTests(unittest.TestCase):
                 with opener.open(request, timeout=5) as response:
                     self.assertEqual(response.status, 204)
                     self.assertEqual(response.read(), b'')
+                    waited = float(response.headers['X-Cor-Fixture-Wait-Ms'])
+                    self.assertGreaterEqual(waited, proxy_benchmark.LATENCY_SECONDS * 1000)
                 Path(manifest['report']).write_text('{"complete": true}')
             save.assert_called_once()
             self.assertFalse(Path(manifest['certificate']).exists())
@@ -1490,7 +1511,7 @@ class BuildTests(unittest.TestCase):
                 'median_reported_delay_ms': 25,
             }, {
                 'route': 'direct', 'median_elapsed_ms': 25.5,
-                'median_reported_delay_ms': None,
+                'median_reported_delay_ms': None, 'median_server_wait_ms': 25.1,
             }],
         }
         with tempfile.TemporaryDirectory() as temporary:
@@ -1508,6 +1529,7 @@ class BuildTests(unittest.TestCase):
             self.assertIn('| https | native-http | memory | 12.50 | 4.25 |', text)
             self.assertIn('| controller-loopback-socks | 51.50 | 25.00 |', text)
             self.assertIn('| direct | 25.50 | — |', text)
+            self.assertIn('| direct | 25.50 | — | 25.10 |', text)
             self.assertIn('no public DNS, remote node or GitHub CDN', text)
 
     def test_previews_reject_a_viewer_without_color_font_support(self):
@@ -1588,7 +1610,7 @@ class BuildTests(unittest.TestCase):
                 patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
-        self.assertTrue(any('platform::macos::service::tests::tun_session_' in command
+        self.assertTrue(any('platform::macos::service::tests::' in command
                             and '--no-run' not in command for command in commands))
 
     def test_update_changes_run_shared_schedule_config_cli_and_gui_regressions(self):
@@ -2598,6 +2620,9 @@ Private_Clean: 2 kB
             for compiler, settings in (
                 (b'compiler two', environment),
                 (b'compiler one', {**environment, 'RUSTFLAGS': '-C target-cpu=native'}),
+                *[(b'compiler one', {**environment, name: 'different'})
+                  for name in ('CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_TARGET', 'CC',
+                               'CXX', 'CFLAGS', 'CXXFLAGS', 'CMAKE_TOOLCHAIN_FILE')],
             ):
                 different = local_cache.workspace_restore_identity(
                     *arguments, compiler=compiler, environment=settings)

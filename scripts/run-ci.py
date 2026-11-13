@@ -30,7 +30,7 @@ def main():
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
     if not extended and args.system == 'macos' and proxy_benchmark():
         run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
-             'platform::macos::service::tests::tun_session_', '--', '--test-threads=1'])
+             'platform::macos::service::tests::', '--', '--test-threads=1'])
     if not extended and linux_user_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for package, target, case in (
                 ('clash-client-runtime', ['--lib'], 'platform::linux_tun::'),

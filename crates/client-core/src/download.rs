@@ -27,18 +27,33 @@ pub fn retryable(error: &anyhow::Error) -> bool {
         cause
             .downcast_ref::<reqwest::Error>()
             .is_some_and(|error| error.is_timeout() || error.is_body())
-            || cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                matches!(
-                    error.kind(),
-                    std::io::ErrorKind::TimedOut
-                        | std::io::ErrorKind::ConnectionReset
-                        | std::io::ErrorKind::ConnectionAborted
-                        | std::io::ErrorKind::ConnectionRefused
-                        | std::io::ErrorKind::BrokenPipe
-                        | std::io::ErrorKind::UnexpectedEof
-                )
-            })
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(retryable_io)
     })
+}
+
+fn retryable_io(mut error: &std::io::Error) -> bool {
+    loop {
+        if matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+        ) {
+            return true;
+        }
+        match error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<std::io::Error>())
+        {
+            Some(inner) => error = inner,
+            None => return false,
+        }
+    }
 }
 
 pub struct Watchdog {
@@ -134,6 +149,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tiny_continuous_chunks_do_not_reset_the_slow_route_deadline() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n")
+                .await
+                .unwrap();
+            loop {
+                if socket.write_all(b".").await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        let mut response = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}/package")),
+        )
+        .await
+        .unwrap();
+        let mut watchdog = Watchdog::new(true);
+        watchdog.window_started = Instant::now() - SPEED_WINDOW + Duration::from_millis(100);
+        let error = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Err(error) = watchdog.chunk(&mut response).await {
+                    return error;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(error.to_string().contains("32 KiB/s"), "{error:#}");
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
     async fn response_deadline_bounds_a_connection_that_never_sends_headers() {
         use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -170,12 +230,16 @@ mod tests {
         ] {
             let error = anyhow::Error::new(std::io::Error::from(kind)).context("下载中断");
             assert!(retryable(&error));
+            let wrapped = std::io::Error::other(std::io::Error::other(std::io::Error::from(kind)));
+            assert!(retryable(&wrapped.into()));
         }
         for kind in [
             std::io::ErrorKind::PermissionDenied,
             std::io::ErrorKind::InvalidData,
         ] {
             assert!(!retryable(&std::io::Error::from(kind).into()));
+            let wrapped = std::io::Error::other(std::io::Error::other(std::io::Error::from(kind)));
+            assert!(!retryable(&wrapped.into()));
         }
         assert!(!retryable(&anyhow::anyhow!("SHA256 校验失败")));
         let mut slow = Watchdog::new(true);

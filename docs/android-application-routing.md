@@ -60,6 +60,8 @@ Claude 保护期间锁定编辑并临时覆盖为全部应用，不修改用户�
 
 Android 10 起使用官方 [getConnectionOwnerUid](https://developer.android.com/reference/android/net/ConnectivityManager#getConnectionOwnerUid(int,%20java.net.InetSocketAddress,%20java.net.InetSocketAddress))，按原始 TCP/UDP 源与目标地址/端口查询 UID，再交给 mihomo 的包名回调。Fake-IP 解析后仍使用原始目标元组。Android 8/9 显示不支持按应用指定出口，继续提供全部／仅选中／排除范围分流，不使用 root 或不可靠的 `/proc` 绕过。
 
+桥接层回归分别核对 IPv4、IPv6 和 IPv4 映射地址的 TCP/UDP 原始元组，确保解析后的地址、端口和域名不覆盖归属查询依据。缺失或无效元组计为归属查询失败并跟随配置，不假报目标失效；该源码回归不替代真机 IPv6 网络和系统 UID 查询的实际验收。
+
 | 情况 | 行为 |
 | --- | --- |
 | 规则模式、应用进入 VPN、归属可识别 | 应用规则优先于普通订阅规则；未指定的应用跟随配置 |

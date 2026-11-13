@@ -317,7 +317,7 @@ def container(command):
     for key in ('BUILD_INPUTS_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY',
                 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'RUST_BACKTRACE',
                 'COR_CI_EXTENDED_TESTS', 'COR_CI_LINUX_USER_TESTS', 'COR_CI_DESKTOP_UI_TESTS',
-                'COR_CI_UPDATE_TESTS'):
+                'COR_CI_UPDATE_TESTS', 'COR_CI_PROXY_BENCHMARK'):
         if key in os.environ:
             # Runner summary files live outside the source mount.
             if key in ('GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY'):

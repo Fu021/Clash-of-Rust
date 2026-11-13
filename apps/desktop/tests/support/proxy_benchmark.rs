@@ -35,6 +35,7 @@ struct LatencySample {
     round: usize,
     elapsed_ms: f64,
     reported_delay_ms: Option<u32>,
+    server_wait_ms: Option<f64>,
     peer: SocketAddr,
 }
 
@@ -270,6 +271,16 @@ async fn client_latency(
         response.status() == reqwest::StatusCode::NO_CONTENT,
         "latency fixture returned an unexpected response"
     );
+    let server_wait_ms: f64 = response
+        .headers()
+        .get("x-cor-fixture-wait-ms")
+        .context("missing fixture timing")?
+        .to_str()?
+        .parse()?;
+    ensure!(
+        server_wait_ms.is_finite() && server_wait_ms >= 0.,
+        "invalid fixture timing"
+    );
     let peer = response.remote_addr().context("missing latency peer")?;
     let expected_port = if route.proxy.is_some() {
         mixed_port
@@ -285,6 +296,7 @@ async fn client_latency(
         round,
         elapsed_ms,
         reported_delay_ms: None,
+        server_wait_ms: Some(server_wait_ms),
         peer,
     })
 }
@@ -322,6 +334,7 @@ async fn controller_latency(
         round,
         elapsed_ms,
         reported_delay_ms: Some(delay),
+        server_wait_ms: None,
         peer,
     })
 }
@@ -374,11 +387,16 @@ fn report(
             .iter()
             .filter_map(|sample| sample.reported_delay_ms.map(f64::from))
             .collect();
+        let server_waits: Vec<_> = selected
+            .iter()
+            .filter_map(|sample| sample.server_wait_ms)
+            .collect();
         latency_summaries.push(json!({
             "route": route,
             "samples": selected.len(),
             "median_elapsed_ms": median(selected.iter().map(|sample| sample.elapsed_ms).collect()),
             "median_reported_delay_ms": if reported.is_empty() { None } else { Some(median(reported)) },
+            "median_server_wait_ms": if server_waits.is_empty() { None } else { Some(median(server_waits)) },
         }));
     }
     let report = json!({

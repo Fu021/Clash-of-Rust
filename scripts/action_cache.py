@@ -31,6 +31,10 @@ CHUNK = 1024 * 1024
 DEFAULT_ROOT = Path('/home/coder/github_action_cache')
 RESTORE_SECONDS = 300
 README_LIMIT = 64 * 1024
+COMPILER_ENV_PREFIXES = (
+    'RUST', 'CARGO_PROFILE_', 'CARGO_TARGET_', 'CARGO_BUILD_TARGET',
+    'CARGO_ENCODED_RUSTFLAGS', 'CC', 'CXX', 'CFLAGS', 'CMAKE',
+)
 
 
 class RestoreBudgetExceeded(TimeoutError):
@@ -150,7 +154,7 @@ def valid_key(key):
 def rust_environment_key(compiler, environment):
     value = hashlib.sha256(compiler)
     for name, item in sorted(environment.items()):
-        if name.startswith(('RUST', 'CARGO_PROFILE_', 'CARGO_TARGET_', 'CC_', 'CXX_')):
+        if name.startswith(COMPILER_ENV_PREFIXES):
             value.update((name+'='+item).encode())
     return f'v{SCHEMA}-' + value.hexdigest() + '-'
 
@@ -413,7 +417,7 @@ def rust_keys(source, compiler, environment):
                     pass  # Invalid manifests must still invalidate the cache.
             dependencies.update(content)
     for name, value in sorted(environment.items()):
-        if name.startswith(('RUST', 'CARGO_PROFILE_', 'CARGO_TARGET_', 'CC_', 'CXX_')):
+        if name.startswith(COMPILER_ENV_PREFIXES):
             dependencies.update((name+'='+value).encode())
     generation = rust_environment_key(compiler, environment) + dependencies.hexdigest()
     sources = hashlib.sha256()

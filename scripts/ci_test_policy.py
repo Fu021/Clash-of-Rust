@@ -76,7 +76,9 @@ def select(paths, extended=False):
                          'crates/client-runtime/src/platform/host_network'))
         or path in ('scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py',
                     'scripts/ci_test_policy.py', 'apps/desktop/tests/core_integration.rs',
-                    'apps/desktop/tests/support/protected_dns.rs')
+                    'apps/desktop/tests/support/protected_dns.rs',
+                    'apps/desktop/tests/support/proxy_benchmark.rs',
+                    'scripts/proxy_benchmark.py')
         or path.startswith('crates/client-runtime/src/platform/network/')
         or path in ('crates/client-runtime/src/control/network.rs',
                     'crates/client-runtime/src/engine/recovery.rs')
@@ -108,6 +110,8 @@ def select(paths, extended=False):
                          'crates/client-runtime/src/platform/windows/mod.rs',
                          'crates/client-runtime/src/platform/macos/proxy_preferences.rs',
                          'crates/client-runtime/src/platform/macos/mod.rs',
+                         'crates/client-runtime/src/platform/macos/service.rs',
+                         'crates/client-runtime/src/platform/macos/tun.rs',
                          'crates/client-runtime/src/platform/linux/mod.rs'))
         or path in ('scripts/proxy_benchmark.py', 'apps/desktop/tests/core_integration.rs',
                     'crates/client-core/src/download.rs',

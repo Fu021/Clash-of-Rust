@@ -14,6 +14,9 @@ type fixtureOwner struct {
 	packages    map[string]int32
 	destination string
 	source      string
+	protocol    int32
+	sourcePort  int32
+	targetPort  int32
 	fail        bool
 }
 
@@ -38,6 +41,9 @@ func (selector *fixtureApplicationSelector) EmptyFallback() C.Proxy { return sel
 func (owner *fixtureOwner) Owner(protocol int32, source string, sourcePort int32, destination string, destinationPort int32) (int32, error) {
 	owner.source = source
 	owner.destination = destination
+	owner.protocol = protocol
+	owner.sourcePort = sourcePort
+	owner.targetPort = destinationPort
 	if owner.fail {
 		return -1, errors.New("fixture lookup failed")
 	}
@@ -128,6 +134,76 @@ func TestApplicationTargetNeverFallsThroughForUnsupportedUDP(t *testing.T) {
 			if got := applicationTarget(rule, available, true, false, true); got != expected {
 				t.Fatalf("missing target routed to %q, wanted %q", got, expected)
 			}
+		}
+	}
+}
+
+func TestApplicationOwnerPreservesIPv6AndUDPOriginalTuples(t *testing.T) {
+	tunnel.SetMode(tunnel.Rule)
+	owner := &fixtureOwner{packages: map[string]int32{"org.example.first": 10001}}
+	SetConnectionOwner(owner)
+	applicationRoutes.Store(&resolvedApplicationRules{owners: map[uint32]applicationRule{
+		10001: {Package: "org.example.first", Target: "DIRECT", RejectMissing: true},
+	}})
+	defer SetConnectionOwner(nil)
+	defer applicationRoutes.Store(nil)
+	for _, addresses := range [][2]string{
+		{"198.18.0.1", "198.18.0.23"},
+		{"fd00::1", "fdfe:dcba:9876::23"},
+		{"::ffff:198.18.0.1", "::ffff:198.18.0.23"},
+	} {
+		for _, network := range []C.NetWork{C.TCP, C.UDP} {
+			metadata := &C.Metadata{
+				NetWork: network, SrcIP: netip.MustParseAddr("192.0.2.1"),
+				DstIP: netip.MustParseAddr("203.0.113.1"), DstPort: 80,
+				Host: "rewritten.example.test",
+			}
+			source := net.ParseIP(addresses[0])
+			target := net.ParseIP(addresses[1])
+			protocol := int32(6)
+			if network == C.UDP {
+				protocol = 17
+				metadata.RawSrcAddr = &net.UDPAddr{IP: source, Port: 40001}
+				metadata.RawDstAddr = &net.UDPAddr{IP: target, Port: 443}
+			} else {
+				metadata.RawSrcAddr = &net.TCPAddr{IP: source, Port: 40001}
+				metadata.RawDstAddr = &net.TCPAddr{IP: target, Port: 443}
+			}
+			beforeRejected := applicationMissingRejected.Load()
+			result, err := applicationPackage(metadata)
+			if err != nil || result != "org.example.first" {
+				t.Fatalf("original tuple did not match its application: %q %v", result, err)
+			}
+			if owner.source != source.String() || owner.destination != target.String() ||
+				owner.protocol != protocol || owner.sourcePort != 40001 || owner.targetPort != 443 {
+				t.Fatalf("rewritten metadata replaced the original tuple: %+v", owner)
+			}
+			if applicationMissingRejected.Load() != beforeRejected {
+				t.Fatal("a valid original tuple was reported as a missing outbound")
+			}
+		}
+	}
+}
+
+func TestMissingOrInvalidApplicationTupleFollowsConfiguration(t *testing.T) {
+	tunnel.SetMode(tunnel.Rule)
+	owner := &fixtureOwner{packages: map[string]int32{"org.example.first": 10001}}
+	SetConnectionOwner(owner)
+	applicationRoutes.Store(&resolvedApplicationRules{owners: map[uint32]applicationRule{
+		10001: {Package: "org.example.first", Target: "missing", RejectMissing: true},
+	}})
+	defer SetConnectionOwner(nil)
+	defer applicationRoutes.Store(nil)
+	for _, raw := range []net.Addr{nil, &net.UnixAddr{Name: "invalid", Net: "unix"}} {
+		metadata := &C.Metadata{NetWork: C.TCP, RawSrcAddr: raw, RawDstAddr: raw}
+		beforeFailed := ownerFailures.Load()
+		beforeRejected := applicationMissingRejected.Load()
+		result, err := applicationPackage(metadata)
+		if err == nil || result != "" || ownerFailures.Load() != beforeFailed+1 {
+			t.Fatalf("an unidentifiable connection was assigned an application: %q %v", result, err)
+		}
+		if owner.source != "" || applicationMissingRejected.Load() != beforeRejected {
+			t.Fatal("an invalid tuple reached the owner API or missing-target rejection")
 		}
 	}
 }
