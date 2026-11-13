@@ -1401,6 +1401,9 @@ public class ProxyTunTest {
             if (catalog.getString("snapshot_id").equals(ui.optString("applications_snapshot"))) break;
             assertFalse("Enumeration must not discard an application selection draft: " + ui,
                 ui.getBoolean("applications_dirty"));
+            shell("input keyevent KEYCODE_BACK");
+            await("The unchanged application catalog did not close before refresh", () ->
+                MainActivity.diagnostics().optInt("detail", -1) == 0);
             openApplicationRouting();
         } while (SystemClock.elapsedRealtime() < deadline);
         assertNotNull(catalog);
