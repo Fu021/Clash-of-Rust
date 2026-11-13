@@ -212,12 +212,12 @@ mod tests {
             .application_rules
             .insert("profile".into(), std::sync::Arc::new(old));
         let raw = "proxies: []\nrules: ['MATCH,DIRECT']\n";
-        let before = super::super::runtime(raw, &settings, "profile", true).unwrap();
+        let before = super::super::runtime(raw, raw, &settings, "profile", true).unwrap();
         settings
             .application_rules
             .insert("profile".into(), std::sync::Arc::new(named));
         assert_eq!(
-            super::super::runtime(raw, &settings, "profile", true).unwrap(),
+            super::super::runtime(raw, raw, &settings, "profile", true).unwrap(),
             before
         );
         assert!(Group::default().reject_missing);

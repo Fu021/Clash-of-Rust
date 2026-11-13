@@ -291,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn protection_cycles_restore_application_bindings_and_both_udp_preferences() {
-        use core::claude_check::protection::{Previous, Protection};
+        use super::core::claude_check::protection::{Previous, Protection};
         use std::sync::atomic::{AtomicBool, Ordering};
         #[derive(Default)]
         struct RecordingHost {
