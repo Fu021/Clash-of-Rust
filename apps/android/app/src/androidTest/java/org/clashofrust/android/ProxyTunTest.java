@@ -1007,6 +1007,9 @@ public class ProxyTunTest {
         } while (System.nanoTime()<deadline);
     }
     private static void tunCarriesSocket(String controller,String secret) throws Exception {
+        tunCarriesSocket(controller,secret,"198.51.100.1",false,"CI-TUN-origin");
+    }
+    private static void tunCarriesSocket(String controller,String secret,String destination,boolean verifyOwner,String expectedNode) throws Exception {
         // NetworkCallbacks describe the control plane. A just-replaced VPN can
         // still be waiting for netd's UID routes; require fresh real traffic,
         // with a bounded deadline, rather than sleeping or rerunning the test.
@@ -1016,7 +1019,7 @@ public class ProxyTunTest {
             .getSystemService(ConnectivityManager.class);
         String before=interfaceCounters(manager);
         do {
-            try { assertTunSocket(controller,secret); return; }
+            try { assertTunSocket(controller,secret,destination,verifyOwner,expectedNode); return; }
             catch (IOException transition) { last=transition; }
             SystemClock.sleep(100);
         } while (SystemClock.elapsedRealtime()<deadline);
@@ -1094,12 +1097,6 @@ public class ProxyTunTest {
             SystemClock.sleep(100);
         } while (SystemClock.elapsedRealtime()<deadline);
         throw new IOException("Default network did not recover after VPN disconnect; "+networkState(),last);
-    }
-    private static void assertTunSocket(String controller,String secret) throws Exception {
-        assertTunSocket(controller,secret,"198.51.100.1",false);
-    }
-    private static void assertTunSocket(String controller,String secret,String destination,boolean verifyOwner) throws Exception {
-        assertTunSocket(controller,secret,destination,verifyOwner,"CI-TUN-origin");
     }
     private static void assertTunSocket(String controller,String secret,String destination,boolean verifyOwner,String expectedNode) throws Exception {
         // The physical network cannot reach this reserved address. Only the
@@ -1705,6 +1702,13 @@ public class ProxyTunTest {
                 return TunnelService.connected() && vpnActive(connectivity);
             });
             tunCarriesSocket(controller, secret);
+            for (int handover=0;handover<3;handover++) {
+                long previousGeneration=TunnelService.generation();
+                TunnelService.start(context,true);
+                await("Repeated routing replacement did not reconnect",()->
+                    TunnelService.connected() && TunnelService.generation()>previousGeneration);
+                tunCarriesSocket(controller,secret);
+            }
             shell("input keyevent KEYCODE_BACK");
             await("Saved editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
             openApplicationRouting();
@@ -1754,6 +1758,18 @@ public class ProxyTunTest {
             assertEquals(0, MainActivity.diagnostics().getInt("applications_visible"));
             shell("input keyevent KEYCODE_BACK");
             await("All-applications editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
+            long preservedGeneration=TunnelService.generation();
+            new ApplicationRouting(ApplicationRouting.ONLY,java.util.Collections.singleton(removed)).persist(preferences);
+            TunnelService.start(context,true);
+            await("Rejected routing replacement did not preserve the working VPN",()->
+                !TunnelService.error().isEmpty() && TunnelService.connected() && !TunnelService.pending());
+            assertEquals("Rejected routing replacement changed the VPN generation",preservedGeneration,TunnelService.generation());
+            tunCarriesSocket(controller,secret);
+            new ApplicationRouting(ApplicationRouting.ALL,java.util.Collections.emptySet()).persist(preferences);
+            await("Rejected routing replacement did not show its error",()->
+                MainActivity.diagnostics().optBoolean("notice_active") && MainActivity.diagnostics().optBoolean("notice_error"));
+            tapTarget("notice_close_target");
+            await("Rejected routing replacement notice did not close",()->!MainActivity.diagnostics().optBoolean("notice_active"));
             TunnelService.stop(context);
             await("UI routing regression did not disconnect VPN", () -> !TunnelService.connected() && !TunnelService.pending());
             awaitDirectRecovery(connectivity);
@@ -1895,15 +1911,15 @@ public class ProxyTunTest {
                 long missingBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                     .getLong("missing_rejected");
                 CoreBridge.reload(applicationOutboundConfig(named,self,"cor-application-unicode",true));
-                assertTunSocket(controller,secret,"198.51.100.1",true,nodeName);
-                assertTunSocket(controller,secret,"application-policy.test",true,nodeName);
+                tunCarriesSocket(controller,secret,"198.51.100.1",true,nodeName);
+                tunCarriesSocket(controller,secret,"application-policy.test",true,nodeName);
                 assertEquals("A valid emoji target was reported as missing",missingBefore,
                     new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                         .getLong("missing_rejected"));
             }
             CoreBridge.reload(applicationOutboundConfig(restrictive,self,"CI-TUN-origin",false));
-            assertTunSocket(controller,secret,"198.51.100.1",true);
-            assertTunSocket(controller,secret,"application-policy.test",true);
+            tunCarriesSocket(controller,secret,"198.51.100.1",true,"CI-TUN-origin");
+            tunCarriesSocket(controller,secret,"application-policy.test",true,"CI-TUN-origin");
             long rejectedBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                 .getLong("udp_rejected");
             long udpMissingBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())

@@ -38,7 +38,7 @@ CI 的分支任务与 Memory 清理任务从 main 加载保留策略；旧分支
 
 共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。当前[不保存分支差异](cache-capacity.md#main-基线与分支只读)；GitHub 不会自动合并归档，制作差异还需扫描完整对象并核验基线，目前没有真实运行证据证明其收益超过成本。缺少兼容基线或恢复损坏时正常重编。新命名空间只由可信 main 写入完整基线，不通过切换触发事件或提升 PR 权限绕过作用域。
 
-Rust 1.100 使用 `native-main-v2-<平台>-<架构>--`、`android-main-v2-<ABI>--` 及 `memory-main-v2-<profile>` 命名空间，删除宽前缀的旧归档迁移入口，防止 `ubuntu-22.04-` 误匹配 `ubuntu-22.04-arm-`。精确键包含根 Cargo profile、锁文件、`.cargo` 和工具版本；依赖未变时仍由缓存 Action 在同平台、同架构、同编译器范围内恢复兼容对象。源码回执兼容 Cargo 的旧目录和 `build/<包>/<hash>/{out,fingerprint,run}` 布局，修改共享输入时失效相应指纹。
+Rust 1.100 使用 `native-main-v2-<平台>-<架构>--`、`android-main-v2-<ABI>--` 及 `memory-main-v2-<profile>` 命名空间，删除宽前缀的旧归档迁移入口，防止 `ubuntu-22.04-` 误匹配 `ubuntu-22.04-arm-`。精确键包含根 Cargo profile、锁文件、`.cargo` 和工具版本；缓存 Action 的兼容恢复仍要求自定义恢复前缀匹配。当前八个 workspace 目标把全仓源码摘要放在此前缀中，源码变化会失配，不能仅凭依赖未变宣称可跨提交复用，实测边界见[容量记录](cache-capacity.md#当前上限与保留预算)。源码回执兼容 Cargo 的旧目录和 `build/<包>/<hash>/{out,fingerprint,run}` 布局，修改共享输入时失效相应指纹。
 
 Linux 和 Android 保留 workspace 编译结果及经过内容核对的源码时间戳，不再精确命中旧依赖缓存后永久跳过新对象保存；Linux 容器同时挂载源码回执，避免宿主和容器读取不同位置。Windows ARM64 保留依赖缓存，只在本地 vendor 源码变化时更新键，不因每次业务源码变动重压整个 workspace；其他桌面端继续保留 workspace。全部使用 zstd 快速压缩级别 1，缓存仍不可变，首次填充和后续暖恢复需分别测量。
 

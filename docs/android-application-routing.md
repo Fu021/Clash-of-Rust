@@ -56,6 +56,8 @@ Claude 保护期间锁定编辑并临时覆盖为全部应用，不修改用户�
 
 连接时保存会请求重新连接 VPN，新连接应用新规则；请求重连不等于已经生效，失败保留已保存记录并报告可恢复错误。未连接时下次连接生效。表单保存／撤销、选择页返回及系统返回均保留清楚的草稿边界，不刷新覆盖未保存的名称或选择。
 
+重建前先停止旧内核的读包器，保留原系统 VPN 描述符，再由系统原子替换接口；新接口的地址与路由回调确认后才启动新读包器。替换被拒绝时恢复原读包器及其 IPv6 设置，不先关闭系统接口制造直连窗口。实际流量回归覆盖连续重建、非法范围被拒绝后原连接仍可用，以及配置重载后的指定出站；等待有明确时限，源端口、TUN 类型、UID、出站及失效计数断言不放宽。
+
 Android 10 起使用官方 [getConnectionOwnerUid](https://developer.android.com/reference/android/net/ConnectivityManager#getConnectionOwnerUid(int,%20java.net.InetSocketAddress,%20java.net.InetSocketAddress))，按原始 TCP/UDP 源与目标地址/端口查询 UID，再交给 mihomo 的包名回调。Fake-IP 解析后仍使用原始目标元组。Android 8/9 显示不支持按应用指定出口，继续提供全部／仅选中／排除范围分流，不使用 root 或不可靠的 `/proc` 绕过。
 
 | 情况 | 行为 |

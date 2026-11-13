@@ -26,6 +26,7 @@ public final class TunnelService extends VpnService {
     private ScheduledFuture<?> notificationTask;
     private ParcelFileDescriptor descriptor;
     private String interfaceName;
+    private boolean interfaceIpv6;
     private volatile boolean stopping;
     private volatile String lastStatus = "";
     private JSONObject networkStatus = new JSONObject();
@@ -110,6 +111,7 @@ public final class TunnelService extends VpnService {
         if (stopping || !current(this, request) || (descriptor != null && !reconfigure)) return;
         ParcelFileDescriptor previous = descriptor;
         ParcelFileDescriptor replacement = null;
+        boolean previousReaderStopped = false;
         boolean established = false;
         try {
             CoreBridge.restore(this);
@@ -131,6 +133,11 @@ public final class TunnelService extends VpnService {
                 if (stopping || !current(this, request)) return;
                 ProtectionRuntime.pause(this);
                 if (previous == null) Mobile.setProtector(fd -> protect(fd));
+                if (previous != null) {
+                    connected = false;
+                    previousReaderStopped = true;
+                    Mobile.stopTun();
+                }
                 replacement = builder.establish();
                 if (replacement == null) throw new IllegalStateException("系统拒绝建立 VPN");
                 established = true;
@@ -141,12 +148,12 @@ public final class TunnelService extends VpnService {
                 // gVisor stops its reader after a device read failure; publishing
                 // routes afterwards does not restart that reader.
                 String readyInterface=routes.await(() -> stopping || !current(this, request));
-                if (previous != null) Mobile.stopTun();
                 android.util.Log.i("ClashOfRust", "VPN established; starting embedded TUN");
                 Mobile.startTun(replacement.getFd(), ipv6);
                 descriptor = replacement;
                 replacement = null;
                 interfaceName=readyInterface;
+                interfaceIpv6=ipv6;
                 closeDescriptor(previous);
                 previous = null;
                 android.util.Log.i("ClashOfRust", "VPN routing ready on "+interfaceName);
@@ -169,8 +176,14 @@ public final class TunnelService extends VpnService {
             android.util.Log.e("ClashOfRust", "VPN startup failed", error);
             boolean keepPrevious = false;
             if (previous != null && !established) {
-                try { keepPrevious = VpnService.prepare(this) == null; }
-                catch (RuntimeException revoked) { android.util.Log.w("ClashOfRust", "VPN permission is unavailable", revoked); }
+                try {
+                    keepPrevious = VpnService.prepare(this) == null;
+                    if (keepPrevious && previousReaderStopped) Mobile.startTun(previous.getFd(), interfaceIpv6);
+                } catch (Exception restore) {
+                    keepPrevious = false;
+                    lastError += "; 原连接恢复失败：" + restore;
+                    android.util.Log.e("ClashOfRust", "Restore previous VPN reader", restore);
+                }
             }
             if (keepPrevious) {
                 // A rejected replacement leaves the old descriptor valid.
