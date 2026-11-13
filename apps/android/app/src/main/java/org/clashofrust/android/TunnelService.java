@@ -49,6 +49,7 @@ public final class TunnelService extends VpnService {
             Intent intent = new Intent(context, TunnelService.class).putExtra(REQUEST, request);
             if (reconfigure) intent.setAction(RECONFIGURE);
             context.startForegroundService(intent);
+            clearError();
         }
     }
     static boolean connected() { return connected; }

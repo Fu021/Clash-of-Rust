@@ -1785,6 +1785,7 @@ public class ProxyTunTest {
                 assertEquals(mode, ApplicationRouting.load(context).mode);
                 boolean throughVpn = captured[index];
                 TunnelService.start(context, false);
+                assertEquals("A new VPN request must clear the previous rejection", "", TunnelService.error());
                 await("Application routing did not establish VPN for " + mode, () -> {
                     if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
                     return TunnelService.connected();
