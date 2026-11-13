@@ -3794,6 +3794,64 @@ runpy.run_path(str(script), run_name='__main__')
         with patch.object(dependency_audit, 'metadata', return_value=legacy):
             self.assertEqual(dependency_audit.android_candidate('system-image-legacy','31-r14')[0],'31-r99')
 
+    def test_emulator_boot_recovers_a_timed_out_probe_but_still_requires_ready_property(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            responses=[
+                subprocess.TimeoutExpired(['adb','shell','getprop','sys.boot_completed'],10),
+                subprocess.CompletedProcess([],1,'','device offline'),
+                subprocess.CompletedProcess([],0,'0\n',''),
+                subprocess.CompletedProcess([],0,'1\n',''),
+            ]
+            with patch.object(android_build.subprocess,'run',side_effect=responses) as invoke, \
+                    patch.object(android_build.time,'sleep'):
+                android_build.wait_emulator_boot(process,{'ANDROID_USER_HOME':'fixture'},report)
+            status=json.loads((report/'boot-status.json').read_text())
+            self.assertTrue(status['complete'])
+            self.assertEqual([entry['state'] for entry in status['probes']],
+                             ['adb_timeout','not_ready','not_ready','ready'])
+            self.assertEqual(invoke.call_count,4)
+            self.assertTrue(all(call.kwargs['timeout']<=10 for call in invoke.call_args_list))
+            self.assertEqual(invoke.call_args.kwargs['env'],{'ANDROID_USER_HOME':'fixture'})
+
+    def test_emulator_boot_probe_timeouts_cannot_extend_the_overall_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            process=MagicMock()
+            process.poll.return_value=None
+            clock=[0.0]
+            def invoke(command,**kwargs):
+                clock[0]+=kwargs['timeout']
+                raise subprocess.TimeoutExpired(command,kwargs['timeout'])
+            def sleep(seconds):
+                clock[0]+=seconds
+            with patch.object(android_build.subprocess,'run',side_effect=invoke) as command, \
+                    patch.object(android_build.time,'monotonic',side_effect=lambda:clock[0]), \
+                    patch.object(android_build.time,'sleep',side_effect=sleep):
+                with self.assertRaisesRegex(RuntimeError,'did not finish booting'):
+                    android_build.wait_emulator_boot(process,{},report,timeout=14)
+            status=json.loads((report/'boot-status.json').read_text())
+            self.assertFalse(status['complete'])
+            self.assertEqual(status['elapsed_seconds'],14)
+            self.assertEqual([entry.kwargs['timeout'] for entry in command.call_args_list],[10,2])
+            self.assertEqual([entry['state'] for entry in status['probes']],['adb_timeout']*2)
+
+    def test_emulator_exit_during_boot_fails_before_any_adb_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            (report/'emulator.txt').write_text('emulator fixture exited')
+            process=MagicMock()
+            process.poll.return_value=7
+            with patch.object(android_build.subprocess,'run') as invoke:
+                with self.assertRaisesRegex(RuntimeError,'emulator fixture exited'):
+                    android_build.wait_emulator_boot(process,{},report)
+            invoke.assert_not_called()
+            status=json.loads((report/'boot-status.json').read_text())
+            self.assertFalse(status['complete'])
+            self.assertEqual(status['probes'],[])
+
     def test_emulator_storage_accounts_for_the_effective_userdata_floor(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

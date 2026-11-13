@@ -661,6 +661,39 @@ def runtime_crash_status(log, scoped=True):
             'system_ui_crashes': process_crashes(log, 'com.android.systemui')}
 
 
+def wait_emulator_boot(process, env, report, timeout=180):
+    started=time.monotonic()
+    deadline=started+timeout
+    status={'schema':1,'complete':False,'probes':[]}
+    try:
+        while time.monotonic()<deadline:
+            if process.poll() is not None:
+                raise RuntimeError('Android emulator exited: '+(report/'emulator.txt').read_text()[-4000:])
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                break
+            try:
+                result=subprocess.run([ADB,'shell','getprop','sys.boot_completed'],env=env,
+                                      capture_output=True,text=True,timeout=min(10,remaining))
+            except subprocess.TimeoutExpired:
+                status['probes'].append({'state':'adb_timeout'})
+                print('Android boot property probe timed out; waiting within the existing boot deadline',flush=True)
+            else:
+                ready=result.returncode==0 and result.stdout.strip()=='1'
+                status['probes'].append({'state':'ready' if ready else 'not_ready',
+                                         'returncode':result.returncode})
+                if ready:
+                    status['complete']=True
+                    return
+            remaining=deadline-time.monotonic()
+            if remaining>0:
+                time.sleep(min(2,remaining))
+        raise RuntimeError('Android emulator did not finish booting')
+    finally:
+        status['elapsed_seconds']=round(time.monotonic()-started,3)
+        write_json(report/'boot-status.json',status)
+
+
 def prepare_emulator_input_method(report):
     properties=[subprocess.check_output([ADB,'shell','getprop',name],text=True,timeout=15).strip()
                 for name in ('ro.kernel.qemu','ro.debuggable','ro.build.version.sdk')]
@@ -1299,14 +1332,7 @@ def main():
                 '-gpu','swiftshader_indirect','-memory','4096','-cores',str(cores)],
                 env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         run([ADB,'start-server'],env=env,timeout=30)
-        deadline=time.monotonic()+180
-        while time.monotonic()<deadline:
-            if process.poll() is not None:
-                raise RuntimeError('Android emulator exited: '+(report/'emulator.txt').read_text()[-4000:])
-            ready=subprocess.run([ADB,'shell','getprop','sys.boot_completed'],env=env,capture_output=True,text=True,timeout=10)
-            if ready.returncode==0 and ready.stdout.strip()=='1':break
-            time.sleep(2)
-        else: raise RuntimeError('Android emulator did not finish booting')
+        wait_emulator_boot(process,env,report)
         run([ADB,'shell','settings','put','global','private_dns_mode','off'])
         run([ADB,'shell','input','keyevent','KEYCODE_WAKEUP'])
         run([ADB,'shell','wm','dismiss-keyguard'])
