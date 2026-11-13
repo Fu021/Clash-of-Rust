@@ -258,10 +258,10 @@ def seed_assets():
     from build_inputs import resource_release
     target = ANDROID/'app/offline-assets'
     target.mkdir(parents=True, exist_ok=True)
-    # Reuse the approved desktop artwork; Android applies its own launcher mask.
+    # Android adaptive launchers do not need the 1254-pixel source artwork.
     logo=ANDROID/'app/generated-res/drawable-nodpi/app_logo.png'
     logo.parent.mkdir(parents=True,exist_ok=True)
-    shutil.copy2(ROOT/'resources/icon-concepts/app-blue-transparent.png',logo)
+    shutil.copy2(ROOT/'resources/icons/app-android.png',logo)
     shutil.copy2(ROOT/'resources/icons/app.png',logo.with_name('notification_logo.png'))
     release = resource_release('geo', target/'geodata.json')
     records = []

@@ -29,6 +29,8 @@ def pack_icons():
             (output/f'{name}.rgba').write_bytes(thumbnail.tobytes())
             thumbnail.save(output/f'{name}.png')
             if name == 'app':
+                image.resize((432, 432), Image.Resampling.LANCZOS).save(
+                    output/'app-android.png', optimize=True)
                 image.save(output/'app.ico', sizes=[(n, n) for n in (16, 24, 32, 48, 64, 128, 256)])
 
 

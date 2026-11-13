@@ -23,6 +23,19 @@ BUILD_NAMES |= {f'build-android-{arch}' for arch in ('arm64', 'armv7', 'x64')}
 ARCHIVE_NAME = 'build.tar.gz'
 BUILD_SCHEMA = 3
 TEST_NAMES = {'core_integration'}
+RELEASE_BINARIES = {'clash-of-rust', 'clash-desktop-ui', 'clash-tun-launcher', 'cor'}
+
+
+def require_stripped_linux_binaries(directory):
+    """Reject release ELF files that retained Cargo's unpackaged symbol tables."""
+    for name in RELEASE_BINARIES:
+        path = directory/name
+        result = subprocess.run(
+            ['readelf', '-SW', str(path)], capture_output=True, text=True,
+            check=True,
+        )
+        if re.search(r'\]\s+\.(?:symtab|strtab)\s', result.stdout):
+            raise ValueError(f'Release binary retains symbols: {path.name}')
 
 
 def commit():
@@ -81,6 +94,8 @@ def export_build(system, arch, tests, output, binaries=None):
             source = (binaries or ROOT/'target/release')/(name+extension)
             validate_binary_arch(source, system, arch)
             shutil.copy2(source, payload/source.name)
+        if system == 'linux':
+            require_stripped_linux_binaries(payload)
         paths = {}
         for name, source in tests.items():
             if name not in TEST_NAMES:

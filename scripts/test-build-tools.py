@@ -22,6 +22,7 @@ import android_apk
 import windows_ci as windows
 import macos_ci as macos
 import workflow_storage as storage
+import workflow_artifacts
 import action_cache as local_cache
 import upstream_cache
 import cache_shards
@@ -1080,6 +1081,40 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_release_profile_and_package_overrides_strip_symbols(self):
+        manifest = tomllib.loads((build.ROOT/'Cargo.toml').read_text())
+        release = manifest['profile']['release']
+        self.assertEqual(release['strip'], 'symbols')
+        overrides = release.get('package', {})
+        self.assertTrue(overrides)
+        for name, profile in overrides.items():
+            with self.subTest(package=name):
+                self.assertEqual(profile.get('strip'), 'symbols')
+
+    def test_release_export_rejects_elf_symbol_tables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = Path(temporary)
+            for name in workflow_artifacts.RELEASE_BINARIES:
+                (payload/name).write_bytes(b'ELF')
+            stripped = '  [1] .text PROGBITS 0 1000 20\n'
+            with patch.object(workflow_artifacts.subprocess, 'run',
+                              return_value=subprocess.CompletedProcess([], 0, stripped)):
+                workflow_artifacts.require_stripped_linux_binaries(payload)
+            unstripped = stripped + '  [2] .symtab SYMTAB 0 2000 10\n'
+            with patch.object(workflow_artifacts.subprocess, 'run',
+                              return_value=subprocess.CompletedProcess([], 0, unstripped)):
+                with self.assertRaisesRegex(ValueError, 'retains symbols'):
+                    workflow_artifacts.require_stripped_linux_binaries(payload)
+
+    def test_android_launcher_uses_a_density_sized_committed_asset(self):
+        path = build.ROOT/'resources/icons/app-android.png'
+        data = path.read_bytes()
+        self.assertEqual(data[:8], b'\x89PNG\r\n\x1a\n')
+        self.assertEqual(struct.unpack('>II', data[16:24]), (432, 432))
+        self.assertLess(len(data), 200_000)
+        source = (build.ROOT/'scripts/android.py').read_text()
+        self.assertIn("ROOT/'resources/icons/app-android.png'", source)
+
     def test_apk_certificate_accepts_numbered_versioned_and_sdk_range_signers(self):
         digest = 'ab'*32
         for output in (

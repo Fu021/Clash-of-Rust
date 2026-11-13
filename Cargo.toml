@@ -47,26 +47,31 @@ opt-level = "s"
 lto = "off"
 codegen-units = 16
 incremental = true
-strip = true
+strip = "symbols"
 
 # Desktop state adapters and generated UI code are dominated by instruction
 # pages. Use one codegen unit to avoid duplicating these adapters across units.
 [profile.release.package.clash-of-rust]
 opt-level = "s"
 codegen-units = 1
+strip = "symbols"
 
 [profile.release.package.clash-desktop-ui]
 opt-level = "s"
 codegen-units = 1
+strip = "symbols"
 
 [profile.release.package.clash-client-ui]
 opt-level = "s"
 codegen-units = 1
+strip = "symbols"
 
 [profile.release.package.clash-desktop-protocol]
 opt-level = "s"
 codegen-units = 1
+strip = "symbols"
 
 [profile.release.package.clash-desktop-shell]
 opt-level = "s"
 codegen-units = 1
+strip = "symbols"
