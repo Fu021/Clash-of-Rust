@@ -2,6 +2,12 @@
 
 [工作流索引](../workflows.md)。按需读取本页，不必加载全部工作流文档。
 
+## Rust 工具链
+
+固定版本集中于 [build-versions.json](../../.github/build-versions.json)，当前为 Rust 1.100.0；CI、Android 和内存基准沿用此版本，发布不另编译 Rust。升级核对[官方发行说明](https://blog.rust-lang.org/2026/11/12/Rust-1.100.0/)和 Cargo 产物布局、严格 Clippy 与最低系统验收，不只修改版本号。缓存身份及新旧目录兼容见[缓存分工](cache-coverage.md#编译对象只用-github)。
+
+新 API 不自动意味着驻留内存更低。重构须有相同负载下的持有、复制或分配证据，并保留共享业务和平台边界；本次先更新工具链、关闭 ThinLTO，再由同提交内存基准核对 RSS/PSS，不为使用新语法引入未经测量的改写。
+
 ## 版本与更新通道
 
 版本格式和同步规则见[版本管理](../development.md#版本管理)。打包器从所选 CI 提交的根 `Cargo.toml` 读取版本，核对构建 manifest、包名、收据和平台版本信息：Windows 的 PE 字符串 `FileVersion`、Android 的 `versionName` 必须一致。Windows 数字版本使用基础版本加 `.0`；macOS 的系统版本字段使用基础版本，自定义 `ClashOfRustVersion` 保留完整后缀。仅改文件名或系统元数据不会改变程序内部用于检查更新的编译版本；不一致的产物不能通过正常打包校验。

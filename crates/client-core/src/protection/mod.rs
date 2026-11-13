@@ -32,6 +32,9 @@ pub const ASSOCIATED_DOMAINS: &[&str] = &[
     "intercom.io",
     "intercomcdn.com",
     "cdn.usefathom.com",
+    "maps.googleapis.com",
+    "withpersona.com",
+    "frompersona.com",
 ];
 pub const KEYWORDS: &[&str] = &["datadog", "sentry", "sift"];
 pub const DIAGNOSTIC_HOSTS: &[&str] = &[
@@ -1417,6 +1420,10 @@ mod tests {
         assert!(!owned_host("sentry.io"));
         assert!(associated_host("shared.sentry.io"));
         assert!(associated_host("example-datadog.test"));
+        for host in ["maps.googleapis.com", "withpersona.com", "frompersona.com"] {
+            assert!(associated_host(host));
+            assert!(!owned_host(host));
+        }
     }
     #[test]
     fn interrupted_enable_and_disable_recover_the_correct_persisted_snapshot() {

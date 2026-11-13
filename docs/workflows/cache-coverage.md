@@ -36,7 +36,9 @@ CI 的分支任务与 Memory 清理任务从 main 加载保留策略；旧分支
 
 这是保留规则，不会改变 GitHub 的[缓存读取作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)：PR 的 merge ref 缓存仍不能被 main 或其他 PR 读取，切换运行分支可能冷编译。不能通过同名 key 将 PR 缓存迁移到主分支，也不扩大不可信 PR 的写权限。
 
-共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。当前[不保存分支差异](cache-capacity.md#main-基线与分支只读)；GitHub 不会自动合并归档，制作差异还需扫描完整对象并核验基线，目前没有真实运行证据证明其收益超过成本。缺少兼容基线或恢复损坏时正常重编。新命名空间只由可信 main 写入完整基线，首次 main 运行可从旧 main 归档迁移；不通过切换触发事件或提升 PR 权限绕过作用域。
+共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。当前[不保存分支差异](cache-capacity.md#main-基线与分支只读)；GitHub 不会自动合并归档，制作差异还需扫描完整对象并核验基线，目前没有真实运行证据证明其收益超过成本。缺少兼容基线或恢复损坏时正常重编。新命名空间只由可信 main 写入完整基线，不通过切换触发事件或提升 PR 权限绕过作用域。
+
+Rust 1.100 使用 `native-main-v2-<平台>-<架构>--`、`android-main-v2-<ABI>--` 及 `memory-main-v2-<profile>` 命名空间，删除宽前缀的旧归档迁移入口，防止 `ubuntu-22.04-` 误匹配 `ubuntu-22.04-arm-`。精确键包含根 Cargo profile、锁文件、`.cargo` 和工具版本；依赖未变时仍由缓存 Action 在同平台、同架构、同编译器范围内恢复兼容对象。源码回执兼容 Cargo 的旧目录和 `build/<包>/<hash>/{out,fingerprint,run}` 布局，修改共享输入时失效相应指纹。
 
 Linux 和 Android 保留 workspace 编译结果及经过内容核对的源码时间戳，不再精确命中旧依赖缓存后永久跳过新对象保存；Linux 容器同时挂载源码回执，避免宿主和容器读取不同位置。Windows ARM64 保留依赖缓存，只在本地 vendor 源码变化时更新键，不因每次业务源码变动重压整个 workspace；其他桌面端继续保留 workspace。全部使用 zstd 快速压缩级别 1，缓存仍不可变，首次填充和后续暖恢复需分别测量。
 
@@ -53,6 +55,7 @@ macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两�
 | Publish Release | 复用同提交 CI 候选包，不重复编译或另存对象 | 核对兼容性回执，不下载或上传 VM |
 | Android Compatibility | 复用成功 CI 的 APK，默认代理/TUN；截图及诊断可选 | 不使用 VM；官方系统镜像原包走 `upstream/files` |
 | Ubuntu Compatibility | 不保存编译缓存，只留小型报告与回执 | Ubuntu 20.04 x64、ARM64 只走 `vm/prepared` |
+| COSMIC Startup Investigation | 不读取或保存 GitHub Cache，复用 CI 候选 DEB；仅保存短期诊断附件 | 不访问私网缓存 |
 
 ## 原始下载：官方优先，私网回退
 

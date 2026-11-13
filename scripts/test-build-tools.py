@@ -18,6 +18,7 @@ import unittest
 from unittest.mock import MagicMock, call, patch
 import build_support as build
 import android as android_build
+import android_apk
 import windows_ci as windows
 import macos_ci as macos
 import workflow_storage as storage
@@ -1079,6 +1080,69 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_apk_resource_compression_preserves_payload_and_mmap_members(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original, packed = root/'original.apk', root/'packed.apk'
+            entries = {
+                'assets/GeoIP.dat': b'geo database fixture '*10000,
+                'lib/arm64-v8a/libgojni.so': b'core library fixture '*10000,
+                'resources.arsc': b'resource table',
+                'classes.dex': b'dex bytecode',
+            }
+            with zipfile.ZipFile(original, 'w') as archive:
+                for name, data in entries.items():
+                    method = zipfile.ZIP_DEFLATED if name.endswith('.so') else zipfile.ZIP_STORED
+                    archive.writestr(name, data, compress_type=method, compresslevel=1)
+                archive.writestr('META-INF/CERT.RSA', b'old signature')
+                archive.writestr('META-INF/MANIFEST.MF', b'old signature manifest')
+                archive.writestr('META-INF/services/example', b'preserved service')
+            android_apk.recompress(original, packed)
+            self.assertLess(packed.stat().st_size, original.stat().st_size)
+            with zipfile.ZipFile(packed) as archive:
+                for name, data in entries.items():
+                    self.assertEqual(archive.read(name), data)
+                self.assertEqual(archive.getinfo('assets/GeoIP.dat').compress_type, zipfile.ZIP_DEFLATED)
+                self.assertEqual(archive.getinfo('resources.arsc').compress_type, zipfile.ZIP_STORED)
+                self.assertEqual(archive.getinfo('classes.dex').compress_type, zipfile.ZIP_STORED)
+                self.assertEqual(archive.read('META-INF/services/example'), b'preserved service')
+                self.assertNotIn('META-INF/CERT.RSA', archive.namelist())
+                self.assertNotIn('META-INF/MANIFEST.MF', archive.namelist())
+
+    def test_apk_compression_requires_the_same_signer_and_preserves_old_package_on_failure(self):
+        for failure in ('none', 'align', 'signer'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                apk, key = root/'app.apk', root/'debug.keystore'
+                key.write_bytes(b'test keystore')
+                with zipfile.ZipFile(apk, 'w') as archive:
+                    archive.writestr('assets/GeoIP.dat', b'fixture '*10000)
+                before = apk.read_bytes()
+                commands = []
+                def execute(command, **kwargs):
+                    commands.append(command)
+                    if '-f' in command:
+                        if failure == 'align':
+                            raise subprocess.CalledProcessError(1, command)
+                        shutil.copyfile(command[-2], command[-1])
+                    return subprocess.CompletedProcess(command, 0)
+                identity = [['a'*64], ['b'*64 if failure == 'signer' else 'a'*64]]
+                with patch.dict(os.environ, {'ANDROID_CI_TEST': '1', 'ANDROID_USER_HOME': str(root),
+                                              'ANDROID_KEYSTORE_PATH': ''}), \
+                        patch.object(android_apk, 'certificate', side_effect=identity), \
+                        patch.object(android_apk.subprocess, 'run', side_effect=execute):
+                    if failure == 'none':
+                        result = android_apk.optimize(apk, root)
+                        self.assertGreater(result['saved_bytes'], 0)
+                        self.assertLess(len(apk.read_bytes()), len(before))
+                        self.assertEqual(len(commands), 3)
+                        self.assertIn('--v4-signing-enabled', commands[1])
+                    else:
+                        with self.assertRaises((subprocess.CalledProcessError, ValueError)):
+                            android_apk.optimize(apk, root)
+                        self.assertEqual(apk.read_bytes(), before)
+                self.assertFalse(list(root.glob('.apk-compress-*')))
+
     def test_windows_update_gate_handles_spaces_without_quoting_the_option_name(self):
         command = windows._update_handoff_command(
             r'C:\Downloads\COR setup.exe', r'C:\Users\Test User\cor update', 123,
@@ -2353,6 +2417,9 @@ Private_Clean: 2 kB
                 'release/deps/renderer_patch-first.d': b'dependency paths',
                 'release/.fingerprint/renderer-patch-first/lib-renderer_patch.json': b'fingerprint',
                 'aarch64-linux-android/release/build/renderer-patch/second/output': b'generated bindings',
+                'release/build/renderer-patch/third/out/librenderer_patch.rlib': b'new Cargo library',
+                'release/build/renderer-patch/third/fingerprint/lib-renderer_patch.json': b'new fingerprint',
+                'release/build/renderer-patch/third/run/stdout': b'new build script',
             }
             for relative, data in {**objects, 'release/deps/libclash_core-first.rlib': b'application'}.items():
                 path = target/relative
@@ -2410,6 +2477,35 @@ Private_Clean: 2 kB
                 code.write_text('changed source')
                 local_cache.workspace_sources(root)
             self.assertFalse(fingerprint.exists())
+
+    def test_new_cargo_fingerprints_are_invalidated_when_shared_build_inputs_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            code, watched = root/'crates/ui/lib.rs', root/'crates/layout/shared.slint'
+            code.parent.mkdir(parents=True)
+            watched.parent.mkdir(parents=True)
+            (code.parent/'Cargo.toml').write_text('[package]\nname="client-ui"\nversion="1.0.0"\n')
+            code.write_text('source')
+            watched.write_text('old layout')
+            unit = root/'target/release/build/client-ui/first'
+            output = unit/'run/stdout'
+            marker = unit/'fingerprint/lib-client_ui.json'
+            output.parent.mkdir(parents=True)
+            marker.parent.mkdir(parents=True)
+            output.write_text('cargo:rerun-if-changed='+str(watched)+'\n')
+            marker.write_text('cached fingerprint')
+            objects = unit/'out/libclient_ui.rlib'
+            objects.parent.mkdir(parents=True)
+            objects.write_bytes(b'compiled object')
+            tracked = b'crates/ui/Cargo.toml\0crates/ui/lib.rs\0crates/layout/shared.slint\0'
+            with patch.object(local_cache.subprocess, 'check_output', return_value=tracked):
+                local_cache.workspace_sources(root, save=True)
+                self.assertTrue(local_cache.github_restored(
+                    {'kind': 'rust', 'source': str(root), 'github_hit': 'false'}))
+                watched.write_text('changed layout')
+                local_cache.workspace_sources(root)
+            self.assertFalse(marker.exists())
+            self.assertTrue(objects.exists())
 
     def test_malformed_workspace_receipt_preserves_sources_and_existing_compiler_objects(self):
         for value in ([], None, 'invalid', 1):
@@ -5445,11 +5541,11 @@ runpy.run_path(str(script), run_name='__main__')
 
     def test_dmg_uses_the_smallest_verified_format_before_notarization(self):
         import macos_package as mac
-        for smallest in ('ULMO', 'ULFO', 'UDZO'):
+        for smallest in ('ULMO', 'UDBZ', 'ULFO', 'UDZO'):
             with self.subTest(smallest=smallest), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root/'dist').mkdir()
-                formats = {'ULMO', 'ULFO', 'UDZO'}
+                formats = {'ULMO', 'UDBZ', 'ULFO', 'UDZO'}
                 commands = []
                 verified = []
                 def disk_image(arguments, **kwargs):
@@ -5497,7 +5593,7 @@ runpy.run_path(str(script), run_name='__main__')
                             raise subprocess.CalledProcessError(1, ['hdiutil', 'verify'])
                         return
                     image_format = arguments[arguments.index('-format')+1]
-                    if image_format == 'ULMO':
+                    if image_format in ('ULMO', 'UDBZ'):
                         raise subprocess.TimeoutExpired('hdiutil', 300)
                     Path(arguments[-1]).write_bytes(
                         b'fallback' if image_format == 'UDZO' and fallback else b'')
@@ -7129,6 +7225,12 @@ class AptCacheTests(unittest.TestCase):
 
 
 class CosmicStartupInvestigationTests(unittest.TestCase):
+    def test_diagnostic_workflow_cannot_restore_or_save_build_caches(self):
+        workflow = (build.ROOT/'.github/workflows/cosmic-startup-investigation.yml').read_text()
+        self.assertNotRegex(workflow, r'uses:\s*(?:actions/cache|Swatinem/rust-cache|tailscale/github-action)')
+        self.assertNotRegex(workflow, r'uses:\s*\./\.github/actions/(?:linux-build-cache|upstream-cache)')
+        self.assertNotRegex(workflow, r'\b(?:gh cache|saveCache|restoreCache)\b')
+
     def test_monitor_negotiates_before_using_the_short_command_timeout(self):
         stream = io.BytesIO(b'{"QMP": {"version": {}, "capabilities": []}}\r\n'
                             b'{"return": {}}\r\n')

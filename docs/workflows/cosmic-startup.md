@@ -38,6 +38,6 @@ gh workflow run cosmic-startup-investigation.yml --ref main -f run_id=<成功的
 
 宿主脚本为 `scripts/investigate-cosmic-startup.py`，guest 脚本为 `scripts/cosmic_startup_guest.py`；离线回归在 `scripts/test-build-tools.py`。三者作为同一入口维护，不在每次验收后删除重建。
 
-只下载官方公开镜像，不访问私网缓存或传递订阅、控制密钥、GitHub 凭据；guest 中的服务重启和用户会话退出仅作用于该隔离 VM，不修改开发机网络或用户会话。工作流本身不发布 Release、不更改更新通道。
+只下载官方公开镜像，不访问私网缓存或传递订阅、控制密钥、GitHub 凭据；不恢复或保存 GitHub Cache，ISO、VM 写入层和工具目录仅存在于当次 runner，短期诊断附件不作为缓存。guest 中的服务重启和用户会话退出仅作用于该隔离 VM，不修改开发机网络或用户会话。工作流本身不发布 Release、不更改更新通道。
 
 修改镜像、驱动或断言后，重新核对所有阶段、失败取证及实际截图。镜像升级须同步官方身份、启动方式和已验证范围，不以自动跳过或放宽条件消除失败。

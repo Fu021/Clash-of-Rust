@@ -405,8 +405,11 @@ def build(arch):
         for path in (ANDROID/'app/build/reports').glob('lint-results-release.*'):
             shutil.copy2(path,report/path.name)
     apk = ANDROID/'app/build/outputs/apk/release/app-release.apk'
+    from android_apk import optimize
+    compression = optimize(apk, sdk_tools())
     sizes = validate_apk(apk, arch)
-    report = {'commit':commit(), 'arch':arch, 'version':package_version(), **sizes}
+    report = {'commit':commit(), 'arch':arch, 'version':package_version(),
+              'compression': compression, **sizes}
     write_json(ROOT/'target/android-report'/arch/'build.json', report)
     print(json.dumps(report), flush=True)
     workspace_sources(ROOT, save=True)

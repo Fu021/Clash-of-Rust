@@ -107,6 +107,7 @@ def build_dmg(payload, version, arch):
         failures = []
         for image_format, options in (
             ('ULMO', []),
+            ('UDBZ', []),
             ('ULFO', []),
             ('UDZO', ['-imagekey', 'zlib-level=9']),
         ):

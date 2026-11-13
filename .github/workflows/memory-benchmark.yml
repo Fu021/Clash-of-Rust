@@ -127,7 +127,7 @@ jobs:
         id: rust_github
         with:
           workspaces: source -> target
-          prefix-key: memory-main-v1-${{ inputs.profile }}
+          prefix-key: memory-main-v2-${{ inputs.profile }}
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: false

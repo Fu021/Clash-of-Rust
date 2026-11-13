@@ -245,8 +245,8 @@ jobs:
         continue-on-error: true
         id: rust_github
         with:
-          prefix-key: android-main-v1-${{ matrix.arch }}
-          key: workspace-${{ hashFiles('.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**') }}
+          prefix-key: android-main-v2-${{ matrix.arch }}--
+          key: workspace-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**') }}
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: true
@@ -254,42 +254,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure'
-        shell: python
-        run: |
-          import sys
-          sys.path.insert(0, 'scripts')
-          from action_cache import discard_restore
-          discard_restore({'kind': 'rust', 'source': '.'})
-      - name: Identify Android dependency cache paths
-        id: android_paths
-        shell: python
-        run: |
-          import os, pathlib, sys
-          sys.path.insert(0, 'scripts')
-          from action_cache import github_restored
-          cargo = pathlib.Path(os.environ.get('CARGO_HOME', str(pathlib.Path.home()/'.cargo')))
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('needed=' + str(not github_restored({'kind': 'rust', 'source': '.', 'github_hit': 'false'})).lower() + '\n')
-              for name, path in [('registry', cargo/'registry'), ('git', cargo/'git'), ('target', pathlib.Path('target').absolute())]:
-                  output.write(name + '=' + str(path) + '\n')
-      - name: Restore previous Android dependency archives
-        id: android_legacy
-        if: steps.android_paths.outputs.needed == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        continue-on-error: true
-        timeout-minutes: 3
-        with:
-          path: |
-            ${{ steps.android_paths.outputs.registry }}
-            ${{ steps.android_paths.outputs.git }}
-            ${{ steps.android_paths.outputs.target }}
-            ${{ github.workspace }}/.workspace-sources
-          key: android-main-v1-${{ matrix.arch }}-migration-${{ github.run_id }}
-          restore-keys: |
-            android-main-v1-${{ matrix.arch }}-
-            ${{ github.ref == 'refs/heads/main' && format('android-v2-{0}-', matrix.arch) || '' }}
-      - name: Discard interrupted previous Android restore
-        if: steps.android_legacy.outcome == 'failure'
         shell: python
         run: |
           import sys
@@ -564,8 +528,8 @@ jobs:
         continue-on-error: true
         id: rust_github
         with:
-          prefix-key: native-main-v1-${{ matrix.os }}
-          key: ${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
+          prefix-key: native-main-v2-${{ matrix.system }}-${{ matrix.arch }}--
+          key: ${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
           cache-on-failure: false
           cache-bin: false
           # Source hashes are checked before restoring workspace mtimes; changed
@@ -580,44 +544,11 @@ jobs:
           sys.path.insert(0, 'scripts')
           from action_cache import discard_restore
           discard_restore({'kind': 'rust', 'source': '.'})
-      - name: Check whether native dependency objects were restored
-        id: rust_paths
+      - name: Configure verified workspace source receipts
         run: |
-          import os, pathlib, sys
-          sys.path.insert(0, 'scripts')
-          from action_cache import github_restored
-          cargo = pathlib.Path(os.environ.get('CARGO_HOME', str(pathlib.Path.home()/'.cargo')))
+          import os, pathlib
           with open(os.environ['GITHUB_ENV'], 'a') as environment:
               environment.write('WORKSPACE_SOURCE_CACHE=' + str(pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json') + '\n')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('needed=' + str(not github_restored({'kind':'rust', 'source':'.', 'github_hit':'false'})).lower() + '\n')
-              for name, path in [('registry', cargo/'registry'), ('git', cargo/'git'), ('target', pathlib.Path('target').absolute())]:
-                  output.write(name + '=' + str(path) + '\n')
-      - name: Restore compatible GitHub workspace compilation
-        id: rust_fallback
-        if: steps.rust_paths.outputs.needed == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        continue-on-error: true
-        timeout-minutes: 5
-        with:
-          # A source-specific exact key must still restore prior dependency and
-          # workspace objects. These paths match rust-cache's archive version.
-          path: |
-            ${{ steps.rust_paths.outputs.registry }}
-            ${{ steps.rust_paths.outputs.git }}
-            ${{ steps.rust_paths.outputs.target }}
-            ${{ runner.temp }}/workspace-sources
-          key: native-main-v1-${{ matrix.os }}-fallback-${{ github.run_id }}
-          restore-keys: |
-            native-main-v1-${{ matrix.os }}-
-            ${{ github.ref == 'refs/heads/main' && format('{0}{1}-', runner.os == 'Linux' && 'native-release-ubuntu20-v1-' || 'native-release-v2-', matrix.os) || '' }}
-      - name: Discard interrupted compatible GitHub restore
-        if: steps.rust_fallback.outcome == 'failure'
-        run: |
-          import sys
-          sys.path.insert(0, 'scripts')
-          from action_cache import discard_restore
-          discard_restore({'kind': 'rust', 'source': '.'})
       - name: Verify native architecture
         run: |
           import subprocess, sys

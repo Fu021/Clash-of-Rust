@@ -315,12 +315,14 @@ def workspace_sources(source, save=False):
     changed_paths = [(source/name).resolve() for name in changed]
     if changed_paths:
         patterns = ('release/build/*/output', 'release/build/*/*/output',
-                    '*/release/build/*/output', '*/release/build/*/*/output')
+                    '*/release/build/*/output', '*/release/build/*/*/output',
+                    'release/build/*/*/run/stdout', '*/release/build/*/*/run/stdout')
         for pattern in patterns:
             for output in (source/'target').glob(pattern):
                 owners = [(directory, package) for directory, package in packages.items()
                           if any(name == package or name.startswith(package + '-')
-                                 for name in (output.parent.name, output.parent.parent.name))]
+                                 for name in (output.parent.name, output.parent.parent.name,
+                                              output.parent.parent.parent.name))]
                 for directory, package in owners:
                     if package in invalid:
                         continue
@@ -350,6 +352,13 @@ def workspace_sources(source, save=False):
                 for artifact in [directory/package, *directory.glob(package + '-*')]:
                     if artifact.is_dir() and not artifact.is_symlink():
                         shutil.rmtree(artifact)
+    for profile in (source/'target/release', *(source/'target').glob('*/release')):
+        for package in invalid:
+            directory = profile/'build'/package
+            if directory.is_dir() and not directory.is_symlink():
+                for fingerprint in directory.glob('*/fingerprint'):
+                    if fingerprint.is_dir() and not fingerprint.is_symlink():
+                        shutil.rmtree(fingerprint)
     print(f'Workspace cache: verified {restored} source/directory timestamps; '
           f'invalidated {len(invalid)} changed crates.', flush=True)
 
@@ -433,7 +442,9 @@ def github_restored(config):
     # step that can populate target before this action; require real dependency
     # objects before treating that ambiguous result as a restored cache.
     target = Path(config['source'])/'target'
-    return any(path.stat().st_size for pattern in ('**/deps/*.rlib', '**/deps/*.rmeta', '**/deps/*.a')
+    return any(path.stat().st_size for pattern in ('**/deps/*.rlib', '**/deps/*.rmeta', '**/deps/*.a',
+                                                  '**/build/*/*/out/*.rlib', '**/build/*/*/out/*.rmeta',
+                                                  '**/build/*/*/out/*.a')
                for path in target.glob(pattern) if path.is_file() and not path.is_symlink())
 
 
