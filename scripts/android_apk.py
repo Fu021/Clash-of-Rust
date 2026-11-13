@@ -16,13 +16,21 @@ def certificate(path, tools):
     result = subprocess.check_output(
         [str(tools/'apksigner'), '-J-enable-native-access=ALL-UNNAMED', 'verify',
          '--print-certs', str(path)], text=True)
-    digests = re.findall(
-        r'(?m)^Signer (?:#\d+|\(minSdkVersion=\d+(?: \(dev release=true\))?, '
-        r'maxSdkVersion=\d+\)) certificate SHA-256 digest: ([0-9a-fA-F]{64})[ \t]*\r?$',
-        result)
+    digests = set()
+    marker = ' certificate SHA-256 digest:'
+    for line in result.splitlines():
+        if marker not in line:
+            continue
+        label, digest = line.rsplit(marker, 1)
+        if 'Signer' not in label or 'Source Stamp' in label:
+            continue
+        digest = digest.strip()
+        if not re.fullmatch(r'[0-9a-fA-F]{64}', digest):
+            raise ValueError('APK signing certificate digest is invalid')
+        digests.add(digest.lower())
     if not digests:
         raise ValueError('APK signing certificate is unavailable')
-    return sorted({digest.lower() for digest in digests})
+    return sorted(digests)
 
 
 def recompress(source, destination):

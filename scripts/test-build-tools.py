@@ -1080,11 +1080,17 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
-    def test_apk_certificate_accepts_numbered_and_sdk_range_signers(self):
+    def test_apk_certificate_accepts_numbered_versioned_and_sdk_range_signers(self):
         digest = 'ab'*32
         for output in (
                 f'Signer #1 certificate SHA-256 digest: {digest}\n',
                 f'Signer #1 certificate SHA-256 digest: {digest.upper()} \r\n',
+                f'Signer: certificate SHA-256 digest: {digest}\n',
+                f'Signer #1: certificate SHA-256 digest: {digest}\n',
+                f'V3.0 Signer: certificate SHA-256 digest: {digest}\n',
+                f'V3.1 Signer: (minSdkVersion=33, maxSdkVersion=2147483647) '
+                f'certificate SHA-256 digest: {digest}\n',
+                f'V3.2 Hybrid Classical Signer: certificate SHA-256 digest: {digest}\n',
                 f'Signer (minSdkVersion=28, maxSdkVersion=32) certificate SHA-256 digest: {digest}\n'
                 f'Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: {digest}\n',
                 f'Signer (minSdkVersion=36 (dev release=true), maxSdkVersion=2147483647) '
@@ -1094,15 +1100,18 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(android_apk.certificate(Path('app.apk'), Path('tools')), [digest])
                 self.assertIn('--print-certs', execute.call_args.args[0])
         output = (f'Signer #1 certificate SHA-256 digest: {digest}\n'
-                  f'Signer #2 certificate SHA-256 digest: {"cd"*32}\n')
+                  f'Signer #2 certificate SHA-256 digest: {"cd"*32}\n'
+                  f'V3.1 Signer: certificate SHA-256 digest: {digest.upper()}\n'
+                  f'Source Stamp Signer: certificate SHA-256 digest: {"ef"*32}\n'
+                  f'Signer #1 public key SHA-256 digest: {"ef"*32}\n')
         with patch.object(android_apk.subprocess, 'check_output', return_value=output):
             self.assertEqual(android_apk.certificate(Path('app.apk'), Path('tools')), [digest, 'cd'*32])
 
     def test_apk_certificate_rejects_missing_invalid_and_source_stamp_only_identity(self):
-        for output in ('', 'Verifies\n', 'Signer #1 certificate SHA-256 digest: xyz\n',
-                       'Signer #1 certificate SHA-256 digest: ' + 'a'*65 + '\n',
+        for output in ('', 'Verifies\n',
                        'Signer #1 public key SHA-256 digest: ' + 'a'*64 + '\n',
-                       'Source Stamp Signer certificate SHA-256 digest: ' + 'a'*64 + '\n'):
+                       'Source Stamp Signer certificate SHA-256 digest: ' + 'a'*64 + '\n',
+                       'Source Stamp Signer: certificate SHA-256 digest: ' + 'a'*64 + '\n'):
             with self.subTest(output=output), \
                     patch.object(android_apk.subprocess, 'check_output', return_value=output):
                 with self.assertRaisesRegex(ValueError, 'certificate is unavailable'):
@@ -1111,6 +1120,15 @@ class BuildTests(unittest.TestCase):
                           side_effect=subprocess.CalledProcessError(1, ['apksigner'])):
             with self.assertRaises(subprocess.CalledProcessError):
                 android_apk.certificate(Path('app.apk'), Path('tools'))
+
+    def test_apk_certificate_rejects_malformed_signer_even_beside_a_valid_one(self):
+        for digest in ('xyz', 'a'*63, 'a'*65, 'a'*64 + ' trailing'):
+            for prefix in ('', 'Signer #1 certificate SHA-256 digest: ' + 'b'*64 + '\n'):
+                output = prefix + f'V3.0 Signer: certificate SHA-256 digest: {digest}\n'
+                with self.subTest(digest=digest, valid_prefix=bool(prefix)), \
+                        patch.object(android_apk.subprocess, 'check_output', return_value=output):
+                    with self.assertRaisesRegex(ValueError, 'certificate digest is invalid'):
+                        android_apk.certificate(Path('app.apk'), Path('tools'))
 
     def test_apk_resource_compression_preserves_payload_and_mmap_members(self):
         with tempfile.TemporaryDirectory() as temporary:
