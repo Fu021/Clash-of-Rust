@@ -1425,12 +1425,16 @@ class BuildTests(unittest.TestCase):
                 native_ci.main()
         checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
         for package, case in (('clash-client-core', 'update'),
+                              ('clash-client-core', 'download::tests::'),
+                              ('clash-client-core', 'geodata::tests::'),
                               ('clash-client-runtime', 'update_check_interval'),
                               ('clash-cli', 'update_'),
                               ('clash-of-rust', 'update_')):
             self.assertTrue(any(command[command.index('-p')+1] == package and case in command
                                 for command in checks), (package, case, checks))
         for path in ('crates/client-core/src/config/mod.rs',
+                     'crates/client-core/src/download.rs',
+                     'crates/client-core/src/geodata/mod.rs',
                      'crates/client-core/src/update/schedule.rs'):
             self.assertTrue(ci_test_policy.select([path])['update_tests'])
 
@@ -1480,12 +1484,17 @@ class BuildTests(unittest.TestCase):
         for case in (
                 'application::ui_tests::protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change',
                 'application::ui_tests::protection_rejects_confirmations_that_would_save_or_delete',
+                'application::ui_tests::a_stopped_protected_core_exposes_a_retry_without_disabling_protection',
                 'application::ui_tests::a_locked_rules_page_still_accepts_the_global_exit_confirmation',
                 'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             self.assertTrue(any(case in command for command in focused), case)
         self.assertTrue(any('application_policy_form_respects_platform_protection_and_scrolls'
                             in command for command in focused))
-        self.assertTrue(all('--exact' in command for command in focused))
+        self.assertTrue(any('application::network_watch::tests::' in command for command in focused))
+        self.assertTrue(any('protected_mobile_core_recovery_is_reachable_and_respects_pending_operations'
+                            in command for command in focused))
+        self.assertTrue(all(('--exact' in command) == ('application::network_watch::tests::' not in command)
+                            for command in focused))
         for package, target in (('clash-client-ui', 'ui_models'),
                                 ('clash-desktop-ui', '--lib'),
                                 ('clash-client-core', '--lib')):

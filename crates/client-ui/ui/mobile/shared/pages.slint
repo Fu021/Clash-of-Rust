@@ -44,7 +44,7 @@ component StatusCard inherits MCard {
             clicked => { MobileActions.request(MobileIntent.mode, "" + index, ""); }
         }
     }
-    if !MobileData.core-running: MButton { text: "重启内核"; enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.restart-core, "", ""); } }
+    if !MobileData.core-running: MButton { geometry-key: "retry-core"; text: "重试启动"; enabled: !MobileData.working && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.restart-core, "", ""); } }
 }
 component TrafficCard inherits MCard {
     GridLayout { spacing: 16px;

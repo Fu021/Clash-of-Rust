@@ -48,6 +48,7 @@ impl Action {
         matches!(
             self,
             Self::Refresh
+                | Self::Start
                 | Self::Appearance(_)
                 | Self::Accent(_)
                 | Self::TextScale(_)
@@ -534,6 +535,7 @@ mod synchronization_tests {
     fn protection_allows_observation_and_disable_but_rejects_mutations() {
         for allowed in [
             Action::Refresh,
+            Action::Start,
             Action::LoadRules("fixture".into()),
             Action::OpenProfiles,
             Action::Delay("node".into()),
@@ -549,7 +551,6 @@ mod synchronization_tests {
             assert!(allowed.allowed_during_protection());
         }
         for blocked in [
-            Action::Start,
             Action::SavePorts(7897),
             Action::UpdatePrereleases(true),
             Action::DnsOverride(true),

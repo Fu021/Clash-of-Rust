@@ -3,6 +3,7 @@ import json
 from http.client import HTTPException
 import os
 from pathlib import Path
+import signal
 import subprocess
 import time
 
@@ -140,6 +141,53 @@ def verify(directory, invoke, api, http):
                     uplink(initial_ipv6)
                 raise
 
+    def protected_restart(expected_ipv6):
+        def child_pids(pid):
+            children = set()
+            for thread in Path(f'/proc/{pid}/task').iterdir():
+                try:
+                    children.update((thread/'children').read_text().split())
+                except FileNotFoundError:
+                    continue
+            return children
+
+        control = directory/'data/control.json'
+        endpoint = json.loads(control.read_text())
+        owner_pid = endpoint['pid']
+        assert endpoint['owner'] == 'daemon' and owner_pid > 1 and owner_pid != os.getpid()
+        environment = Path(f'/proc/{owner_pid}/environ').read_bytes().split(b'\0')
+        assert os.fsencode(f'CLASH_OF_RUST_DATA_DIR={directory/"data"}') in environment
+        previous = json.loads(settings_path.read_text())
+        os.kill(owner_pid, signal.SIGTERM)
+        deadline = time.monotonic()+35
+        while True:
+            try:
+                process_state = Path(f'/proc/{owner_pid}/stat').read_text().rpartition(') ')[2].split()[0]
+            except FileNotFoundError:
+                break
+            if process_state == 'Z':
+                break
+            assert time.monotonic() < deadline, 'The protected test owner did not exit'
+            time.sleep(0.1)
+        assert json.loads(settings_path.read_text())['claude_protection'] == previous['claude_protection']
+        assert invoke('start')['running']
+        current = json.loads(control.read_text())
+        assert current['pid'] != owner_pid
+        check(expected_ipv6, expect_unconfigured=not expected_ipv6)
+        assert invoke('status')['protected']
+        runtime = (directory/'data/runtime/config.yaml').read_bytes()
+        previous_children = child_pids(current['pid'])
+        assert previous_children, 'The protected owner has no live core child'
+        assert invoke('start')['running']
+        assert json.loads(control.read_text())['pid'] == current['pid']
+        assert child_pids(current['pid']) == previous_children, 'Repeated start replaced the core'
+        assert (directory/'data/runtime/config.yaml').read_bytes() == runtime
+        restored = json.loads(settings_path.read_text())
+        for field in ('claude_protection', 'proxy_mode', 'run_mode', 'active_profile'):
+            assert restored[field] == previous[field], f'Protected restart changed {field}'
+        print('PASS: protected owner exit/relaunch and idempotent explicit start preserve '
+              f'protection, locked configuration and real TUN traffic; IPv6={expected_ipv6}', flush=True)
+
     invoke('proxy', 'off')
     invoke('profile', 'import', profile, '--name', 'ipv6-lifecycle')
     invoke('profile', 'use', 'ipv6-lifecycle')
@@ -164,6 +212,7 @@ def verify(directory, invoke, api, http):
         assert invoke('status')['protected'], 'Rejected stop disabled Claude protection'
         check(False, expect_unconfigured=True)
         protected_roundtrip(False)
+        protected_restart(False)
         assert not invoke('claude', 'protect', 'off')['enabled']
         previous = settings_path.read_bytes()
         previous_refreshes = refresh_count()
@@ -187,6 +236,7 @@ def verify(directory, invoke, api, http):
         check(True)
         protected_roundtrip(True)
         check(True)
+        protected_restart(True)
         print('PASS: default IPv6 survives an IPv4-only startup, restart, IPv6 arrival/loss '
               'and TUN reconnect; Claude protection with IPv6 absent/present, protected '
               'arrival/loss, IPv4/IPv6 HTTP and unchanged settings verified', flush=True)

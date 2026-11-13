@@ -445,7 +445,11 @@ impl Editor {
                     && (!session.running || !self.providers_loaded)
                 {
                     "动态目标待确认"
-                } else if !self.targets.contains(&group.target) {
+                } else if !self
+                    .targets
+                    .iter()
+                    .any(|candidate| group.target.matches(candidate))
+                {
                     if group.reject_missing {
                         "目标失效 · 阻止连接"
                     } else {

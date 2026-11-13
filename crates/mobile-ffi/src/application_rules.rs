@@ -15,6 +15,7 @@ impl Session {
 
     pub(crate) fn application_runtime(
         &self,
+        source: &str,
         raw: &str,
         settings: &core::config::Settings,
         profile: &str,
@@ -30,7 +31,7 @@ impl Session {
         } else {
             false
         };
-        core::application_rules::runtime(raw, settings, profile, supported)
+        core::application_rules::runtime(source, raw, settings, profile, supported)
     }
 
     pub fn save_application_rules(&mut self, profile: &str, rules: Vec<Rule>) -> Result<()> {
@@ -152,6 +153,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn emoji_node_bindings_use_source_identity_through_save_reload_and_subscription_updates()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let native: Arc<dyn NativeHost> = Arc::new(Host(true));
+        let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+        let name = "🇺🇸 美国 🚀 [01].+ ✈️";
+        let source = format!(
+            "proxies: [{{name: '{name}', type: socks5, server: example.test, port: 1080}}]\nrules: ['MATCH,DIRECT']\n"
+        );
+        session
+            .save_profile(None, "Unicode", "", Some(&source))
+            .await
+            .unwrap();
+        let profile = session.profiles.last().unwrap().id.clone();
+        session.activate(&profile).unwrap();
+        let target = core::application_rules::targets(&source)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let binding = Rule {
+            package: "org.example.browser".into(),
+            target,
+            reject_missing: true,
+            group: None,
+        };
+        session
+            .save_application_rules(&profile, vec![binding.clone()])
+            .unwrap();
+        for session in [
+            session,
+            Session::open(root.path().into(), native.clone()).unwrap(),
+        ] {
+            for enabled in [false, true] {
+                let mut settings = session.settings.clone();
+                settings.udp = enabled;
+                let runtime: yaml_serde::Value =
+                    yaml_serde::from_str(&session.runtime(&settings).unwrap()).unwrap();
+                let route = &runtime["cor-application-rules"]["routes"][0];
+                assert_eq!(route["missing_target"].as_bool(), Some(false));
+                let selector = route["target"].as_str().unwrap();
+                assert_ne!(selector, "REJECT");
+                assert!(
+                    runtime["proxy-groups"]
+                        .as_sequence()
+                        .unwrap()
+                        .iter()
+                        .any(|group| group["name"].as_str() == Some(selector)
+                            && group["proxies"][0].as_str() == Some(name))
+                );
+                assert_eq!(runtime["proxies"][0]["udp"].as_bool(), Some(enabled));
+            }
+        }
+        let mut session = Session::open(root.path().into(), native).unwrap();
+        for (source, missing) in [
+            (source.clone(), false),
+            (source.replace("1080", "1081"), true),
+            (source.clone(), false),
+        ] {
+            session
+                .save_profile(Some(&profile), "Unicode", "", Some(&source))
+                .await
+                .unwrap();
+            let runtime: yaml_serde::Value =
+                yaml_serde::from_str(&session.runtime(&session.settings).unwrap()).unwrap();
+            let route = &runtime["cor-application-rules"]["routes"][0];
+            assert_eq!(route["missing_target"].as_bool(), Some(missing));
+            assert_eq!(route["target"].as_str() == Some("REJECT"), missing);
+            assert_eq!(
+                session.settings.application_rules[&profile].as_slice(),
+                std::slice::from_ref(&binding)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn legacy_application_rules_survive_reopen_and_group_editing() {
         use super::core::application_rules::groups;
         let root = tempfile::tempdir().unwrap();
@@ -211,5 +287,135 @@ mod tests {
             std::fs::read(session.store.profile_path(&profile).unwrap()).unwrap(),
             source
         );
+    }
+
+    #[tokio::test]
+    async fn protection_cycles_restore_application_bindings_and_both_udp_preferences() {
+        use core::claude_check::protection::{Previous, Protection};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        #[derive(Default)]
+        struct RecordingHost {
+            configs: std::sync::Mutex<Vec<String>>,
+            reject: AtomicBool,
+        }
+        impl NativeHost for RecordingHost {
+            fn request(&self, value: Value) -> Result<Value> {
+                if value["op"] == "reload" {
+                    self.configs
+                        .lock()
+                        .unwrap()
+                        .push(value["config"].as_str().unwrap().into());
+                    ensure!(
+                        !self.reject.swap(false, Ordering::AcqRel),
+                        "simulated protected reload failure"
+                    );
+                }
+                Ok(json!({"supported":true}))
+            }
+        }
+        for enabled in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let native = Arc::new(RecordingHost::default());
+            let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+            let source = "proxies: [{name: '🇯🇵 日本 🚀', type: socks5, server: example.test, port: 1080}]\nrules: ['MATCH,DIRECT']\n";
+            session
+                .save_profile(None, "Protection", "", Some(source))
+                .await
+                .unwrap();
+            let profile = session.profiles.last().unwrap().id.clone();
+            session.activate(&profile).unwrap();
+            let mut settings = session.settings.clone();
+            settings.udp = enabled;
+            session.commit_settings(settings).unwrap();
+            session
+                .save_application_rules(
+                    &profile,
+                    vec![Rule {
+                        package: "org.example.browser".into(),
+                        target: core::application_rules::targets(source)
+                            .unwrap()
+                            .pop()
+                            .unwrap(),
+                        reject_missing: true,
+                        group: None,
+                    }],
+                )
+                .unwrap();
+            let before = session.settings.clone();
+            let original = session.runtime(&before).unwrap();
+            for _ in 0..3 {
+                session.running = true;
+                let protection = Protection::new(
+                    profile.clone(),
+                    "🇯🇵 日本 🚀".into(),
+                    Previous {
+                        mode: before.run_mode.clone(),
+                        proxy_mode: before.proxy_mode,
+                        selectors: Vec::new(),
+                    },
+                );
+                session
+                    .commit_protection(Some(Arc::new(protection)), before.run_mode.clone())
+                    .unwrap();
+                session = Session::open(root.path().into(), native.clone()).unwrap();
+                let protected_raw = session.runtime(&session.settings).unwrap();
+                assert_eq!(
+                    native.configs.lock().unwrap().last().unwrap(),
+                    &protected_raw
+                );
+                let protected: yaml_serde::Value = yaml_serde::from_str(&protected_raw).unwrap();
+                assert!(protected["cor-application-rules"].is_null());
+                assert_eq!(protected["proxies"][0]["udp"].as_bool(), Some(true));
+                assert_eq!(session.settings.udp, enabled);
+                assert_eq!(
+                    session.settings.application_rules[&profile],
+                    before.application_rules[&profile]
+                );
+                let saved = std::fs::read(root.path().join("settings.json")).unwrap();
+                let mut modified = session.settings.clone();
+                modified.udp = !enabled;
+                assert!(session.commit_settings(modified).is_err());
+                assert!(
+                    session
+                        .save_application_rules(&profile, Vec::new())
+                        .is_err()
+                );
+                assert_eq!(
+                    std::fs::read(root.path().join("settings.json")).unwrap(),
+                    saved
+                );
+                session.running = true;
+                native.reject.store(true, Ordering::Release);
+                assert!(
+                    session
+                        .commit_protection(None, before.run_mode.clone())
+                        .is_err()
+                );
+                assert!(session.settings.claude_protection.is_some());
+                assert_eq!(
+                    std::fs::read(root.path().join("settings.json")).unwrap(),
+                    saved
+                );
+                assert_eq!(
+                    std::fs::read_to_string(session.store.runtime().join("config.yaml")).unwrap(),
+                    protected_raw
+                );
+                assert_eq!(
+                    native.configs.lock().unwrap().last().unwrap(),
+                    &protected_raw
+                );
+                session
+                    .commit_protection(None, before.run_mode.clone())
+                    .unwrap();
+                assert_eq!(native.configs.lock().unwrap().last().unwrap(), &original);
+                session = Session::open(root.path().into(), native.clone()).unwrap();
+                assert_eq!(session.runtime(&session.settings).unwrap(), original);
+                assert_eq!(
+                    serde_json::to_value(&session.settings).unwrap(),
+                    serde_json::to_value(&before).unwrap()
+                );
+                assert_eq!(session.raw().unwrap(), source);
+            }
+        }
     }
 }

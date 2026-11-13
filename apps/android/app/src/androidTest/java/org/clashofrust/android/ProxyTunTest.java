@@ -1099,6 +1099,9 @@ public class ProxyTunTest {
         assertTunSocket(controller,secret,"198.51.100.1",false);
     }
     private static void assertTunSocket(String controller,String secret,String destination,boolean verifyOwner) throws Exception {
+        assertTunSocket(controller,secret,destination,verifyOwner,"CI-TUN-origin");
+    }
+    private static void assertTunSocket(String controller,String secret,String destination,boolean verifyOwner,String expectedNode) throws Exception {
         // The physical network cannot reach this reserved address. Only the
         // test core's explicit HTTP outbound can relay it to the host origin.
         // Keep a fresh socket open and require its exact TUN source port too.
@@ -1123,7 +1126,7 @@ public class ProxyTunTest {
                             && metadata.optInt("sourcePort")==connection.getLocalPort()
                             && metadata.optInt("destinationPort")==18081
                             && (!verifyOwner || metadata.optInt("uid")==android.os.Process.myUid())
-                            && "CI-TUN-origin".equals(chains.optString(chain))) {
+                            && expectedNode.equals(chains.optString(chain))) {
                             connection.getOutputStream().write('!');
                             return;
                         }
@@ -1884,11 +1887,26 @@ public class ProxyTunTest {
             .replace("MATCH,DIRECT","MATCH,REJECT");
         String self=context.getPackageName();
         try {
+            for (String nodeName : new String[]{"🇺🇸 美国节点", "🚀 日本 [01].+", "👩🏽‍💻 台湾✈️"}) {
+                String named=restrictive.replace("CI-TUN-origin",nodeName)
+                    + "\nproxy-groups:\n  - name: cor-application-unicode\n    type: select\n"
+                    + "    hidden: true\n    proxies: ['"+nodeName+"']\n    empty-fallback: REJECT\n";
+                long missingBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                    .getLong("missing_rejected");
+                CoreBridge.reload(applicationOutboundConfig(named,self,"cor-application-unicode",true));
+                assertTunSocket(controller,secret,"198.51.100.1",true,nodeName);
+                assertTunSocket(controller,secret,"application-policy.test",true,nodeName);
+                assertEquals("A valid emoji target was reported as missing",missingBefore,
+                    new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                        .getLong("missing_rejected"));
+            }
             CoreBridge.reload(applicationOutboundConfig(restrictive,self,"CI-TUN-origin",false));
             assertTunSocket(controller,secret,"198.51.100.1",true);
             assertTunSocket(controller,secret,"application-policy.test",true);
             long rejectedBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                 .getLong("udp_rejected");
+            long udpMissingBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                .getLong("missing_rejected");
             try (DatagramSocket socket=new DatagramSocket()) {
                 socket.connect(InetAddress.getByName("198.51.100.1"),18081);
                 socket.send(new DatagramPacket(new byte[]{1},1));
@@ -1896,6 +1914,9 @@ public class ProxyTunTest {
                     ()->new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                         .getLong("udp_rejected")>rejectedBefore);
             }
+            assertEquals("Unsupported UDP must not be reported as a missing target",udpMissingBefore,
+                new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
+                    .getLong("missing_rejected"));
             CoreBridge.reload(applicationOutboundConfig(restrictive,self,"DIRECT",false));
             assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
             long missingRejectedBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())

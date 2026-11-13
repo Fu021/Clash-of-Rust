@@ -1872,7 +1872,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 json!({"op":if intent == MobileIntent::Connect {"connect"} else {"disconnect"}}),
             )?;
         }
-        MobileIntent::RestartCore => session.initialize()?,
+        MobileIntent::RestartCore => {
+            if session.settings.claude_protection.is_some() {
+                session.attach_or_initialize()?;
+            } else {
+                session.initialize()?;
+            }
+        }
         MobileIntent::Mode => {
             ensure!(
                 session.settings.claude_protection.is_none(),
@@ -2341,6 +2347,7 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
     matches!(
         intent,
         MobileIntent::Navigate
+            | MobileIntent::RestartCore
             | MobileIntent::Appearance
             | MobileIntent::Accent
             | MobileIntent::TextScale

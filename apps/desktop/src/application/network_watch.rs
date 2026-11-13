@@ -9,6 +9,7 @@ pub(super) struct Watch {
     proxy: Option<ProxyMode>,
     revision: u64,
     pending: bool,
+    transitioning: bool,
     checked_at: Option<Instant>,
 }
 
@@ -26,8 +27,16 @@ impl Watch {
         }
     }
 
+    pub(super) fn transition(&mut self, active: bool) {
+        if self.transitioning != active {
+            self.transitioning = active;
+            self.invalidate();
+        }
+    }
+
     pub(super) fn begin(&mut self) -> Option<u64> {
-        if self.pending
+        if self.transitioning
+            || self.pending
             || self
                 .checked_at
                 .is_some_and(|time| time.elapsed() < Duration::from_secs(30))
@@ -47,6 +56,9 @@ impl Watch {
     }
 
     pub(super) fn notice(&self, settings: Option<&Settings>) -> String {
+        if self.transitioning {
+            return String::new();
+        }
         host_network::notice(&host_network::with_settings_context(
             self.routes.clone(),
             self.proxy,
@@ -81,6 +93,69 @@ mod tests {
             "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
             "tun_holders":{"interfaces":{"Meta":[{"uid":0,"pid":42}]}}
         })
+    }
+
+    fn bypass_routes() -> Value {
+        json!({
+            "scope":"current_network_namespace",
+            "ipv4":{"state":"observed","interface":"eth0","kind":"other"}
+        })
+    }
+
+    #[test]
+    fn protection_transition_discards_inflight_samples_even_when_tun_mode_is_unchanged() {
+        let mut watch = Watch::default();
+        watch.proxy(Some(ProxyMode::Tun));
+        let previous = watch.begin().unwrap();
+        watch.transition(true);
+        watch.finish(previous, bypass_routes());
+        assert!(watch.notice(Some(&Settings::default())).is_empty());
+        assert!(watch.begin().is_none());
+        watch.transition(false);
+        assert!(watch.notice(Some(&Settings::default())).is_empty());
+        let current = watch.begin().unwrap();
+        assert_ne!(previous, current);
+        watch.finish(current, routes());
+        assert!(watch.notice(Some(&Settings::default())).is_empty());
+    }
+
+    #[test]
+    fn a_sample_finishing_after_the_transition_is_also_discarded() {
+        let mut watch = Watch::default();
+        watch.proxy(Some(ProxyMode::Tun));
+        let stale = watch.begin().unwrap();
+        watch.transition(true);
+        watch.transition(false);
+        watch.finish(stale, bypass_routes());
+        assert!(watch.notice(Some(&Settings::default())).is_empty());
+        let current = watch.begin().unwrap();
+        watch.finish(current, routes());
+        assert!(watch.notice(Some(&Settings::default())).is_empty());
+    }
+
+    #[test]
+    fn a_confirmed_bypass_after_a_failed_or_successful_transition_is_still_reported() {
+        let mut watch = Watch::default();
+        watch.proxy(Some(ProxyMode::Tun));
+        watch.transition(true);
+        watch.transition(false);
+        let revision = watch.begin().unwrap();
+        watch.finish(revision, bypass_routes());
+        assert!(
+            watch
+                .notice(Some(&Settings::default()))
+                .contains("绕过 TUN")
+        );
+        watch.transition(true);
+        assert!(watch.notice(Some(&Settings::default())).is_empty());
+        watch.transition(false);
+        let revision = watch.begin().unwrap();
+        watch.finish(revision, bypass_routes());
+        assert!(
+            watch
+                .notice(Some(&Settings::default()))
+                .contains("绕过 TUN")
+        );
     }
 
     #[test]

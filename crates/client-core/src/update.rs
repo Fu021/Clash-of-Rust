@@ -266,103 +266,110 @@ pub async fn download(
     let mut errors = Vec::new();
     let routes = crate::network::download_routes(port, None);
     for (index, route) in routes.iter().enumerate() {
-        progress(Progress {
-            total: package.size,
-            route: route.label,
-            ..Progress::default()
-        });
-        let result = async {
-            let client = client(route, Duration::from_secs(30 * 60))?;
-            let expected = checksum(
-                &bounded(
-                    client
-                        .get(&package.checksum_url)
-                        .timeout(Duration::from_secs(30))
-                        .send()
-                        .await?,
-                    1024,
-                )
-                .await?,
-                &package.name,
-            )?;
-            if let Some(digest) = &package.digest {
-                ensure!(
-                    digest == &format!("sha256:{expected}"),
-                    "发布元数据与校验文件不一致"
-                );
-            }
-            let mut response = client.get(&package.url).send().await?;
-            ensure!(
-                response.status().is_success(),
-                "安装包下载返回 HTTP {}",
-                response.status()
-            );
-            ensure!(
-                response
-                    .content_length()
-                    .is_none_or(|size| size == package.size),
-                "安装包大小与发布信息不一致"
-            );
-            let observer = RouteObserver::new(&response, api.cloned());
-            let temporary = tempfile::NamedTempFile::new_in(parent)?;
-            let file = tokio::fs::File::from_std(temporary.reopen()?);
-            let mut file =
-                tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
-            let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
-            let mut count = 0u64;
-            let mut hash = Sha256::new();
-            let mut last = std::time::Instant::now();
-            let mut rate_started = last;
-            let mut rate_received = 0;
-            while let Some(chunk) = watchdog.chunk(&mut response).await? {
-                let chunk = chunk.as_ref();
-                count += chunk.len() as u64;
-                ensure!(
-                    count <= package.size && count <= LIMIT,
-                    "安装包超过预期大小"
-                );
-                file.write_all(chunk).await?;
-                hash.update(chunk);
-                if count == chunk.len() as u64 || last.elapsed() >= Duration::from_millis(250) {
-                    let elapsed = rate_started.elapsed().as_secs_f64();
-                    progress(Progress {
-                        received: count,
-                        total: package.size,
-                        bytes_per_second: ((count - rate_received) as f64 / elapsed.max(0.001))
-                            as u64,
-                        route: route.label,
-                        outbound: observer.outbound(),
-                    });
-                    if elapsed >= 1.0 {
-                        rate_started = std::time::Instant::now();
-                        rate_received = count;
-                    }
-                    last = std::time::Instant::now();
-                }
-            }
-            ensure!(
-                count == package.size && crate::file_hash::hex(hash.finalize()) == expected,
-                "安装包大小或 SHA256 校验失败"
-            );
-            file.flush().await?;
-            file.into_inner().sync_all().await?;
-            crate::config::persist_file(temporary, path)?;
+        for attempt in 0..2 {
             progress(Progress {
-                received: count,
                 total: package.size,
-                bytes_per_second: ((count - rate_received) as f64
-                    / rate_started.elapsed().as_secs_f64().max(0.001))
-                    as u64,
                 route: route.label,
-                outbound: observer.outbound(),
+                ..Progress::default()
             });
-            Ok::<(), anyhow::Error>(())
-        }
-        .await;
-        match result {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                errors.push(format!("{}：{e}", route.label));
+            let result = async {
+                let client = client(route, Duration::from_secs(30 * 60))?;
+                let expected = checksum(
+                    &bounded(
+                        client
+                            .get(&package.checksum_url)
+                            .timeout(Duration::from_secs(30))
+                            .send()
+                            .await?,
+                        1024,
+                    )
+                    .await?,
+                    &package.name,
+                )?;
+                if let Some(digest) = &package.digest {
+                    ensure!(
+                        digest == &format!("sha256:{expected}"),
+                        "发布元数据与校验文件不一致"
+                    );
+                }
+                let mut response = crate::download::response(client.get(&package.url)).await?;
+                ensure!(
+                    response.status().is_success(),
+                    "安装包下载返回 HTTP {}",
+                    response.status()
+                );
+                ensure!(
+                    response
+                        .content_length()
+                        .is_none_or(|size| size == package.size),
+                    "安装包大小与发布信息不一致"
+                );
+                let observer = RouteObserver::new(&response, api.cloned());
+                let temporary = tempfile::NamedTempFile::new_in(parent)?;
+                let file = tokio::fs::File::from_std(temporary.reopen()?);
+                let mut file =
+                    tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
+                let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
+                let mut count = 0u64;
+                let mut hash = Sha256::new();
+                let mut last = std::time::Instant::now();
+                let mut rate_started = last;
+                let mut rate_received = 0;
+                while let Some(chunk) = watchdog.chunk(&mut response).await? {
+                    let chunk = chunk.as_ref();
+                    count += chunk.len() as u64;
+                    ensure!(
+                        count <= package.size && count <= LIMIT,
+                        "安装包超过预期大小"
+                    );
+                    file.write_all(chunk).await?;
+                    hash.update(chunk);
+                    if count == chunk.len() as u64 || last.elapsed() >= Duration::from_millis(250) {
+                        let elapsed = rate_started.elapsed().as_secs_f64();
+                        progress(Progress {
+                            received: count,
+                            total: package.size,
+                            bytes_per_second: ((count - rate_received) as f64 / elapsed.max(0.001))
+                                as u64,
+                            route: route.label,
+                            outbound: observer.outbound(),
+                        });
+                        if elapsed >= 1.0 {
+                            rate_started = std::time::Instant::now();
+                            rate_received = count;
+                        }
+                        last = std::time::Instant::now();
+                    }
+                }
+                ensure!(
+                    count == package.size && crate::file_hash::hex(hash.finalize()) == expected,
+                    "安装包大小或 SHA256 校验失败"
+                );
+                file.flush().await?;
+                file.into_inner().sync_all().await?;
+                crate::config::persist_file(temporary, path)?;
+                progress(Progress {
+                    received: count,
+                    total: package.size,
+                    bytes_per_second: ((count - rate_received) as f64
+                        / rate_started.elapsed().as_secs_f64().max(0.001))
+                        as u64,
+                    route: route.label,
+                    outbound: observer.outbound(),
+                });
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let reconnect = attempt == 0 && crate::download::retryable(&e);
+                    errors.push(format!("{}：{e}", route.label));
+                    if !reconnect {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
             }
         }
     }
@@ -373,7 +380,7 @@ pub async fn download(
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn buffered_download_flushes_verified_bytes_and_reports_the_route() {
+    async fn buffered_download_reconnects_after_interruption_and_flushes_verified_bytes() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let body = vec![42; 128 * 1024 + 3];
         let expected = crate::file_hash::hex(Sha256::digest(&body));
@@ -382,20 +389,21 @@ mod tests {
         let sent = body.clone();
         let sidecar = expected.clone();
         let server = tokio::spawn(async move {
-            for (suffix, bytes) in [(".sha256", sidecar.into_bytes()), ("", sent)] {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0; 8192];
-                let mut count = 0;
-                while !request[..count].ends_with(b"\r\n\r\n") {
-                    let n = socket.read(&mut request[count..]).await.unwrap();
-                    assert!(n > 0);
-                    count += n;
-                }
-                assert!(
-                    String::from_utf8_lossy(&request[..count])
-                        .starts_with(&format!("GET /update.apk{suffix} HTTP/1.1"))
-                );
-                socket
+            for attempt in 0..2 {
+                for (suffix, bytes) in [(".sha256", sidecar.as_bytes()), ("", sent.as_slice())] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 8192];
+                    let mut count = 0;
+                    while !request[..count].ends_with(b"\r\n\r\n") {
+                        let n = socket.read(&mut request[count..]).await.unwrap();
+                        assert!(n > 0);
+                        count += n;
+                    }
+                    assert!(
+                        String::from_utf8_lossy(&request[..count])
+                            .starts_with(&format!("GET /update.apk{suffix} HTTP/1.1"))
+                    );
+                    socket
                     .write_all(
                         format!(
                             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -405,8 +413,15 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                for part in bytes.chunks(1024) {
-                    socket.write_all(part).await.unwrap();
+                    let bytes = if suffix.is_empty() && attempt == 0 {
+                        &bytes[..1]
+                    } else {
+                        bytes
+                    };
+                    for part in bytes.chunks(1024) {
+                        socket.write_all(part).await.unwrap();
+                    }
+                    socket.shutdown().await.unwrap();
                 }
             }
         });
@@ -428,6 +443,11 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), body);
         assert!(!path.with_extension("partial").exists());
         assert_eq!(progress.first().unwrap().received, 0);
+        assert_eq!(
+            progress.iter().filter(|value| value.received == 0).count(),
+            2
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
         let last = progress.last().unwrap();
         assert_eq!(last.received, package.size);
         assert_eq!(last.route, "系统网络");

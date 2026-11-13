@@ -29,6 +29,13 @@ pub struct Target {
 }
 
 impl Target {
+    pub fn matches(&self, candidate: &Self) -> bool {
+        self.kind == candidate.kind
+            && self.name == candidate.name
+            && self.provider == candidate.provider
+            && (self.fingerprint.is_empty() || self.fingerprint == candidate.fingerprint)
+    }
+
     pub fn label(&self) -> String {
         match self.kind {
             TargetKind::Follow => "跟随配置".into(),
@@ -175,14 +182,16 @@ fn target_in_profile(map: &Mapping, candidates: &[Target], target: &Target) -> b
             .and_then(|providers| providers.get(&target.provider))
             .is_some();
     }
-    candidates.iter().any(|candidate| {
-        candidate.kind == target.kind
-            && candidate.name == target.name
-            && (target.fingerprint.is_empty() || candidate.fingerprint == target.fingerprint)
-    })
+    candidates.iter().any(|candidate| target.matches(candidate))
 }
 
-pub fn runtime(raw: &str, settings: &Settings, profile: &str, supported: bool) -> Result<String> {
+pub fn runtime(
+    source: &str,
+    raw: &str,
+    settings: &Settings,
+    profile: &str,
+    supported: bool,
+) -> Result<String> {
     let Some(rules) = settings
         .application_rules
         .get(profile)
@@ -194,21 +203,22 @@ pub fn runtime(raw: &str, settings: &Settings, profile: &str, supported: bool) -
         return Ok(raw.into());
     }
     validate(rules)?;
-    let profile = parse_profile(raw)?;
-    let candidates = targets_from_profile(&profile)?;
-    let mut value = Value::Mapping(profile);
+    let present: Vec<_> = {
+        let source = parse_profile(source)?;
+        let candidates = targets_from_profile(&source)?;
+        rules
+            .iter()
+            .map(|rule| target_in_profile(&source, &candidates, &rule.target))
+            .collect()
+    };
+    let mut value = Value::Mapping(parse_profile(raw)?);
     let mut routes = Vec::new();
     let mut predicates = Vec::new();
     let mut generated = BTreeSet::new();
-    for rule in rules.iter() {
+    for (rule, present) in rules.iter().zip(present) {
         if rule.target.kind == TargetKind::Follow {
             continue;
         }
-        let present = target_in_profile(
-            value.as_mapping().context("配置无效")?,
-            &candidates,
-            &rule.target,
-        );
         let target = if !present {
             if rule.reject_missing {
                 "REJECT".into()
@@ -247,6 +257,7 @@ pub fn runtime(raw: &str, settings: &Settings, profile: &str, supported: bool) -
                         );
                         let mut selector = serde_json::json!({
                             "name": name, "type":"select", "hidden":true,
+                            "disable-udp": !settings.udp,
                             "empty-fallback":if rule.reject_missing { "REJECT" } else { "PASS" }
                         });
                         if rule.target.provider.is_empty() {
@@ -317,14 +328,84 @@ mod tests {
         for reject in [false, true] {
             let settings = settings(target.clone(), reject);
             let changed = raw.replace("1080", "1081");
-            let runtime: Value =
-                yaml_serde::from_str(&runtime(&changed, &settings, "profile", true).unwrap())
-                    .unwrap();
+            let runtime: Value = yaml_serde::from_str(
+                &runtime(&changed, &changed, &settings, "profile", true).unwrap(),
+            )
+            .unwrap();
             assert_eq!(
                 runtime["cor-application-rules"]["routes"][0]["target"].as_str(),
                 Some(if reject { "REJECT" } else { "" })
             );
         }
+    }
+
+    #[test]
+    fn source_identity_survives_runtime_udp_overrides_and_exact_unicode_names() {
+        for name in ["node", "🇺🇸 美国节点", "🚀 日本 [01].+", "👩🏽‍💻 台湾✈️"]
+        {
+            for udp in [None, Some(false), Some(true)] {
+                let mut node = serde_json::json!({
+                    "name":name, "type":"socks5", "server":"example.test", "port":1080
+                });
+                if let Some(udp) = udp {
+                    node["udp"] = udp.into();
+                }
+                let source = format!("proxies: [{node}]\nrules: ['MATCH,DIRECT']\n");
+                let target = targets(&source).unwrap().pop().unwrap();
+                for enabled in [false, true] {
+                    let mut settings = settings(target.clone(), true);
+                    settings.udp = enabled;
+                    for changed in [false, true] {
+                        let source = if changed {
+                            source.replace("1080", "1081")
+                        } else {
+                            source.clone()
+                        };
+                        let normalized = crate::config::runtime_config(&source, &settings).unwrap();
+                        let output: Value = yaml_serde::from_str(
+                            &runtime(&source, &normalized, &settings, "profile", true).unwrap(),
+                        )
+                        .unwrap();
+                        let route = &output["cor-application-rules"]["routes"][0];
+                        assert_eq!(route["missing_target"].as_bool(), Some(changed), "{name}");
+                        if changed {
+                            assert_eq!(route["target"].as_str(), Some("REJECT"));
+                        } else {
+                            let selector = route["target"].as_str().unwrap();
+                            let selected = output["proxy-groups"]
+                                .as_sequence()
+                                .unwrap()
+                                .iter()
+                                .find(|group| group["name"].as_str() == Some(selector))
+                                .unwrap();
+                            assert_eq!(selected["proxies"][0].as_str(), Some(name));
+                            assert_eq!(selected["disable-udp"].as_bool(), Some(!enabled));
+                            assert_eq!(output["proxies"][0]["udp"].as_bool(), Some(enabled));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_name_only_targets_and_fingerprinted_targets_use_the_same_catalog_semantics() {
+        let raw = "proxies: [{name: '🇰🇷 한국', type: socks5, server: example.test, port: 1080}]\n";
+        let current = targets(raw).unwrap().pop().unwrap();
+        let mut legacy = current.clone();
+        legacy.fingerprint.clear();
+        assert!(legacy.matches(&current));
+        assert!(target_present(raw, &legacy).unwrap());
+        assert!(!current.matches(&legacy));
+        let changed = raw.replace("1080", "1081");
+        assert!(!target_present(&changed, &current).unwrap());
+        assert!(target_present(&changed, &legacy).unwrap());
+        let mut other = current.clone();
+        other.provider = "another-feed".into();
+        assert!(!legacy.matches(&other));
+        other.provider.clear();
+        other.name = "🇰🇵 한국".into();
+        assert!(!legacy.matches(&other));
     }
 
     #[test]
@@ -337,35 +418,41 @@ mod tests {
             },
             false,
         );
-        assert_eq!(runtime(raw, &settings, "profile", false).unwrap(), raw);
-        assert_eq!(runtime(raw, &settings, "other", true).unwrap(), raw);
+        assert_eq!(runtime(raw, raw, &settings, "profile", false).unwrap(), raw);
+        assert_eq!(runtime(raw, raw, &settings, "other", true).unwrap(), raw);
         settings.run_mode = "global".into();
-        assert_eq!(runtime(raw, &settings, "profile", true).unwrap(), raw);
+        assert_eq!(runtime(raw, raw, &settings, "profile", true).unwrap(), raw);
     }
 
     #[test]
     fn provider_nodes_are_exact_hidden_selectors_with_explicit_missing_policy() {
         let raw = "proxies: []\nproxy-providers: {feed: {type: file, path: feed.yaml}}\n";
-        let settings = settings(
-            Target {
-                kind: TargetKind::Node,
-                name: "node.[1]".into(),
-                provider: "feed".into(),
-                ..Default::default()
-            },
-            false,
-        );
-        let result: Value =
-            yaml_serde::from_str(&runtime(raw, &settings, "profile", true).unwrap()).unwrap();
-        assert_eq!(
-            result["proxy-groups"][0]["filter"].as_str(),
-            Some(r"^node\.\[1\]$")
-        );
-        assert_eq!(
-            result["proxy-groups"][0]["empty-fallback"].as_str(),
-            Some("PASS")
-        );
-        assert_eq!(result["proxy-groups"][0]["hidden"].as_bool(), Some(true));
+        for name in ["node.[1]", "🇭🇰 香港 [01].+", "👩🏽‍💻 台湾✈️"] {
+            for enabled in [false, true] {
+                let mut settings = settings(
+                    Target {
+                        kind: TargetKind::Node,
+                        name: name.into(),
+                        provider: "feed".into(),
+                        ..Default::default()
+                    },
+                    false,
+                );
+                settings.udp = enabled;
+                let result: Value =
+                    yaml_serde::from_str(&runtime(raw, raw, &settings, "profile", true).unwrap())
+                        .unwrap();
+                let selector = &result["proxy-groups"][0];
+                let pattern = format!("^{}$", regex::escape(name));
+                assert_eq!(selector["filter"].as_str(), Some(pattern.as_str()));
+                let filter = regex::Regex::new(&pattern).unwrap();
+                assert!(filter.is_match(name));
+                assert!(!filter.is_match(&format!("{name} another")));
+                assert_eq!(selector["empty-fallback"].as_str(), Some("PASS"));
+                assert_eq!(selector["hidden"].as_bool(), Some(true));
+                assert_eq!(selector["disable-udp"].as_bool(), Some(!enabled));
+            }
+        }
     }
 
     #[test]
@@ -390,7 +477,7 @@ mod tests {
         second.package = "org.example.second".into();
         std::sync::Arc::make_mut(saved.application_rules.get_mut("profile").unwrap()).push(second);
         let output: Value =
-            yaml_serde::from_str(&runtime(raw, &saved, "profile", true).unwrap()).unwrap();
+            yaml_serde::from_str(&runtime(raw, raw, &saved, "profile", true).unwrap()).unwrap();
         assert_eq!(output["proxy-groups"].as_sequence().unwrap().len(), 1);
         assert_eq!(
             output["cor-application-rules"]["routes"][0]["target"],
@@ -418,7 +505,7 @@ mod tests {
                 selectors: Default::default(),
             },
         )));
-        assert_eq!(runtime(raw, &before, "profile", true).unwrap(), raw);
+        assert_eq!(runtime(raw, raw, &before, "profile", true).unwrap(), raw);
         let mut appearance = before.clone();
         appearance.theme_mode = Some(crate::config::ThemeMode::Light);
         appearance.accent_color = crate::config::AccentColor::Blue;

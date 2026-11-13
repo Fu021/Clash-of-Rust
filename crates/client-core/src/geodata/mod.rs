@@ -283,54 +283,62 @@ async fn download_asset(
 ) -> Result<()> {
     let mut errors = Vec::new();
     for (index, route) in routes.iter().enumerate() {
-        let attempt = async {
-            let mut response = route
-                .client()?
-                .get(&asset.browser_download_url)
-                .send()
-                .await?
-                .error_for_status()?;
-            if response
-                .content_length()
-                .is_some_and(|size| size != asset.size)
-            {
-                bail!("Geo 数据大小与发布信息不一致");
-            }
-            let temporary =
-                tempfile::NamedTempFile::new_in(destination.parent().context("Geo 下载路径无效")?)?;
-            let file = tokio::fs::File::from_std(temporary.reopen()?);
-            let mut file =
-                tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
-            let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
-            let mut hash = Sha256::new();
-            let mut size = 0;
-            while let Some(chunk) = watchdog.chunk(&mut response).await? {
-                let chunk = chunk.as_ref();
-                size += chunk.len() as u64;
-                if size > asset.size || size > LIMIT {
-                    bail!("Geo 数据超过预期大小");
+        for attempt in 0..2 {
+            let result = async {
+                let mut response =
+                    crate::download::response(route.client()?.get(&asset.browser_download_url))
+                        .await?
+                        .error_for_status()?;
+                if response
+                    .content_length()
+                    .is_some_and(|size| size != asset.size)
+                {
+                    bail!("Geo 数据大小与发布信息不一致");
                 }
-                hash.update(chunk);
-                file.write_all(chunk).await?;
+                let temporary = tempfile::NamedTempFile::new_in(
+                    destination.parent().context("Geo 下载路径无效")?,
+                )?;
+                let file = tokio::fs::File::from_std(temporary.reopen()?);
+                let mut file =
+                    tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
+                let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
+                let mut hash = Sha256::new();
+                let mut size = 0;
+                while let Some(chunk) = watchdog.chunk(&mut response).await? {
+                    let chunk = chunk.as_ref();
+                    size += chunk.len() as u64;
+                    if size > asset.size || size > LIMIT {
+                        bail!("Geo 数据超过预期大小");
+                    }
+                    hash.update(chunk);
+                    file.write_all(chunk).await?;
+                }
+                let actual = format!("sha256:{}", crate::file_hash::hex(hash.finalize()));
+                if size != asset.size
+                    || !asset
+                        .digest
+                        .as_ref()
+                        .is_some_and(|digest| digest.eq_ignore_ascii_case(&actual))
+                {
+                    bail!("Geo 数据 SHA256/大小校验失败，已有数据保持不变");
+                }
+                file.flush().await?;
+                file.into_inner().sync_all().await?;
+                persist_file(temporary, destination)?;
+                Ok::<_, anyhow::Error>(())
             }
-            let actual = format!("sha256:{}", crate::file_hash::hex(hash.finalize()));
-            if size != asset.size
-                || !asset
-                    .digest
-                    .as_ref()
-                    .is_some_and(|digest| digest.eq_ignore_ascii_case(&actual))
-            {
-                bail!("Geo 数据 SHA256/大小校验失败，已有数据保持不变");
+            .await;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    let reconnect = attempt == 0 && crate::download::retryable(&error);
+                    errors.push(format!("{}：{error:#}", route.label));
+                    if !reconnect {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
             }
-            file.flush().await?;
-            file.into_inner().sync_all().await?;
-            persist_file(temporary, destination)?;
-            Ok::<_, anyhow::Error>(())
-        }
-        .await;
-        match attempt {
-            Ok(()) => return Ok(()),
-            Err(error) => errors.push(format!("{}：{error:#}", route.label)),
         }
     }
     bail!("Geo 下载失败：{}", errors.join("；"))

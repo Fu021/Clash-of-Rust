@@ -43,6 +43,8 @@ def main():
         if (args.system, args.arch) == ('linux', 'x64'):
             for package, target, case in (
                     ('clash-client-core', ['--lib'], 'update'),
+                    ('clash-client-core', ['--lib'], 'download::tests::'),
+                    ('clash-client-core', ['--lib'], 'geodata::tests::'),
                     ('clash-client-runtime', ['--lib'], 'update_check_interval'),
                     ('clash-cli', ['--bin', 'cor'], 'update_'),
                     ('clash-of-rust', ['--bin', 'clash-of-rust'], 'update_')):
@@ -57,10 +59,13 @@ def main():
                      'application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it',
                      'application::ui_tests::protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change',
                      'application::ui_tests::protection_rejects_confirmations_that_would_save_or_delete',
+                     'application::ui_tests::a_stopped_protected_core_exposes_a_retry_without_disabling_protection',
                      'application::ui_tests::a_locked_rules_page_still_accepts_the_global_exit_confirmation',
                      'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])
+        run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
+             '--locked', 'application::network_watch::tests::', '--', '--test-threads=1'])
         for case in ('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes',
                      'notice_countdown_restarts_and_expires_after_five_seconds',
                      'application_controls_distinguish_scope_filter_save_and_protection',
@@ -70,6 +75,7 @@ def main():
                      'application_policy_form_respects_platform_protection_and_scrolls',
                      'application_policy_picker_keeps_the_form_and_rejects_locked_selection',
                      'mobile_accent_picker_remains_usable_while_protected',
+                     'protected_mobile_core_recovery_is_reachable_and_respects_pending_operations',
                      'mobile_appearance_settings_reopen_with_geometry_and_protection',
                      'mobile_connections_keep_actions_reachable_and_scroll_with_long_names',
                      'report_categories_share_one_panel_without_gaps_from_hidden_rows',

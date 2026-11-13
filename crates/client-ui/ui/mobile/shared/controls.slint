@@ -397,7 +397,7 @@ export component MNotice inherits Rectangle {
     in property <bool> error;
     in property <length> available-height;
     property <bool> can-recover: MobileView.notice-recover-network && MobileData.vpn-connected && !MobileData.protected && !MobileData.protection-pending;
-    property <bool> can-restart: MobileView.notice-modal && !MobileData.core-running && !MobileData.protected && !MobileData.protection-pending;
+    property <bool> can-restart: MobileView.notice-modal && !MobileData.core-running && !MobileData.protection-pending;
     property <bool> has-recovery: root.can-restart || root.can-recover;
     property <int> action-count: root.has-recovery ? 4 : 3;
     property <length> horizontal-padding: (MobileView.notice-modal ? 16px : 12px) * MobileTypography.density;
@@ -455,7 +455,8 @@ export component MNotice inherits Rectangle {
                 y: floor(index / root.action-columns) * (actions.row-height + actions.gap);
                 width: actions.button-width; height: actions.row-height;
                 modal-control: true; notice-control: true; quiet: true; compact: true;
-                text: index == root.action-count - 1 ? "关闭" : index == 0 ? "导出诊断" : index == 1 ? "新建 Issue" : root.can-restart ? "重启内核" : "关闭代理";
+                geometry-key: index == 2 && root.can-restart ? "notice-retry-core" : "";
+                text: index == root.action-count - 1 ? "关闭" : index == 0 ? "导出诊断" : index == 1 ? "新建 Issue" : root.can-restart ? "重试启动" : "关闭代理";
                 enabled: index != 2 || !root.has-recovery || !MobileData.working;
                 clicked => {
                     if index == root.action-count - 1 { root.dismissed(); }

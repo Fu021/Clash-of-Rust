@@ -452,26 +452,35 @@ async fn download_routes(
         .size;
     let mut errors = Vec::new();
     for (index, route) in routes.iter().enumerate() {
-        // Each attempt owns a fresh temporary directory and starts at zero.
-        report(Progress {
-            total: size,
-            route: route.label,
-            ..Progress::default()
-        });
-        match download_package(
-            available.clone(),
-            route.proxy.as_deref(),
-            api,
-            index + 1 < routes.len(),
-            |mut value| {
-                value.route = route.label;
-                report(value);
-            },
-        )
-        .await
-        {
-            Ok(downloaded) => return Ok(downloaded),
-            Err(error) => errors.push(format!("{}：{error}", route.label)),
+        for attempt in 0..2 {
+            // Each attempt owns a fresh temporary directory and starts at zero.
+            report(Progress {
+                total: size,
+                route: route.label,
+                ..Progress::default()
+            });
+            match download_package(
+                available.clone(),
+                route.proxy.as_deref(),
+                api,
+                index + 1 < routes.len(),
+                |mut value| {
+                    value.route = route.label;
+                    report(value);
+                },
+            )
+            .await
+            {
+                Ok(downloaded) => return Ok(downloaded),
+                Err(error) => {
+                    let reconnect = attempt == 0 && clash_client_core::download::retryable(&error);
+                    errors.push(format!("{}：{error:#}", route.label));
+                    if !reconnect {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
         }
     }
     bail!("{}（已尝试可用代理和直连）", errors.join("；"));
@@ -488,12 +497,13 @@ async fn download_package(
         .package
         .context("该版本缺少本平台安装包或校验文件")?;
     let client = download_client_via(proxy, Duration::from_secs(30 * 60))?;
-    let mut response = client
-        .get(&package.checksum_url)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|error| crate::network::request_error(error, "校验文件下载"))?;
+    let mut response = clash_client_core::download::response(
+        client
+            .get(&package.checksum_url)
+            .timeout(Duration::from_secs(30)),
+    )
+    .await
+    .context("校验文件下载失败")?;
     if response.status() != StatusCode::OK {
         bail!("校验文件下载失败（HTTP {}）", response.status().as_u16());
     }
@@ -542,11 +552,9 @@ async fn transfer(
     observe: (Option<crate::api::Api>, bool),
     mut report: impl FnMut(Progress),
 ) -> Result<()> {
-    let mut response = client
-        .get(url)
-        .send()
+    let mut response = clash_client_core::download::response(client.get(url))
         .await
-        .map_err(|error| crate::network::request_error(error, "安装包下载"))?;
+        .context("安装包下载失败")?;
     if response.status() != StatusCode::OK {
         bail!("安装包下载失败（HTTP {}）", response.status().as_u16());
     }
@@ -1107,19 +1115,28 @@ mod tests {
         body: Vec<u8>,
         expected: String,
     ) -> (String, tokio::task::JoinHandle<()>) {
+        reconnecting_package_proxy(body, expected, 0).await
+    }
+
+    async fn reconnecting_package_proxy(
+        body: Vec<u8>,
+        expected: String,
+        interruptions: usize,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
-            for (suffix, bytes) in [(".sha256", expected.into_bytes()), ("", body)] {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0; 4096];
-                let count = socket.read(&mut request).await.unwrap();
-                assert!(
-                    String::from_utf8_lossy(&request[..count]).starts_with(&format!(
-                        "GET http://download.invalid/package{suffix} HTTP/1.1"
-                    ))
-                );
-                socket
+            for attempt in 0..=interruptions.min(1) {
+                for (suffix, bytes) in [(".sha256", expected.as_bytes()), ("", body.as_slice())] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 4096];
+                    let count = socket.read(&mut request).await.unwrap();
+                    assert!(
+                        String::from_utf8_lossy(&request[..count]).starts_with(&format!(
+                            "GET http://download.invalid/package{suffix} HTTP/1.1"
+                        ))
+                    );
+                    socket
                     .write_all(
                         format!(
                             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
@@ -1129,10 +1146,78 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                socket.write_all(&bytes).await.unwrap();
+                    let interrupted = suffix.is_empty() && attempt < interruptions;
+                    socket
+                        .write_all(if interrupted { &bytes[..1] } else { bytes })
+                        .await
+                        .unwrap();
+                    socket.shutdown().await.unwrap();
+                }
             }
         });
         (proxy, task)
+    }
+
+    #[tokio::test]
+    async fn interrupted_proxy_reconnects_before_direct_and_exhaustion_falls_back() {
+        use crate::network::Route;
+        let body = b"verified installer bytes after the automatic node switch";
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(body));
+        for interruptions in [1, 2] {
+            let (proxy, task) =
+                reconnecting_package_proxy(body.to_vec(), expected.clone(), interruptions).await;
+            let (direct, direct_task) = package_proxy(body.to_vec(), expected.clone()).await;
+            let available = Available {
+                version: "0.7.1".into(),
+                url: format!("{RELEASES_URL}/tag/v0.7.1"),
+                preview: false,
+                package: Some(Package {
+                    asset: Asset {
+                        name: package_name("0.7.1").unwrap(),
+                        size: body.len() as u64,
+                        digest: Some(format!("sha256:{expected}")),
+                    },
+                    url: "http://download.invalid/package".into(),
+                    checksum_url: "http://download.invalid/package.sha256".into(),
+                }),
+            };
+            let routes = [
+                Route {
+                    label: "内核代理",
+                    proxy: Some(proxy),
+                },
+                Route {
+                    label: "内核直连",
+                    proxy: Some(direct),
+                },
+            ];
+            let mut progress = Vec::new();
+            let downloaded =
+                download_routes(available, &routes, None, |value| progress.push(value))
+                    .await
+                    .unwrap();
+            assert_eq!(std::fs::read(&downloaded.package).unwrap(), body);
+            assert_eq!(downloaded.sha256, expected);
+            let attempts = progress
+                .iter()
+                .filter(|value| value.received == 0)
+                .map(|value| value.route)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                attempts,
+                if interruptions == 1 {
+                    vec!["内核代理", "内核代理"]
+                } else {
+                    vec!["内核代理", "内核代理", "内核直连"]
+                }
+            );
+            assert_eq!(progress.last().unwrap().received, body.len() as u64);
+            task.await.unwrap();
+            if interruptions == 1 {
+                direct_task.abort();
+            }
+            let _ = direct_task.await;
+        }
     }
 
     #[tokio::test]

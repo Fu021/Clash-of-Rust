@@ -5,6 +5,7 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
     matches!(
         intent,
         Intent::Navigate
+            | Intent::RestartCore
             | Intent::Appearance
             | Intent::AccentPicker
             | Intent::AccentColor

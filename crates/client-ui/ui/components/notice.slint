@@ -99,7 +99,7 @@ export component DesktopNotice inherits Rectangle {
                     modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭代理"; enabled: !UiData.working;
                     clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); }
                 }
-                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; compact: true; quiet: true; text: "重启内核"; enabled: UiData.notice != "" && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; compact: true; quiet: true; text: "重试启动"; enabled: UiData.notice != "" && !UiData.working && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
                 ActionButton {
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { root.close-target = self.target; }

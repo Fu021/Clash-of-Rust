@@ -181,6 +181,7 @@ impl Command {
         if !matches!(
             self,
             Self::Meta
+                | Self::Start
                 | Self::Snapshot { .. }
                 | Self::RuleDocument { .. }
                 | Self::TrayNodes
@@ -288,6 +289,7 @@ mod tests {
         let settings = protected_settings();
         for allowed in [
             Command::Meta,
+            Command::Start,
             Command::Snapshot {
                 scope: Scope::Other,
                 header: false,
@@ -323,7 +325,6 @@ mod tests {
             assert!(allowed.check_protection(&settings).is_ok());
         }
         for blocked in [
-            Command::Start,
             Command::Stop,
             Command::Restart,
             Command::RecoverNetwork,

@@ -47,7 +47,7 @@ export component HomePage inherits PageSurface {
                         }
                         ConnectionPower {
                             connected: UiData.running && UiData.proxy-mode != 2;
-                            label: self.connected ? "关闭代理" : UiData.retry-core ? "重启内核" : "连接代理";
+                            label: self.connected ? "关闭代理" : UiData.retry-core ? "重试启动" : "连接代理";
                             enabled: (UiData.ready || UiData.retry-core) && !UiData.working && (UiData.retry-core || (!UiData.protected && !UiData.protection-pending)) && UiData.modal == 0 && !UiData.notice-modal;
                             clicked => {
                                 if UiData.retry-core { UiActions.dispatch(Intent.restart-core, "", ""); }

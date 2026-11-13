@@ -160,6 +160,12 @@ slint::slint! {
         in-out property <int> page <=> MobileView.page;
         in-out property <float> text-scale <=> Theme.text-scale;
         in-out property <bool> core-running <=> MobileData.core-running;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> protection-pending <=> MobileData.protection-pending;
+        in-out property <bool> working <=> MobileData.working;
+        in-out property <string> notice <=> MobileView.notice;
+        in-out property <bool> notice-error <=> MobileView.notice-error;
+        in-out property <bool> notice-critical <=> MobileView.notice-critical;
         if !root.use-ios: AndroidSurface { width: parent.width; height: parent.height; }
         if root.use-ios: IosSurface { width: parent.width; height: parent.height; }
     }
@@ -2148,6 +2154,94 @@ fn notice_countdown_restarts_and_expires_after_five_seconds() {
     assert_eq!(countdown.get_remaining(), 0.);
     countdown.hide().unwrap();
     drop(countdown);
+}
+
+#[test]
+fn protected_mobile_core_recovery_is_reachable_and_respects_pending_operations() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = MobileStartupProbe::new().unwrap();
+    probe.set_protected(true);
+    probe.set_page(0);
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, _, _| captured.borrow_mut().push(intent));
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.show().unwrap();
+    for use_ios in [false, true] {
+        probe.set_use_ios(use_ios);
+        for (width, height) in [(393, 852), (800, 1280)] {
+            adapter.set_size(slint::PhysicalSize::new(width, height));
+            for modal in [false, true] {
+                probe.set_notice_error(modal);
+                probe.set_notice_critical(modal);
+                probe.set_notice(if modal { "内核启动失败" } else { "" }.into());
+                let key = if modal {
+                    "notice-retry-core"
+                } else {
+                    "retry-core"
+                };
+                for (pending, working, allowed) in [
+                    (false, false, true),
+                    (false, true, false),
+                    (true, false, false),
+                    (false, false, true),
+                ] {
+                    probe.set_protection_pending(pending);
+                    probe.set_working(working);
+                    targets.borrow_mut().clear();
+                    let geometry = probe.global::<UiGeometry>();
+                    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+                    advance(&clock, Duration::from_millis(300));
+                    frame(&adapter, width as usize, height as usize);
+                    requests.borrow_mut().clear();
+                    let bounds = targets.borrow().get(key).cloned();
+                    if let Some(bounds) = bounds {
+                        assert!(bounds[2] > 0. && bounds[3] >= 48.);
+                        let position = LogicalPosition::new(
+                            bounds[0] + bounds[2] / 2.,
+                            bounds[1] + bounds[3] / 2.,
+                        );
+                        assert!(position.x >= 0. && position.x < width as f32);
+                        assert!(position.y >= 0. && position.y < height as f32);
+                        for event in [
+                            WindowEvent::PointerPressed {
+                                position,
+                                button: PointerEventButton::Left,
+                            },
+                            WindowEvent::PointerReleased {
+                                position,
+                                button: PointerEventButton::Left,
+                            },
+                        ] {
+                            probe.window().dispatch_event(event);
+                        }
+                        advance(&clock, Duration::from_millis(50));
+                    } else {
+                        assert!(!allowed, "A stopped protected core must expose {key}");
+                    }
+                    assert_eq!(requests.borrow().len(), usize::from(allowed));
+                    if allowed {
+                        assert_eq!(requests.borrow()[0], MobileIntent::RestartCore);
+                    }
+                    assert!(probe.get_protected());
+                }
+            }
+        }
+    }
+    probe.hide().unwrap();
 }
 
 #[test]

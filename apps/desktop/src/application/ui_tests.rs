@@ -3171,6 +3171,44 @@ fn protection_rejects_confirmations_that_would_save_or_delete() {
 }
 
 #[test]
+fn a_stopped_protected_core_exposes_a_retry_without_disabling_protection() {
+    use clash_client_core::protection::{Previous, Protection};
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Home);
+    app.snapshot.running = false;
+    app.settings.claude_protection = Some(Arc::new(Protection::new(
+        "fixture".into(),
+        "node".into(),
+        Previous {
+            mode: "rule".into(),
+            proxy_mode: ProxyMode::Off,
+            selectors: vec![],
+        },
+    )));
+    let settings = serde_json::to_value(&app.settings).unwrap();
+    let data = clash_desktop_protocol::UiData::default();
+    let mut models = clash_desktop_protocol::models::ViewModels::default();
+    app.present(&data, &mut models);
+    assert!(data.get_protected() && data.get_retry_core());
+    app.claude.protection_pending = Some(true);
+    assert!(!app.ready_to_retry());
+    let _ = app.ui_intent(Intent::RestartCore, "", "");
+    assert!(!app.busy);
+    app.claude.protection_pending = None;
+    let _ = app.ui_intent(Intent::RestartCore, "", "");
+    assert!(app.busy && app.working);
+    assert_eq!(serde_json::to_value(&app.settings).unwrap(), settings);
+    let _ = app.ui_intent(Intent::RestartCore, "", "");
+    assert!(app.queued_actions.is_empty());
+    app.busy = false;
+    app.working = false;
+    app.snapshot.running = true;
+    let _ = app.ui_intent(Intent::RestartCore, "", "");
+    assert!(!app.busy && app.queued_actions.is_empty());
+    assert_eq!(serde_json::to_value(&app.settings).unwrap(), settings);
+}
+
+#[test]
 fn every_page_projects_protection_readiness_and_discards_unconfirmed_success() {
     use clash_client_core::protection::{Previous, Protection, status};
     let mut app = fixture(Page::Home);

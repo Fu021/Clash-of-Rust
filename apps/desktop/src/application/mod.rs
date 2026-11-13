@@ -640,6 +640,7 @@ impl App {
 
     fn ready_to_retry(&self) -> bool {
         !self.snapshot.running
+            && self.claude.protection_pending.is_none()
             && !self.busy
             && !self.working
             && !self.exiting
@@ -791,7 +792,7 @@ impl App {
             action,
             Action::Start | Action::ProxyMode(_) | Action::ClaudeProtection(_) | Action::Ipv6(_)
         ) {
-            self.network_watch.invalidate();
+            self.network_watch.transition(true);
         }
         self.busy = true;
         self.working = !matches!(action, Action::Refresh);
@@ -1034,6 +1035,7 @@ impl App {
                 }
                 self.cancel_delay_checks();
                 self.cancel_site_checks();
+                self.network_watch.transition(true);
                 self.busy = true;
                 self.working = true;
                 return Task::perform(
@@ -1046,6 +1048,7 @@ impl App {
                 );
             }
             Message::CoreReady(result) => {
+                self.network_watch.transition(false);
                 self.busy = false;
                 self.working = false;
                 self.geo_updating = false;
@@ -2082,6 +2085,10 @@ impl App {
             Message::Finished(reply) => {
                 self.claude.protection_pending = None;
                 let reply = *reply;
+                if reply.protection_changed {
+                    self.network_watch.invalidate();
+                }
+                self.network_watch.transition(false);
                 self.network_watch.proxy(
                     reply
                         .snapshot

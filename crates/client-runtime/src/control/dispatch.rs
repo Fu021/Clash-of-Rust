@@ -197,7 +197,11 @@ pub(super) async fn execute(
                 snapshot,
             })?);
         }
-        Command::Start => start(&mut engine).await?,
+        Command::Start => {
+            if !engine.running() {
+                engine.start_with_proxy_mode().await?;
+            }
+        }
         Command::Stop => engine.stop().await?,
         Command::Restart => {
             engine.stop().await?;

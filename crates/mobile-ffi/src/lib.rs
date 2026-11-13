@@ -223,13 +223,13 @@ impl Session {
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
         let raw = core::config::read_profile(&self.store.profile_path(id)?)?;
         let rules = ProfileRules::for_profile(settings, id, false);
-        let raw = android_safe_config(&core::config::runtime_config_with_rules(
+        let runtime = android_safe_config(&core::config::runtime_config_with_rules(
             &raw,
             settings,
             Some(&rules),
             false,
         )?)?;
-        self.application_runtime(&raw, settings, id)
+        self.application_runtime(&raw, &runtime, settings, id)
     }
     pub fn initialize(&mut self) -> Result<()> {
         let native_running = self.native.request(json!({"op":"state"}))?["running"] == true;
@@ -645,7 +645,7 @@ impl Session {
                 Some(&rules),
                 false,
             )?)?;
-            Some(self.application_runtime(&runtime, &self.settings, &id)?)
+            Some(self.application_runtime(&raw, &runtime, &self.settings, &id)?)
         } else {
             None
         };
@@ -1841,8 +1841,25 @@ mod tests {
     async fn protected_initialize_skips_the_direct_download_listener() {
         use crate::core::claude_check::protection::{Previous, Protection};
 
+        #[derive(Default)]
+        struct Host(std::sync::Mutex<(bool, Vec<String>)>);
+        impl NativeHost for Host {
+            fn request(&self, value: Value) -> Result<Value> {
+                let mut state = self.0.lock().unwrap();
+                let operation = value["op"].as_str().unwrap();
+                state.1.push(operation.to_owned());
+                if operation == "state" {
+                    return Ok(json!({"running":state.0}));
+                }
+                if operation == "initialize" {
+                    state.0 = true;
+                }
+                Ok(json!({"ok":true}))
+            }
+        }
         let root = tempfile::tempdir().unwrap();
-        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let host = Arc::new(Host::default());
+        let mut session = Session::open(root.path().into(), host.clone()).unwrap();
         session
             .save_profile(
                 None,
@@ -1878,9 +1895,52 @@ mod tests {
             )
             .unwrap();
         let direct_port = session.settings.direct_download_port;
-        session.initialize().unwrap();
+        let protection = session.settings.claude_protection.clone();
+        host.0.lock().unwrap().1.clear();
+        session.attach_or_initialize().unwrap();
+        assert!(session.running);
         assert_eq!(session.settings.direct_download_port, direct_port);
         assert_eq!(session.settings.download_ports().direct, 0);
+        assert_eq!(session.settings.claude_protection, protection);
+        let settings = std::fs::read(root.path().join("settings.json")).unwrap();
+        let runtime = std::fs::read(session.store.runtime().join("config.yaml")).unwrap();
+        let mut reopened = Session::open(root.path().into(), host.clone()).unwrap();
+        for _ in 0..2 {
+            reopened.attach_or_initialize().unwrap();
+            assert!(reopened.running);
+            assert_eq!(reopened.settings.claude_protection, protection);
+            assert_eq!(
+                std::fs::read(root.path().join("settings.json")).unwrap(),
+                settings
+            );
+            assert_eq!(
+                std::fs::read(reopened.store.runtime().join("config.yaml")).unwrap(),
+                runtime
+            );
+        }
+        let state = host.0.lock().unwrap();
+        assert_eq!(
+            state
+                .1
+                .iter()
+                .filter(|operation| *operation == "initialize")
+                .count(),
+            1
+        );
+        assert_eq!(
+            state
+                .1
+                .iter()
+                .filter(|operation| *operation == "protection-sync")
+                .count(),
+            3
+        );
+        assert!(
+            !state
+                .1
+                .iter()
+                .any(|operation| matches!(operation.as_str(), "reload" | "disconnect"))
+        );
     }
 
     #[tokio::test]

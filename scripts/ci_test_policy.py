@@ -116,6 +116,7 @@ def select(paths, extended=False):
     )
     update = any(
         path.startswith(('crates/client-core/src/update', 'crates/client-core/src/config/',
+                         'crates/client-core/src/download.rs', 'crates/client-core/src/geodata/',
                          'crates/client-runtime/src/update/', 'apps/cli/src/commands/maintenance.rs',
                          'crates/client-runtime/src/control/', 'apps/cli/src/backend.rs'))
         or path in ('scripts/test-cli-update.py', 'scripts/ci_test_policy.py')
