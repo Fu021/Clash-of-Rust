@@ -261,8 +261,9 @@ def validate_files(paths, version):
 
 
 def build_artifacts(client, run_id):
-    from workflow_artifacts import BUILD_NAMES
+    from workflow_artifacts import BUILD_NAMES, current_ci_artifacts
     artifacts = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+    artifacts = current_ci_artifacts(client, client(f'/actions/runs/{run_id}'), artifacts)
     builds = [a for a in artifacts if a['name'].startswith('build-')]
     require(len(builds) == len(BUILD_NAMES) and {a['name'] for a in builds} == BUILD_NAMES,
             'CI native build artifacts are incomplete or duplicated')
@@ -295,7 +296,9 @@ def verified_package_run(client, run_id, commit, check_only=False, prerelease=Fa
 
 
 def candidate_artifacts(client, run_id):
+    from workflow_artifacts import current_ci_artifacts
     artifacts = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+    artifacts = current_ci_artifacts(client, client(f'/actions/runs/{run_id}'), artifacts)
     packages = [artifact for artifact in artifacts if artifact['name'].startswith('package-')]
     require(len(packages) == len(PACKAGES) and {artifact['name'] for artifact in packages} == set(PACKAGES),
             'CI candidate packages are incomplete or duplicated')

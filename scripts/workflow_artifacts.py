@@ -1,5 +1,6 @@
 """Export and verify native CI binaries without rebuilding them during release."""
 import argparse
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -52,6 +53,63 @@ def release_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def current_ci_artifacts(client, run, records):
+    if run.get('path', '').split('@', 1)[0] != '.github/workflows/ci.yml':
+        return records
+    attempt = run.get('run_attempt', 1)
+    if type(attempt) is not int or not 1 <= attempt <= 100:
+        raise ValueError('Invalid CI artifact attempt')
+    if attempt == 1:
+        return records
+
+    def producer(name):
+        if name == 'dependency-snapshot':
+            return 'Resolve build inputs'
+        for prefix in ('build-', 'package-'):
+            if name.startswith(prefix) and 'build-' + name.removeprefix(prefix) in BUILD_NAMES:
+                return name.removeprefix(prefix)
+        if name in ('linux-tun-test-x64', 'linux-tun-test-arm64'):
+            return 'linux-' + name.removeprefix('linux-tun-test-')
+        return None
+
+    names = {name for record in records if (name := producer(record.get('name', '')))}
+    if not names:
+        return records
+    jobs = {job['name']: job for job in release_module().workflow_jobs(client, run, names)}
+
+    def timestamp(value):
+        try:
+            parsed = datetime.datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            raise ValueError('Invalid CI artifact producer timestamp') from None
+        if parsed.tzinfo is None:
+            raise ValueError('CI artifact producer timestamp requires a timezone')
+        return parsed
+
+    selected = []
+    for record in records:
+        name = producer(record.get('name', ''))
+        if name is None:
+            selected.append(record)
+            continue
+        if name not in jobs:
+            raise ValueError('CI artifact producer is missing: ' + name)
+        source = record.get('workflow_run', {})
+        if source.get('id') != run['id'] or source.get('head_sha') != run['head_sha']:
+            raise ValueError('CI artifact producer source mismatch: ' + name)
+        created = timestamp(record.get('created_at'))
+        job = jobs[name]
+        started = timestamp(job.get('started_at'))
+        completed = timestamp(job['completed_at']) if job.get('completed_at') else None
+        if job.get('status') == 'completed' and completed is None:
+            raise ValueError('CI artifact producer completion time is missing: ' + name)
+        if completed is not None and completed < started:
+            raise ValueError('Invalid CI artifact producer interval: ' + name)
+        if created >= started and (completed is None or created <= completed):
+            selected.append(record)
+    return selected
 
 
 def safe_name(name):
@@ -255,7 +313,10 @@ def stage_local_build(archive, root, system, arch, expected_commit, artifact_id,
 
 def fetch_build(client, run_id, system, arch, root, expected_commit):
     name = f'build-{system}-{arch}'
-    matches = [a for a in client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts'] if a['name'] == name]
+    run = client(f'/actions/runs/{run_id}')
+    records = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+    matches = [record for record in current_ci_artifacts(client, run, records)
+               if record['name'] == name]
     if len(matches) != 1 or matches[0]['expired']:
         raise ValueError('CI build artifact missing, duplicated or expired: '+name)
     artifact = matches[0]
@@ -292,6 +353,7 @@ def wait_package(client, run_id, system, arch, expected_commit, timeout=1200):
         if run.get('head_sha') != expected_commit:
             raise ValueError('Package workflow source differs from the selected commit')
         records = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+        records = current_ci_artifacts(client, run, records)
         for name in names:
             matches = [record for record in records if record['name'] == name]
             if len(matches) > 1 or any(record.get('expired') for record in matches):
@@ -318,6 +380,7 @@ def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_c
         raise ValueError('Package inputs require a verified source CI run')
     wait_package(client, run_id, 'linux', arch, expected_commit, timeout=3600)
     records = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+    records = current_ci_artifacts(client, client(f'/actions/runs/{run_id}'), records)
     suffix = 'amd64' if arch == 'x64' else 'arm64'
     package = f'Clash-of-Rust-{package_version()}-linux-{suffix}.deb'
     for name, folder, expected in [

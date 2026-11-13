@@ -6336,6 +6336,53 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'incomplete'):
             release.workflow_jobs(lambda _: {'jobs':[],'total_count':1},{'id':77})
 
+    def test_release_partial_rerun_uses_current_producers_without_deleting_old_artifacts(self):
+        run = {'id': 77, 'run_attempt': 2, 'path': '.github/workflows/ci.yml',
+               'head_sha': self.commit}
+        jobs = [
+            {'name': name.removeprefix('package-'),
+             'started_at': '2026-11-13T16:00:00Z' if name == 'package-macos-x64'
+             else '2026-11-13T15:00:00Z',
+             'completed_at': '2026-11-13T16:30:00Z'}
+            for name in release.PACKAGES
+        ]
+        records = [
+            {'id': index, 'name': prefix + name.removeprefix('package-'),
+             'created_at': '2026-11-13T16:20:00Z', 'expired': False,
+             'workflow_run': {'id': 77, 'head_sha': self.commit},
+             'digest': 'sha256:' + 'b'*64}
+            for index, (prefix, name) in enumerate(
+                ((prefix, name) for prefix in ('build-', 'package-')
+                 for name in release.PACKAGES), 1)
+        ]
+        old = next(record for record in records if record['name'] == 'build-macos-x64')
+        records.append(old | {'id': 99, 'created_at': '2026-11-13T15:20:00Z',
+                              'expired': True})
+        def client(path):
+            if path == '/actions/runs/77':
+                return run
+            if path == '/actions/runs/77/artifacts?per_page=100':
+                return {'artifacts': records}
+            self.fail('Unexpected artifact selection request: ' + path)
+        with patch.object(workflow_artifacts, 'release_module', return_value=release), \
+                patch.object(release, 'workflow_jobs', return_value=jobs):
+            builds = release.build_artifacts(client, 77)
+            self.assertEqual(builds['build-macos-x64']['id'], old['id'])
+            self.assertEqual(len(builds), 9)
+            self.assertEqual(len(release.candidate_artifacts(client, 77)), 9)
+            self.assertEqual(len(records), 19)
+            for invalid in ('duplicate', 'missing', 'expired'):
+                saved = list(records)
+                if invalid == 'duplicate':
+                    records.append(old | {'id': 100})
+                elif invalid == 'missing':
+                    records.remove(old)
+                else:
+                    records[records.index(old)] = old | {'expired': True}
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    release.build_artifacts(client, 77)
+                records[:] = saved
+
     def test_release_partial_rerun_stops_before_obsolete_skipped_matrix_placeholders(self):
         records = {
             2:[{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS],
@@ -6601,6 +6648,9 @@ class ReleaseTests(unittest.TestCase):
         if duplicate:artifacts.append(artifacts[0])
         if missing_candidate:candidates.pop()
         def request(path, raw=False):
+            if path == '/actions/runs/77':
+                return {'id': 77, 'path': '.github/workflows/ci.yml',
+                        'head_sha': self.commit, 'run_attempt': 1}
             if path.startswith('/actions/runs/77/artifacts?'):return {'artifacts':builds+candidates}
             if path.startswith('/actions/runs/88/artifacts?'):return {'artifacts':artifacts}
             return archives[int(path.split('/')[3])]

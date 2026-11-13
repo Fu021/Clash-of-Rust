@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from build_inputs import android_versions
-from workflow_artifacts import commit, release_module
+from workflow_artifacts import commit, current_ci_artifacts, release_module
 
 WORKFLOWS = {'android': 'android-compatibility.yml', 'ubuntu': 'ubuntu-compatibility.yml'}
 REPORT_JOBS = {'android': 'Record Android compatibility', 'ubuntu': 'Record Ubuntu compatibility'}
@@ -86,6 +86,7 @@ def resolve(client, repository, expected_commit, run_id=None, suite='android'):
         if len(batch) < 100:
             break
         page += 1
+    artifacts = current_ci_artifacts(client, run, artifacts)
     inputs = []
     for name in input_names(suite):
         found = [item for item in artifacts if item.get('name') == name]

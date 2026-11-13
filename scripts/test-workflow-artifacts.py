@@ -29,6 +29,95 @@ class ArtifactTests(unittest.TestCase):
     commit = 'a'*40
     version = '0.4.12'
 
+    def rerun_records(self):
+        run = {'id': 42, 'head_sha': self.commit, 'run_attempt': 2,
+               'path': '.github/workflows/ci.yml'}
+        jobs = [
+            {'name': 'macos-x64', 'status': 'completed',
+             'started_at': '2026-11-13T16:00:00Z',
+             'completed_at': '2026-11-13T16:30:00Z'},
+            {'name': 'linux-x64', 'status': 'completed',
+             'started_at': '2026-11-13T15:00:00Z',
+             'completed_at': '2026-11-13T15:30:00Z'},
+        ]
+        source = {'id': 42, 'head_sha': self.commit}
+        records = [
+            {'id': 1, 'name': 'build-macos-x64', 'created_at': '2026-11-13T15:20:00Z',
+             'workflow_run': source},
+            {'id': 2, 'name': 'build-linux-x64', 'created_at': '2026-11-13T15:20:00Z',
+             'workflow_run': source},
+            {'id': 3, 'name': 'build-macos-x64', 'created_at': '2026-11-13T16:20:00Z',
+             'workflow_run': source},
+            {'id': 4, 'name': 'package-macos-x64', 'created_at': '2026-11-13T16:25:00Z',
+             'workflow_run': source},
+        ]
+        return run, jobs, records
+
+    def test_partial_rerun_keeps_only_the_latest_producer_and_untouched_platforms(self):
+        run, jobs, records = self.rerun_records()
+        module = artifacts.release_module()
+        with patch.object(module, 'workflow_jobs', return_value=jobs) as query, \
+                patch.object(artifacts, 'release_module', return_value=module):
+            selected = artifacts.current_ci_artifacts(None, run, records)
+        self.assertEqual([record['id'] for record in selected], [2, 3, 4])
+        self.assertEqual(len(records), 4)
+        query.assert_called_once_with(None, run, {'macos-x64', 'linux-x64'})
+
+    def test_rerun_never_falls_back_to_an_old_or_out_of_interval_artifact(self):
+        run, jobs, records = self.rerun_records()
+        records[2]['created_at'] = '2026-11-13T16:31:00Z'
+        records[3]['created_at'] = '2026-11-13T16:31:00Z'
+        module = artifacts.release_module()
+        with patch.object(module, 'workflow_jobs', return_value=jobs), \
+                patch.object(artifacts, 'release_module', return_value=module):
+            selected = artifacts.current_ci_artifacts(None, run, records)
+        self.assertEqual([record['id'] for record in selected], [2])
+
+    def test_rerun_preserves_same_attempt_duplicates_for_existing_rejection(self):
+        run, jobs, records = self.rerun_records()
+        records.append(records[2] | {'id': 5})
+        module = artifacts.release_module()
+        with patch.object(module, 'workflow_jobs', return_value=jobs), \
+                patch.object(artifacts, 'release_module', return_value=module):
+            selected = artifacts.current_ci_artifacts(None, run, records)
+        self.assertEqual(sum(record['name'] == 'build-macos-x64' for record in selected), 2)
+
+    def test_rerun_rejects_unknown_provenance_or_missing_job_timestamps(self):
+        run, jobs, records = self.rerun_records()
+        module = artifacts.release_module()
+        for kind in ('source', 'run', 'created', 'timezone', 'started',
+                     'completed', 'interval', 'producer'):
+            candidate_records = copy.deepcopy(records)
+            candidate_jobs = copy.deepcopy(jobs)
+            if kind == 'source':
+                candidate_records[2]['workflow_run']['head_sha'] = 'b'*40
+            elif kind == 'run':
+                candidate_records[2]['workflow_run']['id'] = 43
+            elif kind == 'created':
+                candidate_records[2].pop('created_at')
+            elif kind == 'timezone':
+                candidate_records[2]['created_at'] = '2026-11-13T16:20:00'
+            elif kind == 'started':
+                candidate_jobs[0].pop('started_at')
+            elif kind == 'completed':
+                candidate_jobs[0].pop('completed_at')
+            elif kind == 'interval':
+                candidate_jobs[0]['completed_at'] = '2026-11-13T15:00:00Z'
+            else:
+                candidate_jobs.pop(0)
+            with self.subTest(kind=kind), \
+                    patch.object(module, 'workflow_jobs', return_value=candidate_jobs), \
+                    patch.object(artifacts, 'release_module', return_value=module), \
+                    self.assertRaises(ValueError):
+                artifacts.current_ci_artifacts(None, run, candidate_records)
+
+    def test_first_attempt_preserves_the_original_strict_artifact_checks(self):
+        run, _, records = self.rerun_records()
+        run['run_attempt'] = 1
+        with patch.object(artifacts, 'release_module') as module:
+            self.assertIs(artifacts.current_ci_artifacts(None, run, records), records)
+        module.assert_not_called()
+
     def test_guest_source_marker_is_validated_without_falling_back_to_git(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
