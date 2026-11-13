@@ -1620,6 +1620,7 @@ public class ProxyTunTest {
     @Test public void applicationRoutingPersistsAndKeepsOtherAppsOnline() throws Exception {
         incidentNotificationsKeepSeverityPermissionAndRateLimitsSeparate();
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        persistNetworkProfile(context);
         android.content.pm.ApplicationInfo bundled = new android.content.pm.ApplicationInfo();
         bundled.flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM;
         assertTrue("Preinstalled launchable apps must remain selectable",

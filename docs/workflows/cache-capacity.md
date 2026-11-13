@@ -37,7 +37,27 @@ Rust 行包含其 Cargo registry/Git 数据和相关原生依赖构建结果，�
 
 北京时间 2026-11-13 15:18 的逐项清单为 **16 条、19.57 GiB**，全部属于 main，每个逻辑目标各一代：六桌面 Rust 约 12.62 GiB、三 Android Rust 约 5.52 GiB、三 Android Go 约 0.65 GiB、两编译容器约 0.71 GiB、两 macOS Tailscale 约 65.9 MiB；当时没有 Memory profile 或 Gradle 转换缓存。CI `43381550885` 收尾逐项总量同为 19.57 GiB，未发现可按现行代际规则删除的条目。此前 2026-11-10 的 11 条／10.09 GiB 只包含九个平台 Rust 与两份 Tailscale，覆盖和编译设置不同，不能作为当前全覆盖容量目标。
 
-上述 19.57 GiB 是启用 ThinLTO 后的历史快照；当时未逐文件量化中间数据和旧指纹，不能把全部增长归为必需数据。当前[安装包压缩](install-validation.md#安装包压缩)关闭 ThinLTO，升级 Rust 后按维护者授权清空 GitHub Cache 并冷填充；私网原包及两种预装 VM 不删除。新容量和恢复／保存净耗时以本次 Actions 实测更新，不用历史暖编译推断收益，也不因已有 24 GiB 上限填满预算。
+上述 19.57 GiB 是启用 ThinLTO 后的历史快照；当时未逐文件量化中间数据和旧指纹，不能把全部增长归为必需数据。[安装包压缩](install-validation.md#安装包压缩)现以 `lto = "off"` 完全关闭 LTO，Rust 更新至 1.100.0 后按维护者授权清空 GitHub Cache 并冷填充；私网原包及两种预装 VM 不删除。
+
+提交 `107ddd2` 的冷 CI `43401803549` 为 12/12 成功，开始前 GitHub Cache 为零，收尾为 **16 条／8.26 GiB**：六桌面 Rust 4.53 GiB、三 Android Rust 2.31 GiB、三 Android Go 0.65 GiB、两 Linux 编译环境 0.71 GiB、两 macOS Tailscale 0.064 GiB。每个用途仅一代且全部属于 main；覆盖范围与 19.57 GiB 快照一致，较其减少约 57.8%。这是两次完整清单的实测差异，不能把编译器、LTO、缓存布局与旧中间数据的贡献分别归因。第二轮 `43406564916` 同样 12/12 成功，收尾仍为 16 条／8.26 GiB，仅增加 96,206 字节；这些数值尚未包含后续 Memory profile，不因已有 24 GiB 上限填满预算。
+
+两轮保持同提交与测试选择，先完成冷 CI，再单独运行暖 CI，期间不启动兼容或内存任务。整轮自创建至最后任务结束为 **35 分 41 秒 → 17 分 31 秒**，约缩短 50.9%；不同 runner 和排队会造成波动，不保证后续恒定。以下合计缓存恢复、编译/测试与 Rust 缓存保存，Android 编译阶段还包含 Go 和应用打包；不是纯 Rust 编译耗时。
+
+| 目标 | 冷填充 | 暖恢复 |
+| --- | ---: | ---: |
+| Windows x64 | 11 分 43 秒 | 1 分 14 秒 |
+| Windows ARM64 | 11 分 32 秒 | 6 分 33 秒 |
+| macOS Intel | 21 分 12 秒 | 4 分 18 秒 |
+| macOS ARM64 | 12 分 11 秒 | 1 分 21 秒 |
+| Linux x64 | 7 分 5 秒 | 30 秒 |
+| Linux ARM64 | 7 分 19 秒 | 25 秒 |
+| Android ARM64 | 11 分 7 秒 | 3 分 3 秒 |
+| Android ARMv7 | 18 分 49 秒 | 2 分 42 秒 |
+| Android x64 | 10 分 15 秒 | 3 分 14 秒 |
+
+两种 macOS 的第二轮为兼容命中：冷编译 Tailscale 时遗留的源码目录带有 `.cargo/config.toml`，被 Rust Cache 计入依赖键；恢复二进制工具后该目录不再存在，因此经历一次键迁移和重新保存。上表已计入这部分收尾，旧键已按代际规则回收；后续 Tailscale 更新时需继续观察此边界，不把兼容命中写成精确命中。
+
+同提交 Memory `43409153353` 完成后新增一份约 0.56 GiB 的 release 基准缓存，完整清单为 **17 条／8.82 GiB**，各用途仍各一代。两种 Ubuntu 预装 VM 继续仅在私网，COSMIC 不读写 GitHub Cache。
 
 CI 与 Memory 共用 `scripts/workflow_storage.py` 的 **20 GiB** 工作预算，低于仓库 **24 GB** 配置上限；余量不保证容纳任何完整归档。main 每个目标和用途只留最新一代，其他 ref 不保留缓存；main 最新代本身超预算时只警告，不删除唯一基线。识别与回收规则统一见[缓存分工](cache-coverage.md#编译对象只用-github)。GitHub 仍可按自身到期或容量规则淘汰缓存，保护和预算均非永久保证；费用以 GitHub 实际账单为准。
 
