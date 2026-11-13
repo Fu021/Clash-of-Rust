@@ -6,6 +6,14 @@ CI 负责发行构建、候选安装包及基本代理/TUN 验收，Publish Rele
 
 候选打包器及其工具随 CI 平台 job 准备：Windows 准备 NSIS，Linux 准备 DEB 工具，macOS 复用本机 DMG 工具，Android 准备 Gradle、JDK 与 SDK。发布的不发布模式只需要核验工具；公开模式的 Android job 只准备 JDK、签名/对齐工具和 x64 模拟器，不安装 Gradle 或重新构建 Rust/Go。Memory Benchmark 只编译所选桌面源码并采样，不生成候选安装包。各原包的实际私网覆盖以[下载路径表](cache-coverage.md#原始下载官方优先私网回退)为准，不能把 setup 成功视为私网可恢复。
 
+## 安装包压缩
+
+发行构建采用 Rust ThinLTO、体积优化和符号剥离；Android 仍按 ABI 分包，并压缩原生库。Windows 使用 solid LZMA 与 128 MiB 字典；DEB 使用 xz 级别 9 和 extreme 策略。macOS 从同一份已签名 App 生成 ULMO、ULFO 和 zlib 级别 9 的 UDZO，逐个验证后选择最小 DMG；单格式失败可尝试其余格式，全部失败则终止，不覆盖旧包。公证及装订在最终选择之后执行。
+
+压缩不移除完整中文/emoji 字体、离线 Geo、许可证或诊断；不增加运行时自解压可执行层。字体覆盖、JNI 名称及 Android 的 16 KiB 对齐仍须保留。Java 混淆和资源裁剪未开启，避免在尚未验证 JNI/反射保留规则时影响宿主调用。发布不改写已签名 APK 的 ZIP 内容。
+
+压缩收益以同提交九组候选包的实际字节和安装结果为准，同时记录编译及打包耗时；ThinLTO 会使原有编译缓存失效，首轮冷编译不能与历史暖缓存直接比较。安装包必须继续通过本页各平台安装、签名和基本网络检查，不能仅以压缩成功作为兼容证据。
+
 ## 平台范围
 
 | 平台 | 验证位置与检查 |

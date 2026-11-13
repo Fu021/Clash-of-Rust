@@ -33,7 +33,7 @@ OutFile "${OUTPUT}"
 InstallDir "$PROGRAMFILES64\Clash of Rust"
 InstallDirRegKey ${PRODUCT_HIVE} "${PRODUCT_KEY}" "InstallLocation"
 SetCompressor /SOLID lzma
-SetCompressorDictSize 32
+SetCompressorDictSize 128
 ShowInstDetails show
 ShowUninstDetails show
 VIProductVersion "${APP_NUMERIC_VERSION}"

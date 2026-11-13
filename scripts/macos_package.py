@@ -99,11 +99,44 @@ def build_dmg(payload, version, arch):
     artifact = ROOT/f'dist/Clash-of-Rust-{version}-macos-{arch}.dmg'
     with tempfile.TemporaryDirectory(prefix='clash-macos-') as temporary:
         root = Path(temporary)
-        build_app(payload, root/APP_NAME, version, arch)
-        (root/'Applications').symlink_to('/Applications')
-        artifact.unlink(missing_ok=True)
-        disk_image(['create', '-volname', 'Clash of Rust', '-srcfolder', root,
-                    '-fs', 'HFS+', '-format', 'UDZO', '-ov', artifact])
+        contents = root/'contents'
+        contents.mkdir()
+        build_app(payload, contents/APP_NAME, version, arch)
+        (contents/'Applications').symlink_to('/Applications')
+        candidates = []
+        failures = []
+        for image_format, options in (
+            ('ULMO', []),
+            ('ULFO', []),
+            ('UDZO', ['-imagekey', 'zlib-level=9']),
+        ):
+            image = root/(image_format+'.dmg')
+            started = time.monotonic()
+            try:
+                disk_image(['create', '-volname', 'Clash of Rust', '-srcfolder', contents,
+                            '-fs', 'HFS+', '-format', image_format, *options, '-ov', image],
+                           timeout=300)
+                size = image.stat().st_size
+                if size <= 0:
+                    raise ValueError('DiskImages produced an empty image')
+                disk_image(['verify', image])
+            except (subprocess.SubprocessError, OSError, ValueError) as error:
+                failures.append(f'{image_format}: {error}')
+                print(f'DMG compression {image_format} failed: {error}', flush=True)
+                continue
+            print(f'DMG compression {image_format}: {size} bytes, '
+                  f'{time.monotonic()-started:.2f} seconds', flush=True)
+            candidates.append(image)
+        if not candidates:
+            raise RuntimeError('No verified DMG compression candidate: '+'; '.join(failures))
+        selected = min(candidates, key=lambda image: image.stat().st_size)
+        print('Selected DMG compression: '+selected.stem, flush=True)
+        partial = artifact.with_name(artifact.name+'.partial')
+        try:
+            shutil.copyfile(selected, partial)
+            partial.replace(artifact)
+        finally:
+            partial.unlink(missing_ok=True)
     profile = os.environ.get('MACOS_NOTARY_PROFILE')
     if profile:
         if os.environ.get('MACOS_SIGNING_IDENTITY', '-') == '-':

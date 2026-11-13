@@ -307,10 +307,12 @@ pub fn runtime(
 mod tests {
     use super::*;
 
+    const PROFILE: &str = "12345678-1234-4234-8234-123456789abc";
+
     fn settings(target: Target, reject_missing: bool) -> Settings {
         let mut settings = Settings::default();
         settings.application_rules.insert(
-            "profile".into(),
+            PROFILE.into(),
             std::sync::Arc::new(vec![Rule {
                 package: "org.example.browser".into(),
                 target,
@@ -329,7 +331,7 @@ mod tests {
             let settings = settings(target.clone(), reject);
             let changed = raw.replace("1080", "1081");
             let runtime: Value = yaml_serde::from_str(
-                &runtime(&changed, &changed, &settings, "profile", true).unwrap(),
+                &runtime(&changed, &changed, &settings, PROFILE, true).unwrap(),
             )
             .unwrap();
             assert_eq!(
@@ -363,7 +365,7 @@ mod tests {
                         };
                         let normalized = crate::config::runtime_config(&source, &settings).unwrap();
                         let output: Value = yaml_serde::from_str(
-                            &runtime(&source, &normalized, &settings, "profile", true).unwrap(),
+                            &runtime(&source, &normalized, &settings, PROFILE, true).unwrap(),
                         )
                         .unwrap();
                         let route = &output["cor-application-rules"]["routes"][0];
@@ -418,10 +420,10 @@ mod tests {
             },
             false,
         );
-        assert_eq!(runtime(raw, raw, &settings, "profile", false).unwrap(), raw);
+        assert_eq!(runtime(raw, raw, &settings, PROFILE, false).unwrap(), raw);
         assert_eq!(runtime(raw, raw, &settings, "other", true).unwrap(), raw);
         settings.run_mode = "global".into();
-        assert_eq!(runtime(raw, raw, &settings, "profile", true).unwrap(), raw);
+        assert_eq!(runtime(raw, raw, &settings, PROFILE, true).unwrap(), raw);
     }
 
     #[test]
@@ -440,7 +442,7 @@ mod tests {
                 );
                 settings.udp = enabled;
                 let result: Value =
-                    yaml_serde::from_str(&runtime(raw, raw, &settings, "profile", true).unwrap())
+                    yaml_serde::from_str(&runtime(raw, raw, &settings, PROFILE, true).unwrap())
                         .unwrap();
                 let selector = &result["proxy-groups"][0];
                 let pattern = format!("^{}$", regex::escape(name));
@@ -473,11 +475,11 @@ mod tests {
         let raw = "proxies: [{name: node, type: socks5, server: example.test, port: 1080}]\n";
         let target = targets(raw).unwrap().pop().unwrap();
         let mut saved = settings(target, false);
-        let mut second = saved.application_rules["profile"][0].clone();
+        let mut second = saved.application_rules[PROFILE][0].clone();
         second.package = "org.example.second".into();
-        std::sync::Arc::make_mut(saved.application_rules.get_mut("profile").unwrap()).push(second);
+        std::sync::Arc::make_mut(saved.application_rules.get_mut(PROFILE).unwrap()).push(second);
         let output: Value =
-            yaml_serde::from_str(&runtime(raw, raw, &saved, "profile", true).unwrap()).unwrap();
+            yaml_serde::from_str(&runtime(raw, raw, &saved, PROFILE, true).unwrap()).unwrap();
         assert_eq!(output["proxy-groups"].as_sequence().unwrap().len(), 1);
         assert_eq!(
             output["cor-application-rules"]["routes"][0]["target"],
@@ -497,7 +499,7 @@ mod tests {
             true,
         );
         before.claude_protection = Some(std::sync::Arc::new(Protection::new(
-            "profile".into(),
+            PROFILE.into(),
             "node".into(),
             Previous {
                 mode: "rule".into(),
@@ -505,7 +507,7 @@ mod tests {
                 selectors: Default::default(),
             },
         )));
-        assert_eq!(runtime(raw, raw, &before, "profile", true).unwrap(), raw);
+        assert_eq!(runtime(raw, raw, &before, PROFILE, true).unwrap(), raw);
         let mut appearance = before.clone();
         appearance.theme_mode = Some(crate::config::ThemeMode::Light);
         appearance.accent_color = crate::config::AccentColor::Blue;

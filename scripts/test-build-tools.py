@@ -5443,6 +5443,117 @@ runpy.run_path(str(script), run_name='__main__')
                     mac.disk_image(['create', 'package.dmg'], timeout=1)
                 execute.assert_not_called()
 
+    def test_dmg_uses_the_smallest_verified_format_before_notarization(self):
+        import macos_package as mac
+        for smallest in ('ULMO', 'ULFO', 'UDZO'):
+            with self.subTest(smallest=smallest), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root/'dist').mkdir()
+                formats = {'ULMO', 'ULFO', 'UDZO'}
+                commands = []
+                verified = []
+                def disk_image(arguments, **kwargs):
+                    commands.append(arguments)
+                    if arguments[0] == 'create':
+                        image_format = arguments[arguments.index('-format')+1]
+                        Path(arguments[-1]).write_bytes(image_format.encode()*(
+                            1 if image_format == smallest else 10))
+                    else:
+                        self.assertEqual(arguments[0], 'verify')
+                        verified.append(Path(arguments[1]).stem)
+                with patch.object(mac, 'ROOT', root), patch.object(mac, 'build_app') as app, \
+                        patch.object(mac, 'disk_image', side_effect=disk_image), \
+                        patch.object(mac, 'run') as run, patch('sys.stdout', io.StringIO()), \
+                        patch.dict(os.environ, {'MACOS_NOTARY_PROFILE': 'test-profile',
+                                                'MACOS_SIGNING_IDENTITY': 'test-identity'}):
+                    artifact = mac.build_dmg(root/'payload', '0.7.1', 'arm64')
+                app.assert_called_once()
+                self.assertEqual(artifact.read_bytes(), smallest.encode())
+                self.assertEqual(set(verified), formats)
+                creates = [command for command in commands if command[0] == 'create']
+                self.assertEqual({command[command.index('-format')+1] for command in creates}, formats)
+                self.assertEqual(len({command[command.index('-srcfolder')+1] for command in creates}), 1)
+                udzo = next(command for command in creates if 'UDZO' in command)
+                self.assertEqual(udzo[udzo.index('-imagekey')+1], 'zlib-level=9')
+                self.assertEqual(run.call_args_list, [
+                    call(['/usr/bin/xcrun', 'notarytool', 'submit', artifact,
+                          '--keychain-profile', 'test-profile', '--wait']),
+                    call(['/usr/bin/xcrun', 'stapler', 'staple', artifact]),
+                    call(['/usr/bin/xcrun', 'stapler', 'validate', artifact]),
+                ])
+                self.assertFalse(artifact.with_name(artifact.name+'.partial').exists())
+
+    def test_dmg_rejects_failed_empty_and_corrupt_candidates_without_replacing_a_valid_package(self):
+        import macos_package as mac
+        for fallback in (True, False):
+            with self.subTest(fallback=fallback), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root/'dist').mkdir()
+                artifact = root/'dist/Clash-of-Rust-0.7.1-macos-x64.dmg'
+                artifact.write_bytes(b'previous package')
+                def disk_image(arguments, **kwargs):
+                    if arguments[0] == 'verify':
+                        if Path(arguments[1]).stem == 'ULFO':
+                            raise subprocess.CalledProcessError(1, ['hdiutil', 'verify'])
+                        return
+                    image_format = arguments[arguments.index('-format')+1]
+                    if image_format == 'ULMO':
+                        raise subprocess.TimeoutExpired('hdiutil', 300)
+                    Path(arguments[-1]).write_bytes(
+                        b'fallback' if image_format == 'UDZO' and fallback else b'')
+                    if image_format == 'ULFO':
+                        Path(arguments[-1]).write_bytes(b'corrupt')
+                with patch.object(mac, 'ROOT', root), patch.object(mac, 'build_app'), \
+                        patch.object(mac, 'disk_image', side_effect=disk_image), \
+                        patch('sys.stdout', io.StringIO()), \
+                        patch.dict(os.environ, {'MACOS_NOTARY_PROFILE': ''}):
+                    if fallback:
+                        self.assertEqual(mac.build_dmg(root/'payload', '0.7.1', 'x64'), artifact)
+                        self.assertEqual(artifact.read_bytes(), b'fallback')
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'No verified DMG'):
+                            mac.build_dmg(root/'payload', '0.7.1', 'x64')
+                        self.assertEqual(artifact.read_bytes(), b'previous package')
+                self.assertFalse(artifact.with_name(artifact.name+'.partial').exists())
+
+    def test_deb_strong_compression_keeps_the_previous_package_if_building_fails(self):
+        spec = importlib.util.spec_from_file_location('build_installer', build.ROOT/'scripts/build-installer.py')
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root/'dist').mkdir()
+                payload = root/'payload'
+                (payload/'resources').mkdir(parents=True)
+                (payload/'resources/THIRD-PARTY-NOTICES.txt').write_text('notices')
+                for name in ('linux/org.clashofrust.tun.policy', 'icons/app.png'):
+                    source = root/'resources'/name
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(b'fixture')
+                artifact = root/'dist/Clash-of-Rust-0.7.1-linux-amd64.deb'
+                artifact.write_bytes(b'previous package')
+                def package(command):
+                    self.assertEqual(command[:7], [
+                        'dpkg-deb', '--build', '--root-owner-group',
+                        '--uniform-compression', '-Zxz', '-z9', '-Sextreme'])
+                    Path(command[-1]).write_bytes(b'new package')
+                    if fail:
+                        raise subprocess.CalledProcessError(2, command)
+                with patch.object(installer, 'ROOT', root), \
+                        patch.object(installer.subprocess, 'check_output',
+                                     return_value='shlibs:Depends=libc6 (>= 2.31)\n'), \
+                        patch.object(installer, 'run', side_effect=package):
+                    if fail:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            installer._build_deb(payload, '0.7.1', 'x64', root/'work')
+                        self.assertEqual(artifact.read_bytes(), b'previous package')
+                    else:
+                        self.assertEqual(
+                            installer._build_deb(payload, '0.7.1', 'x64', root/'work'), artifact)
+                        self.assertEqual(artifact.read_bytes(), b'new package')
+                self.assertFalse(artifact.with_name(artifact.name+'.partial').exists())
+
     def test_defender_update_waits_for_busy_installation_and_refreshes_binary(self):
         busy = subprocess.CompletedProcess([], 2, 'ERROR: hr=0x80070652\n')
         ok = subprocess.CompletedProcess([], 0, 'Signature update finished\n')

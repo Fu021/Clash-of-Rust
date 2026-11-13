@@ -44,7 +44,7 @@ debug = 1
 [profile.release]
 # Keep resident code compact, including shared runtime and rendering dependencies.
 opt-level = "s"
-lto = false
+lto = "thin"
 codegen-units = 16
 incremental = true
 strip = true

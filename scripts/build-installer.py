@@ -105,7 +105,7 @@ def _build_deb(payload, version, arch, work):
     artifact = ROOT/f'dist/Clash-of-Rust-{version}-linux-{deb_arch}.deb'
     temporary = artifact.with_name(artifact.name+'.partial')
     try:
-        run(['dpkg-deb','--build','--root-owner-group','--uniform-compression','-Zxz','-z6',root,temporary])
+        run(['dpkg-deb','--build','--root-owner-group','--uniform-compression','-Zxz','-z9','-Sextreme',root,temporary])
         temporary.replace(artifact)
     finally:
         temporary.unlink(missing_ok=True)
