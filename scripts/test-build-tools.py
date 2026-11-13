@@ -1080,6 +1080,38 @@ class PreparedVmTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_apk_certificate_accepts_numbered_and_sdk_range_signers(self):
+        digest = 'ab'*32
+        for output in (
+                f'Signer #1 certificate SHA-256 digest: {digest}\n',
+                f'Signer #1 certificate SHA-256 digest: {digest.upper()} \r\n',
+                f'Signer (minSdkVersion=28, maxSdkVersion=32) certificate SHA-256 digest: {digest}\n'
+                f'Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: {digest}\n',
+                f'Signer (minSdkVersion=36 (dev release=true), maxSdkVersion=2147483647) '
+                f'certificate SHA-256 digest: {digest}\n'):
+            with self.subTest(output=output), \
+                    patch.object(android_apk.subprocess, 'check_output', return_value=output) as execute:
+                self.assertEqual(android_apk.certificate(Path('app.apk'), Path('tools')), [digest])
+                self.assertIn('--print-certs', execute.call_args.args[0])
+        output = (f'Signer #1 certificate SHA-256 digest: {digest}\n'
+                  f'Signer #2 certificate SHA-256 digest: {"cd"*32}\n')
+        with patch.object(android_apk.subprocess, 'check_output', return_value=output):
+            self.assertEqual(android_apk.certificate(Path('app.apk'), Path('tools')), [digest, 'cd'*32])
+
+    def test_apk_certificate_rejects_missing_invalid_and_source_stamp_only_identity(self):
+        for output in ('', 'Verifies\n', 'Signer #1 certificate SHA-256 digest: xyz\n',
+                       'Signer #1 certificate SHA-256 digest: ' + 'a'*65 + '\n',
+                       'Signer #1 public key SHA-256 digest: ' + 'a'*64 + '\n',
+                       'Source Stamp Signer certificate SHA-256 digest: ' + 'a'*64 + '\n'):
+            with self.subTest(output=output), \
+                    patch.object(android_apk.subprocess, 'check_output', return_value=output):
+                with self.assertRaisesRegex(ValueError, 'certificate is unavailable'):
+                    android_apk.certificate(Path('app.apk'), Path('tools'))
+        with patch.object(android_apk.subprocess, 'check_output',
+                          side_effect=subprocess.CalledProcessError(1, ['apksigner'])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                android_apk.certificate(Path('app.apk'), Path('tools'))
+
     def test_apk_resource_compression_preserves_payload_and_mmap_members(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

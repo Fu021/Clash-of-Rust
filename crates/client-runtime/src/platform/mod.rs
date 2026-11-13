@@ -345,23 +345,20 @@ fn owns(current: &ProxyState, owned: &ProxyState) -> Result<bool> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        if !owned.is_empty()
+        let owned_matches = !owned.is_empty()
             && owned.keys().any(|key| !auxiliary_key(key))
             && current.len() == owned.len()
             && owned.iter().all(|(key, value)| {
                 current.contains_key(key)
                     && (auxiliary_key(key) || same_route_value(key, current.get(key), Some(value)))
-            })
-        {
-            return Ok(true);
-        }
+            });
         #[cfg(target_os = "linux")]
         {
-            Ok(linux::owns_legacy(current, owned))
+            Ok(owned_matches || linux::owns_legacy(current, owned))
         }
         #[cfg(not(target_os = "linux"))]
         {
-            Ok(false)
+            Ok(owned_matches)
         }
     }
 }

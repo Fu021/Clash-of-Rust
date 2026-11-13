@@ -1,6 +1,6 @@
 plugins { id("com.android.application") }
 
-val appVersion = providers.gradleProperty("appVersion").orElse("0.7.1").get()
+val appVersion = providers.gradleProperty("appVersion").orElse("0.7.2-fix.1.rust100-cache").get()
 val appVersionCode = providers.gradleProperty("appVersionCode").orElse("605000").get().toInt()
 val selectedAbi = providers.gradleProperty("appAbi").orNull
 val selectedNdkVersion = providers.gradleProperty("appNdkVersion").orNull

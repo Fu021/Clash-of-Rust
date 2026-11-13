@@ -84,6 +84,8 @@ APT 可直接复用下载目录中同大小的 DEB，不能仅凭 GitHub 缓存�
 
 ## 3. Rust 编译与 Clippy 跨 target 差异
 
+Rust 工具链升级后须检查各平台展开 `cfg` 后的控制流；Linux 带兼容回退的分支在 Windows 上可能退化为多余布尔判断。修复表达式并保留回退的短路语义，不关闭新 lint。Rust 1.100 的 `cargo::unused_dependencies` 还会报告清单中的无用依赖；先查全部源码、测试与平台入口，删除无引用项，把只用于 Windows 的依赖移到对应 target，而不是全局压低告警。版本及锁文件随清单同步，仍由各平台严格 Clippy 验证。
+
 **典型症状**
 
 - `-D warnings` 下出现死代码、未使用函数、未构造枚举变体、多余 `return` 或可合并 `if`。

@@ -10,7 +10,7 @@ CI 负责发行构建、候选安装包及基本代理/TUN 验收，Publish Rele
 
 发行构建使用体积优化和符号剥离，关闭 ThinLTO；安装包压缩在打包阶段覆盖内核、Geo 和其余内容，不为提高压缩率改变运行时数据格式。Windows 使用 solid LZMA，x64 字典为 128 MiB，ARM64 为 64 MiB；这是已通过打包器初始化的边界，ARM64 更大字典曾失败，不再盲目提高。DEB 使用最高 xz 预设 9 和 extreme 策略。macOS 从同一份已签名 App 生成 ULMO、UDBZ、ULFO 和 zlib 级别 9 的 UDZO，逐个验证后选择最小 DMG；单格式失败可尝试其余格式，全部失败则终止，不覆盖旧包。公证及装订在最终选择之后执行。
 
-Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压缩成员与四份 Geo 资源；原有不压缩的 DEX、资源表和原生库保持其方式，不破坏 mmap 和对齐约束。逐项校验解压后长度与 SHA256，然后重新进行 16 KiB 对齐、同身份签名和签名验证，失败保留原包，结果不更小时仍使用原包。体积变化写入 `android-report/<ABI>/build.json` 的 `compression`；此操作发生在网络验收前，发布只复用已验收内容并重新发行签名。
+Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压缩成员与四份 Geo 资源；原有不压缩的 DEX、资源表和原生库保持其方式，不破坏 mmap 和对齐约束。逐项校验解压后长度与 SHA256，然后重新进行 16 KiB 对齐、同身份签名和签名验证，失败保留原包，结果不更小时仍使用原包。证书身份兼容 apksigner 的编号及 SDK 区间输出，按证书摘要去重比较，不把 Source Stamp 或公钥摘要当作安装签名；格式来源见 [AOSP ApkSignerTool](https://android.googlesource.com/platform/tools/apksig/+/refs/heads/main/src/apksigner/java/com/android/apksigner/ApkSignerTool.java)。体积变化写入 `android-report/<ABI>/build.json` 的 `compression`；此操作发生在网络验收前，发布只复用已验收内容并重新发行签名。
 
 压缩不移除完整中文/emoji 字体、离线 Geo、许可证或诊断；不增加运行时自解压可执行层。字体覆盖、JNI 名称及 Android 的 16 KiB 对齐仍须保留。Java 混淆和资源裁剪未开启，避免在尚未验证 JNI/反射保留规则时影响宿主调用。发布不改写已签名 APK 的 ZIP 内容。
 
