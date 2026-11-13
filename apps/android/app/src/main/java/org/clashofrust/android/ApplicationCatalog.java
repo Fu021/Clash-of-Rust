@@ -101,13 +101,20 @@ final class ApplicationCatalog {
             .thenComparing(item -> item.optString("package")));
         ArrayList<String> selected = new ArrayList<>(saved.packages);
         java.util.Collections.sort(selected);
-        return new JSONObject().put("applications", new JSONArray(entries))
+        JSONObject catalog = new JSONObject().put("applications", new JSONArray(entries))
             .put("mode", saved.mode).put("selected", new JSONArray(selected))
             .put("summary", saved.summary()).put("visibility_limited", other == 0)
             .put("query_permission", android.os.Build.VERSION.SDK_INT < 30
                 || manager.checkPermission("android.permission.QUERY_ALL_PACKAGES", context.getPackageName())
                     == PackageManager.PERMISSION_GRANTED)
             .put("icon_failures", iconFailures);
+        JSONObject identity = new JSONObject().put("applications", catalog.getJSONArray("applications"))
+            .put("mode", saved.mode).put("selected", catalog.getJSONArray("selected"));
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(
+            identity.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        StringBuilder fingerprint = new StringBuilder();
+        for (byte value : digest) fingerprint.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+        return catalog.put("snapshot_id", fingerprint.toString());
     }
 
     static JSONObject save(Context context, JSONObject data) throws Exception {

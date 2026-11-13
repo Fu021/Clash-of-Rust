@@ -465,11 +465,33 @@ def verify_build(root, arch, expected_commit):
     return manifest
 
 
-def adb_evidence_command(command, timeout):
+def adb_evidence_command(command, timeout, binary=False):
     try:
-        return subprocess.run(command,capture_output=True,text=True,timeout=timeout)
+        return subprocess.run(command,capture_output=True,text=not binary,timeout=timeout)
     except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(command,255,'',f'ADB command timed out after {timeout}s')
+        message=f'ADB command timed out after {timeout}s'
+        return subprocess.CompletedProcess(command,255,b'' if binary else '',message.encode() if binary else message)
+
+
+def adb_transport_failed(result):
+    return result.returncode != 0 and bool(re.search(
+        r'device offline|device not found|no devices|connection.*closed|'
+        r'failed to get feature set|ADB command timed out', result.stdout+result.stderr, re.I))
+
+
+def record_adb_health(report):
+    records={}
+    for name,command in (
+            ('devices',[ADB,'devices','-l']),
+            ('processes',['ps','-eo','pid,ppid,etimes,rss,comm'])):
+        result=adb_evidence_command(command,10)
+        records[name]={'returncode':result.returncode,'output':result.stdout+result.stderr}
+    for name in ('meminfo','pressure/memory'):
+        try:
+            records[name]=Path('/proc',name).read_text()
+        except OSError as error:
+            records[name]={'unavailable':type(error).__name__}
+    write_json(report/'adb-transport-health.json',{'schema':1,'observed_at':time.time(),'records':records})
 
 
 def wait_adb_identity(output, expected=None):
@@ -494,9 +516,15 @@ def pull_device_report(remote, report, required=False, required_pattern='*.png',
     result=adb_evidence_command(command,30)
     output=[result.stdout+result.stderr]
     restored=True
-    if result.returncode and required:
-        properties=[subprocess.run([ADB,'shell','getprop',name],capture_output=True,text=True,timeout=15)
+    if required and adb_transport_failed(result):
+        record_adb_health(report)
+        if wait_adb_identity(output) is not None:
+            result=adb_evidence_command(command,30)
+            output.append(result.stdout+result.stderr)
+    if result.returncode and required and re.search(r'permission denied', result.stderr+result.stdout, re.I):
+        properties=[adb_evidence_command([ADB,'shell','getprop',name],15)
                     for name in ('ro.kernel.qemu','ro.debuggable')]
+        output.extend(value.stdout+value.stderr for value in properties)
         if all(value.returncode==0 and value.stdout.strip()=='1' for value in properties):
             previous=wait_adb_identity(output)
             if previous is not None and previous!='0':
@@ -618,6 +646,26 @@ def finish_test_log(process, report, marker):
         except Exception as cleanup_error:
             error=error or cleanup_error
     raw=(report/'logcat.raw').read_bytes()
+    if error is not None:
+        recovery=[str(error)]
+        record_adb_health(report)
+        if wait_adb_identity(recovery) is not None:
+            boundary=adb_evidence_command([ADB,'shell','log','-t','CorAndroidTest',end_marker],15)
+            recovery.append(boundary.stdout+boundary.stderr)
+            if boundary.returncode == 0:
+                replay=adb_evidence_command(
+                    [ADB,'logcat','-b','main,system,crash','-v','threadtime','-d'],30,binary=True)
+                (report/'logcat-recovery.raw').write_bytes(replay.stdout)
+                recovery.append(replay.stderr.decode(errors='replace'))
+                if replay.returncode == 0:
+                    try:
+                        raw=merge_test_log(raw,replay.stdout,marker,end_marker)
+                        (report/'logcat-recovered.raw').write_bytes(raw)
+                        error=None
+                    except RuntimeError as recovery_error:
+                        recovery.append(str(recovery_error))
+        (report/'logcat-recovery.txt').write_text('\n'.join(recovery))
+        write_json(report/'logcat-recovery-status.json',{'schema':1,'recovered':error is None})
     try:
         captured_log=scoped_test_log(raw,marker,end_marker)
     except RuntimeError as scope_error:
@@ -625,6 +673,19 @@ def finish_test_log(process, report, marker):
         captured_log=raw.decode('utf-8',errors='replace')
     (report/'logcat.txt').write_text(captured_log)
     return captured_log,error
+
+
+def merge_test_log(raw, replay, marker, end_marker):
+    scoped_test_log(raw,marker)
+    complete=raw[:raw.rfind(b'\n')+1]
+    lines=complete.splitlines(keepends=True)
+    overlap=b''.join(lines[-min(8,len(lines)):])
+    position=replay.find(overlap) if overlap else -1
+    if position < 0:
+        raise RuntimeError('Android recovered log has no continuous overlap with the original stream')
+    merged=complete+replay[position+len(overlap):]
+    scoped_test_log(merged,marker,end_marker)
+    return merged
 
 
 def process_crashes(log, package):

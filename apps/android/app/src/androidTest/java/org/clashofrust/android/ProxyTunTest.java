@@ -1393,9 +1393,25 @@ public class ProxyTunTest {
         previewSettingsTop();
     }
     private static void previewApplicationCatalog(Context context) throws Exception {
-        JSONObject catalog = ApplicationCatalog.read(context);
+        JSONObject catalog = null, ui = null;
+        long deadline = SystemClock.elapsedRealtime() + 15000;
+        do {
+            catalog = ApplicationCatalog.read(context);
+            ui = MainActivity.diagnostics();
+            if (catalog.getString("snapshot_id").equals(ui.optString("applications_snapshot"))) break;
+            assertFalse("Enumeration must not discard an application selection draft: " + ui,
+                ui.getBoolean("applications_dirty"));
+            openApplicationRouting();
+        } while (SystemClock.elapsedRealtime() < deadline);
+        assertNotNull(catalog);
+        assertNotNull(ui);
+        assertEquals("The displayed application catalog did not match a stable system snapshot: " + ui,
+            catalog.getString("snapshot_id"), ui.getString("applications_snapshot"));
         JSONArray entries = catalog.getJSONArray("applications");
         java.util.Set<String> selected = ApplicationRouting.load(context).packages;
+        assertFalse("Catalog verification requires the default system filter", ui.getBoolean("applications_system"));
+        assertEquals("Catalog verification requires an unfiltered list", 0, ui.getInt("applications_filter"));
+        assertEquals("UI selected count differs from saved routing", selected.size(), ui.getInt("applications_selected"));
         int expected = 0, other = 0, icons = 0;
         for (int index = 0; index < entries.length(); index++) {
             JSONObject item = entries.getJSONObject(index);
@@ -1408,7 +1424,6 @@ public class ProxyTunTest {
                 if (!icon.isEmpty() && new File(icon).isFile()) icons++;
             }
         }
-        JSONObject ui = MainActivity.diagnostics();
         assertEquals("Application enumeration failed: " + ui, "", ui.getString("applications_error"));
         assertEquals(entries.length(), ui.getInt("applications_total"));
         boolean all = ui.getInt("applications_mode") == 0;
@@ -1896,6 +1911,7 @@ public class ProxyTunTest {
     }
 
     private static void verifyApplicationOutbounds(Context context,String controller,String secret) throws Exception {
+        verifyUidProbeRecovery();
         assertEquals(Build.VERSION.SDK_INT>=29,ApplicationOwners.capability().getBoolean("supported"));
         openApplicationRouting();
         previewApplicationPolicies(null, null, "");
@@ -1967,6 +1983,8 @@ public class ProxyTunTest {
                 +" /system/bin org.clashofrust.android.ApplicationUidProbe").trim());
             assertEquals("The independent probe must run as the assigned UID",
                 context.getPackageManager().getApplicationInfo("com.android.shell",0).uid,response.getInt("uid"));
+            if (!"cor-android-network-ok".equals(response.optString("body")))
+                response.put("network_state", networkState());
             assertEquals("A different UID did not use its assigned outbound: "+response,
                 "cor-android-network-ok",response.optString("body"));
             assertEquals(200,response.getInt("status"));
@@ -1980,6 +1998,40 @@ public class ProxyTunTest {
             assertTrue(new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics()).getLong("matches")>0);
         } finally {
             CoreBridge.reload(original);
+        }
+    }
+
+    private static void verifyUidProbeRecovery() throws Exception {
+        for (boolean recover : new boolean[]{false, true}) {
+            try (java.net.ServerSocket server = new java.net.ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))) {
+                server.setSoTimeout(5000);
+                java.util.concurrent.FutureTask<Void> origin = new java.util.concurrent.FutureTask<>(() -> {
+                    for (int index = 0; index < (recover ? 2 : 1); index++) {
+                        try (Socket socket = server.accept()) {
+                            socket.setSoTimeout(5000);
+                            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(),
+                                StandardCharsets.US_ASCII));
+                            String line;
+                            while ((line = reader.readLine()) != null && !line.isEmpty()) {}
+                            String response = !recover ? "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"
+                                : index == 0 ? "HTTP/1.1 200 OK\r\nContent-Length: 22\r\n\r\nshort"
+                                : "HTTP/1.1 200 OK\r\nContent-Length: 22\r\n\r\ncor-android-network-ok";
+                            socket.getOutputStream().write(response.getBytes(StandardCharsets.US_ASCII));
+                        }
+                    }
+                    return null;
+                });
+                Thread worker = new Thread(origin, "uid-probe-recovery");
+                worker.setDaemon(true);
+                worker.start();
+                URL target = new URL("http://" + server.getInetAddress().getHostAddress() + ":" + server.getLocalPort() + "/probe");
+                JSONObject result = ApplicationUidProbe.request(target, 5000);
+                origin.get(6, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(recover ? 200 : 403, result.getInt("status"));
+                assertEquals(recover ? 2 : 1, result.getJSONArray("attempts").length());
+                if (recover) assertEquals("cor-android-network-ok", result.getString("body"));
+                else assertFalse("An HTTP rejection must not be retried as a transition", result.has("body"));
+            }
         }
     }
 

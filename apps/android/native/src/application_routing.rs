@@ -33,6 +33,8 @@ struct Catalog {
     query_permission: bool,
     #[serde(default)]
     icon_failures: usize,
+    #[serde(default)]
+    snapshot_id: String,
 }
 
 #[derive(Default)]
@@ -84,6 +86,7 @@ impl Editor {
         data.set_applications(ModelRc::new(VecModel::from(items)));
         data.set_applications_loaded(self.loaded);
         data.set_applications_total(self.catalog.applications.len() as i32);
+        data.set_applications_snapshot(self.catalog.snapshot_id.as_str().into());
         data.set_applications_selected(self.catalog.selected.len() as i32);
         data.set_applications_saved_summary(self.catalog.summary.as_str().into());
         data.set_applications_visibility_limited(self.catalog.visibility_limited);
@@ -210,6 +213,7 @@ pub(super) fn request(
                                 state.catalog.visibility_limited = catalog.visibility_limited;
                                 state.catalog.query_permission = catalog.query_permission;
                                 state.catalog.icon_failures = catalog.icon_failures;
+                                state.catalog.snapshot_id = catalog.snapshot_id;
                             }
                             state.loaded = true;
                         }

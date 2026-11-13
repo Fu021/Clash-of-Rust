@@ -4090,6 +4090,40 @@ runpy.run_path(str(script), run_name='__main__')
                     android_build.pull_device_report('/sdcard/ime-report',report,required=True)
             self.assertEqual(invoke.call_count,1)
 
+    def test_android_report_export_recovers_offline_transport_without_root(self):
+        for available in (False, True):
+            with self.subTest(available=available), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                pulls=0
+                def invoke(command, **kwargs):
+                    nonlocal pulls
+                    if command[1]=='pull':
+                        pulls+=1
+                        if pulls==1:
+                            return subprocess.CompletedProcess(command,1,'','failed to get feature set: device offline')
+                        (report/'ime-report/capture.png').write_bytes(b'capture')
+                    self.assertNotIn(command[1],('root','unroot'))
+                    return subprocess.CompletedProcess(command,0,'','')
+                with patch.object(android_build.subprocess,'run',side_effect=invoke), \
+                        patch.object(android_build,'record_adb_health'), \
+                        patch.object(android_build,'wait_adb_identity',return_value='2000' if available else None):
+                    if available:
+                        android_build.pull_device_report('/sdcard/report',report,required=True)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError,'export failed'):
+                            android_build.pull_device_report('/sdcard/report',report,required=True)
+                self.assertEqual(pulls,2 if available else 1)
+                self.assertIn('device offline',(report/'ime-pull.txt').read_text())
+
+    def test_android_report_export_does_not_root_for_missing_reports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report=Path(temporary)
+            with patch.object(android_build.subprocess,'run',return_value=subprocess.CompletedProcess(
+                    [],1,'','remote object does not exist')) as invoke:
+                with self.assertRaisesRegex(RuntimeError,'export failed'):
+                    android_build.pull_device_report('/sdcard/missing',report,required=True)
+            self.assertEqual(invoke.call_count,1)
+
     def test_ime_export_can_require_native_control_state_instead_of_subscription_screenshots(self):
         with tempfile.TemporaryDirectory() as temporary:
             report=Path(temporary)
@@ -4816,6 +4850,8 @@ runpy.run_path(str(script), run_name='__main__')
                 process=MagicMock()
                 process.poll.return_value=1 if ended else None
                 with patch.object(android_build.subprocess,'run'), \
+                        patch.object(android_build,'record_adb_health'), \
+                        patch.object(android_build,'wait_adb_identity',return_value=None), \
                         patch.object(android_build.time,'monotonic',side_effect=[0,31]), \
                         patch.object(android_build.time,'sleep') as pause:
                     captured,error=android_build.finish_test_log(process,report,'current-test')
@@ -4829,6 +4865,57 @@ runpy.run_path(str(script), run_name='__main__')
                     process.terminate.assert_not_called()
         with self.assertRaisesRegex(RuntimeError,'end marker is missing'):
             android_build.scoped_test_log(b'I CorAndroidTest: current-test\n','current-test','current-test-end')
+
+    def test_android_recovered_log_requires_both_boundaries_and_continuous_overlap(self):
+        start=b'I CorAndroidTest: current-test\n'
+        end=b'I CorAndroidTest: current-test-end\n'
+        lines=[f'I fixture: event-{index}\n'.encode() for index in range(16)]
+        crash=(b'E AndroidRuntime: FATAL EXCEPTION: main\n'
+               b'E AndroidRuntime: Process: org.clashofrust.android, PID: 42\n'
+               b'E AndroidRuntime: java.lang.IllegalStateException: broken \xc0\n')
+        raw=start+b''.join(lines)
+        for replay, accepted in ((raw+crash+end,True),
+                                 (b''.join(lines[4:])+crash+end,True),
+                                 (b''.join(lines[10:])+crash+end,False),
+                                 (b''.join(lines[4:])+crash,False)):
+            with self.subTest(replay=replay,accepted=accepted):
+                if accepted:
+                    merged=android_build.merge_test_log(raw+b'partial record',replay,'current-test','current-test-end')
+                    self.assertIn(b'\xc0',merged)
+                    log=android_build.scoped_test_log(merged,'current-test','current-test-end')
+                    self.assertEqual(len(android_build.runtime_crash_status(log,True)['application_crashes']),1)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        android_build.merge_test_log(raw,replay,'current-test','current-test-end')
+        merged=android_build.merge_test_log(start+crash+b''.join(lines),start+b''.join(lines)+end,
+                                            'current-test','current-test-end')
+        self.assertIn(crash,merged)
+
+    def test_android_log_stream_recovers_from_device_buffers_without_discarding_a_crash(self):
+        for complete in (True,False):
+            with self.subTest(complete=complete), tempfile.TemporaryDirectory() as temporary:
+                report=Path(temporary)
+                raw=b'I CorAndroidTest: current-test\nI fixture: before disconnect\n'
+                replay=(raw if complete else b'overwritten buffer\n')+(
+                    b'E RustPanic: panicked at fixture\nI CorAndroidTest: current-test-end\n')
+                (report/'logcat.raw').write_bytes(raw)
+                process=MagicMock()
+                process.poll.return_value=1
+                def invoke(command,timeout,binary=False):
+                    if command[1]=='logcat':
+                        self.assertTrue(binary)
+                        return subprocess.CompletedProcess(command,0,replay,b'')
+                    return subprocess.CompletedProcess(command,0,'','')
+                with patch.object(android_build,'wait_adb_identity',return_value='2000'), \
+                        patch.object(android_build,'record_adb_health'), \
+                        patch.object(android_build,'adb_evidence_command',side_effect=invoke):
+                    captured,error=android_build.finish_test_log(process,report,'current-test')
+                self.assertEqual(error is None,complete)
+                self.assertEqual((report/'logcat.raw').read_bytes(),raw)
+                self.assertEqual((report/'logcat-recovery.raw').read_bytes(),replay)
+                self.assertEqual(json.loads((report/'logcat-recovery-status.json').read_text())['recovered'],complete)
+                if complete:
+                    self.assertEqual(len(android_build.runtime_crash_status(captured,True)['application_crashes']),1)
 
     def test_android_log_stream_cleans_up_when_start_marker_cannot_be_written(self):
         with tempfile.TemporaryDirectory() as temporary:

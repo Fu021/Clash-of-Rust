@@ -3699,6 +3699,7 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "applications_loading":android.get_applications_loading(),
             "applications_loaded":android.get_applications_loaded(),
             "applications_total":android.get_applications_total(),
+            "applications_snapshot":android.get_applications_snapshot().as_str(),
             "applications_visible":android.get_applications().row_count(),
             "applications_scroll_y":android.get_applications_scroll_y(),
             "applications_error":android.get_applications_error().as_str()});
