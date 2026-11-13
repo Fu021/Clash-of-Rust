@@ -57,6 +57,6 @@
 
 **防回归**
 
-- 每轮只保留 CI、Publish Release、Memory Benchmark 三个长期工作流。
+- 常驻 CI、Publish Release、Memory Benchmark；已授权的两套兼容验证和 COSMIC 手动诊断继续保留，职责与触发条件见[工作流索引](../workflows.md)。不因单轮调查另加未授权临时工作流。
 - 手动 workflow 输入必须有校验和明确错误信息。
 - 缓存恢复不能让整个平台矩阵无限等待；必须有超时、部分失败和正常下载回退。
