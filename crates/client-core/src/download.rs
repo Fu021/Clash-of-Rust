@@ -111,6 +111,29 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn tls_eof_keeps_the_transport_cause_available_for_bounded_reconnect() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut hello = [0; 4096];
+            assert!(socket.read(&mut hello).await.unwrap() > 0);
+        });
+        let error = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("https://{address}/package")),
+        )
+        .await
+        .unwrap_err();
+        server.await.unwrap();
+        assert!(retryable(&error), "{error:#}");
+    }
+
+    #[tokio::test]
     async fn response_deadline_bounds_a_connection_that_never_sends_headers() {
         use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

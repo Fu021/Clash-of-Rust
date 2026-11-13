@@ -363,6 +363,25 @@ def workspace_sources(source, save=False):
           f'invalidated {len(invalid)} changed crates.', flush=True)
 
 
+def workspace_restore_identity(source, family, receipt, compiler=None, environment=None):
+    if not re.fullmatch(r'(?:native-main-v3-(?:linux|macos|windows)|android-main-v3)-(?:x64|arm64|armv7)', family):
+        raise ValueError('Invalid compiler cache family')
+    source = Path(source).resolve()
+    receipt = Path(receipt).resolve()
+    environment = dict(os.environ if environment is None else environment)
+    compiler = subprocess.check_output(['rustc', '-vV']) if compiler is None else compiler
+    compatible = rust_keys(source, compiler, environment)[1].rstrip('-')
+    versions = source/'.github/build-versions.json'
+    toolchain = hashlib.sha256(versions.read_bytes() if versions.is_file() else b'').hexdigest()
+    compatible = rust_environment_key(compiler, environment) + hashlib.sha256(
+        (compatible+toolchain).encode()).hexdigest()
+    cargo = Path(environment.get('CARGO_HOME', str(Path.home()/'.cargo'))).resolve()
+    return {
+        'prefix': family+'--'+compatible,
+        'paths': [str(cargo/'registry'), str(cargo/'git'), str(source/'target'), str(receipt.parent)],
+    }
+
+
 def rust_keys(source, compiler, environment):
     """Changed dependencies invalidate exact hits; Cargo validates compatible objects."""
     source = Path(source)

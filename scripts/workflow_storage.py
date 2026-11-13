@@ -23,6 +23,7 @@ def caches(client):
 
 
 def lineage(key):
+    key = re.sub(r'--v\d+-[0-9a-f]{64}-[0-9a-f]{64}(?=-)', '--', key)
     key = re.sub(r'-(?:workspace|vendor)-[0-9a-f]{64}', '', key)
     key = re.sub(r'-local-deps-v\d+', '', key)
     key = re.sub(r'^native-(?:main-v\d+|release-(?:ubuntu20-)?v\d+)-', 'native-', key)

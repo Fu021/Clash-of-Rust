@@ -16,7 +16,7 @@
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
 | `runtime_cache.py` | 历史协议辅助 | 旧工具快照的离线兼容回归；当前工作流不调用。 |
 | `workflow_artifacts.py` | CLI / 模块 | 导出、就地暂存、下载和校验不可变 CI 产物；就地暂存绑定实际上传 id/digest，避免同 runner 再下载；同 CI 的 Linux 包就绪后启动兼容验证。 |
-| `action_cache.py` | CLI / 模块 | 认证私网缓存协议、恢复预算、校验及清单。 |
+| `action_cache.py` | CLI / 模块 | 认证私网缓存历史协议与校验；GitHub 编译缓存兼容身份、源码回执及不完整恢复清理。现行私网只缓存原包和预装 VM，不恢复 Rust 对象。 |
 | `cache_shards.py` | 历史协议辅助 | 旧 Rust 分片的离线兼容回归；当前工作流不调用。 |
 | `workflow_storage.py` | CLI | main 每个目标只留最新缓存，清除其他 ref 缓存；`--dry-run` 预览删除计划。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |

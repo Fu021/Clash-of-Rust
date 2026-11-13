@@ -48,18 +48,21 @@ class Payload(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path != '/payload':
+        if self.path not in ('/payload', '/small'):
             self.send_error(404)
             return
+        size = len(BLOCK) if self.path == '/small' else BODY_SIZE
         self.connection.settimeout(15)
         self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.send_response(200)
-        self.send_header('Content-Length', str(BODY_SIZE))
+        self.send_header('Content-Length', str(size))
         self.send_header('Content-Type', 'application/octet-stream')
-        self.send_header('Connection', 'close')
+        if self.path != '/small':
+            self.send_header('Connection', 'close')
+            self.close_connection = True
         self.end_headers()
         try:
-            for _ in range(BODY_SIZE // len(BLOCK)):
+            for _ in range(size // len(BLOCK)):
                 self.wfile.write(BLOCK)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
@@ -108,6 +111,13 @@ def save_report(path):
         + '\n'.join(rows) + '\n')
     if report.get('error'):
         text += '\nFailure: '+str(report['error'])+'\n'
+    sequences = report.get('pooled_sequences', [])
+    if sequences:
+        text += '\n## Reused HTTPS client: 29 small files, then one large file\n\n'
+        text += '| Route | Round | Requests | Final file (MiB/s) |\n| --- | ---: | ---: | ---: |\n'
+        for sample in sequences:
+            text += (f'| {sample["route"]} | {sample["round"]} | {sample["requests"]} | '
+                     f'{sample["final_mib_per_second"]:.2f} |\n')
     delays = report.get('latency_summaries', [])
     if delays:
         text += (

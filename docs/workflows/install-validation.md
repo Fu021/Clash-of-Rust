@@ -8,7 +8,7 @@ CI 负责发行构建、候选安装包及基本代理/TUN 验收，Publish Rele
 
 ## 安装包压缩
 
-发行构建使用体积优化和符号剥离，按 [Cargo 配置语义](https://doc.rust-lang.org/cargo/reference/profiles.html#lto)以 `lto = "off"` 完全关闭 LTO；`false` 仍可能启用 crate 内部 ThinLTO，不用于此策略。包级 profile 覆盖会重置继承的 `strip`，因此所有带覆盖的发行包都显式设置 `strip = "symbols"`，Linux 导出还会拒绝残留 `.symtab`/`.strtab` 的 ELF。安装包压缩在打包阶段覆盖内核、Geo 和其余内容，不为提高压缩率改变运行时数据格式。Windows 使用 solid LZMA，x64 字典为 128 MiB，ARM64 为 64 MiB；这是已通过打包器初始化的边界，ARM64 更大字典曾失败，不再盲目提高。DEB 使用最高 xz 预设 9 和 extreme 策略。macOS 从同一份已签名 App 生成 ULMO、UDBZ、ULFO 和 zlib 级别 9 的 UDZO，逐个验证后选择最小 DMG；单格式失败可尝试其余格式，全部失败则终止，不覆盖旧包。公证及装订在最终选择之后执行。
+发行构建使用体积优化和符号剥离，按 [Cargo 配置语义](https://doc.rust-lang.org/cargo/reference/profiles.html#lto)以 `lto = "off"` 完全关闭 LTO；`false` 仍可能启用 crate 内部 ThinLTO，不用于此策略。包级 profile 覆盖会重置继承的 `strip`，因此所有带覆盖的发行包都显式设置 `strip = "symbols"`，Linux 导出还会拒绝残留 `.symtab`/`.strtab` 的 ELF。安装包压缩在打包阶段覆盖内核、Geo 和其余内容，不为提高压缩率改变运行时数据格式。Windows 使用 solid LZMA，x64 字典为 128 MiB，ARM64 为 64 MiB；这是已通过打包器初始化的边界，ARM64 更大字典曾失败，不再盲目提高。DEB 使用最高 xz 预设 9 和 extreme 策略。macOS 优先生成并验证历史两架构均最小的 ULMO，成功即复用，不再重复生成另外三种格式。ULMO 失败时才从同一份已签名 App 比较 UDBZ、ULFO 与 zlib 级别 9 的 UDZO，逐个验证后选最小；全部失败则终止，不覆盖旧包。公证及装订在最终选择之后执行。
 
 Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压缩成员与四份 Geo 资源；原有不压缩的 DEX、资源表和原生库保持其方式，不破坏 mmap 和对齐约束。启动图标使用从源图生成的 432px Android 前景成品，避免把 1254px 源图原样存入每个 APK；逐项校验解压后长度与 SHA256，然后重新进行 16 KiB 对齐、同身份签名和签名验证，失败保留原包，结果不更小时仍使用原包。证书身份兼容 apksigner 的编号、SDK 区间以及 Build Tools 37 的 `Signer:`、`V3.0 Signer` 等输出，读取签名者的证书 SHA256 并去重比较；非法摘要直接拒绝，Source Stamp 和公钥摘要不作为安装签名。格式以实际批准 SDK 分发包为准，[AOSP ApkSignerTool](https://android.googlesource.com/platform/tools/apksig/+/refs/heads/main/src/apksigner/java/com/android/apksigner/ApkSignerTool.java)主线源码只作参考。体积变化写入 `android-report/<ABI>/build.json` 的 `compression`；此操作发生在网络验收前，发布只复用已验收内容并重新发行签名。
 
@@ -18,7 +18,7 @@ Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压
 
 `0.7.2-fix.1.rust100-cache` 的公开安装包（Android 为发行签名）合计 **531,643,212 字节**，0.7.1 为 **589,984,384 字节**，减少 **9.89%**。Linux 两架构约减 6.68～7.43%、Windows 约减 4.17～4.58%、macOS 约减 26.97～28.96%；三种 Android APK 仍比 0.7.1 大约 0.21～0.57%，不能宣称所有平台缩小。相较此前启用 ThinLTO 的压缩候选，九包合计增加约 **2.00%**；这是同时改变工具链、应用修复与 LTO 的实际取舍，不能当作纯压缩算法对照。九包、九摘要、安装收据和公开附件均已核对，来源提交与验收见[最近复盘](../agent-failures/reviews.md)。
 
-后续 `333d287` 的 CI `43450326229` 候选包合计 **521,547,905 字节**，比上述公开包再减约 **1.90%**：Linux 两架构减约 3.27～4.57%、macOS 减约 2.75～2.94%、Android 减约 1.20～1.28%；Windows 两包反而增加约 0.04%，解包后四个主要程序大小未变，不能记为压缩收益。Android 此处是开发签名候选，签名差异也计入实际字节；后续提交及兼容验收单独记录，不改写已公开版本的体积数据。
+后续符号剥离和 Android 图标调整在 `4bb7d8c` CI `43465685765` 完成验收，九组候选包合计 **521,476,651 字节**，比上述公开包再减约 **1.91%**：Linux 两架构减约 3.24～4.58%、macOS 减约 2.75～3.02%、Android 减约 1.20～1.28%；Windows 两包仅约 −0.003%／+0.012% 的波动，不能记为有效压缩收益。Android 此处是开发签名候选，签名差异也计入实际字节；同提交兼容与不发布核验证据见[最近复盘](../agent-failures/reviews.md)，不改写已公开版本的体积数据。
 
 ## 平台范围
 

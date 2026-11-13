@@ -1438,6 +1438,22 @@ class BuildTests(unittest.TestCase):
                         self.assertEqual(len(body), manifest['size'])
                         self.assertEqual(hashlib.sha256(body).hexdigest(), manifest['sha256'])
                         self.assertEqual(response.headers['Content-Length'], str(len(body)))
+                import http.client
+                url = urllib.parse.urlsplit(manifest['urls'][0])
+                connection = http.client.HTTPConnection(url.hostname, url.port, timeout=5)
+                try:
+                    descriptor = None
+                    for _ in range(3):
+                        connection.request('GET', '/small')
+                        response = connection.getresponse()
+                        self.assertEqual(response.read(), proxy_benchmark.BLOCK)
+                        self.assertFalse(response.will_close)
+                        current = connection.sock.getsockname()
+                        if descriptor is not None:
+                            self.assertEqual(current, descriptor)
+                        descriptor = current
+                finally:
+                    connection.close()
                 request = urllib.request.Request(manifest['latency_url'], method='HEAD')
                 with opener.open(request, timeout=5) as response:
                     self.assertEqual(response.status, 204)
@@ -1555,6 +1571,25 @@ class BuildTests(unittest.TestCase):
         self.assertEqual([command[1] for command in commands], ['fmt', 'clippy', 'build', 'test'])
         self.assertEqual(commands[-1][2:6], ['-p', 'clash-of-rust', '--test', 'core_integration'])
         self.assertIn('--no-run', commands[-1])
+
+    def test_macos_proxy_investigation_runs_the_actual_child_readiness_regressions(self):
+        specification = importlib.util.spec_from_file_location('native_macos_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        commands = []
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_PROXY_BENCHMARK': 'true',
+                                     'COR_CI_UPDATE_TESTS': 'false'}), \
+                patch.object(sys, 'argv', ['run-ci.py', '--system', 'macos', '--arch', 'x64']), \
+                patch.object(native_ci, 'host_system', return_value='macos'), \
+                patch.object(native_ci, 'host_arch', return_value='x64'), \
+                patch.object(local_cache, 'workspace_sources'), \
+                patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+            with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                native_ci.main()
+        self.assertTrue(any('platform::macos::service::tests::tun_session_' in command
+                            and '--no-run' not in command for command in commands))
 
     def test_update_changes_run_shared_schedule_config_cli_and_gui_regressions(self):
         specification = importlib.util.spec_from_file_location('native_update_ci', build.ROOT/'scripts/run-ci.py')
@@ -2542,6 +2577,59 @@ Private_Clean: 2 kB
                 local_cache.workspace_vendor_objects(root, cache, packages)
                 self.assertFalse(target.exists())
                 self.assertFalse((root.parent/'outside').exists())
+
+    def test_workspace_restore_identity_changes_for_environment_not_business_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=[]\n')
+            source = root/'crates/client/src/lib.rs'
+            source.parent.mkdir(parents=True)
+            source.write_text('first')
+            arguments = (root, 'native-main-v3-macos-x64', root/'receipt/source.json')
+            environment = {'CARGO_HOME': str(root/'cargo')}
+            first = local_cache.workspace_restore_identity(
+                *arguments, compiler=b'compiler one', environment=environment)
+            source.write_text('second')
+            second = local_cache.workspace_restore_identity(
+                *arguments, compiler=b'compiler one', environment=environment)
+            self.assertEqual(first, second)
+            self.assertEqual(first['paths'], [str(root/'cargo/registry'), str(root/'cargo/git'),
+                                               str(root/'target'), str(root/'receipt')])
+            for compiler, settings in (
+                (b'compiler two', environment),
+                (b'compiler one', {**environment, 'RUSTFLAGS': '-C target-cpu=native'}),
+            ):
+                different = local_cache.workspace_restore_identity(
+                    *arguments, compiler=compiler, environment=settings)
+                self.assertNotEqual(first['prefix'], different['prefix'])
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=[]\n[profile.release]\nlto="thin"\n')
+            different = local_cache.workspace_restore_identity(
+                *arguments, compiler=b'compiler one', environment=environment)
+            self.assertNotEqual(first['prefix'], different['prefix'])
+            versions = root/'.github/build-versions.json'
+            versions.parent.mkdir()
+            versions.write_text('{"ndk":"different"}')
+            changed_tool = local_cache.workspace_restore_identity(
+                *arguments, compiler=b'compiler one', environment=environment)
+            self.assertNotEqual(different['prefix'], changed_tool['prefix'])
+            for family in ('native-main-v3-linux-x64', 'native-main-v3-windows-arm64',
+                           'android-main-v3-arm64'):
+                different = local_cache.workspace_restore_identity(
+                    root, family, root/'receipt/source.json', compiler=b'compiler one',
+                    environment=environment)
+                self.assertNotEqual(first['prefix'], different['prefix'])
+            with self.assertRaises(ValueError):
+                local_cache.workspace_restore_identity(
+                    root, 'native-main-v3-linux-x64\nunsafe', root/'receipt/source.json')
+
+    def test_compiler_fallback_generations_share_the_existing_retention_family(self):
+        suffix = '-workspace-'+'a'*64+'-local-deps-v1-check-Darwin-x64-'+'b'*16+'-'+'c'*16
+        legacy = 'native-main-v2-macos-x64--'+suffix
+        current = 'native-main-v3-macos-x64--v1-'+'d'*64+'-'+'e'*64+suffix
+        self.assertEqual(storage.lineage(legacy), storage.lineage(current))
+        newer = current.replace('d'*64, 'f'*64).replace('a'*64, '0'*64)
+        self.assertEqual(storage.lineage(current), storage.lineage(newer))
+        self.assertNotEqual(storage.lineage(current), storage.lineage(current.replace('macos-x64', 'macos-arm64')))
 
     def test_changed_vendor_source_invalidates_restored_fingerprints_before_cargo_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -5624,7 +5712,7 @@ runpy.run_path(str(script), run_name='__main__')
                     mac.disk_image(['create', 'package.dmg'], timeout=1)
                 execute.assert_not_called()
 
-    def test_dmg_uses_the_smallest_verified_format_before_notarization(self):
+    def test_dmg_prefers_verified_ulmo_and_only_compares_fallbacks_when_needed(self):
         import macos_package as mac
         for smallest in ('ULMO', 'UDBZ', 'ULFO', 'UDZO'):
             with self.subTest(smallest=smallest), tempfile.TemporaryDirectory() as temporary:
@@ -5637,6 +5725,8 @@ runpy.run_path(str(script), run_name='__main__')
                     commands.append(arguments)
                     if arguments[0] == 'create':
                         image_format = arguments[arguments.index('-format')+1]
+                        if image_format == 'ULMO' and smallest != 'ULMO':
+                            raise subprocess.CalledProcessError(1, ['hdiutil', 'create'])
                         Path(arguments[-1]).write_bytes(image_format.encode()*(
                             1 if image_format == smallest else 10))
                     else:
@@ -5650,12 +5740,14 @@ runpy.run_path(str(script), run_name='__main__')
                     artifact = mac.build_dmg(root/'payload', '0.7.1', 'arm64')
                 app.assert_called_once()
                 self.assertEqual(artifact.read_bytes(), smallest.encode())
-                self.assertEqual(set(verified), formats)
+                self.assertEqual(set(verified), {'ULMO'} if smallest == 'ULMO' else formats-{'ULMO'})
                 creates = [command for command in commands if command[0] == 'create']
-                self.assertEqual({command[command.index('-format')+1] for command in creates}, formats)
+                self.assertEqual({command[command.index('-format')+1] for command in creates},
+                                 {'ULMO'} if smallest == 'ULMO' else formats)
                 self.assertEqual(len({command[command.index('-srcfolder')+1] for command in creates}), 1)
-                udzo = next(command for command in creates if 'UDZO' in command)
-                self.assertEqual(udzo[udzo.index('-imagekey')+1], 'zlib-level=9')
+                if smallest != 'ULMO':
+                    udzo = next(command for command in creates if 'UDZO' in command)
+                    self.assertEqual(udzo[udzo.index('-imagekey')+1], 'zlib-level=9')
                 self.assertEqual(run.call_args_list, [
                     call(['/usr/bin/xcrun', 'notarytool', 'submit', artifact,
                           '--keychain-profile', 'test-profile', '--wait']),

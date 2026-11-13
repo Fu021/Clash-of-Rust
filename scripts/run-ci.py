@@ -6,7 +6,7 @@ import sys
 
 from build_support import host_system, ROOT, bundle_directory, host_arch, run, cargo_messages, write_json, desktop_cargo_scope
 from workflow_artifacts import export_build, test_binaries
-from ci_test_policy import desktop_ui_tests, extended_tests, linux_user_tests, update_tests
+from ci_test_policy import desktop_ui_tests, extended_tests, linux_user_tests, proxy_benchmark, update_tests
 
 
 def main():
@@ -28,6 +28,9 @@ def main():
     clippy_targets = ['--all-targets'] if extended else ['--lib', '--bins']
     run(['cargo', 'clippy', *packages, '--release', *clippy_targets, '--locked', '--', '-D', 'warnings'])
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
+    if not extended and args.system == 'macos' and proxy_benchmark():
+        run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
+             'platform::macos::service::tests::tun_session_', '--', '--test-threads=1'])
     if not extended and linux_user_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for package, target, case in (
                 ('clash-client-runtime', ['--lib'], 'platform::linux_tun::'),

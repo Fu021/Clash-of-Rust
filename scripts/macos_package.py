@@ -128,6 +128,8 @@ def build_dmg(payload, version, arch):
             print(f'DMG compression {image_format}: {size} bytes, '
                   f'{time.monotonic()-started:.2f} seconds', flush=True)
             candidates.append(image)
+            if image_format == 'ULMO':
+                break
         if not candidates:
             raise RuntimeError('No verified DMG compression candidate: '+'; '.join(failures))
         selected = min(candidates, key=lambda image: image.stat().st_size)

@@ -52,6 +52,91 @@ struct Sample {
     sha256: String,
 }
 
+#[derive(Serialize)]
+struct SequenceSample {
+    route: String,
+    round: usize,
+    requests: usize,
+    bytes: u64,
+    elapsed_ms: f64,
+    final_mib_per_second: f64,
+}
+
+async fn pooled_sequence(
+    fixture: &Fixture,
+    url: &reqwest::Url,
+    route: &Route,
+    round: usize,
+    mixed_port: u16,
+) -> Result<SequenceSample> {
+    let certificate = reqwest::Certificate::from_pem(&std::fs::read(&fixture.certificate)?)?;
+    let client = route
+        .apply(
+            clash_client_core::network::client_builder()
+                .tls_certs_only([certificate])
+                .http1_only()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(20)),
+        )?
+        .build()?;
+    let small: Vec<_> = (0u8..=255).cycle().take(64 * 1024).collect();
+    let small_digest = file_hash::hex(Sha256::digest(&small));
+    let started = Instant::now();
+    let mut bytes = 0;
+    let mut final_mib_per_second = 0.;
+    for index in 0..30 {
+        let mut target = url.clone();
+        let (size, expected) = if index == 29 {
+            (fixture.size, fixture.sha256.as_str())
+        } else {
+            target.set_path("/small");
+            (small.len() as u64, small_digest.as_str())
+        };
+        let request_started = Instant::now();
+        let mut response = client.get(target).send().await?;
+        ensure!(
+            response.status() == reqwest::StatusCode::OK && response.content_length() == Some(size),
+            "pooled sequence returned an unexpected response"
+        );
+        let peer = response.remote_addr().context("missing pooled peer")?;
+        let expected_port = if route.proxy.is_some() {
+            mixed_port
+        } else {
+            url.port_or_known_default().unwrap()
+        };
+        ensure!(
+            peer.ip().is_loopback() && peer.port() == expected_port,
+            "pooled sequence bypassed the intended proxy"
+        );
+        let mut watchdog = Watchdog::new(false);
+        let mut received = 0;
+        let mut digest = Sha256::new();
+        while let Some(chunk) = watchdog.chunk(&mut response).await? {
+            let chunk = chunk.as_ref();
+            received += chunk.len() as u64;
+            ensure!(received <= size, "oversized pooled response");
+            digest.update(chunk);
+        }
+        ensure!(
+            received == size && file_hash::hex(digest.finalize()) == expected,
+            "pooled sequence returned corrupt bytes"
+        );
+        bytes += received;
+        if index == 29 {
+            final_mib_per_second =
+                received as f64 / (1024. * 1024.) / request_started.elapsed().as_secs_f64();
+        }
+    }
+    Ok(SequenceSample {
+        route: route.label.into(),
+        round,
+        requests: 30,
+        bytes,
+        elapsed_ms: started.elapsed().as_secs_f64() * 1000.,
+        final_mib_per_second,
+    })
+}
+
 async fn sample(
     fixture: &Fixture,
     url: &reqwest::Url,
@@ -245,6 +330,7 @@ fn report(
     fixture: &Fixture,
     samples: &[Sample],
     latencies: &[LatencySample],
+    sequences: &[SequenceSample],
     error: Option<String>,
 ) -> Result<()> {
     let mut summaries = Vec::new();
@@ -300,10 +386,12 @@ fn report(
         "scope": "local-loopback-no-public-network",
         "http_version": "HTTP/1.1", "ip_version": 4,
         "tls_certificate_verified": samples.iter().any(|sample| sample.protocol == "https"),
-        "complete": error.is_none() && samples.len() == 36 && latencies.len() == 25,
+        "complete": error.is_none() && samples.len() == 36 && latencies.len() == 25
+            && sequences.len() == 30,
         "error": error, "bytes_per_sample": fixture.size,
         "samples": samples, "summaries": summaries,
         "latency_samples": latencies, "latency_summaries": latency_summaries,
+        "pooled_sequences": sequences,
     });
     std::fs::write(&fixture.report, serde_json::to_vec_pretty(&report)?)?;
     Ok(())
@@ -316,8 +404,9 @@ pub async fn check(api: &Api, mixed_port: u16) -> Result<()> {
     let fixture: Fixture = serde_json::from_slice(&std::fs::read(path)?)?;
     let mut samples = Vec::new();
     let mut latencies = Vec::new();
-    report(&fixture, &samples, &latencies, None)?;
-    let result = tokio::time::timeout(Duration::from_secs(90), async {
+    let mut sequences = Vec::new();
+    report(&fixture, &samples, &latencies, &sequences, None)?;
+    let result = tokio::time::timeout(Duration::from_secs(180), async {
         let latency_url = reqwest::Url::parse(&fixture.latency_url)?;
         ensure!(
             latency_url.scheme() == "http"
@@ -345,14 +434,14 @@ pub async fn check(api: &Api, mixed_port: u16) -> Result<()> {
             for offset in 0..latency_routes.len() {
                 let route = &latency_routes[(round + offset) % latency_routes.len()];
                 latencies.push(client_latency(&latency_url, route, round, mixed_port).await?);
-                report(&fixture, &samples, &latencies, None)?;
+                report(&fixture, &samples, &latencies, &sequences, None)?;
             }
             for (node, label) in [
                 ("DIRECT", "controller-direct"),
                 ("CI-Loopback", "controller-loopback-socks"),
             ] {
                 latencies.push(controller_latency(api, &latency_url, node, label, round).await?);
-                report(&fixture, &samples, &latencies, None)?;
+                report(&fixture, &samples, &latencies, &sequences, None)?;
             }
         }
         for url in &fixture.urls {
@@ -393,7 +482,17 @@ pub async fn check(api: &Api, mixed_port: u16) -> Result<()> {
                             sample.first_byte_ms,
                         );
                         samples.push(sample);
-                        report(&fixture, &samples, &latencies, None)?;
+                        report(&fixture, &samples, &latencies, &sequences, None)?;
+                    }
+                }
+            }
+            if url.scheme() == "https" {
+                for round in 0..10 {
+                    for offset in 0..routes.len() {
+                        let route = &routes[(round + offset) % routes.len()];
+                        sequences
+                            .push(pooled_sequence(&fixture, &url, route, round, mixed_port).await?);
+                        report(&fixture, &samples, &latencies, &sequences, None)?;
                     }
                 }
             }
@@ -401,12 +500,13 @@ pub async fn check(api: &Api, mixed_port: u16) -> Result<()> {
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .context("loopback throughput benchmark exceeded its 90-second budget")
+    .context("loopback throughput benchmark exceeded its 180-second budget")
     .and_then(|result| result);
     report(
         &fixture,
         &samples,
         &latencies,
+        &sequences,
         result.as_ref().err().map(|error| format!("{error:#}")),
     )?;
     result

@@ -430,12 +430,18 @@ pub(crate) fn validate_session_path(socket: &Path, uid: u32) -> Result<()> {
     check_user_file(socket.parent().context("TUN 会话路径无效")?, uid, true)
 }
 fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<()> {
+    let started = Instant::now();
     ensure!(
         unsafe { libc::geteuid() } == 0 && uid != 0 && uuid::Uuid::parse_str(token).is_ok(),
         "TUN 服务身份无效"
     );
     validate_session_path(socket, uid)?;
+    eprintln!("TUN session: preparing private core");
     let (source, expected) = core_path()?;
+    eprintln!(
+        "TUN session: source verified in {:.3}s",
+        started.elapsed().as_secs_f64()
+    );
     // Freeze the authorized executable in a root-private directory. A later
     // user-space app replacement must never change what this lease executes.
     let frozen = tempfile::Builder::new()
@@ -447,6 +453,10 @@ fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<(
         crate::assets::hash_file(&core)?.0 == expected,
         "授权过程中内核文件发生变化"
     );
+    eprintln!(
+        "TUN session: private core ready in {:.3}s",
+        started.elapsed().as_secs_f64()
+    );
     let listener = UnixListener::bind(socket)?;
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
     let cpath = std::ffi::CString::new(socket.as_os_str().as_encoded_bytes())?;
@@ -455,6 +465,12 @@ fn serve(socket: &Path, uid: u32, token: &str, idle_limit: Duration) -> Result<(
         "无法设置 TUN 会话权限"
     );
     listener.set_nonblocking(true)?;
+    std::io::stdout().write_all(b"ready\n")?;
+    std::io::stdout().flush()?;
+    eprintln!(
+        "TUN session: socket ready in {:.3}s",
+        started.elapsed().as_secs_f64()
+    );
     serve_requests(&listener, socket, uid, token, &core, idle_limit)
 }
 fn serve_requests(

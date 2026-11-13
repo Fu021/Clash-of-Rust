@@ -240,20 +240,42 @@ jobs:
           toolchain: ${{ env.COR_RUST }}
           targets: ${{ matrix.target }}
           components: clippy
+      - name: Identify compatible Android compiler objects
+        id: rust_identity
+        shell: python
+        run: |
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import workspace_restore_identity
+          identity = workspace_restore_identity('.', 'android-main-v3-${{ matrix.arch }}',
+              os.environ['WORKSPACE_SOURCE_CACHE'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('prefix=' + identity['prefix'] + '\npaths<<CACHE_PATHS\n' +
+                  '\n'.join(identity['paths']) + '\nCACHE_PATHS\n')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         timeout-minutes: 5
         continue-on-error: true
         id: rust_github
         with:
-          prefix-key: android-main-v2-${{ matrix.arch }}--
+          prefix-key: ${{ steps.rust_identity.outputs.prefix }}
           key: workspace-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**') }}
           cache-on-failure: false
           cache-bin: false
           cache-workspace-crates: true
           cache-directories: ${{ github.workspace }}/.workspace-sources
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Restore compatible Android workspace from an earlier source revision
+        if: steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit != 'true'
+        id: rust_fallback
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: ${{ steps.rust_identity.outputs.paths }}
+          key: ${{ steps.rust_identity.outputs.prefix }}-compatible-lookup
+          restore-keys: ${{ steps.rust_identity.outputs.prefix }}-
       - name: Discard interrupted GitHub compiler restore
-        if: steps.rust_github.outcome == 'failure'
+        if: steps.rust_github.outcome == 'failure' || steps.rust_fallback.outcome == 'failure'
         shell: python
         run: |
           import sys
@@ -523,12 +545,23 @@ jobs:
         with:
           toolchain: ${{ env.COR_RUST }}-${{ matrix.target }}
           components: rustfmt, clippy
+      - name: Identify compatible native compiler objects
+        id: rust_identity
+        run: |
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import workspace_restore_identity
+          identity = workspace_restore_identity('.', 'native-main-v3-${{ matrix.system }}-${{ matrix.arch }}',
+              pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('prefix=' + identity['prefix'] + '\npaths<<CACHE_PATHS\n' +
+                  '\n'.join(identity['paths']) + '\nCACHE_PATHS\n')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         timeout-minutes: 5
         continue-on-error: true
         id: rust_github
         with:
-          prefix-key: native-main-v2-${{ matrix.system }}-${{ matrix.arch }}--
+          prefix-key: ${{ steps.rust_identity.outputs.prefix }}
           key: ${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
           cache-on-failure: false
           cache-bin: false
@@ -537,8 +570,18 @@ jobs:
           cache-workspace-crates: ${{ matrix.os != 'windows-11-arm' }}
           cache-directories: ${{ runner.temp }}/workspace-sources
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Restore compatible native workspace from an earlier source revision
+        if: steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit != 'true'
+        id: rust_fallback
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: ${{ steps.rust_identity.outputs.paths }}
+          key: ${{ steps.rust_identity.outputs.prefix }}-compatible-lookup
+          restore-keys: ${{ steps.rust_identity.outputs.prefix }}-
       - name: Discard interrupted GitHub compiler restore
-        if: steps.rust_github.outcome == 'failure'
+        if: steps.rust_github.outcome == 'failure' || steps.rust_fallback.outcome == 'failure'
         run: |
           import sys
           sys.path.insert(0, 'scripts')

@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PROTOCOL: u32 = 8;
+const PROTOCOL: u32 = 9;
 const PREFIX: &str = "org.clashofrust.network";
 const LIMIT: u64 = 256 * 1024;
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -119,7 +119,7 @@ fn restore_lease(path: &Path, lease: &mut Option<ProxyLease>) -> Result<()> {
 
 fn accepts_protocol(request: &Request, protocol: u32) -> bool {
     protocol == PROTOCOL
-        || (matches!(protocol, 2..=7)
+        || (matches!(protocol, 2..=8)
             && matches!(
                 request,
                 Request::Proxy { restore: true, .. } | Request::Dns { enabled: false, .. }
@@ -260,6 +260,40 @@ pub fn open_tun(socket: &Path, token: &str) -> Result<()> {
         short_idle: false,
     })?;
     Ok(())
+}
+
+fn start_tun_session(command: &mut Command, timeout: Duration) -> Result<Child> {
+    command.stdout(Stdio::piped());
+    let mut child = command.spawn().context("无法创建 TUN 会话进程")?;
+    eprintln!("TUN session child started: pid={}", child.id());
+    let output = child.stdout.take().context("无法读取 TUN 会话启动状态")?;
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let reader = std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = BufReader::new(output)
+            .take(1024)
+            .read_line(&mut line)
+            .map(|_| line);
+        let _ = send.send(result);
+    });
+    let result = receive.recv_timeout(timeout);
+    let ready = matches!(&result, Ok(Ok(line)) if line == "ready\n");
+    if !ready {
+        let status = child.try_wait();
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        bail!(
+            "TUN 会话准备失败：{}；子进程状态：{status:?}；请保留网络助手日志",
+            if matches!(result, Err(std::sync::mpsc::RecvTimeoutError::Timeout)) {
+                "准备内核或通信接口超时"
+            } else {
+                "子进程未返回有效就绪回执"
+            }
+        );
+    }
+    let _ = reader.join();
+    Ok(child)
 }
 
 pub fn protection_dns(enabled: bool) -> Result<()> {
@@ -732,7 +766,7 @@ pub fn serve(uid: u32) -> Result<()> {
                             .stdout(Stdio::null())
                             .stderr(Stdio::inherit());
                         ensure!(!short_idle, "TUN 会话参数无效");
-                        children.push(command.spawn()?);
+                        children.push(start_tun_session(&mut command, Duration::from_secs(10))?);
                     }
                 }
                 Ok(())
@@ -761,6 +795,35 @@ pub fn serve(uid: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tun_session_waits_for_the_child_receipt_not_just_a_successful_spawn() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 0.1; printf 'ready\\n'; exec sleep 5"]);
+        let started = Instant::now();
+        let mut child = start_tun_session(&mut command, Duration::from_secs(2)).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(80));
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn tun_session_rejects_exit_invalid_receipts_and_a_stalled_child() {
+        for script in [
+            "exit 7",
+            "printf 'invalid\\n'; exec sleep 5",
+            "exec sleep 5",
+        ] {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", script]);
+            let started = Instant::now();
+            let error = start_tun_session(&mut command, Duration::from_millis(150)).unwrap_err();
+            assert!(started.elapsed() < Duration::from_secs(3));
+            assert!(error.to_string().contains("TUN 会话准备失败"), "{error:#}");
+        }
+    }
+
     #[test]
     fn older_helpers_can_clean_up_but_must_be_updated_before_new_operations() {
         assert_eq!(
@@ -773,7 +836,7 @@ mod tests {
             "Old helpers reject unknown fields even during cleanup",
         );
         assert!(accepts_protocol(&Request::Status {}, PROTOCOL));
-        for protocol in [2, 3, 4, 5, 6, 7] {
+        for protocol in [2, 3, 4, 5, 6, 7, 8] {
             assert!(!accepts_protocol(&Request::Status {}, protocol));
             assert!(!accepts_protocol(
                 &Request::Dns {

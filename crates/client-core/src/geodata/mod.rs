@@ -678,6 +678,73 @@ mod tests {
         .unwrap();
     }
 
+    #[tokio::test]
+    async fn interrupted_transfer_reconnects_preserving_old_bytes_until_verified() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = vec![42; 512 * 1024 + 3];
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("GeoIP.dat");
+        std::fs::write(&destination, b"previous verified data").unwrap();
+        let previous = destination.clone();
+        let expected = body.clone();
+        let server = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192];
+                let mut count = 0;
+                while !request[..count].ends_with(b"\r\n\r\n") {
+                    let received = socket.read(&mut request[count..]).await.unwrap();
+                    assert!(received > 0);
+                    count += received;
+                }
+                assert_eq!(std::fs::read(&previous).unwrap(), b"previous verified data");
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            expected.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(if attempt == 0 {
+                        &expected[..16384]
+                    } else {
+                        &expected
+                    })
+                    .await
+                    .unwrap();
+            }
+        });
+        let asset = ReleaseAsset {
+            name: "geoip.dat".into(),
+            size: body.len() as u64,
+            digest: Some(format!(
+                "sha256:{}",
+                crate::file_hash::hex(Sha256::digest(&body))
+            )),
+            browser_download_url: format!("http://{address}/asset"),
+        };
+        let routes = [DownloadRoute::new(&crate::network::Route {
+            label: "测试网络",
+            proxy: None,
+        })];
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            download_asset(&asset, &destination, &routes),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), body);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
     async fn asset_server(bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
