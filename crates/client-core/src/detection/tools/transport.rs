@@ -380,7 +380,7 @@ pub(super) fn certificate_entries(der: &[u8], entries: &mut Vec<Entry>) -> Resul
     ));
     entries.push(Entry::ok(
         "证书 SHA256",
-        format!("{:x}", Sha256::digest(der)),
+        crate::file_hash::hex(Sha256::digest(der)),
     ));
     Ok(())
 }
