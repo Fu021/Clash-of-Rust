@@ -22,6 +22,8 @@ pub mod ip_report;
 pub mod model;
 #[path = "subscription/routes.rs"]
 pub mod network;
+#[path = "detection/tools/mod.rs"]
+pub mod network_tools;
 #[path = "detection/overview.rs"]
 pub mod overview;
 #[path = "detection/probe.rs"]

@@ -5,19 +5,29 @@ use slint::{ComponentHandle, Model};
 
 #[test]
 fn network_report_is_replaced_and_late_results_cannot_reappear_after_navigation() {
-    let check = |detail: &str| probe::DiagnosticCheck {
-        success: Some(true),
-        detail: detail.into(),
-    };
-    let report = || probe::NetworkReport {
+    let report = || network_tools::Report {
+        schema: 1,
+        tool: network_tools::Tool::Website,
         target: "https://example.test".into(),
-        system_dns: check("198.18.0.1"),
-        core_dns: check("203.0.113.1"),
-        proxy: check("可连接"),
-        https: check("HTTP 200"),
-        http: check("HTTP 301"),
-        response: check("HTTPS"),
-        route: check("PROXY → node"),
+        elapsed_ms: 1,
+        status: "complete",
+        entries: [
+            "系统 DNS",
+            "内核 DNS",
+            "本机代理",
+            "HTTPS",
+            "HTTP",
+            "采用协议",
+            "实际线路",
+        ]
+        .into_iter()
+        .map(|label| network_tools::Entry {
+            label: label.into(),
+            detail: "示例响应".into(),
+            success: Some(true),
+            code: "ok",
+        })
+        .collect(),
     };
     let mut app = fixture(Page::Tests);
     app.test_results = vec!["旧记录".into()];
@@ -31,6 +41,17 @@ fn network_report_is_replaced_and_late_results_cannot_reappear_after_navigation(
     let _ = app.update(Message::Navigate(Page::Tests));
     let _ = app.update(Message::ProbeDone(generation, Ok(report())));
     assert!(app.test_results.is_empty());
+    app.test_results = vec!["新结果".into()];
+    app.probing = true;
+    let _ = app.update(Message::NetworkTool(network_tools::Tool::Tls.index()));
+    assert!(!app.probing);
+    assert!(app.test_results.is_empty());
+    let _ = app.update(Message::ProbeDone(generation, Ok(report())));
+    assert!(app.test_results.is_empty());
+    app.probing = true;
+    let _ = app.update(Message::ProbeCancel);
+    assert!(!app.probing);
+    assert_eq!(app.test_results, ["检查已取消"]);
 }
 
 #[test]

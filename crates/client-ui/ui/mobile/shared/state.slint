@@ -7,7 +7,7 @@ export enum MobileIntent {
     import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
-    rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe,
+    rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe, network-tool, probe-cancel,
     site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-protection, export-report,
     appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
@@ -95,6 +95,7 @@ export global MobileData {
     in-out property <string> geo-status;
     in-out property <[string]> probe-results;
     in-out property <bool> probe-busy;
+    in-out property <int> network-tool;
     in-out property <string> mixed-port: "7897";
     in-out property <string> interval: "0";
     in-out property <string> subscription-interval: "360";
@@ -104,6 +105,7 @@ export global MobileData {
 // Navigation and editing state is separate from both domain and platform state.
 export global MobileView {
     in-out property <int> page;
+    in-out property <bool> network-open;
     // 1 risks, 2 rule editor, 3 profile editor, 4 delete, 5 connection,
     // 14 Fake-IP, 15 rule actions, 16 IP result, 17 Android detection options.
     in-out property <int> detail;
@@ -180,6 +182,7 @@ export global MobileView {
         if self.draft-dirty {
             self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {
+            if self.page != destination { self.network-open = false; }
             self.page = destination; self.detail = 0; self.query = ""; self.rule-selected = false; self.rule-drag-id = ""; self.rule-drag-target = "";
         }
     }

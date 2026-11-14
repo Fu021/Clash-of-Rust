@@ -80,6 +80,15 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             }
             Ok(())
         }
+        path if path.starts_with("network ") => {
+            field(out, "目标", &text(value, "target"))?;
+            if let Some(entries) = value["entries"].as_array() {
+                for entry in entries {
+                    field(out, &text(entry, "label"), &text(entry, "detail"))?;
+                }
+            }
+            Ok(())
+        }
         "proxy" => {
             field(out, "代理", &text(value, "proxy"))?;
             network_notice(out, &value["host_routes"])

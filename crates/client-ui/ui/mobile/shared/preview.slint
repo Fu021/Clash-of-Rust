@@ -17,6 +17,8 @@ export component MobilePreviewSurface inherits Rectangle {
     init => { Motion.enabled = root.preview-motion; }
     background: Theme.canvas;
     in-out property <int> preview-page <=> MobileView.page;
+    in-out property <bool> preview-network-detail <=> MobileView.network-open;
+    in-out property <int> preview-network-tool <=> MobileData.network-tool;
     in-out property <int> preview-detail <=> MobileView.detail;
     in-out property <bool> preview-dark;
     in-out property <bool> preview-connected <=> MobileData.vpn-connected;

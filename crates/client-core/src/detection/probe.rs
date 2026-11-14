@@ -25,8 +25,11 @@ pub fn validate_url(input: &str) -> Result<Url> {
 }
 
 pub fn diagnostic_url(input: &str) -> Result<Url> {
+    if input.chars().any(char::is_control) {
+        bail!("请输入有效的网站地址");
+    }
     let input = input.trim();
-    if input.is_empty() || input.len() > 2048 || input.chars().any(char::is_control) {
+    if input.is_empty() || input.len() > 2048 {
         bail!("请输入有效的网站地址");
     }
     let address = if input.contains("://") {

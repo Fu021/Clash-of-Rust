@@ -461,6 +461,7 @@ impl App {
         text!(get_profile_source, set_profile_source, &self.profile_source);
         text!(get_test_url, set_test_url, &self.test_url);
         set!(get_probing, set_probing, self.probing);
+        set!(get_network_tool, set_network_tool, self.network_tool);
         text!(get_mixed_port, set_mixed_port, &self.mixed_port);
         text!(get_window_width, set_window_width, &self.window_width);
         text!(get_window_height, set_window_height, &self.window_height);

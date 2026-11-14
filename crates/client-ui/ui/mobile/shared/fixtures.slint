@@ -1,9 +1,15 @@
 // Fixed, offline demonstration data. Imported only by the Viewer entry points.
 import { MobileData, MobileView } from "state.slint";
 import { PreviewReports } from "../../preview-reports.slint";
+import { PreviewNetwork } from "../../preview-network.slint";
 
 export component MobileFixture inherits Rectangle {
     in property <bool> long-names;
+    property <int> network-tool: MobileData.network-tool;
+    changed network-tool => {
+        MobileView.test-url = PreviewNetwork.target(root.network-tool);
+        MobileData.probe-results = PreviewNetwork.results(root.network-tool);
+    }
     property <string> long-name: "🚀 这是一份用于检验超长配置名称不会挤压状态和操作按钮的订阅 · 日本东京专线 / IPv6 / VeryLongUnbrokenConfigurationName0123456789";
     changed long-names => {
         if root.long-names {
@@ -20,14 +26,11 @@ export component MobileFixture inherits Rectangle {
     }
     width: 0px; height: 0px;
     init => {
-        MobileData.version = "0.7.2-fix.2.update-memory";
+        MobileData.version = "0.7.2-fix.3.network-toolbox";
         MobileData.site-summary = "确认可用 74 · 网页可达 20 · 受限 36";
         MobileData.core-running = true;
-        MobileView.test-url = "github.com";
-        MobileData.probe-results = ["目标 · https://github.com", "系统 DNS · 198.18.0.12",
-            "内核 DNS · 203.0.113.42", "本机代理 · 端口可连接 · 1 ms",
-            "HTTPS · HTTP 200 · 128 ms", "HTTP · HTTP 301 · 96 ms", "采用协议 · HTTPS",
-            "实际线路 · PROXY → AUTO → 🇩🇪 德国 01 · 命中 DomainSuffix (github.com)"];
+        MobileView.test-url = PreviewNetwork.target(root.network-tool);
+        MobileData.probe-results = PreviewNetwork.results(root.network-tool);
         MobileData.dns-override = true; MobileData.fake-ip = true;
         MobileData.profile = root.long-names ? root.long-name : "我的订阅"; MobileData.node = root.long-names ? root.long-name : "🇩🇪 德国 01 · IPv6";
         MobileData.download-rate = "1.24 MiB/s"; MobileData.upload-rate = "28.6 KiB/s";

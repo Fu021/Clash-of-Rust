@@ -31,7 +31,7 @@ use clash_of_rust::{
     engine::{Engine, ProxyMode, Scope, Snapshot},
     ip_check,
     ip_report::{self, CategoryFilter, RegionFilter, ResultSlot, Status, StatusFilter},
-    platform, probe,
+    network_tools, platform,
     proxy_order::{self, NodeSort},
     rule_manager::{self, ProfileRules},
     tray, update,
@@ -279,8 +279,10 @@ enum Message {
     PeriodicDone(u64, Result<BTreeMap<String, u32>, String>),
     SiteProbe(String),
     SiteDone(u64, String, Result<ip_check::CheckResult, String>),
-    Probe,
-    ProbeDone(u64, Result<probe::NetworkReport, String>),
+    Probe(String),
+    NetworkTool(i32),
+    ProbeCancel,
+    ProbeDone(u64, Result<network_tools::Report, String>),
     OverviewRefresh,
     OverviewPrivacy,
     OverviewHost(u64, Result<platform::HostInfo, String>),
@@ -321,6 +323,8 @@ struct App {
     pending_refresh: bool,
     queued_actions: VecDeque<Action>,
     probing: bool,
+    network_tool: i32,
+    network_codes: Vec<&'static str>,
     visible: bool,
     hidden_ticks: u8,
     expanded: BTreeSet<String>,
@@ -580,6 +584,8 @@ impl App {
             pending_refresh: false,
             queued_actions: VecDeque::new(),
             probing: false,
+            network_tool: 0,
+            network_codes: Vec::new(),
             visible: !background_start() || (tray.is_none() && tray_startup.is_none()),
             hidden_ticks: 0,
             expanded: BTreeSet::new(),
@@ -835,6 +841,7 @@ impl App {
         }
         self.probing = false;
         self.test_results.clear();
+        self.network_codes.clear();
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -2406,7 +2413,18 @@ impl App {
                 };
                 return Task::batch([update_task, next_task, protection_test]);
             }
-            Message::Probe => {
+            Message::NetworkTool(index) => {
+                if network_tools::Tool::at(index).is_ok() {
+                    self.clear_network_test();
+                    self.network_tool = index;
+                }
+            }
+            Message::ProbeCancel => {
+                self.clear_network_test();
+                self.test_results = vec!["检查已取消".into()];
+                self.network_codes = vec!["cancelled"];
+            }
+            Message::Probe(fields) => {
                 if self.probing {
                     return Task::none();
                 }
@@ -2416,6 +2434,7 @@ impl App {
                 }
                 self.probing = true;
                 self.test_results.clear();
+                self.network_codes.clear();
                 self.network_test_generation = self.network_test_generation.wrapping_add(1);
                 let generation = self.network_test_generation;
                 let url = self.test_url.clone();
@@ -2423,9 +2442,18 @@ impl App {
                 let api = port.and_then(|_| clash_of_rust::api::Api::new(&self.settings).ok());
                 let protected = self.settings.claude_protection.is_some()
                     || self.claude.protection_pending.is_some();
+                let tool = network_tools::Tool::at(self.network_tool)
+                    .unwrap_or(network_tools::Tool::Website);
+                let environment = network_tools::Environment {
+                    port,
+                    api,
+                    protected,
+                    udp_enabled: self.settings.udp,
+                };
+                let options = network_tools::Options::from_fields(&fields);
                 let (task, handle) = Task::perform(
                     async move {
-                        probe::diagnose(&url, port, api, protected)
+                        network_tools::run(tool, &url, environment, options)
                             .await
                             .map_err(|error| format!("{error:#}"))
                     },
@@ -2442,7 +2470,11 @@ impl App {
                 self.probing = false;
                 self.network_test_task = None;
                 match result {
-                    Ok(result) => self.test_results = result.lines(),
+                    Ok(result) => {
+                        self.test_results = result.lines();
+                        self.network_codes =
+                            result.entries.iter().map(|entry| entry.code).collect();
+                    }
                     Err(error) => {
                         self.test_results = vec![format!("检查失败 · {error}")];
                     }

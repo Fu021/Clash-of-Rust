@@ -4,6 +4,7 @@ import { UiData } from "state.slint";
 import { Motion } from "components/motion.slint";
 import { PageViews } from "components/view-toggle.slint";
 import { PreviewReports } from "preview-reports.slint";
+import { PreviewNetwork } from "preview-network.slint";
 import "../../../resources/fonts/NotoColorEmoji-Regular.ttf";
 
 export component Preview inherits AppWindow {
@@ -27,6 +28,11 @@ export component Preview inherits AppWindow {
     in-out property <bool> preview-list-view;
     changed preview-list-view => { PageViews.nodes-list = root.preview-list-view; PageViews.profiles-list = root.preview-list-view; }
     in-out property <int> preview-page <=> UiData.page;
+    in-out property <int> preview-network-tool <=> UiData.network-tool;
+    changed preview-network-tool => {
+        UiData.test-url = PreviewNetwork.target(root.preview-network-tool);
+        UiData.network-results = PreviewNetwork.results(root.preview-network-tool);
+    }
     property <int> preview-row-count: root.preview-page == 2 ? UiData.profiles.length : root.preview-page == 4 ? UiData.rules.length : root.preview-page == 7 ? UiData.site-results.length : UiData.connections.length;
     changed preview-row-count => {
         UiData.page-status = root.preview-row-count == 0 ? "0 条" : root.preview-row-count + " 条 · 1–" + root.preview-row-count;
@@ -102,7 +108,7 @@ export component Preview inherits AppWindow {
     init => {
         Motion.enabled = root.preview-motion;
         UiData.fake-ip-editor = root.preview-fake-ip-editor;
-        UiData.version = "0.7.2-fix.2.update-memory";
+        UiData.version = "0.7.2-fix.3.network-toolbox";
         UiData.ready = true; UiData.running = true;
         UiData.profile = root.preview-long-names ? root.long-name : "我的订阅"; UiData.node = root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6";
         UiData.download-rate = "1.24 MiB/s"; UiData.upload-rate = "28.6 KiB/s";
@@ -173,11 +179,8 @@ export component Preview inherits AppWindow {
             {time: "", level: "INFO", message: "配置已更新并生效", tone: 4},
             {time: "", level: "WARN", message: "DNS query failed, retrying", tone: 2},
             {time: "", level: "ERROR", message: "connection timeout: api.example.org:443", tone: 3}];
-        UiData.test-url = "github.com";
-        UiData.network-results = ["目标 · https://github.com", "系统 DNS · 198.18.0.12",
-            "内核 DNS · 203.0.113.42", "本机代理 · 端口可连接 · 1 ms",
-            "HTTPS · HTTP 200 · 128 ms", "HTTP · HTTP 301 · 96 ms", "采用协议 · HTTPS",
-            "实际线路 · PROXY → AUTO → 🇩🇪 德国 01 · 命中 DomainSuffix (github.com)"];
+        UiData.test-url = PreviewNetwork.target(root.preview-network-tool);
+        UiData.network-results = PreviewNetwork.results(root.preview-network-tool);
         UiData.node-sort = 2;
         UiData.sites-started = true; UiData.site-progress = "完成 183 / 183"; UiData.site-fraction = 1;
         UiData.site-counts = [{id: "确认可用", label: "确认可用 74"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 48"}];

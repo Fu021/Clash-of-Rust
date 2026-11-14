@@ -122,7 +122,7 @@ pub async fn execute(args: &Args) -> Result<()> {
             || path.starts_with("logs ")
             || path == "diagnose"
             || path == "dns"
-            || path == "network check"
+            || path.starts_with("network ")
             || path.starts_with("ip-check")
             || path.starts_with("claude ") =>
         {

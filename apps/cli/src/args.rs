@@ -353,6 +353,86 @@ pub static COMMANDS: &[Spec] = &[
         ""
     ),
     command!(
+        "network dns",
+        "比较系统与内核 DNS",
+        "network dns URL",
+        1,
+        1,
+        "output"
+    ),
+    command!(
+        "network phase",
+        "检查 TCP、TLS 与首字节耗时",
+        "network phase URL [--seconds N]",
+        1,
+        1,
+        "seconds output"
+    ),
+    command!(
+        "network family",
+        "分别检查 IPv4 与 IPv6",
+        "network family URL [--seconds N]",
+        1,
+        1,
+        "seconds output"
+    ),
+    command!(
+        "network explain",
+        "查看真实请求的规则与出口",
+        "network explain URL",
+        1,
+        1,
+        "output"
+    ),
+    command!(
+        "network tls",
+        "检查 HTTPS 证书与信任链",
+        "network tls URL [--seconds N]",
+        1,
+        1,
+        "seconds output"
+    ),
+    command!(
+        "network stability",
+        "检查短时请求稳定性",
+        "network stability URL [--count N] [--interval-ms N] [--seconds N]",
+        1,
+        1,
+        "count interval-ms seconds output"
+    ),
+    command!(
+        "network udp",
+        "经内核 UDP 中继检查 DNS 响应",
+        "network udp DNS_SERVER [--seconds N]",
+        1,
+        1,
+        "seconds output"
+    ),
+    command!(
+        "network ping",
+        "执行系统 ICMP 探针",
+        "network ping URL [--count N]",
+        1,
+        1,
+        "count output"
+    ),
+    command!(
+        "network trace",
+        "执行系统逐跳探针",
+        "network trace URL [--max-hops N]",
+        1,
+        1,
+        "max-hops output"
+    ),
+    command!(
+        "network download",
+        "限时限量下载并即时丢弃正文",
+        "network download URL [--max-bytes N] [--seconds N]",
+        1,
+        1,
+        "max-bytes seconds output"
+    ),
+    command!(
         "ip-check list",
         "列出内置 IP/地区检测项目",
         "ip-check list [--category CATEGORY]",
@@ -501,7 +581,7 @@ pub static COMMANDS: &[Spec] = &[
 
 const GLOBAL: &str =
     "help version json jsonl timeout data-dir resources user yes show-secrets quiet no-color";
-pub(crate) const VALUES: &str = "timeout data-dir resources user filter name source output sort limit offset group profile position interval level shell url host category";
+pub(crate) const VALUES: &str = "timeout data-dir resources user filter name source output sort limit offset group profile position interval level shell url host category count interval-ms seconds max-bytes max-hops";
 
 #[derive(Debug)]
 pub struct Usage(pub String);
@@ -912,6 +992,11 @@ fn option_help(key: &str) -> String {
         "network-only" => "刷新当前内核出站和 DNS，关闭旧连接；不重启内核",
         "watch" | "follow" => "持续输出新采样/日志，Ctrl+C 结束",
         "interval" => "采样秒数，默认 1，最小 0.25",
+        "count" => "检查次数，1～20，默认 5",
+        "interval-ms" => "请求间隔毫秒，100～5000，默认 1000",
+        "seconds" => "单次时限秒数，1～30，默认 10",
+        "max-bytes" => "下载字节上限，1024～16777216，默认 8388608",
+        "max-hops" => "追踪跳数上限，1～16，默认 8",
         "filter" => "按文本筛选",
         "sort" => {
             "排序字段；node: name/latency；connection: name/rule/chain/upload/download/upload-rate/download-rate/start"

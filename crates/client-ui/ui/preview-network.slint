@@ -1,0 +1,65 @@
+export global PreviewNetwork {
+    pure public function target(tool: int) -> string {
+        return tool == 7 ? "203.0.113.53:53"
+            : tool == 8 || tool == 9 ? "203.0.113.42"
+            : tool == 10 ? "https://example.com/test.bin" : "example.com";
+    }
+    pure public function results(tool: int) -> [string] {
+        if tool == 1 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · example.com",
+                "系统 DNS · 198.18.0.12", "内核 DNS · 203.0.113.42",
+                "解析对照 · 系统使用 Fake-IP，结果不同不等于故障"];
+        }
+        if tool == 2 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
+                "本机代理 TCP · 1 ms", "目标 TCP · 23 ms（含代理侧 DNS）",
+                "TLS 握手 · 46 ms", "等待首字节 · 128 ms",
+                "路径 · 经本机 SOCKS5 代理，沿用当前线路"];
+        }
+        if tool == 3 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
+                "IPv4 · 203.0.113.42 · HTTP 200 · 128 ms",
+                "IPv6 · 2001:db8::42 · HTTP 200 · 143 ms"];
+        }
+        if tool == 4 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
+                "命中规则 · DOMAIN-SUFFIX,example.com,PROXY",
+                "实际线路 · PROXY → AUTO → 🇩🇪 德国 01"];
+        }
+        if tool == 5 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
+                "TLS 握手 · 46 ms", "证书信任 · 域名与信任链验证通过",
+                "协议 · TLS 1.3"];
+        }
+        if tool == 6 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
+                "请求结果 · 5 / 5 成功", "响应头耗时 · 中位 128 ms",
+                "最快 / 最慢 · 112 / 169 ms", "失败 · 0"];
+        }
+        if tool == 7 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · 203.0.113.53:53",
+                "SOCKS5 UDP · 中继已建立", "DNS 探针 · 收到匹配响应 · 24 ms"];
+        }
+        if tool == 8 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · 203.0.113.42",
+                "系统 ICMP · 5 次发送 / 5 次响应", "丢包 · 0%",
+                "说明 · 不代表代理节点延迟"];
+        }
+        if tool == 9 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · 203.0.113.42",
+                "第 1 跳 · 192.0.2.1 · 1 ms", "第 2 跳 · 未响应",
+                "第 3 跳 · 203.0.113.42 · 23 ms"];
+        }
+        if tool == 10 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
+                "已接收 · 8 MiB", "平均速度 · 4.2 MiB/s",
+                "实际耗时 · 1.90 秒", "结束原因 · 已达到流量上限",
+                "实际线路 · PROXY → AUTO → 🇩🇪 德国 01"];
+        }
+        return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
+            "系统 DNS · 198.18.0.12", "内核 DNS · 203.0.113.42",
+            "本机代理 · 端口可连接 · 1 ms", "HTTPS · HTTP 200 · 128 ms",
+            "HTTP · HTTP 301 · 96 ms", "采用协议 · HTTPS",
+            "实际线路 · PROXY → AUTO → 🇩🇪 德国 01 · 命中 DomainSuffix (example.com)"];
+    }
+}

@@ -22,7 +22,7 @@ slint::slint! {
     import { MobileFrame } from "../ui/mobile/shared/frame.slint";
     import { MobileView } from "../ui/mobile/shared/state.slint";
     import { MobileData } from "../ui/mobile/shared/state.slint";
-    import { MobileSubscriptions, MobileConnections, MobileRules, RulesRow } from "../ui/mobile/shared/pages.slint";
+    import { MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow } from "../ui/mobile/shared/pages.slint";
     import { MobileModal } from "../ui/mobile/shared/details.slint";
     import { AppearanceSettings } from "../ui/mobile/shared/settings.slint";
     import { AndroidSurface } from "../ui/mobile/android/app.slint";
@@ -54,6 +54,17 @@ slint::slint! {
             compact: true; primary: true; enabled: root.enabled;
             clicked => { root.clicks += 1; }
         }
+    }
+
+    export component NetworkToolboxProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <int> tool <=> MobileData.network-tool;
+        in-out property <bool> opened <=> MobileView.network-open;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> busy <=> MobileData.probe-busy;
+        in-out property <[string]> results <=> MobileData.probe-results;
+        MobileNetwork { width: parent.width; height: parent.height; }
     }
 
     export component CountdownProbe inherits Window {
@@ -470,6 +481,150 @@ fn headless(width: u32, height: u32) -> (Rc<MinimalSoftwareWindow>, Rc<Cell<Dura
 }
 
 #[test]
+fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = NetworkToolboxProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    let weak = probe.as_weak();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, subject, _| {
+            recorded.borrow_mut().push((intent, subject.to_string()));
+            if intent == MobileIntent::NetworkTool {
+                weak.upgrade().unwrap().set_tool(subject.parse().unwrap());
+            }
+        });
+    probe.show().unwrap();
+    let render = || {
+        advance(&clock, Duration::from_millis(300));
+        let size = probe.window().size();
+        frame(&adapter, size.width as usize, size.height as usize);
+        targets.borrow_mut().clear();
+        let geometry = probe.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        frame(&adapter, size.width as usize, size.height as usize);
+    };
+    let click = |key: &str| {
+        let bounds = targets.borrow()[key].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            probe.window().dispatch_event(event);
+        }
+        advance(&clock, Duration::from_millis(50));
+    };
+    for (width, height, scale) in [
+        (360, 640, 1.3),
+        (393, 852, 1.),
+        (800, 1280, 1.),
+        (1280, 800, 1.),
+    ] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        probe.set_opened(false);
+        probe.set_protected(true);
+        probe.set_busy(false);
+        probe.set_results(Rc::new(slint::VecModel::from(vec!["结果 · 示例".into()])).into());
+        render();
+        {
+            let bounds = targets.borrow();
+            let first = &bounds["network-tool:0"];
+            let second = &bounds["network-tool:1"];
+            let last = &bounds["network-tool:10"];
+            assert!(first[3] >= 48.);
+            assert_eq!(first[0], second[0]);
+            assert_eq!(first[2], last[2]);
+            assert!(bounds["network-group:target"][1] < first[1]);
+            assert!(bounds["network-group:link"][1] > bounds["network-tool:5"][1]);
+        }
+        click("network-tool:1");
+        assert!(probe.get_opened());
+        assert_eq!(probe.get_tool(), 1);
+        render();
+        let bounds = targets.borrow();
+        let input = &bounds["network-target"];
+        let action = &bounds["network-run"];
+        assert!(input[2] >= 48. && input[0] + input[2] <= action[0]);
+        assert!(action[2] >= 48. && action[3] >= 48.);
+        assert!(action[0] + action[2] <= width as f32 + 1.);
+        assert!(action[1] + action[3] <= height as f32 + 1.);
+        drop(bounds);
+        click("network-run");
+        assert_eq!(events.borrow().last().unwrap().0, MobileIntent::Probe);
+        probe.set_busy(true);
+        render();
+        click("network-run");
+        assert_eq!(events.borrow().last().unwrap().0, MobileIntent::ProbeCancel);
+        click("network-export");
+        assert_eq!(
+            events.borrow().last().unwrap().0,
+            MobileIntent::ExportDiagnostics
+        );
+        if width < 700 {
+            click("network-menu-back");
+            assert!(!probe.get_opened());
+            assert_eq!(events.borrow().last().unwrap().0, MobileIntent::ProbeCancel);
+        }
+        render();
+        probe.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(40., height as f32 / 2.),
+            delta_x: 0.,
+            delta_y: -2000.,
+        });
+        render();
+        let last = targets.borrow()["network-tool:10"].clone();
+        assert!(last[1] >= 0. && last[1] + last[3] <= height as f32 + 1.);
+        click("network-tool:10");
+        assert!(probe.get_opened());
+        assert_eq!(probe.get_tool(), 10);
+        render();
+        {
+            let bounds = targets.borrow();
+            let seconds = &bounds["field:network-param:2"];
+            let bytes = &bounds["field:network-param:3"];
+            for field in [seconds, bytes] {
+                assert!(field[0] >= 0. && field[0] + field[2] <= width as f32 + 1.);
+                assert!(field[2] >= 100. && field[3] >= 48.);
+            }
+        }
+        probe.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(width as f32 - 30., height as f32 / 2.),
+            delta_x: 0.,
+            delta_y: -2000.,
+        });
+        render();
+        let export = targets.borrow()["network-export"].clone();
+        assert!(export[1] >= 0. && export[1] + export[3] <= height as f32 + 1.);
+        click("network-export");
+        assert_eq!(
+            events.borrow().last().unwrap().0,
+            MobileIntent::ExportDiagnostics
+        );
+    }
+}
+
+#[test]
 fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
     let (adapter, clock) = headless(393, 852);
     let probe = MobileConnectionsProbe::new().unwrap();
@@ -520,7 +675,7 @@ fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
         advance(&clock, Duration::ZERO);
         frame(&adapter, size.width as usize, size.height as usize);
     };
-    for (width, height, text_scale) in [(393, 852, 1.), (320, 568, 1.3), (1280, 800, 1.)] {
+    for (width, height, text_scale) in [(393, 852, 1.), (360, 640, 1.3), (1280, 800, 1.)] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
         probe.set_text_scale(text_scale);
         probe.set_query(format!("viewport-{width}").into());
@@ -755,7 +910,7 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
         });
     probe.global::<UiGeometry>().set_enabled(true);
     probe.show().unwrap();
-    for (width, scale) in [(320, 1.), (393, 1.), (800, 1.), (320, 1.3)] {
+    for (width, scale) in [(360, 1.), (393, 1.), (800, 1.), (360, 1.3)] {
         adapter.set_size(slint::PhysicalSize::new(width, 400));
         probe.set_text_scale(scale);
         advance(&clock, Duration::from_millis(300));
@@ -824,7 +979,7 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
         probe.set_detail(0);
         probe.set_protected(protected);
         probe.set_protection_pending(pending);
-        frame(&adapter, 320, 400);
+        frame(&adapter, 360, 400);
         click("rule-switch:custom");
         click("rule-detail:shortcut");
         assert_eq!(requests.borrow().len(), 1);
@@ -858,7 +1013,7 @@ fn mobile_rules_drag_real_rows_at_phone_pad_and_large_text_sizes() {
         });
     probe.show().unwrap();
     probe.global::<UiGeometry>().set_enabled(true);
-    for (width, height, scale) in [(393, 720, 1.), (800, 720, 1.), (320, 568, 1.3)] {
+    for (width, height, scale) in [(393, 720, 1.), (800, 720, 1.), (360, 640, 1.3)] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
         probe.set_text_scale(scale);
         advance(&clock, Duration::from_millis(300));
@@ -1034,7 +1189,7 @@ fn applications_reopen_with_active_geometry_observers_across_modes_and_sizes() {
         });
     probe.global::<UiGeometry>().set_enabled(true);
     probe.show().unwrap();
-    for (width, height, scale) in [(393, 852, 1.), (320, 640, 1.6), (1100, 740, 1.)] {
+    for (width, height, scale) in [(393, 852, 1.), (360, 640, 1.6), (1100, 740, 1.)] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
         probe.set_text_scale(scale);
         for mode in [0, 1, 2, 1, 0] {
@@ -1088,10 +1243,10 @@ fn application_policy_form_respects_platform_protection_and_scrolls() {
     probe.show().unwrap();
     for (width, height, scale) in [
         (393, 852, 1.),
-        (320, 568, 1.5),
-        (852, 320, 1.),
+        (360, 640, 1.5),
+        (800, 360, 1.),
         (800, 1280, 1.),
-        (320, 568, 1.5),
+        (360, 640, 1.5),
         (393, 852, 1.),
     ] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
@@ -1287,7 +1442,7 @@ fn application_policy_picker_keeps_the_form_and_rejects_locked_selection() {
         .set_policies_applications(applications.into());
     for (width, height, scale) in [
         (393, 852, 1.),
-        (320, 568, 1.5),
+        (360, 640, 1.5),
         (852, 393, 1.),
         (800, 1280, 1.),
     ] {
@@ -1421,7 +1576,7 @@ fn application_rule_entry_remains_reachable_in_landscape() {
         (393, 852, 1.),
         (873, 301, 1.),
         (852, 240, 1.),
-        (320, 568, 1.5),
+        (360, 640, 1.5),
         (1280, 650, 1.),
     ] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
@@ -2375,7 +2530,7 @@ fn mobile_notices_reflow_and_preserve_the_underlying_draft() {
             notice.set_recover_network(recovery);
             notice.set_vpn_connected(recovery);
             notice.set_core_running(recovery);
-            for width in [320, 740, 393] {
+            for width in [360, 740, 393] {
                 adapter.set_size(slint::PhysicalSize::new(width, 852));
                 advance(&clock, Duration::from_millis(250));
                 frame(&adapter, width as usize, 852);
@@ -2590,7 +2745,7 @@ fn mobile_pages_start_cold_without_geometry_observers() {
             .on_measured(move |_, _| reported.set(reported.get() + 1));
         assert!(!startup.global::<UiGeometry>().get_enabled());
         startup.show().unwrap();
-        for (width, height, scale) in [(393, 852, 1.), (320, 640, 2.), (1100, 740, 1.)] {
+        for (width, height, scale) in [(393, 852, 1.), (360, 640, 2.), (1100, 740, 1.)] {
             adapter.set_size(slint::PhysicalSize::new(width, height));
             startup.set_text_scale(scale);
             for core_running in [false, true] {
@@ -2687,7 +2842,7 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     advance(&clock, Duration::from_secs(1));
     render();
     let bounds = |key: &str| targets.borrow()[key].clone();
-    for width in [320, 740] {
+    for width in [360, 740] {
         adapter.set_size(slint::PhysicalSize::new(width, 1100));
         advance(&clock, Duration::from_secs(1));
         render();
@@ -2695,7 +2850,7 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
         let second = bounds("profile:builtin");
         assert!(first[0] >= 0. && first[0] + first[2] <= width as f32 + 1.);
         assert!(second[0] >= 0. && second[0] + second[2] <= width as f32 + 1.);
-        if width == 320 {
+        if width == 360 {
             assert!(second[1] >= first[1] + first[3]);
         } else {
             assert!((first[1] - second[1]).abs() < 1.);
@@ -2748,7 +2903,7 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     let mut renamed = profile_items.row_data(0).unwrap();
     renamed.name = "A very long subscription name ".repeat(8).into();
     profile_items.set_row_data(0, renamed);
-    for width in [320, 740] {
+    for width in [360, 740] {
         adapter.set_size(slint::PhysicalSize::new(width, 1100));
         advance(&clock, Duration::from_secs(1));
         render();
@@ -2925,7 +3080,7 @@ fn mobile_appearance_settings_reopen_with_geometry_and_protection() {
     };
     for (width, height, scale) in [
         (393, 852, 1.),
-        (320, 568, 1.5),
+        (360, 640, 1.5),
         (852, 393, 1.),
         (800, 1280, 1.),
     ] {

@@ -46,6 +46,8 @@ impl App {
             "page":format!("{:?}",self.page),"running":self.snapshot.running,
             "proxy":format!("{:?}",self.snapshot.proxy_mode()),
             "network_alert":self.network_watch.notice(Some(&self.settings)),"network_tests":self.test_results,
+            "network_tool":network_tools::Tool::at(self.network_tool).ok().map(|tool| tool.id()),
+            "network_test_codes":self.network_codes,
             "site_results":clash_client_core::support::ip_results(&self.site_results),
             "claude_status":self.claude.status,
             "geo_status":self.geo_status,

@@ -114,6 +114,32 @@ Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到�
 
 Android 文档选择、导出和导入失败另外在应用日志中记录 `DOCUMENT_PICKER_FAILED`、`DOCUMENT_EXPORT_FAILED`、`DOCUMENT_IMPORT_FAILED` 及异常类型，不写入 URI 或文件正文。界面保留具体错误；诊断导出回归先核对实际待写入内容，再检查保存结果和写入错误，不能将空文件或文件选择器已经打开当作导出成功。
 
+## 网络工具
+
+[网络工具箱](network-tools.md)报告的错误码仅用于导出分析，界面展示逐项可读原因。GUI 诊断中的 `network_tool`、`network_tests`、`network_test_codes` 只保存当前检查；不写历史、不上传正文。
+
+| 错误码 | 含义 |
+| --- | --- |
+| `invalid_target` / `invalid_options` | 非法地址、凭据、控制字符、协议或参数越界；未发送请求 |
+| `core_unavailable` / `controller_unavailable` | 本机代理或内核查询接口不可用，不自动启动后台 |
+| `protection_restricted` / `udp_disabled` | 保护或 UDP 设置拒绝该探针；不作为断网 |
+| `dns_timeout` / `dns_failed` / `dns_no_address` | 内核解析超时、失败或无地址 |
+| `family_no_address` / `family_timeout` | 此地址族无记录或实际连接超时；无 IPv6 不等于绕行 |
+| `proxy_authentication` / `proxy_response_invalid` | 本机 SOCKS5 认证拒绝或响应不合规 |
+| `proxy_rule_denied` / `proxy_target_unreachable` / `proxy_target_refused` | 规则拒绝、目标不可达或连接拒绝 |
+| `proxy_command_unsupported` / `proxy_family_unsupported` / `proxy_target_failed` | 代理不支持命令、地址族或其他连接失败 |
+| `http_timeout` / `http_connect_failed` / `http_body_failed` / `http_failed` | HTTP 超时、连接、正文或其他请求失败 |
+| `tls_failed` / `certificate_display_invalid` | TLS/证书验证失败，或握手成功后证书字段无法展示 |
+| `download_http_status` / `empty_response` | 下载收到非成功状态或无正文 |
+| `udp_invalid_response` / `udp_no_response` / `udp_io_failed` | DNS 响应不匹配、无响应或 UDP 通信失败 |
+| `component_unavailable` / `permission_denied` / `process_failed` | 系统组件缺失、拒绝权限或探针非零退出 |
+| `connection_refused` / `connection_timeout` / `connection_closed` / `connection_interrupted` | 拨号拒绝、超时、提前关闭或断连 |
+| `probe_timeout` / `probe_io_failed` / `probe_failed` | 总预算耗尽、其他 I/O 或未归类错误 |
+| `route_not_observed` / `dns_not_observed` / `not_observed` | 缺乏观测证据，不能伪造成功 |
+| `cancelled` | 用户取消；迟到结果丢弃 |
+
+`information`、`not_applicable`、`literal_ip`、`process_output`、`output_truncated`、`byte_limit`、`time_limit`、`completed` 是说明或正常结束原因，不单独表示失败。原有网站检查保留 `probe_failed` 分类和逐项详情。
+
 ## 回归与现场导出
 
 普通 CI 按测速、诊断和 Android 宿主相关源码改动选择实际 APK 回归；全版本诊断专项须维护者显式选择 `verify_diagnostics`，见[测试入口和验证边界](workflows/android-compatibility.md#测速与诊断专项)。覆盖成功与拒绝连接混合、VPN 开关、控制认证失败、恢复后复测及真实诊断文件写入；模拟器中的确定性故障不能直接解释用户现场。

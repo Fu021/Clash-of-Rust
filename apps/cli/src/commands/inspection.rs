@@ -23,9 +23,90 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             let report = network_check(args, &args.positional[0]).await?;
             output::emit(args, serde_json::to_value(report)?)
         }
+        path if path.starts_with("network ") => {
+            use clash_client_core::network_tools::Tool;
+            let tool = Tool::parse(path.trim_start_matches("network "))?;
+            let options = network_options(args);
+            let report = network_tool(args, tool, &args.positional[0], options).await?;
+            let failed = matches!(report.status, "failed" | "unavailable");
+            output::emit(args, serde_json::to_value(report)?)?;
+            ensure!(
+                !failed,
+                "网络检查未完成；请查看逐项结果或保存 --output 报告"
+            );
+            Ok(())
+        }
         "ip-check" | "ip-check list" => ip(args).await,
         _ => claude(args).await,
     }
+}
+
+fn network_options(args: &Args) -> clash_client_core::network_tools::Options {
+    use clash_client_core::network_tools::Options;
+    let defaults = Options::default();
+    let parse = || -> Result<Options> {
+        Ok(Options {
+            count: args.get("count").map_or(Ok(defaults.count), str::parse)?,
+            interval_ms: args
+                .get("interval-ms")
+                .map_or(Ok(defaults.interval_ms), str::parse)?,
+            seconds: args
+                .get("seconds")
+                .map_or(Ok(defaults.seconds), str::parse)?,
+            max_bytes: args
+                .get("max-bytes")
+                .map_or(Ok(defaults.max_bytes), str::parse)?,
+            max_hops: args
+                .get("max-hops")
+                .map_or(Ok(defaults.max_hops), str::parse)?,
+        })
+    };
+    parse().unwrap_or(Options {
+        count: 0,
+        ..defaults
+    })
+}
+
+pub(crate) async fn network_tool(
+    args: &Args,
+    tool: clash_client_core::network_tools::Tool,
+    target: &str,
+    options: clash_client_core::network_tools::Options,
+) -> Result<clash_client_core::network_tools::Report> {
+    if options.validate().is_err() {
+        return clash_client_core::network_tools::run(
+            tool,
+            target,
+            clash_client_core::network_tools::Environment {
+                port: None,
+                api: None,
+                protected: true,
+                udp_enabled: false,
+            },
+            options,
+        )
+        .await;
+    }
+    let poll = super::current_snapshot(args, Scope::Other, false).await?;
+    let environment = match poll {
+        Some(poll) => clash_client_core::network_tools::Environment {
+            port: poll.meta.running.then_some(poll.meta.settings.mixed_port),
+            api: poll
+                .meta
+                .running
+                .then(|| Api::new(&poll.meta.settings))
+                .transpose()?,
+            protected: poll.meta.settings.claude_protection.is_some(),
+            udp_enabled: poll.meta.settings.udp,
+        },
+        None => clash_client_core::network_tools::Environment {
+            port: None,
+            api: None,
+            protected: true,
+            udp_enabled: false,
+        },
+    };
+    clash_client_core::network_tools::run(tool, target, environment, options).await
 }
 
 pub(crate) async fn network_check(
@@ -791,6 +872,36 @@ impl Drop for AuditScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn network_option_errors_still_produce_machine_readable_reports() {
+        for (tool, option, value) in [
+            ("stability", "--count", "0"),
+            ("stability", "--count", "999999999999999999999999"),
+            ("stability", "--seconds", "31"),
+            ("stability", "--seconds", "not-a-number"),
+            ("stability", "--interval-ms", "99"),
+            ("download", "--max-bytes", "0"),
+            ("trace", "--max-hops", "17"),
+        ] {
+            let args = crate::args::parse(
+                ["network", tool, "example.test", option, value]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+            let report = network_tool(
+                &args,
+                clash_client_core::network_tools::Tool::parse(tool).unwrap(),
+                "example.test",
+                network_options(&args),
+            )
+            .await
+            .unwrap();
+            assert_eq!(report.status, "failed");
+            assert_eq!(report.entries[0].code, "invalid_options");
+        }
+    }
+
     #[test]
     fn slimming_keeps_only_rate_baseline_and_restart_invalidates_it() {
         let mut previous = vec![Connection {

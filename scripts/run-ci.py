@@ -76,6 +76,7 @@ def main():
         run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
              '--locked', 'application::network_watch::tests::', '--', '--test-threads=1'])
         for case in ('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes',
+                     'network_toolbox_keeps_menu_input_cancel_and_export_reachable',
                      'notice_countdown_restarts_and_expires_after_five_seconds',
                      'application_controls_distinguish_scope_filter_save_and_protection',
                      'applications_reopen_with_active_geometry_observers_across_modes_and_sizes',

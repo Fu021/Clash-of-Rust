@@ -163,10 +163,15 @@ def verify(console, resources, report):
             terminal.wait('github.com')
             terminal.capture(report, 'connections')
             terminal.send(b'4')
-            terminal.wait('网址检查')
+            terminal.wait('网站检查')
             terminal.send(b'\r')
             terminal.wait('实际线路')
             terminal.capture(report, 'network')
+            terminal.send(b']')
+            terminal.wait('DNS 对照')
+            terminal.send(b'[')
+            terminal.wait('网站检查')
+            terminal.send(b'\x1b')
             terminal.send(b'3')
             terminal.wait('活跃连接')
             terminal.resize(55, 16)
@@ -183,5 +188,6 @@ def verify(console, resources, report):
     (report/'verification.json').write_text(json.dumps({
         'status': 'passed', 'source': 'real-pty',
         'checks': ['no-tty-rejected', 'read-only-no-backend', 'search-and-confirmation',
-                   'literal-q-search', 'resize', 'q-restores-terminal', 'ctrl-c-restores-terminal'],
+                   'literal-q-search', 'network-tools-and-cancel', 'resize',
+                   'q-restores-terminal', 'ctrl-c-restores-terminal'],
     }), encoding='utf-8')

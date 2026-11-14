@@ -3,8 +3,8 @@
 pub(crate) use clash_client_core::file_hash;
 pub(crate) use clash_client_core::profile_transaction;
 pub use clash_client_core::{
-    active_route, api, config, connection, ip_check, ip_report, overview, probe, proxy_order,
-    rule_manager,
+    active_route, api, config, connection, ip_check, ip_report, network_tools, overview, probe,
+    proxy_order, rule_manager,
 };
 #[path = "engine/assets.rs"]
 pub mod assets;

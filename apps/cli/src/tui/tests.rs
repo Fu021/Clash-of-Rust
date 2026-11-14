@@ -183,6 +183,26 @@ fn network_check_in_demo_does_not_query_the_backend_and_clears_on_navigation() {
 }
 
 #[test]
+fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
+    let mut state = State::new(false);
+    state.key(Key::Char('4'));
+    state.release_page();
+    state.network_results = vec!["旧结果".into()];
+    assert!(matches!(state.key(Key::Char('[')), Action::CancelNetwork));
+    assert_eq!(state.network_tool, 10);
+    assert!(state.network_results.is_empty());
+    assert!(matches!(state.key(Key::Char(']')), Action::CancelNetwork));
+    assert_eq!(state.network_tool, 0);
+    state.key(Key::Char('/'));
+    state.key(Key::Paste("example.test/a[1]".into()));
+    state.key(Key::Enter);
+    assert!(matches!(state.key(Key::Enter), Action::CheckNetwork(
+        clash_client_core::network_tools::Tool::Website, target
+    ) if target == "example.test/a[1]"));
+    assert!(matches!(state.key(Key::Escape), Action::CancelNetwork));
+}
+
+#[test]
 fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection() {
     for (columns, rows) in [(40, 10), (60, 18), (80, 24), (100, 30), (180, 70)] {
         for page in [Page::Home, Page::Nodes, Page::Connections, Page::Network] {

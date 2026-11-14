@@ -40,7 +40,10 @@ component HeaderStatus inherits VerticalLayout {
 export component MobileFrame inherits Rectangle {
     callback go-back();
     go-back => {
-        if root.detail-page || root.standalone-detail { MobileView.back(); }
+        if MobileView.page == 6 && MobileView.network-open {
+            MobileView.network-open = false;
+            MobileActions.request(MobileIntent.probe-cancel, "", "");
+        } else if root.detail-page || root.standalone-detail { MobileView.back(); }
         else { MobileView.navigate(10); }
     }
     forward-focus: keys;
@@ -132,7 +135,10 @@ export component MobileFrame inherits Rectangle {
             }
             if event.text == Key.Escape && !MobileView.modal {
                 if root.detail-page || root.standalone-detail { root.go-back(); }
-                else if MobileView.page >= 3 && MobileView.page <= 8 { MobileView.navigate(10); }
+                else if MobileView.page == 6 && MobileView.network-open {
+                    MobileView.network-open = false;
+                    MobileActions.request(MobileIntent.probe-cancel, "", "");
+                } else if MobileView.page >= 3 && MobileView.page <= 8 { MobileView.navigate(10); }
                 return accept;
             }
             return reject;

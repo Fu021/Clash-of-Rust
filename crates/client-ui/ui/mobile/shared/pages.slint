@@ -3,6 +3,7 @@ import { ListReorderGesture, ListReorderPreview } from "../../components/list-re
 import { PageViews, ViewModeIcon } from "../../components/view-toggle.slint";
 import { GeometryTarget } from "../../components/geometry.slint";
 import { Panel } from "../../components/controls.slint";
+import { NetworkTools, NetworkToolMenu, NetworkToolHeading, NetworkToolOptions } from "../../components/network-tools.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { ConnectionPower } from "../../components/brand.slint";
@@ -625,17 +626,53 @@ export component MobileLogs inherits PageSurface {
     }
 }
 export component MobileNetwork inherits PageSurface {
-    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
-        MCard {
-            MToolHeading { title: "网址检查"; icon: @image-url("../../icons/network.svg"); }
-            MSmall { text: "检查 DNS、代理端口、HTTP / HTTPS 和实际线路"; wrap: word-wrap; }
-            HorizontalLayout { spacing: 8px;
-                MField { text <=> MobileView.test-url; placeholder: "域名或网址"; enabled: !MobileData.probe-busy; }
-                MButton { text: MobileData.probe-busy ? "检查中…" : "检查"; primary: true;
-                    width: MobileData.probe-busy ? 88px : 64px; horizontal-stretch: 0; enabled: !MobileData.probe-busy;
-                    clicked => { MobileActions.request(MobileIntent.probe, MobileView.test-url, ""); }
+    property <bool> opened <=> MobileView.network-open;
+    property <bool> wide: root.width >= max(620px, 600px * Theme.text-scale);
+    property <length> menu-width: 156px * max(1, Theme.text-scale);
+    HorizontalLayout {
+        spacing: MobileTypography.gap;
+        if root.wide || !root.opened: MScroll {
+            preferred-width: root.wide ? root.menu-width : 0px;
+            max-width: root.wide ? root.menu-width : 100000px;
+            horizontal-stretch: root.wide ? 0 : 1;
+            NetworkToolMenu {
+                selected: MobileData.network-tool; descriptions: !root.wide; touch-input: true;
+                body-size: MobileTypography.font-size(14);
+                detail-size: MobileTypography.font-size(12);
+                enabled: !MobileView.modal && !MobileView.notice-modal;
+                chosen(index) => {
+                    MobileActions.request(MobileIntent.network-tool, "" + index, "");
+                    root.opened = true;
                 }
             }
+        }
+        if root.wide || root.opened: MScroll { content-key: "" + MobileData.network-tool;
+        VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+            if !root.wide: HorizontalLayout {
+                alignment: start;
+                MButton {
+                    geometry-key: "network-menu-back";
+                    text: "‹ 全部工具"; quiet: true; compact: true;
+                    width: max(104px, MobileTypography.font-size(14) * 6 + 16px); horizontal-stretch: 0;
+                    clicked => { MobileActions.request(MobileIntent.probe-cancel, "", ""); root.opened = false; }
+                }
+            }
+            NetworkToolHeading {
+                tool: MobileData.network-tool;
+                body-size: MobileTypography.font-size(17);
+                detail-size: MobileTypography.font-size(12);
+            }
+        MCard {
+            MSmall { text: NetworkTools.target-labels[MobileData.network-tool]; }
+            HorizontalLayout { spacing: 8px;
+                MField { geometry-key: "network-target"; text <=> MobileView.test-url; placeholder: "域名或网址"; enabled: !MobileData.probe-busy; }
+                MButton { text: MobileData.probe-busy ? "取消" : "检查"; primary: !MobileData.probe-busy;
+                    geometry-key: "network-run";
+                    width: 64px; horizontal-stretch: 0;
+                    clicked => { MobileActions.request(MobileData.probe-busy ? MobileIntent.probe-cancel : MobileIntent.probe, MobileView.test-url, parameters.encoded); }
+                }
+            }
+            parameters := NetworkToolOptions { tool: MobileData.network-tool; touch-input: true; enabled: !MobileData.probe-busy && !MobileView.modal && !MobileView.notice-modal; }
             VerticalLayout {
                 spacing: 0px;
                 for line in MobileData.probe-results: VerticalLayout {
@@ -647,8 +684,17 @@ export component MobileNetwork inherits PageSurface {
                     }
                 }
             }
+            if MobileData.probe-results.length > 0: HorizontalLayout {
+                alignment: start;
+                MButton {
+                    geometry-key: "network-export";
+                    text: "导出诊断"; compact: true;
+                    width: max(96px, MobileTypography.font-size(14) * 4 + 24px); horizontal-stretch: 0;
+                    clicked => { MobileActions.request(MobileIntent.export-diagnostics, "网络工具检查", ""); }
+                }
+            }
         }
-    } }
+    } } }
 }
 component CategoryCard inherits MCard {
     in property <CategoryItem> item;

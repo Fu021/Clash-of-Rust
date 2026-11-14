@@ -142,7 +142,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     } else if state.saving {
         (
             if state.page == Page::Network {
-                "正在检查网址…"
+                "正在检查… Esc 取消"
             } else {
                 "正在提交节点切换…"
             }
@@ -165,7 +165,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         (format!("  {notice}"), tone),
         (
             if state.page == Page::Network {
-                "  / 输入网址   Enter 检查   1–4 切页   q 退出".into()
+                "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–4 切页   q 退出".into()
             } else {
                 "  ↑↓ 选择   Enter 打开/选择   / 搜索   Esc 返回   r 刷新   q 退出".into()
             },
@@ -198,8 +198,12 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
 }
 
 fn network(state: &State) -> Vec<(String, Tone)> {
+    let tool = clash_client_core::network_tools::Tool::ALL[state.network_tool];
     let mut lines = vec![
-        ("网址检查".into(), Tone::Accent),
+        (
+            format!("{}  {}/11", tool.title(), state.network_tool + 1),
+            Tone::Accent,
+        ),
         (
             format!(
                 "网址{}：{}",
@@ -212,10 +216,7 @@ fn network(state: &State) -> Vec<(String, Tone)> {
             ),
             Tone::Plain,
         ),
-        (
-            "检查 DNS、HTTP / HTTPS 与实际线路；↑↓滚动结果。".into(),
-            Tone::Muted,
-        ),
+        (tool.hint().into(), Tone::Muted),
         (String::new(), Tone::Plain),
     ];
     lines.extend(

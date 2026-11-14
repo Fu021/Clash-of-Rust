@@ -1,0 +1,188 @@
+import { Theme } from "../theme/palette.slint";
+import { Label, Caption, Field } from "controls.slint";
+import { GeometryTarget } from "geometry.slint";
+import { Motion } from "motion.slint";
+
+export global NetworkTools {
+    out property <[string]> titles: ["网站检查", "DNS 对照", "连接耗时", "IPv4 / IPv6", "规则与出口", "TLS 证书", "短时稳定性", "UDP 连通", "Ping", "路由追踪", "限量下载"];
+    out property <[string]> summaries: [
+        "解析、响应与出口", "系统与内核解析", "TCP、TLS 与首字节",
+        "地址与连接可用性", "命中规则与完整策略链", "证书、域名与有效期",
+        "有限次请求与延迟波动", "UDP 响应与当前线路", "ICMP 往返与丢包",
+        "逐跳响应与未响应", "有上限的下载速度检查"
+    ];
+    out property <[image]> icons: [
+        @image-url("../icons/globe.svg"), @image-url("../icons/network-dns.svg"),
+        @image-url("../icons/timer.svg"), @image-url("../icons/split.svg"),
+        @image-url("../icons/route.svg"), @image-url("../icons/shield-check.svg"),
+        @image-url("../icons/chart-no-axes-combined.svg"), @image-url("../icons/radio-tower.svg"),
+        @image-url("../icons/radar.svg"), @image-url("../icons/waypoints.svg"),
+        @image-url("../icons/download.svg")
+    ];
+    out property <[string]> target-labels: [
+        "网址", "域名", "网址", "网址", "网址", "域名或网址",
+        "网址", "DNS 响应目标", "域名或 IP", "域名或 IP", "下载网址"
+    ];
+    out property <[string]> hints: [
+        "DNS、双协议响应与本次实际线路",
+        "比较系统与内核解析，不同结果不等于故障",
+        "经本机代理检查 TCP、TLS 与首字节耗时",
+        "分别连接目标 IPv4 与 IPv6 地址",
+        "通过真实请求查看命中规则与策略链",
+        "检查 HTTPS 信任链、有效期与证书摘要",
+        "最多 20 次请求，只保留本次结果",
+        "经内核 UDP 中继向目标 DNS 服务器发送探针",
+        "系统 ICMP 探针，不代表代理节点延迟",
+        "系统逐跳探针，部分跳不响应属于常见情况",
+        "最多接收 16 MiB，正文即时丢弃"
+    ];
+}
+
+export component NetworkToolOptions inherits Rectangle {
+    in property <int> tool;
+    in property <bool> touch-input;
+    in property <bool> enabled: true;
+    property <string> count: "5";
+    property <string> interval: "1000";
+    property <string> seconds: "10";
+    property <string> megabytes: "8";
+    property <string> hops: "8";
+    out property <string> encoded: root.count + "|" + root.interval + "|" + root.seconds + "|" + root.megabytes + "|" + root.hops;
+    property <[int]> fields: root.tool == 6 ? [0, 1, 2] : root.tool == 8 ? [0] : root.tool == 9 ? [4] : root.tool == 10 ? [2, 3] : (root.tool == 2 || root.tool == 3 || root.tool == 5 || root.tool == 7) ? [2] : [];
+    property <[string]> titles: ["次数 · 1～20", "间隔 · 毫秒", "时限 · 秒", "流量上限 · MiB", "最大跳数 · 1～16"];
+    property <[string]> values: [root.count, root.interval, root.seconds, root.megabytes, root.hops];
+    property <int> columns: root.width >= 520px * Theme.text-scale ? 3 : root.width >= 300px * Theme.text-scale ? 2 : 1;
+    property <length> row-height: max(80px, Theme.detail-size * 1.5 + max(48px, Theme.control-height) + 16px);
+    height: ceil(root.fields.length / root.columns) * root.row-height;
+    horizontal-stretch: 1; vertical-stretch: 0; min-width: 0px;
+    changed tool => { root.count = "5"; root.interval = "1000"; root.seconds = "10"; root.megabytes = "8"; root.hops = "8"; }
+    for field[index] in root.fields: VerticalLayout {
+        x: mod(index, root.columns) * (root.width + 12px) / root.columns;
+        y: floor(index / root.columns) * root.row-height;
+        width: (root.width - (root.columns - 1) * 12px) / root.columns;
+        height: root.row-height - 10px; spacing: 6px;
+        Caption { text: root.titles[field]; }
+        Field {
+            enabled: root.enabled;
+            placeholder: root.titles[field];
+            focus-id: "network-param:" + field;
+            height: root.touch-input ? max(48px, Theme.control-height) : Theme.control-height;
+            text: root.values[field];
+            edited(value) => {
+                if field == 0 { root.count = value; }
+                else if field == 1 { root.interval = value; }
+                else if field == 2 { root.seconds = value; }
+                else if field == 3 { root.megabytes = value; }
+                else { root.hops = value; }
+            }
+        }
+    }
+}
+
+export component NetworkToolEntry inherits Rectangle {
+    in property <int> tool;
+    in property <bool> selected;
+    in property <bool> descriptions;
+    in property <bool> touch-input;
+    in property <bool> enabled: true;
+    in property <length> body-size: 14px * Theme.text-scale;
+    in property <length> detail-size: 12px * Theme.text-scale;
+    callback chosen();
+    property <bool> keyboard-focus;
+    height: max(root.descriptions ? 64px : root.touch-input ? 48px : 42px, copy.preferred-height + 20px);
+    min-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
+    border-radius: 9px;
+    background: root.selected && !root.descriptions ? Theme.accent-wash
+        : root.enabled && (area.has-hover || area.pressed) ? Theme.inset : transparent;
+    border-width: root.keyboard-focus && keys.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
+    animate background { duration: Motion.fast; enabled: Motion.active; }
+    accessible-role: button;
+    accessible-label: NetworkTools.titles[root.tool] + (root.descriptions ? "，" + NetworkTools.summaries[root.tool] : "");
+    accessible-action-default => { if root.enabled { root.chosen(); } }
+    forward-focus: keys;
+    GeometryTarget { key: "network-tool:" + root.tool; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
+    HorizontalLayout {
+        padding-left: 9px; padding-right: 9px; spacing: 9px; cross-axis-alignment: center;
+        Image {
+            width: 17px; height: 17px; horizontal-stretch: 0; vertical-stretch: 0;
+            source: NetworkTools.icons[root.tool];
+            colorize: root.selected && !root.descriptions ? Theme.accent : Theme.ink;
+        }
+        copy := VerticalLayout {
+            spacing: 3px; alignment: center;
+            Label {
+                text: NetworkTools.titles[root.tool]; font-size: root.body-size;
+                color: root.selected && !root.descriptions ? Theme.accent : Theme.ink;
+            }
+            if root.descriptions: Caption {
+                text: NetworkTools.summaries[root.tool]; font-size: root.detail-size; wrap: word-wrap;
+            }
+        }
+        if root.descriptions: Image {
+            width: 15px; height: 15px; horizontal-stretch: 0; vertical-stretch: 0;
+            source: @image-url("../icons/chevron-right.svg"); colorize: Theme.secondary;
+        }
+    }
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-gained(reason) => { root.keyboard-focus = reason == FocusReason.tab-navigation; }
+        key-pressed(event) => {
+            root.keyboard-focus = true;
+            if event.text == Key.Return || event.text == " " { root.chosen(); return accept; }
+            return reject;
+        }
+    }
+    area := TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { root.keyboard-focus = false; keys.focus(); root.chosen(); }
+    }
+}
+
+export component NetworkToolMenu inherits VerticalLayout {
+    in property <int> selected;
+    in property <bool> descriptions;
+    in property <bool> touch-input;
+    in property <bool> enabled: true;
+    in property <length> body-size: 14px * Theme.text-scale;
+    in property <length> detail-size: 12px * Theme.text-scale;
+    callback chosen(int);
+    alignment: start; spacing: 3px;
+    for title[index] in NetworkTools.titles: VerticalLayout {
+        spacing: 3px;
+        if index == 0 || index == 6: Rectangle {
+            height: group-title.preferred-height + (index == 0 ? 14px : 24px);
+            GeometryTarget { key: index == 0 ? "network-group:target" : "network-group:link"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+            group-title := Caption {
+                x: 9px; y: index == 0 ? 6px : 16px; width: parent.width - 18px;
+                text: index == 0 ? "目标检查" : "链路分析"; font-size: root.detail-size;
+            }
+        }
+        NetworkToolEntry {
+            tool: index; selected: root.selected == index;
+            descriptions: root.descriptions; touch-input: root.touch-input; enabled: root.enabled;
+            body-size: root.body-size; detail-size: root.detail-size;
+            chosen => { root.chosen(index); }
+        }
+    }
+}
+
+export component NetworkToolHeading inherits HorizontalLayout {
+    in property <int> tool;
+    in property <length> body-size: Theme.heading-size;
+    in property <length> detail-size: Theme.detail-size;
+    spacing: 12px; cross-axis-alignment: start;
+    Rectangle {
+        width: 36px; height: 36px; horizontal-stretch: 0; vertical-stretch: 0;
+        border-radius: 10px; background: Theme.accent-wash;
+        Image {
+            x: 9px; y: 9px; width: 18px; height: 18px;
+            source: NetworkTools.icons[root.tool]; colorize: Theme.accent;
+        }
+    }
+    VerticalLayout {
+        alignment: start; spacing: 4px;
+        Label { text: NetworkTools.titles[root.tool]; font-size: root.body-size; font-weight: 600; }
+        Caption { text: NetworkTools.hints[root.tool]; font-size: root.detail-size; wrap: word-wrap; }
+    }
+}

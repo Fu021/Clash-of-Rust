@@ -115,6 +115,8 @@ def mobile_preview(args) -> None:
             width, height = map(int, size.split('x'))
             short = height < 480
             values = {'preview-page': page, 'preview-dark': dark, 'preview-detail': detail,
+                      'preview-network-detail': args.network_detail,
+                      'preview-network-tool': args.network_tool,
                       'preview-long-names': args.long_names,
                       'preview-list-view': args.list_view,
                       'preview-shortcuts': args.shortcuts,
@@ -372,6 +374,8 @@ def main() -> None:
     parser.add_argument("--sidebar-collapsed", action="store_true", help="preview the desktop's manually collapsed sidebar")
     parser.add_argument("--list-view", action="store_true", help="preview proxies and subscriptions as lists")
     parser.add_argument("--shortcuts", action="store_true", help="show the rule shortcut selection dialog")
+    parser.add_argument("--network-tool", type=int, choices=range(11), default=0, help="select a network toolbox page")
+    parser.add_argument("--network-detail", action="store_true", help="open the selected network tool on a phone")
     parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
     parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")
     parser.add_argument("--notice-critical", action="store_true", help="show the error in a centered blocking dialog")
@@ -450,6 +454,7 @@ def main() -> None:
                                            "preview-sidebar-collapsed": args.sidebar_collapsed,
                                            "preview-list-view": args.list_view,
                                            "preview-shortcuts": args.shortcuts,
+                                           "preview-network-tool": args.network_tool,
                                            **{f"preview-{name}-scroll": args.scroll_y for name in (
                                                "proxies", "profiles", "connections", "logs", "network", "sites", "claude", "settings")},
                                            "preview-notice": args.notice, "preview-notice-error": args.notice_error, "preview-notice-elapsed": args.notice_elapsed,

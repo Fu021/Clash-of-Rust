@@ -10,7 +10,7 @@ i-slint-renderer-software = { path = "vendor/slint-renderer-software" }
 winit = { path = "vendor/winit" }
 
 [workspace.package]
-version = "0.7.2-fix.2.update-memory"
+version = "0.7.2-fix.3.network-toolbox"
 edition = "2024"
 license = "GPL-3.0-only"
 

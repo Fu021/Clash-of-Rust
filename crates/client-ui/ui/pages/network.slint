@@ -1,27 +1,39 @@
 import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
-import { PageScroll, Caption, ContentPanel, ActionButton, Field, Paragraph, Divider } from "../components/controls.slint";
-import { ToolHeading } from "../components/sections.slint";
+import { PageScroll, ContentPanel, ActionButton, Field, Paragraph, Caption, Divider } from "../components/controls.slint";
+import { NetworkTools, NetworkToolMenu, NetworkToolHeading, NetworkToolOptions } from "../components/network-tools.slint";
 
 export component NetworkPage inherits PageSurface {
-    PageScroll {
+    HorizontalLayout {
+        spacing: 16px;
+        PageScroll {
+            width: 156px * max(1, Theme.text-scale); horizontal-stretch: 0;
+            NetworkToolMenu {
+                selected: UiData.network-tool;
+                enabled: (UiData.modal == 0 || UiData.modal == 10) && !UiData.notice-modal;
+                chosen(index) => { UiActions.dispatch(Intent.network-tool, "" + index, ""); }
+            }
+        }
+        PageScroll {
+        content-key: "" + UiData.network-tool;
         content-y <=> UiData.scroll-network;
         VerticalLayout {
             padding-right: 8px; spacing: 16px; alignment: start;
+            NetworkToolHeading { tool: UiData.network-tool; }
             ContentPanel {
-                ToolHeading { title: "网址检查"; icon: @image-url("../icons/network.svg"); }
-                Caption { text: "检查 DNS、代理端口、HTTP / HTTPS 和实际线路"; }
+                Caption { text: NetworkTools.target-labels[UiData.network-tool]; }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Field {
                         placeholder: "域名或网址"; text <=> UiData.test-url; enabled: !UiData.probing;
                         edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); }
-                        accepted => { if !UiData.probing { UiActions.dispatch(Intent.probe, "", ""); } }
+                        accepted => { if !UiData.probing { UiActions.dispatch(Intent.probe, "", parameters.encoded); } }
                     }
-                    ActionButton { text: UiData.probing ? "检查中…" : "检查"; primary: true; busy: UiData.probing;
-                        enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "", ""); }
+                    ActionButton { text: UiData.probing ? "取消" : "检查"; primary: !UiData.probing;
+                        clicked => { UiActions.dispatch(UiData.probing ? Intent.probe-cancel : Intent.probe, "", parameters.encoded); }
                     }
                 }
+                parameters := NetworkToolOptions { tool: UiData.network-tool; enabled: !UiData.probing; }
                 VerticalLayout {
                     spacing: 0px;
                     for line in UiData.network-results: VerticalLayout {
@@ -33,7 +45,15 @@ export component NetworkPage inherits PageSurface {
                         }
                     }
                 }
+                if UiData.network-results.length > 0: HorizontalLayout {
+                    alignment: start;
+                    ActionButton {
+                        text: "导出诊断";
+                        clicked => { UiActions.dispatch(Intent.export-diagnostics, "网络工具检查", ""); }
+                    }
+                }
             }
+        }
         }
     }
 }

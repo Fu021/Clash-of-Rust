@@ -275,6 +275,8 @@ struct State {
     completed: Option<MobileIntent>,
     probe: Vec<String>,
     probe_busy: bool,
+    network_tool: i32,
+    probe_codes: Vec<&'static str>,
     geo: String,
     geo_updating: bool,
     node_pages: BTreeMap<String, usize>,
@@ -523,7 +525,10 @@ enum Update {
     Protection(std::result::Result<core::claude_check::protection::Protection, String>),
     ProtectionVerified(std::time::Instant, std::result::Result<(), String>),
     Address(u64, String, String),
-    NetworkProbe(u64, std::result::Result<core::probe::NetworkReport, String>),
+    NetworkProbe(
+        u64,
+        std::result::Result<core::network_tools::Report, String>,
+    ),
     Log(String, String),
     Geo(std::result::Result<tempfile::TempDir, String>),
     Checked(
@@ -583,6 +588,8 @@ async fn run_loop(
         completed: None,
         probe: Default::default(),
         probe_busy: false,
+        network_tool: 0,
+        probe_codes: Vec::new(),
         geo: "Geo 数据状态不可用".into(),
         geo_updating: false,
         node_pages: BTreeMap::new(),
@@ -712,6 +719,7 @@ async fn run_loop(
                     network_generation = network_generation.wrapping_add(1);
                     if let Some(job) = network_job.take() { job.abort(); }
                     state.probe = Default::default();
+                    state.probe_codes.clear();
                     state.probe_busy = false;
                 }
                 let edited_profile = match intent {
@@ -761,6 +769,7 @@ async fn run_loop(
                         network_generation = network_generation.wrapping_add(1);
                         if let Some(job) = network_job.take() { job.abort(); }
                         state.probe = Default::default();
+                        state.probe_codes.clear();
                         state.probe_busy = false;
                     }
                     if state.page == 8 && page != 8 {
@@ -790,11 +799,26 @@ async fn run_loop(
                             }
                         }
                     }
+                } else if matches!(intent, MobileIntent::NetworkTool | MobileIntent::ProbeCancel) {
+                    network_generation = network_generation.wrapping_add(1);
+                    if let Some(job) = network_job.take() { job.abort(); }
+                    state.probe = Default::default();
+                    state.probe_codes.clear();
+                    state.probe_busy = false;
+                    if intent == MobileIntent::NetworkTool {
+                        if let Some(tool) = request.a.parse::<i32>().ok().and_then(|index| core::network_tools::Tool::at(index).ok()) {
+                            state.network_tool = tool.index();
+                        }
+                    } else {
+                        state.probe = vec!["检查已取消".into()];
+                        state.probe_codes = vec!["cancelled"];
+                    }
                 } else if intent == MobileIntent::Probe {
                     if state.protection_change.is_some() {
                         state.probe = vec!["Claude 保护切换中，请稍后重试".into()];
                     } else if network_job.is_none() && state.page == 6 {
                         state.probe = Default::default();
+                        state.probe_codes.clear();
                         state.probe_busy = true;
                         network_generation = network_generation.wrapping_add(1);
                         let generation = network_generation;
@@ -803,9 +827,14 @@ async fn run_loop(
                         let api = port.map(|_| state.session.api.clone());
                         let protected = state.session.settings.claude_protection.is_some()
                             || state.protection_change.is_some();
+                        let tool = core::network_tools::Tool::at(state.network_tool).unwrap_or(core::network_tools::Tool::Website);
+                        let environment = core::network_tools::Environment {
+                            port, api, protected, udp_enabled: state.session.settings.udp,
+                        };
+                        let options = core::network_tools::Options::from_fields(&request.b);
                         let send = updates.clone();
                         network_job = Some(tokio::spawn(async move {
-                            let result = core::probe::diagnose(&target, port, api, protected)
+                            let result = core::network_tools::run(tool, &target, environment, options)
                                 .await.map_err(|error| format!("{error:#}"));
                             let _ = send.send(Update::NetworkProbe(generation, result)).await;
                         }));
@@ -1025,7 +1054,10 @@ async fn run_loop(
                         network_job = None;
                         state.probe_busy = false;
                         state.probe = match result {
-                            Ok(report) => report.lines(),
+                            Ok(report) => {
+                                state.probe_codes = report.entries.iter().map(|entry| entry.code).collect();
+                                report.lines()
+                            }
                             Err(error) => vec![format!("检查失败 · {error}")],
                         };
                         immediate = true;
@@ -1146,6 +1178,7 @@ async fn run_loop(
                         network_generation = network_generation.wrapping_add(1);
                         if let Some(job) = network_job.take() { job.abort(); }
                         state.probe = Default::default();
+                        state.probe_codes.clear();
                         state.probe_busy = false;
                         if let Some(job) = refresh_job.take() { job.abort(); }
                         refresh_generation += 1;
@@ -2094,6 +2127,8 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 "error":a,"events":state.issue_events,"page":state.page,
                 "core_running":session.running,"vpn_connected":session.vpn,
                 "measurements":session.api.measurement_diagnostics(),
+                "network_tool":core::network_tools::Tool::at(state.network_tool).ok().map(|tool| tool.id()),
+                "network_tests":state.probe,"network_test_codes":state.probe_codes,
                 "site_results":core::support::ip_results(&state.ip_results),"claude_status":state.claude_status,
                 "presentation":PRESENTATION.lock().map(|value|value.clone()).unwrap_or_default(),
                 "platform":session.native.request(json!({"op":"diagnostics"})).map_err(|error|format!("{error:#}")),
@@ -2431,6 +2466,8 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::CopyDiagnostics
             | MobileIntent::ReportIssue
             | MobileIntent::Probe
+            | MobileIntent::NetworkTool
+            | MobileIntent::ProbeCancel
             | MobileIntent::SiteStart
             | MobileIntent::SiteCancel
             | MobileIntent::SiteCategory
@@ -2516,6 +2553,7 @@ fn reset_subscription_results(
     state.claude = None;
     state.claude_status = "订阅已更新，请重新检测地区线索。".into();
     state.probe = Default::default();
+    state.probe_codes.clear();
     state.probe_busy = false;
 }
 fn start_delay(
@@ -2586,6 +2624,7 @@ struct Projection {
     exit: (String, String),
     probe: Vec<String>,
     probe_busy: bool,
+    network_tool: i32,
     geo: String,
     connection_page: (usize, usize),
     rule_page: (usize, usize),
@@ -2974,6 +3013,7 @@ fn project(state: &State) -> Projection {
         exit,
         probe: state.probe.clone(),
         probe_busy: state.probe_busy,
+        network_tool: state.network_tool,
         geo: state.geo.clone(),
         rules,
         connection_page: (connection_page, connection_count),
@@ -3167,6 +3207,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         rows(p.probe.into_iter().map(Into::into).collect()),
     ));
     data.set_probe_busy(p.probe_busy);
+    data.set_network_tool(p.network_tool);
     data.set_geo_status(p.geo.into());
     data.set_site_summary(p.site_summary.into());
     data.set_claude_status(p.claude_status.into());

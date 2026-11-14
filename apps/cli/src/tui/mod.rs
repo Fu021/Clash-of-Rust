@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 enum Reply {
     Snapshot(Option<Box<Poll>>),
-    Network(Box<Result<clash_client_core::probe::NetworkReport, String>>),
+    Network(Box<Result<clash_client_core::network_tools::Report, String>>),
 }
 
 struct Request(JoinHandle<Result<Reply>>);
@@ -101,7 +101,11 @@ pub async fn run(args: &Args) -> Result<()> {
             }
             if request.is_some()
                 && state.saving
-                && !(state.page == Page::Network && matches!(key, Key::Tab | Key::Char('1'..='4')))
+                && !(state.page == Page::Network
+                    && matches!(
+                        key,
+                        Key::Tab | Key::Escape | Key::Char('1'..='4' | '[' | ']')
+                    ))
             {
                 continue;
             }
@@ -118,14 +122,23 @@ pub async fn run(args: &Args) -> Result<()> {
                             .map(|poll| Reply::Snapshot(poll.map(Box::new)))
                     })));
                 }
-                Action::CheckNetwork(target) => {
+                Action::CancelNetwork => {
+                    request = None;
+                    state.saving = false;
+                }
+                Action::CheckNetwork(tool, target) => {
                     let args = args.clone();
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
                         Ok(Reply::Network(Box::new(
-                            crate::commands::inspection::network_check(&args, &target)
-                                .await
-                                .map_err(|error| format!("{error:#}")),
+                            crate::commands::inspection::network_tool(
+                                &args,
+                                tool,
+                                &target,
+                                clash_client_core::network_tools::Options::default(),
+                            )
+                            .await
+                            .map_err(|error| format!("{error:#}")),
                         )))
                     })));
                 }

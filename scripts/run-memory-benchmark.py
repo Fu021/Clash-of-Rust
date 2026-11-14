@@ -486,7 +486,7 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
                     for page, key, ready in (('home', b'1', '参考线路'),
                                              ('nodes', b'2', '策略组'),
                                              ('connections', b'3', '活跃连接'),
-                                             ('network', b'4', '网址检查')):
+                                             ('network', b'4', '网站检查')):
                         terminal.send(key)
                         terminal.wait(ready)
                         name = prefix+'tui-'+page

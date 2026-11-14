@@ -28,7 +28,7 @@
 
 支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 最低 20.04）**、**macOS 14+（Intel / Apple Silicon）** 和 **Android 8.0+（ARM64 / ARMv7 / x86_64）**。Android 各版本和厂商 ROM 的验证范围见[兼容性说明](apps/android/README.md#兼容性与验证范围)。
 
-当前源码与预发布版本：**0.7.2-fix.2.update-memory**，见[更新内容](docs/releases/0.7.2-fix.2.update-memory.md)；下方下载表提供 **0.7.1 正式版**。
+当前源码版本：**0.7.2-fix.3.network-toolbox**，见[更新内容](docs/releases/0.7.2-fix.3.network-toolbox.md)；下方下载表提供 **0.7.1 正式版**。
 
 ## 功能一览
 

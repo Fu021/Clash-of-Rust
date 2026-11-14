@@ -35,6 +35,9 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
 }
 
 fn needs_failure_hint(args: &Args, value: &Value) -> bool {
+    if args.path.starts_with("network ") && value.get("entries").is_some() {
+        return value["status"].as_str() != Some("complete");
+    }
     if args.path == "service status"
         && ["config_error", "service_error", "backend_error"]
             .into_iter()

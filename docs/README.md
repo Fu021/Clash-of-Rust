@@ -8,6 +8,7 @@
 | --- | --- |
 | 安装、升级与开始使用 | [项目首页](../README.md#安装与使用)；[Android 使用与兼容性](../apps/android/README.md) |
 | 使用 `cor` 命令行 | [CLI 入口](cli.md)，按需查[运行与诊断](cli/runtime.md)、[订阅与规则](cli/profiles-and-rules.md)、[维护与更新](cli/maintenance.md) |
+| 检查 DNS、网站、出口、TLS 或链路质量 | [网络工具箱](network-tools.md)，GUI、CLI 与 TUI 共用检查逻辑 |
 | 确认 Linux 用户、sudo、root 与 TUN 归属 | [Linux 用户与授权](cli/linux-users.md) |
 | 导入或更新订阅、了解自动更新与失败保留 | [订阅说明](subscriptions.md) |
 | 选择哪些 Android 应用进入 VPN | [Android 应用分流](android-application-routing.md) |

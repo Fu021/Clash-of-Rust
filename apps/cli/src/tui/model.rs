@@ -56,7 +56,8 @@ pub(super) enum Action {
     None,
     Refresh,
     Select(Target),
-    CheckNetwork(String),
+    CheckNetwork(clash_client_core::network_tools::Tool, String),
+    CancelNetwork,
 }
 
 pub(super) struct State {
@@ -72,6 +73,7 @@ pub(super) struct State {
     pub saving: bool,
     pub demo: bool,
     pub network_results: Vec<String>,
+    pub network_tool: usize,
 }
 
 impl State {
@@ -89,6 +91,7 @@ impl State {
             saving: false,
             demo,
             network_results: Vec::new(),
+            network_tool: 0,
         }
     }
 
@@ -216,6 +219,22 @@ impl State {
             };
         }
         match key {
+            Key::Char('[' | ']') if self.page == Page::Network => {
+                let count = clash_client_core::network_tools::Tool::ALL.len();
+                self.network_tool = if key == Key::Char(']') {
+                    (self.network_tool + 1) % count
+                } else {
+                    (self.network_tool + count - 1) % count
+                };
+                self.selected = 0;
+                self.network_results.clear();
+                return Action::CancelNetwork;
+            }
+            Key::Escape if self.page == Page::Network => {
+                self.network_results.clear();
+                self.selected = 0;
+                return Action::CancelNetwork;
+            }
             Key::Tab => {
                 self.page = match self.page {
                     Page::Home => Page::Nodes,
@@ -255,6 +274,15 @@ impl State {
                 self.selected = 0;
                 self.network_results.clear();
                 if self.demo {
+                    if self.network_tool != 0 {
+                        let tool = clash_client_core::network_tools::Tool::ALL[self.network_tool];
+                        self.network_results = vec![
+                            format!("目标（演示） · {}", self.query),
+                            format!("{} · {}", tool.title(), tool.hint()),
+                            "演示模式 · 未运行网络或系统探针".into(),
+                        ];
+                        return Action::None;
+                    }
                     self.network_results = vec![
                         format!("目标（演示） · {}", self.query),
                         "系统 DNS · 198.18.0.12".into(),
@@ -267,7 +295,10 @@ impl State {
                             .into(),
                     ];
                 } else {
-                    return Action::CheckNetwork(self.query.clone());
+                    return Action::CheckNetwork(
+                        clash_client_core::network_tools::Tool::ALL[self.network_tool],
+                        self.query.clone(),
+                    );
                 }
             }
             _ => {}

@@ -15,7 +15,8 @@ hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 yaml_serde = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+tokio-rustls = "0.26"
 tempfile = { workspace = true }
 uuid = { workspace = true }
 futures-util = { workspace = true }
