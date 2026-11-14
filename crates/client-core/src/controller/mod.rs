@@ -170,6 +170,9 @@ impl Text {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+    pub fn shared(&self) -> std::sync::Arc<str> {
+        self.0.clone()
+    }
 }
 impl From<&str> for Text {
     fn from(value: &str) -> Self {

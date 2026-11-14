@@ -713,16 +713,20 @@ mod tests {
              "metadata":{"host":"claude.ai","sniffHost":"outside.ech.test"}},
             {"id":"sni","chains":["DIRECT"],"metadata":{"host":"shared.example","sniffHost":"s-cdn.anthropic.com"}},
             {"id":"ip","chains":["DIRECT"],"metadata":{"host":"shared.example","destinationIP":"160.79.104.1"}},
+            {"id":"new-ip","chains":["DIRECT"],"metadata":{"host":"shared.example","destinationIP":"153.61.224.1"}},
+            {"id":"outside-ip","chains":["DIRECT"],"metadata":{"host":"shared.example","destinationIP":"153.61.228.1"}},
+            {"id":"pinned-ip","chains":["node"],"metadata":{"host":"shared.example","destinationIP":"153.61.224.1"}},
             {"id":"normal","chains":["node"],"metadata":{"host":"claude.ai","sniffHost":"outside.ech.test"}}
         ]})).unwrap();
         let rows = decode(bytes.as_slice(), "node").unwrap();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].host, "claude.ai");
         assert!(
             rows[0].rule.contains("outside.ech.test") && rows[0].rule.contains("原域名：claude.ai")
         );
         assert_eq!(rows[1].host, "s-cdn.anthropic.com");
         assert_eq!(rows[2].host, "160.79.104.1");
+        assert_eq!(rows[3].host, "153.61.224.1");
     }
     #[test]
     fn retains_only_relevant_bounded_connections_without_credentials_or_processes() {

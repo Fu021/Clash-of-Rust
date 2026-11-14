@@ -87,6 +87,8 @@ STUN 保护依赖[覆盖主机与路由规则](../crates/client-core/src/protect
 
 规则参考官方 [Desktop 网络要求](https://code.claude.com/docs/en/desktop#network-access-requirements)、[Code 网络要求](https://code.claude.com/docs/en/network-config#network-access-requirements)、[入站 IP 网段](https://platform.claude.com/docs/en/api/ip-addresses)与 [Net.Coffee 分类](https://ip.net.coffee/claude/site.html)。不将出站网段当作入站网段，不以 NTP 能改变时区为依据添加规则。
 
+2026-11-14 核对的官方入站 IPv4 包含 `160.79.104.0/23` 和 `153.61.224.0/22`，IPv6 包含 `2607:6bc0::/48`；这些范围同时进入优先路由、拒绝回退和异常连接识别。官方列出的较大出站网段不作为客户端入站目标使用。
+
 ### 名单维护
 
 每轮 [loop](loop-workflow.md#每轮怎么做)重新读取上述 Net.Coffee 页面，对照当前域名后缀、精确域名和关键词的实际覆盖范围；已由父域名覆盖的子域名不重复添加。新增且尚未覆盖的网站归入核心或关联服务名单，同步优先路由、拒绝回退、DNS 与后台异常连接识别，并补充对应回归。共享 CDN、遥测或客服域名可能影响其他应用，保留这一范围说明；IP/ASN 及其他非域名建议仍按官方来源和协议语义分别核实。

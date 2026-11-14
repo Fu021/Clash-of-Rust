@@ -1856,7 +1856,7 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any('protected_mobile_core_recovery_is_reachable_and_respects_pending_operations'
                             in command for command in focused))
         prefixes = ('application::network_watch::tests::', 'application::notice::tests::',
-                    'application::claude::tests::')
+                    'application::claude::tests::', 'application::memory_tests::')
         for prefix in prefixes:
             self.assertTrue(any(prefix in command for command in focused), prefix)
         self.assertTrue(all(('--exact' in command) == (not any(prefix in command for prefix in prefixes))

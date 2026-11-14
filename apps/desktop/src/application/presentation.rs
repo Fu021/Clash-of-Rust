@@ -85,7 +85,10 @@ impl App {
             })
         });
         let mut rows = Vec::with_capacity(visible.len());
+        let mut delay_labels = BTreeMap::<Option<u32>, SharedString>::new();
+        let unknown_kind = SharedString::from("");
         for &(group, proxy) in visible {
+            let group_name = SharedString::from(group.shared());
             let expanded = self.expanded.contains(group.as_str()) || !query.is_empty();
             let mut pairs = Vec::new();
             let mut count = 0;
@@ -107,22 +110,28 @@ impl App {
                     .copied()
                     .unwrap_or(0)
                     .min(last_page_offset(count));
-                let node = |index: usize| {
-                    let name = proxy.all[index].as_str();
+                let mut node = |index: usize| {
+                    let source_name = &proxy.all[index];
+                    let name = source_name.as_str();
+                    let delay = self.node_delay(name);
+                    let kind = self
+                        .snapshot
+                        .proxies
+                        .proxies
+                        .get(name)
+                        .map_or_else(|| unknown_kind.clone(), |node| node.kind.shared().into());
+                    let delay_label = delay_labels
+                        .entry(delay)
+                        .or_insert_with(|| proxy_order::delay_label(delay).into())
+                        .clone();
                     NodeItem {
-                        group: group.as_str().into(),
-                        name: name.into(),
+                        group: group_name.clone(),
+                        name: source_name.shared().into(),
                         valid: true,
                         selected: proxy.now.as_str() == name,
-                        kind: self
-                            .snapshot
-                            .proxies
-                            .proxies
-                            .get(name)
-                            .map_or("", |node| node.kind.as_str())
-                            .into(),
-                        delay: proxy_order::delay_label(self.node_delay(name)).into(),
-                        tone: proxy_order::delay_tone(self.node_delay(name)),
+                        kind,
+                        delay: delay_label,
+                        tone: proxy_order::delay_tone(delay),
                     }
                 };
                 for pair in indices[start..(start + PAGE_SIZE).min(count)].chunks(2) {
@@ -136,9 +145,9 @@ impl App {
             }
             rows.push((
                 GroupItem {
-                    id: group.as_str().into(),
-                    title: group.as_str().into(),
-                    current: proxy.now.as_str().into(),
+                    id: group_name.clone(),
+                    title: group_name,
+                    current: proxy.now.shared().into(),
                     detail: format!("{} · {} 个节点", proxy.kind, proxy.all.len()).into(),
                     expanded,
                     testing: self.testing_groups.contains(group.as_str()),

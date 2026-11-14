@@ -3167,6 +3167,87 @@ mod memory_tests {
     }
 
     #[test]
+    fn proxy_projection_shares_source_text_and_keeps_node_behavior() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("view test")), None);
+        let group_name = "代理 🌏";
+        app.snapshot.proxies = serde_json::from_value(serde_json::json!({
+            "proxies": {
+                "代理 🌏": {
+                    "type": "Selector",
+                    "now": "🇯🇵 东京",
+                    "all": ["🇯🇵 东京", "🇺🇸 美国"]
+                },
+                "🇯🇵 东京": {"type": "HTTP"},
+                "🇺🇸 美国": {"type": "HTTP"}
+            }
+        }))
+        .unwrap();
+        app.expanded.insert(group_name.into());
+
+        let (total, groups) = app.proxy_rows();
+        assert_eq!(total, 1);
+        let (group, pairs) = &groups[0];
+        let (source_group_name, source_group) = app
+            .snapshot
+            .proxies
+            .proxies
+            .get_key_value(group_name)
+            .unwrap();
+        assert_eq!(group.id.as_str(), group_name);
+        assert_eq!(group.current.as_str(), "🇯🇵 东京");
+        assert_eq!(
+            group.id.as_str().as_ptr(),
+            source_group_name.as_str().as_ptr()
+        );
+        assert_eq!(group.title.as_str().as_ptr(), group.id.as_str().as_ptr());
+        assert_eq!(
+            group.current.as_str().as_ptr(),
+            source_group.now.as_str().as_ptr()
+        );
+
+        let nodes = [&pairs[0].left, &pairs[0].right];
+        for node in &nodes {
+            let source = source_group
+                .all
+                .iter()
+                .find(|name| name.as_str() == node.name.as_str())
+                .unwrap();
+            let source_kind = &app.snapshot.proxies.proxies[node.name.as_str()].kind;
+            assert_eq!(node.group.as_str().as_ptr(), group.id.as_str().as_ptr());
+            assert_eq!(node.name.as_str().as_ptr(), source.as_str().as_ptr());
+            assert_eq!(node.kind.as_str().as_ptr(), source_kind.as_str().as_ptr());
+            assert_eq!(node.selected, node.name.as_str() == "🇯🇵 东京");
+            assert_eq!(node.delay.as_str(), "未测速");
+        }
+        assert_eq!(
+            nodes[0].delay.as_str().as_ptr(),
+            nodes[1].delay.as_str().as_ptr()
+        );
+        let saved_name = nodes[0].name.clone();
+        let saved_delay = nodes[0].delay.clone();
+        let expected_name = saved_name.as_str().to_owned();
+        drop(groups);
+        app.node_delays.insert("🇯🇵 东京".into(), 0);
+        app.node_delays.insert("🇺🇸 美国".into(), 320);
+        let (_, updated) = app.proxy_rows();
+        let updated_nodes = [&updated[0].1[0].left, &updated[0].1[0].right];
+        let japan = updated_nodes
+            .iter()
+            .find(|node| node.name.as_str() == "🇯🇵 东京")
+            .unwrap();
+        let america = updated_nodes
+            .iter()
+            .find(|node| node.name.as_str() == "🇺🇸 美国")
+            .unwrap();
+        assert_eq!((japan.delay.as_str(), japan.tone), ("超时", 3));
+        assert_eq!((america.delay.as_str(), america.tone), ("320 ms", 2));
+        drop(updated);
+        app.snapshot.proxies = Default::default();
+        assert_eq!(saved_name.as_str(), expected_name);
+        assert_eq!(saved_delay.as_str(), "未测速");
+    }
+
+    #[test]
     fn pagination_bounds_rows_without_losing_the_last_page() {
         for (total, expected) in [
             (0, 0),

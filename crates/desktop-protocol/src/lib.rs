@@ -42,6 +42,11 @@ impl From<&str> for Text {
         Self(value.into())
     }
 }
+impl From<std::sync::Arc<str>> for Text {
+    fn from(value: std::sync::Arc<str>) -> Self {
+        Self(value)
+    }
+}
 impl PartialEq<&str> for Text {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other

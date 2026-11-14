@@ -458,7 +458,8 @@ pub fn anthropic_ip(input: &str) -> bool {
     match input.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(ip)) => {
             let bytes = ip.octets();
-            bytes[..2] == [160, 79] && matches!(bytes[2], 104 | 105)
+            (bytes[..2] == [160, 79] && matches!(bytes[2], 104 | 105))
+                || (bytes[..2] == [153, 61] && (224..=227).contains(&bytes[2]))
         }
         Ok(std::net::IpAddr::V6(ip)) => ip.octets()[..6] == [0x26, 7, 0x6b, 0xc0, 0, 0],
         _ => false,
@@ -569,6 +570,7 @@ pub fn apply(map: &mut Mapping, settings: &Settings) -> Result<()> {
     }
     for (kind, payload) in [
         ("IP-CIDR", "160.79.104.0/23"),
+        ("IP-CIDR", "153.61.224.0/22"),
         ("IP-CIDR6", "2607:6bc0::/48"),
     ] {
         route_or_reject(&mut rules, kind, payload, protection, true);
@@ -1386,6 +1388,12 @@ mod tests {
                 "every protected predicate needs an immediate fail-closed fallback"
             );
         }
+        let protection_route = &settings.claude_protection.as_ref().unwrap().route;
+        let expected_route = format!("IP-CIDR,153.61.224.0/22,{protection_route},no-resolve");
+        assert!(overlay.windows(2).any(|pair| {
+            pair[0] == expected_route.as_str()
+                && pair[1] == "IP-CIDR,153.61.224.0/22,REJECT,no-resolve"
+        }));
         assert_eq!(
             overlay
                 .iter()
@@ -1423,6 +1431,86 @@ mod tests {
         for host in ["maps.googleapis.com", "withpersona.com", "frompersona.com"] {
             assert!(associated_host(host));
             assert!(!owned_host(host));
+        }
+    }
+    #[test]
+    fn official_inbound_addresses_match_only_the_documented_ranges() {
+        for address in [
+            "160.79.104.0",
+            "160.79.105.255",
+            "153.61.224.0",
+            "153.61.225.1",
+            "153.61.227.255",
+            "2607:6bc0::",
+            "[2607:6bc0:0:ffff::1]",
+        ] {
+            assert!(anthropic_ip(address), "{address}");
+        }
+        for address in [
+            "160.79.103.255",
+            "160.79.106.0",
+            "153.61.223.255",
+            "153.61.228.0",
+            "153.61.208.1",
+            "2607:6bc0:1::",
+            "invalid",
+        ] {
+            assert!(!anthropic_ip(address), "{address}");
+        }
+    }
+    #[test]
+    fn inbound_range_overrides_direct_and_restores_original_rules() {
+        for mode in ["rule", "global", "direct"] {
+            for udp in [false, true] {
+                let id = uuid::Uuid::new_v4().to_string();
+                let raw = "proxies: [{name: node, type: socks5, server: 127.0.0.1, port: 1080}]\nrules: ['IP-CIDR,153.61.224.0/22,DIRECT,no-resolve', 'MATCH,DIRECT']\n";
+                let mut settings = Settings {
+                    active_profile: Some(id.clone()),
+                    run_mode: mode.into(),
+                    udp,
+                    ..Default::default()
+                };
+                let original = crate::config::runtime_config(raw, &settings).unwrap();
+                settings.claude_protection = Some(std::sync::Arc::new(Protection::new(
+                    id,
+                    "node".into(),
+                    Previous {
+                        mode: mode.into(),
+                        proxy_mode: settings.proxy_mode,
+                        selectors: vec![],
+                    },
+                )));
+                let protected = crate::config::runtime_config(raw, &settings).unwrap();
+                let protected: Value = yaml_serde::from_str(&protected).unwrap();
+                assert_eq!(
+                    protected["mode"],
+                    if mode == "global" { "global" } else { "rule" }
+                );
+                let matching: Vec<_> = protected["rules"]
+                    .as_sequence()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|rule| rule.starts_with("IP-CIDR,153.61.224.0/22,"))
+                    .map(str::to_owned)
+                    .collect();
+                assert_eq!(
+                    matching,
+                    vec![
+                        format!(
+                            "IP-CIDR,153.61.224.0/22,{},no-resolve",
+                            settings.claude_protection.as_ref().unwrap().route
+                        ),
+                        "IP-CIDR,153.61.224.0/22,REJECT,no-resolve".to_owned(),
+                    ]
+                );
+                settings.claude_protection = None;
+                assert_eq!(
+                    crate::config::runtime_config(raw, &settings).unwrap(),
+                    original
+                );
+                assert_eq!(settings.udp, udp);
+            }
         }
     }
     #[test]
