@@ -1247,6 +1247,39 @@ class BuildTests(unittest.TestCase):
                 windows_update_tests.reference_source()
             download.assert_not_called()
 
+    def test_windows_reference_installer_resolves_inputs_before_nsis_changes_directory(self):
+        with tempfile.TemporaryDirectory(prefix='installer paths ') as temporary:
+            directory = Path(temporary)
+            payload = directory/'payload files'
+            payload.mkdir()
+            (payload/'LICENSE').write_text('fixture license')
+            output = directory/'reference installer'
+
+            def compile_installer(command):
+                source = Path(command[-1])
+                supplied_payload = Path(next(
+                    value.removeprefix('/DPAYLOAD=') for value in command
+                    if value.startswith('/DPAYLOAD=')))
+                supplied_output = Path(next(
+                    value.removeprefix('/DOUTPUT=') for value in command
+                    if value.startswith('/DOUTPUT=')))
+                self.assertEqual((source.parent/supplied_payload/'LICENSE').read_text(),
+                                 'fixture license')
+                self.assertTrue(supplied_payload.is_absolute())
+                self.assertTrue(supplied_output.is_absolute())
+                self.assertEqual(supplied_output, output/'reference-setup.exe')
+                self.assertTrue(source.is_file())
+
+            with patch.object(windows_update_tests, 'reference_source', return_value=b'fixture'), \
+                    patch.object(windows_update_tests, 'file_version',
+                                 return_value='0.7.2') as version, \
+                    patch.object(windows_update_tests, 'nsis', return_value='makensis'), \
+                    patch.object(windows_update_tests, 'run', side_effect=compile_installer):
+                package = windows_update_tests.reference_installer(
+                    Path(os.path.relpath(payload)), Path(os.path.relpath(output)))
+                self.assertEqual(package, output/'reference-setup.exe')
+                version.assert_called_once_with(payload/'clash-of-rust.exe')
+
     def test_windows_reference_source_fallback_is_bounded_and_checksum_verified(self):
         source = b'fixture installer source'
         digest = hashlib.sha256(source).hexdigest()

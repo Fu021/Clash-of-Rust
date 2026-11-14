@@ -51,6 +51,8 @@ def reference_source():
 
 
 def reference_installer(payload, directory):
+    payload = payload.resolve()
+    directory = directory.resolve()
     source = directory/'installer/reference.nsi'
     source.parent.mkdir(parents=True)
     source.write_bytes(reference_source())
