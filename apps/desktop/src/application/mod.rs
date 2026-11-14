@@ -238,7 +238,6 @@ enum Message {
     WindowStateCaptured(u64, desktop_runtime::Size, bool, Option<bool>),
     WindowStateSaved(Result<(), String>),
     TestUrl(String),
-    DnsHost(String),
     Action(Action),
     Finished(Box<Reply>),
     UpdateGeo,
@@ -280,10 +279,8 @@ enum Message {
     PeriodicDone(u64, Result<BTreeMap<String, u32>, String>),
     SiteProbe(String),
     SiteDone(u64, String, Result<ip_check::CheckResult, String>),
-    Probe(bool),
-    ProbeDone(Result<probe::ProbeResult, String>),
-    Dns,
-    DnsDone(Result<Vec<String>, String>),
+    Probe,
+    ProbeDone(u64, Result<probe::NetworkReport, String>),
     OverviewRefresh,
     OverviewPrivacy,
     OverviewHost(u64, Result<platform::HostInfo, String>),
@@ -398,8 +395,9 @@ struct App {
     dark: bool,
     autostart: bool,
     test_url: String,
-    dns_host: String,
     test_results: Vec<String>,
+    network_test_generation: u64,
+    network_test_task: Option<desktop_runtime::task::Handle>,
     geo_status: String,
     geo_updating: bool,
     updates: update::State,
@@ -623,8 +621,9 @@ impl App {
             profile_name: String::new(),
             profile_source: String::new(),
             test_url: "https://www.gstatic.com/generate_204".into(),
-            dns_host: "github.com".into(),
             test_results: vec![],
+            network_test_generation: 0,
+            network_test_task: None,
             updates: update::State::default(),
         };
         if let Some((message, error)) = update::startup_outcome() {
@@ -816,6 +815,7 @@ impl App {
     }
 
     fn reset_network_results(&mut self) {
+        self.clear_network_test();
         self.cancel_delay_checks();
         self.node_delays.clear();
         self.proxy_order.get_mut().clear();
@@ -826,6 +826,15 @@ impl App {
         self.claude.close();
         self.claude.reports = Default::default();
         self.claude.status = "网络配置已改变，请重新检测地区线索。".into();
+    }
+
+    fn clear_network_test(&mut self) {
+        self.network_test_generation = self.network_test_generation.wrapping_add(1);
+        if let Some(task) = self.network_test_task.take() {
+            task.abort();
+        }
+        self.probing = false;
+        self.test_results.clear();
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -1244,6 +1253,9 @@ impl App {
                 }
             }
             Message::Navigate(page) => {
+                if self.page == Page::Tests && page != Page::Tests {
+                    self.clear_network_test();
+                }
                 if self.page == Page::Home && page != Page::Home && self.overview.busy() {
                     self.overview.invalidate();
                 }
@@ -1545,7 +1557,6 @@ impl App {
                 ]);
             }
             Message::TestUrl(value) => self.test_url = value,
-            Message::DnsHost(value) => self.dns_host = value,
             Message::Action(Action::DeleteProfile(id)) => {
                 return self.confirm_delete(id);
             }
@@ -2395,68 +2406,47 @@ impl App {
                 };
                 return Task::batch([update_task, next_task, protection_test]);
             }
-            Message::Probe(exit_ip) => {
+            Message::Probe => {
                 if self.probing {
                     return Task::none();
                 }
-                if !self.snapshot.running {
-                    self.show_notice("请先启动内核".into(), true);
+                if self.claude.protection_pending.is_some() {
+                    self.test_results = vec!["Claude 保护切换中，请稍后重试".into()];
                     return Task::none();
                 }
                 self.probing = true;
-                let url = if exit_ip {
-                    "https://api.ipify.org?format=json".into()
-                } else {
-                    self.test_url.clone()
-                };
-                let port = self.settings.mixed_port;
-                return Task::perform(
+                self.test_results.clear();
+                self.network_test_generation = self.network_test_generation.wrapping_add(1);
+                let generation = self.network_test_generation;
+                let url = self.test_url.clone();
+                let port = self.snapshot.running.then_some(self.settings.mixed_port);
+                let api = port.and_then(|_| clash_of_rust::api::Api::new(&self.settings).ok());
+                let protected = self.settings.claude_protection.is_some()
+                    || self.claude.protection_pending.is_some();
+                let (task, handle) = Task::perform(
                     async move {
-                        probe::website(url, port, exit_ip)
+                        probe::diagnose(&url, port, api, protected)
                             .await
-                            .map_err(|e| e.to_string())
+                            .map_err(|error| format!("{error:#}"))
                     },
-                    Message::ProbeDone,
-                );
+                    move |result| Message::ProbeDone(generation, result),
+                )
+                .abortable();
+                self.network_test_task = Some(handle);
+                return task;
             }
-            Message::ProbeDone(result) => {
-                self.probing = false;
-                let line = match result {
-                    Ok(result) => {
-                        format!("{} · {} ms · {}", result.url, result.millis, result.detail)
-                    }
-                    Err(error) => {
-                        let message = format!("测试失败：{error}");
-                        self.show_notice(message.clone(), true);
-                        message
-                    }
-                };
-                self.add_test(line);
-            }
-            Message::Dns => {
-                if self.probing {
+            Message::ProbeDone(generation, result) => {
+                if generation != self.network_test_generation || self.page != Page::Tests {
                     return Task::none();
                 }
-                self.probing = true;
-                let host = self.dns_host.clone();
-                return Task::perform(
-                    async move { probe::dns(host).await.map_err(|e| e.to_string()) },
-                    Message::DnsDone,
-                );
-            }
-            Message::DnsDone(result) => {
                 self.probing = false;
-                let line = match result {
-                    Ok(addresses) => {
-                        format!("系统 DNS · {} → {}", self.dns_host, addresses.join(", "))
-                    }
+                self.network_test_task = None;
+                match result {
+                    Ok(result) => self.test_results = result.lines(),
                     Err(error) => {
-                        let message = format!("DNS 查询失败：{error}");
-                        self.show_notice(message.clone(), true);
-                        message
+                        self.test_results = vec![format!("检查失败 · {error}")];
                     }
-                };
-                self.add_test(line);
+                }
             }
             Message::OverviewRefresh => return self.overview_refresh(),
             Message::OverviewPrivacy => self.privacy_hidden = !self.privacy_hidden,
@@ -2745,13 +2735,6 @@ impl App {
             },
             move |_| Message::ApplyWindowSize(revision, size),
         )
-    }
-
-    fn add_test(&mut self, line: String) {
-        if self.test_results.len() == 20 {
-            self.test_results.remove(0);
-        }
-        self.test_results.push(line);
     }
 
     fn node_delay(&self, name: &str) -> Option<u32> {

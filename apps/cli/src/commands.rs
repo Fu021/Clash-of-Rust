@@ -1,4 +1,4 @@
-mod inspection;
+pub(crate) mod inspection;
 mod maintenance;
 mod profiles;
 mod rules;
@@ -15,6 +15,7 @@ pub async fn execute(args: &Args) -> Result<()> {
         return output::emit(args, crate::users::profiles(args)?);
     }
     match args.path.as_str() {
+        "ui" => crate::tui::run(args).await,
         "run" => backend::run(args).await,
         "version" => output::emit(
             args,
@@ -121,6 +122,7 @@ pub async fn execute(args: &Args) -> Result<()> {
             || path.starts_with("logs ")
             || path == "diagnose"
             || path == "dns"
+            || path == "network check"
             || path.starts_with("ip-check")
             || path.starts_with("claude ") =>
         {

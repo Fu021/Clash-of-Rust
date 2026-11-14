@@ -135,7 +135,7 @@ def core_running(port):
         return False
 
 
-def read_scene(path, seconds=None, role=None):
+def read_scene(path, seconds=None, role=None, frontend=None):
     samples = [row for line in path.read_text().splitlines()
                if 'elapsed_ms' in (row := json.loads(line))]
     if not samples:
@@ -147,6 +147,13 @@ def read_scene(path, seconds=None, role=None):
             roles = {process['role'] for process in row['processes']}
             if role not in roles or 'core' not in roles or (role == 'daemon' and 'gui' in roles):
                 raise ValueError('Client/core identity is incomplete: '+path.name)
+    if frontend is not None:
+        for row in samples:
+            matches = [process for process in row['processes']
+                       if process['role'] == 'tui' and process['pid'] == frontend]
+            identities = [process['pid'] for process in row['processes']]
+            if len(matches) != 1 or len(identities) != len(set(identities)):
+                raise ValueError('TUI identity is missing or duplicated: '+path.name)
     return samples
 
 
@@ -240,15 +247,19 @@ def mapping_private_peaks(snapshots):
     return peaks
 
 
-def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
+def measure_process(benchmark, pid, name, output, seconds, env, mode='app', frontend=None, on_tick=None):
     time.sleep(3)
     samples_path = output/(name+'.jsonl')
     snapshots = []
     with (output/(name+'.txt')).open('x') as text:
         command = [str(benchmark), mode, str(pid), str(seconds), '250', str(samples_path)]
+        if frontend is not None:
+            command.append(str(frontend))
         process = subprocess.Popen(command, stdout=text, env=env)
         try:
             while True:
+                if on_tick is not None:
+                    on_tick()
                 try:
                     status = process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
@@ -277,7 +288,7 @@ def measure_process(benchmark, pid, name, output, seconds, env, mode='app'):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
-    rows = read_scene(samples_path, seconds, 'daemon' if mode == 'daemon' else 'gui')
+    rows = read_scene(samples_path, seconds, 'daemon' if mode == 'daemon' else 'gui', frontend=frontend)
     write_json(output/(name+'-mapping-peaks.json'), {
         'interval_ms': 1000, 'samples': len(snapshots), 'peak': mapping_peaks(snapshots),
         'anonymous_heap_private_peak': mapping_private_peaks(snapshots),
@@ -448,7 +459,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 app.wait()
 
 
-def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-'):
+def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-', tui=False):
     with tempfile.TemporaryDirectory(prefix='memory-cli-') as directory, (output/(prefix+'cor.log')).open('x') as log:
         data = Path(directory)
         env, port = client_fixture(data, workload, rule_overrides)
@@ -457,6 +468,7 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
         command = [str(console), '--json', '--yes', '--timeout', '30',
                    '--data-dir', str(data), '--resources', str(resources)]
         pid = identity = None
+        terminal_scenes = []
         try:
             subprocess.run([*command, 'start'], env=env, stdout=log, stderr=log, check=True, timeout=90)
             endpoint = json.loads((data/'control.json').read_text())
@@ -465,13 +477,44 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
             pid = endpoint['pid']
             identity = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
             wait_until(lambda: core_running(port), 'headless core readiness')
-            measure_process(benchmark, pid, prefix+'headless', output, seconds, env, mode='daemon')
+            baseline = measure_process(benchmark, pid, prefix+'headless', output, seconds, env, mode='daemon')
+            core_identity = {(process['pid'], process['start_time']) for process in baseline[-1]['processes']
+                             if process['role'] == 'core'}
+            if tui:
+                from cli_tui import Session
+                with Session([console, '--data-dir', data, '--resources', resources, 'ui'], env=env) as terminal:
+                    for page, key, ready in (('home', b'1', '参考线路'),
+                                             ('nodes', b'2', '策略组'),
+                                             ('connections', b'3', '活跃连接'),
+                                             ('network', b'4', '网址检查')):
+                        terminal.send(key)
+                        terminal.wait(ready)
+                        name = prefix+'tui-'+page
+                        terminal.capture(output/'terminal-previews', name)
+                        measured = measure_process(benchmark, pid, name, output, seconds, env,
+                                                   mode='daemon', frontend=terminal.process.pid,
+                                                   on_tick=lambda: terminal.pump(0))
+                        if any({(process['pid'], process['start_time']) for process in row['processes']
+                                if process['role'] == 'core'} != core_identity for row in measured):
+                            raise RuntimeError('TUI measurement restarted or replaced the core')
+                        terminal_scenes.append(name)
+                current = json.loads((data/'control.json').read_text())
+                if current['pid'] != pid or not core_running(port):
+                    raise RuntimeError('Closing TUI changed the daemon or stopped the core')
+                name = prefix+'tui-closed'
+                closed = measure_process(benchmark, pid, name, output, seconds, env, mode='daemon')
+                if any({(process['pid'], process['start_time']) for process in row['processes']
+                        if process['role'] == 'core'} != core_identity for row in closed):
+                    raise RuntimeError('Closing TUI restarted or replaced the core')
+                terminal_scenes.append(name)
             if not core_running(port) or (data/'gui-session.json').exists():
                 raise RuntimeError('Headless measurement unexpectedly stopped or created a GUI')
             write_json(output/(prefix+'headless-proof.json'), {
                 'daemon_pid': pid, 'owner': endpoint['owner'], 'display': False,
                 'gui_session': False, 'core_running': True,
+                'tui_scenes': terminal_scenes, 'tui_closed_keeps_daemon': bool(tui),
             })
+            return terminal_scenes
         finally:
             try:
                 subprocess.run([*command, 'stop'], env=env, stdout=log, stderr=log, check=True, timeout=45)
@@ -533,6 +576,18 @@ def summarize(output, metadata):
             values = [f"{max(row[key][field] for row in samples)/1048576:.2f}"
                       for key, field in ((role, 'rss_bytes'), ('core', 'rss_bytes'), ('total', 'pss_bytes'))]
             lines.append(f'| {scene} | {"cor" if role == "daemon" else "GUI"} | '+ ' | '.join(values)+' |')
+    if metadata.get('terminal_scenes'):
+        lines += ['', 'TUI scenes keep the same daemon/core and fixture as their preceding headless baseline. '
+                  'The PTY driver is outside the measured trees; the frontend is an additional identified cor process. '
+                  'Total PSS sums each process once; RSS may double-count shared executable pages.',
+                  '', '| Scene | TUI RSS MiB | Daemon RSS MiB | Core RSS MiB | Total PSS MiB |',
+                  '| --- | ---: | ---: | ---: | ---: |']
+        for scene in metadata['terminal_scenes']:
+            samples = read_scene(output/(scene+'.jsonl'), metadata['gui_sample_seconds'], 'daemon')
+            values = [f"{max(row[key][field] for row in samples)/1048576:.2f}"
+                      for key, field in (('tui', 'rss_bytes'), ('daemon', 'rss_bytes'),
+                                         ('core', 'rss_bytes'), ('total', 'pss_bytes'))]
+            lines.append('| '+scene+' | '+' | '.join(values)+' |')
     lines += ['', 'Mapping peaks are sampled separately every second; each category/metric peak can occur at a different time. Missing processes are reported rather than counted as zero.',
               '', '| Scene | Role | Anonymous + heap private peak MiB | Final MiB | Missing samples |',
               '| --- | --- | ---: | ---: | ---: |']
@@ -632,6 +687,7 @@ def main():
         # Preserve the original visible-window scenarios without a tray host,
         # so old baselines remain comparable. Measure normal tray use separately.
         metadata['background_scenes'] = []
+        metadata['terminal_scenes'] = []
         console = target/'cor'
         has_cli = (source/'apps/cli/Cargo.toml').is_file()
         if has_cli:
@@ -651,8 +707,10 @@ def main():
                 metadata['background_scenes'] += [prefix+name for name in ('tray-open', 'tray-hidden',
                     'tray-reopened', 'tray-search', 'tray-search-hidden', 'tray-search-reopened', 'tray-after-cycles')]
                 if has_cli:
-                    headless_scene(bundle/'cor', resources, benchmark, output, args.seconds,
-                                   args.workload, overrides, prefix)
+                    metadata['terminal_scenes'] += headless_scene(
+                        bundle/'cor', resources, benchmark, output, args.seconds,
+                        args.workload, overrides, prefix,
+                        tui=(source/'apps/cli/src/tui/mod.rs').is_file())
                     metadata['background_scenes'].append(prefix+'headless')
         write_json(output/'metadata.json', metadata)
     summarize(output, metadata)

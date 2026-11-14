@@ -44,6 +44,7 @@
 | `tun_ipv6_lifecycle.py` | 隔离测试模块 | 由 Linux TUN 测试调用，验证默认 IPv6、无 IPv6 的启动/保护、地址族增减与 TUN 重连；不单独操作开发主机网络。 |
 | `test-release-package.py` | CLI | 统一调度安装包结构、安装后验证和 Linux 兼容性检查。 |
 | `run-memory-benchmark.py` | CLI | 隔离运行 API、GUI、托盘和 CLI 内存基准。 |
+| `cli_tui.py` | 测试夹具模块 | 共用真实 PTY 的终端恢复、输入、缩放、演示帧和 TUI 内存场景驱动，不接管宿主网络；由 CI 与内存基准调用。 |
 | `memory_desktop.py` | 模块 / 子进程 | 托盘宿主与窗口夹具；测量进程外运行，不能并入基准入口。 |
 | `preview-slint.py` | CLI | 使用依赖版本一致的 Viewer 检查语法，主线 Viewer 配合随包字体渲染正式组件；拒绝旧工具输出缺字截图，不调用 Cargo。 |
 | `test-build-tools.py` | 离线测试 | 构建输入、缓存、打包、Windows/macOS 辅助逻辑的单元测试。 |

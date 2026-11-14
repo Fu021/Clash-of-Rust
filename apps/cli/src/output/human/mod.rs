@@ -65,6 +65,21 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
         }
         "mode" => field(out, "运行模式", &text(value, "mode")),
         "diagnose" => diagnose(out, value),
+        "network check" => {
+            field(out, "目标", &text(value, "target"))?;
+            for (label, key) in [
+                ("系统 DNS", "system_dns"),
+                ("内核 DNS", "core_dns"),
+                ("本机代理", "proxy"),
+                ("HTTPS", "https"),
+                ("HTTP", "http"),
+                ("采用协议", "response"),
+                ("实际线路", "route"),
+            ] {
+                field(out, label, &text(&value[key], "detail"))?;
+            }
+            Ok(())
+        }
         "proxy" => {
             field(out, "代理", &text(value, "proxy"))?;
             network_notice(out, &value["host_routes"])

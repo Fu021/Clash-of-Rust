@@ -460,7 +460,6 @@ impl App {
         text!(get_profile_name, set_profile_name, &self.profile_name);
         text!(get_profile_source, set_profile_source, &self.profile_source);
         text!(get_test_url, set_test_url, &self.test_url);
-        text!(get_dns_host, set_dns_host, &self.dns_host);
         set!(get_probing, set_probing, self.probing);
         text!(get_mixed_port, set_mixed_port, &self.mixed_port);
         text!(get_window_width, set_window_width, &self.window_width);

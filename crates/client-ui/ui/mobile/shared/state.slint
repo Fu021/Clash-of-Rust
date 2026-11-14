@@ -7,7 +7,7 @@ export enum MobileIntent {
     import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
-    rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe, dns,
+    rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe,
     site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-protection, export-report,
     appearance, accent, text-scale, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
@@ -93,9 +93,8 @@ export global MobileData {
     in-out property <string> site-summary;
     in-out property <string> claude-status;
     in-out property <string> geo-status;
-    in-out property <string> probe-status: "尚未测试";
-    in-out property <string> probe-time;
-    in-out property <string> dns-result: "尚未查询";
+    in-out property <[string]> probe-results;
+    in-out property <bool> probe-busy;
     in-out property <string> mixed-port: "7897";
     in-out property <string> interval: "0";
     in-out property <string> subscription-interval: "360";
@@ -156,7 +155,6 @@ export global MobileView {
     in-out property <string> category: "AI";
     in-out property <string> site-status: "全部结果";
     in-out property <string> test-url: "https://www.gstatic.com/generate_204";
-    in-out property <string> dns-host: "github.com";
     in-out property <string> notice;
     in-out property <bool> notice-error;
     in-out property <bool> notice-critical;

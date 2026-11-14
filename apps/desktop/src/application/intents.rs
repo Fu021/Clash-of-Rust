@@ -38,9 +38,7 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
             | Intent::ClearLogs
             | Intent::LogDetail
             | Intent::TestUrl
-            | Intent::DnsHost
             | Intent::Probe
-            | Intent::Dns
             | Intent::SiteAll
             | Intent::SiteCancel
             | Intent::SiteCategory
@@ -243,9 +241,7 @@ impl App {
             Intent::ExportLogs => Message::Action(Action::ExportLogs),
             Intent::ExportDiagnostics => Message::ExportDiagnostics(a.into()),
             Intent::TestUrl => Message::TestUrl(a.into()),
-            Intent::DnsHost => Message::DnsHost(a.into()),
-            Intent::Probe => Message::Probe(boolean(a)),
-            Intent::Dns => Message::Dns,
+            Intent::Probe => Message::Probe,
             Intent::OverviewRefresh => Message::OverviewRefresh,
             Intent::OverviewPrivacy => Message::OverviewPrivacy,
             Intent::SiteAll => Message::SiteAll,

@@ -48,7 +48,7 @@ Clash-of-Rust/
 ├── apps/                          各端入口与原生宿主
 │   ├── desktop/                   常驻桌面宿主、后台协调与状态投影
 │   ├── desktop-ui/                可关闭并重建的独立窗口进程
-│   ├── cli/                       cor 命令行与后台入口
+│   ├── cli/                       cor 命令行、终端界面与后台入口
 │   ├── android/
 │   │   ├── native/                Rust / Slint / JNI 宿主
 │   │   ├── app/                   Java 生命周期、VPN、通知与系统交互

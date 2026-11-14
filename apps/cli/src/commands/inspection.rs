@@ -19,9 +19,33 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         "connection list" | "connection show" | "connection close" => connections(args).await,
         "logs" | "logs clear" | "logs export" => logs(args).await,
         "diagnose" | "dns" => diagnose(args).await,
+        "network check" => {
+            let report = network_check(args, &args.positional[0]).await?;
+            output::emit(args, serde_json::to_value(report)?)
+        }
         "ip-check" | "ip-check list" => ip(args).await,
         _ => claude(args).await,
     }
+}
+
+pub(crate) async fn network_check(
+    args: &Args,
+    target: &str,
+) -> Result<clash_client_core::probe::NetworkReport> {
+    let poll = super::current_snapshot(args, Scope::Other, false).await?;
+    let (port, api, protected) = match poll {
+        Some(poll) => {
+            let port = poll.meta.running.then_some(poll.meta.settings.mixed_port);
+            let api = if port.is_some() {
+                Some(Api::new(&poll.meta.settings)?)
+            } else {
+                None
+            };
+            (port, api, poll.meta.settings.claude_protection.is_some())
+        }
+        None => (None, None, true),
+    };
+    clash_client_core::probe::diagnose(target, port, api, protected).await
 }
 
 async fn nodes(args: &Args) -> Result<()> {

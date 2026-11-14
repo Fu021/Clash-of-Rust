@@ -24,6 +24,14 @@ macro_rules! command {
 }
 pub static COMMANDS: &[Spec] = &[
     command!(
+        "ui",
+        "打开终端界面原型；退出界面保留后台和代理",
+        "ui [--demo]",
+        0,
+        0,
+        "demo"
+    ),
+    command!(
         "run",
         "前台运行后台与内核；Ctrl+C 恢复网络后退出",
         "run [--no-core]",
@@ -337,6 +345,14 @@ pub static COMMANDS: &[Spec] = &[
         "system"
     ),
     command!(
+        "network check",
+        "检查网址的 DNS、响应与本次实际代理线路",
+        "network check URL",
+        1,
+        1,
+        ""
+    ),
+    command!(
         "ip-check list",
         "列出内置 IP/地区检测项目",
         "ip-check list [--category CATEGORY]",
@@ -496,6 +512,7 @@ impl std::fmt::Display for Usage {
 }
 impl std::error::Error for Usage {}
 
+#[derive(Clone)]
 pub struct Args {
     pub path: String,
     pub positional: Vec<String>,
@@ -535,6 +552,14 @@ pub fn parse(input: impl IntoIterator<Item = String>) -> Result<Args> {
         .map_err(|error| Usage(error.to_string()).into())
 }
 fn validate(args: &Args) -> Result<()> {
+    if args.path == "ui" {
+        ensure!(
+            !["json", "jsonl", "quiet", "output"]
+                .iter()
+                .any(|key| args.flag(key)),
+            "终端界面需要交互终端；脚本请使用 status、node list 或 connection list"
+        );
+    }
     ensure!(
         !args.flag("all-users") || (args.get("user").is_none() && args.get("data-dir").is_none()),
         "--all-users 不能与 --user 或 --data-dir 同时使用"
@@ -786,7 +811,9 @@ pub fn help(prefix: &str) -> String {
     let mut out = format!("Clash of Rust CLI {}\n\n", clash_client_core::VERSION);
     if prefix.is_empty() {
         out += "用法：cor <命令> [选项]\n\n常用命令：\n";
-        for path in ["start", "stop", "restart", "status", "proxy", "diagnose"] {
+        for path in [
+            "ui", "start", "stop", "restart", "status", "proxy", "diagnose",
+        ] {
             let spec = COMMANDS.iter().find(|spec| spec.path == path).unwrap();
             out += &format!("  {:<25} {}\n", spec.path, spec.description);
         }
@@ -797,7 +824,8 @@ pub fn help(prefix: &str) -> String {
             .map(|spec| spec.path.split_whitespace().next().unwrap())
             .filter(|path| {
                 ![
-                    "start", "stop", "restart", "status", "proxy", "diagnose", "profile", "node",
+                    "ui", "start", "stop", "restart", "status", "proxy", "diagnose", "profile",
+                    "node",
                 ]
                 .contains(path)
             })
@@ -879,6 +907,7 @@ fn option_help(key: &str) -> String {
         "show-secrets" => "显式允许输出订阅/配置中的完整凭据",
         "quiet" => "不显示进度提示（-q）",
         "no-color" => "纯文本输出；CLI 默认不使用颜色",
+        "demo" => "使用虚构数据预览终端界面，不连接后台或改变网络",
         "no-core" => "仅运行后台，暂不启动内核",
         "network-only" => "刷新当前内核出站和 DNS，关闭旧连接；不重启内核",
         "watch" | "follow" => "持续输出新采样/日志，Ctrl+C 结束",

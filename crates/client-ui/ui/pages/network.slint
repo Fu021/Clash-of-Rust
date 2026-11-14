@@ -1,8 +1,8 @@
 import { PageSurface } from "../components/motion.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
-import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Field, Badge, Paragraph, Divider } from "../components/controls.slint";
-import { ToolHeading, InsetResult } from "../components/sections.slint";
+import { PageScroll, Caption, ContentPanel, ActionButton, Field, Paragraph, Divider } from "../components/controls.slint";
+import { ToolHeading } from "../components/sections.slint";
 
 export component NetworkPage inherits PageSurface {
     PageScroll {
@@ -10,37 +10,27 @@ export component NetworkPage inherits PageSurface {
         VerticalLayout {
             padding-right: 8px; spacing: 16px; alignment: start;
             ContentPanel {
-                ToolHeading { title: "网站响应"; icon: @image-url("../icons/network.svg"); }
-                HorizontalLayout { cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Field { text <=> UiData.test-url; edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); } }
-                    ActionButton { text: UiData.probing ? "测试中…" : "测试"; primary: true; busy: UiData.probing; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "false", ""); } }
+                ToolHeading { title: "网址检查"; icon: @image-url("../icons/network.svg"); }
+                Caption { text: "检查 DNS、代理端口、HTTP / HTTPS 和实际线路"; }
+                HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
+                    Field {
+                        placeholder: "域名或网址"; text <=> UiData.test-url; enabled: !UiData.probing;
+                        edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); }
+                        accepted => { if !UiData.probing { UiActions.dispatch(Intent.probe, "", ""); } }
+                    }
+                    ActionButton { text: UiData.probing ? "检查中…" : "检查"; primary: true; busy: UiData.probing;
+                        enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "", ""); }
+                    }
                 }
-            }
-            ContentPanel {
-                ToolHeading {
-                    title: "出口信息"; icon: @image-url("../icons/ip.svg");
-                    ActionButton { text: "查询出口"; compact: true; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.probe, "true", ""); } }
-                }
-                Caption { text: "查询当前网络的公网出口与地区"; }
-            }
-            ContentPanel {
-                ToolHeading { title: "系统 DNS 查询"; icon: @image-url("../icons/proxies.svg"); }
-                HorizontalLayout { cross-axis-alignment: center;
-                    spacing: Theme.content-gap;
-                    Field { text <=> UiData.dns-host; edited(value) => { UiActions.dispatch(Intent.dns-host, value, ""); } }
-                    ActionButton { text: "解析"; enabled: !UiData.probing; clicked => { UiActions.dispatch(Intent.dns, "", ""); } }
-                }
-            }
-            if UiData.network-results.length > 0: ContentPanel {
-                vertical-padding: 0px; gap: 0px;
-                HorizontalLayout { height: 44px; Caption { text: "本次检查记录"; } Badge { text: "" + UiData.network-results.length; tone: 4; } }
-                for line in UiData.network-results: VerticalLayout {
+                VerticalLayout {
                     spacing: 0px;
-                    Divider { }
-                    Rectangle {
-                        height: max(44px, result.preferred-height + 20px);
-                        result := Paragraph { y: 10px; width: parent.width; text: line; font-size: Theme.detail-size; }
+                    for line in UiData.network-results: VerticalLayout {
+                        spacing: 0px;
+                        Divider { }
+                        Rectangle {
+                            height: max(32px, result.preferred-height + 14px);
+                            result := Paragraph { y: 7px; width: parent.width; text: line; font-size: Theme.detail-size; }
+                        }
                     }
                 }
             }

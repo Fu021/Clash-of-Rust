@@ -5,6 +5,7 @@ mod diagnostics;
 mod host_network;
 mod output;
 mod service;
+mod tui;
 mod users;
 
 fn main() {

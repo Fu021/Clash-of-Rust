@@ -24,6 +24,278 @@ pub fn validate_url(input: &str) -> Result<Url> {
     Ok(url)
 }
 
+pub fn diagnostic_url(input: &str) -> Result<Url> {
+    let input = input.trim();
+    if input.is_empty() || input.len() > 2048 || input.chars().any(char::is_control) {
+        bail!("请输入有效的网站地址");
+    }
+    let address = if input.contains("://") {
+        input.to_owned()
+    } else {
+        format!("https://{input}")
+    };
+    validate_url(&address).context("请输入域名或 HTTP/HTTPS 地址")
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticCheck {
+    pub success: Option<bool>,
+    pub detail: String,
+}
+
+impl DiagnosticCheck {
+    fn success(detail: impl Into<String>) -> Self {
+        Self {
+            success: Some(true),
+            detail: detail.into(),
+        }
+    }
+
+    fn failure(detail: impl Into<String>) -> Self {
+        Self {
+            success: Some(false),
+            detail: detail.into(),
+        }
+    }
+
+    fn unavailable(detail: impl Into<String>) -> Self {
+        Self {
+            success: None,
+            detail: detail.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetworkReport {
+    pub target: String,
+    pub system_dns: DiagnosticCheck,
+    pub core_dns: DiagnosticCheck,
+    pub proxy: DiagnosticCheck,
+    pub https: DiagnosticCheck,
+    pub http: DiagnosticCheck,
+    pub response: DiagnosticCheck,
+    pub route: DiagnosticCheck,
+}
+
+impl NetworkReport {
+    pub fn lines(&self) -> Vec<String> {
+        [
+            ("目标", self.target.as_str()),
+            ("系统 DNS", self.system_dns.detail.as_str()),
+            ("内核 DNS", self.core_dns.detail.as_str()),
+            ("本机代理", self.proxy.detail.as_str()),
+            ("HTTPS", self.https.detail.as_str()),
+            ("HTTP", self.http.detail.as_str()),
+            ("采用协议", self.response.detail.as_str()),
+            ("实际线路", self.route.detail.as_str()),
+        ]
+        .into_iter()
+        .map(|(label, detail)| format!("{label} · {detail}"))
+        .collect()
+    }
+}
+
+fn addresses<I: IntoIterator<Item = IpAddr>>(values: I) -> DiagnosticCheck {
+    let mut addresses: Vec<_> = values.into_iter().collect();
+    addresses.sort();
+    addresses.dedup();
+    if addresses.is_empty() {
+        return DiagnosticCheck::failure("未返回 IP 地址");
+    }
+    let extra = addresses.len().saturating_sub(16);
+    let mut detail = addresses
+        .iter()
+        .take(16)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("、");
+    if extra > 0 {
+        detail.push_str(&format!("（另有 {extra} 项）"));
+    }
+    DiagnosticCheck::success(detail)
+}
+
+fn protocol_urls(input: &str) -> Result<(Url, Url)> {
+    let mut https = diagnostic_url(input)?;
+    let mut http = https.clone();
+    https
+        .set_scheme("https")
+        .map_err(|_| anyhow::anyhow!("无法检查 HTTPS 地址"))?;
+    http.set_scheme("http")
+        .map_err(|_| anyhow::anyhow!("无法检查 HTTP 地址"))?;
+    Ok((https, http))
+}
+
+async fn protocol_check(
+    url: Url,
+    port: Option<u16>,
+    api: Option<crate::api::Api>,
+) -> (DiagnosticCheck, DiagnosticCheck) {
+    let Some(port) = port else {
+        return (
+            DiagnosticCheck::unavailable("内核未运行，未发起请求"),
+            DiagnosticCheck::unavailable("未建立检测连接"),
+        );
+    };
+    let result = async {
+        let client = crate::network::client_builder()
+            .no_proxy()
+            .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let start = Instant::now();
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)?;
+        let elapsed = start.elapsed().as_millis();
+        let mut observer = crate::update::RouteObserver::new(&response, api);
+        let route = observer.observation().await;
+        Ok::<_, anyhow::Error>((response.status().as_u16(), elapsed, route))
+    }
+    .await;
+    match result {
+        Ok((status, millis, route)) => {
+            let response = DiagnosticCheck::success(format!("HTTP {status} · {millis} ms"));
+            let route = match route {
+                Some(route) => {
+                    let rule = match (route.rule.is_empty(), route.rule_payload.is_empty()) {
+                        (true, _) => String::new(),
+                        (false, true) => format!(" · 命中 {}", route.rule),
+                        (false, false) => {
+                            format!(" · 命中 {} ({})", route.rule, route.rule_payload)
+                        }
+                    };
+                    DiagnosticCheck::success(format!("{}{rule}", route.chain))
+                }
+                None => DiagnosticCheck::unavailable("未捕获到此请求的连接记录"),
+            };
+            (response, route)
+        }
+        Err(error) => (
+            DiagnosticCheck::failure(format!("{error:#}")),
+            DiagnosticCheck::unavailable("请求未完成，无法确认线路"),
+        ),
+    }
+}
+
+pub async fn diagnose(
+    input: &str,
+    port: Option<u16>,
+    api: Option<crate::api::Api>,
+    protected: bool,
+) -> Result<NetworkReport> {
+    let (https_url, http_url) = protocol_urls(input)?;
+    let url = &https_url;
+    let host = url
+        .host_str()
+        .context("网站地址缺少域名")?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_owned();
+    let address = host.parse::<IpAddr>().ok();
+    let system = async {
+        if let Some(address) = address {
+            return DiagnosticCheck::unavailable(format!("{address}（IP 目标，无需解析）"));
+        }
+        if protected {
+            return DiagnosticCheck::unavailable("保护已开启或状态未知，未单独查询系统解析器");
+        }
+        match dns(host.clone()).await {
+            Ok(values) => addresses(values.into_iter().filter_map(|value| value.parse().ok())),
+            Err(error) => DiagnosticCheck::failure(format!("{error:#}")),
+        }
+    };
+    let core = async {
+        if let Some(address) = address {
+            return DiagnosticCheck::unavailable(format!("{address}（IP 目标，无需解析）"));
+        }
+        let Some(api) = api.as_ref() else {
+            return DiagnosticCheck::unavailable("内核未运行或控制接口不可用");
+        };
+        match tokio::time::timeout(Duration::from_secs(5), api.resolve_domain(&host)).await {
+            Ok(Ok(values)) => addresses(values),
+            Ok(Err(error)) => DiagnosticCheck::failure(format!("{error:#}")),
+            Err(_) => DiagnosticCheck::failure("查询超时"),
+        }
+    };
+    let proxy = async {
+        let Some(port) = port else {
+            return DiagnosticCheck::unavailable("内核未运行");
+        };
+        let start = Instant::now();
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {
+                DiagnosticCheck::success(format!("端口可连接 · {} ms", start.elapsed().as_millis()))
+            }
+            Ok(Err(error)) => DiagnosticCheck::failure(format!("端口不可连接：{error}")),
+            Err(_) => DiagnosticCheck::failure("端口连接超时"),
+        }
+    };
+    let (system_dns, core_dns, proxy, (https, https_route), (http, http_route)) = tokio::join!(
+        system,
+        core,
+        proxy,
+        protocol_check(https_url.clone(), port, api.clone()),
+        protocol_check(http_url.clone(), port, api.clone()),
+    );
+    let (target, response, route) = select_protocol(
+        https_url.origin().ascii_serialization(),
+        http_url.origin().ascii_serialization(),
+        &https,
+        &http,
+        https_route,
+        http_route,
+    );
+    Ok(NetworkReport {
+        target,
+        system_dns,
+        core_dns,
+        proxy,
+        https,
+        http,
+        response,
+        route,
+    })
+}
+
+fn select_protocol(
+    https_target: String,
+    http_target: String,
+    https: &DiagnosticCheck,
+    http: &DiagnosticCheck,
+    https_route: DiagnosticCheck,
+    http_route: DiagnosticCheck,
+) -> (String, DiagnosticCheck, DiagnosticCheck) {
+    if https.success == Some(true) {
+        (https_target, DiagnosticCheck::success("HTTPS"), https_route)
+    } else if http.success == Some(true) {
+        (
+            http_target,
+            DiagnosticCheck::success("HTTP（HTTPS 不可达）"),
+            http_route,
+        )
+    } else {
+        (
+            https_target,
+            if https.success.is_none() && http.success.is_none() {
+                DiagnosticCheck::unavailable("未检查")
+            } else {
+                DiagnosticCheck::failure("HTTPS 与 HTTP 均未连通")
+            },
+            DiagnosticCheck::unavailable("未建立检测连接"),
+        )
+    }
+}
 pub async fn website(input: String, port: u16, exit_ip: bool) -> Result<ProbeResult> {
     website_with_route(input, Some(port), exit_ip).await
 }
@@ -184,6 +456,21 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    async fn request_headers(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        while !request.ends_with(b"\r\n\r\n") {
+            let count = socket.read(&mut buffer).await.unwrap();
+            if count == 0 {
+                assert!(request.is_empty());
+                break;
+            }
+            request.extend_from_slice(&buffer[..count]);
+            assert!(request.len() <= 8192);
+        }
+        request
+    }
+
     async fn probe_response(status: &str, body: &str, exit_ip: bool) -> Result<ProbeResult> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -216,6 +503,212 @@ mod tests {
         assert!(validate_url("file:///etc/passwd").is_err());
         assert!(validate_url("https://user:secret@example.com").is_err());
         assert!(validate_url("https://example.com").is_ok());
+    }
+
+    #[test]
+    fn diagnostic_accepts_bare_hosts_without_accepting_credentials_or_other_schemes() {
+        for (input, expected) in [
+            ("example.com", "https://example.com/"),
+            ("  example.com/path  ", "https://example.com/path"),
+            ("http://example.com:8080/", "http://example.com:8080/"),
+            ("https://example.com/", "https://example.com/"),
+        ] {
+            assert_eq!(diagnostic_url(input).unwrap().as_str(), expected);
+        }
+        for input in [
+            "",
+            "not a host",
+            "file:///etc/passwd",
+            "https://name:password@example.com/",
+            "https://example.com/\nother",
+        ] {
+            assert!(diagnostic_url(input).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn diagnostic_protocol_pair_preserves_paths_and_custom_ports() {
+        for (input, https, http) in [
+            ("example.com", "https://example.com/", "http://example.com/"),
+            (
+                "http://example.com/path?q=1",
+                "https://example.com/path?q=1",
+                "http://example.com/path?q=1",
+            ),
+            (
+                "https://example.com/",
+                "https://example.com/",
+                "http://example.com/",
+            ),
+            (
+                "example.com:8443/path",
+                "https://example.com:8443/path",
+                "http://example.com:8443/path",
+            ),
+            ("[::1]:8080/", "https://[::1]:8080/", "http://[::1]:8080/"),
+        ] {
+            let pair = protocol_urls(input).unwrap();
+            assert_eq!(pair.0.as_str(), https);
+            assert_eq!(pair.1.as_str(), http);
+        }
+    }
+
+    #[test]
+    fn protocol_selection_prefers_https_responses_and_keeps_the_matching_route() {
+        for https_status in [200, 301, 403, 500] {
+            let (target, response, route) = select_protocol(
+                "https://example.test".into(),
+                "http://example.test".into(),
+                &DiagnosticCheck::success(format!("HTTP {https_status}")),
+                &DiagnosticCheck::success("HTTP 200"),
+                DiagnosticCheck::success("HTTPS 节点"),
+                DiagnosticCheck::success("HTTP 节点"),
+            );
+            assert_eq!(target, "https://example.test");
+            assert_eq!(response.detail, "HTTPS");
+            assert_eq!(route.detail, "HTTPS 节点");
+        }
+        let (_, response, route) = select_protocol(
+            "https://example.test".into(),
+            "http://example.test".into(),
+            &DiagnosticCheck::failure("TLS 握手失败"),
+            &DiagnosticCheck::success("HTTP 301"),
+            DiagnosticCheck::unavailable("未确认"),
+            DiagnosticCheck::success("HTTP 节点"),
+        );
+        assert!(response.detail.contains("HTTPS 不可达"));
+        assert_eq!(route.detail, "HTTP 节点");
+        for success in [None, Some(false)] {
+            let failed = || DiagnosticCheck {
+                success,
+                detail: "不可用".into(),
+            };
+            let (_, response, route) = select_protocol(
+                "https://example.test".into(),
+                "http://example.test".into(),
+                &failed(),
+                &failed(),
+                DiagnosticCheck::success("旧线路"),
+                DiagnosticCheck::success("旧线路"),
+            );
+            assert_eq!(response.success, success);
+            assert_eq!(route.success, None);
+            assert!(!route.detail.contains("旧线路"));
+        }
+    }
+
+    #[tokio::test]
+    async fn diagnostic_reports_the_exact_proxy_connection_and_does_not_follow_redirects() {
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_port = proxy.local_addr().unwrap().port();
+        let api = crate::api::Api::new(&crate::config::Settings {
+            controller_port: controller.local_addr().unwrap().port(),
+            secret: "probe-test-secret".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let (finish, wait) = tokio::sync::oneshot::channel();
+        let proxy_task = tokio::spawn(async move {
+            let mut sender = Some(sender);
+            let mut wait = Some(wait);
+            let mut transfer = None;
+            for _ in 0..3 {
+                let (mut socket, peer) = proxy.accept().await.unwrap();
+                let request = request_headers(&mut socket).await;
+                if request.is_empty() {
+                    continue;
+                }
+                if String::from_utf8_lossy(&request).starts_with("CONNECT ") {
+                    socket
+                        .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await
+                        .unwrap();
+                    continue;
+                }
+                assert!(String::from_utf8_lossy(&request).starts_with("GET http://"));
+                sender.take().unwrap().send(peer).unwrap();
+                socket
+                    .write_all(b"HTTP/1.1 302 Found\r\nLocation: http://other.invalid/\r\nContent-Length: 1\r\n\r\nx")
+                    .await
+                    .unwrap();
+                let wait = wait.take().unwrap();
+                transfer = Some(tokio::spawn(async move {
+                    let _ = wait.await;
+                    drop(socket);
+                }));
+            }
+            if let Some(transfer) = transfer {
+                transfer.await.unwrap();
+            }
+        });
+        let controller_task = tokio::spawn(async move {
+            let (mut socket, _) = controller.accept().await.unwrap();
+            let request = request_headers(&mut socket).await;
+            assert!(
+                String::from_utf8_lossy(&request)
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer probe-test-secret")
+            );
+            let source = receiver.await.unwrap();
+            let body = serde_json::json!({"connections":[{"metadata":{
+                "sourceIP":source.ip().to_string(),"sourcePort":source.port(),
+                "network":"tcp","host":"127.0.0.1"},
+                "chains":["🇺🇸 节点","AUTO","PROXY"],"rule":"DomainSuffix",
+                "rulePayload":"example.test"}]})
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let report = diagnose(
+            "http://127.0.0.1/private?token=test",
+            Some(proxy_port),
+            Some(api),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.https.success, Some(false));
+        assert!(report.http.detail.contains("HTTP 302"));
+        assert!(report.response.detail.contains("HTTPS 不可达"));
+        assert_eq!(report.target, "http://127.0.0.1");
+        assert!(
+            !serde_json::to_string(&report)
+                .unwrap()
+                .contains("token=test")
+        );
+        assert!(report.route.detail.contains("PROXY → AUTO → 🇺🇸 节点"));
+        assert!(report.route.detail.contains("DomainSuffix"));
+        assert!(report.route.detail.contains("example.test"));
+        finish.send(()).unwrap();
+        proxy_task.await.unwrap();
+        controller_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn diagnostic_without_core_never_starts_or_bypasses_it() {
+        let report = diagnose("localhost", None, None, true).await.unwrap();
+        assert_eq!(report.system_dns.success, None);
+        assert_eq!(report.core_dns.success, None);
+        assert_eq!(report.proxy.success, None);
+        assert_eq!(report.https.success, None);
+        assert_eq!(report.http.success, None);
+        assert_eq!(report.response.success, None);
+        assert_eq!(report.route.success, None);
+        let report = diagnose("[::1]", None, None, false).await.unwrap();
+        assert_eq!(report.system_dns.success, None);
+        assert_eq!(report.core_dns.success, None);
+        assert!(report.system_dns.detail.contains("无需解析"));
+        assert_eq!(report.response.success, None);
     }
 
     #[test]

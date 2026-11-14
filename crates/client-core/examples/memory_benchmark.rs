@@ -421,6 +421,7 @@ mod process_memory {
         daemon: Memory,
         core: Memory,
         other: Memory,
+        tui: Memory,
         total: Memory,
         processes: Vec<ProcessMemory>,
     }
@@ -485,13 +486,16 @@ mod process_memory {
         );
     }
 
-    fn sample(system: &System, root: u32, elapsed_ms: u64) -> Sample {
+    fn sample(system: &System, root: u32, elapsed_ms: u64, frontend: Option<u32>) -> Sample {
         let parents = system
             .processes()
             .iter()
             .map(|(pid, process)| (pid.as_u32(), process.parent().map(Pid::as_u32)))
             .collect();
-        let selected = descendants(root, &parents);
+        let mut selected = descendants(root, &parents);
+        if let Some(frontend) = frontend {
+            selected.extend(descendants(frontend, &parents));
+        }
         let mut processes: Vec<_> = system
             .processes()
             .iter()
@@ -500,7 +504,9 @@ mod process_memory {
             })
             .map(|(pid, process)| {
                 let name = process.name().to_string_lossy().into_owned();
-                let role = if pid.as_u32() == root {
+                let role = if Some(pid.as_u32()) == frontend {
+                    "tui"
+                } else if pid.as_u32() == root {
                     if matches!(name.to_ascii_lowercase().as_str(), "cor" | "cor.exe") {
                         "daemon"
                     } else {
@@ -546,6 +552,7 @@ mod process_memory {
                     .map(|p| &p.memory),
             ),
             daemon: group("daemon"),
+            tui: group("tui"),
             core: group("core"),
             other: group("other"),
             total: Memory::sum(processes.iter().map(|process| &process.memory)),
@@ -599,8 +606,8 @@ mod process_memory {
 
     fn run_kind(arguments: &[String], daemon: bool) -> Result<()> {
         ensure!(
-            (1..=4).contains(&arguments.len()),
-            "用法: memory_benchmark <app|daemon> <CLIENT_PID> [seconds=30] [interval_ms=250] [output.jsonl]"
+            (1..=5).contains(&arguments.len()),
+            "用法: memory_benchmark <app|daemon> <CLIENT_PID> [seconds=30] [interval_ms=250] [output.jsonl] [TUI_PID]"
         );
         let root: u32 = arguments[0].parse().context("CLIENT_PID 必须是进程号")?;
         ensure!(
@@ -633,6 +640,33 @@ mod process_memory {
             "指定进程不是所选的 Clash of Rust 客户端，请检查进程号与 app/daemon 模式"
         );
         let identity = process.start_time();
+        let frontend = arguments
+            .get(4)
+            .map(|value| value.parse::<u32>())
+            .transpose()?;
+        let frontend_identity = if let Some(frontend) = frontend {
+            ensure!(
+                daemon && frontend != root,
+                "TUI 必须是独立于 cor 后台的进程"
+            );
+            let process = system
+                .process(Pid::from_u32(frontend))
+                .context("找不到 TUI 进程")?;
+            ensure!(
+                matches!(
+                    process
+                        .name()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "cor" | "cor.exe"
+                ),
+                "TUI 进程必须为 cor"
+            );
+            Some(process.start_time())
+        } else {
+            None
+        };
         // Never overwrite an earlier measurement by mistake.
         let mut output = arguments
             .get(3)
@@ -645,6 +679,7 @@ mod process_memory {
                     "type": "metadata", "tool_version": env!("CARGO_PKG_VERSION"),
                     "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
                     "client_pid": root, "client_start_time": identity,
+                    "tui_pid": frontend, "tui_start_time": frontend_identity,
                     "gui_pid": (!daemon).then_some(root),
                     "gui_start_time": (!daemon).then_some(identity),
                     "client_kind": if daemon { "daemon" } else { "gui" },
@@ -676,7 +711,16 @@ mod process_memory {
                 println!("客户端已退出或 PID 已变化，结束采样。");
                 break;
             }
-            let measured = sample(&system, root, start.elapsed().as_millis() as u64);
+            if let Some(frontend) = frontend {
+                ensure!(
+                    system
+                        .process(Pid::from_u32(frontend))
+                        .is_some_and(|process| Some(process.start_time()) == frontend_identity
+                            && process.status() != ProcessStatus::Zombie),
+                    "TUI 已退出或 PID 已变化"
+                );
+            }
+            let measured = sample(&system, root, start.elapsed().as_millis() as u64, frontend);
             let client = if daemon {
                 &measured.daemon
             } else {
@@ -832,7 +876,7 @@ mod process_memory {
                 // Wait for exec to publish the fixture's process name and pages.
                 let measured = (0..100).find_map(|_| {
                     refresh(&mut system);
-                    let measured = sample(&system, root, 0);
+                    let measured = sample(&system, root, 0, None);
                     if measured.processes.iter().any(|process| {
                         process.pid == pid
                             && process.role == "core"
@@ -857,7 +901,7 @@ mod process_memory {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 assert!(
-                    !sample(&system, root, 0)
+                    !sample(&system, root, 0, None)
                         .processes
                         .iter()
                         .any(|process| process.pid == pid)
@@ -875,7 +919,7 @@ mod process_memory {
                 previous_pid = Some(pid);
                 refresh(&mut system);
                 assert!(
-                    !sample(&system, root, 0)
+                    !sample(&system, root, 0, None)
                         .processes
                         .iter()
                         .any(|process| process.pid == pid)

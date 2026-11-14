@@ -23,6 +23,7 @@ import windows_ci as windows
 import windows_update_tests
 import macos_ci as macos
 from test_macos_runner_network import MacosRunnerNetworkTests
+from test_cli_tui import CliTuiTests
 import workflow_storage as storage
 import workflow_artifacts
 import action_cache as local_cache

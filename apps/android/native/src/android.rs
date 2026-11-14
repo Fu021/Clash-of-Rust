@@ -273,8 +273,8 @@ struct State {
     generation: u64,
     visible: bool,
     completed: Option<MobileIntent>,
-    probe: (String, String),
-    dns: String,
+    probe: Vec<String>,
+    probe_busy: bool,
     geo: String,
     geo_updating: bool,
     node_pages: BTreeMap<String, usize>,
@@ -523,6 +523,7 @@ enum Update {
     Protection(std::result::Result<core::claude_check::protection::Protection, String>),
     ProtectionVerified(std::time::Instant, std::result::Result<(), String>),
     Address(u64, String, String),
+    NetworkProbe(u64, std::result::Result<core::probe::NetworkReport, String>),
     Log(String, String),
     Geo(std::result::Result<tempfile::TempDir, String>),
     Checked(
@@ -580,8 +581,8 @@ async fn run_loop(
         generation: 0,
         visible: true,
         completed: None,
-        probe: ("尚未测试".into(), String::new()),
-        dns: "尚未查询".into(),
+        probe: Default::default(),
+        probe_busy: false,
         geo: "Geo 数据状态不可用".into(),
         geo_updating: false,
         node_pages: BTreeMap::new(),
@@ -660,6 +661,8 @@ async fn run_loop(
     let mut subscription_generation = 0u64;
     let mut last_subscription_check = std::time::Instant::now() - Duration::from_secs(30);
     let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut network_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut network_generation = 0u64;
     let mut recovery_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut poll = tokio::time::interval(Duration::from_secs(1));
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -699,6 +702,17 @@ async fn run_loop(
                     | MobileIntent::ActivateProfile | MobileIntent::ClaudeProtection) {
                     if let Some(job) = recovery_job.take() { job.abort(); }
                     cancel_delay(&mut state, &mut delay_job);
+                }
+                if matches!(intent, MobileIntent::Connect | MobileIntent::Disconnect
+                    | MobileIntent::RestartCore | MobileIntent::Mode | MobileIntent::SelectNode
+                    | MobileIntent::ActivateProfile | MobileIntent::UpdateProfile | MobileIntent::SaveProfile
+                    | MobileIntent::ClaudeProtection | MobileIntent::DnsOverride | MobileIntent::FakeIp
+                    | MobileIntent::FakeIpAdd | MobileIntent::FakeIpRemove | MobileIntent::FakeIpRestoreDefaults
+                    | MobileIntent::Ipv6 | MobileIntent::Udp | MobileIntent::SavePorts | MobileIntent::RuleApply) {
+                    network_generation = network_generation.wrapping_add(1);
+                    if let Some(job) = network_job.take() { job.abort(); }
+                    state.probe = Default::default();
+                    state.probe_busy = false;
                 }
                 let edited_profile = match intent {
                     MobileIntent::UpdateProfile => Some(request.a.as_str()),
@@ -743,6 +757,12 @@ async fn run_loop(
                     state.overview.toggle_privacy();
                 } else if intent == MobileIntent::Navigate {
                     let page: i32 = request.a.parse()?;
+                    if state.page == 6 && page != 6 {
+                        network_generation = network_generation.wrapping_add(1);
+                        if let Some(job) = network_job.take() { job.abort(); }
+                        state.probe = Default::default();
+                        state.probe_busy = false;
+                    }
                     if state.page == 8 && page != 8 {
                         if let Some(job) = claude_job.take() { job.abort(); }
                         state.claude_generation = state.claude_generation.wrapping_add(1);
@@ -769,6 +789,26 @@ async fn run_loop(
                                 state.notice_error = true;
                             }
                         }
+                    }
+                } else if intent == MobileIntent::Probe {
+                    if state.protection_change.is_some() {
+                        state.probe = vec!["Claude 保护切换中，请稍后重试".into()];
+                    } else if network_job.is_none() && state.page == 6 {
+                        state.probe = Default::default();
+                        state.probe_busy = true;
+                        network_generation = network_generation.wrapping_add(1);
+                        let generation = network_generation;
+                        let target = request.a;
+                        let port = state.session.running.then_some(state.session.settings.mixed_port);
+                        let api = port.map(|_| state.session.api.clone());
+                        let protected = state.session.settings.claude_protection.is_some()
+                            || state.protection_change.is_some();
+                        let send = updates.clone();
+                        network_job = Some(tokio::spawn(async move {
+                            let result = core::probe::diagnose(&target, port, api, protected)
+                                .await.map_err(|error| format!("{error:#}"));
+                            let _ = send.send(Update::NetworkProbe(generation, result)).await;
+                        }));
                     }
                 } else if intent == MobileIntent::ClaudeCancel {
                     if let Some(job) = claude_job.take() { job.abort(); }
@@ -980,6 +1020,16 @@ async fn run_loop(
                         state.connection_address = (id, value);
                         immediate = true;
                     }
+                    Some(Update::NetworkProbe(generation, result))
+                        if generation == network_generation && state.page == 6 => {
+                        network_job = None;
+                        state.probe_busy = false;
+                        state.probe = match result {
+                            Ok(report) => report.lines(),
+                            Err(error) => vec![format!("检查失败 · {error}")],
+                        };
+                        immediate = true;
+                    }
                     Some(Update::Delays(generation,result)) if generation==state.delay_generation => {
                         let all=matches!(state.delay_scope,Some(DelayScope::All));
                         delay_job=None;state.delay_scope=None;
@@ -1093,6 +1143,10 @@ async fn run_loop(
                     }
                     Some(Update::Log(level,message)) => state.logs.push_back((level,message)),
                     Some(Update::Geo(result))=> {
+                        network_generation = network_generation.wrapping_add(1);
+                        if let Some(job) = network_job.take() { job.abort(); }
+                        state.probe = Default::default();
+                        state.probe_busy = false;
                         if let Some(job) = refresh_job.take() { job.abort(); }
                         refresh_generation += 1;
                         refresh_requested = true;
@@ -1108,6 +1162,8 @@ async fn run_loop(
                             match result {
                                 Ok((raw, usage)) => match state.session.update_subscription(&pending, raw, usage) {
                                     Ok(true) => {
+                                        network_generation = network_generation.wrapping_add(1);
+                                        if let Some(job) = network_job.take() { job.abort(); }
                                         cancel_delay(&mut state, &mut delay_job);
                                         reset_subscription_results(&mut state, &mut checks, &mut claude_job);
                                         state.rule_rows = None;
@@ -1495,6 +1551,9 @@ async fn run_loop(
         job.abort();
     }
     if let Some(job) = delay_job {
+        job.abort();
+    }
+    if let Some(job) = network_job {
         job.abort();
     }
     if let Some(job) = recovery_job {
@@ -2254,18 +2313,6 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.settings = next;
             state.notice = "自动检查更新间隔已保存".into();
         }
-        MobileIntent::Probe => {
-            let result = core::probe::website(a, session.settings.mixed_port, false).await?;
-            state.probe = (result.detail, format!("{} ms", result.millis));
-        }
-        MobileIntent::Dns => {
-            let ips = session.api.resolve_domain(&a).await?;
-            state.dns = ips
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(" · ");
-        }
         MobileIntent::SystemNotification => {
             session.native.notify("Clash of Rust", "喵!", true)?;
         }
@@ -2384,7 +2431,6 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::CopyDiagnostics
             | MobileIntent::ReportIssue
             | MobileIntent::Probe
-            | MobileIntent::Dns
             | MobileIntent::SiteStart
             | MobileIntent::SiteCancel
             | MobileIntent::SiteCategory
@@ -2470,7 +2516,7 @@ fn reset_subscription_results(
     state.claude = None;
     state.claude_status = "订阅已更新，请重新检测地区线索。".into();
     state.probe = Default::default();
-    state.dns.clear();
+    state.probe_busy = false;
 }
 fn start_delay(
     state: &mut State,
@@ -2538,8 +2584,8 @@ struct Projection {
     progress: (usize, usize),
     detecting: bool,
     exit: (String, String),
-    probe: (String, String),
-    dns: String,
+    probe: Vec<String>,
+    probe_busy: bool,
     geo: String,
     connection_page: (usize, usize),
     rule_page: (usize, usize),
@@ -2927,7 +2973,7 @@ fn project(state: &State) -> Projection {
         detecting: state.detecting,
         exit,
         probe: state.probe.clone(),
-        dns: state.dns.clone(),
+        probe_busy: state.probe_busy,
         geo: state.geo.clone(),
         rules,
         connection_page: (connection_page, connection_count),
@@ -3116,9 +3162,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_vpn_pending(p.platform["vpn_pending"].as_bool().unwrap_or(false));
     data.set_geo_updating(p.geo_updating);
     data.set_delay_busy(p.delay_busy);
-    data.set_probe_status(p.probe.0.into());
-    data.set_probe_time(p.probe.1.into());
-    data.set_dns_result(p.dns.into());
+    data.set_probe_results(stable(
+        data.get_probe_results(),
+        rows(p.probe.into_iter().map(Into::into).collect()),
+    ));
+    data.set_probe_busy(p.probe_busy);
     data.set_geo_status(p.geo.into());
     data.set_site_summary(p.site_summary.into());
     data.set_claude_status(p.claude_status.into());

@@ -627,35 +627,26 @@ export component MobileLogs inherits PageSurface {
 export component MobileNetwork inherits PageSurface {
     MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MCard {
-            MToolHeading { title: "网站响应"; icon: @image-url("../../icons/network.svg"); }
+            MToolHeading { title: "网址检查"; icon: @image-url("../../icons/network.svg"); }
+            MSmall { text: "检查 DNS、代理端口、HTTP / HTTPS 和实际线路"; wrap: word-wrap; }
             HorizontalLayout { spacing: 8px;
-                MField { text <=> MobileView.test-url; }
-                MButton { text: "测试"; primary: true; width: 64px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.probe, MobileView.test-url, ""); } }
-            }
-            if MobileData.probe-status != "": MCard { background: Theme.inset; border-width: 0px; border-radius: 8px; vertical-padding: 10px;
-                HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-                    MParagraph { text: MobileData.probe-status; font-size: MobileTypography.font-size(14); }
-                    if MobileData.probe-time != "": MSmall { text: MobileData.probe-time; horizontal-stretch: 0; }
+                MField { text <=> MobileView.test-url; placeholder: "域名或网址"; enabled: !MobileData.probe-busy; }
+                MButton { text: MobileData.probe-busy ? "检查中…" : "检查"; primary: true;
+                    width: MobileData.probe-busy ? 88px : 64px; horizontal-stretch: 0; enabled: !MobileData.probe-busy;
+                    clicked => { MobileActions.request(MobileIntent.probe, MobileView.test-url, ""); }
                 }
             }
-        }
-        MCard {
-            MToolHeading { title: "出口信息"; icon: @image-url("../../icons/ip.svg"); }
-            MDivider { }
-            MSmall { text: "公网 IP"; }
-            MHeading { text: MobileData.exit-ip == "" ? "尚未查询" : MobileData.exit-ip; font-size: MobileTypography.font-size(22); }
-            MSmall { text: MobileData.exit-country; }
-        }
-        MCard {
-            MToolHeading { title: "DNS 查询"; icon: @image-url("../../icons/proxies.svg"); }
-            HorizontalLayout { spacing: 8px;
-                MField { text <=> MobileView.dns-host; }
-                MButton { text: "解析"; width: 64px; horizontal-stretch: 0; clicked => { MobileActions.request(MobileIntent.dns, MobileView.dns-host, ""); } }
+            VerticalLayout {
+                spacing: 0px;
+                for line in MobileData.probe-results: VerticalLayout {
+                    spacing: 0px;
+                    MDivider { }
+                    Rectangle {
+                        height: max(32px, result.preferred-height + 14px);
+                        result := MParagraph { y: 7px; width: parent.width; text: line; font-size: MobileTypography.font-size(14); }
+                    }
+                }
             }
-            if MobileData.dns-result != "": MCard { background: Theme.inset; border-width: 0px; border-radius: 8px; vertical-padding: 10px;
-                MParagraph { text: MobileData.dns-result; font-size: MobileTypography.font-size(14); }
-            }
-            MSmall { text: "当前内核解析结果"; }
         }
     } }
 }
@@ -769,7 +760,7 @@ export component MobileTools inherits PageSurface {
                     Rectangle { width: 34px; height: 34px; border-radius: 10px; background: Theme.inset;
                         Image { x: 8px; y: 8px; width: 18px; height: 18px; colorize: Theme.secondary; source: [@image-url("../../icons/network.svg"), @image-url("../../icons/ip.svg"), @image-url("../../icons/ai.svg")][index]; }
                     }
-                    MRow { geometry-key: "preview-tool:" + route; title: ["网络诊断", "IP 检测", "A÷检测"][index]; subtitle: index == 0 ? "网站响应、DNS 与出口" : index == 1 ? "平台可用情况与地区报告" : "地区线索与配置";
+                MRow { geometry-key: "preview-tool:" + route; title: ["网络诊断", "IP 检测", "A÷检测"][index]; subtitle: index == 0 ? "DNS、网站响应与实际线路" : index == 1 ? "平台可用情况与地区报告" : "地区线索与配置";
                         value: index == 2 && MobileData.claude-risk != "0" ? MobileData.claude-risk + " 风险" : ""; value-color: Theme.danger;
                         clicked => { MobileView.navigate(route); }
                     }

@@ -4,6 +4,36 @@ use clash_client_ui::{AppWindow, Intent, UiActions, UiData, UiGeometry, models::
 use slint::{ComponentHandle, Model};
 
 #[test]
+fn network_report_is_replaced_and_late_results_cannot_reappear_after_navigation() {
+    let check = |detail: &str| probe::DiagnosticCheck {
+        success: Some(true),
+        detail: detail.into(),
+    };
+    let report = || probe::NetworkReport {
+        target: "https://example.test".into(),
+        system_dns: check("198.18.0.1"),
+        core_dns: check("203.0.113.1"),
+        proxy: check("可连接"),
+        https: check("HTTP 200"),
+        http: check("HTTP 301"),
+        response: check("HTTPS"),
+        route: check("PROXY → node"),
+    };
+    let mut app = fixture(Page::Tests);
+    app.test_results = vec!["旧记录".into()];
+    app.probing = true;
+    let generation = app.network_test_generation;
+    let _ = app.update(Message::ProbeDone(generation, Ok(report())));
+    assert_eq!(app.test_results.len(), 8);
+    assert!(!app.test_results.iter().any(|line| line.contains("旧记录")));
+    let _ = app.update(Message::Navigate(Page::Home));
+    assert!(app.test_results.is_empty());
+    let _ = app.update(Message::Navigate(Page::Tests));
+    let _ = app.update(Message::ProbeDone(generation, Ok(report())));
+    assert!(app.test_results.is_empty());
+}
+
+#[test]
 fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
     use clash_of_rust::overview::{Health, Status, TARGETS};
     ui_testing::initialize(950, 700);

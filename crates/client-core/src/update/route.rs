@@ -12,7 +12,14 @@ use std::{
     time::Duration,
 };
 
-type SharedOutbound = Arc<Mutex<Option<Arc<str>>>>;
+#[derive(Debug, Clone)]
+pub struct ObservedRoute {
+    pub chain: Arc<str>,
+    pub rule: Arc<str>,
+    pub rule_payload: Arc<str>,
+}
+
+type SharedOutbound = Arc<Mutex<Option<ObservedRoute>>>;
 pub struct Observer {
     outbound: SharedOutbound,
     task: Option<tokio::task::JoinHandle<()>>,
@@ -42,10 +49,10 @@ impl Observer {
                     json.end()?;
                     Ok(result)
                 });
-                if let Ok(Ok(Some(chain))) =
+                if let Ok(Ok(Some(route))) =
                     tokio::time::timeout(Duration::from_millis(500), lookup).await
                 {
-                    *outbound.lock().unwrap() = Some(chain);
+                    *outbound.lock().unwrap() = Some(route);
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -54,6 +61,19 @@ impl Observer {
         observer
     }
     pub fn outbound(&self) -> Option<Arc<str>> {
+        self.outbound.lock().unwrap().as_ref().map(|route| {
+            if route.chain.as_ref() == "DIRECT" || route.chain.ends_with(" → DIRECT") {
+                Arc::from("DIRECT")
+            } else {
+                route.chain.clone()
+            }
+        })
+    }
+    pub async fn observation(&mut self) -> Option<ObservedRoute> {
+        if let Some(task) = self.task.as_mut() {
+            let _ = task.await;
+        }
+        self.task = None;
         self.outbound.lock().unwrap().clone()
     }
 }
@@ -103,6 +123,10 @@ struct Row {
     metadata: Metadata,
     #[serde(default)]
     chains: Option<Vec<String>>,
+    #[serde(default)]
+    rule: String,
+    #[serde(rename = "rulePayload", default)]
+    rule_payload: String,
 }
 #[derive(Clone, Copy)]
 struct Match<'a> {
@@ -124,20 +148,27 @@ impl Match<'_> {
             && row.chains.as_ref().is_some_and(|chains| {
                 !chains.is_empty()
                     && chains.len() <= 16
-                    && chains
-                        .iter()
-                        .all(|name| !name.is_empty() && name.len() <= 512)
+                    && chains.iter().all(|name| {
+                        !name.is_empty() && name.len() <= 512 && !name.chars().any(char::is_control)
+                    })
             })
+            && row.rule.len() <= 512
+            && row.rule_payload.len() <= 512
+            && !row
+                .rule
+                .chars()
+                .chain(row.rule_payload.chars())
+                .any(char::is_control)
     }
 }
 impl<'de> DeserializeSeed<'de> for Match<'_> {
-    type Value = Option<Arc<str>>;
+    type Value = Option<ObservedRoute>;
     fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
         d.deserialize_map(self)
     }
 }
 impl<'de> Visitor<'de> for Match<'_> {
-    type Value = Option<Arc<str>>;
+    type Value = Option<ObservedRoute>;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("a connections document")
     }
@@ -155,13 +186,13 @@ impl<'de> Visitor<'de> for Match<'_> {
 }
 struct Rows<'a>(Match<'a>);
 impl<'de> DeserializeSeed<'de> for Rows<'_> {
-    type Value = Option<Arc<str>>;
+    type Value = Option<ObservedRoute>;
     fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
         d.deserialize_any(self)
     }
 }
 impl<'de> Visitor<'de> for Rows<'_> {
-    type Value = Option<Arc<str>>;
+    type Value = Option<ObservedRoute>;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("a connection list or null")
     }
@@ -177,12 +208,11 @@ impl<'de> Visitor<'de> for Rows<'_> {
                     ambiguous = true;
                 } else {
                     let mut chain = row.chains.unwrap();
-                    result = Some(if chain.first().is_some_and(|name| name == "DIRECT") {
-                        Arc::from("DIRECT")
-                    } else {
-                        // Match the connection page: group → ... → actual node.
-                        chain.reverse();
-                        Arc::from(chain.join(" → "))
+                    chain.reverse();
+                    result = Some(ObservedRoute {
+                        chain: Arc::from(chain.join(" → ")),
+                        rule: Arc::from(row.rule),
+                        rule_payload: Arc::from(row.rule_payload),
                     });
                 }
             }
@@ -194,6 +224,34 @@ impl<'de> Visitor<'de> for Rows<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_observation_keeps_the_worker_owned_until_it_can_be_aborted() {
+        let (ready, started) = tokio::sync::oneshot::channel();
+        let (held, released) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            ready.send(()).unwrap();
+            let _held = held;
+            std::future::pending::<()>().await;
+        });
+        let mut observer = Observer {
+            outbound: Arc::new(Mutex::new(None)),
+            task: Some(task),
+        };
+        started.await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), observer.observation())
+                .await
+                .is_err()
+        );
+        drop(observer);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), released)
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
     #[tokio::test]
     async fn response_socket_metadata_is_matched_against_the_authenticated_controller() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -269,7 +327,7 @@ mod tests {
         origin_task.await.unwrap();
         controller_task.await.unwrap();
     }
-    fn matched(value: serde_json::Value) -> Option<Arc<str>> {
+    fn matched(value: serde_json::Value) -> Option<ObservedRoute> {
         Match {
             local: "127.0.0.1:32100".parse().unwrap(),
             host: "release-assets.githubusercontent.com",
@@ -288,11 +346,16 @@ mod tests {
         );
         let other_host = row("32100", "example.com", "其他请求");
         let result = matched(serde_json::json!({"connections":[browser,other_host,own.clone()]}));
-        assert_eq!(result.as_deref(), Some("Auto → 真实节点"));
+        assert_eq!(
+            result.as_ref().map(|route| route.chain.as_ref()),
+            Some("Auto → 真实节点")
+        );
         let mut direct = own.clone();
         direct["chains"] = serde_json::json!(["DIRECT"]);
         assert_eq!(
-            matched(serde_json::json!({"connections":[direct]})).as_deref(),
+            matched(serde_json::json!({"connections":[direct]}))
+                .as_ref()
+                .map(|route| route.chain.as_ref()),
             Some("DIRECT")
         );
         assert!(matched(serde_json::json!({"connections":[own.clone(),own]})).is_none());

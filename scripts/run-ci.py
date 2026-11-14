@@ -58,7 +58,8 @@ def main():
             run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
                  'update_preparation_releases_owner', '--', '--test-threads=1'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
-        for case in ('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions',
+        for case in ('application::ui_tests::network_report_is_replaced_and_late_results_cannot_reappear_after_navigation',
+                     'application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions',
                      'application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release',
                      'application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it',
                      'application::ui_tests::protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change',
@@ -119,6 +120,9 @@ def main():
     # Headless console smoke checks need neither a display nor a running kernel.
     run([bundle/('cor'+extension), '--json', 'version'])
     run([bundle/('cor'+extension), 'help'])
+    if args.system == 'linux' and linux_user_tests():
+        from cli_tui import verify
+        verify(bundle/'cor', bundle/'resources', ROOT/'target/linux-report/tui')
     write_json(ROOT/'target/ci-tests.json', tests)
     # Export the exact production binaries tested above.
     export_build(args.system, args.arch, tests, ROOT/'dist/build', binaries=bundle)
