@@ -64,6 +64,7 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 ## 本地验证与 UI 预览
 
 - 资源充足时优先做相关本地验证，再按风险扩大范围；沿用同一 Release profile 与 `--locked`。文档改动只做内容、链接等静态检查；新增测试覆盖行为、边界或恢复，不镜像实现。构建与 CI 范围见 [README](../README.md#编译与打包)及[工作流说明](workflows/ci.md#ci)。
+- 模块拆分或新增 `#[path]` 后，从受影响 crate 的 `lib.rs` / `main.rs` 递归运行 `rustfmt --edition 2024 --check`，不能只逐个检查改动文件；资源充足时再执行 `cargo fmt --all -- --check`。属性指定的模块路径会影响子模块查找，必要时显式指定相对路径；格式检查不能替代类型检查。
 - UI 使用持久安装、版本匹配的官方 Slint Viewer 直接预览正式组件，可用 `--viewer PATH` 指定；参数见 [UI 预览](workflows/local-development.md#ui-预览与静态资源)及[Slint 说明](../crates/client-ui/README.md)。
 - 桌面默认 950×700、最小 800×450，移动端按[代表性尺寸与可用性检查](loop-workflow.md#多尺寸-ui-检查)覆盖手机横竖屏、平板与系统字号；检查主题、强调色、滚动、弹窗。复用主题控件与间距，语义颜色不被强调色覆盖；安全区/键盘只扣一次，内容合理顶部对齐。
 - 固定演示数据只能验证外观，外观改动附实际截图；交互、后端与系统功能另验。真实代理/TUN 测试只在可丢弃环境执行，不擅自改用户路由、防火墙、代理或重启网络。

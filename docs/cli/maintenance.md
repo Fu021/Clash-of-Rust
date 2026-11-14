@@ -73,7 +73,7 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 原内核运行且由 systemd 用户服务管理时，更新后仍通过该服务启动。已启用、程序与数据目录完全匹配的同名服务，也可重新接管此前手动启动的后台；不会仅凭服务名启动其他配置或其他账户。恢复前后核对 unit 内容、启用状态、覆盖配置和后台 PID；服务被修改、禁用或移除时明确报错，不重建服务、不重复启动后台。重新安装后 TUN 授权仍在原终端完成。若原内核已经关闭，只恢复不启动内核的后台，不通过默认启动内核的服务恢复。
 
-`service status` 显示服务配置是否存在；存在且已启用不等于服务当前正在运行。Linux 可用 `systemctl --user status clash-of-rust-cli.service` 核对实际服务，`cor status` 核对原数据目录的后台。旧版更新器成功后只停止后台，随后手动 `cor start` 可能让后台运行于服务之外，并不说明 unit 已被删除。使用新实现的更新器前开始的安装，不会追溯获得自动恢复能力。
+旧版更新器成功后只停止后台，随后手动 `cor start` 可能让后台运行于服务之外，并不说明 unit 已被删除。当前可用 `service status` 同时核对启用、运行与后台归属；Linux 的 `systemctl --user status clash-of-rust-cli.service` 可作为独立对照。使用新实现的更新器前开始的安装，不会追溯获得自动恢复能力。
 
 成功结果中的 `error=false` 不触发故障反馈提示；实际失败仍附诊断命令。
 

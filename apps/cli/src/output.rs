@@ -35,6 +35,13 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
 }
 
 fn needs_failure_hint(args: &Args, value: &Value) -> bool {
+    if args.path == "service status"
+        && value["service_error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty())
+    {
+        return true;
+    }
     if matches!(args.path.as_str(), "status" | "stop" | "proxy")
         && let Some(fields) = value.as_object()
     {
@@ -136,6 +143,10 @@ mod tests {
         unknown["active"] = Value::Null;
         unknown["ownership"] = json!("unknown");
         unknown["service_error"] = json!("用户总线不可达");
+        assert!(needs_failure_hint(
+            &crate::args::parse(["service".into(), "status".into()]).unwrap(),
+            &unknown,
+        ));
         let text = render(&["service", "status"], unknown);
         assert!(text.contains("登录自启：未确认"), "{text}");
         assert!(text.contains("服务状态：未确认"), "{text}");

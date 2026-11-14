@@ -9,6 +9,7 @@ use std::{
     os::fd::AsFd,
     sync::atomic::{AtomicBool, Ordering},
 };
+#[path = "terminal/service.rs"]
 mod service;
 use service::UserService;
 
