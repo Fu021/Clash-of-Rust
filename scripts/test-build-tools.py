@@ -20,6 +20,7 @@ import build_support as build
 import android as android_build
 import android_apk
 import windows_ci as windows
+import windows_update_tests
 import macos_ci as macos
 import workflow_storage as storage
 import workflow_artifacts
@@ -1238,6 +1239,56 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             windows._update_handoff_command('setup.exe', 'bad"path', 123, 'installed')
 
+    def test_windows_reference_installer_refuses_changed_source(self):
+        with patch.object(windows_update_tests.subprocess, 'run', return_value=
+                          subprocess.CompletedProcess([], 0, b'untrusted installer')), \
+                patch.object(windows_update_tests.urllib.request, 'urlopen') as download:
+            with self.assertRaisesRegex(ValueError, 'source identity'):
+                windows_update_tests.reference_source()
+            download.assert_not_called()
+
+    def test_windows_reference_source_fallback_is_bounded_and_checksum_verified(self):
+        source = b'fixture installer source'
+        digest = hashlib.sha256(source).hexdigest()
+        with patch.object(windows_update_tests.subprocess, 'run', return_value=
+                          subprocess.CompletedProcess([], 128, b'')), \
+                patch.object(windows_update_tests, 'REFERENCE_SHA256', digest), \
+                patch.object(windows_update_tests.urllib.request, 'urlopen',
+                             return_value=contextlib.nullcontext(io.BytesIO(source))) as download:
+            self.assertEqual(windows_update_tests.reference_source(), source)
+            self.assertIn(windows_update_tests.REFERENCE_COMMIT, download.call_args.args[0])
+            self.assertEqual(download.call_args.kwargs['timeout'], 30)
+        with patch.object(windows_update_tests.subprocess, 'run', return_value=
+                          subprocess.CompletedProcess([], 0, b'x'*(64*1024+1))):
+            with self.assertRaisesRegex(ValueError, 'source identity'):
+                windows_update_tests.reference_source()
+
+    def test_windows_acl_barrier_restores_permissions_after_a_failed_assertion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            target = directory/'settings-defaults.json'
+            with patch.object(windows_update_tests.subprocess, 'check_output', return_value=
+                              '"fixture","S-1-5-21-123"\n'), \
+                    patch.object(windows_update_tests.subprocess, 'run') as execute:
+                with self.assertRaisesRegex(AssertionError, 'fixture failure'):
+                    with windows_update_tests.write_barrier(target, 'denied', directory):
+                        raise AssertionError('fixture failure')
+                self.assertEqual(execute.call_count, 3)
+                self.assertIn('/deny', execute.call_args_list[1].args[0])
+                self.assertIn('/restore', execute.call_args_list[2].args[0])
+
+    def test_windows_installer_exit_keeps_bounded_failure_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory/'installer-failure.json').write_text(
+                '{"stage":"preflight","file":"resources/GeoIP.dat"}'+' '*5000)
+            with patch.object(windows.subprocess, 'CREATE_NO_WINDOW', 0, create=True), \
+                    patch.object(windows.subprocess, 'Popen') as process:
+                process.return_value.__enter__.return_value.wait.return_value = 68
+                with self.assertRaisesRegex(RuntimeError, 'resources/GeoIP.dat') as error:
+                    windows._installer_exit(directory/'setup.exe', ['/S'], 0)
+                self.assertLess(len(str(error.exception)), 4300)
+
     def test_installed_update_driver_runs_outside_the_runner_checkout(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -1337,7 +1388,7 @@ class BuildTests(unittest.TestCase):
             for path in ('crates/client-runtime/src/update/install/terminal.rs',
                          'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py',
                          'installer/clash-of-rust.nsi', 'scripts/windows_ci.py',
-                         'scripts/build-installer.py',
+                         'scripts/windows_update_tests.py', 'scripts/build-installer.py',
                          'crates/client-runtime/src/platform/windows/mod.rs'):
                 self.assertTrue(ci_test_policy.select([path])['update_tests'])
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',

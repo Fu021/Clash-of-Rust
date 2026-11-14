@@ -698,12 +698,13 @@ jobs:
           retention-days: 3
       - name: Preserve Windows test results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always() && runner.os == 'Windows' && needs.inputs.outputs.extended_tests == 'true'
+        if: always() && runner.os == 'Windows' && (needs.inputs.outputs.extended_tests == 'true' || needs.inputs.outputs.update_tests == 'true')
         with:
           name: windows-ci-report-${{ matrix.arch }}
           path: |
             target/windows-ci-report.json
             target/windows-gui-report.json
+            target/windows-update-report.json
           if-no-files-found: warn
           retention-days: 3
       - name: Preserve local proxy throughput measurements

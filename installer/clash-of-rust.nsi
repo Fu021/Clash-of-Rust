@@ -112,9 +112,11 @@ Var InstallFailureCode
 
 !macro PreflightFile SOURCE DIRECTORY NAME
   StrCpy $InstallFile "${DIRECTORY}/${NAME}"
-  StrCpy $InstallTarget "$INSTDIR\${DIRECTORY}\${NAME}"
+  !searchreplace NATIVE_DIRECTORY "${DIRECTORY}" "/" "\"
+  StrCpy $InstallTarget "$INSTDIR\${NATIVE_DIRECTORY}\${NAME}"
   ClearErrors
-  CreateDirectory "$INSTDIR\${DIRECTORY}"
+  CreateDirectory "$INSTDIR\${NATIVE_DIRECTORY}"
+  !undef NATIVE_DIRECTORY
   ${If} ${Errors}
     StrCpy $InstallWin32Error 0
     Call FailInstallWrite
@@ -126,7 +128,9 @@ Var InstallFailureCode
   StrCpy $InstallFile "${DIRECTORY}/${NAME}"
   StrCpy $InstallWin32Error 0
   ClearErrors
-  SetOutPath "$INSTDIR\${DIRECTORY}"
+  !searchreplace NATIVE_DIRECTORY "${DIRECTORY}" "/" "\"
+  SetOutPath "$INSTDIR\${NATIVE_DIRECTORY}"
+  !undef NATIVE_DIRECTORY
   ${If} ${Errors}
     Call FailInstallWrite
   ${EndIf}

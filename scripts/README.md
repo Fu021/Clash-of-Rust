@@ -23,6 +23,7 @@
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
 | `android.py` | CLI | Android 编译、模拟器、产物导出与 APK 打包；普通 CI 按变更选择专项。`application-preview --arch x64 --api LEVEL --build DIRECTORY --compatibility` 复用 CI APK 验证基础代理/TUN；可加 `--screenshots`、`--verify-diagnostics`，见[兼容验证](../docs/workflows/android-compatibility.md)。不带 `--compatibility` 的本地入口仍只截图或诊断。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
+| `windows_update_tests.py` | 隔离安装测试模块 | 由 Windows 候选包验证按需调用；使用固定提交、固定摘要的旧安装器脚本和同一份 CI payload，对照文件占用、只读与 ACL 拒绝写入的旧/新退出码，并验证拒绝前保留旧文件及解除限制后可重试。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择。 |

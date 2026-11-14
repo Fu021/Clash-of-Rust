@@ -248,68 +248,13 @@ def _installer_exit(executable,args,code,timeout=60):
                           creationflags=subprocess.CREATE_NO_WINDOW) as process:
         actual = process.wait(timeout=timeout)
     if actual != code:
-        raise RuntimeError(f'{executable.name}: expected exit {code}, got {actual}')
-
-
-def _verify_failed_update(package, installed):
-    """Reject locked payloads before replacing any installed file."""
-    import ctypes as c
-    from ctypes import wintypes as w
-    kernel = c.WinDLL('kernel32', use_last_error=True)
-    kernel.CreateFileW.argtypes = [w.LPCWSTR,w.DWORD,w.DWORD,w.LPVOID,w.DWORD,w.DWORD,w.HANDLE]
-    kernel.CreateFileW.restype = w.HANDLE
-    kernel.CloseHandle.argtypes = [w.HANDLE]
-    renderer = installed/'clash-desktop-ui.exe'
-    original = renderer.read_bytes()
-    owner_hash = sha256(installed/'clash-of-rust.exe')
-    protected_files = ('uninstall.exe', 'cor.exe', 'resources/mihomo.exe', 'resources/GeoIP.dat')
-    report = package.parent/'installer-failure.json'
-    for locked_file in protected_files:
-        # A harmless PE overlay distinguishes the old renderer from the
-        # identical-version installer. Neither probe renderer is executed.
-        renderer.write_bytes(original+b'installer-rollback-probe')
-        before = {str(path.relative_to(installed)): sha256(path)
-                  for path in installed.rglob('*') if path.is_file()}
-        handle = kernel.CreateFileW(str(installed/locked_file),0x80000000,1,None,3,0,None)
-        if handle == c.c_void_p(-1).value:
-            renderer.write_bytes(original)
-            raise c.WinError(c.get_last_error())
+        failure = executable.parent/'installer-failure.json'
         try:
-            report.unlink(missing_ok=True)
-            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],68)
-            failure = json.loads(report.read_text(encoding='ascii'))
-            expected_file = locked_file if '/' in locked_file else './'+locked_file
-            if failure != {'schema': 1, 'stage': 'preflight', 'file': expected_file,
-                           'win32_error': 32, 'exit_code': 68}:
-                raise AssertionError(f'Incorrect installer write diagnostic: {failure}')
-            after = {str(path.relative_to(installed)): sha256(path)
-                     for path in installed.rglob('*') if path.is_file()}
-            assert before == after
-            assert sha256(installed/'clash-of-rust.exe') == owner_hash
-            assert not list(installed.glob('*.update-backup.exe'))
-        finally:
-            kernel.CloseHandle(handle)
-            renderer.write_bytes(original)
-            report.unlink(missing_ok=True)
-    readonly = installed/'resources/GeoIP.dat'
-    readonly.chmod(0o444)
-    before = {str(path.relative_to(installed)): sha256(path)
-              for path in installed.rglob('*') if path.is_file()}
-    try:
-        _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 68)
-        failure = json.loads(report.read_text(encoding='ascii'))
-        if failure != {'schema': 1, 'stage': 'preflight', 'file': 'resources/GeoIP.dat',
-                       'win32_error': 5, 'exit_code': 68}:
-            raise AssertionError(f'Incorrect read-only file diagnostic: {failure}')
-        after = {str(path.relative_to(installed)): sha256(path)
-                 for path in installed.rglob('*') if path.is_file()}
-        assert before == after
-        assert not list(installed.glob('*.update-backup.exe'))
-    finally:
-        readonly.chmod(0o666)
-        report.unlink(missing_ok=True)
-    run([installed/'cor.exe', '--help'])
-    _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+            with failure.open('rb') as stream:
+                evidence = stream.read(4096).decode('utf-8', errors='replace')
+        except OSError:
+            evidence = 'unavailable'
+        raise RuntimeError(f'{executable.name}: expected exit {code}, got {actual}; installer failure: {evidence}')
 
 
 def _update_handoff_command(package, gate, parent, installed):
@@ -492,6 +437,8 @@ def _verify_installed_package(package, binary, root, smoke):
         assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
         assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
         validate_resources(installed/'resources', 'windows')
+        for name in ('LICENSE', 'SOURCE.md'):
+            assert (installed/'resources/ip-check'/name).read_bytes() == (ROOT/'resources/ip-check'/name).read_bytes()
         assert (installed/'clash-tun-launcher.exe').is_file()
         run(['sc.exe', 'query', 'ClashOfRust.Network'])
         user_file = installed/'unrelated-user-file.txt'
@@ -501,7 +448,8 @@ def _verify_installed_package(package, binary, root, smoke):
         from ci_test_policy import update_tests
         if update_tests():
             _verify_deferred_update(package, installed)
-            _verify_failed_update(package, installed)
+            from windows_update_tests import verify_write_failures
+            verify_write_failures(package, installed, binary.parent, _installer_exit)
             _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
             assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
             assert not list(installed.glob('*.update-backup.exe'))

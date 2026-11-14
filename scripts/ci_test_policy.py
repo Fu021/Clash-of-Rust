@@ -125,7 +125,8 @@ def select(paths, extended=False):
                          'crates/client-runtime/src/control/', 'apps/cli/src/backend.rs',
                          'installer/', 'crates/client-runtime/src/platform/windows/'))
         or path in ('scripts/test-cli-update.py', 'scripts/ci_test_policy.py',
-                    'scripts/windows_ci.py', 'scripts/build-installer.py')
+                    'scripts/windows_ci.py', 'scripts/windows_update_tests.py',
+                    'scripts/build-installer.py')
         for path in paths
     )
     return {'extended_tests': extended, 'android_routing_tests': extended or android,

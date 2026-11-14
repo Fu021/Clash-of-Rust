@@ -36,6 +36,10 @@ Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压
 
 更新、CLI 维护或控制交接相关变更按需启用更新回归：六个桌面构建运行更新模块的 Rust 测试，Windows/macOS 另检查锁外准备与交接失效。Windows 候选安装器检查未提交、父进程未退出时不替换，取消保留旧文件，随后完成同包安装，并验证写入失败回滚。Ubuntu 22.04 的已安装候选包使用临时普通账户执行 `test-cli-update.py`，实际调用生产安装助手、非交互 sudo 和 dpkg，检查授权拒绝时不停止后台、损坏 DEB 安装失败后分别恢复后台或内核，以及同版本重装后保留设置并保存结果。安装测试使用本轮已校验的本地候选包，不连接线上 Release；发现、下载与摘要错误由源码回归覆盖。真实 UAC、交互密码、断电和半安装损坏仍不在自动验收范围。
 
+Windows 写入复现由 [windows_update_tests.py](../../scripts/windows_update_tests.py) 执行八个场景：主程序、界面、CLI、内核、Geo 和卸载器被占用，Geo 只读，以及单文件 ACL 拒绝写入。旧/新安装器使用相同已校验 payload，旧脚本固定在明确提交及 SHA256；临时对照包关闭归档压缩以减少测试耗时，安装指令不改动，不发布或上传该包。核对实际退出码与旧提示的映射、当前阶段/文件/系统码、预检拒绝前文件逐字节不变，以及解除限制后成功安装。只读是独立对照：旧安装器可能主动清除该属性，不能假定它与文件占用返回相同错误。保留 `windows-update-report.json` 的逐场景结果与可用空间；中途失败也保留已取得证据。此矩阵不操作真实用户目录，不禁用 Defender，不把 ACL 拒绝等同于已复现第三方安全软件的具体行为。
+
+NSIS 的磁盘路径使用反斜杠，诊断中的相对文件名使用正斜杠；两者在清单宏内转换。安装后另核对 `resources/ip-check` 的许可证与来源文件，防止 NSIS 的路径清理将目录名拼接，见 [NSIS 路径实现](https://github.com/kichik/nsis/blob/master/Source/exehead/util.c)。
+
 Ubuntu latest 在 CI 内仅等待本架构包；Ubuntu 20.04 则在成功 CI 后独立运行。两者的候选包与测试程序都须属于所选 CI、完整提交及正确架构，重复、过期、摘要不符或生产 job 失败均终止。只有候选包实际通过原生安装验证才上传 `package-linux-*`，旧内核与多版本 Android 的兼容结果须另外成功。
 
 Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 guest 只跳过无关文档索引，GUI 依赖仍随环境安装；窗口断言在扩展模式执行，见[测试环境边界](../agent-failures/test-environments.md#11-测试稳定性与外部环境假设)。
@@ -47,7 +51,7 @@ Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 gues
 - 收据绑定完整提交、版本、CI run、平台/架构、包 SHA256，以及上传后的构建 artifact id/name/digest；只有该包的安装验证成功后才写 `tests_passed=true`。Ubuntu 兼容 job 还必须单独成功，不能以原生收据代替。
 - Android 收据用 `distribution_signed=false` 标识开发签名候选包。公开发布只接受签名后重新验证并记录 `distribution_signed=true` 的 APK；测试包不能混入正式附件。
 - 最终发布核对 CI 全部必需 job、两套兼容性回执、附件 digest、内部完整成员、构建身份和包摘要。不发布模式读取九份 CI 候选包；公开模式读取六份 CI 桌面包和本次发布的三份发行签名 APK。
-- `macos-ci-report-*`、`linux-package-report-*` 与 `android-report-*` 保留对应运行的证据和失败诊断，Windows 扩展窗口报告按需保存；常规 Windows 代理/TUN 结果见 job 日志。包及源码附件保留 3 天。证据过期则重新运行 CI，不悄悄重建另一份包。
+- `macos-ci-report-*`、`linux-package-report-*` 与 `android-report-*` 保留对应运行的证据和失败诊断，Windows 扩展窗口与更新专项报告按需保存；常规 Windows 代理/TUN 结果见 job 日志。包及源码附件保留 3 天。证据过期则重新运行 CI，不悄悄重建另一份包。
 - Ubuntu 20.04 的 `focal-guest-report-status.json` 区分 guest 报告已保存、未生成及传输失败；只有完整传输成功才保留归档，安装和网络测试结果仍以实际任务及收据为准。
 
 ## 资源与权限
