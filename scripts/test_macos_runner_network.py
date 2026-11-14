@@ -4,6 +4,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -178,15 +179,20 @@ class MacosRunnerNetworkTests(unittest.TestCase):
             self.assertEqual(report['before_restore']['settings_error'], 'TimeoutExpired')
             self.assertEqual(state, actual)
 
-    def test_runner_network_reports_survive_native_report_directory_reset(self):
+    def test_runner_network_reports_survive_discarding_interrupted_compiler_cache(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             target = root/'target'
             report = target/'macos-report'
-            report.mkdir(parents=True)
-            source = target/'cache-network-report.json'
+            target.mkdir()
+            source = root/'runner-temp/cache-network-report.json'
+            source.parent.mkdir()
             source.write_text('{"schema":1,"restoration":"ready"}')
-            with patch.object(macos_ci, 'ROOT', root), patch.object(macos_ci, 'REPORT', report):
+            shutil.rmtree(target)
+            report.mkdir(parents=True)
+            with patch.object(macos_ci, 'REPORT', report), \
+                    patch.object(network, 'REPORT', source), \
+                    patch.object(network, 'SNAPSHOT', root/'runner-temp/cache-network.json'):
                 macos_ci.copy_runner_network_report()
             self.assertEqual((report/source.name).read_bytes(), source.read_bytes())
 

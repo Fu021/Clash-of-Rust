@@ -11,8 +11,9 @@ import time
 
 
 HOSTS = ('github.com', 'api.github.com', 'static.rust-lang.org', 'pypi.org')
-SNAPSHOT = Path('target/cache-network.json')
-REPORT = Path('target/cache-network-report.json')
+STATE = Path(os.environ.get('RUNNER_TEMP', 'target'))/'cor-runner-network'
+SNAPSHOT = STATE/'cache-network.json'
+REPORT = STATE/'cache-network-report.json'
 PROBE_SECONDS = 4
 RESTORE_SECONDS = 30
 

@@ -350,8 +350,10 @@ def installed_package_tests(package, manifest, build):
 
 
 def copy_runner_network_report():
-    for source in (ROOT/'target').glob('cache-network*.json'):
-        shutil.copy2(source, REPORT/source.name)
+    from macos_runner_network import SNAPSHOT, REPORT as network_report
+    for source in (SNAPSHOT, network_report):
+        if source.is_file():
+            shutil.copy2(source, REPORT/source.name)
 
 
 def diagnostics(arch):
