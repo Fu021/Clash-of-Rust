@@ -3305,12 +3305,16 @@ mod async_state_tests {
         assert!(app.core_failure.is_none());
         assert!(app.error && app.notice_visible);
         assert!(!app.notice_critical);
-        assert!(app.notice.contains("托盘不可用"));
-        assert!(app.notice.contains("当前桌面没有可用托盘宿主"));
+        let expected = if cfg!(target_os = "macos") {
+            "菜单栏图标不可用：当前桌面没有可用托盘宿主"
+        } else {
+            "托盘不可用：当前桌面没有可用托盘宿主；关闭窗口将退出。"
+        };
+        assert_eq!(app.notice, expected);
         assert!(app.busy && app.working);
         app.show_notice("内核已启动".into(), false);
         assert!(app.error && app.notice_visible);
-        assert!(app.notice.contains("托盘不可用"));
+        assert_eq!(app.notice, expected);
     }
 
     #[test]

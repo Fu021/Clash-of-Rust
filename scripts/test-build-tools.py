@@ -1902,6 +1902,9 @@ class BuildTests(unittest.TestCase):
                             and 'control::tests::' in command for command in ui_checks))
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
                             and 'control::dispatch::tests::' in command for command in ui_checks))
+        self.assertTrue(any(command[command.index('-p')+1] == 'clash-cli'
+                            and 'tui::tests::' in command and '--no-run' not in command
+                            for command in ui_checks))
         self.assertTrue(any('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes'
                             in command for command in ui_checks))
         focused = [command for command in ui_checks if
@@ -1937,6 +1940,33 @@ class BuildTests(unittest.TestCase):
         arguments = run.call_args.args[0]
         index = arguments.index('COR_CI_DESKTOP_UI_TESTS')
         self.assertEqual(arguments[index - 1], '--env')
+
+    def test_macos_ui_changes_execute_platform_warning_preservation(self):
+        specification = importlib.util.spec_from_file_location('native_tray_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        case = 'application::async_state_tests::core_initialization_preserves_a_tray_failure_as_a_recoverable_warning'
+        for arch in ('arm64', 'x64'):
+            for enabled in ('true', 'false'):
+                commands = []
+                with self.subTest(arch=arch, enabled=enabled), \
+                        patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                            'COR_CI_DESKTOP_UI_TESTS': enabled, 'COR_CI_UPDATE_TESTS': 'false',
+                            'COR_CI_PROXY_BENCHMARK': 'false'}), \
+                        patch.object(sys, 'argv', ['run-ci.py', '--system', 'macos', '--arch', arch]), \
+                        patch.object(native_ci, 'host_system', return_value='macos'), \
+                        patch.object(native_ci, 'host_arch', return_value=arch), \
+                        patch.object(local_cache, 'workspace_sources'), \
+                        patch.object(local_cache, 'compiler_cache_checkpoint'), \
+                        patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                        patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+                    with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                        native_ci.main()
+                checks = [command for command in commands if case in command]
+                self.assertEqual(len(checks), int(enabled == 'true'))
+                for command in checks:
+                    self.assertIn('--exact', command)
+                    self.assertNotIn('--no-run', command)
 
     def test_linux_tun_changes_run_agent_and_restart_checks_without_full_suite(self):
         specification = importlib.util.spec_from_file_location('native_tun_ci', build.ROOT/'scripts/run-ci.py')

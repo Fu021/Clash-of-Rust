@@ -32,6 +32,11 @@ def main():
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
     workspace_sources(ROOT, save=True)
     compiler_cache_checkpoint(ROOT)
+    if not extended and args.system == 'macos' and desktop_ui_tests():
+        run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust',
+             '--release', '--locked',
+             'application::async_state_tests::core_initialization_preserves_a_tray_failure_as_a_recoverable_warning',
+             '--', '--exact', '--test-threads=1'])
     if not extended and args.system == 'macos' and proxy_benchmark():
         run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
              'platform::macos::service::tests::', '--', '--test-threads=1'])
@@ -100,6 +105,7 @@ def main():
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),
+                ('clash-cli', ['--bin', 'cor'], ['tui::tests::']),
                 ('clash-client-runtime', ['--lib'],
                  ['control::dispatch::tests::']
                  + ([] if linux_user_tests() else ['control::tests::']))):
