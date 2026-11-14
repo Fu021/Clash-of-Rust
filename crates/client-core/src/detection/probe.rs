@@ -32,7 +32,9 @@ pub fn diagnostic_url(input: &str) -> Result<Url> {
     if input.is_empty() || input.len() > 2048 {
         bail!("请输入有效的网站地址");
     }
-    let address = if input.contains("://") {
+    let address = if input.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("https://[{input}]")
+    } else if input.contains("://") {
         input.to_owned()
     } else {
         format!("https://{input}")
@@ -515,6 +517,8 @@ mod tests {
             ("  example.com/path  ", "https://example.com/path"),
             ("http://example.com:8080/", "http://example.com:8080/"),
             ("https://example.com/", "https://example.com/"),
+            ("2001:db8::1", "https://[2001:db8::1]/"),
+            ("[2001:db8::1]:8443", "https://[2001:db8::1]:8443/"),
         ] {
             assert_eq!(diagnostic_url(input).unwrap().as_str(), expected);
         }
