@@ -250,7 +250,7 @@ jobs:
           identity = workspace_restore_identity('.', 'android-main-v3-${{ matrix.arch }}',
               os.environ['WORKSPACE_SOURCE_CACHE'])
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('prefix=' + identity['prefix'] + '\npaths<<CACHE_PATHS\n' +
+              output.write('prefix=' + identity['prefix'] + '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
                   '\n'.join(identity['paths']) + '\nCACHE_PATHS\n')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         timeout-minutes: 5
@@ -273,7 +273,9 @@ jobs:
         with:
           path: ${{ steps.rust_identity.outputs.paths }}
           key: ${{ steps.rust_identity.outputs.prefix }}-compatible-lookup
-          restore-keys: ${{ steps.rust_identity.outputs.prefix }}-
+          restore-keys: |
+            ${{ steps.rust_identity.outputs.prefix }}-
+            ${{ steps.rust_identity.outputs.legacy_prefix }}-
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure' || steps.rust_fallback.outcome == 'failure'
         shell: python
@@ -346,6 +348,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/android.py build --arch ${{ matrix.arch }}
+      - name: Retain completed Android compiler objects after later failures
+        if: ${{ !cancelled() }}
+        shell: python
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import allow_completed_compiler_cache
+          allow_completed_compiler_cache('.')
       - name: Save Android Go compilation
         if: github.ref == 'refs/heads/main' && steps.go_cache.outputs.cache-hit != 'true' && steps.go_cache.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -554,7 +564,7 @@ jobs:
           identity = workspace_restore_identity('.', 'native-main-v3-${{ matrix.system }}-${{ matrix.arch }}',
               pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('prefix=' + identity['prefix'] + '\npaths<<CACHE_PATHS\n' +
+              output.write('prefix=' + identity['prefix'] + '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
                   '\n'.join(identity['paths']) + '\nCACHE_PATHS\n')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         timeout-minutes: 5
@@ -579,7 +589,9 @@ jobs:
         with:
           path: ${{ steps.rust_identity.outputs.paths }}
           key: ${{ steps.rust_identity.outputs.prefix }}-compatible-lookup
-          restore-keys: ${{ steps.rust_identity.outputs.prefix }}-
+          restore-keys: |
+            ${{ steps.rust_identity.outputs.prefix }}-
+            ${{ steps.rust_identity.outputs.legacy_prefix }}-
       - name: Discard interrupted GitHub compiler restore
         if: steps.rust_github.outcome == 'failure' || steps.rust_fallback.outcome == 'failure'
         run: |
@@ -630,6 +642,13 @@ jobs:
           elif '${{ matrix.system }}' == 'linux':
               command = [sys.executable, 'scripts/linux_ci.py', 'ci']
           subprocess.run(command, check=True)
+      - name: Retain completed native compiler objects after later failures
+        if: ${{ !cancelled() }}
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import allow_completed_compiler_cache
+          allow_completed_compiler_cache('.')
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         id: native_build
         with:

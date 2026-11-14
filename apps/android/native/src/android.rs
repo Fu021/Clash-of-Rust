@@ -3762,6 +3762,8 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
     let size = ui.window().size();
     let mut snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
+            "working":data.get_working(),"profile_busy":data.get_profile_busy(),
+            "draft_dirty":view.get_draft_dirty(),"modal":view.get_modal(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
             "vpn_pending":data.get_vpn_pending(),
             "delay_busy":data.get_delay_busy(),

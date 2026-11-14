@@ -170,6 +170,14 @@ jobs:
           if os.environ['BENCH_ROWS'].strip():
               command += ['--rows', os.environ['BENCH_ROWS']]
           subprocess.run(command, check=True)
+      - name: Retain completed benchmark compiler objects after later failures
+        if: ${{ !cancelled() }}
+        shell: python
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from action_cache import allow_completed_compiler_cache
+          allow_completed_compiler_cache('source')
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

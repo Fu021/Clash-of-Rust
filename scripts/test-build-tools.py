@@ -1523,6 +1523,9 @@ class BuildTests(unittest.TestCase):
             for path in ('crates/client-core/src/config/mod.rs',
                          'crates/client-core/src/protection/mod.rs',
                          'crates/client-runtime/src/control/mod.rs',
+                         'crates/client-core/src/detection/tools/transport.rs',
+                         'crates/client-core/src/detection/tools/tests.rs',
+                         'crates/client-core/src/detection/probe.rs',
                          'crates/mobile-ffi/src/lib.rs',
                          'apps/android/native/src/android.rs',
                          'crates/client-core/src/application_rules/groups.rs',
@@ -1793,6 +1796,7 @@ class BuildTests(unittest.TestCase):
                 patch.object(native_ci, 'host_system', return_value='linux'), \
                 patch.object(native_ci, 'host_arch', return_value='x64'), \
                 patch.object(local_cache, 'workspace_sources'), \
+                patch.object(local_cache, 'compiler_cache_checkpoint'), \
                 patch.object(native_ci, 'run', side_effect=capture), \
                 patch.object(native_ci, 'cargo_messages', side_effect=capture_test):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
@@ -1817,6 +1821,7 @@ class BuildTests(unittest.TestCase):
                 patch.object(native_ci, 'host_system', return_value='macos'), \
                 patch.object(native_ci, 'host_arch', return_value='x64'), \
                 patch.object(local_cache, 'workspace_sources'), \
+                patch.object(local_cache, 'compiler_cache_checkpoint'), \
                 patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
                 patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
@@ -1836,6 +1841,7 @@ class BuildTests(unittest.TestCase):
                 patch.object(native_ci, 'host_system', return_value='linux'), \
                 patch.object(native_ci, 'host_arch', return_value='x64'), \
                 patch.object(local_cache, 'workspace_sources'), \
+                patch.object(local_cache, 'compiler_cache_checkpoint'), \
                 patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
                 patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
@@ -1866,10 +1872,13 @@ class BuildTests(unittest.TestCase):
                 patch.object(native_ci, 'host_system', return_value='linux'), \
                 patch.object(native_ci, 'host_arch', return_value='x64'), \
                 patch.object(local_cache, 'workspace_sources'), \
+                patch.object(local_cache, 'compiler_cache_checkpoint'), \
                 patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
                 patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
+        clippy = next(command for command in commands if command[1] == 'clippy')
+        self.assertIn('--all-targets', clippy)
         ui_checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
         self.assertTrue(any('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions'
                             in command for command in ui_checks))
@@ -1942,6 +1951,7 @@ class BuildTests(unittest.TestCase):
                 patch.object(native_ci, 'host_system', return_value='linux'), \
                 patch.object(native_ci, 'host_arch', return_value='x64'), \
                 patch.object(local_cache, 'workspace_sources'), \
+                patch.object(local_cache, 'compiler_cache_checkpoint'), \
                 patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
                 patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
@@ -2850,7 +2860,7 @@ Private_Clean: 2 kB
             self.assertNotEqual(first['prefix'], different['prefix'])
             versions = root/'.github/build-versions.json'
             versions.parent.mkdir()
-            versions.write_text('{"ndk":"different"}')
+            versions.write_text('{"tools":{"python_macos":"different"}}')
             changed_tool = local_cache.workspace_restore_identity(
                 *arguments, compiler=b'compiler one', environment=environment)
             self.assertNotEqual(different['prefix'], changed_tool['prefix'])
@@ -2863,6 +2873,97 @@ Private_Clean: 2 kB
             with self.assertRaises(ValueError):
                 local_cache.workspace_restore_identity(
                     root, 'native-main-v3-linux-x64\nunsafe', root/'receipt/source.json')
+
+    def test_compiler_fallback_reuses_objects_across_dependency_and_feature_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = root/'Cargo.toml'
+            manifest.write_text('[workspace]\nmembers=[]\n')
+            lockfile = root/'Cargo.lock'
+            lockfile.write_text('version=4\n')
+            arguments = (root, 'native-main-v3-macos-x64', root/'receipt/source.json')
+            initial = local_cache.workspace_restore_identity(*arguments, compiler=b'rustc', environment={})
+            exact = local_cache.rust_keys(root, b'rustc', {})[0]
+            for manifest_text, lock_text in (
+                    ('[workspace]\nmembers=[]\n[workspace.dependencies]\ntokio="1"\n', 'version=4\n'),
+                    ('[workspace]\nmembers=[]\n[workspace.dependencies]\ntokio={version="1",features=["process"]}\n',
+                     'version=4\n[[package]]\nname="tokio"\nversion="1.0"\nsource="registry+test"\n')):
+                manifest.write_text(manifest_text)
+                lockfile.write_text(lock_text)
+                current = local_cache.workspace_restore_identity(*arguments, compiler=b'rustc', environment={})
+                self.assertEqual(initial['prefix'], current['prefix'])
+                self.assertNotEqual(initial['legacy_prefix'], current['legacy_prefix'])
+                self.assertNotEqual(exact, local_cache.rust_keys(root, b'rustc', {})[0])
+            cargo = root/'.cargo'
+            cargo.mkdir()
+            (cargo/'config.toml').write_text('[build]\nrustflags=["-C","target-cpu=native"]\n')
+            current = local_cache.workspace_restore_identity(*arguments, compiler=b'rustc', environment={})
+            self.assertNotEqual(initial['prefix'], current['prefix'])
+
+    def test_compiler_compatibility_scopes_tools_and_preserves_legacy_lookup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=[]\n')
+            versions = root/'.github/build-versions.json'
+            versions.parent.mkdir()
+            baseline = {'tools': {'rust': '1', 'python': '3', 'python_macos': '3',
+                                   'tailscale': '1', 'gradle': '1'},
+                        'upstream': {'android': {'ndk': '1', 'system_image': 'one'},
+                                     'linux': {'image': 'ubuntu@sha256:first'}}}
+            versions.write_text(json.dumps(baseline))
+            def identity(family):
+                return local_cache.workspace_restore_identity(
+                    root, family, root/'receipt/source.json', compiler=b'rustc', environment={})
+            macos = identity('native-main-v3-macos-x64')
+            android = identity('android-main-v3-arm64')
+            linux = identity('native-main-v3-linux-x64')
+            legacy = local_cache.rust_keys(root, b'rustc', {})[1].rstrip('-')
+            expected = local_cache.rust_environment_key(b'rustc', {}) + hashlib.sha256(
+                (legacy+hashlib.sha256(versions.read_bytes()).hexdigest()).encode()).hexdigest()
+            self.assertEqual(macos['legacy_prefix'], 'native-main-v3-macos-x64--'+expected)
+            baseline['tools']['tailscale'] = '2'
+            baseline['tools']['gradle'] = '2'
+            baseline['upstream']['android']['system_image'] = 'two'
+            versions.write_text(json.dumps(baseline))
+            for family, original in (('native-main-v3-macos-x64', macos), ('android-main-v3-arm64', android)):
+                self.assertEqual(original['prefix'], identity(family)['prefix'])
+            baseline['upstream']['android']['ndk'] = '2'
+            versions.write_text(json.dumps(baseline))
+            self.assertEqual(macos['prefix'], identity('native-main-v3-macos-x64')['prefix'])
+            self.assertNotEqual(android['prefix'], identity('android-main-v3-arm64')['prefix'])
+            baseline['upstream']['linux']['image'] = 'ubuntu@sha256:second'
+            versions.write_text(json.dumps(baseline))
+            self.assertNotEqual(linux['prefix'], identity('native-main-v3-linux-x64')['prefix'])
+            baseline['tools']['python_macos'] = '4'
+            versions.write_text(json.dumps(baseline))
+            self.assertNotEqual(macos['prefix'], identity('native-main-v3-macos-x64')['prefix'])
+
+    def test_only_current_successful_compiler_checkpoint_allows_failure_save(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = {'GITHUB_ACTIONS': 'true', 'GITHUB_REF': 'refs/heads/main',
+                           'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2',
+                           'GITHUB_ENV': str(root/'environment')}
+            with patch.dict(os.environ, environment, clear=True), \
+                    patch.object(local_cache.subprocess, 'check_output', return_value='a'*40+'\n'):
+                self.assertFalse(local_cache.allow_completed_compiler_cache(root))
+                local_cache.compiler_cache_checkpoint(root)
+                checkpoint = root/'target/compiler-cache-ready.json'
+                original = checkpoint.read_text()
+                for field in ('schema', 'run_id', 'attempt', 'commit'):
+                    record = json.loads(original)
+                    record[field] = 'stale'
+                    checkpoint.write_text(json.dumps(record))
+                    self.assertFalse(local_cache.allow_completed_compiler_cache(root), field)
+                for invalid in ('[]', '{bad json', 'x'*4097):
+                    checkpoint.write_text(invalid)
+                    self.assertFalse(local_cache.allow_completed_compiler_cache(root))
+                checkpoint.write_text(original)
+                with patch.dict(os.environ, {'GITHUB_REF': 'refs/pull/1/merge'}):
+                    self.assertFalse(local_cache.allow_completed_compiler_cache(root))
+                self.assertFalse((root/'environment').exists())
+                self.assertTrue(local_cache.allow_completed_compiler_cache(root))
+                self.assertEqual((root/'environment').read_text(), 'CACHE_ON_FAILURE=true\n')
 
     def test_compiler_fallback_generations_share_the_existing_retention_family(self):
         suffix = '-workspace-'+'a'*64+'-local-deps-v1-check-Darwin-x64-'+'b'*16+'-'+'c'*16
@@ -3002,6 +3103,33 @@ Private_Clean: 2 kB
                 view.write_bytes(b'new component');os.utime(view,ns=(1,1))
                 local_cache.workspace_sources(root)
                 self.assertFalse(fingerprint.exists())
+
+    def test_dependency_manifest_updates_leave_unrelated_workspace_objects_for_cargo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = root/'Cargo.toml'
+            manifest.write_text('[workspace]\nmembers=[]\n')
+            lockfile = root/'Cargo.lock'
+            lockfile.write_text('version=4\n')
+            vendor = root/'vendor/renderer'
+            vendor.mkdir(parents=True)
+            (vendor/'Cargo.toml').write_text('[package]\nname="renderer"\nversion="1.0.0"\n')
+            paths = b'Cargo.toml\0Cargo.lock\0vendor/renderer/Cargo.toml\0'
+            with patch.object(local_cache.subprocess, 'check_output', return_value=paths), \
+                    patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': str(root/'receipt/source.json')}):
+                local_cache.workspace_sources(root, save=True)
+                marker = root/'target/release/.fingerprint/renderer-first/lib-info'
+                marker.parent.mkdir(parents=True)
+                marker.write_bytes(b'unrelated renderer object')
+                manifest.write_text('[workspace]\nmembers=[]\n[workspace.dependencies]\ntokio="1"\n')
+                lockfile.write_text('version=4\n[[package]]\nname="tokio"\nversion="1.0"\n')
+                local_cache.workspace_sources(root)
+                self.assertTrue(marker.is_file())
+                output = root/'target/release/build/renderer-first/output'
+                output.parent.mkdir(parents=True)
+                output.write_text('cargo:rerun-if-changed='+str(manifest)+'\n')
+                local_cache.workspace_sources(root)
+                self.assertFalse(marker.exists())
 
     def test_rust_shards_only_upload_changed_buckets_and_verify_before_extracting(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4441,6 +4569,7 @@ runpy.run_path(str(script), run_name='__main__')
                 (network_cases[1],None,'application routing test failed'),
                 (network_cases[2],None,'tile test failed'),
                 (network_cases[3],None,'diagnostic export test failed'),
+                (network_cases[0],None,'instrumentation transport timeout'),
                 (None,RuntimeError('Android test log end marker is missing'),'partial log'),
                 (None,None,'Mobile runtime stopped: core failure')):
             with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \
@@ -4452,6 +4581,9 @@ runpy.run_path(str(script), run_name='__main__')
                     if 'instrument' in command:
                         case=command[command.index('class')+1].split('#')[1]
                         cases.append(case)
+                        if case==failed_case and captured_log=='instrumentation transport timeout':
+                            raise subprocess.TimeoutExpired(command,240,
+                                output=b'INSTRUMENTATION_STATUS: class=ProxyTunTest')
                         output='FAILURES!!!' if case==failed_case else 'OK (1 test)'
                         return subprocess.CompletedProcess(command,0,output,'')
                     return subprocess.CompletedProcess(command,0,'','')
@@ -4485,6 +4617,16 @@ runpy.run_path(str(script), run_name='__main__')
                 report=root/'target/android-report/x64'
                 self.assertFalse((report/'input-method-status.json').exists())
                 self.assertTrue((report/'instrumentation.txt').is_file())
+                statuses = json.loads((report/'instrumentation-status.json').read_text())['cases']
+                self.assertEqual([record['case'] for record in statuses], list(network_cases))
+                self.assertTrue(all(record['completed'] for record in statuses))
+                self.assertEqual([record['case'] for record in statuses if not record['passed']],
+                                 [failed_case] if failed_case else [])
+                if captured_log=='instrumentation transport timeout':
+                    self.assertTrue(statuses[0]['transport_error'])
+                    self.assertEqual(statuses[0]['returncode'],255)
+                    self.assertIn('INSTRUMENTATION_STATUS: class=ProxyTunTest',
+                                  (report/'instrumentation.txt').read_text())
 
     def test_android_measurement_reports_reject_stale_misclassified_or_incompatible_evidence(self):
         cases = ['without-vpn', 'with-vpn', 'controller-authentication', 'recovered']

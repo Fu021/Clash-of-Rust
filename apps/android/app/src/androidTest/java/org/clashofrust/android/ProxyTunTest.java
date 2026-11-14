@@ -1264,13 +1264,31 @@ public class ProxyTunTest {
         SystemClock.sleep(500);
     }
     private static void previewNavigate(int page) throws Exception {
-        await("Could not navigate to screenshot page " + page, () -> {
-            JSONObject ui = MainActivity.diagnostics();
-            if (ui.optInt("page", -1) == page && ui.optInt("detail", -1) == 0) return true;
-            tryPreviewTarget("preview-nav:" + page);
-            SystemClock.sleep(350);
-            return false;
-        });
+        try {
+            waitForAppWindow();
+            await("Could not navigate to screenshot page " + page, () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                if (ui.optInt("page", -1) == page && ui.optInt("detail", -1) == 0) return true;
+                tryPreviewTarget("preview-nav:" + page);
+                SystemClock.sleep(350);
+                return false;
+            });
+        } catch (AssertionError failure) {
+            java.util.concurrent.atomic.AtomicReference<String> window =
+                new java.util.concurrent.atomic.AtomicReference<>("No resumed MainActivity");
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                for (android.app.Activity activity : androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+                        .getInstance().getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED)) {
+                    if (!(activity instanceof MainActivity)) continue;
+                    android.view.View decor = activity.getWindow().getDecorView();
+                    window.set("focused=" + activity.hasWindowFocus() + ", attached=" + decor.isAttachedToWindow()
+                        + ", shown=" + decor.isShown() + ", laidOut=" + decor.isLaidOut()
+                        + ", layoutRequested=" + decor.isLayoutRequested()
+                        + ", width=" + decor.getWidth() + ", height=" + decor.getHeight());
+                }
+            });
+            throw new AssertionError(failure.getMessage() + "; Android window: " + window.get(), failure);
+        }
     }
     private static void previewTool(int page) throws Exception {
         previewNavigate(10);

@@ -640,7 +640,6 @@ fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
                 up: "128.9 KiB/s".into(),
                 download: "123.4 GiB".into(),
                 upload: "123.4 MiB".into(),
-                ..Default::default()
             })
             .collect::<Vec<_>>(),
     ));

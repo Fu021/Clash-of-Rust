@@ -661,6 +661,8 @@ def main():
         command.append('--release')
     with (output/'build.log').open('x') as log:
         subprocess.run(command, cwd=source, stdout=log, stderr=subprocess.STDOUT, check=True)
+    from action_cache import compiler_cache_checkpoint
+    compiler_cache_checkpoint(source)
     subprocess.run([sys.executable, source/'scripts/prepare-resources.py', '--system', 'linux', '--arch', 'x64'], cwd=source, check=True)
     resources = source/'bundle/linux-x64/resources'
     for name in ('core.json', 'geodata.json'):

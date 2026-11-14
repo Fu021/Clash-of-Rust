@@ -309,7 +309,7 @@ def workspace_sources(source, save=False):
         owners = [directory for directory in packages if name.startswith(directory + '/')]
         if owners:
             invalid.add(packages[max(owners, key=len)])
-        elif name.startswith(('resources/', '.cargo/')) or name in ('Cargo.toml', 'LICENSE'):
+        elif name.startswith(('resources/', '.cargo/')) or name == 'LICENSE':
             invalid.update(packages.values())  # Shared resources/manifest changed.
         # Cargo.lock changes are handled by Cargo's dependency fingerprints.
         # A reqwest update alone must not discard unrelated Slint/UI objects.
@@ -374,16 +374,74 @@ def workspace_restore_identity(source, family, receipt, compiler=None, environme
     receipt = Path(receipt).resolve()
     environment = dict(os.environ if environment is None else environment)
     compiler = subprocess.check_output(['rustc', '-vV']) if compiler is None else compiler
-    compatible = rust_keys(source, compiler, environment)[1].rstrip('-')
+    legacy = rust_keys(source, compiler, environment)[1].rstrip('-')
     versions = source/'.github/build-versions.json'
-    toolchain = hashlib.sha256(versions.read_bytes() if versions.is_file() else b'').hexdigest()
+    toolchain = versions.read_bytes() if versions.is_file() else b''
+    legacy = rust_environment_key(compiler, environment) + hashlib.sha256(
+        (legacy+hashlib.sha256(toolchain).hexdigest()).encode()).hexdigest()
+    baseline = json.loads(toolchain) if toolchain else {}
+    tools = baseline.get('tools', {})
+    system = family.split('-')[-2] if family.startswith('native-') else 'linux'
+    python = 'python_windows_arm64' if family.endswith('windows-arm64') else 'python_'+system
+    inputs = {
+        'profile': tomllib.loads((source/'Cargo.toml').read_text()).get('profile', {}),
+        'tools': {'rust': tools.get('rust'), 'python': tools.get(python, tools.get('python'))},
+        'cargo': {path.relative_to(source).as_posix(): digest(path)
+                  for path in sorted((source/'.cargo').rglob('*')) if path.is_file()},
+    }
+    if family.startswith('android-'):
+        android = baseline.get('upstream', {}).get('android', {})
+        inputs['tools'].update(go=tools.get('go'), ndk=android.get('ndk'),
+                               platform=android.get('platform'), build_tools=android.get('build_tools'))
+    elif system == 'linux':
+        inputs['linux'] = baseline.get('upstream', {}).get('linux', {})
+        dockerfile = source/'resources/linux/ubuntu20.Dockerfile'
+        inputs['dockerfile'] = digest(dockerfile) if dockerfile.is_file() else None
     compatible = rust_environment_key(compiler, environment) + hashlib.sha256(
-        (compatible+toolchain).encode()).hexdigest()
+        json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     cargo = Path(environment.get('CARGO_HOME', str(Path.home()/'.cargo'))).resolve()
     return {
         'prefix': family+'--'+compatible,
+        'legacy_prefix': family+'--'+legacy,
         'paths': [str(cargo/'registry'), str(cargo/'git'), str(source/'target'), str(receipt.parent)],
     }
+
+
+def compiler_cache_checkpoint(source):
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        return
+    source = Path(source)
+    path = source/'target/compiler-cache-ready.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, {
+        'schema': 1, 'run_id': os.environ.get('GITHUB_RUN_ID'),
+        'attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
+        'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip(),
+    })
+
+
+def allow_completed_compiler_cache(source):
+    if os.environ.get('GITHUB_REF') != 'refs/heads/main' or not os.environ.get('GITHUB_ENV'):
+        return False
+    source = Path(source)
+    path = source/'target/compiler-cache-ready.json'
+    try:
+        if path.is_symlink() or path.stat().st_size > 4096:
+            return False
+        record = json.loads(path.read_text())
+        if (not isinstance(record, dict) or record.get('schema') != 1
+                or not os.environ.get('GITHUB_RUN_ID') or not os.environ.get('GITHUB_RUN_ATTEMPT')
+                or record.get('run_id') != os.environ['GITHUB_RUN_ID']
+                or record.get('attempt') != os.environ['GITHUB_RUN_ATTEMPT']
+                or record.get('commit') != subprocess.check_output(
+                    ['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()):
+            return False
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    with open(os.environ['GITHUB_ENV'], 'a') as output:
+        output.write('CACHE_ON_FAILURE=true\n')
+    print('Compiler cache: this attempt completed compilation; preserve objects after later failures.', flush=True)
+    return True
 
 
 def rust_keys(source, compiler, environment):

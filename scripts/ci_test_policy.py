@@ -98,6 +98,7 @@ def select(paths, extended=False):
         path.startswith(('crates/client-ui/', 'apps/desktop-ui/src/', 'vendor/winit/',
                          'apps/desktop/src/application/', 'crates/client-core/src/config/',
                          'crates/client-core/src/protection/', 'crates/client-runtime/src/control/',
+                         'crates/client-core/src/detection/',
                          'crates/mobile-ffi/src/', 'apps/android/native/src/',
                          'crates/client-core/src/application_rules.rs',
                          'crates/client-core/src/application_rules/',

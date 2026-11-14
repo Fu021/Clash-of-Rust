@@ -38,7 +38,13 @@ CI 的分支任务与 Memory 清理任务从 main 加载保留策略；旧分支
 
 共享是单向的：开发分支及 PR 可以恢复默认分支 main 的兼容缓存，main 不能反向读取 PR 缓存。当前[不保存分支差异](cache-capacity.md#main-基线与分支只读)；GitHub 不会自动合并归档，制作差异还需扫描完整对象并核验基线，目前没有真实运行证据证明其收益超过成本。缺少兼容基线或恢复损坏时正常重编。新命名空间只由可信 main 写入完整基线，不通过切换触发事件或提升 PR 权限绕过作用域。
 
-CI 使用 `native-main-v3-<平台>-<架构>--`、`android-main-v3-<ABI>--`，Memory 保持 `memory-main-v2-<profile>`。CI 的兼容身份由实际 rustc、相关编译环境、各 Cargo manifest/锁文件、`.cargo` 与工具基线生成；编译环境包含 Rust flags、编码 flags、目标、C/C++ 编译器及 flags、CMake 配置，不把切换原生工具链当作兼容命中。精确键另含源码代际。精确恢复未命中时，用同一兼容身份只读恢复此前源码归档；恢复路径和顺序与锁定版本 Rust Cache 一致，随后仍由该 Action 清理并只在 main 成功时保存新代。不同平台、架构、编译器、profile、依赖或工具版本不共用回退前缀，不能通过宽平台前缀误取其他对象。任一步恢复失败都会丢弃不完整对象；源码回执按内容恢复未变文件时间戳，并失效变化 crate 及共享构建输入。旧目录和 `build/<包>/<hash>/{out,fingerprint,run}` 布局都保留支持。v3 首次填充和下一次跨提交恢复须分别实测，不能用历史同提交暖构建代替。
+CI 使用 `native-main-v3-<平台>-<架构>--`、`android-main-v3-<ABI>--`，Memory 保持 `memory-main-v2-<profile>`。CI 的兼容身份保留实际 rustc、编译环境、workspace profile、`.cargo` 及本平台编译工具；编译环境包含 Rust flags、编码 flags、目标、C/C++ 编译器及 flags、CMake 配置。Android 另区分 NDK、Go 和目标平台，Linux 另区分容器输入；桌面缓存不因 Android 模拟器、Gradle 或 Tailscale 版本变化失效。精确键仍包含 manifest、锁文件和源码代际，兼容前缀不包含依赖约束或 features；新增或更新依赖时恢复已有对象，由 Cargo 指纹决定重编范围。迁移时还按旧的完整身份尝试一次只读恢复，不扩大旧归档的兼容范围。
+
+不同平台、架构、编译器、profile 和关键工具版本仍隔离。恢复路径和顺序与锁定版本 Rust Cache 一致，任一步失败都会丢弃不完整对象；源码回执按内容恢复未变文件时间戳，并失效变化 crate 及共享构建输入。旧目录和 `build/<包>/<hash>/{out,fingerprint,run}` 布局都保留支持。首次填充和下一次跨提交恢复须分别实测，不能用历史同提交暖构建代替。
+
+CI 与 Memory 在编译成功后写入仅属于本次 run、attempt 和提交的检查点；CI 同时更新源码回执。后续源码测试、安装验收或附件上传失败时，只有核对当前检查点成功，才允许 Rust Cache 的 post 步骤保存对象；编译未完成、其他分支、旧 attempt 和旧提交不能开启失败保存。缓存不是验收结果，任务及发布门禁仍照常失败；取消的运行不额外启用保存。保留策略仍只清除已有替代缓存的旧代，不删除唯一旧基线。
+
+锁定的 [Rust Cache 实现](https://github.com/Swatinem/rust-cache/blob/d1527c8f67ef9af357290475d4af4b0fab8f12e0/action.yml)在恢复时用 `cache-on-failure: false` 初始化 `CACHE_ON_FAILURE`，post 条件再读取环境变量。检查点通过后写入 `GITHUB_ENV` 才能改变后续保存行为；不要在恢复步骤提前求值该变量或无条件开启失败保存。
 
 Linux 和 Android 保留 workspace 编译结果及经过内容核对的源码时间戳，不再精确命中旧依赖缓存后永久跳过新对象保存；Linux 容器同时挂载源码回执，避免宿主和容器读取不同位置。Windows ARM64 保留依赖缓存，只在本地 vendor 源码变化时更新键，不因每次业务源码变动重压整个 workspace；其他桌面端继续保留 workspace。全部使用 zstd 快速压缩级别 1，缓存仍不可变，首次填充和后续暖恢复需分别测量。
 

@@ -330,7 +330,7 @@ def apk_identity(metadata, version):
 
 
 def build(arch):
-    from action_cache import workspace_sources
+    from action_cache import compiler_cache_checkpoint, workspace_sources
     from ci_test_policy import enabled, extended_tests
     workspace_sources(ROOT)
     packages = ['-p', 'clash-mobile-runtime', '-p', 'clash-android']
@@ -376,6 +376,8 @@ def build(arch):
     })
     cargo_build(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked', '--', '-D', 'warnings'], cwd=ROOT, env=env)
     cargo_build(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
+    workspace_sources(ROOT, save=True)
+    compiler_cache_checkpoint(ROOT)
     destination = ANDROID/'app/native-libs'/abi
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT/'target'/target/'release/libclash_mobile.so', destination)
@@ -966,6 +968,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     log_capture=start_test_log(report,marker)
     try:
         outputs=[]
+        statuses=[]
         from ci_test_policy import android_cases
         cases=(('applicationRoutingPersistsAndKeepsOtherAppsOnline',) if routing_only else
                ('androidUiPreviewCapturesPagesAndApplications',) if applications_only else
@@ -983,16 +986,38 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                 print(f'IME round {iteration}: system animation scale {animation_scale}',flush=True)
             for case in cases:
                 stop_app_before_test()
-                result = subprocess.run([ADB,'shell','am','instrument','-w','-e','class',
+                started=time.monotonic()
+                status={'case':case,'round':iteration,'completed':False,'passed':False}
+                statuses.append(status)
+                write_json(report/'instrumentation-status.json',{'schema':1,'cases':statuses})
+                command = [ADB,'shell','am','instrument','-w','-e','class',
                     'org.clashofrust.android.ProxyTunTest#'+case,
                     '-e','ime_round',str(iteration),
                     '-e','ime_probe',str(ime_probe).lower(),
-                    'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner'],
-                    text=True,capture_output=True,timeout=600 if applications_only else 240)
+                    'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner']
+                timeout = 600 if applications_only else 240
+                try:
+                    result = subprocess.run(command,text=True,capture_output=True,timeout=timeout)
+                except subprocess.TimeoutExpired as error:
+                    stdout = error.stdout or ''
+                    stderr = error.stderr or ''
+                    if isinstance(stdout, bytes):
+                        stdout = stdout.decode(errors='replace')
+                    if isinstance(stderr, bytes):
+                        stderr = stderr.decode(errors='replace')
+                    result = subprocess.CompletedProcess(command,255,stdout,
+                        stderr+f'\nADB command timed out after {timeout}s')
+                passed = (result.returncode == 0 and 'FAILURES!!!' not in result.stdout
+                          and 'OK (1 test)' in result.stdout)
+                status.update(completed=True,returncode=result.returncode,
+                              elapsed_seconds=round(time.monotonic()-started,3),passed=passed,
+                              transport_error=adb_transport_failed(result))
+                write_json(report/'instrumentation-status.json',{'schema':1,'cases':statuses})
                 outputs.append(f'Round {iteration}: '+case+'\n'+result.stdout+result.stderr)
                 (report/'instrumentation.txt').write_text('\n\n'.join(outputs))
                 print(result.stdout,flush=True)
-                if result.returncode or 'FAILURES!!!' in result.stdout or 'OK (1 test)' not in result.stdout:
+                if not passed:
+                    record_adb_health(report)
                     failures.append(f'{case} round {iteration}')
         if failures:
             raise RuntimeError('Android integration test failed: '+', '.join(failures))

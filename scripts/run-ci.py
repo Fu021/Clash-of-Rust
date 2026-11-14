@@ -16,7 +16,7 @@ def main():
     args = parser.parse_args()
     if (args.system, args.arch) != (host_system(), host_arch()):
         raise ValueError('CI must run on the selected native architecture')
-    from action_cache import workspace_sources
+    from action_cache import compiler_cache_checkpoint, workspace_sources
     workspace_sources(ROOT)
     run(['cargo', 'fmt', '--all', '--', '--check'])
     # Shared Python checks run in the workflow's prerequisite job, before the
@@ -25,9 +25,13 @@ def main():
     # dependency compilation and produces the exact binaries released later.
     packages = desktop_cargo_scope(ROOT)
     extended = extended_tests()
-    clippy_targets = ['--all-targets'] if extended else ['--lib', '--bins']
+    source_regressions = (args.system, args.arch) == ('linux', 'x64') and (
+        desktop_ui_tests() or linux_user_tests() or update_tests())
+    clippy_targets = ['--all-targets'] if extended or source_regressions else ['--lib', '--bins']
     run(['cargo', 'clippy', *packages, '--release', *clippy_targets, '--locked', '--', '-D', 'warnings'])
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
+    workspace_sources(ROOT, save=True)
+    compiler_cache_checkpoint(ROOT)
     if not extended and args.system == 'macos' and proxy_benchmark():
         run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
              'platform::macos::service::tests::', '--', '--test-threads=1'])
