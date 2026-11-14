@@ -89,7 +89,7 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 图形及其他平台的 `update install` 返回“安装助手已启动”只说明已交接，不等于安装完成。使用同一账户及原有 `--data-dir` 参数执行 `cor update status` 查看结果；状态保存在数据目录 `update-install.json`，临时安装目录清理后仍可查询。Linux 终端安装也保存同一记录。安装失败会给出原因，准备或安装中不冒充成功。诊断报告的 `update_installation` 同步保留该结果。
 
-`service status` 只读查询，不创建数据目录或启用服务。Linux 分别显示配置是否存在、登录自启、服务运行状态、MainPID、当前后台 PID，以及后台是否由该服务管理；“已安装/已启用”不代表正在运行，独立启动的后台也不等于服务失效。macOS 查询 launchd；Windows 保留登录任务开关与后台身份，未观测到服务状态时返回 `null`，不推断正在运行。用户总线不可达、查询超时或输出缺失时标记“未确认”并保留 `service_error`/`backend_error`。JSON 保留 `installed`、`matches_current`、`path`（适用平台），增加 `enabled`、`active`、`main_pid`、`owner_pid` 和 `ownership`；查询不会执行 reload/enable/start。
+`service status` 只读查询，不创建数据目录或启用服务。Linux 分别显示配置是否存在、登录自启、服务运行状态、MainPID、当前后台 PID，以及后台是否由该服务管理；“已安装/已启用”不代表正在运行，独立启动的后台也不等于服务失效。macOS 查询 launchd；Windows 保留登录任务开关与后台身份，未观测到服务状态时返回 `null`，不推断正在运行。配置不可读、用户总线不可达、查询超时或输出缺失时，只将受影响的状态标为“未确认”，分别保留 `config_error`、`service_error`、`backend_error` 和诊断入口，其余观测继续显示。JSON 保留 `installed`、`matches_current`、`path`（适用平台），增加 `enabled`、`active`、`main_pid`、`owner_pid` 和 `ownership`；查询不会执行 reload/enable/start。
 
 使用 `cor config set update_prereleases true` 将预发布版纳入检查，默认 `false`。关闭时所有用户都以线上最新正式版为目标，即使本地为 `0.999.0` 等更高版本，也可检查、下载并确认返回正式版；版本相同时不重复提示。开启后才纳入预发布版，且只提供比本地更高的版本。GUI 与 CLI 共用此设置，细则见[更新通道](../workflows/versions.md#版本与更新通道)。
 

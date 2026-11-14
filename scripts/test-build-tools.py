@@ -1400,6 +1400,24 @@ class BuildTests(unittest.TestCase):
             self.assertIn('--phase', result.stdout)
             self.assertEqual(driver.stat().st_mode & 0o777, 0o644)
 
+    def test_installed_update_environment_uses_only_the_test_account(self):
+        home = Path('/home/disposable-account')
+        with patch.dict(os.environ, {'HOME': '/root', 'XDG_CONFIG_HOME': '/root/.config',
+                                     'CLASH_OF_RUST_DATA_DIR': '/root/private',
+                                     'SUDO_UID': '0'}):
+            environment = cli_update.phase_environment('disposable-account', '1002', home)
+        result = subprocess.run(
+            [sys.executable, '-B', '-c', 'import json, os; print(json.dumps(dict(os.environ)))'],
+            env=environment, text=True, capture_output=True, check=True)
+        observed = json.loads(result.stdout)
+        self.assertEqual(observed['HOME'], str(home))
+        self.assertEqual(observed['XDG_CONFIG_HOME'], str(home/'.config'))
+        self.assertEqual(observed['XDG_DATA_HOME'], str(home/'.local/share'))
+        self.assertEqual(observed['USER'], 'disposable-account')
+        self.assertEqual(observed['XDG_RUNTIME_DIR'], '/run/user/1002')
+        self.assertNotIn('CLASH_OF_RUST_DATA_DIR', observed)
+        self.assertNotIn('SUDO_UID', observed)
+
     def test_terminal_update_result_requires_helper_exit_and_a_persisted_terminal_state(self):
         for code, state, accepted in ((0, 'succeeded', True), (0, 'failed', True),
                                       (0, 'preparing', False), (0, 'installing', False),

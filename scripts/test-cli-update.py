@@ -100,6 +100,22 @@ def stage_test_driver(directory):
     return directory/'test-cli-update.py'
 
 
+def phase_environment(user, uid, home):
+    environment = {
+        'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        'HOME': str(home), 'USER': user, 'LOGNAME': user,
+        'XDG_CONFIG_HOME': str(home/'.config'), 'XDG_DATA_HOME': str(home/'.local/share'),
+        'XDG_CACHE_HOME': str(home/'.cache'), 'XDG_STATE_HOME': str(home/'.local/state'),
+        'XDG_RUNTIME_DIR': f'/run/user/{uid}',
+        'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus',
+        'GITHUB_ACTIONS': 'true', 'PYTHONDONTWRITEBYTECODE': '1',
+    }
+    for key in ('LD_LIBRARY_PATH', 'SYSTEMROOT'):
+        if key in os.environ:
+            environment[key] = os.environ[key]
+    return environment
+
+
 def exercise_read_only(report):
     data = report/'uninitialized'
     for arguments in (('node', 'list'), ('connection', 'list'), ('service', 'status')):
@@ -354,6 +370,8 @@ def main():
         try:
             invoke(['sudo', '-n', 'useradd', '--create-home', '--user-group', '--shell', '/bin/bash', user])
             uid = invoke(['id', '-u', user]).stdout.strip()
+            home = Path(invoke(['getent', 'passwd', user]).stdout.strip().split(':')[5])
+            environment = phase_environment(user, uid, home)
             for phase in ('denied', 'allowed', 'service'):
                 output = staging/phase
                 invoke(['sudo', '-n', 'install', '-d', '-m', '0700', '-o', user, '-g', user, output])
@@ -365,9 +383,8 @@ def main():
                 if phase == 'service':
                     invoke(['sudo', '-n', 'systemctl', 'start', f'user@{uid}.service'])
                 command = [
-                    'sudo', '-n', '-u', user, '-H', 'env', 'GITHUB_ACTIONS=true',
-                    'PYTHONDONTWRITEBYTECODE=1',
-                    f'XDG_RUNTIME_DIR=/run/user/{uid}', f'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus',
+                    'sudo', '-n', '-u', user, '-H', 'env', '-i',
+                    *(f'{key}={value}' for key, value in environment.items()),
                     sys.executable, driver,
                     '--package', staged, '--phase', phase, '--report', output,
                 ]

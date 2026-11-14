@@ -36,9 +36,9 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
 
 fn needs_failure_hint(args: &Args, value: &Value) -> bool {
     if args.path == "service status"
-        && value["service_error"]
-            .as_str()
-            .is_some_and(|error| !error.is_empty())
+        && ["config_error", "service_error", "backend_error"]
+            .into_iter()
+            .any(|key| value[key].as_str().is_some_and(|error| !error.is_empty()))
     {
         return true;
     }
@@ -151,6 +151,22 @@ mod tests {
         assert!(text.contains("登录自启：未确认"), "{text}");
         assert!(text.contains("服务状态：未确认"), "{text}");
         assert!(text.contains("用户总线不可达"), "{text}");
+    }
+
+    #[test]
+    fn unreadable_service_configuration_keeps_other_observations_and_diagnostics() {
+        let value = json!({
+            "installed":null,"matches_current":null,"enabled":true,"active":true,
+            "main_pid":123,"owner_pid":123,"ownership":"service",
+            "config_error":"无法读取 CLI 登录自启配置：Permission denied"
+        });
+        let args = crate::args::parse(["service".into(), "status".into()]).unwrap();
+        assert!(needs_failure_hint(&args, &value));
+        let text = render(&["service", "status"], value);
+        assert!(text.contains("CLI 自启配置：未确认"), "{text}");
+        assert!(text.contains("服务状态：运行中"), "{text}");
+        assert!(text.contains("由登录服务管理"), "{text}");
+        assert!(text.contains("Permission denied"), "{text}");
     }
 
     #[test]

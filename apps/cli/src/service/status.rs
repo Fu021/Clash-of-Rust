@@ -9,6 +9,27 @@ use clash_client_runtime::{
 };
 use serde_json::{Value, json};
 
+#[cfg(unix)]
+pub(super) fn configuration(path: &std::path::Path, expected: &str) -> Value {
+    let mut value = json!({
+        "installed":null,"matches_current":null,"path":path,"scope":"current-user-logon"
+    });
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            value["installed"] = json!(true);
+            value["matches_current"] = json!(text == expected);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            value["installed"] = json!(false);
+            value["matches_current"] = json!(false);
+        }
+        Err(error) => {
+            value["config_error"] = json!(format!("无法读取 CLI 登录自启配置：{error}"));
+        }
+    }
+    value
+}
+
 pub(super) async fn enrich(args: &Args, mut value: Value) -> Value {
     let owner = async {
         let Some(_) = backend::connect(args, false).await? else {
@@ -166,6 +187,32 @@ fn macos(text: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn configuration_read_failures_do_not_masquerade_as_missing_units() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("service");
+        let missing = configuration(&path, "expected");
+        assert_eq!(missing["installed"], false);
+        assert!(!path.exists());
+        std::fs::write(&path, "expected").unwrap();
+        let matching = configuration(&path, "expected");
+        assert_eq!(matching["installed"], true);
+        assert_eq!(matching["matches_current"], true);
+        assert_eq!(configuration(&path, "different")["matches_current"], false);
+        std::fs::write(&path, [0xff]).unwrap();
+        let unreadable = configuration(&path, "expected");
+        assert!(unreadable["installed"].is_null());
+        assert!(unreadable["matches_current"].is_null());
+        assert!(
+            unreadable["config_error"]
+                .as_str()
+                .unwrap()
+                .contains("无法读取")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), [0xff]);
+    }
 
     #[test]
     fn linux_states_distinguish_configuration_activity_and_unknown() {

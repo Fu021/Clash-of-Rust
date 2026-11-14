@@ -235,7 +235,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                         _ => "未确认",
                     },
                 )?;
-                for name in ["service_error", "backend_error"] {
+                for name in ["config_error", "service_error", "backend_error"] {
                     if let Some(error) = value[name].as_str() {
                         field(out, "查询失败", error)?;
                     }

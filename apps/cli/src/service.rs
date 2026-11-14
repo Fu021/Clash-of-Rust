@@ -34,13 +34,8 @@ pub async fn execute(args: &Args) -> Result<()> {
     #[cfg(unix)]
     {
         let (path, text) = definition(args)?;
-        let existing = match std::fs::read_to_string(&path) {
-            Ok(text) => Some(text),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error).context("无法读取 CLI 登录自启配置"),
-        };
         if args.path == "service status" {
-            let mut value = json!({"installed":existing.is_some(),"matches_current":existing.as_deref()==Some(&text),"path":path,"scope":"current-user-logon"});
+            let mut value = status::configuration(&path, &text);
             match status::query().await {
                 Ok(state) => value
                     .as_object_mut()
@@ -55,6 +50,11 @@ pub async fn execute(args: &Args) -> Result<()> {
             }
             return output::emit(args, status::enrich(args, value).await);
         }
+        let existing = match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("无法读取 CLI 登录自启配置"),
+        };
         ensure!(
             existing.as_ref().is_none_or(|current| current == &text),
             "已有不同配置的 CLI 登录服务，请先从原数据目录移除它"
