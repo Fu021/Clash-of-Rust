@@ -111,7 +111,7 @@ impl Decoder {
                             None => (self.bytes.len(), None),
                         }
                     } else {
-                        (2, None)
+                        (1, Some(Key::Escape))
                     }
                 }
                 _ if first < 32 => (1, None),

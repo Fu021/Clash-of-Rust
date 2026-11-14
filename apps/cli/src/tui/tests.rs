@@ -58,6 +58,24 @@ fn decoder_preserves_fragmented_unicode_and_arrow_sequences() {
 }
 
 #[test]
+fn escape_keeps_following_shortcuts_across_input_chunk_boundaries() {
+    for split in [0, 1, 2] {
+        let mut decoder = Decoder::default();
+        let now = Instant::now();
+        let sequence = b"\x1b3";
+        let mut keys = decoder.feed(&sequence[..split], now);
+        keys.extend(decoder.feed(&sequence[split..], now + Duration::from_millis(20)));
+        assert_eq!(keys, [Key::Escape, Key::Char('3')]);
+        let mut state = State::new(true);
+        state.page = Page::Network;
+        for key in keys {
+            state.key(key);
+        }
+        assert!(state.page == Page::Connections);
+    }
+}
+
+#[test]
 fn windows_console_decodes_surrogate_pairs_without_corrupting_later_input() {
     let mut decoder = Utf16Decoder::default();
     assert_eq!(decoder.feed(0xd83c), None);
