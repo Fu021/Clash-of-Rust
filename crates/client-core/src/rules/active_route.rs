@@ -47,11 +47,20 @@ pub fn group<'a>(mode: &str, default: &'a str, proxies: &Proxies) -> Option<&'a 
 }
 /// Use the already loaded proxy page without fetching it a second time.
 pub fn from_snapshot(root: &str, proxies: &Proxies) -> Option<String> {
+    snapshot_path(root, proxies).and_then(|path| path.last().map(|name| (*name).to_owned()))
+}
+
+pub fn path_from_snapshot(root: &str, proxies: &Proxies) -> Option<Vec<String>> {
+    snapshot_path(root, proxies).map(|path| path.into_iter().map(str::to_owned).collect())
+}
+
+fn snapshot_path<'a>(root: &'a str, proxies: &'a Proxies) -> Option<Vec<&'a str>> {
     let mut name = root;
     let mut visited = Vec::new();
     for _ in 0..MAX_DEPTH {
         if terminal(name) {
-            return Some(name.into());
+            visited.push(name);
+            return Some(visited);
         }
         if visited.contains(&name) {
             return None;
@@ -59,10 +68,10 @@ pub fn from_snapshot(root: &str, proxies: &Proxies) -> Option<String> {
         visited.push(name);
         let Some(proxy) = proxies.proxies.get(name) else {
             // A valid group's selected provider member is absent from this map.
-            return (visited.len() > 1).then(|| name.into());
+            return (visited.len() > 1).then_some(visited);
         };
         if proxy.now.as_str().is_empty() {
-            return Some(name.into());
+            return Some(visited);
         }
         name = proxy.now.as_str();
     }
@@ -90,14 +99,25 @@ mod tests {
             "Main": {"type":"Selector", "now":"Auto"},
             "Auto": {"type":"URLTest", "now":"日本节点"},
             "日本节点": {"type":"Trojan"},
-            "Cycle": {"type":"Selector", "now":"Cycle"}
-            ,"Provider": {"type":"Selector", "now":"provider leaf", "all":["provider leaf"]}
+            "Cycle": {"type":"Selector", "now":"Cycle"},
+            "Provider": {"type":"Selector", "now":"provider leaf", "all":["provider leaf"]}
         }}))
         .unwrap();
         assert_eq!(
             from_snapshot("GLOBAL", &proxies).as_deref(),
             Some("日本节点")
         );
+        assert_eq!(
+            path_from_snapshot("GLOBAL", &proxies).unwrap(),
+            ["GLOBAL", "Main", "Auto", "日本节点"]
+        );
+        assert_eq!(
+            path_from_snapshot("Provider", &proxies).unwrap(),
+            ["Provider", "provider leaf"]
+        );
+        assert_eq!(path_from_snapshot("DIRECT", &proxies).unwrap(), ["DIRECT"]);
+        assert!(path_from_snapshot("Cycle", &proxies).is_none());
+        assert!(path_from_snapshot("Missing", &proxies).is_none());
         assert!(from_snapshot("Cycle", &proxies).is_none());
         assert!(from_snapshot("Missing", &proxies).is_none());
         assert_eq!(

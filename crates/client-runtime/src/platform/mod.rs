@@ -23,6 +23,9 @@ struct Journal {
 }
 
 #[cfg(target_os = "linux")]
+#[path = "linux/cli_service.rs"]
+pub mod cli_service;
+#[cfg(target_os = "linux")]
 #[path = "linux/desktop.rs"]
 mod desktop;
 #[cfg(target_os = "linux")]

@@ -1415,6 +1415,36 @@ class BuildTests(unittest.TestCase):
                     with self.assertRaisesRegex(AssertionError, 'terminal result'):
                         cli_update.run_helper(Path('/fixture/update'), Path('/fixture/data'))
 
+    def test_terminal_update_staging_preserves_optional_service_identity(self):
+        for service in (None, {'unit_file': '/home/example/.config/systemd/user/clash-of-rust-cli.service',
+                               'unit_sha256': 'a'*64, 'enabled': 'enabled', 'tun_authorization': True}):
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                data = directory/'data'
+                data.mkdir()
+                settings = {'update_prereleases': True, 'proxy_mode': 'tun'}
+                (data/'settings.json').write_text(json.dumps(settings))
+                package = directory/'candidate.deb'
+                package.write_bytes(b'candidate package')
+                executable = directory/'cor'
+                executable.write_bytes(b'copied updater')
+                staged = directory/'update'
+                staged.mkdir()
+                with patch.object(cli_update, 'CLI', executable), \
+                        patch.object(cli_update.tempfile, 'mkdtemp', return_value=str(staged)), \
+                        patch.object(cli_update, 'endpoint', return_value={'pid': 2468}), \
+                        patch.object(cli_update, 'invoke',
+                                     return_value=subprocess.CompletedProcess([], 0, '0.7.2\n', '')):
+                    self.assertEqual(cli_update.stage(package, data, True, service), staged)
+                plan = json.loads((staged/'plan.json').read_text())
+                self.assertEqual(plan['terminal'].get('user_service'), service)
+                self.assertEqual(plan['data_dir'], str(data))
+                self.assertEqual(plan['parent'], 2468)
+                self.assertEqual(plan['terminal']['settings_sha256'], hashlib.sha256(
+                    json.dumps(settings, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest())
+                self.assertEqual((staged/'package.deb').read_bytes(), package.read_bytes())
+                self.assertEqual(json.loads((data/'update-install.json').read_text())['state'], 'preparing')
+
     def test_installed_terminal_update_is_not_run_in_a_development_environment(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), \
                 patch.object(sys, 'argv', ['test-cli-update.py', '--package', '/candidate.deb']), \
@@ -1488,6 +1518,12 @@ class BuildTests(unittest.TestCase):
                          'apps/android/app/src/main/java/org/clashofrust/android/IncidentNotifications.java'):
                 self.assertTrue(ci_test_policy.select([path])['android_routing_tests'], path)
             for path in ('crates/client-runtime/src/update/install/terminal.rs',
+                         'crates/client-runtime/src/update/install/terminal/service.rs',
+                         'apps/cli/src/service.rs', 'apps/cli/src/service/status.rs',
+                         'apps/cli/src/commands/inspection.rs',
+                         'apps/cli/src/commands/inspection/catalog.rs',
+                         'apps/cli/src/commands/inspection/picker.rs',
+                         'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py',
                          'installer/clash-of-rust.nsi', 'scripts/windows_ci.py',
                          'scripts/windows_update_tests.py', 'scripts/build-installer.py',
@@ -1892,14 +1928,16 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
-        self.assertEqual(len(checks), 5)
+        self.assertEqual(len(checks), 6)
         for package, case in (('clash-client-runtime', 'platform::linux_tun::'),
                               ('clash-client-runtime', 'platform::linux_startup::'),
+                              ('clash-client-runtime', 'platform::cli_service::'),
                               ('clash-client-runtime', 'platform::host_network::'),
-                              ('clash-client-runtime', 'control::tests::'),
-                              ('clash-cli', 'backend::tests::')):
+                              ('clash-client-runtime', 'control::tests::')):
             self.assertTrue(any(command[command.index('-p')+1] == package and case in command
                                 for command in checks), (package, case))
+        cli = next(command for command in checks if command[command.index('-p')+1] == 'clash-cli')
+        self.assertEqual(cli[cli.index('--locked')+1:], ['--', '--test-threads=1'])
         self.assertTrue(ci_test_policy.select([
             'crates/client-runtime/src/platform/linux/tun/terminal_agent.rs'
         ])['linux_user_tests'])

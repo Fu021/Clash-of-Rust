@@ -146,9 +146,9 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "node select",
-        "选择策略组节点；保护期间禁止切换",
-        "node select GROUP NODE",
-        2,
+        "选择策略组节点；省略参数时交互筛选，保护期间禁止切换",
+        "node select [GROUP [NODE]]",
+        0,
         2,
         ""
     ),

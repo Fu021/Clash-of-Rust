@@ -82,7 +82,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 )
                 .await?;
             }
-            crate::service::execute(args)
+            crate::service::execute(args).await
         }
         path if path.starts_with("update ") => update(args).await,
         _ => bail!("未知命令：{}", args.path),

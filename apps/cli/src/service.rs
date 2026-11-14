@@ -6,8 +6,9 @@ use anyhow::{Context, ensure};
 use serde_json::json;
 #[cfg(unix)]
 use std::path::PathBuf;
+mod status;
 
-pub fn execute(args: &Args) -> Result<()> {
+pub async fn execute(args: &Args) -> Result<()> {
     #[cfg(windows)]
     {
         let enabled = match args.path.as_str() {
@@ -17,24 +18,42 @@ pub fn execute(args: &Args) -> Result<()> {
         };
         let resources = args.get("resources").map(backend::absolute).transpose()?;
         let enabled = clash_client_runtime::platform::headless_startup(
-            &backend::store(args)?.root,
+            &backend::data_root(args)?,
             resources.as_deref(),
             enabled,
         )?;
-        output::emit(
-            args,
-            json!({"enabled":enabled,"scope":"current-user-logon"}),
-        )
+        let mut value = json!({"enabled":enabled,"scope":"current-user-logon"});
+        if args.path == "service status" {
+            value["installed"] = serde_json::Value::Null;
+            value["active"] = serde_json::Value::Null;
+            value["main_pid"] = serde_json::Value::Null;
+            value = status::enrich(args, value).await;
+        }
+        output::emit(args, value)
     }
     #[cfg(unix)]
     {
         let (path, text) = definition(args)?;
-        let existing = std::fs::read_to_string(&path).ok();
+        let existing = match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("无法读取 CLI 登录自启配置"),
+        };
         if args.path == "service status" {
-            return output::emit(
-                args,
-                json!({"installed":existing.is_some(),"matches_current":existing.as_deref()==Some(&text),"path":path,"scope":"current-user-logon"}),
-            );
+            let mut value = json!({"installed":existing.is_some(),"matches_current":existing.as_deref()==Some(&text),"path":path,"scope":"current-user-logon"});
+            match status::query().await {
+                Ok(state) => value
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(state.as_object().unwrap().clone()),
+                Err(error) => {
+                    value["enabled"] = serde_json::Value::Null;
+                    value["active"] = serde_json::Value::Null;
+                    value["main_pid"] = serde_json::Value::Null;
+                    value["service_error"] = json!(format!("{error:#}"));
+                }
+            }
+            return output::emit(args, status::enrich(args, value).await);
         }
         ensure!(
             existing.as_ref().is_none_or(|current| current == &text),
@@ -76,50 +95,38 @@ fn system(args: &[&str]) -> Result<()> {
 #[cfg(unix)]
 fn definition(args: &Args) -> Result<(PathBuf, String)> {
     let exe = std::env::current_exe()?;
-    let store = backend::store(args)?;
-    let mut argv = vec![
-        exe.to_string_lossy().into_owned(),
-        "run".into(),
-        "--data-dir".into(),
-        store.root.to_string_lossy().into_owned(),
-    ];
-    if let Some(resources) = args.get("resources") {
-        argv.extend([
-            "--resources".into(),
-            backend::absolute(resources)?.to_string_lossy().into_owned(),
-        ]);
-    }
-    ensure!(
-        argv.iter().all(|s| !s.contains(['\0', '\n', '\r'])),
-        "服务路径不能包含控制字符"
-    );
+    let data = backend::data_root(args)?;
     #[cfg(target_os = "linux")]
     {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-            });
-        ensure!(base.is_absolute(), "无法确定用户配置目录");
-        let quote = |s: &str| {
-            format!(
-                "\"{}\"",
-                s.replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('%', "%%")
-                    .replace('$', "$$")
-            )
-        };
-        let command = argv.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" ");
+        let resources = args.get("resources").map(backend::absolute).transpose()?;
+        let service = clash_client_runtime::platform::cli_service::definition(
+            &exe,
+            &data,
+            resources.as_deref(),
+        )?;
         Ok((
-            base.join("systemd/user/clash-of-rust-cli.service"),
-            format!(
-                "[Unit]\nDescription=Clash of Rust CLI\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart={command}\nTimeoutStopSec=45\n\n[Install]\nWantedBy=default.target\n"
-            ),
+            clash_client_runtime::platform::cli_service::path()?,
+            service,
         ))
     }
     #[cfg(target_os = "macos")]
     {
+        let mut argv = vec![
+            exe.to_string_lossy().into_owned(),
+            "run".into(),
+            "--data-dir".into(),
+            data.to_string_lossy().into_owned(),
+        ];
+        if let Some(resources) = args.get("resources") {
+            argv.extend([
+                "--resources".into(),
+                backend::absolute(resources)?.to_string_lossy().into_owned(),
+            ]);
+        }
+        ensure!(
+            argv.iter().all(|s| !s.contains(['\0', '\n', '\r'])),
+            "服务路径不能包含控制字符"
+        );
         let home = std::env::var_os("HOME").context("无法确定主目录")?;
         let xml = |s: &str| {
             s.replace('&', "&amp;")

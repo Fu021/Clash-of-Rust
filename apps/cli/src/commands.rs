@@ -167,7 +167,8 @@ async fn status(args: &Args) -> Result<()> {
                 .iter()
                 .find(|p| Some(&p.id) == poll.meta.settings.active_profile.as_ref());
             let value = json!({"running":poll.snapshot.running,"owner":poll.meta.owner,"version":poll.meta.version,
-                "profile":profile.map(|p|&p.name),"node":poll.snapshot.active_node,"mode":poll.snapshot.mode,
+                "profile":profile.map(|p|&p.name),"node":poll.snapshot.active_node,
+                "route":poll.snapshot.active_route,"mode":poll.snapshot.mode,
                 "proxy":poll.snapshot.proxy_mode(),"protected":poll.meta.settings.claude_protection.is_some(),
                 "connections":poll.snapshot.connection_count,"upload_rate":poll.snapshot.upload_rate,
                 "download_rate":poll.snapshot.download_rate});

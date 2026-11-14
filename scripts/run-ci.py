@@ -35,11 +35,12 @@ def main():
         for package, target, case in (
                 ('clash-client-runtime', ['--lib'], 'platform::linux_tun::'),
                 ('clash-client-runtime', ['--lib'], 'platform::linux_startup::'),
+                ('clash-client-runtime', ['--lib'], 'platform::cli_service::'),
                 ('clash-client-runtime', ['--lib'], 'platform::host_network::'),
                 ('clash-client-runtime', ['--lib'], 'control::tests::'),
-                ('clash-cli', ['--bin', 'cor'], 'backend::tests::')):
+                ('clash-cli', ['--bin', 'cor'], '')):
             run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
-                 case, '--', '--test-threads=1'])
+                 *([case] if case else []), '--', '--test-threads=1'])
     if not extended and update_tests():
         run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
              'update::', '--', '--test-threads=1'])

@@ -194,11 +194,59 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 .as_bool()
                 .or(value["enabled"].as_bool())
                 .unwrap_or(false);
-            field(
-                out,
-                "CLI 后台登录自启",
-                if installed { "已开启" } else { "已关闭" },
-            )?;
+            if args.path == "service status" {
+                field(
+                    out,
+                    "CLI 自启配置",
+                    match value["installed"].as_bool() {
+                        Some(true) => "已安装",
+                        Some(false) => "未安装",
+                        None => "未确认",
+                    },
+                )?;
+                field(
+                    out,
+                    "登录自启",
+                    match value["enabled"].as_bool() {
+                        Some(true) => "已开启",
+                        Some(false) => "已关闭",
+                        None => "未确认",
+                    },
+                )?;
+                field(
+                    out,
+                    "服务状态",
+                    match value["active"].as_bool() {
+                        Some(true) => "运行中",
+                        Some(false) => "未运行",
+                        None => "未确认",
+                    },
+                )?;
+                field(out, "服务 PID", &text(value, "main_pid"))?;
+                field(out, "后台 PID", &text(value, "owner_pid"))?;
+                field(
+                    out,
+                    "控制方",
+                    match value["ownership"].as_str() {
+                        Some("service") => "由登录服务管理",
+                        Some("detached") => "服务之外的 CLI 后台",
+                        Some("gui") => "桌面客户端",
+                        Some("none") => "无后台",
+                        _ => "未确认",
+                    },
+                )?;
+                for name in ["service_error", "backend_error"] {
+                    if let Some(error) = value[name].as_str() {
+                        field(out, "查询失败", error)?;
+                    }
+                }
+            } else {
+                field(
+                    out,
+                    "CLI 后台登录自启",
+                    if installed { "已开启" } else { "已关闭" },
+                )?;
+            }
             if value.get("path").is_some() {
                 field(out, "配置文件", &text(value, "path"))?;
             }
@@ -300,10 +348,36 @@ fn status(out: &mut dyn Write, value: &Value) -> Result<()> {
         "代理",
         &format!("{} · {}模式", text(value, "proxy"), text(value, "mode")),
     )?;
-    for key in ["profile", "node"] {
-        if !value[key].is_null() {
-            field(out, label(key), &text(value, key))?;
+    if !value["profile"].is_null() {
+        field(out, label("profile"), &text(value, "profile"))?;
+    }
+    let route = value["route"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(clean)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty());
+    if let Some(route) = route {
+        let name = if value["protected"] == true {
+            "保护节点"
+        } else if value["mode"] == "rule" {
+            "规则参考线路"
+        } else {
+            "当前线路"
+        };
+        field(out, name, &route.join(" → "))?;
+        if value["mode"] == "rule" && value["protected"] != true {
+            message(
+                out,
+                "实际连接可能使用其他规则；可用 cor connection list 查看",
+            )?;
         }
+    } else if !value["node"].is_null() {
+        field(out, label("node"), &text(value, "node"))?;
     }
     if !value["protected"].is_null() {
         field(out, "Claude 保护", &text(value, "protected"))?;

@@ -8,6 +8,20 @@ mod service;
 mod users;
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsString::from("__authorize-tun-for-service")])
+    {
+        let result = clash_client_runtime::platform::authorize_tun_terminal(std::path::Path::new(
+            "/opt/clash-of-rust/resources/mihomo",
+        ));
+        if let Err(error) = result {
+            eprintln!("cor: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let mut completion = std::env::args_os().skip(1);
     if completion.next().as_deref() == Some(std::ffi::OsStr::new("__complete")) {
         use std::io::Write;

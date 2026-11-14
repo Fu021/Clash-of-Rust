@@ -65,6 +65,12 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value) -> Result<()> {
 }
 
 pub(super) fn nodes(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
+    if value["offline"] == true {
+        writeln!(
+            out,
+            "内核未运行；显示已保存订阅，未测速。远程节点提供者及动态筛选成员未展开。\n"
+        )?;
+    }
     let entries = rows(&value["items"]);
     if let Some(name) = args.positional.first() {
         writeln!(out, "策略组：{}\n", clean(name))?;
@@ -237,6 +243,10 @@ pub(super) fn rules(out: &mut dyn Write, value: &Value) -> Result<()> {
 }
 
 pub(super) fn connections(out: &mut dyn Write, value: &Value) -> Result<()> {
+    if value["offline"] == true {
+        writeln!(out, "内核未运行，没有活动连接；查询未启动后台或内核。")?;
+        return table::page(out, value);
+    }
     let entries: Vec<_> = if value.get("items").is_some() {
         rows(&value["items"]).iter().collect()
     } else {

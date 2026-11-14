@@ -2410,9 +2410,9 @@ impl Engine {
         Ok(path)
     }
 
-    async fn current_node(&self, mode: &str, proxies: &Proxies) -> Result<Option<String>> {
+    async fn current_route(&self, mode: &str, proxies: &Proxies) -> Result<Option<Vec<String>>> {
         if let Some(protection) = &self.settings.claude_protection {
-            return Ok(Some(protection.node.clone()));
+            return Ok(Some(vec![protection.node.clone()]));
         }
         let default = if mode == "rule" {
             self.default_route()?
@@ -2421,21 +2421,24 @@ impl Engine {
         };
         let mut name = crate::active_route::start(mode, &default).to_owned();
         if !proxies.proxies.is_empty() {
-            return Ok(crate::active_route::from_snapshot(&name, proxies));
+            return Ok(crate::active_route::path_from_snapshot(&name, proxies));
         }
         let mut visited = std::collections::BTreeSet::new();
+        let mut path = Vec::new();
         for _ in 0..crate::active_route::MAX_DEPTH {
             if crate::active_route::terminal(&name) {
-                return Ok(Some(name));
+                path.push(name);
+                return Ok(Some(path));
             }
             if !visited.insert(name.clone()) {
                 return Ok(None);
             }
+            path.push(name.clone());
             let Some(proxy) = self.api.proxy_selection(&name).await? else {
-                return Ok((visited.len() > 1).then_some(name));
+                return Ok((visited.len() > 1).then_some(path));
             };
             if proxy.now.is_empty() {
-                return Ok(Some(name));
+                return Ok(Some(path));
             }
             name = proxy.now;
         }
@@ -2592,14 +2595,18 @@ impl Engine {
         if header {
             // Header failures do not erase useful page data or report a core
             // failure. Hidden-window polling does not request any node details.
-            snapshot.active_node = tokio::time::timeout(
+            snapshot.active_route = tokio::time::timeout(
                 Duration::from_millis(900),
-                self.current_node(&snapshot.mode, &snapshot.proxies),
+                self.current_route(&snapshot.mode, &snapshot.proxies),
             )
             .await
             .ok()
             .and_then(Result::ok)
             .flatten();
+            snapshot.active_node = snapshot
+                .active_route
+                .as_ref()
+                .and_then(|route| route.last().cloned());
         }
         Ok(snapshot)
     }

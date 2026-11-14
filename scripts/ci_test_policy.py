@@ -70,8 +70,9 @@ def select(paths, extended=False):
         for path in paths
     )
     linux = any(
-        path.startswith(('apps/cli/src/users.rs', 'apps/cli/src/host_network.rs', 'apps/cli/src/backend.rs',
-                         'apps/cli/src/service.rs', 'crates/client-runtime/src/platform/linux/tun/',
+        path.startswith(('apps/cli/src/',
+                         'crates/client-runtime/src/platform/linux/tun/',
+                         'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'crates/client-runtime/src/platform/linux/startup.rs',
                          'crates/client-runtime/src/platform/host_network'))
         or path in ('scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py',
@@ -123,6 +124,8 @@ def select(paths, extended=False):
                          'crates/client-core/src/download.rs', 'crates/client-core/src/geodata/',
                          'crates/client-runtime/src/update/', 'apps/cli/src/commands/maintenance.rs',
                          'crates/client-runtime/src/control/', 'apps/cli/src/backend.rs',
+                         'apps/cli/src/service', 'apps/cli/src/commands/inspection',
+                         'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'installer/', 'crates/client-runtime/src/platform/windows/'))
         or path in ('scripts/test-cli-update.py', 'scripts/ci_test_policy.py',
                     'scripts/windows_ci.py', 'scripts/windows_update_tests.py',

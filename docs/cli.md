@@ -19,17 +19,17 @@ cor profile list
 cor profile use 我的订阅
 cor start
 cor node list
-cor node select Proxy 节点名称
+cor node select
 cor proxy tun
 cor status
 cor stop
 ```
 
-依次添加和选择订阅、后台启动、选择节点、启用 TUN、查看状态并停止。名称和组名以实际订阅为准；首次 TUN 可能需要系统授权。服务器建议使用 TUN；后台登录自启见[`service install`](cli/maintenance.md#维护与后台自启)。
+依次添加和选择订阅、后台启动、交互选择策略组与节点、启用 TUN、查看状态并停止。交互列表支持输入文字筛选、编号选择和 `q` 取消；脚本使用 `cor node select GROUP NODE`。首次 TUN 可能需要系统授权。服务器建议使用 TUN；后台登录自启见[`service install`](cli/maintenance.md#维护与后台自启)。
 
 节点和策略组名称以实际订阅为准；带空格的名称应使用引号。订阅可用完整 ID 或唯一名称定位，重名时须使用 ID。CLI 首次启动沿用内置“默认直连”。
 
-GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。GUI 未运行时，需要后台的命令会自动创建无界面后台，无需手动运行 `cor run`；查询、修改配置不会自行开启系统代理。需要网络的命令会启动内核并恢复已保存的代理模式。`status`、`stop`、`help`、`version`、补全生成不会启动后台。
+GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。GUI 未运行时，需要后台的命令会自动创建无界面后台，无需手动运行 `cor run`；查询、修改配置不会自行开启系统代理。需要网络的命令会启动内核并恢复已保存的代理模式。`status`、`stop`、`node list`、`connection list/show`、`service status`、`help`、`version`、补全生成不会启动后台。节点离线查询显示已保存订阅，不能代表实时选择或测速。
 
 每个数据目录只有一个运行层所有者；随后打开的 GUI 会接入该后台。退出 GUI 会停止内核及其独立后台。`cor stop` 会停止内核、恢复网络；没有关联窗口时独立后台同时退出；有关联窗口时保留后台，窗口可直接重新启动内核。
 

@@ -43,7 +43,7 @@
 | `geo status` / `geo update` | 查看或校验更新 Geo 数据 |
 | `update check` | 按已保存的更新通道检查；默认仅正式版 |
 | `update download -o FILE` | 下载并校验当前平台安装包，不安装 |
-| `update install --yes` | 下载并校验后安装；Linux 无窗口时在当前终端授权并等待结果，安装失败尝试恢复原后台；成功后用 `cor start` 启动。有窗口及其他桌面平台沿用系统安装助手 |
+| `update install --yes` | 下载并校验后安装；Linux 无窗口时在当前终端授权、等待结果并恢复原后台与内核运行状态。有窗口及其他桌面平台沿用系统安装助手 |
 | `update status` | 不启动后台，读取本账户和数据目录中的最近安装结果；区分准备、安装中、成功与失败 |
 | `autostart [on\|off]` | 桌面程序登录后在后台启动，不主动打开窗口 |
 | `service install --yes` | 为当前用户配置 CLI 后台登录自启 |
@@ -69,7 +69,11 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 
 没有桌面窗口时，`cor update install` 在当前终端通过 `sudo` 授权，不依赖桌面 polkit 授权代理。授权失败、取消或安装交接已过期时保留原后台；只有授权通过且后台、设置与数据目录仍匹配本次请求，才停止后台并安装。root 不再提权；普通账户缺少 sudo 时明确报错，可用 `cor update download --output cor-update.deb` 下载后交管理员安装，不要把整个更新命令切换到另一账户来绕过授权。
 
-终端会等待 DEB 安装结束并报告实际结果，包管理器错误的有界尾部也写入安装记录，供诊断导出。失败时尝试以原账户、原数据目录和资源路径恢复后台：原来运行的内核重新启动，原来未运行的内核保持关闭。恢复失败同时保留安装与恢复错误，并给出 `cor start` 和诊断入口。成功安装仍由用户执行 `cor start`，避免更新后自动接管网络。
+终端会等待 DEB 安装结束并报告实际结果，包管理器错误的有界尾部也写入安装记录，供诊断导出。安装成功或失败后，都会尝试以原账户、原数据目录和资源路径恢复后台：原来运行的内核重新启动，原来未运行的内核保持关闭。只有确认恢复结果后才报告完成；安装成功但恢复失败时分别说明这两个结果，不把已安装误报成未安装。
+
+原内核运行且由 systemd 用户服务管理时，更新后仍通过该服务启动。已启用、程序与数据目录完全匹配的同名服务，也可重新接管此前手动启动的后台；不会仅凭服务名启动其他配置或其他账户。恢复前后核对 unit 内容、启用状态、覆盖配置和后台 PID；服务被修改、禁用或移除时明确报错，不重建服务、不重复启动后台。重新安装后 TUN 授权仍在原终端完成。若原内核已经关闭，只恢复不启动内核的后台，不通过默认启动内核的服务恢复。
+
+`service status` 显示服务配置是否存在；存在且已启用不等于服务当前正在运行。Linux 可用 `systemctl --user status clash-of-rust-cli.service` 核对实际服务，`cor status` 核对原数据目录的后台。旧版更新器成功后只停止后台，随后手动 `cor start` 可能让后台运行于服务之外，并不说明 unit 已被删除。使用新实现的更新器前开始的安装，不会追溯获得自动恢复能力。
 
 成功结果中的 `error=false` 不触发故障反馈提示；实际失败仍附诊断命令。
 
@@ -84,6 +88,8 @@ CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用
 `cor config set update_check_interval_minutes 0` 关闭自动检查，`cor config set update_check_interval_minutes 360` 恢复默认；允许 0–10080 分钟，与 GUI“计划任务”保存同一设置。具体启动、调度及暂停语义见[自动检查更新](../workflows/versions.md#自动检查更新)。手动 `cor update check` 不受该间隔限制；纯 CLI 后台不额外启动自动检查任务。
 
 图形及其他平台的 `update install` 返回“安装助手已启动”只说明已交接，不等于安装完成。使用同一账户及原有 `--data-dir` 参数执行 `cor update status` 查看结果；状态保存在数据目录 `update-install.json`，临时安装目录清理后仍可查询。Linux 终端安装也保存同一记录。安装失败会给出原因，准备或安装中不冒充成功。诊断报告的 `update_installation` 同步保留该结果。
+
+`service status` 只读查询，不创建数据目录或启用服务。Linux 分别显示配置是否存在、登录自启、服务运行状态、MainPID、当前后台 PID，以及后台是否由该服务管理；“已安装/已启用”不代表正在运行，独立启动的后台也不等于服务失效。macOS 查询 launchd；Windows 保留登录任务开关与后台身份，未观测到服务状态时返回 `null`，不推断正在运行。用户总线不可达、查询超时或输出缺失时标记“未确认”并保留 `service_error`/`backend_error`。JSON 保留 `installed`、`matches_current`、`path`（适用平台），增加 `enabled`、`active`、`main_pid`、`owner_pid` 和 `ownership`；查询不会执行 reload/enable/start。
 
 使用 `cor config set update_prereleases true` 将预发布版纳入检查，默认 `false`。关闭时所有用户都以线上最新正式版为目标，即使本地为 `0.999.0` 等更高版本，也可检查、下载并确认返回正式版；版本相同时不重复提示。开启后才纳入预发布版，且只提供比本地更高的版本。GUI 与 CLI 共用此设置，细则见[更新通道](../workflows/versions.md#版本与更新通道)。
 

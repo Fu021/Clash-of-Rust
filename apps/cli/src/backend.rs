@@ -44,16 +44,23 @@ pub fn timeout(args: &Args) -> Result<Duration> {
 }
 
 pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
-    let store = store(args)?;
+    let store = if spawn {
+        store(args)?
+    } else {
+        Store {
+            root: data_root(args)?,
+        }
+    };
     if let Some(remote) = Remote::discover(&store, timeout(args)?)? {
         match remote.request::<Meta>(Command::Meta).await {
             Ok(_) => return Ok(Some(remote)),
-            Err(error) if store.instance_lock().is_err() => {
-                return Err(
-                    error.context(Unavailable("存活的后台暂时不可达，请先保留排障现场".into()))
-                );
+            Err(error) => {
+                if owner_locked(&store)? {
+                    return Err(
+                        error.context(Unavailable("存活的后台暂时不可达，请先保留排障现场".into()))
+                    );
+                }
             }
-            Err(_) => {}
         }
     }
     if !spawn {
@@ -122,6 +129,21 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
             )));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+fn owner_locked(store: &Store) -> Result<bool> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .open(store.root.join("instance.lock"))
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("无法检查后台的占用锁"),
+    };
+    match file.try_lock_shared() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(error) => Err(error).context("无法检查后台的占用锁"),
     }
 }
 pub async fn remote(args: &Args) -> Result<Remote> {
@@ -291,6 +313,35 @@ pub async fn interrupted() -> Result<()> {
 mod tests {
     use super::*;
     use clash_client_runtime::{config::Settings, engine::ProxyMode};
+
+    #[tokio::test]
+    async fn inspection_does_not_initialize_a_missing_data_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("absent");
+        let args = crate::args::parse([
+            "node".into(),
+            "list".into(),
+            "--data-dir".into(),
+            root.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert!(connect(&args, false).await.unwrap().is_none());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn observing_the_owner_lock_neither_creates_it_nor_steals_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store {
+            root: temporary.path().to_owned(),
+        };
+        assert!(!owner_locked(&store).unwrap());
+        assert!(!store.root.join("instance.lock").exists());
+        let owner = store.instance_lock().unwrap();
+        assert!(owner_locked(&store).unwrap());
+        drop(owner);
+        assert!(!owner_locked(&store).unwrap());
+    }
 
     #[test]
     fn restart_authorizes_before_stopping_a_running_tun_but_start_reuses_it() {

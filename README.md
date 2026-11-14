@@ -8,19 +8,41 @@
   </picture>
 </h1>
 
-基于 mihomo 的原生 Rust 代理客户端。提供 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 最低 20.04）**、**macOS 14 及以上（Intel / Apple Silicon）** 和 **Android（ARM64 / ARMv7 / x86_64，最低安装版本 8.0）**。Android 各版本和厂商 ROM 的验证范围、已知问题见[兼容性说明](apps/android/README.md#兼容性与验证范围)。源码版本 **0.7.2-fix.2.update-memory**，更新内容见[发布说明](docs/releases/0.7.2-fix.2.update-memory.md)；已发布版本以 GitHub Releases 为准。
+<p align="center">
+  原生界面 · 命令行 · 应用分流 · 网络诊断
+</p>
+<p align="center">
+  <a href="https://github.com/Fu021/Clash-of-Rust/releases/latest"><img src="https://img.shields.io/github/v/release/Fu021/Clash-of-Rust?label=stable&amp;color=2b9b78" alt="最新正式版"></a>
+  <a href="https://github.com/Fu021/Clash-of-Rust/releases"><img src="https://img.shields.io/github/v/release/Fu021/Clash-of-Rust?include_prereleases&amp;sort=date&amp;label=latest&amp;color=c77d45" alt="最新发布（含预发布）"></a>
+  <a href="https://github.com/Fu021/Clash-of-Rust/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Fu021/Clash-of-Rust/ci.yml?branch=main&amp;label=CI" alt="main 分支 CI 状态"></a>
+  <a href="https://github.com/Fu021/Clash-of-Rust/releases"><img src="https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/total?label=downloads&amp;color=577cad" alt="全部版本累计下载次数"></a>
+</p>
+<p align="center">
+  <a href="#安装与使用">下载安装</a> ·
+  <a href="#界面预览">界面预览</a> ·
+  <a href="#命令行">命令行</a> ·
+  <a href="docs/README.md">使用与开发文档</a>
+</p>
 
-## Features
+基于 **Rust + Slint + mihomo** 的原生代理客户端，无需 WebView。一个后台连接桌面界面与 `cor` 命令行，Android 使用独立移动宿主。
 
-- **轻量**：Rust + Slint 原生界面，无需 WebView，页面数据按需加载。
-- **CLI**：Windows、Linux、macOS 均支持无界面运行，适用于服务器与 SSH，覆盖 GUI 中的大部分配置与维护操作，详见 [CLI 使用文档](docs/cli.md)。
-- **Android 应用分流**：选择全部、仅选中或排除应用；Android 10+ 可按应用指定直连、策略组或节点，保存后重新连接生效。
-- **离线就绪**：内置 mihomo 内核和 Geo 数据，支持一键更新 Geo 数据。
-- **IP 检测**：183 个检测项，覆盖出口 IP、GitHub、AI 服务与流媒体地区访问；一键检测显示分类报告，点击分类或状态查看详情，支持筛选与分类重测。
-- **A÷检测**：采集 Claude 地区、DNS、WebRTC 与浏览器线索，扫描已记录项目配置并分类展示；可选一键保护，锁定节点及规则/全局模式并启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复原设置。各页盾牌显示保护就绪、验证中或异常，Android 常驻通知同步标注，详见 [检测说明](docs/claude-region-detection.md)。
-- **便捷使用**：托盘快捷切换节点，可选显示上传与下载速度；支持后台开机自启、单实例与网络诊断，记住普通窗口尺寸与位置，关闭窗口后释放界面进程；内核启动失败时可直接重试。
-- **Fake-IP 控制**：DNS 覆盖下可独立开关 Fake-IP；排除项标明自定义或 DNS 覆盖来源，内置项删除后支持一键还原，详见[界面说明](crates/client-ui/README.md)。
-- **客户端更新**：默认检查正式版，可选预发布版，桌面预发布版可切回正式版；支持下载进度与取消；校验完成后桌面自动安装与重启，Android 由系统确认安装，失败时显示原因。
+支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 最低 20.04）**、**macOS 14+（Intel / Apple Silicon）** 和 **Android 8.0+（ARM64 / ARMv7 / x86_64）**。Android 各版本和厂商 ROM 的验证范围见[兼容性说明](apps/android/README.md#兼容性与验证范围)。
+
+当前源码与预发布版本：**0.7.2-fix.2.update-memory**，见[更新内容](docs/releases/0.7.2-fix.2.update-memory.md)；下方下载表提供 **0.7.1 正式版**。
+
+## 功能一览
+
+| 功能 | 能做什么 |
+| --- | --- |
+| 🖥️ 原生界面 | 浅色与深色主题、强调色、宫格与列表、手机与平板布局；页面数据按需加载。 |
+| ⌨️ 命令行 | Windows、Linux、macOS 无界面运行，与窗口共用后台和内核，适用于服务器与 SSH。[使用文档](docs/cli.md) |
+| 📱 应用分流 | Android 全部、仅选中或排除应用；Android 10+ 可按应用指定直连、策略组或节点。[配置说明](docs/android-application-routing.md) |
+| 🌐 网络检测 | 出口 IP、GitHub、AI 服务与流媒体访问检测，分类报告、筛选与重测；可导出诊断。[诊断说明](docs/diagnostics.md) |
+| 🛡️ Claude 保护 | A÷检测汇总地区、DNS、WebRTC 与项目配置线索；保护启用 TUN、加密 DNS 与异常连接拦截，锁定节点及网络修改，关闭后恢复设置。[检测与保护](docs/claude-region-detection.md) |
+| 📦 内置资源与更新 | 内置 mihomo 与 Geo 数据；支持 Geo 更新、正式版与预发布版更新、进度与取消，校验安装包 SHA256；桌面可从预发布版切回正式版，Android 安装由系统确认。 |
+| ⚙️ 日常使用 | 托盘切换节点与速度显示、后台自启动、单实例、窗口位置记忆；关闭窗口释放界面进程。DNS 覆盖下可独立管理 Fake-IP 及排除项。[界面说明](crates/client-ui/README.md) |
+
+## 界面预览
 
 | 浅色首页 | 深色首页 |
 | --- | --- |

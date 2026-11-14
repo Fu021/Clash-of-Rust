@@ -9,6 +9,8 @@ use std::{
     os::fd::AsFd,
     sync::atomic::{AtomicBool, Ordering},
 };
+mod service;
+use service::UserService;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Recovery {
@@ -16,6 +18,8 @@ pub(super) struct Recovery {
     resources: PathBuf,
     running: bool,
     settings_sha256: String,
+    #[serde(default)]
+    user_service: Option<UserService>,
 }
 
 fn settings_sha256(engine: &Engine) -> Result<String> {
@@ -63,11 +67,13 @@ pub(crate) fn prepare_terminal_install(
         executable == Path::new("/opt/clash-of-rust/cor"),
         "终端自动安装仅支持 DEB 安装的 cor"
     );
+    let user_service = UserService::capture(engine, &executable)?;
     plan.terminal = Some(Recovery {
         executable,
         resources: engine.resource_directory().to_owned(),
         running: engine.running(),
         settings_sha256: settings_sha256(engine)?,
+        user_service,
     });
     fs::write(directory.join("plan.json"), serde_json::to_vec(&plan)?)?;
     fs::copy(
@@ -285,6 +291,28 @@ async fn stop_owner(plan: &Plan, directory: &Path) -> Result<()> {
 fn restore_owner(plan: &Plan) -> Result<()> {
     let recovery = plan.terminal.as_ref().context("缺少后台恢复信息")?;
     let data_dir = plan.data_dir.as_ref().context("缺少安装数据目录")?;
+    let store = Store::at(data_dir.clone())?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let endpoint = control::Endpoint::read(&store)?;
+        anyhow::ensure!(
+            endpoint
+                .as_ref()
+                .is_none_or(|endpoint| endpoint.pid == plan.parent),
+            "其他后台已接管原数据目录，未重复启动"
+        );
+        if store.instance_lock().is_ok() {
+            break;
+        }
+        anyhow::ensure!(Instant::now() < deadline, "原后台尚未完成退出");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if let Some(service) = &recovery.user_service
+        && recovery.running
+    {
+        service.restore(plan, recovery)?;
+        return verify_owner(plan, recovery);
+    }
     let mut command = foreground(&recovery.executable)?;
     command
         .arg("--data-dir")
@@ -292,19 +320,7 @@ fn restore_owner(plan: &Plan) -> Result<()> {
         .arg("--resources")
         .arg(&recovery.resources);
     if recovery.running {
-        let mut child = command.arg("start").spawn().context("无法重新启动原后台")?;
-        let deadline = Instant::now() + Duration::from_secs(90);
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                bail!("等待原内核恢复超时，请运行 cor status");
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        };
+        let status = wait_command(command.arg("start"), "等待原内核恢复超时")?;
         anyhow::ensure!(status.success(), "恢复原内核失败（{status}）");
     } else {
         use std::os::unix::fs::OpenOptionsExt;
@@ -323,6 +339,27 @@ fn restore_owner(plan: &Plan) -> Result<()> {
             .spawn()
             .context("无法重新启动原后台")?;
     }
+    verify_owner(plan, recovery)
+}
+
+fn wait_command(command: &mut Command, timeout: &str) -> Result<std::process::ExitStatus> {
+    let mut child = command.spawn().context("无法启动后台恢复命令")?;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{timeout}，请运行 cor status");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn verify_owner(plan: &Plan, recovery: &Recovery) -> Result<()> {
+    let data_dir = plan.data_dir.as_ref().context("缺少安装数据目录")?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -333,16 +370,35 @@ fn restore_owner(plan: &Plan) -> Result<()> {
             if let Some(remote) = Remote::discover(&store, Duration::from_secs(2))?
                 && let Ok(meta) = remote.request::<Meta>(control::Command::Meta).await
             {
+                let endpoint = control::Endpoint::read(&store)?.context("无法核对恢复后的后台")?;
                 anyhow::ensure!(
-                    meta.running == recovery.running,
-                    "后台已恢复，但内核状态与更新前不同，请运行 cor status"
+                    endpoint.owner == control::Owner::Daemon && endpoint.pid != plan.parent,
+                    "原数据目录的后台身份与预期不同"
                 );
-                return Ok(());
+                if recovered_core_ready(meta.running, recovery)? {
+                    if let Some(service) = &recovery.user_service
+                        && recovery.running
+                    {
+                        service.verify(endpoint.pid)?;
+                    }
+                    return Ok(());
+                }
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        bail!("等待原后台恢复超时，请运行 cor status")
+        bail!("等待原后台及内核恢复超时，请运行 cor status")
     })
+}
+
+fn recovered_core_ready(running: bool, recovery: &Recovery) -> Result<bool> {
+    if recovery.running {
+        return Ok(running);
+    }
+    anyhow::ensure!(
+        !running,
+        "后台已恢复，但原来关闭的内核被启动，请运行 cor status"
+    );
+    Ok(true)
 }
 
 fn failure_message(error: &anyhow::Error, recovery: Option<Result<()>>) -> String {
@@ -367,6 +423,7 @@ fn check_interrupted() -> Result<()> {
 
 fn transaction(
     version: &str,
+    was_running: bool,
     authorize: impl FnOnce() -> Result<()>,
     commit: impl FnOnce() -> Result<()>,
     install: impl FnOnce() -> Result<()>,
@@ -375,9 +432,21 @@ fn transaction(
 ) -> Outcome {
     let result = authorize().and_then(|()| commit()).and_then(|()| install());
     match result {
-        Ok(()) => Outcome {
-            message: format!("已更新至 {version}；可用 cor start 启动后台"),
-            error: false,
+        Ok(()) => match recover() {
+            Ok(()) => Outcome {
+                message: if was_running {
+                    format!("已更新至 {version}；已恢复后台和内核")
+                } else {
+                    format!("已更新至 {version}；后台已恢复，内核保持关闭")
+                },
+                error: false,
+            },
+            Err(error) => Outcome {
+                message: format!(
+                    "已安装 {version}，但恢复后台失败：{error:#}；请运行 cor status 检查后重试"
+                ),
+                error: true,
+            },
         },
         Err(error) => Outcome {
             message: failure_message(&error, committed().then(recover)),
@@ -405,6 +474,9 @@ pub(super) fn helper(directory: &Path) {
     let interactive = std::io::stdin().is_terminal();
     let outcome = transaction(
         &plan.version,
+        plan.terminal
+            .as_ref()
+            .is_some_and(|recovery| recovery.running),
         || {
             verify(&plan, directory)?;
             authorize(interactive)?;
@@ -470,6 +542,7 @@ mod tests {
                 resources: "/opt/clash-of-rust/resources".into(),
                 running: true,
                 settings_sha256: "0".repeat(64),
+                user_service: None,
             }),
         }
     }
@@ -524,6 +597,7 @@ mod tests {
         fs::write(&plan.package, b"changed package").unwrap();
         let outcome = transaction(
             &plan.version,
+            true,
             || verify(&plan, download.path()),
             || panic!("must not stop the owner"),
             || panic!("must not install changed bytes"),
@@ -538,6 +612,7 @@ mod tests {
     fn authorization_denial_never_stops_the_owner_or_installs() {
         let outcome = transaction(
             "0.6.7",
+            true,
             || bail!("authorization denied"),
             || panic!("must not stop the owner"),
             || panic!("must not install"),
@@ -556,6 +631,7 @@ mod tests {
             let committed = Cell::new(false);
             let outcome = transaction(
                 "0.6.7",
+                true,
                 || {
                     events.borrow_mut().push("authorize");
                     Ok(())
@@ -598,6 +674,7 @@ mod tests {
             let recovered = Cell::new(false);
             let outcome = transaction(
                 "0.6.7",
+                true,
                 || Ok(()),
                 || bail!("commit failed"),
                 || panic!("must not install after an unacknowledged shutdown"),
@@ -613,22 +690,75 @@ mod tests {
     }
 
     #[test]
-    fn successful_install_waits_for_completion_and_does_not_restart_the_old_core() {
-        let installed = Cell::new(false);
+    fn successful_install_restores_the_original_running_state_after_installation() {
+        for running in [false, true] {
+            let events = RefCell::new(Vec::new());
+            let outcome = transaction(
+                "0.6.7",
+                running,
+                || Ok(()),
+                || {
+                    events.borrow_mut().push("stop");
+                    Ok(())
+                },
+                || {
+                    events.borrow_mut().push("install");
+                    Ok(())
+                },
+                || panic!("successful installation has already committed"),
+                || {
+                    events.borrow_mut().push("recover");
+                    Ok(())
+                },
+            );
+            assert_eq!(*events.borrow(), ["stop", "install", "recover"]);
+            assert!(!outcome.error);
+            assert!(outcome.message.contains("已更新至 0.6.7"));
+            assert_eq!(outcome.message.contains("内核保持关闭"), !running);
+        }
+    }
+
+    #[test]
+    fn installed_package_with_failed_restart_preserves_both_results() {
         let outcome = transaction(
             "0.6.7",
+            true,
             || Ok(()),
             || Ok(()),
-            || {
-                installed.set(true);
-                Ok(())
-            },
-            || panic!("must not recover a successful installation"),
-            || panic!("must not restart a successful installation"),
+            || Ok(()),
+            || panic!("successful installation has already committed"),
+            || bail!("service disabled during authorization"),
         );
-        assert!(installed.get());
-        assert!(!outcome.error);
-        assert!(outcome.message.contains("已更新至 0.6.7"));
+        assert!(outcome.error);
+        assert!(outcome.message.contains("已安装 0.6.7"));
+        assert!(outcome.message.contains("恢复后台失败"));
+        assert!(outcome.message.contains("service disabled"));
+        assert!(!outcome.message.contains("更新失败"));
+    }
+
+    #[test]
+    fn old_recovery_records_without_service_metadata_remain_compatible() {
+        let recovery: Recovery = serde_json::from_value(serde_json::json!({
+            "executable": "/opt/clash-of-rust/cor",
+            "resources": "/opt/clash-of-rust/resources",
+            "running": true,
+            "settings_sha256": "0".repeat(64)
+        }))
+        .unwrap();
+        assert!(recovery.user_service.is_none());
+    }
+
+    #[test]
+    fn recovery_waits_for_core_readiness_without_accepting_an_unexpected_start() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let plan = plan(data.path(), directory.path());
+        let mut recovery = plan.terminal.unwrap();
+        assert!(!recovered_core_ready(false, &recovery).unwrap());
+        assert!(recovered_core_ready(true, &recovery).unwrap());
+        recovery.running = false;
+        assert!(recovered_core_ready(false, &recovery).unwrap());
+        assert!(recovered_core_ready(true, &recovery).is_err());
     }
 
     #[test]

@@ -20,6 +20,8 @@ pub struct Snapshot {
     pub version: String,
     pub mode: String,
     pub active_node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_route: Option<Vec<String>>,
     pub active_group: Option<String>,
     pub tun: bool,
     pub system_proxy: bool,

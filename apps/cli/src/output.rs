@@ -22,16 +22,27 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
         if !args.flag("quiet") {
             eprintln!("已保存：{path}");
         }
-        if crate::diagnostics::has_failure(&value) {
+        if needs_failure_hint(args, &value) {
             crate::diagnostics::failure_hint(Some(args));
         }
         return Ok(());
     }
     write_output(&mut std::io::stdout().lock(), args, &value)?;
-    if crate::diagnostics::has_failure(&value) {
+    if needs_failure_hint(args, &value) {
         crate::diagnostics::failure_hint(Some(args));
     }
     Ok(())
+}
+
+fn needs_failure_hint(args: &Args, value: &Value) -> bool {
+    if matches!(args.path.as_str(), "status" | "stop" | "proxy")
+        && let Some(fields) = value.as_object()
+    {
+        return fields.iter().any(|(key, item)| {
+            key != "host_routes" && crate::diagnostics::has_failure(&json!({(key):item}))
+        });
+    }
+    crate::diagnostics::has_failure(value)
 }
 
 fn write_output(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
@@ -108,6 +119,46 @@ mod tests {
         let mut out = Vec::new();
         write_output(&mut out, &args, &redact(value)).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn service_output_separates_enabled_from_running_and_owner() {
+        let value = json!({
+            "installed":true,"enabled":true,"active":false,"main_pid":0,
+            "owner_pid":123,"ownership":"detached","matches_current":true
+        });
+        let text = render(&["service", "status"], value.clone());
+        assert!(text.contains("登录自启：已开启"), "{text}");
+        assert!(text.contains("服务状态：未运行"), "{text}");
+        assert!(text.contains("服务之外的 CLI 后台"), "{text}");
+        let mut unknown = value;
+        unknown["enabled"] = Value::Null;
+        unknown["active"] = Value::Null;
+        unknown["ownership"] = json!("unknown");
+        unknown["service_error"] = json!("用户总线不可达");
+        let text = render(&["service", "status"], unknown);
+        assert!(text.contains("登录自启：未确认"), "{text}");
+        assert!(text.contains("服务状态：未确认"), "{text}");
+        assert!(text.contains("用户总线不可达"), "{text}");
+    }
+
+    #[test]
+    fn offline_list_output_discloses_its_source() {
+        let value =
+            json!({"items":[],"offset":0,"total":0,"offline":true,"source":"saved_profile"});
+        let nodes = render(&["node", "list"], value.clone());
+        assert!(nodes.contains("已保存订阅"), "{nodes}");
+        assert!(nodes.contains("未测速"), "{nodes}");
+        let connections = render(&["connection", "list"], value);
+        assert!(connections.contains("没有活动连接"), "{connections}");
+        let json = render(
+            &["node", "list", "--json"],
+            json!({"offline":true,"items":[]}),
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&json).unwrap()["data"]["offline"],
+            true
+        );
     }
 
     #[test]
@@ -229,6 +280,58 @@ mod tests {
             json!({"theme_mode":"dark"}),
         );
         assert!(setting.contains("深色（dark）"));
+    }
+
+    #[test]
+    fn status_distinguishes_reference_routes_from_real_connections() {
+        let base = json!({
+            "running":true,"owner":"daemon","mode":"rule","proxy":"tun",
+            "route":["PROXY","AUTO","🇺🇸美国02-cn2"],"node":"🇺🇸美国02-cn2",
+            "upload_rate":0,"download_rate":0,"connections":1,"protected":false
+        });
+        let rule = render(&["status"], base.clone());
+        assert!(
+            rule.contains("规则参考线路：PROXY → AUTO → 🇺🇸美国02-cn2"),
+            "{rule}"
+        );
+        assert!(rule.contains("cor connection list"), "{rule}");
+        let mut global = base.clone();
+        global["mode"] = json!("global");
+        global["route"] = json!(["GLOBAL", "🇺🇸美国02-cn2"]);
+        let global = render(&["status"], global);
+        assert!(
+            global.contains("当前线路：GLOBAL → 🇺🇸美国02-cn2"),
+            "{global}"
+        );
+        assert!(!global.contains("规则参考"), "{global}");
+        let mut protected = base.clone();
+        protected["protected"] = json!(true);
+        protected["route"] = json!(["🇺🇸美国02-cn2"]);
+        let protected = render(&["status"], protected);
+        assert!(protected.contains("保护节点：🇺🇸美国02-cn2"), "{protected}");
+        assert!(!protected.contains("规则参考线路"), "{protected}");
+        let mut old_backend = base;
+        old_backend["route"] = Value::Null;
+        let old_backend = render(&["status"], old_backend);
+        assert!(
+            old_backend.contains("当前节点：🇺🇸美国02-cn2"),
+            "{old_backend}"
+        );
+    }
+
+    #[test]
+    fn unavailable_route_evidence_does_not_trigger_a_general_failure_hint() {
+        let args = crate::args::parse(vec!["status".into()]).unwrap();
+        let value = json!({
+            "running":true,
+            "host_routes":{"ipv6_uplink":{"state":"unavailable"},"warnings":[]}
+        });
+        assert!(!needs_failure_hint(&args, &value));
+        let mut failed = value.clone();
+        failed["backend_error"] = json!("控制接口超时");
+        assert!(needs_failure_hint(&args, &failed));
+        let diagnose = crate::args::parse(vec!["diagnose".into()]).unwrap();
+        assert!(needs_failure_hint(&diagnose, &value));
     }
 
     #[test]

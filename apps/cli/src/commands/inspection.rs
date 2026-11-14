@@ -10,6 +10,8 @@ use std::{
     hash::{Hash, Hasher},
     time::Instant,
 };
+mod catalog;
+mod picker;
 
 pub(super) async fn execute(args: &Args) -> Result<()> {
     match args.path.as_str() {
@@ -23,26 +25,20 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
 }
 
 async fn nodes(args: &Args) -> Result<()> {
-    backend::live(args).await?;
     if args.path == "node select" {
-        let _: Value = backend::request(
-            args,
-            Command::Select {
-                group: args.positional[0].clone(),
-                node: args.positional[1].clone(),
-            },
-        )
-        .await?;
-        return output::emit(
-            args,
-            json!({"group":args.positional[0],"selected":args.positional[1]}),
-        );
+        return select_node(args).await;
     }
     if args.path == "node test" {
         let count = usize::from(!args.positional.is_empty())
             + usize::from(args.flag("all"))
             + usize::from(args.get("group").is_some());
         ensure!(count == 1, "请选择 NODE、--group GROUP 或 --all 中的一项");
+        let meta = backend::meta(args).await?;
+        ensure!(
+            meta.running || meta.settings.claude_protection.is_none(),
+            "Claude 保护期间测速不会启动内核；请先执行 cor start"
+        );
+        backend::live(args).await?;
         let value: Value = backend::request(
             args,
             Command::Delay {
@@ -56,15 +52,15 @@ async fn nodes(args: &Args) -> Result<()> {
         .await?;
         return output::emit(args, value);
     }
-    let poll: Poll = backend::request(
-        args,
-        Command::Snapshot {
-            scope: Scope::Proxies,
-            header: false,
-        },
-    )
-    .await?;
-    let proxies = poll.snapshot.proxies;
+    let poll = super::current_snapshot(args, Scope::Proxies, false).await?;
+    let offline = poll.as_ref().is_none_or(|poll| !poll.meta.running);
+    let proxies = if offline {
+        catalog::saved(&clash_client_runtime::config::Store {
+            root: backend::data_root(args)?,
+        })?
+    } else {
+        poll.context("后台状态已丢失")?.snapshot.proxies
+    };
     let filter = args.get("filter").unwrap_or("").to_lowercase();
     let sort = match args.get("sort").unwrap_or("name") {
         "name" => proxy_order::NodeSort::Name,
@@ -105,7 +101,74 @@ async fn nodes(args: &Args) -> Result<()> {
         let name=&names[i]; let proxy=proxies.proxies.get(name.as_str());
         json!({"name":name,"type":proxy.map(|p|&p.kind),"selected":selected==Some(name),"now":proxy.map(|p|&p.now),"latency_ms":proxy.and_then(|p|p.delay),"members":proxy.map_or(0,|p|p.all.len())})
     }).collect();
-    output::emit(args, output::page(args, rows)?)
+    let mut page = output::page(args, rows)?;
+    page["offline"] = json!(offline);
+    page["source"] = json!(if offline { "saved_profile" } else { "core" });
+    output::emit(args, page)
+}
+
+async fn select_node(args: &Args) -> Result<()> {
+    if args.positional.len() < 2 {
+        use std::io::IsTerminal;
+        picker::require_terminal(
+            std::io::stdin().is_terminal(),
+            args.flag("json") || args.flag("jsonl") || args.get("output").is_some(),
+        )?;
+    } else {
+        let meta = backend::meta(args).await?;
+        ensure!(
+            meta.settings.claude_protection.is_none(),
+            "Claude 保护期间不能切换节点"
+        );
+        backend::live(args).await?;
+    }
+    let poll = super::current_snapshot(args, Scope::Proxies, false)
+        .await?
+        .context("后台未运行；请先执行 cor start，再选择节点")?;
+    ensure!(
+        poll.meta.settings.claude_protection.is_none(),
+        "Claude 保护期间不能切换节点"
+    );
+    ensure!(poll.meta.running, "内核未运行；请先执行 cor start");
+    let proxies = poll.snapshot.proxies;
+    let group = match args.positional.first() {
+        Some(group) => group.clone(),
+        None => {
+            picker::choose(
+                "策略组",
+                proxies
+                    .proxies
+                    .iter()
+                    .filter(|(_, proxy)| !proxy.all.is_empty())
+                    .map(|(name, _)| name.to_string())
+                    .collect(),
+            )
+            .await?
+        }
+    };
+    let members = &proxies
+        .proxies
+        .get(group.as_str())
+        .context("未找到策略组")?
+        .all;
+    ensure!(!members.is_empty(), "所选名称不是可切换的策略组");
+    let node = match args.positional.get(1) {
+        Some(node) => node.clone(),
+        None => picker::choose("节点", members.iter().map(ToString::to_string).collect()).await?,
+    };
+    ensure!(
+        members.iter().any(|member| member.as_str() == node),
+        "节点不属于所选策略组"
+    );
+    let _: Value = backend::request(
+        args,
+        Command::Select {
+            group: group.clone(),
+            node: node.clone(),
+        },
+    )
+    .await?;
+    output::emit(args, json!({"group":group,"selected":node}))
 }
 
 fn connection_json(c: &Connection) -> Value {
@@ -115,18 +178,24 @@ fn connection_json(c: &Connection) -> Value {
         "upload_rate":c.rates.map(|r|r.upload),"download_rate":c.rates.map(|r|r.download),"start":c.start})
 }
 async fn sample(args: &Args) -> Result<Vec<Connection>> {
-    let poll: Poll = backend::request(
-        args,
-        Command::Snapshot {
-            scope: Scope::Connections,
-            header: false,
-        },
-    )
-    .await?;
+    let poll = super::current_snapshot(args, Scope::Connections, false)
+        .await?
+        .context("后台已停止；连接查询不会启动内核")?;
+    ensure!(poll.meta.running, "内核已停止；连接查询不会重启内核");
     Ok(poll.snapshot.connections.connections)
 }
 async fn connections(args: &Args) -> Result<()> {
-    let meta = backend::live(args).await?;
+    let poll = super::current_snapshot(args, Scope::Connections, false).await?;
+    let Some(poll) = poll.filter(|poll| poll.meta.running) else {
+        ensure!(
+            args.path == "connection list" && !args.flag("watch"),
+            "内核未运行，没有活动连接；请先执行 cor start"
+        );
+        let mut page = output::page(args, Vec::new())?;
+        page["offline"] = json!(true);
+        return output::emit(args, page);
+    };
+    let meta = poll.meta;
     if args.path == "connection close" {
         ensure!(
             args.flag("all") != !args.positional.is_empty(),
@@ -145,7 +214,7 @@ async fn connections(args: &Args) -> Result<()> {
         return output::emit(args, json!({"closed":true}));
     }
     if args.path == "connection show" {
-        let entries = sample(args).await?;
+        let entries = poll.snapshot.connections.connections;
         let c = entries
             .iter()
             .find(|c| c.id.as_ref() == args.positional[0])
@@ -190,7 +259,7 @@ async fn connections(args: &Args) -> Result<()> {
         }) ^ args.flag("reverse"),
     };
     let filter = args.get("filter").unwrap_or("").to_lowercase();
-    let mut previous = sample(args).await?;
+    let mut previous = poll.snapshot.connections.connections;
     let mut sampled = Instant::now();
     slim(&mut previous);
     loop {
