@@ -1249,7 +1249,7 @@ class BuildTests(unittest.TestCase):
 
     def test_windows_reference_installer_resolves_inputs_before_nsis_changes_directory(self):
         with tempfile.TemporaryDirectory(prefix='installer paths ') as temporary:
-            directory = Path(temporary)
+            directory = Path(temporary).resolve()
             payload = directory/'payload files'
             payload.mkdir()
             (payload/'LICENSE').write_text('fixture license')
@@ -1309,6 +1309,74 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(execute.call_count, 3)
                 self.assertIn('/deny', execute.call_args_list[1].args[0])
                 self.assertIn('/restore', execute.call_args_list[2].args[0])
+
+    def test_windows_update_matrix_restores_access_before_hashing_and_before_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            payload = directory/'payload'
+            installed = directory/'installed'
+            package = directory/'candidate/setup.exe'
+            reference = directory/'reference/setup.exe'
+            package.parent.mkdir()
+            reference.parent.mkdir()
+            (directory/'target').mkdir()
+            for name in (
+                'clash-of-rust.exe', 'clash-desktop-ui.exe', 'cor.exe',
+                'clash-tun-launcher.exe', 'resources/mihomo.exe', 'resources/GeoIP.dat',
+                'resources/GeoSite.dat', 'resources/default.yaml',
+                'resources/ip-check/LICENSE', 'resources/ip-check/SOURCE.md', 'uninstall.exe',
+            ):
+                path = payload/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'original payload')
+            shutil.copytree(payload, installed)
+            active = []
+            candidate_barriers = []
+            original_hashes = windows_update_tests.installed_hashes
+
+            @contextmanager
+            def barrier(path, kind, root):
+                self.assertFalse(active)
+                active.append((path.relative_to(installed).as_posix(), kind))
+                try:
+                    yield
+                finally:
+                    active.clear()
+
+            def readable_hashes(path):
+                self.assertFalse(active, 'ACL must be restored before reading installed files')
+                return original_hashes(path)
+
+            def execute(installer, arguments, expected_code):
+                if installer == package and expected_code == 68:
+                    relative, kind = active[0]
+                    candidate_barriers.append(relative)
+                    file_name = relative if '/' in relative else './'+relative
+                    (package.parent/'installer-failure.json').write_text(json.dumps({
+                        'schema': 1, 'stage': 'preflight', 'file': file_name,
+                        'win32_error': 32 if kind == 'locked' else 5,
+                        'exit_code': 68,
+                    }))
+                elif expected_code == 0:
+                    if installer == package:
+                        self.assertFalse(active, 'Retry must happen after access is restored')
+                    shutil.copytree(payload, installed, dirs_exist_ok=True)
+
+            with patch.object(windows_update_tests, 'ROOT', directory), \
+                    patch.object(windows_update_tests, 'os', SimpleNamespace(
+                        name='nt', environ={'GITHUB_ACTIONS': 'true'})), \
+                    patch.object(windows_update_tests, 'reference_installer',
+                                 return_value=reference), \
+                    patch.object(windows_update_tests, 'write_barrier', side_effect=barrier), \
+                    patch.object(windows_update_tests, 'installed_hashes',
+                                 side_effect=readable_hashes):
+                windows_update_tests.verify_write_failures(package, installed, payload, execute)
+            report = json.loads((directory/'target/windows-update-report.json').read_text())
+            self.assertTrue(report['completed'])
+            self.assertEqual(len(candidate_barriers), len(windows_update_tests.CASES))
+            for case in report['cases']:
+                self.assertTrue(case['attempts'][1]['original_files_unchanged'])
+                self.assertTrue(all(attempt['retry_succeeded'] for attempt in case['attempts']))
 
     def test_windows_installer_exit_keeps_bounded_failure_context(self):
         with tempfile.TemporaryDirectory() as temporary:

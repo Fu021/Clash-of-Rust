@@ -184,11 +184,12 @@ def verify_write_failures(package, installed, payload, execute):
                                 'win32_error': system_code, 'exit_code': 68
                             }:
                                 raise AssertionError(f'{name}: incorrect installer diagnostic: {failure}')
-                            if installed_hashes(installed) != before:
-                                raise AssertionError(f'{name}: write preflight modified installed files')
                             if list(installed.glob('*.update-backup.exe')):
                                 raise AssertionError(f'{name}: write preflight started replacement')
-                            attempt['original_files_unchanged'] = True
+                    if label == 'candidate':
+                        if installed_hashes(installed) != before:
+                            raise AssertionError(f'{name}: write preflight modified installed files')
+                        attempt['original_files_unchanged'] = True
                     execute(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
                     if any(sha256(installed/path) != digest for path, digest in expected.items()):
                         raise AssertionError(f'{name}: retry did not restore the verified payload')
