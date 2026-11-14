@@ -22,6 +22,7 @@ import android_apk
 import windows_ci as windows
 import windows_update_tests
 import macos_ci as macos
+from test_macos_runner_network import MacosRunnerNetworkTests
 import workflow_storage as storage
 import workflow_artifacts
 import action_cache as local_cache
@@ -5518,26 +5519,6 @@ runpy.run_path(str(script), run_name='__main__')
                 path.write_text(json.dumps({'version':'latest','files':records[:1]}))
                 with self.assertRaisesRegex(RuntimeError, 'no verified'):
                     build_inputs.resource_release('geo', path)
-
-    def test_cache_login_restores_mac_dns_including_automatic_search_domains(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            original = {'dnsservers':['9.9.9.9','2620:fe::fe'], 'searchdomains':[]}
-            state = copy.deepcopy(original)
-            def get(command, **kwargs):
-                values = state[command[1][4:]]
-                return '\n'.join(values) if values else "There aren't any Search Domains set on Ethernet."
-            def set_value(command, **kwargs):
-                values = command[5:]
-                state[command[3][4:]] = [] if values == ['Empty'] else values
-            with patch.object(local_cache.sys, 'platform', 'darwin'), \
-                 patch.object(local_cache, 'Path', side_effect=lambda path: root/path), \
-                 patch.object(local_cache.subprocess, 'check_output', side_effect=get), \
-                 patch.object(local_cache.subprocess, 'run', side_effect=set_value):
-                local_cache.preserve_network()
-                state.update(dnsservers=['100.100.100.100'], searchdomains=['tailnet.example'])
-                local_cache.preserve_network(restore=True)
-            self.assertEqual(state, original)
 
     def test_nsis_version_query_failure_uses_only_verified_cached_compiler(self):
         with tempfile.TemporaryDirectory() as temporary:

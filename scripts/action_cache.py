@@ -1184,26 +1184,8 @@ def inventory():
 
 
 def preserve_network(restore=False):
-    """The upstream macOS login action overwrites Ethernet DNS even with accept-dns=false."""
-    if sys.platform != 'darwin':
-        return
-    snapshot = Path('target/cache-network.json')
-    if restore:
-        value = json.loads(snapshot.read_text())
-        for kind in ('dnsservers', 'searchdomains'):
-            subprocess.run(['sudo', '-n', 'networksetup', '-set'+kind, 'Ethernet',
-                            *(value[kind] or ['Empty'])], check=True)
-        print('Restored original runner DNS and search domains after cache login.')
-        return
-    value = {}
-    for kind in ('dnsservers', 'searchdomains'):
-        text = subprocess.check_output(['networksetup', '-get'+kind, 'Ethernet'], text=True).strip()
-        value[kind] = [] if text.startswith(("There aren't any", "You haven't set")) else text.splitlines()
-        if kind == 'dnsservers':
-            for address in value[kind]:
-                ipaddress.ip_address(address)
-    snapshot.parent.mkdir(parents=True, exist_ok=True)
-    write_json(snapshot, value)
+    from macos_runner_network import preserve
+    preserve(restore)
 
 
 def main():

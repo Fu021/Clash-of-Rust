@@ -349,8 +349,16 @@ def installed_package_tests(package, manifest, build):
                  '--bundle', installed], timeout=450 if proxy_benchmark() else 300))
 
 
+def copy_runner_network_report():
+    for source in (ROOT/'target').glob('cache-network*.json'):
+        shutil.copy2(source, REPORT/source.name)
+
+
 def diagnostics(arch):
     REPORT.mkdir(parents=True, exist_ok=True)
+    copy_runner_network_report()
+    from macos_runner_network import observation
+    write_json(REPORT/'diagnostic-network.json', observation())
     commands = {'system': ['/usr/bin/sw_vers'], 'kernel': ['/usr/bin/uname', '-a'],
                 'hardware': ['/usr/sbin/sysctl', 'hw.ncpu', 'hw.memsize', 'hw.model'],
                 'proxy': ['/usr/sbin/scutil', '--proxy'], 'dns': ['/usr/sbin/scutil', '--dns'],
@@ -397,6 +405,7 @@ def main():
     elif REPORT.exists():
         shutil.rmtree(REPORT)
     REPORT.mkdir(parents=True, exist_ok=True)
+    copy_runner_network_report()
     planned = ['Compile and Clippy']
     write_json(REPORT/'report.json', {'schema': 1, 'arch': args.arch, 'status': 'running',
                'suites': [{'name': name, 'status': 'not_run'} for name in planned]})

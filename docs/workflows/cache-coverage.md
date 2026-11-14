@@ -48,6 +48,8 @@ Android `GOCACHE` 按工具版本、Go 源码及锁文件分键；Linux 编译�
 
 macOS 的官方 Tailscale Action 会源码编译 CLI/daemon，因此 CI 的两个 macOS main job 开启该 Action 自带的 GitHub 二进制缓存，分支只复用已有的兼容缓存；内存基准、发布签名与 Android 截图均在 Linux 上运行并关闭此工具缓存。此引导缓存按架构保留最近版本，计入 20 GiB 总预算，不上传私网。预算任务在运行取消时跳过，只操作 GitHub API。
 
+Mac 接入还须恢复并实际验证原生 DNS，不能仅凭 `networksetup` 写入成功继续安装工具链。接入前后对照、一次缓存刷新、有界等待与故障分类见[runner DNS 恢复](../agent-failures/macos-dns.md#runner-dns-恢复)；该逻辑只运行在可丢弃 Actions 环境，不改变应用或用户机器的 DNS。
+
 | 工作流 | GitHub 编译缓存与收尾 | 私网预装镜像 |
 | --- | --- | --- |
 | CI | main 保存九个目标的 Rust 基线、Linux 编译容器及 Android Go；其他分支只读 | 只冻结环境输入，不启动 VM |

@@ -1,5 +1,17 @@
 # macOS Tailscale DNS 共存
 
+## Runner DNS 恢复
+
+当前固定的官方 Tailscale Action 在 macOS 且启用 MagicDNS 时，会[单独执行 DNS 设置](https://github.com/tailscale/github-action/blob/064b10558093f38325e838ddea35486bdc6b1d5c/src/main.ts)，即使传入 `--accept-dns=false`，仍将 Ethernet DNS 改为 `100.100.100.100`。不能只依赖 daemon 参数避免这项副作用。此处仅讨论 CI 私网接入，不等同于下方应用的 Claude 保护 DNS 接管。
+
+CI `43567907725` 的 Intel Mac 在恢复命令返回成功后，Rust 工具链查询 `static.rust-lang.org` 失败，后续附件上传也出现 `ENOTFOUND`；应用尚未编译或运行，不能归因为应用 TUN。历史 CI `43506898037` 的 PyPI 解析失败发生在 Tailscale 登录前，说明不能把所有 runner DNS 故障都归为接入副作用。另一次 TUN 子会话 socket 未就绪属于独立问题，见[生命周期](macos-lifecycle.md#内核退出后的端口复用)。
+
+`macos_runner_network.py` 通过既有 `action_cache.py network-save/network-restore` 入口工作：接入前保存显式 DNS、搜索域、实际 resolver、默认路由及 GitHub/API/Rust/PyPI 的原生解析基线；接入后恢复原值并读回核对，仅在 Actions 的 Mac runner 刷新一次系统解析缓存，再用独立有超时的 `getaddrinfo` 进程确认解析恢复，同时核对实际默认解析器，避免缓存答案掩盖配置尚未生效。恢复窗口为 30 秒，单轮最多增加 6 秒在途检查时间；失败不继续工具链安装，不替换公共 DNS，也不改变 Tailscale 路由或系统代理。
+
+报告 `target/cache-network-report.json` 区分接入前已故障和接入后未恢复，并记录恢复前 resolver、命令结果、逐次原生解析及失败时向原默认服务器发出的直接 DNS 对照。DNS 设置写入成功不代表原生解析成功，直接 DNS 回答也不代替原生就绪。缓存刷新失败保留实际返回值，最终仍以原生探测为准。报告复制进现有 `macos-ci-report-*` 附件，失败摘要同时写入 job 日志，避免上传故障时丢失全部依据。Mac 后续步骤失败时再收一份只读解析现场。离线回归覆盖自动/显式配置、延迟恢复、持续失败、恢复命令失败及非 runner 拒绝；原始间歇故障的首次触发仍需同环境证据，不能以重试成功宣称根因已经排除。
+
+## 应用 DNS 接管
+
 Tailscale 的独立补充分域解析器可以继续成为 macOS 全局 DNS，即使本应用已修改各网络服务的 DNS；因此不能把网络服务写入成功当成保护生效，也不应要求用户关闭 Tailscale DNS。[CI 40470411381](https://github.com/Fu021/Clash-of-Rust/actions/runs/40470411381) 证实独立临时解析器可能未被系统选中；[CI 40478327297](https://github.com/Fu021/Clash-of-Rust/actions/runs/40478327297) 与[故障实验 40481813828](https://github.com/Fu021/Clash-of-Rust/actions/runs/40481813828) 进一步证明默认解析器竞争和 DNS 故障回退可落到 VPN 或物理网络，不能仅调整优先级或仅验证首选路径。
 
 修复采用可撤销的动态服务 DNS 覆盖：默认解析器统一指向助手独占的 `127.0.0.1:53`，仅转发到内核随机高端口，根分域中的私有/搜索后缀克隆为独立分域，保留原服务器、端口和接口，不复制 configd 生成的内部身份。覆盖 State 和 Setup 运行缓存而不写 SCPreferences；Apple 的 [configd 合并逻辑](https://github.com/apple-oss-distributions/configd/blob/main/Plugins/IPMonitor/ip_plugin.c)优先采用 Setup 服务器，不能只改 State。标准端口兼容不识别 `ServerPort` 的 `resolv.conf` 客户端，回归包括原生解析和 `dig` TCP/UDP；端口占用须先拒绝接管，转发应有并发与超时限制并随租约清理。SCDynamicStore 通知由同一助手线程串行处理重连与恢复；先保存新旧并集的恢复记录，再原子写入全部变化。恢复按托管地址/端口和分域字段组比较，保留外部修改，不重建已删除服务。运行中出现冲突时隔离为本机 DNS 并报告，不能以恢复 VPN 默认 DNS 处理错误；失败后限频重试。旧 journal 仍可清理，助手协议升级见[代理状态与安全恢复](desktop.md#系统代理状态与安全恢复)。
