@@ -67,6 +67,9 @@ def main():
                      'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])
+        for case in ('application::notice::tests::', 'application::claude::tests::'):
+            run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
+                 '--locked', case, '--', '--test-threads=1'])
         run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
              '--locked', 'application::network_watch::tests::', '--', '--test-threads=1'])
         for case in ('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes',

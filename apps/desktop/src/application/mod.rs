@@ -628,12 +628,7 @@ impl App {
             updates: update::State::default(),
         };
         if let Some((message, error)) = update::startup_outcome() {
-            if error {
-                app.updates.failure = Some(message);
-            } else {
-                app.updates.outcome = Some(message);
-            }
-            app.error |= error;
+            app.update_outcome(message, error);
         }
         app
     }
@@ -1097,6 +1092,9 @@ impl App {
             Message::CheckUpdate => return self.check_update(),
             Message::UpdateChecked(id, result) => {
                 if id == self.updates.check_id && self.updates.checking {
+                    if let Err(reason) = &result {
+                        self.show_notice(format!("检查更新失败：{reason}"), true);
+                    }
                     self.updates.finish(result);
                 }
             }
@@ -1146,7 +1144,7 @@ impl App {
                     return Task::none();
                 }
                 if let Err(error) = update::ensure_installable() {
-                    self.updates.fail(error.to_string());
+                    self.fail_update(error.to_string());
                     return Task::none();
                 }
                 if let Some(download) = self.updates.cached_for(&available.version) {
@@ -1208,7 +1206,7 @@ impl App {
                     Some(Ok(downloaded)) => {
                         return self.install_download(Arc::new(downloaded));
                     }
-                    Some(Err(reason)) => self.updates.fail(reason),
+                    Some(Err(reason)) => self.fail_update(reason),
                     None => return Task::none(),
                 }
             }
@@ -1222,7 +1220,7 @@ impl App {
                             return self.exit();
                         }
                     }
-                    Err(reason) => self.updates.fail(reason),
+                    Err(reason) => self.fail_update(reason),
                 }
             }
             Message::OpenRelease => {
@@ -2035,12 +2033,7 @@ impl App {
                 {
                     self.updates.installing = None;
                     self.updates.progress = None;
-                    if error {
-                        self.updates.failure = Some(message);
-                    } else {
-                        self.updates.outcome = Some(message);
-                    }
-                    self.error = error;
+                    self.update_outcome(message, error);
                     if !error {
                         return self.exit();
                     }
@@ -2583,7 +2576,7 @@ impl App {
                 match tokio::task::spawn_blocking(move || update::handoff_at(downloaded, data_dir))
                     .await
                 {
-                    Ok(result) => result.map_err(|error| error.to_string()),
+                    Ok(result) => result.map_err(|error| format!("{error:#}")),
                     Err(_) => Err("安装助手无法启动，请重试".into()),
                 }
             },

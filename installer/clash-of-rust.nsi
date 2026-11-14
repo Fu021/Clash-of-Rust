@@ -80,6 +80,126 @@ Var DeleteUserData
 Var UserDataDir
 Var DataOptionsDialog
 Var DeleteDataCheckbox
+Var InstallStage
+Var InstallFile
+Var InstallTarget
+Var InstallWin32Error
+Var InstallFailureCode
+
+!macro Payload ACTION
+  !insertmacro ${ACTION} "${PAYLOAD}\clash-of-rust.exe" "." "clash-of-rust.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}\clash-desktop-ui.exe" "." "clash-desktop-ui.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}\cor.exe" "." "cor.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}\clash-tun-launcher.exe" "." "clash-tun-launcher.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}\LICENSE" "." "LICENSE"
+  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\icons\app.ico" "resources" "clash-of-rust-${APP_VERSION}.ico"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\mihomo.exe" "resources" "mihomo.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\GeoIP.dat" "resources" "GeoIP.dat"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\GeoSite.dat" "resources" "GeoSite.dat"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\Country.mmdb" "resources" "Country.mmdb"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\ASN.mmdb" "resources" "ASN.mmdb"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\geodata.json" "resources" "geodata.json"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\core.json" "resources" "core.json"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\default.yaml" "resources" "default.yaml"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\settings-defaults.json" "resources" "settings-defaults.json"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\THIRD-PARTY-NOTICES.txt" "resources" "THIRD-PARTY-NOTICES.txt"
+  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\fonts\LICENSE.txt" "resources" "SourceHanSans-LICENSE.txt"
+  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\fonts\LICENSE-NotoEmoji.txt" "resources" "NotoEmoji-LICENSE.txt"
+  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\countries\LICENSE-Unicode.txt" "resources" "Unicode-LICENSE.txt"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\ip-check\LICENSE" "resources/ip-check" "LICENSE"
+  !insertmacro ${ACTION} "${PAYLOAD}\resources\ip-check\SOURCE.md" "resources/ip-check" "SOURCE.md"
+!macroend
+
+!macro PreflightFile SOURCE DIRECTORY NAME
+  StrCpy $InstallFile "${DIRECTORY}/${NAME}"
+  StrCpy $InstallTarget "$INSTDIR\${DIRECTORY}\${NAME}"
+  ClearErrors
+  CreateDirectory "$INSTDIR\${DIRECTORY}"
+  ${If} ${Errors}
+    StrCpy $InstallWin32Error 0
+    Call FailInstallWrite
+  ${EndIf}
+  Call ProbeWritable
+!macroend
+
+!macro ExtractFile SOURCE DIRECTORY NAME
+  StrCpy $InstallFile "${DIRECTORY}/${NAME}"
+  StrCpy $InstallWin32Error 0
+  ClearErrors
+  SetOutPath "$INSTDIR\${DIRECTORY}"
+  ${If} ${Errors}
+    Call FailInstallWrite
+  ${EndIf}
+  File "/oname=${NAME}" "${SOURCE}"
+  ${If} ${Errors}
+    Call FailInstallWrite
+  ${EndIf}
+!macroend
+
+Function SaveInstallFailure
+  Push $0
+  ClearErrors
+  FileOpen $0 "$EXEDIR\installer-failure.json" w
+  ${IfNot} ${Errors}
+    FileWrite $0 '{"schema":1,"stage":"$InstallStage","file":"$InstallFile","win32_error":$InstallWin32Error,"exit_code":$InstallFailureCode}$\r$\n'
+    FileClose $0
+  ${EndIf}
+  Pop $0
+FunctionEnd
+
+Function FailInstallWrite
+  Call SaveInstallFailure
+  Call RestoreUpdate
+  SetErrorLevel $InstallFailureCode
+  IfSilent write_failed_silent
+    MessageBox MB_OK|MB_ICONSTOP "安装未完成：$InstallFile 无法写入。请检查文件占用、磁盘空间与写入权限后重试。"
+  write_failed_silent:
+  Abort
+FunctionEnd
+
+Function ProbeWritable
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  StrCpy $2 0
+  probe_write_retry:
+    StrCpy $3 0
+    System::Call 'kernel32::CreateFileW(w "$InstallTarget", i 0x40010000, i 7, p 0, i 3, i 0, p 0) p.r0 ?e'
+    Pop $InstallWin32Error
+    ${If} $0 == -1
+    ${AndIf} $InstallWin32Error == 2
+      System::Call 'kernel32::CreateFileW(w "$InstallTarget", i 0x40010000, i 7, p 0, i 1, i 0x100, p 0) p.r0 ?e'
+      Pop $InstallWin32Error
+      ${If} $0 != -1
+        StrCpy $3 1
+      ${EndIf}
+    ${EndIf}
+    ${If} $0 != -1
+      System::Call 'kernel32::CloseHandle(p r0)'
+      ${If} $3 == 1
+        Delete "$InstallTarget"
+      ${EndIf}
+      Pop $3
+      Pop $2
+      Pop $1
+      Pop $0
+      Return
+    ${EndIf}
+    ${If} $InstallWin32Error == 32
+    ${OrIf} $InstallWin32Error == 33
+      ${If} $2 < 50
+        IntOp $2 $2 + 1
+        Sleep 100
+        Goto probe_write_retry
+      ${EndIf}
+    ${EndIf}
+    Pop $3
+    Pop $2
+    Pop $1
+    Pop $0
+    Call FailInstallWrite
+FunctionEnd
 
 Function LaunchClient
   ClearErrors
@@ -320,6 +440,10 @@ Section "Clash of Rust" MainSection
     Call RemoveExisting
   ${EndIf}
   !insertmacro CheckRunning install_
+  StrCpy $InstallStage "preflight"
+  StrCpy $InstallFailureCode 68
+  !insertmacro Payload PreflightFile
+  !insertmacro PreflightFile "" "." "uninstall.exe"
   ${If} $UpdateMode == 1
     ClearErrors
     Rename "$INSTDIR\clash-of-rust.exe" "$INSTDIR\clash-of-rust.update-backup.exe"
@@ -343,46 +467,22 @@ Section "Clash of Rust" MainSection
       StrCpy $UpdateUiBackup 1
     ui_backup_ready:
   ${EndIf}
-  ; Extraction failures must not look like a successful update to the helper.
   SetErrorLevel 6
+  StrCpy $InstallStage "extract"
+  StrCpy $InstallFailureCode 6
   SetRegView 64
     SetShellVarContext all
+  SetOverwrite try
+  !insertmacro Payload ExtractFile
+  SetOutPath "$INSTDIR"
+  StrCpy $InstallStage "uninstaller"
+  StrCpy $InstallFile "./uninstall.exe"
+  StrCpy $InstallWin32Error 0
+  StrCpy $InstallFailureCode 64
   ClearErrors
-  SetOutPath "$INSTDIR"
-  File "${PAYLOAD}\clash-of-rust.exe"
-  File "${PAYLOAD}\clash-desktop-ui.exe"
-  File "${PAYLOAD}\cor.exe"
-  File "${PAYLOAD}\clash-tun-launcher.exe"
-  File "${PAYLOAD}\LICENSE"
-  SetOutPath "$INSTDIR\resources"
-  File /oname=clash-of-rust-${APP_VERSION}.ico "${__FILEDIR__}\..\resources\icons\app.ico"
-  File "${PAYLOAD}\resources\mihomo.exe"
-  File "${PAYLOAD}\resources\GeoIP.dat"
-  File "${PAYLOAD}\resources\GeoSite.dat"
-  File "${PAYLOAD}\resources\Country.mmdb"
-  File "${PAYLOAD}\resources\ASN.mmdb"
-  File "${PAYLOAD}\resources\geodata.json"
-  File "${PAYLOAD}\resources\core.json"
-  File "${PAYLOAD}\resources\default.yaml"
-  File "${PAYLOAD}\resources\settings-defaults.json"
-  File "${PAYLOAD}\resources\THIRD-PARTY-NOTICES.txt"
-  File /oname=SourceHanSans-LICENSE.txt "${__FILEDIR__}\..\resources\fonts\LICENSE.txt"
-  File /oname=NotoEmoji-LICENSE.txt "${__FILEDIR__}\..\resources\fonts\LICENSE-NotoEmoji.txt"
-  File /oname=Unicode-LICENSE.txt "${__FILEDIR__}\..\resources\countries\LICENSE-Unicode.txt"
-  SetOutPath "$INSTDIR\resources\ip-check"
-  File "${PAYLOAD}\resources\ip-check\LICENSE"
-  File "${PAYLOAD}\resources\ip-check\SOURCE.md"
-  SetOutPath "$INSTDIR"
-  ${If} ${Errors}
-    Call RestoreUpdate
-    SetErrorLevel 6
-    Abort
-  ${EndIf}
   WriteUninstaller "$INSTDIR\uninstall.exe"
   ${If} ${Errors}
-    Call RestoreUpdate
-    SetErrorLevel 64
-    Abort
+    Call FailInstallWrite
   ${EndIf}
   ; The installer's existing administrator grant registers the demand-start
   ; service once. Ordinary GUI launches and TUN switches never elevate it.

@@ -14,8 +14,8 @@ pub fn timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-pub fn incident(message: &str) -> Value {
-    json!({"error":message,"time":timestamp()})
+pub fn incident(message: &str, critical: bool) -> Value {
+    json!({"error":message,"time":timestamp(),"level":if critical {"critical"} else {"recoverable"}})
 }
 
 pub fn ip_results(results: &[crate::ip_report::ResultSlot]) -> Value {
@@ -529,6 +529,15 @@ pub fn redact(mut value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incident_level_is_explicit_and_never_inferred_from_its_text() {
+        assert_eq!(
+            incident("内核启动失败的历史报告已保留", false)["level"],
+            "recoverable"
+        );
+        assert_eq!(incident("连接已终止", true)["level"], "critical");
+    }
 
     #[test]
     fn report_keeps_partial_results_failures_and_pending_distinct() {

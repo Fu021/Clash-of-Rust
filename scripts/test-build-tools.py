@@ -1335,7 +1335,10 @@ class BuildTests(unittest.TestCase):
                          'apps/android/app/src/main/java/org/clashofrust/android/IncidentNotifications.java'):
                 self.assertTrue(ci_test_policy.select([path])['android_routing_tests'], path)
             for path in ('crates/client-runtime/src/update/install/terminal.rs',
-                         'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py'):
+                         'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py',
+                         'installer/clash-of-rust.nsi', 'scripts/windows_ci.py',
+                         'scripts/build-installer.py',
+                         'crates/client-runtime/src/platform/windows/mod.rs'):
                 self.assertTrue(ci_test_policy.select([path])['update_tests'])
         with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
                                      'COR_CI_ANDROID_ROUTING_TESTS': 'true',
@@ -1699,7 +1702,11 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any('application::network_watch::tests::' in command for command in focused))
         self.assertTrue(any('protected_mobile_core_recovery_is_reachable_and_respects_pending_operations'
                             in command for command in focused))
-        self.assertTrue(all(('--exact' in command) == ('application::network_watch::tests::' not in command)
+        prefixes = ('application::network_watch::tests::', 'application::notice::tests::',
+                    'application::claude::tests::')
+        for prefix in prefixes:
+            self.assertTrue(any(prefix in command for command in focused), prefix)
+        self.assertTrue(all(('--exact' in command) == (not any(prefix in command for prefix in prefixes))
                             for command in focused))
         for package, target in (('clash-client-ui', 'ui_models'),
                                 ('clash-desktop-ui', '--lib'),

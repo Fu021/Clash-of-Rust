@@ -37,6 +37,12 @@ impl App {
         let engine = self.engine.clone();
         let context = json!({
             "error":context,"notice":self.notice,"core_failure":self.core_failure,
+            "notice_level":if !self.error {"status"} else if self.notice_critical {"critical"} else {"recoverable"},
+            "notice_visible":self.notice_visible,
+            "update":{"checking":self.updates.checking,"status":self.updates.status,
+                "failure":self.updates.failure,"outcome":self.updates.outcome,
+                "install_pending":self.updates.install_pending,
+                "installer_active":self.updates.installing.is_some()},
             "page":format!("{:?}",self.page),"running":self.snapshot.running,
             "proxy":format!("{:?}",self.snapshot.proxy_mode()),
             "network_alert":self.network_watch.notice(Some(&self.settings)),"network_tests":self.test_results,

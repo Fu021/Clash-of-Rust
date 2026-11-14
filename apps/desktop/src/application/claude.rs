@@ -295,6 +295,12 @@ impl State {
 }
 
 impl App {
+    fn fail_claude_check(&mut self, message: String) {
+        self.claude.status = message.clone();
+        self.claude.error = true;
+        self.show_notice(message, true);
+    }
+
     pub(crate) fn claude_event(&mut self, event: Event) -> Task<Message> {
         let wrap = |event| Message::Claude(event);
         match event {
@@ -416,8 +422,7 @@ impl App {
                         self.claude.sampling_status();
                     }
                     Err(error) => {
-                        self.claude.status = error;
-                        self.claude.error = true;
+                        self.fail_claude_check(error);
                     }
                 }
             }
@@ -460,8 +465,7 @@ impl App {
                     Ok(()) => self.claude.sampling_status(),
                     Err(error) => {
                         self.claude.browser_busy = false;
-                        self.claude.status = format!("无法自动打开浏览器：{error}");
-                        self.claude.error = true;
+                        self.fail_claude_check(format!("无法自动打开浏览器：{error}"));
                     }
                 }
             }
@@ -476,8 +480,7 @@ impl App {
                     }
                     Err(error) => {
                         self.claude.browser_busy = false;
-                        self.claude.status = error;
-                        self.claude.error = true;
+                        self.fail_claude_check(error);
                     }
                 }
             }
@@ -498,8 +501,7 @@ impl App {
             }
             Event::Clipboard(generation, text) if generation == self.claude.generation => {
                 let Some(text) = text.filter(|s| s.len() <= check::REPORT_LIMIT) else {
-                    self.claude.status = "剪贴板为空或内容超过 64 KiB；请复制采样 JSON。".into();
-                    self.claude.error = true;
+                    self.fail_claude_check("剪贴板为空或内容超过 64 KiB；请复制采样 JSON。".into());
                     return Task::none();
                 };
                 self.claude.importing = true;
@@ -539,8 +541,7 @@ impl App {
                         self.claude.status = "采样报告已导入；来源与实测范围见各项详情。".into();
                     }
                     Err(error) => {
-                        self.claude.status = error;
-                        self.claude.error = true;
+                        self.fail_claude_check(error);
                     }
                 }
             }
@@ -582,8 +583,7 @@ impl App {
                     self.claude.error = false;
                 }
                 Err(message) => {
-                    self.claude.status = message;
-                    self.claude.error = true;
+                    self.fail_claude_check(message);
                 }
             },
             Event::Tick => {
@@ -622,6 +622,27 @@ mod tests {
     use super::*;
     fn app() -> App {
         App::initial_state(Err(anyhow::anyhow!("isolated")), None)
+    }
+
+    #[test]
+    fn diagnostic_failures_are_recoverable_and_keep_the_report_without_claiming_protection_failed()
+    {
+        for event in [
+            Event::Network(0, Err("检测连接超时".into())),
+            Event::Completed(Err("报告导出失败：磁盘不可写".into())),
+            Event::Clipboard(0, None),
+            Event::Imported(0, Err("检测报告格式无效".into())),
+        ] {
+            let mut app = app();
+            app.dismiss_notice();
+            app.claude.reports[0] = Some(Report::new(Environment::Core, "preserved"));
+            let _ = app.claude_event(event);
+            assert!(app.claude.error && app.error && app.notice_visible);
+            assert!(!app.notice_critical);
+            assert_eq!(app.notice, app.claude.status);
+            assert_eq!(app.claude.reports[0].as_ref().unwrap().context, "preserved");
+            assert_eq!(app.issue_events.back().unwrap()["level"], "recoverable");
+        }
     }
     fn finish_local(app: &mut App, generation: u64) {
         let _ = app.claude_event(Event::Local(

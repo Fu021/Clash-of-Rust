@@ -252,7 +252,7 @@ def _installer_exit(executable,args,code,timeout=60):
 
 
 def _verify_failed_update(package, installed):
-    """Fail after extraction and require the original owner/renderer pair back."""
+    """Reject locked payloads before replacing any installed file."""
     import ctypes as c
     from ctypes import wintypes as w
     kernel = c.WinDLL('kernel32', use_last_error=True)
@@ -262,27 +262,54 @@ def _verify_failed_update(package, installed):
     renderer = installed/'clash-desktop-ui.exe'
     original = renderer.read_bytes()
     owner_hash = sha256(installed/'clash-of-rust.exe')
-    for legacy in (False, True):
+    protected_files = ('uninstall.exe', 'cor.exe', 'resources/mihomo.exe', 'resources/GeoIP.dat')
+    report = package.parent/'installer-failure.json'
+    for locked_file in protected_files:
         # A harmless PE overlay distinguishes the old renderer from the
         # identical-version installer. Neither probe renderer is executed.
-        if legacy: renderer.unlink()
-        else: renderer.write_bytes(original+b'installer-rollback-probe')
-        expected = None if legacy else sha256(renderer)
-        handle = kernel.CreateFileW(str(installed/'uninstall.exe'),0x80000000,1,None,3,0,None)
+        renderer.write_bytes(original+b'installer-rollback-probe')
+        before = {str(path.relative_to(installed)): sha256(path)
+                  for path in installed.rglob('*') if path.is_file()}
+        handle = kernel.CreateFileW(str(installed/locked_file),0x80000000,1,None,3,0,None)
         if handle == c.c_void_p(-1).value:
             renderer.write_bytes(original)
             raise c.WinError(c.get_last_error())
         try:
-            # Read sharing permits verification, but denies WriteUninstaller.
-            # Extraction has already replaced both executables at this point.
-            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],64)
+            report.unlink(missing_ok=True)
+            _installer_exit(package,['/S','/UPDATE',f'/D={installed}'],68)
+            failure = json.loads(report.read_text(encoding='ascii'))
+            expected_file = locked_file if '/' in locked_file else './'+locked_file
+            if failure != {'schema': 1, 'stage': 'preflight', 'file': expected_file,
+                           'win32_error': 32, 'exit_code': 68}:
+                raise AssertionError(f'Incorrect installer write diagnostic: {failure}')
+            after = {str(path.relative_to(installed)): sha256(path)
+                     for path in installed.rglob('*') if path.is_file()}
+            assert before == after
             assert sha256(installed/'clash-of-rust.exe') == owner_hash
-            if legacy: assert not renderer.exists()
-            else: assert sha256(renderer) == expected
             assert not list(installed.glob('*.update-backup.exe'))
         finally:
             kernel.CloseHandle(handle)
             renderer.write_bytes(original)
+            report.unlink(missing_ok=True)
+    readonly = installed/'resources/GeoIP.dat'
+    readonly.chmod(0o444)
+    before = {str(path.relative_to(installed)): sha256(path)
+              for path in installed.rglob('*') if path.is_file()}
+    try:
+        _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 68)
+        failure = json.loads(report.read_text(encoding='ascii'))
+        if failure != {'schema': 1, 'stage': 'preflight', 'file': 'resources/GeoIP.dat',
+                       'win32_error': 5, 'exit_code': 68}:
+            raise AssertionError(f'Incorrect read-only file diagnostic: {failure}')
+        after = {str(path.relative_to(installed)): sha256(path)
+                 for path in installed.rglob('*') if path.is_file()}
+        assert before == after
+        assert not list(installed.glob('*.update-backup.exe'))
+    finally:
+        readonly.chmod(0o666)
+        report.unlink(missing_ok=True)
+    run([installed/'cor.exe', '--help'])
+    _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
 
 
 def _update_handoff_command(package, gate, parent, installed):

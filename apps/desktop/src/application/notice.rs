@@ -5,6 +5,22 @@ use std::time::Instant;
 pub(super) const LIFETIME: Duration = Duration::from_secs(5);
 
 impl App {
+    pub(super) fn fail_update(&mut self, reason: String) {
+        self.updates.fail(reason);
+        if let Some(message) = self.updates.failure.clone() {
+            self.show_notice(message, true);
+        }
+    }
+
+    pub(super) fn update_outcome(&mut self, message: String, error: bool) {
+        if error {
+            self.updates.failure = Some(message.clone());
+            self.show_notice(message, true);
+        } else {
+            self.updates.outcome = Some(message);
+        }
+    }
+
     pub(super) fn show_notice(&mut self, text: String, error: bool) {
         self.present_notice(text, error, false);
     }
@@ -48,7 +64,7 @@ impl App {
     fn present_notice(&mut self, text: String, error: bool, critical: bool) {
         if error {
             self.issue_events
-                .push_back(clash_client_core::support::incident(&text));
+                .push_back(clash_client_core::support::incident(&text, critical));
             while self.issue_events.len() > 20 {
                 self.issue_events.pop_front();
             }
@@ -199,5 +215,62 @@ mod tests {
         app.dismiss_notice();
         app.show_notice("已保存".into(), false);
         assert!(!app.notice_critical && !app.error);
+    }
+
+    #[test]
+    fn update_failures_have_recoverable_diagnostics_and_cannot_hide_a_critical_error() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.dismiss_notice();
+        app.fail_update("安装文件被占用".into());
+        assert!(app.error && app.notice_visible && !app.notice_critical);
+        assert_eq!(app.notice, app.updates.failure.clone().unwrap());
+        assert_eq!(app.issue_events.back().unwrap()["error"], app.notice);
+        let _ = app.update(Message::NoticeExpired(app.notice_revision));
+        assert!(app.notice_visible);
+        app.show_critical("内核无法启动".into());
+        app.update_outcome("更新失败：没有写入权限".into(), true);
+        assert!(app.notice_critical);
+        assert_eq!(app.notice, "内核无法启动");
+        app.update_outcome("安装成功".into(), false);
+        assert!(app.error && app.notice_critical);
+        assert!(app.updates.failure.as_ref().unwrap().contains("写入权限"));
+    }
+
+    #[test]
+    fn checking_downloading_and_handoff_failures_all_reach_recoverable_feedback() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.dismiss_notice();
+        app.updates.checking = true;
+        let _ = app.update(Message::UpdateChecked(
+            app.updates.check_id,
+            Err("连接超时".into()),
+        ));
+        assert!(app.notice.contains("检查更新失败") && app.error && !app.notice_critical);
+        let (download, _) = app.updates.begin_download(100);
+        let failure = Arc::new(std::sync::Mutex::new(Some(Err("安装包校验失败".into()))));
+        let _ = app.update(Message::UpdateDownloaded(download, failure));
+        assert!(app.notice.contains("校验失败") && app.error && !app.notice_critical);
+        let _ = app.update(Message::UpdateHandoff(Err("安装授权已取消".into())));
+        assert!(app.notice.contains("授权已取消") && app.error && !app.notice_critical);
+        assert_eq!(app.issue_events.back().unwrap()["level"], "recoverable");
+    }
+
+    #[test]
+    fn stale_checks_and_cancelled_downloads_do_not_reopen_error_feedback() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.dismiss_notice();
+        app.updates.checking = true;
+        let _ = app.update(Message::UpdateChecked(
+            app.updates.check_id.wrapping_sub(1),
+            Err("旧检查失败".into()),
+        ));
+        assert!(!app.notice_visible && app.updates.checking);
+        let (download, _) = app.updates.begin_download(100);
+        assert!(app.updates.cancel_download());
+        let failure = Arc::new(std::sync::Mutex::new(Some(Err("已取消的下载失败".into()))));
+        let events = app.issue_events.len();
+        let _ = app.update(Message::UpdateDownloaded(download, failure));
+        assert!(!app.notice_visible && app.updates.failure.is_none());
+        assert_eq!(app.issue_events.len(), events);
     }
 }

@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+mod windows;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstallationStatus {
@@ -20,6 +21,8 @@ pub struct InstallationStatus {
     pub error: bool,
     pub updated_at: u64,
     directory: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    installer_failure: Option<windows::Failure>,
 }
 
 fn load_installation_status(data_dir: &Path) -> Result<Option<InstallationStatus>> {
@@ -47,6 +50,7 @@ pub fn installation_status(data_dir: &Path) -> Result<Option<InstallationStatus>
         status.state = if error { "failed" } else { "succeeded" }.into();
         status.message = message;
         status.error = error;
+        status.installer_failure = windows::read_failure(&status.directory);
     }
     Ok(Some(status))
 }
@@ -90,6 +94,7 @@ fn record_installation(
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs(),
         directory: directory.into(),
+        installer_failure: windows::read_failure(directory),
     };
     crate::config::atomic_write(
         &data_dir.join("update-install.json"),
@@ -333,7 +338,14 @@ fn prepare_plan(
     data_dir: Option<PathBuf>,
 ) -> Result<(Plan, PathBuf)> {
     let directory = download.directory().to_owned();
-    for name in ["ready", "cancel", "commit", "outcome.json", "stage.json"] {
+    for name in [
+        "ready",
+        "cancel",
+        "commit",
+        "outcome.json",
+        "stage.json",
+        "installer-failure.json",
+    ] {
         let path = directory.join(name);
         if path.exists() {
             fs::remove_file(path)?;
@@ -423,13 +435,8 @@ pub fn helper_main() -> bool {
         Ok(plan) => (format!("已更新至 {}", plan.version), false),
         Err(error) => (format!("更新失败：{error:#}"), true),
     };
-    let _ = crate::config::atomic_write(
-        &directory.join("outcome.json"),
-        &serde_json::to_vec(&Outcome { message, error }).unwrap_or_default(),
-    );
     if let Ok(data) = fs::read(directory.join("plan.json"))
         && let Ok(plan) = serde_json::from_slice::<Plan>(&data)
-        && let Some((message, error)) = read_outcome(&directory)
     {
         let _ = record_installation(
             &plan,
@@ -439,6 +446,10 @@ pub fn helper_main() -> bool {
             error,
         );
     }
+    let _ = crate::config::atomic_write(
+        &directory.join("outcome.json"),
+        &serde_json::to_vec(&Outcome { message, error }).unwrap_or_default(),
+    );
     // Before readiness the original GUI is still open and handles the error.
     if !cancelled
         && directory.join("ready").exists()
@@ -457,6 +468,7 @@ pub fn helper_main() -> bool {
             && let Err(error) = restart_client(&plan, &directory)
         {
             let message = format!("更新安装已结束，重新打开客户端失败：{error:#}");
+            let _ = record_installation(&plan, &directory, "failed", &message, true);
             let _ = crate::config::atomic_write(
                 &directory.join("outcome.json"),
                 &serde_json::to_vec(&Outcome {
@@ -465,7 +477,6 @@ pub fn helper_main() -> bool {
                 })
                 .unwrap_or_default(),
             );
-            let _ = record_installation(&plan, &directory, "failed", &message, true);
         }
     }
     #[cfg(target_os = "macos")]
@@ -544,19 +555,7 @@ fn install(plan: &Plan, directory: &Path) -> Result<()> {
         plan.require_commit.then_some((directory, plan.parent)),
     )?;
     fs::write(directory.join("ready"), b"")?;
-    match installer.wait()? {
-        0 => Ok(()),
-        2 => bail!("安装已取消"),
-        3 | 5 => bail!("客户端未能正常退出或文件被占用，请退出后重试"),
-        6 => bail!("安装文件写入失败，请检查磁盘空间与权限"),
-        61 => bail!("无法替换主程序：文件被占用或安装目录不可写，已保留旧版本"),
-        62 => bail!("无法替换界面程序：文件被占用或安装目录不可写，已恢复旧版本"),
-        64 => bail!("无法写入卸载程序：文件被占用或安装目录不可写，已恢复旧版本"),
-        65 => bail!("Windows 网络助手安装失败，已恢复旧版主程序与界面"),
-        66 => bail!("无法写入安装登记信息，已恢复旧版主程序与界面"),
-        67 => bail!("安装交接未确认或已超时，已保留旧版本"),
-        code => bail!("安装程序失败（代码 {code}），请重试"),
-    }
+    windows::result(installer.wait()?, directory)
 }
 
 #[cfg(target_os = "linux")]
@@ -736,6 +735,31 @@ mod tests {
         )
         .unwrap();
         assert!(installation_status(data.path()).is_err());
+    }
+
+    #[test]
+    fn installer_file_failure_remains_in_diagnostics_after_the_download_is_cleaned() {
+        let data = tempfile::tempdir().unwrap();
+        let download = tempfile::tempdir().unwrap();
+        let plan = status_plan(data.path(), download.path());
+        record_installation(&plan, download.path(), "installing", "正在安装", false).unwrap();
+        let details = serde_json::json!({
+            "schema": 1, "stage": "preflight", "file": "./cor.exe",
+            "win32_error": 32, "exit_code": 68
+        });
+        fs::write(
+            download.path().join("installer-failure.json"),
+            serde_json::to_vec(&details).unwrap(),
+        )
+        .unwrap();
+        record_installation(&plan, download.path(), "failed", "文件被占用", true).unwrap();
+        download.close().unwrap();
+        let status = installation_status(data.path()).unwrap().unwrap();
+        assert!(status.error);
+        assert_eq!(
+            serde_json::to_value(status).unwrap()["installer_failure"],
+            details
+        );
     }
 
     #[cfg(target_os = "macos")]

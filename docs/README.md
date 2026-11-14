@@ -13,7 +13,7 @@
 | 选择哪些 Android 应用进入 VPN | [Android 应用分流](android-application-routing.md) |
 | 使用 Claude 保护、了解接管与恢复 | [保护说明](claude-protection.md) |
 | 理解 A÷检测的项目、结果和边界 | [地区检测](claude-region-detection.md) |
-| 遇到错误，导出诊断或新建 Issue | [故障反馈与诊断报告](cli/runtime.md#故障反馈与诊断报告)；GUI 入口及错误分级见[通知与故障反馈](../crates/client-ui/README.md#通知与故障反馈) |
+| 遇到错误，导出诊断或新建 Issue | [故障反馈与诊断报告](cli/runtime.md#故障反馈与诊断报告)；[错误分级对照](error-feedback.md)与[界面入口](../crates/client-ui/README.md#通知与故障反馈) |
 
 ## 开发与界面
 

@@ -1434,7 +1434,7 @@ async fn run_loop(
             }
             state
                 .issue_events
-                .push_back(core::support::incident(&notice));
+                .push_back(core::support::incident(&notice, notice_critical));
             while state.issue_events.len() > 20 {
                 state.issue_events.pop_front();
             }
@@ -1573,15 +1573,29 @@ fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
 
 /// Returns true only after a user-requested enable has completed successfully.
 fn observe_protection(state: &mut State) -> Result<bool> {
+    if state
+        .protection_change
+        .as_ref()
+        .is_some_and(|change| std::time::Instant::now() >= change.deadline)
+    {
+        return rollback_protection(state, "保护切换超时，已恢复原状态").map(|_| false);
+    }
+    match state.session.protection_snapshot() {
+        Ok(Some(snapshot)) => state.guard_snapshot = snapshot,
+        Ok(None) => {}
+        Err(error) => {
+            state.protection_observed = false;
+            let message = format!("暂时无法读取保护状态：{error:#}");
+            if state.protection_status != message {
+                state.logs.push_back(("WARN".into(), message.clone()));
+            }
+            state.protection_status = message;
+            return Ok(false);
+        }
+    }
     let native = &state.session.platform["protection"];
     let active = native["enabled"].as_bool().unwrap_or(false);
-    if let Some(snapshot) = state.session.protection_snapshot()? {
-        state.guard_snapshot = snapshot;
-    }
     if let Some(change) = &state.protection_change {
-        if std::time::Instant::now() >= change.deadline {
-            return rollback_protection(state, "保护切换超时，已恢复原状态").map(|_| false);
-        }
         if change.generation.is_none() {
             return Ok(false);
         }
