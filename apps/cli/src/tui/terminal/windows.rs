@@ -107,10 +107,9 @@ impl Mode {
                 0x28 => bytes.extend_from_slice(b"\x1b[B"),
                 _ => {
                     if let Some(character) = self.characters.feed(unsafe { key.uChar.UnicodeChar })
+                        && character != '\0'
                     {
-                        if character != '\0' {
-                            bytes.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
-                        }
+                        bytes.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
                     }
                 }
             }

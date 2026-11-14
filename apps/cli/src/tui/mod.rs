@@ -17,8 +17,8 @@ use std::{io::IsTerminal, time::Duration};
 use tokio::task::JoinHandle;
 
 enum Reply {
-    Snapshot(Option<Poll>),
-    Network(Result<clash_client_core::probe::NetworkReport, String>),
+    Snapshot(Option<Box<Poll>>),
+    Network(Box<Result<clash_client_core::probe::NetworkReport, String>>),
 }
 
 struct Request(JoinHandle<Result<Reply>>);
@@ -113,18 +113,20 @@ pub async fn run(args: &Args) -> Result<()> {
                     let args = args.clone();
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
-                        select(&args, target).await.map(Reply::Snapshot)
+                        select(&args, target)
+                            .await
+                            .map(|poll| Reply::Snapshot(poll.map(Box::new)))
                     })));
                 }
                 Action::CheckNetwork(target) => {
                     let args = args.clone();
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
-                        Ok(Reply::Network(
+                        Ok(Reply::Network(Box::new(
                             crate::commands::inspection::network_check(&args, &target)
                                 .await
                                 .map_err(|error| format!("{error:#}")),
-                        ))
+                        )))
                     })));
                 }
             }
@@ -139,9 +141,9 @@ pub async fn run(args: &Args) -> Result<()> {
         if request.as_ref().is_some_and(|job| job.0.is_finished()) {
             let mut completed = request.take().unwrap();
             match (&mut completed.0).await {
-                Ok(Ok(Reply::Snapshot(poll))) => state.accept(poll),
+                Ok(Ok(Reply::Snapshot(poll))) => state.accept(poll.map(|poll| *poll)),
                 Ok(Ok(Reply::Network(result))) => {
-                    state.network_results = match result {
+                    state.network_results = match *result {
                         Ok(report) => report.lines(),
                         Err(error) => vec![format!("检查失败 · {error}")],
                     };
@@ -157,7 +159,9 @@ pub async fn run(args: &Args) -> Result<()> {
             let args = args.clone();
             let page = state.page;
             request = Some(Request(tokio::spawn(async move {
-                read(&args, page).await.map(Reply::Snapshot)
+                read(&args, page)
+                    .await
+                    .map(|poll| Reply::Snapshot(poll.map(Box::new)))
             })));
             last_refresh = tokio::time::Instant::now();
         }

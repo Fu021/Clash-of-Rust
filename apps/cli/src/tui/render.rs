@@ -393,10 +393,10 @@ fn nodes(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
         let selected = index == state.selected;
         rows.push((
             format!(
-                "{} {}  {:>8}  {}",
+                "{} {}  {}  {}",
                 if selected { "›" } else { " " },
                 fit(name, name_width),
-                info,
+                fit(&info, 8),
                 if current { "使用中" } else { "" }
             ),
             if selected {
