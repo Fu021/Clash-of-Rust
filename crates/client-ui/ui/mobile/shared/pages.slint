@@ -646,7 +646,10 @@ export component MobileNetwork inherits PageSurface {
                 }
             }
         }
-        if root.wide || root.opened: MScroll { content-key: "" + MobileData.network-tool;
+        if root.wide || root.opened: MScroll {
+        geometry-key: "network-detail-viewport";
+        width: root.wide ? root.width - root.menu-width - MobileTypography.gap : root.width;
+        content-key: "" + MobileData.network-tool;
         VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
             if !root.wide: HorizontalLayout {
                 alignment: start;
@@ -663,9 +666,9 @@ export component MobileNetwork inherits PageSurface {
                 detail-size: MobileTypography.font-size(12);
             }
         MCard {
-            MSmall { text: NetworkTools.target-labels[MobileData.network-tool]; }
+            if NetworkTools.needs-target(MobileData.network-tool): MSmall { text: NetworkTools.target-labels[MobileData.network-tool]; }
             HorizontalLayout { spacing: 8px;
-                MField { geometry-key: "network-target"; text <=> MobileView.test-url; placeholder: "域名或网址"; enabled: !MobileData.probe-busy; }
+                if NetworkTools.needs-target(MobileData.network-tool): MField { geometry-key: "network-target"; text <=> MobileView.test-url; placeholder: NetworkTools.target-labels[MobileData.network-tool]; enabled: !MobileData.probe-busy; }
                 MButton { text: MobileData.probe-busy ? "取消" : "检查"; primary: !MobileData.probe-busy;
                     geometry-key: "network-run";
                     width: 64px; horizontal-stretch: 0;

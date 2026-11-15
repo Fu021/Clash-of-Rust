@@ -26,7 +26,12 @@ async fn route(response: &reqwest::Response, context: &Environment, report: &mut
     });
 }
 
-pub(super) async fn dns(url: &Url, context: &Environment, report: &mut Report) -> Result<()> {
+pub(super) async fn dns(
+    url: &Url,
+    context: &Environment,
+    options: &Options,
+    report: &mut Report,
+) -> Result<()> {
     let host = url
         .host_str()
         .context("目标缺少域名")?
@@ -60,7 +65,13 @@ pub(super) async fn dns(url: &Url, context: &Environment, report: &mut Report) -
         }
     };
     let core = async {
-        match resolve(url, context).await {
+        if options.record_type != "ADDR" {
+            return match dns_records(host, context, &options.record_type).await {
+                Ok(entries) => entries,
+                Err(error) => vec![error::entry("内核 DNS", &error)],
+            };
+        }
+        vec![match resolve(url, context).await {
             Ok(addresses) => Entry::ok(
                 "内核 DNS",
                 addresses
@@ -70,15 +81,195 @@ pub(super) async fn dns(url: &Url, context: &Environment, report: &mut Report) -
                     .join("、"),
             ),
             Err(error) => error::entry("内核 DNS", &error),
-        }
+        }]
     };
     let (system, core) = tokio::join!(system, core);
-    report.entries.extend([system, core]);
+    report.entries.push(system);
+    report.entries.extend(core);
     report.entries.push(Entry::unknown(
         "解析方式",
         "内核查询返回真实上游地址；两种解析结果不同不单独视为故障",
         "information",
     ));
+    Ok(())
+}
+
+async fn dns_records(host: &str, context: &Environment, kind: &str) -> Result<Vec<Entry>> {
+    let api = context
+        .api
+        .as_ref()
+        .ok_or_else(|| error::failure("controller_unavailable", "内核解析接口不可用"))?;
+    let mut url = api.url(&["dns", "query"])?;
+    url.query_pairs_mut()
+        .append_pair("name", host)
+        .append_pair("type", kind);
+    let response = api.request(reqwest::Method::GET, url).send().await?;
+    let value = controller_json(response, 64 * 1024).await?;
+    dns_entries(&value, kind)
+}
+
+pub(super) fn dns_entries(value: &serde_json::Value, kind: &str) -> Result<Vec<Entry>> {
+    let status = value
+        .get("Status")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| error::failure("dns_response_invalid", "DNS 响应缺少状态码"))?;
+    if status != 0 {
+        return Ok(vec![Entry::error(
+            "内核 DNS",
+            format!("{kind} · DNS 状态 {status}"),
+            "dns_failed",
+        )]);
+    }
+    let answers = value.get("Answer").and_then(serde_json::Value::as_array);
+    let mut entries = vec![Entry::ok(
+        "DNS 响应",
+        format!(
+            "{kind} · {} 条回答 · AA={} · RA={}",
+            answers.map_or(0, Vec::len),
+            value
+                .get("AA")
+                .and_then(serde_json::Value::as_bool)
+                .map_or("未提供", |flag| if flag { "是" } else { "否" }),
+            value
+                .get("RA")
+                .and_then(serde_json::Value::as_bool)
+                .map_or("未提供", |flag| if flag { "是" } else { "否" })
+        ),
+    )];
+    if let Some(answers) = answers {
+        for answer in answers.iter().take(16) {
+            let record_type = answer.get("type").and_then(serde_json::Value::as_u64);
+            let data = answer
+                .get("data")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("未提供");
+            entries.push(Entry::ok(
+                "记录",
+                format!(
+                    "类型 {} · TTL {} s · {}",
+                    record_type.map_or_else(|| "未提供".into(), |number| number.to_string()),
+                    answer
+                        .get("TTL")
+                        .and_then(serde_json::Value::as_u64)
+                        .map_or_else(|| "未提供".into(), |number| number.to_string()),
+                    if matches!(kind, "TXT" | "SOA") || matches!(record_type, Some(6 | 16)) {
+                        "正文已隐藏".into()
+                    } else {
+                        bounded(data, 256)
+                    }
+                ),
+            ));
+        }
+        if answers.len() > 16 {
+            entries.push(Entry::unknown(
+                "回答上限",
+                "仅显示前 16 条记录",
+                "output_truncated",
+            ));
+        }
+    }
+    if answers.is_none_or(Vec::is_empty) {
+        entries.push(Entry::unknown(
+            "记录",
+            "查询成功，但没有此类型的回答",
+            "dns_no_record",
+        ));
+    }
+    Ok(entries)
+}
+
+pub(super) async fn controller_json(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<serde_json::Value> {
+    if !response.status().is_success() {
+        return Err(error::failure(
+            "controller_query_failed",
+            "内核未支持此查询或拒绝请求",
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > limit {
+            return Err(error::failure(
+                "controller_response_limit",
+                "控制接口响应超过本次上限",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| error::failure("controller_response_invalid", "控制接口响应格式无效"))
+}
+
+pub(super) async fn inspect(
+    url: &Url,
+    context: &Environment,
+    options: &Options,
+    report: &mut Report,
+) -> Result<()> {
+    let mut response = client(context, options.seconds)?
+        .request(
+            reqwest::Method::from_bytes(options.method.as_bytes())?,
+            url.clone(),
+        )
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)?;
+    report.entries.push(Entry::ok(
+        "网站响应",
+        format!(
+            "{} · HTTP {} · {:?}",
+            options.method,
+            response.status().as_u16(),
+            response.version()
+        ),
+    ));
+    for name in [
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "cache-control",
+        "allow",
+        "strict-transport-security",
+    ] {
+        if let Some(value) = response.headers().get(name) {
+            report.entries.push(Entry::ok(
+                name,
+                bounded(value.to_str().unwrap_or("无法显示"), 256),
+            ));
+        }
+    }
+    if response.status().is_redirection() {
+        report.entries.push(Entry::unknown(
+            "重定向",
+            "未跟随；Location、Cookie 和认证响应头不进入报告",
+            "information",
+        ));
+    }
+    route(&response, context, report).await;
+    if options.method != "HEAD" {
+        let mut size = 0usize;
+        while size < 4096 {
+            match response.chunk().await {
+                Ok(Some(chunk)) => size += chunk.len().min(4096 - size),
+                Ok(None) => break,
+                Err(error) => {
+                    report.entries.push(error::entry("响应正文", &error.into()));
+                    break;
+                }
+            }
+        }
+        report.entries.push(Entry::unknown(
+            "响应正文",
+            format!("接收 {size} B（最多 4096 B），已丢弃"),
+            if size == 4096 {
+                "byte_limit"
+            } else {
+                "information"
+            },
+        ));
+    }
     Ok(())
 }
 

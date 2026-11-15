@@ -34,7 +34,7 @@ python3 -B website/export_preview.py
 - 首页讲用途、常用功能和版本亮点，避免长脚注和逐句硬译；删除插画自我说明，必要的截图版本、演示标识和功能边界保留。首页插画使用正常文档流的全宽图片，与其他页面一致；不以绝对定位、尺寸上限或容器查询坐标限制图片宽度。
 - 使用指南分为 GUI 和 TUI，可通过按钮或 `#gui` / `#tui` 直达，CLI 示例放在对应操作旁。无 JavaScript 时两套教程仍可阅读。已发布 TUI 与源码新增页分别标注，发布时同步修订；不把原型页面数永久写死。
 - 中英文同步修改入口、章节、命令、参数、默认值、平台限制、版本亮点和配图。静态检查核对章节、教程命令及版本字段，不能代替人工语义审阅。每轮 loop 对照 `docs/` 的权威行为，发现不同步先修复再提交。
-- `src/content/tools.json` 是十一项工具的中英介绍、命令、参数及限制来源，须与 `docs/network-tools.md` 和实际 CLI 核对。HTTP 检查使用已有代理；系统 Ping 与路由追踪不能笼统称为走代理。
+- `src/content/tools.json` 是网络工具的中英介绍、命令、参数及限制来源，须与 `docs/network-tools.md` 和实际 CLI 核对。新增工具注明最低可用版本；HTTP 检查使用已有代理，系统 Ping 与路由追踪不能笼统称为走代理。
 - 插画使用乡间铁路、道岔和蓝猫主题；原图在 `src/art/raw/`，网页图在 `src/assets/`。图片外框、按钮、表单与卡片使用统一圆角。动效只使用短时透明度、位移与颜色过渡，尊重 `prefers-reduced-motion`，无自动播放或常驻逐帧任务。
 - `src/content/screenshots.json` 记录当前 GUI 截图版本、来源提交、尺寸及平台；`terminal.json` 保留同版本 CI 实际 PTY 帧。首页、工具与指南共用，禁止混用旧版首页或用插画冒充软件。源图片由正式 Slint 组件串行预览生成，TUI 文本按实际终端帧绘制，不能手写屏幕内容冒充实测；测试输入不是用户订阅。
 - 字体使用 National Park、Departure Mono 和 Noto Sans SC，许可证随 `src/assets/fonts/` 保留。来源分别为 https://github.com/benhoepner/National-Park 、https://departuremono.com/ 、https://github.com/notofonts/noto-cjk 。中文正文使用系统字体，标题使用真实 Medium 子集，避免伪加粗。

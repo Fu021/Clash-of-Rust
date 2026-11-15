@@ -27,7 +27,13 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             use clash_client_core::network_tools::Tool;
             let tool = Tool::parse(path.trim_start_matches("network "))?;
             let options = network_options(args);
-            let report = network_tool(args, tool, &args.positional[0], options).await?;
+            let report = network_tool(
+                args,
+                tool,
+                args.positional.first().map_or("", String::as_str),
+                options,
+            )
+            .await?;
             let failed = matches!(report.status, "failed" | "unavailable");
             output::emit(args, serde_json::to_value(report)?)?;
             ensure!(
@@ -59,6 +65,8 @@ fn network_options(args: &Args) -> clash_client_core::network_tools::Options {
             max_hops: args
                 .get("max-hops")
                 .map_or(Ok(defaults.max_hops), str::parse)?,
+            record_type: args.get("type").unwrap_or("ADDR").to_ascii_uppercase(),
+            method: args.get("method").unwrap_or("HEAD").to_ascii_uppercase(),
         })
     };
     parse().unwrap_or(Options {
@@ -82,6 +90,7 @@ pub(crate) async fn network_tool(
                 api: None,
                 protected: true,
                 udp_enabled: false,
+                data_dir: None,
             },
             options,
         )
@@ -98,12 +107,14 @@ pub(crate) async fn network_tool(
                 .transpose()?,
             protected: poll.meta.settings.claude_protection.is_some(),
             udp_enabled: poll.meta.settings.udp,
+            data_dir: Some(backend::data_root(args)?),
         },
         None => clash_client_core::network_tools::Environment {
             port: None,
             api: None,
             protected: true,
             udp_enabled: false,
+            data_dir: Some(backend::data_root(args)?),
         },
     };
     clash_client_core::network_tools::run(tool, target, environment, options).await

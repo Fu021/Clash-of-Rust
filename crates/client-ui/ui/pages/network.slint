@@ -22,10 +22,10 @@ export component NetworkPage inherits PageSurface {
             padding-right: 8px; spacing: 16px; alignment: start;
             NetworkToolHeading { tool: UiData.network-tool; }
             ContentPanel {
-                Caption { text: NetworkTools.target-labels[UiData.network-tool]; }
+                if NetworkTools.needs-target(UiData.network-tool): Caption { text: NetworkTools.target-labels[UiData.network-tool]; }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    Field {
-                        placeholder: "域名或网址"; text <=> UiData.test-url; enabled: !UiData.probing;
+                    if NetworkTools.needs-target(UiData.network-tool): Field {
+                        placeholder: NetworkTools.target-labels[UiData.network-tool]; text <=> UiData.test-url; enabled: !UiData.probing;
                         edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); }
                         accepted => { if !UiData.probing { UiActions.dispatch(Intent.probe, "", parameters.encoded); } }
                     }

@@ -105,6 +105,42 @@ pub(super) async fn socks(
     ))
 }
 
+pub(super) async fn tcp(
+    url: &reqwest::Url,
+    target: &str,
+    context: &Environment,
+    report: &mut Report,
+) -> Result<()> {
+    if url.port() == Some(0)
+        || target.trim().ends_with(':')
+        || target.contains('/') && !target.contains("://")
+    {
+        return Err(error::failure(
+            "invalid_target",
+            "请输入主机和端口，端口应为 1～65535",
+        ));
+    }
+    let host = url
+        .host_str()
+        .context("缺少主机名")?
+        .trim_matches(['[', ']']);
+    let port = url.port_or_known_default().context("缺少目标端口")?;
+    let (_stream, _, local, remote) = socks(proxy_port(context)?, host, port, 1).await?;
+    report
+        .entries
+        .push(Entry::ok("本机代理 TCP", format!("{local} ms")));
+    report.entries.push(Entry::ok(
+        "目标 TCP",
+        format!("端口 {port} · {remote} ms（含代理侧 DNS）"),
+    ));
+    report.entries.push(Entry::unknown(
+        "检查范围",
+        "仅建立 TCP 连接，不发送应用数据；不代表 TLS 或服务可用",
+        "information",
+    ));
+    Ok(())
+}
+
 fn tls() -> Result<TlsConnector> {
     let mut roots = rustls::RootCertStore::empty();
     for certificate in webpki_root_certs::TLS_SERVER_ROOT_CERTS {

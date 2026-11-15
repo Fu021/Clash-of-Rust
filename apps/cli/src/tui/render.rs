@@ -233,14 +233,24 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
 
 fn network(state: &State) -> Vec<(String, Tone)> {
     let tool = clash_client_core::network_tools::Tool::ALL[state.network_tool];
-    let mut lines = vec![
-        (
-            format!("{}  {}/11", tool.title(), state.network_tool + 1),
-            Tone::Accent,
+    let mut lines = vec![(
+        format!(
+            "{}  {}/{}",
+            tool.title(),
+            state.network_tool + 1,
+            clash_client_core::network_tools::Tool::ALL.len()
         ),
-        (
+        Tone::Accent,
+    )];
+    if tool.needs_target() {
+        lines.push((
             format!(
-                "网址{}：{}",
+                "{}{}：{}",
+                if tool == clash_client_core::network_tools::Tool::Node {
+                    "节点名称"
+                } else {
+                    "目标"
+                },
                 if state.searching {
                     "（输入中）"
                 } else {
@@ -249,10 +259,12 @@ fn network(state: &State) -> Vec<(String, Tone)> {
                 state.query
             ),
             Tone::Plain,
-        ),
+        ));
+    }
+    lines.extend([
         (tool.hint().into(), Tone::Muted),
         (String::new(), Tone::Plain),
-    ];
+    ]);
     lines.extend(
         state
             .network_results

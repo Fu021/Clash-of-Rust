@@ -2,7 +2,10 @@ export global PreviewNetwork {
     pure public function target(tool: int) -> string {
         return tool == 7 ? "203.0.113.53:53"
             : tool == 8 || tool == 9 ? "203.0.113.42"
-            : tool == 10 ? "https://example.com/test.bin" : "example.com";
+            : tool == 10 ? "https://example.com/test.bin"
+            : tool == 11 ? "example.com:22"
+            : tool >= 14 && tool <= 16 ? ""
+            : tool == 17 ? "AUTO" : "example.com";
     }
     pure public function results(tool: int) -> [string] {
         if tool == 1 {
@@ -55,6 +58,43 @@ export global PreviewNetwork {
                 "已接收 · 8 MiB", "平均速度 · 4.2 MiB/s",
                 "实际耗时 · 1.90 秒", "结束原因 · 已达到流量上限",
                 "实际线路 · PROXY → AUTO → 🇩🇪 德国 01"];
+        }
+        if tool == 11 {
+            return ["预览 · 固定演示结果，未发送请求", "目标 · example.com:22",
+                "本机代理 TCP · 1 ms", "目标 TCP · 端口 22 · 128 ms",
+                "检查范围 · 不发送应用数据，不代表服务可用"];
+        }
+        if tool == 12 {
+            return ["预览 · 固定演示结果，未发送请求", "网站响应 · HEAD · HTTP 200",
+                "content-type · text/html", "cache-control · max-age=300",
+                "实际线路 · PROXY → AUTO → 🇩🇪 德国 01"];
+        }
+        if tool == 13 {
+            return ["预览 · 固定演示结果，未发送请求", "预判范围 · 最后生成的配置，不连接目标",
+                "无法确认 · 第 2 条 RULE-SET 需要动态信息，后续命中不能确定"];
+        }
+        if tool == 14 {
+            return ["预览 · 固定演示结果，未读取配置", "目标 · 当前实例",
+                "dns · 对象 2 项 → 对象 6 项 · 已覆盖或变化",
+                "rules · 列表 300 项 → 列表 312 项 · 已覆盖或变化",
+                "proxies · 列表 100 项 → 列表 100 项 · 一致",
+                "tun.enable · 开启", "对照范围 · 不显示正文、节点地址或凭据"];
+        }
+        if tool == 15 {
+            return ["预览 · 固定演示结果，未读取连接", "当前连接 · 6 个",
+                "主机 · example.com · 2 个 · ↑ 1024 B · ↓ 8192 B",
+                "策略链 · PROXY → AUTO → 🇩🇪 德国 01 · 6 个 · ↑ 2048 B · ↓ 16384 B",
+                "检查范围 · 只统计仍存在的连接，不保存历史"];
+        }
+        if tool == 16 {
+            return ["预览 · 固定演示结果，未读取内核", "内核版本 · 示例",
+                "当前连接 · 6 个", "内核托管堆 · 31457280 B · 30.00 MiB",
+                "统计范围 · 托管堆不是进程 RSS，不含 GUI 和后台"];
+        }
+        if tool == 17 {
+            return ["预览 · 固定演示结果，未读取节点", "目标 · AUTO",
+                "类型 · URLTest", "当前选择 · AUTO → 🇩🇪 德国 01",
+                "所属策略组 · PROXY", "检查范围 · 不主动测速，自动组可能变化"];
         }
         return ["预览 · 固定演示结果，未发送请求", "目标 · https://example.com",
             "系统 DNS · 198.18.0.12", "内核 DNS · 203.0.113.42",

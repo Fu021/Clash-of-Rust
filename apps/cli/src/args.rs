@@ -355,10 +355,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network dns",
         "比较系统与内核 DNS",
-        "network dns URL",
+        "network dns HOST [--type ADDR|A|AAAA|CNAME|MX|TXT|NS|SOA|PTR|CAA]",
         1,
         1,
-        "output"
+        "type output"
     ),
     command!(
         "network phase",
@@ -431,6 +431,62 @@ pub static COMMANDS: &[Spec] = &[
         1,
         1,
         "max-bytes seconds output"
+    ),
+    command!(
+        "network tcp",
+        "检查指定端口的 TCP 连接",
+        "network tcp HOST[:PORT] [--seconds N]",
+        1,
+        1,
+        "seconds output"
+    ),
+    command!(
+        "network http",
+        "读取有界 HTTP 响应详情",
+        "network http URL [--method HEAD|GET|OPTIONS] [--seconds N]",
+        1,
+        1,
+        "method seconds output"
+    ),
+    command!(
+        "network rule",
+        "静态预判规则，不连接目标",
+        "network rule URL",
+        1,
+        1,
+        "output"
+    ),
+    command!(
+        "network config-diff",
+        "对照原订阅和生成配置的脱敏摘要",
+        "network config-diff",
+        0,
+        0,
+        "output"
+    ),
+    command!(
+        "network traffic",
+        "汇总当前连接的流量分组",
+        "network traffic",
+        0,
+        0,
+        "output"
+    ),
+    command!(
+        "network performance",
+        "单次读取内核运行指标",
+        "network performance",
+        0,
+        0,
+        "output"
+    ),
+    command!(
+        "network node",
+        "查看节点和策略组的运行详情",
+        "network node NODE",
+        1,
+        1,
+        "output"
     ),
     command!(
         "ip-check list",
@@ -581,7 +637,7 @@ pub static COMMANDS: &[Spec] = &[
 
 const GLOBAL: &str =
     "help version json jsonl timeout data-dir resources user yes show-secrets quiet no-color";
-pub(crate) const VALUES: &str = "timeout data-dir resources user filter name source output sort limit offset group profile position interval level shell url host category count interval-ms seconds max-bytes max-hops";
+pub(crate) const VALUES: &str = "timeout data-dir resources user filter name source output sort limit offset group profile position interval level shell url host category count interval-ms seconds max-bytes max-hops type method";
 
 #[derive(Debug)]
 pub struct Usage(pub String);
@@ -998,6 +1054,8 @@ fn option_help(key: &str) -> String {
         "seconds" => "单次时限秒数，1～30，默认 10",
         "max-bytes" => "下载字节上限，1024～16777216，默认 8388608",
         "max-hops" => "追踪跳数上限，1～16，默认 8",
+        "type" => "DNS 记录类型，默认 ADDR（A 与 AAAA）",
+        "method" => "HTTP 方法 HEAD、GET 或 OPTIONS，默认 HEAD",
         "filter" => "按文本筛选",
         "sort" => {
             "排序字段；node: name/latency；connection: name/rule/chain/upload/download/upload-rate/download-rate/start"
@@ -1206,6 +1264,10 @@ fn attached_option(word: &str) -> Option<(&str, &str)> {
 
 fn option_values(path: &str, option: &str) -> &'static [&'static str] {
     match option {
+        "type" if path == "network dns" => &[
+            "ADDR", "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA", "PTR", "CAA",
+        ],
+        "method" if path == "network http" => &["HEAD", "GET", "OPTIONS"],
         "sort" if path == "node list" => &["name", "latency"],
         "sort" => &[
             "name",
@@ -1239,6 +1301,25 @@ mod tests {
         assert!(args(&["profile", "list", "--srot", "name"]).is_err());
         assert!(args(&["mode", "rule", "extra"]).is_err());
         assert!(args(&["--json", "--json", "status"]).is_err());
+    }
+    #[test]
+    fn network_inspection_commands_validate_targets_and_options_independently() {
+        for tool in clash_client_core::network_tools::Tool::ALL {
+            let mut command = vec!["network", tool.id()];
+            if tool.needs_target() {
+                command.push("🇰🇷 韩国 01");
+            }
+            assert!(args(&command).is_ok(), "{command:?}");
+        }
+        assert!(args(&["network", "traffic", "unexpected"]).is_err());
+        assert!(args(&["network", "node"]).is_err());
+        assert!(args(&["network", "http", "example.test", "--method", "GET"]).is_ok());
+        assert!(args(&["network", "dns", "example.test", "--type", "AAAA"]).is_ok());
+        assert!(args(&["network", "tcp", "example.test:22", "--method", "GET"]).is_err());
+        assert_eq!(
+            option_values("network http", "method"),
+            ["HEAD", "GET", "OPTIONS"]
+        );
     }
     #[test]
     fn every_registered_command_has_help_and_invalid_input_stays_an_error() {

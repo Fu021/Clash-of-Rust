@@ -5,7 +5,13 @@
      "note_zh": "针对某个网站或域名的六项检查。"},
     {"id": "link", "en": "Link analysis", "zh": "链路分析",
      "note_en": "Five checks about the quality of the path itself.",
-     "note_zh": "关于线路本身质量的五项检查。"}
+     "note_zh": "关于线路本身质量的五项检查。"},
+    {"id": "protocol", "en": "Protocol checks", "zh": "协议检查",
+     "note_en": "TCP handshakes and bounded HTTP responses.",
+     "note_zh": "TCP 握手与有界 HTTP 响应。"},
+    {"id": "runtime", "en": "Rules and runtime", "zh": "规则与运行",
+     "note_en": "Read-only snapshots. No persistent monitoring.",
+     "note_zh": "按需读取快照，不常驻监控。"}
   ],
   "tools": [
     {
@@ -26,20 +32,20 @@
       }
     },
     {
-      "id": "dns", "group": "target", "arg": "HOST", "options": [],
+      "id": "dns", "group": "target", "arg": "HOST", "options": ["type"],
       "en": {
         "name": "DNS comparison",
         "short": "The system resolver and the core, side by side.",
         "checks": "Resolves one host name with the system resolver and with the core, and shows both answers next to each other.",
         "when": "A site opens in one app but not in another, or you suspect a wrong or hijacked answer.",
-        "note": "Different answers are not a fault on their own. With Fake-IP on, the core returns a placeholder address by design."
+        "note": "Different answers are not a fault on their own. The controller query returns real upstream addresses even with Fake-IP. Version 0.7.2-fix.4 adds record types, TTL and available AA/RA flags; TXT/SOA bodies are hidden."
       },
       "zh": {
         "name": "DNS 对照",
         "short": "系统解析和内核解析，并排比较。",
         "checks": "同一个域名分别交给系统解析器和内核解析，把两边的结果并排列出。",
         "when": "同一个网站在这个应用能开、另一个应用打不开，或者怀疑解析结果被污染、被劫持时。",
-        "note": "两边结果不同，本身不算故障。开启 Fake-IP 后，内核按设计返回的就是占位地址。"
+        "note": "两边结果不同，本身不算故障。内核控制查询在 Fake-IP 下仍返回真实上游地址。0.7.2-fix.4 起可选记录类型，查看 TTL 和返回的 AA/RA 标志；TXT/SOA 正文隐藏。"
       }
     },
     {
@@ -194,6 +200,41 @@
         "when": "网页能开，但大文件下载很慢或者中途卡住时。",
         "note": "需要服务器返回成功状态。正常达到上限不算失败。"
       }
+    },
+    {
+      "id":"tcp","group":"protocol","arg":"HOST[:PORT]","options":["seconds"],
+      "en":{"name":"TCP port","short":"Connect without sending application data.","checks":"Times the local SOCKS5 hop and the target handshake.","when":"A service port appears unreachable.","note":"Requires 0.7.2-fix.4. Uses the current proxy; default port 443. A handshake does not prove TLS or service health."},
+      "zh":{"name":"TCP 端口","short":"只握手，不发送应用数据。","checks":"计时本机 SOCKS5 和目标端口连接。","when":"怀疑服务端口无法访问时。","note":"0.7.2-fix.4 起提供。沿用当前代理，默认端口 443；握手成功不代表 TLS 或服务正常。"}
+    },
+    {
+      "id":"http","group":"protocol","arg":"URL","options":["method","seconds"],
+      "en":{"name":"HTTP response","short":"Status, safe headers and bounded body size.","checks":"Sends HEAD, GET or OPTIONS; reads at most 4 KiB of body and discards it.","when":"A site answers but behaves unexpectedly.","note":"Requires 0.7.2-fix.4. No redirect following. Cookies, authorization headers and body text are not retained."},
+      "zh":{"name":"HTTP 响应详情","short":"状态、受限响应头与正文长度。","checks":"发送 HEAD、GET 或 OPTIONS，最多接收 4 KiB 正文并丢弃。","when":"网站有响应但行为异常时。","note":"0.7.2-fix.4 起提供。不跟随重定向，不保留 Cookie、认证头和正文。"}
+    },
+    {
+      "id":"rule","group":"runtime","arg":"URL","options":[],
+      "en":{"name":"Rule preview","short":"An offline estimate, with uncertainty shown.","checks":"Reads the last generated configuration and stops at the first condition it cannot evaluate.","when":"Checking simple domain, IP or port rules without contacting a target.","note":"Requires 0.7.2-fix.4. Dynamic rules, Geo and process conditions remain unknown. Use Rule and exit for a real request."},
+      "zh":{"name":"规则预判","short":"离线判断，无法确认时明确说明。","checks":"读取最后生成的配置，遇到无法判断的条件立即停止。","when":"不连接目标，检查简单域名、IP 或端口规则时。","note":"0.7.2-fix.4 起提供。动态规则、Geo 和进程条件保持未知；实际线路使用“规则与出口”。"}
+    },
+    {
+      "id":"config-diff","group":"runtime","arg":"","options":[],
+      "en":{"name":"Configuration diff","short":"Original versus generated configuration.","checks":"Compares field types, item counts and whether selected sections changed.","when":"Understanding which settings overrode a subscription.","note":"Requires 0.7.2-fix.4. A disk snapshot, not proof of live state. Values, node addresses, DNS servers and credentials are hidden."},
+      "zh":{"name":"配置差异","short":"原订阅与生成配置摘要。","checks":"比较字段类型、条目数和所选配置块是否变化。","when":"想知道哪些设置覆盖了订阅时。","note":"0.7.2-fix.4 起提供。磁盘快照不代表实时状态；不显示节点地址、DNS 上游或凭据。"}
+    },
+    {
+      "id":"traffic","group":"runtime","arg":"","options":[],
+      "en":{"name":"Traffic breakdown","short":"Current connections grouped four ways.","checks":"Groups by host, process, policy chain and rule type; shows eight groups per category.","when":"Identifying which active connections account for traffic.","note":"Requires 0.7.2-fix.4. No history; totals cover live connections only. Process details depend on the core and OS."},
+      "zh":{"name":"流量分解","short":"四种分组查看当前连接。","checks":"按主机、进程、策略链和规则类型汇总，每类显示八组。","when":"查看哪些活跃连接占用了流量时。","note":"0.7.2-fix.4 起提供。不留历史，仅统计仍在内核中的连接；进程信息取决于系统和内核。"}
+    },
+    {
+      "id":"performance","group":"runtime","arg":"","options":[],
+      "en":{"name":"Core runtime","short":"Version, connections and managed heap.","checks":"Reads one bounded sample, then closes the metrics stream.","when":"Checking the core without starting a background monitor.","note":"Requires 0.7.2-fix.4. Managed heap is not process RSS. Missing metrics are reported, never estimated."},
+      "zh":{"name":"内核运行","short":"版本、连接与托管堆。","checks":"读取一次有界样本后关闭指标流。","when":"不启动常驻监控，查看内核情况时。","note":"0.7.2-fix.4 起提供。托管堆不是 RSS；未提供的指标不推算。"}
+    },
+    {
+      "id":"node","group":"runtime","arg":"NODE","options":[],
+      "en":{"name":"Node runtime","short":"Type, groups and current selection.","checks":"Looks up a full node name, its last delay and selected policy path without retesting.","when":"Understanding an automatic or nested group.","note":"Requires 0.7.2-fix.4. Names with spaces or emoji must be quoted in CLI. Past delay does not prove current health."},
+      "zh":{"name":"节点运行详情","short":"类型、所属组与当前选择。","checks":"按完整名称查看最近延迟和策略链，不主动测速。","when":"查看自动组或多层策略组时。","note":"0.7.2-fix.4 起提供。CLI 中带空格或 emoji 的名称须加引号；历史延迟不代表现在可达。"}
     }
   ],
   "options": {
@@ -206,7 +247,11 @@
     "bytes": {"flag": "--max-bytes", "range": "1024–16777216", "default": "8388608",
               "en": "Download cap in bytes (8 MiB by default; the window takes whole MiB)", "zh": "下载上限，字节（默认 8 MiB，界面里按整数 MiB 输入）"},
     "hops": {"flag": "--max-hops", "range": "1–16", "default": "8",
-             "en": "Furthest hop to probe", "zh": "最大跳数"}
+             "en": "Furthest hop to probe", "zh": "最大跳数"},
+    "type": {"flag":"--type","range":"ADDR / A / AAAA / CNAME / MX / TXT / NS / SOA / PTR / CAA","default":"ADDR",
+             "en":"Core DNS record type; system comparison still uses A/AAAA","zh":"内核 DNS 记录类型，系统对照仍查询 A/AAAA"},
+    "method": {"flag":"--method","range":"HEAD / GET / OPTIONS","default":"HEAD",
+               "en":"HTTP request method","zh":"HTTP 请求方法"}
   },
   "symptoms": [
     {"en": "A site will not open", "zh": "网站打不开", "tools": ["check", "explain"]},

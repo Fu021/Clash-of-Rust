@@ -30,6 +30,22 @@ class SiteTests(unittest.TestCase):
         build.build()
     def test_current_snapshot(self):
         validate(self.data)
+    def test_tool_catalog_matches_the_shared_cli_and_both_languages(self):
+        catalog = json.loads((build.SRC/'content/tools.json').read_text())
+        core = (build.ROOT.parent/'crates/client-core/src/detection/tools/mod.rs').read_text()
+        commands = (build.ROOT.parent/'apps/cli/src/args.rs').read_text()
+        identifier_body = core.split("pub fn id(self)")[1].split("pub fn title(self)")[0]
+        identifiers = re.findall(r'Self::\w+ => "([^"]+)"', identifier_body)
+        self.assertEqual([tool['id'] for tool in catalog['tools']], identifiers)
+        for tool in catalog['tools']:
+            self.assertIn('"network '+tool['id']+'"', commands)
+            for lang in ('zh', 'en'):
+                for field in ('name', 'short', 'checks', 'when', 'note'):
+                    self.assertTrue(tool[lang][field].strip())
+            for option in tool['options']:
+                self.assertIn(option, catalog['options'])
+            if not tool['arg']:
+                self.assertFalse(build.tool_command(tool).endswith(' '))
     def test_inconsistent_release_data_rejected(self):
         for field in ('channel','translation','package','date','duplicate','series','highlight','known'):
             bad=copy.deepcopy(self.data)

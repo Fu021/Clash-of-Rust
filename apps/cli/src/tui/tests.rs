@@ -210,7 +210,10 @@ fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
     state.release_page();
     state.network_results = vec!["旧结果".into()];
     assert!(matches!(state.key(Key::Char('[')), Action::CancelNetwork));
-    assert_eq!(state.network_tool, 10);
+    assert_eq!(
+        state.network_tool,
+        clash_client_core::network_tools::Tool::ALL.len() - 1
+    );
     assert!(state.network_results.is_empty());
     assert!(matches!(state.key(Key::Char(']')), Action::CancelNetwork));
     assert_eq!(state.network_tool, 0);
@@ -221,6 +224,25 @@ fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
         clash_client_core::network_tools::Tool::Website, target
     ) if target == "example.test/a[1]"));
     assert!(matches!(state.key(Key::Escape), Action::CancelNetwork));
+}
+
+#[test]
+fn read_only_instance_tools_run_without_a_target_and_leave_no_page_history() {
+    use clash_client_core::network_tools::Tool;
+    for tool in [Tool::ConfigDiff, Tool::Traffic, Tool::Performance] {
+        let mut state = State::new(false);
+        state.key(Key::Char('4'));
+        state.release_page();
+        state.query.clear();
+        state.network_tool = tool.index() as usize;
+        assert!(
+            matches!(state.key(Key::Enter), Action::CheckNetwork(selected, _) if selected == tool)
+        );
+        state.network_results = vec!["本次结果".into()];
+        state.key(Key::Char('1'));
+        state.release_page();
+        assert!(state.network_results.is_empty());
+    }
 }
 
 #[test]

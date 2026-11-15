@@ -2449,6 +2449,7 @@ impl App {
                     api,
                     protected,
                     udp_enabled: self.settings.udp,
+                    data_dir: Some(self.store.root.clone()),
                 };
                 let options = network_tools::Options::from_fields(&fields);
                 let (task, handle) = Task::perform(

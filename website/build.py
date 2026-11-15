@@ -96,7 +96,7 @@ def render_terminal(name, lang, frames):
 
 
 def tool_command(tool):
-    return f'cor network {tool["id"]} {tool["arg"]}'
+    return f'cor network {tool["id"]} {tool["arg"]}'.rstrip()
 
 
 def render_downloads(body, release_data):

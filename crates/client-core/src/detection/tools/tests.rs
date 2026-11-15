@@ -6,6 +6,7 @@ fn environment() -> Environment {
         api: None,
         protected: true,
         udp_enabled: true,
+        data_dir: None,
     }
 }
 
@@ -16,7 +17,7 @@ fn tool_identifiers_and_parameter_bounds_reject_invalid_requests() {
         assert_eq!(Tool::parse(tool.id()).unwrap(), tool);
     }
     assert!(Tool::at(-1).is_err());
-    assert!(Tool::at(11).is_err());
+    assert!(Tool::at(Tool::ALL.len() as i32).is_err());
     assert!(Tool::parse("unknown").is_err());
     for options in [
         Options {

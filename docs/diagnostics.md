@@ -124,6 +124,12 @@ Android 文档选择、导出和导入失败另外在应用日志中记录 `DOCU
 | `core_unavailable` / `controller_unavailable` | 本机代理或内核查询接口不可用，不自动启动后台 |
 | `protection_restricted` / `udp_disabled` | 保护或 UDP 设置拒绝该探针；不作为断网 |
 | `dns_timeout` / `dns_failed` / `dns_no_address` | 内核解析超时、失败或无地址 |
+| `dns_response_invalid` / `dns_no_record` | 记录响应缺少状态，或查询成功但没有指定类型的回答 |
+| `controller_query_failed` / `controller_response_limit` / `controller_response_invalid` | 控制查询被拒、响应超过上限或格式/完整性异常 |
+| `config_unavailable` / `config_invalid` / `config_snapshot_limit` | 已保存配置不可用、格式无效或超过单文件 8 MiB 分析上限 |
+| `rule_unknown` / `rule_no_match` | 静态规则存在未知前置条件，或没有可确认命中；不等于网络请求失败 |
+| `metric_unavailable` | 内核未提供指标，不使用估算值替代 |
+| `node_not_found` / `node_path_unknown` / `node_delay_stale` | 节点不存在、选择链不确定，或上次测速失败且当前状态未知 |
 | `family_no_address` / `family_timeout` | 此地址族无记录或实际连接超时；无 IPv6 不等于绕行 |
 | `proxy_authentication` / `proxy_response_invalid` | 本机 SOCKS5 认证拒绝或响应不合规 |
 | `proxy_rule_denied` / `proxy_target_unreachable` / `proxy_target_refused` | 规则拒绝、目标不可达或连接拒绝 |

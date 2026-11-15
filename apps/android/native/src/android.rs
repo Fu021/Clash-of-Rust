@@ -830,6 +830,7 @@ async fn run_loop(
                         let tool = core::network_tools::Tool::at(state.network_tool).unwrap_or(core::network_tools::Tool::Website);
                         let environment = core::network_tools::Environment {
                             port, api, protected, udp_enabled: state.session.settings.udp,
+                            data_dir: Some(state.session.store.root.clone()),
                         };
                         let options = core::network_tools::Options::from_fields(&request.b);
                         let send = updates.clone();

@@ -551,7 +551,7 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
             let bounds = targets.borrow();
             let first = &bounds["network-tool:0"];
             let second = &bounds["network-tool:1"];
-            let last = &bounds["network-tool:10"];
+            let last = &bounds["network-tool:17"];
             assert!(first[3] >= 48.);
             assert_eq!(first[0], second[0]);
             assert_eq!(first[2], last[2]);
@@ -593,11 +593,30 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
             delta_y: -2000.,
         });
         render();
-        let last = targets.borrow()["network-tool:10"].clone();
+        let last = targets.borrow()["network-tool:17"].clone();
         assert!(last[1] >= 0. && last[1] + last[3] <= height as f32 + 1.);
-        click("network-tool:10");
+        click("network-tool:17");
         assert!(probe.get_opened());
-        assert_eq!(probe.get_tool(), 10);
+        assert_eq!(probe.get_tool(), 17);
+        probe.set_busy(false);
+        for tool in [14, 15, 16] {
+            probe.set_tool(tool);
+            render();
+            let bounds = targets.borrow();
+            assert!(!bounds.contains_key("network-target"));
+            let viewport = &bounds["network-detail-viewport"];
+            assert!(
+                (viewport[0] + viewport[2] - width as f32).abs() < 2.,
+                "{width}x{height}: {viewport:?}"
+            );
+            if width < 700 {
+                assert!((viewport[2] - width as f32).abs() < 2.);
+            }
+            drop(bounds);
+            click("network-run");
+            assert_eq!(events.borrow().last().unwrap().0, MobileIntent::Probe);
+        }
+        probe.set_tool(10);
         render();
         {
             let bounds = targets.borrow();

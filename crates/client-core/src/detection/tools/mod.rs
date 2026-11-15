@@ -1,7 +1,12 @@
+mod config_diff;
 mod datagram;
 mod error;
 mod http;
+mod inspection;
+#[cfg(test)]
+mod inspection_tests;
 mod process;
+mod rule_preview;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -25,10 +30,17 @@ pub enum Tool {
     Ping,
     Trace,
     Download,
+    Tcp,
+    Http,
+    RulePreview,
+    ConfigDiff,
+    Traffic,
+    Performance,
+    Node,
 }
 
 impl Tool {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 18] = [
         Self::Website,
         Self::Dns,
         Self::Phase,
@@ -40,6 +52,13 @@ impl Tool {
         Self::Ping,
         Self::Trace,
         Self::Download,
+        Self::Tcp,
+        Self::Http,
+        Self::RulePreview,
+        Self::ConfigDiff,
+        Self::Traffic,
+        Self::Performance,
+        Self::Node,
     ];
 
     pub fn parse(value: &str) -> Result<Self> {
@@ -73,6 +92,13 @@ impl Tool {
             Self::Ping => "ping",
             Self::Trace => "trace",
             Self::Download => "download",
+            Self::Tcp => "tcp",
+            Self::Http => "http",
+            Self::RulePreview => "rule",
+            Self::ConfigDiff => "config-diff",
+            Self::Traffic => "traffic",
+            Self::Performance => "performance",
+            Self::Node => "node",
         }
     }
 
@@ -89,6 +115,13 @@ impl Tool {
             Self::Ping => "Ping",
             Self::Trace => "路由追踪",
             Self::Download => "限量下载",
+            Self::Tcp => "TCP 端口",
+            Self::Http => "HTTP 响应详情",
+            Self::RulePreview => "规则预判",
+            Self::ConfigDiff => "配置差异",
+            Self::Traffic => "流量分解",
+            Self::Performance => "内核运行",
+            Self::Node => "节点运行详情",
         }
     }
 
@@ -109,7 +142,18 @@ impl Tool {
             Self::Ping => "系统 ICMP 探针，不代表代理节点延迟",
             Self::Trace => "系统逐跳探针，部分跳不响应属于常见情况",
             Self::Download => "最多接收 16 MiB，正文即时丢弃",
+            Self::Tcp => "经当前代理连接指定端口，不发送应用数据",
+            Self::Http => "检查响应头及有界正文摘要，不保留正文",
+            Self::RulePreview => "不发起目标连接；动态条件无法确认时明确标注",
+            Self::ConfigDiff => "对照原订阅和已生成配置，只显示脱敏摘要",
+            Self::Traffic => "按主机、进程、策略和规则汇总当前连接",
+            Self::Performance => "按需读取内核版本、连接数量与托管堆信息",
+            Self::Node => "读取指定节点的类型、历史测速与策略选择，不主动测速",
         }
+    }
+
+    pub fn needs_target(self) -> bool {
+        !matches!(self, Self::ConfigDiff | Self::Traffic | Self::Performance)
     }
 }
 
@@ -120,6 +164,8 @@ pub struct Options {
     pub seconds: u64,
     pub max_bytes: u64,
     pub max_hops: u8,
+    pub record_type: String,
+    pub method: String,
 }
 
 impl Default for Options {
@@ -130,6 +176,8 @@ impl Default for Options {
             seconds: 10,
             max_bytes: 8 * 1024 * 1024,
             max_hops: 8,
+            record_type: "ADDR".into(),
+            method: "HEAD".into(),
         }
     }
 }
@@ -142,7 +190,7 @@ impl Options {
         let parse = || -> Result<Self> {
             ensure!(fields.len() <= 128, "检查参数过长");
             let values: Vec<_> = fields.split('|').collect();
-            ensure!(values.len() == 5, "检查参数格式无效");
+            ensure!(matches!(values.len(), 5 | 7), "检查参数格式无效");
             Ok(Self {
                 count: values[0].parse()?,
                 interval_ms: values[1].parse()?,
@@ -152,6 +200,8 @@ impl Options {
                     .checked_mul(1024 * 1024)
                     .context("下载上限溢出")?,
                 max_hops: values[4].parse()?,
+                record_type: values.get(5).copied().unwrap_or("ADDR").into(),
+                method: values.get(6).copied().unwrap_or("HEAD").into(),
             })
         };
         parse().unwrap_or(Self {
@@ -184,6 +234,17 @@ impl Options {
             "下载上限应为 1 KiB～16 MiB"
         );
         ensure!((1..=16).contains(&self.max_hops), "最大跳数应为 1～16");
+        ensure!(
+            matches!(
+                self.record_type.as_str(),
+                "ADDR" | "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SOA" | "PTR" | "CAA"
+            ),
+            "DNS 记录类型无效"
+        );
+        ensure!(
+            matches!(self.method.as_str(), "HEAD" | "GET" | "OPTIONS"),
+            "HTTP 方法应为 HEAD、GET 或 OPTIONS"
+        );
         Ok(())
     }
 }
@@ -194,6 +255,7 @@ pub struct Environment {
     pub api: Option<Api>,
     pub protected: bool,
     pub udp_enabled: bool,
+    pub data_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -297,8 +359,10 @@ pub async fn run(
     tool: Tool,
     target: &str,
     context: Environment,
-    options: Options,
+    mut options: Options,
 ) -> Result<Report> {
+    options.record_type.make_ascii_uppercase();
+    options.method.make_ascii_uppercase();
     let start = Instant::now();
     let mut report = Report {
         schema: 1,
@@ -311,9 +375,42 @@ pub async fn run(
     if options.validate().is_err() {
         report.entries.push(Entry::error(
             "检查参数",
-            "参数超出范围，请检查次数、间隔、时限、流量上限及最大跳数",
+            "参数无效，请检查次数、间隔、时限、流量上限、跳数、DNS 类型或 HTTP 方法",
             "invalid_options",
         ));
+        report.finish(start);
+        return Ok(report);
+    }
+    if !tool.needs_target() || tool == Tool::Node {
+        if tool == Tool::Node
+            && (target.is_empty() || target.len() > 1024 || target.chars().any(char::is_control))
+        {
+            report.entries.push(Entry::error(
+                "检查参数",
+                "目标过长或包含控制字符",
+                "invalid_target",
+            ));
+        } else {
+            report.target = if tool == Tool::Node {
+                bounded(target, 256)
+            } else {
+                "当前实例".into()
+            };
+            match tokio::time::timeout(
+                options.budget(tool),
+                inspection::run(tool, target, &context, &mut report),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => report.entries.push(error::entry("检查失败", &error)),
+                Err(_) => report.entries.push(Entry::error(
+                    "检查停止",
+                    "已达到本次检查时限",
+                    "probe_timeout",
+                )),
+            }
+        }
         report.finish(start);
         return Ok(report);
     }
@@ -371,7 +468,10 @@ pub async fn run(
                     }
                     Ok(())
                 }
-                Tool::Dns => http::dns(&url, &context, &mut report).await,
+                Tool::Dns => http::dns(&url, &context, &options, &mut report).await,
+                Tool::Tcp => transport::tcp(&url, target, &context, &mut report).await,
+                Tool::Http => http::inspect(&url, &context, &options, &mut report).await,
+                Tool::RulePreview => rule_preview::run(&url, &context, &mut report).await,
                 Tool::Stability => http::stability(&url, &context, &options, &mut report).await,
                 Tool::Download => http::download(&url, &context, &options, &mut report).await,
                 Tool::Phase | Tool::Tls | Tool::Family => {
@@ -381,6 +481,7 @@ pub async fn run(
                 Tool::Ping | Tool::Trace => {
                     process::run(tool, &url, &context, &options, &mut report).await
                 }
+                Tool::ConfigDiff | Tool::Traffic | Tool::Performance | Tool::Node => unreachable!(),
             }
         };
         match tokio::time::timeout(options.budget(tool), operation).await {
