@@ -1,0 +1,114 @@
+<!-- title: Clash of Rust: a native mihomo client for desktop and Android -->
+<!-- description: A proxy client built with Rust and Slint on the mihomo core, with no WebView. Windows, Debian/Ubuntu, macOS and Android, plus the cor command line and eleven network checks. -->
+<section class="hero">
+  <div class="wrap hero-copy">
+    <h1>Send every connection down the right line.</h1>
+    <p class="lead">Clash of Rust is a native mihomo client for Windows, Linux, macOS and Android. It keeps your subscriptions, nodes and rules in one place, and shows where each connection actually went.</p>
+    <p class="hero-benefit">A lighter background: <b>17.9 MiB</b> measured for the client with its window closed. <a href="#memory">See the benchmark</a></p>
+    <div class="actions">
+      <a class="btn" href="download.html" data-download-button>Download</a>
+      <a class="btn ghost" href="{{repo}}" target="_blank" rel="noopener">{{star}}Star on GitHub<span data-stars></span></a>
+    </div>
+    <p class="fine">Free and open source under GPL-3.0. The mihomo core and Geo data come in the installer.</p>
+  </div>
+  <div class="scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/hero-narrow.webp">
+      <img src="{{root}}assets/hero.webp" srcset="{{root}}assets/hero.webp 1774w, {{root}}assets/hero@2x.webp 3548w" sizes="100vw" width="1774" height="887" alt="Pixel art of a country railway junction at dawn. One track splits into three: over an iron bridge to the mountains, straight on to a small town, and into a siding that ends at a buffer stop. A blue cat watches from the balcony of the signal cabin." fetchpriority="high">
+    </picture>
+    <p class="tag proxy"><b>Proxy</b><span>over the bridge, out through a node</span></p>
+    <p class="tag direct"><b>Direct</b><span>straight on, on your own network</span></p>
+    <p class="tag reject"><b>Reject</b><span>into the siding, and no further</span></p>
+  </div>
+  <p class="wrap fine scene-note">One track in, three ways out: through a node, straight on, or into the siding. Rules decide which.</p>
+</section>
+
+{{memory}}
+
+<section class="part" id="what">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <h2>A real window, not a web page wearing one.</h2>
+      </div>
+      <div>
+        <p>The interface is drawn with Rust and Slint. There is no WebView inside, so the window gives its memory back when you close it, and the tray and the core carry on without it.</p>
+        <dl class="facts" style="margin-top:1.6rem">
+          <div class="sleepers"><dt>Four platforms</dt><dd>Windows on x64 and ARM64, Debian and Ubuntu on amd64 and arm64, macOS 14 on Intel and Apple silicon, Android 8.0 and later.</dd></div>
+          <div class="sleepers"><dt>One backend</dt><dd>The window, the tray and the <code>cor</code> command line all talk to the same background service and the same mihomo core.</dd></div>
+          <div class="sleepers"><dt>Nothing to fetch</dt><dd>Installers already contain mihomo and the Geo data. Add a subscription and you can connect.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    {{showcase}}
+
+  </div>
+</section>
+
+<section class="part" id="features">
+  <div class="wrap">
+    <h2>What you do with it, day to day</h2>
+    <ul class="features">
+      <li class="sleepers"><h3>Subscriptions and nodes</h3><p>Remote subscriptions and local YAML sit side by side and refresh on a schedule. Test, filter and switch nodes from the window or the tray.</p><a href="guide.html#subscriptions">Subscriptions in the guide</a></li>
+      <li class="sleepers"><h3>Rules</h3><p>Rule, global and direct modes. Five quick rules cover ads, private addresses and mainland China traffic; your own rules can be added, reordered and switched off.</p><a href="guide.html#rules">Rules in the guide</a></li>
+      <li class="sleepers"><h3>Per-app routing on Android</h3><p>Choose which apps enter the VPN. On Android 10 and later, an app can be sent to a node, a policy group or straight out.</p><a href="guide.html#android">Android in the guide</a></li>
+      <li class="sleepers"><h3>Access checks</h3><p>See your exit IP and whether GitHub, AI services and streaming sites answer through the current node. Results are grouped and can be re-run or exported.</p><a href="guide.html#checks">Checks in the guide</a></li>
+      <li class="sleepers"><h3>Claude protection</h3><p>Pins one node, turns on TUN and encrypted DNS, blocks stray connections, and locks network settings until you switch it off. Your own settings come back afterwards.</p><a href="guide.html#protection">Protection in the guide</a></li>
+      <li class="sleepers"><h3>Updates</h3><p>Stable and preview channels inside the app. Each download is checked against its SHA256 before it installs, and the desktop app can step back from preview to stable.</p><a href="guide.html#updates">Updates in the guide</a></li>
+    </ul>
+  </div>
+</section>
+
+<section class="part" id="toolbox">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <h2>Eleven checks for when something will not connect<span class="preview">0.7.2 preview</span></h2>
+        <p class="lead">Run one when you need it. HTTP checks use your running proxy; ping and route trace use system tools. None of them starts the core, changes node or quietly falls back to a direct connection.</p>
+        <p style="margin-top:1rem">The window, the command line and the terminal interface share the same checks. Results are not kept: leave the page and they are gone, so export first if you need them.</p>
+        <p style="margin-top:1.4rem"><a class="more" href="tools.html">How each check works</a></p>
+      </div>
+      <figure>
+        <div class="frame"><img src="{{root}}assets/app-network.webp" width="1100" height="760" alt="The network diagnostics page: a list of eleven tools on the left and the short stability run on the right, with its target, count, interval and time limit." loading="lazy"></div>
+        <figcaption class="fine" style="margin-top:0.9rem">Network diagnostics in 0.7.2-fix.3, showing a fixed demo result.</figcaption>
+      </figure>
+    </div>
+    <div class="tool-groups">{{tools:home}}</div>
+  </div>
+</section>
+
+<section class="night" id="cli">
+  <div class="wrap split">
+    <div>
+      <h2>The same client, without the window</h2>
+      <p class="lead" style="margin-top:1.1rem"><code>cor</code> ships inside the desktop installers and drives the same backend as the window. Use it on a server or over SSH, and add <code>--json</code> when a script is reading.</p>
+<pre class="term" aria-label="First commands with cor"><span class="p">$ </span>cor profile add home 'https://example.com/subscription'
+<span class="p">$ </span>cor profile use home
+<span class="p">$ </span>cor start            <span class="c"># run in the background</span>
+<span class="p">$ </span>cor node select      <span class="c"># pick a group and a node</span>
+<span class="p">$ </span>cor proxy tun        <span class="c"># capture traffic with TUN</span>
+<span class="p">$ </span>cor status</pre>
+      <p class="fine" style="margin-top:1.3rem"><code>cor ui</code> opens a terminal interface prototype with home, nodes, connections and the network checks. <a href="guide.html#cli">Command line in the guide</a></p>
+    </div>
+    <figure>
+      <div class="frame"><img src="{{root}}assets/terminal.webp" width="2172" height="724" alt="Pixel art of the signal cabin at night. The blue cat sits at a small desk with an old terminal, in front of a long row of signal levers." loading="lazy"></div>
+    </figure>
+  </div>
+</section>
+
+{{releases:home}}
+
+<section class="ask">
+  <div class="wrap">
+    <img src="{{root}}assets/cat.png" alt="" width="150" height="150" loading="lazy">
+    <div>
+      <h2>If it earns a place on your machine, give it a star.</h2>
+      <p>Clash of Rust is built in the open. A star helps other people find it, and an issue tells the maintainers what to fix next.</p>
+      <div class="actions">
+        <a class="btn" href="{{repo}}" target="_blank" rel="noopener">{{star}}Star on GitHub<span data-stars></span></a>
+        <a class="btn ghost" href="download.html">Download</a>
+      </div>
+    </div>
+  </div>
+</section>

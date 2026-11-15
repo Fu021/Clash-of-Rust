@@ -1,0 +1,160 @@
+{
+  "checked": "2026-11-15",
+  "downloads": {
+    "stable": {
+      "tag": "v0.7.1",
+      "published": "2026-11-12T21:05:55Z",
+      "sizes": {
+        "windows-x64-setup.exe": 53308782,
+        "windows-arm64-setup.exe": 49366378,
+        "linux-amd64.deb": 58775100,
+        "linux-arm64.deb": 54854572,
+        "macos-arm64.dmg": 81209958,
+        "macos-x64.dmg": 85978001,
+        "android-arm64.apk": 68315801,
+        "android-armv7.apk": 67173021,
+        "android-x64.apk": 71002771
+      }
+    },
+    "preview": {
+      "tag": "v0.7.2-fix.3.network-toolbox",
+      "published": "2026-11-15T00:10:38Z",
+      "sizes": {
+        "windows-x64-setup.exe": 51086305,
+        "windows-arm64-setup.exe": 47519688,
+        "linux-amd64.deb": 52805248,
+        "linux-arm64.deb": 49003196,
+        "macos-arm64.dmg": 56428560,
+        "macos-x64.dmg": 61338090,
+        "android-arm64.apk": 68135577,
+        "android-armv7.apk": 66771613,
+        "android-x64.apk": 70900371
+      }
+    }
+  },
+  "releases": [
+    {
+      "version": "0.7.2-fix.3.network-toolbox",
+      "channel": "preview",
+      "date": "2026-11-15",
+      "en": {
+        "title": "Network toolbox",
+        "highlights": [
+          "Ten new checks join the website check: DNS comparison, connection timing, IPv4/IPv6, rule and exit, TLS, stability, UDP, ping, route trace and capped download.",
+          "The same tools on desktop, phone and tablet, with cancel, adjustable options and export. No history is kept.",
+          "The terminal interface and cor network offer the same tools.",
+          "Fixed: pages could not be switched in the terminal interface after cancelling quickly."
+        ],
+        "known": "Ping and route trace depend on what the system provides, and are unavailable during Claude protection.",
+        "summary": "Eleven network checks, from DNS and timing to the route a request takes."
+      },
+      "zh": {
+        "title": "网络工具箱",
+        "highlights": [
+          "网络诊断新增十项工具：DNS 对照、连接耗时、IPv4/IPv6、规则与出口、TLS、稳定性、UDP、Ping、路由追踪、限量下载。",
+          "桌面、手机、平板共用同一套工具，可取消、可调参数、可导出，不留历史。",
+          "终端界面与 cor network 同步提供。",
+          "修复终端界面快速取消后无法切页的问题。"
+        ],
+        "known": "Ping 与路由追踪依赖系统能力，Claude 保护期间不可用。",
+        "summary": "十一项网络检查，从解析、耗时到出口，逐步排查。"
+      }
+    },
+    {
+      "version": "0.7.2-fix.2.update-memory",
+      "channel": "preview",
+      "date": "2026-11-14",
+      "en": {
+        "title": "Update recovery, lighter installers",
+        "highlights": [
+          "A failed Windows update now says why, and can be retried once the cause is cleared.",
+          "Downloads recover better from drops and sustained low speed. TUN start-up on macOS is checked for readiness.",
+          "Claude protection covers more of the official inbound addresses.",
+          "The desktop node list uses less memory, and installers are smaller again."
+        ]
+      },
+      "zh": {
+        "title": "更新更稳，安装包更小",
+        "highlights": [
+          "Windows 更新失败时给出具体原因，排除后可直接重试。",
+          "下载断连或持续低速时恢复更稳；完善 macOS 上 TUN 的启动就绪检查。",
+          "Claude 保护补充覆盖官方入站地址。",
+          "桌面节点列表占用内存更少，安装包进一步缩小。"
+        ]
+      }
+    },
+    {
+      "version": "0.7.2-fix.1.rust100-cache",
+      "channel": "preview",
+      "date": "2026-11-13",
+      "en": {
+        "title": "Protection and per-app fixes",
+        "highlights": [
+          "Fixed a brief false TUN-bypass warning as Claude protection starts, and a core that would not start again after quitting with protection on.",
+          "Android per-app routing no longer mistakes nodes with emoji in their names for missing ones, and respects your UDP switch again.",
+          "If rebuilding the VPN fails after repeated per-app changes, the existing connection is kept.",
+          "Smaller installers."
+        ]
+      },
+      "zh": {
+        "title": "保护与分流修复",
+        "highlights": [
+          "修复 Claude 保护开启瞬间误报 TUN 绕行，以及带着保护退出后内核无法再次启动的问题。",
+          "Android 应用分流不再把名称含 Emoji 的节点误判为失效，并重新遵守 UDP 开关。",
+          "连续修改应用分流时，VPN 重建失败会保留原有连接。",
+          "安装包体积更小。"
+        ]
+      }
+    },
+    {
+      "version": "0.7.1",
+      "channel": "stable",
+      "date": "2026-11-12",
+      "en": {
+        "title": "Per-app exits on Android, a steadier Linux",
+        "highlights": [
+          "Android per-app routing gains named rule groups, app search, and a chosen exit for each app: a node, a policy group, direct or reject. Choosing an exit needs Android 10 or later.",
+          "On Linux, the core starts on networks without IPv6, the old autostart entry no longer opens a window, and fast window resizing no longer stretches the picture.",
+          "Clearer errors and fallbacks for node tests, updates and Geo downloads.",
+          "During Claude protection, appearance settings and read-only pages stay usable while network changes remain locked."
+        ],
+        "known": "Intermittent TLS failures and slow long-lived downloads are still being investigated.",
+        "summary": "Refined app routing, updates, and everyday connection management."
+      },
+      "zh": {
+        "title": "应用可指定出口，Linux 更稳",
+        "highlights": [
+          "Android 应用分流支持命名规则组、搜索应用，并可为应用指定节点、策略组、直连或拦截；指定出口需 Android 10 及以上。",
+          "Linux：无 IPv6 的网络下内核正常启动，旧自启动入口不再弹出窗口，快速缩放窗口不再拉伸画面。",
+          "节点测速、更新与 Geo 下载的报错和回退更清晰。",
+          "Claude 保护期间，外观设置与只读操作照常可用，网络修改继续锁定。"
+        ],
+        "known": "间歇性 TLS 失败与部分长连接下载慢速仍在排查。",
+        "summary": "日常连接更稳，应用分流与更新体验进一步完善。"
+      }
+    },
+    {
+      "version": "0.7.0",
+      "channel": "stable",
+      "date": "2026-11-11",
+      "en": {
+        "title": "A refreshed interface",
+        "highlights": [
+          "Refreshed interfaces on desktop, phone and tablet: a collapsible sidebar, grid or list views for proxies and subscriptions, and one consistent rule list.",
+          "Android per-app routing rebuilt around three modes: all apps, only selected, or exclude selected, with icons, search and reconnect on save.",
+          "Subscription, Geo and client updates try a separate direct route when the proxy is down, and keep the existing configuration if they fail.",
+          "Errors are shown by severity, with shortcuts to export diagnostics and open an issue."
+        ]
+      },
+      "zh": {
+        "title": "界面焕新",
+        "highlights": [
+          "桌面、手机与平板界面更新：侧栏可折叠，代理与订阅可在宫格、列表间切换，规则列表样式统一。",
+          "重做 Android 应用分流：全部应用、仅选中、排除选中三种模式，支持图标、搜索和保存后重连。",
+          "订阅、Geo 与客户端更新在代理不可用时尝试独立直连，失败则保留原有配置。",
+          "错误按影响程度展示，并提供导出诊断与新建 Issue 的入口。"
+        ]
+      }
+    }
+  ]
+}

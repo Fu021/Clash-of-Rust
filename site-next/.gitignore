@@ -1,0 +1,5 @@
+/dist/
+/.cache/
+/preview.html
+/release-check.json
+__pycache__/

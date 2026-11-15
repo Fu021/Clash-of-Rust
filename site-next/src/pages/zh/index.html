@@ -1,0 +1,110 @@
+<!-- title: Clash of Rust：原生界面的 mihomo 客户端 -->
+<!-- description: 用 Rust 和 Slint 写的 mihomo 代理客户端，不带 WebView。支持 Windows、Debian/Ubuntu、macOS 和 Android，附带 cor 命令行和十一项网络检查。 -->
+<section class="hero">
+  <div class="wrap hero-copy">
+    <h1>每一条连接，<br>都有清晰的去向。</h1>
+    <p class="lead">一个原生的 mihomo 客户端。管好订阅，选好线路，也看清每条连接的来龙去脉。</p>
+    <p class="hero-benefit">关窗轻装常驻，客户端实测 <b>17.9 MiB</b>。 <a href="#memory">看实测</a></p>
+    <div class="actions">
+      <a class="btn" href="download.html" data-download-button>下载安装包</a>
+      <a class="btn ghost" href="{{repo}}" target="_blank" rel="noopener">{{star}}在 GitHub 点 Star<span data-stars></span></a>
+    </div>
+  </div>
+  <div class="scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/hero-narrow.webp">
+      <img src="{{root}}assets/hero.webp" srcset="{{root}}assets/hero.webp 1774w, {{root}}assets/hero@2x.webp 3548w" sizes="100vw" width="1774" height="887" alt="像素画：清晨的乡间铁路道岔。一条铁轨分成三条，一条过铁桥通向远山，一条笔直通向小镇，一条进入尽头有车挡的岔线。一只蓝猫蹲在信号楼的阳台上望着铁轨。" fetchpriority="high">
+    </picture>
+    <p class="tag proxy"><b>代理</b><span>经节点，向远方</span></p>
+    <p class="tag direct"><b>直连</b><span>走本机网络</span></p>
+    <p class="tag reject"><b>拦截</b><span>到此为止</span></p>
+  </div>
+</section>
+
+{{memory}}
+
+<section class="part" id="what">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <h2>关上窗口，<br>连接依然继续。</h2>
+      </div>
+      <div>
+        <p>Rust 与 Slint 绘制原生界面。关窗后，界面进程退出，托盘与内核继续运行。</p>
+        <dl class="facts" style="margin-top:1.6rem">
+          <div class="sleepers"><dt>四个平台</dt><dd>Windows、Debian / Ubuntu、macOS、Android。</dd></div>
+          <div class="sleepers"><dt>一个后台</dt><dd>窗口、托盘与命令行，共用后台和内核。</dd></div>
+          <div class="sleepers"><dt>装完即用</dt><dd>自带内核与 Geo 数据，添加订阅即可开始。</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    {{showcase}}
+
+
+  </div>
+</section>
+
+<section class="part" id="features">
+  <div class="wrap">
+    <h2>日常所需，放在一起。</h2>
+    <ul class="features">
+      <li class="sleepers"><h3>订阅与节点</h3><p>订阅自动更新，节点随手切换。测速、筛选，都在一处。</p><a href="guide.html#subscriptions">指南：订阅</a></li>
+      <li class="sleepers"><h3>规则</h3><p>选用快捷规则，或安排自己的分流方式。</p><a href="guide.html#rules">指南：规则</a></li>
+      <li class="sleepers"><h3>Android 应用分流</h3><p>让不同应用，各走各的路。按应用指定出口需 Android 10 及以上。</p><a href="guide.html#android">指南：应用分流</a></li>
+      <li class="sleepers"><h3>访问检测</h3><p>查看出口 IP，检查常用服务是否可达。</p><a href="guide.html#checks">指南：检测</a></li>
+      <li class="sleepers"><h3>Claude 保护</h3><p>固定出口，减少连接绕行；关闭后恢复原有设置。</p><a href="guide.html#protection">指南：Claude 保护</a></li>
+      <li class="sleepers"><h3>更新</h3><p>正式版与预发布版，自由选择。安装前自动校验。</p><a href="guide.html#updates">指南：更新</a></li>
+    </ul>
+  </div>
+</section>
+
+<section class="part" id="toolbox">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <h2>连接不顺，<br>总有迹可循。<span class="preview">0.7.2 预发布</span></h2>
+        <p class="lead">从域名解析到连接耗时，十一项工具帮你逐步排查。按需运行，不擅自切换节点。</p>
+        <p style="margin-top:1.4rem"><a class="more" href="tools.html">逐项了解这些检查</a></p>
+      </div>
+      <figure>
+        <div class="frame"><img src="{{root}}assets/app-network.webp" width="1100" height="760" alt="网络诊断页面：左侧是十一项工具的列表，右侧是短时稳定性检查，包含网址、次数、间隔和时限。" loading="lazy"></div>
+        <figcaption class="fine" style="margin-top:0.9rem">0.7.2-fix.3 的网络诊断页面，图中是固定的演示结果。</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="night" id="cli">
+  <div class="wrap split">
+    <div>
+      <h2>换到终端，<br>依然顺手。</h2>
+      <p class="lead" style="margin-top:1.1rem">桌面安装包附带 <code>cor</code>。在服务器上、SSH 里，也能管理同一个后台。</p>
+<pre class="term" aria-label="cor 的头几条命令"><span class="p">$ </span>cor profile add home 'https://example.com/subscription'
+<span class="p">$ </span>cor profile use home
+<span class="p">$ </span>cor start            <span class="c"># 在后台运行</span>
+<span class="p">$ </span>cor node select      <span class="c"># 选择策略组和节点</span>
+<span class="p">$ </span>cor status</pre>
+      <p style="margin-top:1.3rem"><a class="more" href="guide.html#cli">了解命令行用法</a></p>
+    </div>
+    <figure>
+      <div class="frame"><img src="{{root}}assets/terminal.webp" width="2172" height="724" alt="像素画：夜里的信号楼内。蓝猫坐在小桌前操作一台旧终端，身后是一长排信号扳手。" loading="lazy"></div>
+    </figure>
+  </div>
+</section>
+
+{{releases:home}}
+
+<section class="ask">
+  <div class="wrap">
+    <img src="{{root}}assets/cat.png" alt="" width="150" height="150" loading="lazy">
+    <div>
+      <h2>喜欢用，就点亮一颗 Star。</h2>
+      <p>让更多人发现它，也欢迎用 Issue 帮它变得更好。</p>
+      <div class="actions">
+        <a class="btn" href="{{repo}}" target="_blank" rel="noopener">{{star}}去 GitHub 点 Star<span data-stars></span></a>
+        <a class="btn ghost" href="download.html">下载安装包</a>
+      </div>
+    </div>
+  </div>
+</section>

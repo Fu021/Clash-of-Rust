@@ -1,0 +1,80 @@
+<!-- title: 网络工具箱：Clash of Rust 的十一项检查 -->
+<!-- description: Clash of Rust 十一项网络检查分别查什么、什么时候用，以及对应的命令、参数、限制和报告格式。 -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>十一项检查，从域名查到最后一跳<span class="preview">0.7.2 预发布</span></h1>
+    <p class="lead">连不上的时候，工具箱跟着一次请求走过 DNS、代理、TLS 和出口，告诉你是哪一步出了问题。窗口里、<code>cor network</code> 里、终端界面里都能用。</p>
+  </div>
+  <div class="banner scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/tools-small.webp">
+      <img src="{{root}}assets/tools.webp" width="2172" height="724" alt="像素画：蓝猫蹲在铁路道岔旁，举着提灯检查钢轨接头。旁边放着打开的工具箱，轨旁的小柜里亮着三盏小灯。">
+    </picture>
+  </div>
+</section>
+
+<div class="wrap doc">
+  <section id="choose">
+    <h2>从你看到的现象找起</h2>
+    <p>不用先记住工具的名字。找到对应的现象，运行旁边的检查。</p>
+    {{tools:symptoms}}
+  </section>
+
+  <section id="rules-of-the-road">
+    <h2>每项检查都遵守的几条</h2>
+    <ul class="dots">
+      <li>只在你点下去的时候运行，后台不做任何扫描。</li>
+      <li>网站和 HTTP 类检查经过内核现有的本机代理。检查不会启动内核、切换节点，也不会回退到直连。</li>
+      <li>只保留当前这一次的结果。切换页面或工具会取消检查并清空结果，迟到的结果不会再补回来。需要的话先导出。</li>
+      <li>报告里不包含网址的路径和查询参数、账号密码，以及下载到的正文。</li>
+    </ul>
+  </section>
+
+  {{tools:articles}}
+
+  <section id="limits">
+    <h2>参数与上限</h2>
+    <p>默认值是：5 次、间隔 1000 毫秒、单次时限 10 秒、下载上限 8 MiB、最多 8 跳。窗口里只显示当前工具用得到的参数，切换工具后恢复默认值。终端界面始终使用默认值，要改参数请用 <code>cor network</code>。</p>
+    {{tools:options}}
+    <p style="margin-top:1.2rem">每次运行还有总预算，不会无限等待：稳定性检查最多 120 秒。系统命令的输出每路最多保留 8 KiB，一份报告最多 48 项，每项最多 2048 个字符。</p>
+  </section>
+
+  <section id="protection">
+    <h2>Claude 保护开启时</h2>
+    <p>保护开启，或者读不到保护状态时，工具箱不查询系统 DNS，不发送 UDP、ICMP 和逐跳探针。依赖这些的检查不会运行，而是说明不可用的原因。其余检查仍然经过本机代理和现有规则，所以不能借诊断绕过保护。</p>
+    <p>如果你在设置里关闭了 UDP，UDP 探针同样不会发送。</p>
+  </section>
+
+  <section id="reports">
+    <h2>看懂报告，保存报告</h2>
+    <p>每份报告以四种状态之一结束，它们不能互相替代。后两种状态下，命令行返回非零退出码，但仍然会先输出报告。</p>
+    <div class="cards">
+      <div class="card"><h3>complete</h3><p>每一步都运行了，并且得到了结果。</p></div>
+      <div class="card"><h3>partial</h3><p>有的步骤有结果，有的没有。正常达到时间或流量上限，不会因此被降为部分完成。</p></div>
+      <div class="card"><h3>failed / unavailable</h3><p>检查运行了但失败，或者在这里根本无法运行：缺少系统组件、权限不足，或者保护处于开启状态。</p></div>
+    </div>
+    <h3>在窗口里</h3>
+    <p>点结果下方的“导出诊断”。导出内容包含当前工具、结果和错误码。</p>
+    <h3>在命令行里</h3>
+    <p>加 <code>--json</code> 直接输出报告，或者用 <code>--output FILE</code> 保存到文件。</p>
+<pre class="term" aria-label="保存报告的命令"><span class="p">$ </span>cor network phase example.com --seconds 5
+<span class="p">$ </span>cor network stability example.com --count 10 --interval-ms 500
+<span class="p">$ </span>cor network explain example.com --json
+<span class="p">$ </span>cor network tls example.com --output tls-report.json</pre>
+    <p>JSON 里有 <code>schema</code>、<code>tool</code>、只保留源站的 <code>target</code>、<code>elapsed_ms</code>、<code>status</code> 和一组 <code>entries</code>。每一项包含 <code>label</code>、<code>detail</code>、<code>code</code> 和 <code>success</code>；<code>success</code> 为 <code>null</code> 表示这是一条说明，或者结果未能确认。<code>cor network check</code> 沿用原来的 JSON 结构。</p>
+  </section>
+
+  <section id="where">
+    <h2>在哪里找到它</h2>
+    <table class="plain">
+      <tbody>
+        <tr><th scope="row">窗口</th><td>侧栏“工具”下的“网络诊断”。输入、操作和结果在同一张卡片里。</td></tr>
+        <tr><th scope="row">Android</th><td>同一套工具，从“工具”入口进入。路由追踪取决于系统里有没有 traceroute。</td></tr>
+        <tr><th scope="row">命令行</th><td><code>cor network</code> 后面跟工具名和目标，Windows、Linux、macOS 通用。</td></tr>
+        <tr><th scope="row">终端界面</th><td>运行 <code>cor ui</code>，按 <kbd>4</kbd> 进入。<kbd>[</kbd> 和 <kbd>]</kbd> 切换工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行，<kbd>Esc</kbd> 取消。</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:1.4rem">工具箱随 0.7.2 预发布版加入，0.7.1 正式版里只有网站检查。<a class="more" href="download.html#preview">下载预发布版</a></p>
+    <p class="fine" style="margin-top:1rem">权威说明以仓库里的 <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> 为准。</p>
+  </section>
+</div>

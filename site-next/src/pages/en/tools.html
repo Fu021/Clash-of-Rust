@@ -1,0 +1,80 @@
+<!-- title: Network toolbox: eleven checks in Clash of Rust -->
+<!-- description: What each of the eleven network checks in Clash of Rust does, when to use it, its command, options, limits and report format. -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>Eleven checks, from the name to the last hop<span class="preview">0.7.2 preview</span></h1>
+    <p class="lead">When something will not connect, the toolbox follows one request through DNS, the proxy, TLS and the exit, and tells you which step failed. It is in the window, in <code>cor network</code> and in the terminal interface.</p>
+  </div>
+  <div class="banner scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/tools-small.webp">
+      <img src="{{root}}assets/tools.webp" width="2172" height="724" alt="Pixel art of the blue cat beside the railway points, holding up a lantern to inspect a rail joint. An open toolbox sits next to it, and a trackside cabinet shows three small lamps.">
+    </picture>
+  </div>
+</section>
+
+<div class="wrap doc">
+  <section id="choose">
+    <h2>Start from what you see</h2>
+    <p>You do not need to know the tools by name. Find the symptom, then run the check beside it.</p>
+    {{tools:symptoms}}
+  </section>
+
+  <section id="rules-of-the-road">
+    <h2>What every check has in common</h2>
+    <ul class="dots">
+      <li>It runs only when you ask. Nothing scans in the background.</li>
+      <li>Website and HTTP checks go through the core's local proxy as it is now. A check never starts the core, switches node or falls back to a direct connection.</li>
+      <li>Only the current result is kept. Switching page or tool cancels the check and clears the result, and a late answer is not filled in afterwards. Export first if you need it.</li>
+      <li>Reports leave out the URL path and query, any user name or password, and the downloaded body.</li>
+    </ul>
+  </section>
+
+  {{tools:articles}}
+
+  <section id="limits">
+    <h2>Options and limits</h2>
+    <p>Defaults are 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB download cap and 8 hops. The window shows the options that apply to the selected tool and returns to the defaults when you switch tools. The terminal interface always uses the defaults; set anything else with <code>cor network</code>.</p>
+    {{tools:options}}
+    <p style="margin-top:1.2rem">Every run also has an overall budget, so nothing waits forever: a stability run stops at 120 seconds. System output is kept up to 8 KiB per stream, and a report holds at most 48 entries of 2,048 characters each.</p>
+  </section>
+
+  <section id="protection">
+    <h2>While Claude protection is on</h2>
+    <p>With protection on, or when its state cannot be read, the toolbox sends no system DNS lookups, no UDP, no ICMP and no hop-by-hop probes. Checks that need them say why they are unavailable instead of running. The other checks still go through the local proxy and your current rules, so a diagnosis can never be used to step around protection.</p>
+    <p>If you have switched UDP off in settings, the UDP probe is not sent either.</p>
+  </section>
+
+  <section id="reports">
+    <h2>Reading and saving a report</h2>
+    <p>Each report ends in one of four states. They are not interchangeable, and the command line returns a non-zero exit code for the last two while still printing the report.</p>
+    <div class="cards">
+      <div class="card"><h3>complete</h3><p>Every step ran and gave an answer.</p></div>
+      <div class="card"><h3>partial</h3><p>Some steps answered and some did not. Reaching a time or size cap on purpose does not count against a check.</p></div>
+      <div class="card"><h3>failed / unavailable</h3><p>The check ran and failed, or could not run here at all: a missing system tool, no permission, or protection being on.</p></div>
+    </div>
+    <h3>From the window</h3>
+    <p>Use the export button under the result. The export carries the tool, its result and any error code.</p>
+    <h3>From the command line</h3>
+    <p>Add <code>--json</code> to print the report, or <code>--output FILE</code> to save it.</p>
+<pre class="term" aria-label="Saving a report"><span class="p">$ </span>cor network phase example.com --seconds 5
+<span class="p">$ </span>cor network stability example.com --count 10 --interval-ms 500
+<span class="p">$ </span>cor network explain example.com --json
+<span class="p">$ </span>cor network tls example.com --output tls-report.json</pre>
+    <p>The JSON holds <code>schema</code>, <code>tool</code>, a <code>target</code> reduced to its origin, <code>elapsed_ms</code>, <code>status</code> and a list of <code>entries</code>. Each entry has a <code>label</code>, a <code>detail</code>, a <code>code</code> and <code>success</code>, where <code>null</code> means a note or something that could not be confirmed. <code>cor network check</code> keeps its earlier JSON shape.</p>
+  </section>
+
+  <section id="where">
+    <h2>Where to find it</h2>
+    <table class="plain">
+      <tbody>
+        <tr><th scope="row">Window</th><td>Under 工具 (Tools), open 网络诊断 (Network diagnostics). Input, action and result share one card.</td></tr>
+        <tr><th scope="row">Android</th><td>The same tools, reached from the Tools entry. Route trace depends on the system having traceroute.</td></tr>
+        <tr><th scope="row">Command line</th><td><code>cor network</code> followed by the tool and its target, on Windows, Linux and macOS.</td></tr>
+        <tr><th scope="row">Terminal interface</th><td>Run <code>cor ui</code> and press <kbd>4</kbd>. <kbd>[</kbd> and <kbd>]</kbd> change tool, <kbd>/</kbd> enters the target, <kbd>Enter</kbd> runs it and <kbd>Esc</kbd> cancels.</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:1.4rem">The toolbox arrived in the 0.7.2 preview; stable 0.7.1 has only the website check. <a class="more" href="download.html#preview">Get the preview</a></p>
+    <p class="fine" style="margin-top:1rem">Source of record: <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> in the repository (in Chinese).</p>
+  </section>
+</div>
