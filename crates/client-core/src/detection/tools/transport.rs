@@ -109,6 +109,7 @@ pub(super) async fn tcp(
     url: &reqwest::Url,
     target: &str,
     context: &Environment,
+    options: &Options,
     report: &mut Report,
 ) -> Result<()> {
     if url.port() == Some(0)
@@ -125,7 +126,12 @@ pub(super) async fn tcp(
         .context("缺少主机名")?
         .trim_matches(['[', ']']);
     let port = url.port_or_known_default().context("缺少目标端口")?;
-    let (_stream, _, local, remote) = socks(proxy_port(context)?, host, port, 1).await?;
+    let (_stream, _, local, remote) = tokio::time::timeout(
+        Duration::from_secs(options.seconds),
+        socks(proxy_port(context)?, host, port, 1),
+    )
+    .await
+    .map_err(|_| error::failure("connection_timeout", "TCP 连接或代理握手超时"))??;
     report
         .entries
         .push(Entry::ok("本机代理 TCP", format!("{local} ms")));

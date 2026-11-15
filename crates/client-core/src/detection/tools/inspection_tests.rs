@@ -286,6 +286,43 @@ async fn tcp_probe_sends_no_application_bytes_and_cancellation_closes_the_socket
 }
 
 #[tokio::test]
+async fn tcp_timeout_covers_an_unresponsive_socks_handshake() {
+    use tokio::{io::AsyncReadExt, net::TcpListener};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut greeting = [0; 3];
+        socket.read_exact(&mut greeting).await.unwrap();
+        let mut data = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), socket.read(&mut data))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+    });
+    let report = run(
+        Tool::Tcp,
+        "example.test:443",
+        Environment {
+            port: Some(port),
+            ..offline()
+        },
+        Options {
+            seconds: 1,
+            ..Options::default()
+        },
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert_eq!(report.status, "failed");
+    assert_eq!(report.entries[0].code, "connection_timeout");
+}
+
+#[tokio::test]
 async fn no_target_tools_ignore_stale_input_and_never_start_or_write_data() {
     let temporary = tempfile::tempdir().unwrap();
     let missing = temporary.path().join("missing");

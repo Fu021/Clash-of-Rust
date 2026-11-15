@@ -469,7 +469,7 @@ pub async fn run(
                     Ok(())
                 }
                 Tool::Dns => http::dns(&url, &context, &options, &mut report).await,
-                Tool::Tcp => transport::tcp(&url, target, &context, &mut report).await,
+                Tool::Tcp => transport::tcp(&url, target, &context, &options, &mut report).await,
                 Tool::Http => http::inspect(&url, &context, &options, &mut report).await,
                 Tool::RulePreview => rule_preview::run(&url, &context, &mut report).await,
                 Tool::Stability => http::stability(&url, &context, &options, &mut report).await,
