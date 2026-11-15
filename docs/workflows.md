@@ -9,7 +9,7 @@
 | [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；复用成功 CI 的 Linux 包，Ubuntu 20.04 x64／ARM64 的 5.4 内核安装及代理/TUN | 小型报告及发布回执保留 3 天，VM 镜像仅存私网 |
 | [COSMIC Startup Investigation](workflows/cosmic-startup.md) | 手动诊断；官方 Pop!_OS live VM，核对旧自启动入口迁移、后台登录和手动打开 | JSON、原始截图与 VM 日志，保留 3 天 |
 
-普通 CI 共 12 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu latest 1、缓存预算 1。Android Compatibility 共 13 个 job（解析、11 版本、回执），Ubuntu Compatibility 共 4 个 job（解析、两架构、回执）。发布前必须分别完成两套同提交、同源 CI 的兼容验证；Publish Release 自动核验，不能只凭普通 CI 发布。其 `check_only` 仍只执行解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不作为发布来源。
+普通 CI 共 13 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu latest 1、网站验证 1、缓存预算 1。网站未变化时，网站任务只验证本轮范围。Android Compatibility 共 13 个 job（解析、11 版本、回执），Ubuntu Compatibility 共 4 个 job（解析、两架构、回执）。发布前必须分别完成两套同提交、同源 CI 的兼容验证；Publish Release 自动核验，不能只凭普通 CI 发布。其 `check_only` 仍只执行解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不作为发布来源。
 
 COSMIC 诊断按需手动执行一个 VM job，保留供后续桌面启动排障复用，不加入常规 CI 或发布必需门禁。
 

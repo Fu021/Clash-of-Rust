@@ -105,7 +105,7 @@ def main():
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),
-                ('clash-cli', ['--bin', 'cor'], ['tui::tests::']),
+                ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::']),
                 ('clash-client-runtime', ['--lib'],
                  ['control::dispatch::tests::']
                  + ([] if linux_user_tests() else ['control::tests::']))):
