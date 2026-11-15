@@ -22,27 +22,6 @@ def optional_proxy_benchmark():
         yield {}
 
 
-@contextlib.contextmanager
-def macos_network_service(report):
-    label = f'org.clashofrust.network.{os.getuid()}'
-    directory = Path('/Library/PrivilegedHelperTools')/label
-    agent = Path('/Library/LaunchDaemons')/(label+'.plist')
-    if directory.exists() or agent.exists():
-        raise RuntimeError('Refusing to overwrite an existing network service')
-    try:
-        yield
-    finally:
-        if agent.exists() or directory.exists():
-            state = subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'print', 'system/'+label], capture_output=True, text=True, timeout=15)
-            (report/'proxy-smoke-network-service-launchd.log').write_text(state.stdout+state.stderr)
-            service_log = directory/'network-service.log'
-            if service_log.exists():
-                output = subprocess.run(['/usr/bin/sudo', '-n', '/bin/cat', service_log], capture_output=True, text=True, timeout=15)
-                (report/'proxy-smoke-network-service.log').write_text(output.stdout+output.stderr)
-            subprocess.run(['/usr/bin/sudo', '-n', '/bin/launchctl', 'bootout', 'system/'+label], capture_output=True, timeout=20)
-            subprocess.run(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', directory, agent], check=True, timeout=20)
-
-
 def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Proxy/TUN checks require a disposable Actions runner')
@@ -86,9 +65,10 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
                  '--test-binary', binary, '--uid', os.getuid(), '--test-case', test_case,
                  *user_tests])
     elif system == 'macos':
+        from macos_test_network import network_service
         report = ROOT/'target/macos-report'
         report.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='clash-proxy-smoke-') as temporary, macos_network_service(report):
+        with tempfile.TemporaryDirectory(prefix='clash-proxy-smoke-') as temporary, network_service(report):
             # Mac's production service/bridge locates its bundled core relative
             # to current_exe, rather than the integration-test environment.
             # Preserve the installed app's seal; stage the unchanged test and

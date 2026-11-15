@@ -28,6 +28,57 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  website:
+    if: ${{ !inputs.refresh_dependencies }}
+    name: Website validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select website checks
+        id: scope
+        shell: python
+        run: |
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from ci_test_policy import changed_paths
+          try:
+              selected = any(path.startswith('website/') or path == '.github/workflows/ci.yml'
+                             for path in changed_paths())
+          except Exception:
+              selected = True
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('check=' + str(selected).lower() + '\n')
+      - name: Validate static pages and assets
+        if: steps.scope.outputs.check == 'true'
+        run: |
+          printf 'PLAYWRIGHT_BROWSERS_PATH=%s/website-browsers\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          python3 -B website/test_build.py
+          node --check website/src/site.js
+          node --check website/browser_check.cjs
+      - name: Install browser test dependencies
+        if: steps.scope.outputs.check == 'true'
+        working-directory: website
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install playwright install --with-deps chromium --only-shell
+      - name: Check desktop and mobile website pages
+        if: steps.scope.outputs.check == 'true'
+        working-directory: website
+        run: npm run test:browser
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !cancelled() && steps.scope.outputs.check == 'true' }}
+        with:
+          name: website-browser-report
+          path: website/browser-report
+          retention-days: 3
+          if-no-files-found: warn
   inputs:
     name: Resolve build inputs
     runs-on: ubuntu-latest
@@ -702,6 +753,12 @@ jobs:
             dist/package-receipt.json
           if-no-files-found: error
           retention-days: 3
+      - name: Recover and verify macOS networking before report uploads
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        timeout-minutes: 3
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/macos_ci.py', 'network-check', '--arch', '${{ matrix.arch }}'], check=True)
       - name: Collect macOS failure diagnostics
         if: failure() && runner.os == 'macOS'
         run: |

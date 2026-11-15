@@ -10,6 +10,14 @@ CI `43567907725` 的 Intel Mac 在恢复命令返回成功后，Rust 工具链�
 
 报告 `$RUNNER_TEMP/cor-runner-network/cache-network-report.json` 区分接入前已故障和接入后未恢复，并记录恢复前 resolver、命令结果、逐次原生解析及失败时向原默认服务器发出的直接 DNS 对照。证据不放在编译 `target` 中，避免缓存恢复失败后的清理把本轮现场一起删除。DNS 设置写入成功不代表原生解析成功，直接 DNS 回答也不代替原生就绪。缓存刷新失败保留实际返回值，最终仍以原生探测为准。报告复制进现有 `macos-ci-report-*` 附件，失败摘要同时写入 job 日志，避免上传故障时丢失全部依据。Mac 后续步骤失败时再收一份只读解析现场。离线回归覆盖自动/显式配置、延迟恢复、持续失败、恢复命令失败及非 runner 拒绝；原始间歇故障的首次触发仍需同环境证据，不能以重试成功宣称根因已经排除。
 
+### 安装测试后的网络与附件
+
+CI `43694713473` 的 Intel Mac 先在 TUN 子会话就绪时超时，再在诊断附件上传时出现 `ENOTFOUND`；约 21 秒后另一份附件上传成功。失败时原生默认解析器仍指向 runner 原服务器，系统代理已关闭，不能仅据上传提示认定所有 GitHub 端点均不可达，也不能确定助手超时与 DNS 故障同源。
+
+`macos_test_network.py` 在安装测试前保存各启用网络服务的 DNS、搜索域、有效 HTTP/HTTPS/SOCKS/PAC 状态及代理排除项。测试正常、断言失败或超时后均清理本轮创建的 launchd 助手，再恢复基线；不接管已有助手，不替换公共 DNS，不改 Tailscale 路由。助手清理失败仍尝试网络恢复，但任务保持失败；恢复也不能覆盖原测试错误。助手启动阶段日志和清理前 DNS、路由现场在移除服务前保存，日志尾部同时写入 job 日志。
+
+上传诊断前独立执行同一恢复入口，覆盖测试进程被外层超时终止的情况。按 [GitHub 官方通信要求](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#communication-requirements-for-github-hosted-runners)检查 GitHub、API、codeload、资源端点及实际 Actions 结果/缓存主机；仅从 runner URL 提取合法主机，不记录路径或令牌。HTTPS 验证保留证书校验，HTTP 403/404 只代表已连通，不等同于权限或上传成功。失败时刷新一次系统解析缓存，在 30 秒恢复窗口内有界重试，每轮最多另有 20 秒在途探测；仍失败保留原解析器直接查询及 job summary，不依赖附件成功。有效代理状态恢复不要求清除已禁用代理的旧地址。所有改写入口只允许可丢弃 macOS Actions runner；首次 DNS 故障和 TUN 助手超时触发仍待原生证据定位。
+
 ## 应用 DNS 接管
 
 Tailscale 的独立补充分域解析器可以继续成为 macOS 全局 DNS，即使本应用已修改各网络服务的 DNS；因此不能把网络服务写入成功当成保护生效，也不应要求用户关闭 Tailscale DNS。[CI 40470411381](https://github.com/Fu021/Clash-of-Rust/actions/runs/40470411381) 证实独立临时解析器可能未被系统选中；[CI 40478327297](https://github.com/Fu021/Clash-of-Rust/actions/runs/40478327297) 与[故障实验 40481813828](https://github.com/Fu021/Clash-of-Rust/actions/runs/40481813828) 进一步证明默认解析器竞争和 DNS 故障回退可落到 VPN 或物理网络，不能仅调整优先级或仅验证首选路径。

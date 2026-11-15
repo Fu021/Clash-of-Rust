@@ -14,7 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from build_support import ROOT, opener, write_json
-from build_inputs import android_versions, approved, go_version
+from build_inputs import android_versions, approved, component, go_version
 
 
 def metadata(url, raw=False):
@@ -95,8 +95,8 @@ def inventory():
     legacy_api = android['legacy_system_image'].split(';')[1].removeprefix('android-')
     entries.append(('sdk', 'system-image-legacy', legacy_api + '-r' + android['legacy_system_image_revision'], android_candidate))
     for name in ('mihomo', 'geo', 'nsis', 'linux'):
-        value = selected['upstream'][name]
-        current = value.get('published_at') if name == 'geo' else value.get('image', value.get('version', value.get('tag_name')))
+        value = (component('geo') or {}) if name == 'geo' else selected['upstream'][name]
+        current = value.get('published_at', 'latest') if name == 'geo' else value.get('image', value.get('version', value.get('tag_name')))
         entries.append(('resource', name, current, resource_candidate))
     return list({(kind, name, current): (kind, name, current, query)
                  for kind, name, current, query in entries}.values())
@@ -220,7 +220,8 @@ def resource_candidate(name, current):
         repo = 'MetaCubeX/' + ('mihomo' if name == 'mihomo' else 'meta-rules-dat')
         url = 'https://api.github.com/repos/' + repo + '/releases/latest'
         value = metadata(url)
-        return value['published_at'] if name == 'geo' else value['tag_name'], '', url
+        return ('latest' if name == 'geo' and current == 'latest'
+                else value['published_at'] if name == 'geo' else value['tag_name']), '', url
     if name == 'nsis':
         url = 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/n/NSIS/NSIS'
         versions = [entry['name'] for entry in metadata(url) if re.fullmatch(r'\d+\.\d+(?:\.\d+)?', entry['name'])]

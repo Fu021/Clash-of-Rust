@@ -1,0 +1,7 @@
+/dist/
+/.cache/
+/preview.html
+/release-check.json
+__pycache__/
+/node_modules/
+/browser-report/

@@ -314,7 +314,9 @@ def startup_backtrace(binary, label):
 
 
 def package_tests(package, manifest, build):
-    suite('Installed package verification', lambda: installed_package_tests(package, manifest, build))
+    from macos_test_network import guarded_tests
+    with guarded_tests():
+        suite('Installed package verification', lambda: installed_package_tests(package, manifest, build))
     path = REPORT/'report.json'
     report = json.loads(path.read_text())
     report['status'] = 'passed'
@@ -351,7 +353,8 @@ def installed_package_tests(package, manifest, build):
 
 def copy_runner_network_report():
     from macos_runner_network import SNAPSHOT, REPORT as network_report
-    for source in (SNAPSHOT, network_report):
+    from macos_test_network import SNAPSHOT as test_snapshot, REPORT as test_report
+    for source in (SNAPSHOT, network_report, test_snapshot, test_report):
         if source.is_file():
             shutil.copy2(source, REPORT/source.name)
 
@@ -396,10 +399,18 @@ def diagnostics(arch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('ci', 'diagnostics'))
+    parser.add_argument('operation', choices=('ci', 'diagnostics', 'network-check'))
     parser.add_argument('--arch', choices=('x64', 'arm64'), required=True)
     args = parser.parse_args()
     if sys.platform != 'darwin' or host_arch() != args.arch: raise ValueError('A matching native macOS runner is required')
+    if args.operation == 'network-check':
+        from macos_test_network import recover
+        try:
+            recover()
+        finally:
+            REPORT.mkdir(parents=True, exist_ok=True)
+            copy_runner_network_report()
+        return
     if args.operation == 'diagnostics': diagnostics(args.arch); return
     # All compilation, including failures, has a durable full-output transcript.
     if REPORT.is_symlink():

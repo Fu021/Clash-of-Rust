@@ -23,6 +23,7 @@ import windows_ci as windows
 import windows_update_tests
 import macos_ci as macos
 from test_macos_runner_network import MacosRunnerNetworkTests
+from test_macos_test_network import MacosTestNetworkTests
 from test_cli_tui import CliTuiTests
 import workflow_storage as storage
 import workflow_artifacts
@@ -3134,6 +3135,87 @@ Private_Clean: 2 kB
                 local_cache.workspace_sources(root)
                 self.assertFalse(fingerprint.exists())
 
+    def test_documentation_resource_additions_preserve_all_compiler_objects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tracked = []
+            sources = []
+            for relative, package in (('crates/ui', 'client-ui'), ('vendor/winit', 'winit')):
+                directory = root/relative
+                directory.mkdir(parents=True)
+                (directory/'Cargo.toml').write_text(f'[package]\nname="{package}"\nversion="1.0.0"\n')
+                source = directory/'lib.rs'
+                source.write_bytes(b'unchanged source')
+                sources.append((source, source.stat().st_mtime_ns))
+                tracked.extend((relative+'/Cargo.toml', relative+'/lib.rs'))
+            with patch.object(local_cache.subprocess, 'check_output',
+                              side_effect=lambda *args, **kwargs: '\0'.join(tracked).encode()), \
+                    patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': str(root/'external/source.json')}):
+                local_cache.workspace_sources(root, save=True)
+                markers = []
+                for package in ('client-ui', 'winit'):
+                    marker = root/'target/release/.fingerprint'/(package+'-first')/'lib-info'
+                    marker.parent.mkdir(parents=True)
+                    marker.write_bytes(b'cached compiler object')
+                    markers.append(marker)
+                for name in ('download-button.svg', 'website-button.svg'):
+                    resource = root/'resources/icons'/name
+                    resource.parent.mkdir(parents=True, exist_ok=True)
+                    resource.write_text('<svg/>')
+                    tracked.append(resource.relative_to(root).as_posix())
+                (root/'README.md').write_text('Documentation with two download buttons')
+                tracked.append('README.md')
+                with patch('sys.stdout', new_callable=io.StringIO) as output:
+                    local_cache.workspace_sources(root)
+                self.assertIn('invalidated 0 changed crates', output.getvalue())
+                for marker in markers:
+                    self.assertEqual(marker.read_bytes(), b'cached compiler object')
+                for source, stamp in sources:
+                    self.assertEqual(source.stat().st_mtime_ns, stamp)
+
+    def test_changed_embedded_resources_refresh_times_and_only_invalidate_declared_consumers(self):
+        for watcher in ('none', 'file', 'directory', 'removed'):
+            with self.subTest(watcher=watcher), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                icon = root/'resources/icons/app.png'
+                icon.parent.mkdir(parents=True)
+                icon.write_bytes(b'old icon')
+                tracked = ['resources/icons/app.png']
+                for relative, package in (('crates/ui', 'client-ui'), ('vendor/winit', 'winit')):
+                    directory = root/relative
+                    directory.mkdir(parents=True)
+                    (directory/'Cargo.toml').write_text(f'[package]\nname="{package}"\nversion="1.0.0"\n')
+                    tracked.append(relative+'/Cargo.toml')
+                with patch.object(local_cache.subprocess, 'check_output',
+                                  side_effect=lambda *args, **kwargs: '\0'.join(tracked).encode()), \
+                        patch.dict(os.environ, {'WORKSPACE_SOURCE_CACHE': str(root/'external/source.json')}):
+                    local_cache.workspace_sources(root, save=True)
+                    markers = {}
+                    for package in ('client-ui', 'winit'):
+                        marker = root/'target/release/.fingerprint'/(package+'-first')/'lib-info'
+                        marker.parent.mkdir(parents=True)
+                        marker.write_bytes(b'cached compiler object')
+                        markers[package] = marker
+                    if watcher != 'none':
+                        output = root/'target/release/build/client-ui-first/output'
+                        output.parent.mkdir(parents=True)
+                        watched = icon if watcher == 'file' else icon.parent
+                        output.write_text('cargo:rerun-if-changed='+str(watched)+'\n')
+                    stamp = max(marker.stat().st_mtime_ns for marker in markers.values()) + 1_000_000
+                    if watcher == 'removed':
+                        icon.unlink()
+                        tracked.remove('resources/icons/app.png')
+                    else:
+                        icon.write_bytes(b'new icon')
+                        os.utime(icon, ns=(1, 1))
+                    with patch.object(local_cache.time, 'time_ns', return_value=stamp):
+                        local_cache.workspace_sources(root)
+                if watcher != 'removed':
+                    self.assertEqual(icon.stat().st_mtime_ns, stamp)
+                self.assertEqual(icon.parent.stat().st_mtime_ns, stamp)
+                self.assertEqual(markers['client-ui'].exists(), watcher == 'none')
+                self.assertEqual(markers['winit'].read_bytes(), b'cached compiler object')
+
     def test_dependency_manifest_updates_leave_unrelated_workspace_objects_for_cargo(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -3998,6 +4080,8 @@ Private_Clean: 2 kB
                     patch.object(build_inputs, 'approved', return_value={'upstream': {'gradle': {'version': '9.8.2'}}}), \
                     patch.object(build_inputs, 'read_json', side_effect=AssertionError('unexpected network update')), \
                     patch.object(build_inputs.subprocess, 'run', side_effect=AssertionError('unexpected resolver')), \
+                    patch.object(build_inputs, 'resolve_latest_geo',
+                                 return_value=({'tag_name': 'latest', 'resolution': 'latest'}, {})), \
                     patch.object(build_inputs, 'report'):
                 build_inputs.resolve(snapshot)
                 value = json.loads((snapshot / 'inputs.json').read_text())
@@ -4007,6 +4091,51 @@ Private_Clean: 2 kB
                 (root / 'Cargo.lock').write_text('unapproved update')
                 with self.assertRaisesRegex(ValueError, 'approved repository'):
                     build_inputs.resolve(snapshot)
+
+    def test_latest_geo_uses_official_asset_id_and_requires_complete_metadata(self):
+        payload = b'geo'
+        checksum = hashlib.sha256(payload).hexdigest()
+        assets = [{'id': number, 'name': name, 'size': len(payload), 'digest': 'sha256:' + checksum,
+                   'url': build_inputs.GEO_ASSET + str(number), 'state': 'uploaded',
+                   'browser_download_url': 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/' + name}
+                  for number, name in enumerate(build_inputs.GEO, 1)]
+        release = {'tag_name': 'latest', 'draft': False, 'prerelease': False,
+                   'published_at': '2026-11-15T00:00:00Z', 'assets': assets}
+        with patch.object(build_inputs, 'read_json', return_value=release) as read:
+            latest = build_inputs.latest_geo_release()
+        read.assert_called_once_with(build_inputs.GEO_RELEASE, '')
+        self.assertEqual(latest['resolution'], 'latest')
+        for asset in latest['assets']:
+            self.assertEqual(asset['browser_download_url'], build_inputs.GEO_ASSET + str(asset['id']))
+        for changes in ({'assets': assets[:-1]}, {'assets': assets + [assets[0]]},
+                        {'draft': True}, {'tag_name': 'old'},
+                        {'assets': [{**assets[0], 'url': 'https://example.com/file'}, *assets[1:]]},
+                        {'assets': [{**assets[0], 'digest': 'sha256:bad'}, *assets[1:]]}):
+            with self.subTest(changes=changes), \
+                    patch.object(build_inputs, 'read_json', return_value={**release, **changes}), \
+                    self.assertRaises(ValueError):
+                build_inputs.latest_geo_release()
+
+    def test_geo_refetches_metadata_only_when_asset_disappears(self):
+        first = {'tag_name': 'latest', 'published_at': 'first', 'assets': []}
+        second = {'tag_name': 'latest', 'published_at': 'second', 'assets': []}
+        missing = urllib.error.HTTPError('https://api.github.com/', 404, 'gone', {}, None)
+        forbidden = urllib.error.HTTPError('https://api.github.com/', 403, 'forbidden', {}, None)
+        with patch.object(build_inputs, 'latest_geo_release', side_effect=[first, second]) as metadata, \
+                patch.object(build_inputs, 'freeze_geo', side_effect=[missing, {'resources/GeoIP.dat': 'ok'}]) as freeze, \
+                patch.object(build_inputs.time, 'sleep'):
+            selected, resources = build_inputs.resolve_latest_geo(Path('/unused'))
+        self.assertEqual(selected, second)
+        self.assertEqual(resources, {'resources/GeoIP.dat': 'ok'})
+        self.assertEqual(metadata.call_count, 2)
+        self.assertEqual(freeze.call_args_list[-1].args[1], {'geo': second})
+        with patch.object(build_inputs, 'latest_geo_release', return_value=first) as metadata, \
+                patch.object(build_inputs, 'freeze_geo', side_effect=forbidden), \
+                patch.object(build_inputs.time, 'sleep') as sleep, \
+                self.assertRaises(urllib.error.HTTPError):
+            build_inputs.resolve_latest_geo(Path('/unused'))
+        metadata.assert_called_once()
+        sleep.assert_not_called()
 
     def test_geo_snapshot_reuses_verified_bytes_without_network_access(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -6860,7 +6989,7 @@ class CompatibilityTests(unittest.TestCase):
             self.assertNotIn('pull_request_target:', workflow)
         workflow = (build.ROOT / '.github/workflows/ci.yml').read_text()
         self.assertNotIn('  ubuntu_20:', workflow)
-        self.assertEqual(len(release.CI_JOBS), 12)
+        self.assertEqual(len(release.CI_JOBS), 13)
 
 
 class ReleaseTests(unittest.TestCase):

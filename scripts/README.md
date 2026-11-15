@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `build_support.py` | 共享模块 | 平台识别、版本、资源、下载、架构和暂存目录等标准库辅助。 |
 | `proxy_benchmark.py` | 测试夹具模块 | 为桌面代理集成测试提供本机 HTTP/可信 TLS 数据源和延迟端点，保存吞吐与合成节点测速报告；由代理/TUN 包装器按 CI 选取启动，不修改用户网络。 |
-| `build_inputs.py` | CLI / 模块 | 冻结并应用同一份 Rust、Go、Android、Linux 基线和资源依赖快照；统一取得四份 Geo 原包，随快照校验及分发；按冻结身份下载、校验和安装 Gradle，支持原包私网回退及实际 PATH 版本检查。 |
+| `build_inputs.py` | CLI / 模块 | 解析并应用同一轮 Rust、Go、Android、Linux 基线和资源依赖快照；每轮取得最新版四份 Geo 原包，随快照校验及分发；按已选身份下载、校验和安装 Gradle，支持原包私网回退及实际 PATH 版本检查。 |
 | `android_apk.py` | 共享模块 | 最高 DEFLATE 级别压缩 APK 内核库与 Geo 资源，校验解压内容、对齐和原签名身份后原子替换；由 Android 构建入口在测试前调用。 |
 | `upstream_cache.py` | CLI / 模块 | 官方原始下载的私网回退、持久清单分批提交、分页回执与有界状态查询；不上传 runner 归档。 |
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
@@ -38,6 +38,7 @@
 | `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新及安装包/未压缩 EXE/DLL 的 Defender 验证，扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `macos_runner_network.py` | 共享模块 | 官方 Tailscale Action 接入前后保存、恢复并验证 runner 原生 DNS；由 `action_cache.py` 调用，报告并入 Mac 验收附件，不用于应用网络接管。 |
+| `macos_test_network.py` | 共享模块 | 可丢弃 Mac runner 安装测试前的网络快照、测试助手取证/清理、失败恢复和附件端点检查；由安装验收及上传前检查调用，不用于用户网络。 |
 | `test-proxy-modes.py` | CLI | Windows、Linux、macOS 共用的系统代理、HTTP 和 TUN 流量检查。 |
 | `test-linux-tun.py` | root CLI | Linux 隔离网络/挂载命名空间内的用户身份、订阅隔离、TUN 授权、DNS 和恢复测试。 |
 | `tun_dns_fixture.py` | 子进程夹具 | Linux TUN 测试的隔离上游；必须作为独立进程启动。 |

@@ -309,8 +309,8 @@ def workspace_sources(source, save=False):
         owners = [directory for directory in packages if name.startswith(directory + '/')]
         if owners:
             invalid.add(packages[max(owners, key=len)])
-        elif name.startswith(('resources/', '.cargo/')) or name == 'LICENSE':
-            invalid.update(packages.values())  # Shared resources/manifest changed.
+        elif name.startswith('.cargo/') or name == 'LICENSE':
+            invalid.update(packages.values())
         # Cargo.lock changes are handled by Cargo's dependency fingerprints.
         # A reqwest update alone must not discard unrelated Slint/UI objects.
     # Mobile builds compile shared .slint files outside their own crate. Honor
@@ -347,6 +347,17 @@ def workspace_sources(source, save=False):
             if (record['sha256'] == saved.get('sha256') and isinstance(stamp, int) and 0 < stamp <= now):
                 os.utime(source/name, ns=(now, stamp))
                 restored += 1
+    resource_paths = set()
+    for name in changed:
+        if not name.startswith('resources/'):
+            continue
+        path = source/name
+        resource_paths.add(path)
+        resource_paths.update(parent for parent in path.parents
+                              if parent != source and parent.is_relative_to(source))
+    for path in resource_paths:
+        if path.exists() and not path.is_symlink():
+            os.utime(path, ns=(now, now))
     # Content changes always invalidate their owning crate, independently of
     # clock skew or how old that branch/commit is. Cargo rebuilds dependants.
     for pattern in ('release/.fingerprint', '*/release/.fingerprint'):
@@ -365,6 +376,8 @@ def workspace_sources(source, save=False):
                         shutil.rmtree(fingerprint)
     print(f'Workspace cache: verified {restored} source/directory timestamps; '
           f'invalidated {len(invalid)} changed crates.', flush=True)
+    if invalid:
+        print('Workspace cache: invalidated crates: ' + ', '.join(sorted(invalid)), flush=True)
 
 
 def workspace_restore_identity(source, family, receipt, compiler=None, environment=None):

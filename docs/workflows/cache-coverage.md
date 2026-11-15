@@ -42,6 +42,8 @@ CI 使用 `native-main-v3-<平台>-<架构>--`、`android-main-v3-<ABI>--`，Mem
 
 不同平台、架构、编译器、profile 和关键工具版本仍隔离。恢复路径和顺序与锁定版本 Rust Cache 一致，任一步失败都会丢弃不完整对象；源码回执按内容恢复未变文件时间戳，并失效变化 crate 及共享构建输入。旧目录和 `build/<包>/<hash>/{out,fingerprint,run}` 布局都保留支持。首次填充和下一次跨提交恢复须分别实测，不能用历史同提交暖构建代替。
 
+`resources/` 的变化不再直接清除全部 crate 指纹。已声明 `rerun-if-changed` 的文件或目录仅失效对应消费者；改变、增加或删除的资源及现存父目录刷新时间戳，让 Cargo 继续通过依赖信息核对嵌入资源。README 按钮等未参与编译的图片不触发 Rust 重编，字体、图标及其他实际嵌入内容仍必须更新。日志列出主动失效的 crate 名称，区分缓存恢复、输入变化和真正冷编译；不跨平台复制对象，也不跳过 Cargo 校验。
+
 CI 与 Memory 在编译成功后写入仅属于本次 run、attempt 和提交的检查点；CI 同时更新源码回执。后续源码测试、安装验收或附件上传失败时，只有核对当前检查点成功，才允许 Rust Cache 的 post 步骤保存对象；编译未完成、其他分支、旧 attempt 和旧提交不能开启失败保存。缓存不是验收结果，任务及发布门禁仍照常失败；取消的运行不额外启用保存。保留策略仍只清除已有替代缓存的旧代，不删除唯一旧基线。
 
 锁定的 [Rust Cache 实现](https://github.com/Swatinem/rust-cache/blob/d1527c8f67ef9af357290475d4af4b0fab8f12e0/action.yml)在恢复时用 `cache-on-failure: false` 初始化 `CACHE_ON_FAILURE`，post 条件再读取环境变量。检查点通过后写入 `GITHUB_ENV` 才能改变后续保存行为；不要在恢复步骤提前求值该变量或无条件开启失败保存。

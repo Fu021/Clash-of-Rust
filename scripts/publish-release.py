@@ -26,7 +26,7 @@ CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
 CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64', 'Actions cache budget', 'Resolve build inputs'}
-CI_JOBS |= {'Ubuntu latest-x64 proxy and TUN'}
+CI_JOBS |= {'Ubuntu latest-x64 proxy and TUN', 'Website validation'}
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',

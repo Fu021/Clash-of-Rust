@@ -35,11 +35,11 @@ def command(arguments, timeout=5):
         return {'returncode': None, 'error': type(error).__name__}
 
 
-def service_settings():
+def service_settings(service='Ethernet'):
     value = {}
     for kind in ('dnsservers', 'searchdomains'):
         text = subprocess.check_output(
-            ['/usr/sbin/networksetup', '-get' + kind, 'Ethernet'],
+            ['/usr/sbin/networksetup', '-get' + kind, service],
             text=True, timeout=5).strip()
         value[kind] = [] if text.startswith(("There aren't any", "You haven't set")) else text.splitlines()
     for address in value['dnsservers']:

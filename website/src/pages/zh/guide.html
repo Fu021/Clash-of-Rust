@@ -1,0 +1,269 @@
+<!-- title: 使用指南：安装、连接和使用 Clash of Rust -->
+<!-- description: Clash of Rust 实用指南：首次连接、订阅、节点与模式、规则、Android 应用分流、访问检测、Claude 保护、cor 命令行、更新与排障。 -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>从安装包到第一次连上</h1>
+    <p class="lead">这里讲的是你最常用到的部分。照着做一遍，大约几分钟就能连上；后面的章节可以用到时再查。</p>
+  </div>
+  <div class="banner scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/guide-small.webp">
+      <img src="{{root}}assets/guide.webp" width="2172" height="724" alt="像素画：蓝猫站在木箱上，看着铁路边告示牌上钉着的线路图。">
+    </picture>
+  </div>
+</section>
+
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="本页目录">
+    <p class="label">本页目录</p>
+    <a href="#first">首次连接</a>
+    <a href="#subscriptions">订阅</a>
+    <a href="#modes">节点与模式</a>
+    <a href="#rules">规则</a>
+    <a href="#android">Android 应用分流</a>
+    <a href="#checks">访问检测</a>
+    <a href="#protection">Claude 保护</a>
+    <a href="#cli">命令行</a>
+    <a href="#tui">终端界面</a>
+    <a href="#updates">更新与开机自启</a>
+    <a href="#trouble">遇到问题时</a>
+  </nav>
+
+  <div>
+    <section id="first">
+      <h2>首次连接</h2>
+      <p>先在<a href="download.html">下载页</a>安装对应系统的安装包。安装包已经带有 mihomo 内核和 Geo 数据，你只需要准备一个订阅链接，或者一份本地配置文件。</p>
+      <ol class="steps">
+        <li>打开<b>订阅</b>页，添加机场提供的订阅链接，或者导入一份 YAML 文件。</li>
+        <li>在这条订阅上点<b>使用</b>。在此之前，客户端用的是内置的“默认直连”，所有流量都直连。</li>
+        <li>打开<b>代理</b>页，给节点测速，选一个。</li>
+        <li>回到<b>首页</b>，选择模式（<b>规则</b>、<b>全局</b>或<b>直连</b>），再选择接管方式（<b>系统代理</b>或 <b>TUN</b>）。</li>
+        <li>连接。第一次使用 TUN 时，系统可能会要求授权；在 Android 上，允许 VPN 请求。</li>
+      </ol>
+      <p>关掉窗口不会断开任何东西：界面进程退出，托盘和内核继续运行，随时可以从托盘重新打开窗口。</p>
+    </section>
+
+    <section id="subscriptions">
+      <h2>订阅</h2>
+      <p>Clash of Rust 读取的是 <b>mihomo / Clash Meta 格式的 YAML</b>，不做格式转换。如果链接返回的是节点分享链接、Base64 列表，或者 sing-box、Xray 的配置，客户端会提示“订阅格式不兼容”，并保留你现有的订阅不动。这时请向机场要 Mihomo 或 Clash Meta 的订阅链接。</p>
+      <ul class="dots">
+        <li><b>远程订阅</b>默认每 360 分钟自动更新一次。间隔可以在设置里改，范围 0～10080 分钟，填 0 关闭。</li>
+        <li><b>本地文件</b>可以改名、删除，但不会自动更新。</li>
+        <li>下载或校验失败时，已保存的订阅和当前运行状态都保持原样。</li>
+        <li>Claude 保护开启期间，定时更新和手动更新都会暂停。</li>
+      </ul>
+<pre class="term" aria-label="订阅相关命令"><span class="p">$ </span>cor profile add home 'https://example.com/subscription'
+<span class="p">$ </span>cor profile list
+<span class="p">$ </span>cor profile update --all
+<span class="p">$ </span>cor config set subscription_update_interval_minutes 720</pre>
+    </section>
+
+    <section id="modes">
+      <h2>节点与模式</h2>
+      <p>节点可以用宫格看，也可以用紧凑列表看。可以测速、按名称筛选，并在允许手动选择的策略组里切换。不打开窗口，也能在托盘菜单里切换节点、查看当前速度。</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">模式</th><th scope="col">效果</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">规则</th><td>每条连接按规则逐条匹配，由规则决定走节点、直连，还是拦截。</td></tr>
+          <tr><th scope="row">全局</th><td>所有流量都从 GLOBAL 组里选中的节点出去。</td></tr>
+          <tr><th scope="row">直连</th><td>所有流量直接出去，不经过代理。</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">接管方式</th><th scope="col">效果</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">系统代理</th><td>设置操作系统的代理。遵守这项设置的程序会经过客户端。</td></tr>
+          <tr><th scope="row">TUN</th><td>创建一块虚拟网卡，在网络层接管流量，连不理会系统代理的程序也能接管。服务器上建议用它。</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:1.2rem">规则模式下，首页显示的节点是默认规则当前选中的那个。某条连接可能命中别的规则、走别的线路；<b>连接</b>页会显示每条连接实际命中的规则和线路。</p>
+    </section>
+
+    <section id="rules">
+      <h2>规则</h2>
+      <p>订阅自带的规则是只读的，但可以调整顺序。你自己的规则可以添加、编辑、停用、移动和删除。修改要先通过 mihomo 的校验才会保存，订阅原始的 YAML 不会被改写。</p>
+      <h3>快捷规则</h3>
+      <p>五个开关，对应最常见的几种情况。默认全部关闭，开启后只补上订阅里缺少的规则，不会重复添加。</p>
+      <div class="table-scroll"><table class="plain">
+        <tbody>
+          <tr><th scope="row"><code>ads</code></th><td>拦截广告域名</td></tr>
+          <tr><th scope="row"><code>private-domain</code></th><td>私有域名和本地域名直连</td></tr>
+          <tr><th scope="row"><code>private-ip</code></th><td>私有 IP 段直连</td></tr>
+          <tr><th scope="row"><code>cn-domain</code></th><td>国内域名直连</td></tr>
+          <tr><th scope="row"><code>cn-ip</code></th><td>国内 IP 段直连</td></tr>
+        </tbody>
+      </table></div>
+<pre class="term" aria-label="规则相关命令"><span class="p">$ </span>cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1
+<span class="p">$ </span>cor rule shortcut ads on
+<span class="p">$ </span>cor rule list --filter example
+<span class="p">$ </span>cor network explain example.com   <span class="c"># 它命中了哪条规则？</span></pre>
+    </section>
+
+    <section id="android">
+      <h2>Android 应用分流</h2>
+      <p>在设置里打开<b>应用分流</b>，决定哪些应用进入 VPN。</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">模式</th><th scope="col">选中的应用</th><th scope="col">其余应用</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">全部应用</th><td>进入 VPN</td><td>进入 VPN</td></tr>
+          <tr><th scope="row">仅选中</th><td>进入 VPN</td><td>使用系统原有网络</td></tr>
+          <tr><th scope="row">排除选中</th><td>使用系统原有网络</td><td>进入 VPN</td></tr>
+        </tbody>
+      </table></div>
+      <ul class="dots" style="margin-top:1.2rem">
+        <li>进入 VPN 不等于强制走代理节点。流量具体去哪，仍然由当前模式和规则决定。</li>
+        <li>Android 10 及以上，还可以给单个应用指定出口：直连、某个策略组或某个节点。Android 8 和 9 只有上面三种模式。</li>
+        <li>已连接时保存，客户端会请求重建 VPN，让改动生效。</li>
+        <li>如果系统设置里开了“阻止不使用 VPN 的连接”，被你留在 VPN 之外的应用仍然可能被系统拦住。</li>
+      </ul>
+      <p class="fine" style="margin-top:1rem">完整行为见 <a href="{{docs}}/android-application-routing.md" target="_blank" rel="noopener">android-application-routing.md</a>。</p>
+    </section>
+
+    <section id="checks">
+      <h2>访问检测</h2>
+      <p>侧栏“工具”下有三个页面，各回答一个问题。</p>
+      <div class="table-scroll"><table class="plain">
+        <tbody>
+          <tr><th scope="row">网络诊断</th><td>这个网站为什么连不上？十一项按需运行的检查，详见<a href="tools.html">网络工具页</a>。</td></tr>
+          <tr><th scope="row">IP 检测</th><td>外面看到的是什么？出口 IP，以及 GitHub、AI 服务、流媒体经当前节点能否访问。结果按分类列出，可以筛选、重测和导出。</td></tr>
+          <tr><th scope="row">A÷检测</th><td>在 Claude 看来有没有异常？把地区、DNS、WebRTC 和项目配置方面的线索汇总成一份报告。</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:1.2rem">检测跑完，只说明观察已经完成，不说明服务一定可用。请看报告本身：失败的项目就记为失败，不会算成“可访问”。</p>
+<pre class="term" aria-label="检测相关命令"><span class="p">$ </span>cor ip-check list
+<span class="p">$ </span>cor ip-check --category AI -o ai-report.json
+<span class="p">$ </span>cor claude check</pre>
+    </section>
+
+    <section id="protection">
+      <h2>Claude 保护</h2>
+      <p>有些时候你需要一个固定不变的出口，不希望手滑点错，也不希望有连接悄悄绕出去。Claude 保护就是为这种时候准备的。它默认关闭，开关在 A÷检测页面。</p>
+      <h3>开启之后</h3>
+      <ul class="dots">
+        <li>固定当前节点，并用优先规则把 Claude 相关的流量都导向它。</li>
+        <li>启用 TUN、严格路由、IPv6 与 UDP 接管和 DNS 接管，DNS 经同一个节点走加密的 DoH。</li>
+        <li>实时拦截会绕开固定节点的连接。开启时会先关闭内核里已有的连接。</li>
+        <li>锁定节点、模式和网络设置的修改。主题、强调色和只读页面照常可用。</li>
+        <li>订阅更新暂停。在 Android 上，应用指定出口暂停，VPN 临时覆盖全部应用。</li>
+      </ul>
+      <h3>关闭之后</h3>
+      <p>恢复你原来的模式、接管方式和节点选择。订阅、规则，以及 DNS、IPv6、UDP 的偏好从头到尾没有被改写，只是被临时覆盖。</p>
+      <p>开启时的确认按钮要等 3 秒才能点。全局模式下，如果所选线路的最终出口是直连，保护会拒绝开启。</p>
+<pre class="term" aria-label="保护相关命令"><span class="p">$ </span>cor claude protect on --yes
+<span class="p">$ </span>cor claude watch          <span class="c"># 观察真实线路和被拦截的请求</span>
+<span class="p">$ </span>cor claude protect off --yes</pre>
+      <p class="fine" style="margin-top:1rem">检测只提供线索，不能保证第三方服务一定接受你。保护的范围和边界见 <a href="{{docs}}/claude-protection.md" target="_blank" rel="noopener">claude-protection.md</a>。</p>
+    </section>
+
+    <section id="cli">
+      <h2>命令行</h2>
+      <p>Windows、Linux、macOS 的桌面安装包都自带 <code>cor</code>。它不需要显示器，和窗口共用后台与内核：窗口开着时，<code>cor</code> 操作的就是它；窗口没开时，需要后台的命令会自动启动一个不带窗口的后台。</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">系统</th><th scope="col"><code>cor</code> 在哪里</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Debian / Ubuntu</th><td><code>/usr/bin/cor</code>，装完 DEB 就在 PATH 里</td></tr>
+          <tr><th scope="row">Windows</th><td>安装目录里的 <code>cor.exe</code>，例如 <code>C:\Program Files\Clash of Rust\cor.exe</code>。常用的话，把这个目录加进 PATH。</td></tr>
+          <tr><th scope="row">macOS</th><td><code>/Applications/Clash of Rust.app/Contents/MacOS/cor</code>。可以自己建一个符号链接到 PATH 里的目录。</td></tr>
+        </tbody>
+      </table></div>
+      <h3>第一次使用</h3>
+<pre class="term" aria-label="第一次使用 cor"><span class="p">$ </span>cor profile add home 'https://example.com/subscription'
+<span class="p">$ </span>cor profile use home
+<span class="p">$ </span>cor start              <span class="c"># 后台运行，关掉终端也不会停</span>
+<span class="p">$ </span>cor node select        <span class="c"># 输入文字筛选，按编号选择，q 取消</span>
+<span class="p">$ </span>cor proxy tun
+<span class="p">$ </span>cor status
+<span class="p">$ </span>cor stop               <span class="c"># 停止内核，恢复网络</span></pre>
+      <p>日常请用 <code>cor start</code>。<code>cor run</code> 在前台运行，终端一关就停，只适合调试。</p>
+      <h3>按用途找命令</h3>
+      <div class="table-scroll">
+        <table class="plain">
+          <tbody>
+            <tr><th scope="row">运行</th><td><code>start</code> <code>stop</code> <code>restart</code> <code>status</code> <code>version</code></td><td>启动、停止和查看后台。<code>status --watch</code> 持续刷新。</td></tr>
+            <tr><th scope="row">线路</th><td><code>mode</code> <code>proxy</code> <code>env</code></td><td><code>mode rule|global|direct</code>，<code>proxy system|tun|off</code>，以及给当前 shell 用的代理环境变量。</td></tr>
+            <tr><th scope="row">订阅</th><td><code>profile</code></td><td><code>add</code>、<code>import</code>、<code>list</code>、<code>use</code>、<code>update</code>、<code>edit</code>、<code>remove</code>、<code>export</code></td></tr>
+            <tr><th scope="row">节点</th><td><code>node</code></td><td><code>list</code>、<code>select</code>、<code>test</code>（单个节点、单个策略组或全部）</td></tr>
+            <tr><th scope="row">规则</th><td><code>rule</code></td><td><code>list</code>、<code>add</code>、<code>edit</code>、<code>move</code>、<code>enable</code>、<code>remove</code>、<code>shortcut</code></td></tr>
+            <tr><th scope="row">连接</th><td><code>connection</code></td><td><code>list</code> 和 <code>show</code>：每条活动连接命中的规则和线路</td></tr>
+            <tr><th scope="row">诊断</th><td><code>network</code> <code>dns</code> <code>ip-check</code> <code>diagnose</code></td><td><a href="tools.html">十一项检查</a>、访问检测，以及反馈问题用的完整报告</td></tr>
+            <tr><th scope="row">设置</th><td><code>config</code></td><td><code>get</code>、<code>set</code>、<code>check</code>、<code>effective</code></td></tr>
+            <tr><th scope="row">维护</th><td><code>update</code> <code>geo</code> <code>autostart</code> <code>service</code> <code>completion</code></td><td>更新、Geo 数据、开机自启和 shell 补全</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:1.2rem"><code>cor help</code> 列出日常命令，<code>cor help all</code> 列出全部命令，每条命令都支持 <code>--help</code>。</p>
+      <h3>写脚本时</h3>
+      <ul class="dots">
+        <li><code>--json</code> 输出一份机器可读的结果；<code>--jsonl</code> 逐行输出，适合状态、日志和连接。每一行的外层都是 <code>{"schema":1,"command":"…","data":…}</code>。</li>
+        <li>结果写到 stdout，进度、授权提示和错误写到 stderr。</li>
+        <li>凭据默认隐藏，加 <code>--show-secrets</code> 才会输出。有破坏性的命令需要 <code>--yes</code>。</li>
+        <li><code>--timeout N</code> 设置单次后台请求的等待秒数，默认 300，最大 3600。</li>
+      </ul>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">退出码</th><th scope="col">含义</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">0</th><td>成功，或者下游管道已关闭</td></tr>
+          <tr><th scope="row">1</th><td>操作、校验或权限失败</td></tr>
+          <tr><th scope="row">2</th><td>命令或参数格式错误</td></tr>
+          <tr><th scope="row">3</th><td>后台启动失败或无法连接</td></tr>
+          <tr><th scope="row">124</th><td>请求超时</td></tr>
+          <tr><th scope="row">130</th><td>查询被中断</td></tr>
+        </tbody>
+      </table></div>
+      <p class="fine" style="margin-top:1rem">全部命令和选项见 <a href="{{docs}}/cli.md" target="_blank" rel="noopener">cli.md</a>。</p>
+    </section>
+
+    <section id="tui">
+      <h2>终端界面</h2>
+      <p><code>cor ui</code> 打开一个用键盘操作的界面，有首页、节点、连接、网络检查四页。它目前是原型：编辑订阅、规则、更新和大部分设置，还得用上面的命令。<code>cor ui --demo</code> 用虚构数据演示，不连接后台，也不保存任何设置。</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">按键</th><th scope="col">作用</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> <kbd>Tab</kbd></th><td>在首页、节点、连接、网络之间切换</td></tr>
+          <tr><th scope="row"><kbd>↑</kbd> <kbd>↓</kbd></th><td>在列表里移动</td></tr>
+          <tr><th scope="row"><kbd>Enter</kbd></th><td>打开策略组；选中成员后，再确认一次才切换</td></tr>
+          <tr><th scope="row"><kbd>/</kbd></th><td>搜索；在网络页用来输入目标</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd></th><td>返回、清除搜索或取消</td></tr>
+          <tr><th scope="row"><kbd>r</kbd></th><td>立即重新读取</td></tr>
+          <tr><th scope="row"><kbd>q</kbd> <kbd>Ctrl+C</kbd></th><td>退出。后台和代理保持原样。</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:1.2rem">需要真实的交互终端，至少 60 列 × 18 行。打开、浏览和退出都不会启动后台，也不会改动代理；后台没在运行时，它会提示你先执行 <code>cor start</code>。</p>
+    </section>
+
+    <section id="updates">
+      <h2>更新与开机自启</h2>
+      <p>应用按你选的通道检查更新，默认只看正式版；下载时显示进度，可以取消。安装包先校验 SHA256 再运行，升级保留订阅和个人设置。在 Android 上，安装由系统确认。</p>
+<pre class="term" aria-label="更新相关命令"><span class="p">$ </span>cor update check
+<span class="p">$ </span>cor update download -o update.deb   <span class="c"># 下载并校验，不安装</span>
+<span class="p">$ </span>cor update install --yes
+<span class="p">$ </span>cor geo update                      <span class="c"># 更新 Geo 数据</span></pre>
+      <h3>开机自启</h3>
+      <p>下面两种选一种，不要同时用。</p>
+      <ul class="dots">
+        <li><b>桌面程序：</b>在设置里打开“后台自启动”，或者运行 <code>cor autostart on</code>。登录后恢复后台和已保存的网络模式，窗口保持关闭，等你自己打开。</li>
+        <li><b>只用命令行：</b><code>cor service install --yes</code> 为当前用户注册后台。它是登录后启动的用户级自启项，不是登录前就运行的系统服务。</li>
+      </ul>
+    </section>
+
+    <section id="trouble">
+      <h2>遇到问题时</h2>
+      <div class="table-scroll"><table class="plain">
+        <tbody>
+          <tr><th scope="row">提示“订阅格式不兼容”</th><td>链接返回的不是 mihomo YAML。向机场要 Mihomo 或 Clash Meta 的订阅链接。</td></tr>
+          <tr><th scope="row">某个网站打不开</th><td>先运行<a href="tools.html#check">网站检查</a>，再看<a href="tools.html#explain">规则与出口</a>。</td></tr>
+          <tr><th scope="row">Windows Defender 告警</th><td>先核对文件的 <a href="download.html#verify">SHA256</a>，再看<a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">告警处理说明</a>。来源不明的告警，不要直接放行。</td></tr>
+          <tr><th scope="row">macOS 打不开应用</th><td>DMG 没有经过 Apple 公证。按 <a href="https://support.apple.com/zh-cn/102445" target="_blank" rel="noopener">Apple 的说明</a>，在“隐私与安全性”里放行。</td></tr>
+          <tr><th scope="row"><code>cor</code> 提示后台未运行</th><td>执行 <code>cor start</code>。<code>status</code>、<code>node list</code> 这类只读命令不会替你启动后台。</td></tr>
+        </tbody>
+      </table></div>
+      <h3>提交一份有用的报告</h3>
+      <p>窗口里，出错提示和检查结果旁边有“导出诊断”。在终端里：</p>
+<pre class="term" aria-label="诊断命令"><span class="p">$ </span>cor diagnose --output cor-diagnose.json
+<span class="p">$ </span>cor diagnose --offline -o cor-offline.json   <span class="c"># 只采集现场，不访问网络</span></pre>
+      <p>报告不会自动上传。订阅凭据和控制密钥不会写进报告，但日志里可能有域名和 IP 地址，附到 <a href="{{repo}}/issues" target="_blank" rel="noopener">Issue</a> 之前请自己先看一遍。</p>
+      <h3>卸载之前</h3>
+      <p>如果你用自定义数据目录配置过命令行自启，先执行 <code>cor stop</code> 和 <code>cor service remove --yes</code>。Windows 的卸载程序可以选择删除全部配置和数据，这一项默认不勾选。</p>
+    </section>
+  </div>
+</div>

@@ -1,0 +1,221 @@
+{
+  "groups": [
+    {"id": "target", "en": "Target checks", "zh": "目标检查",
+     "note_en": "Six checks aimed at one site or host name.",
+     "note_zh": "针对某个网站或域名的六项检查。"},
+    {"id": "link", "en": "Link analysis", "zh": "链路分析",
+     "note_en": "Five checks about the quality of the path itself.",
+     "note_zh": "关于线路本身质量的五项检查。"}
+  ],
+  "tools": [
+    {
+      "id": "check", "group": "target", "arg": "URL", "options": [],
+      "en": {
+        "name": "Website check",
+        "short": "DNS, HTTPS, HTTP and the route one request really took.",
+        "checks": "Resolves the name with both the system and the core, requests the site over HTTPS and HTTP through the local proxy, and reports which protocol answered and the policy chain the request actually used.",
+        "when": "Start here when a site will not open and you do not yet know which layer is at fault.",
+        "note": "An HTTP 403 or 500 proves that something answered, not that the service works. Redirects are reported, not followed. You may leave out the scheme."
+      },
+      "zh": {
+        "name": "网站检查",
+        "short": "解析、HTTPS、HTTP，以及这次请求实际走的线路。",
+        "checks": "分别用系统和内核解析域名，经本机代理用 HTTPS 和 HTTP 各请求一次，报告哪种协议得到了响应，以及这次请求实际经过的策略链。",
+        "when": "网站打不开，又不知道问题出在哪一层时，先从这里查。",
+        "note": "HTTP 403、500 只说明对方有响应，不说明服务可用。重定向只报告，不会跟着跳转。输入时可以省略协议。"
+      }
+    },
+    {
+      "id": "dns", "group": "target", "arg": "HOST", "options": [],
+      "en": {
+        "name": "DNS comparison",
+        "short": "The system resolver and the core, side by side.",
+        "checks": "Resolves one host name with the system resolver and with the core, and shows both answers next to each other.",
+        "when": "A site opens in one app but not in another, or you suspect a wrong or hijacked answer.",
+        "note": "Different answers are not a fault on their own. With Fake-IP on, the core returns a placeholder address by design."
+      },
+      "zh": {
+        "name": "DNS 对照",
+        "short": "系统解析和内核解析，并排比较。",
+        "checks": "同一个域名分别交给系统解析器和内核解析，把两边的结果并排列出。",
+        "when": "同一个网站在这个应用能开、另一个应用打不开，或者怀疑解析结果被污染、被劫持时。",
+        "note": "两边结果不同，本身不算故障。开启 Fake-IP 后，内核按设计返回的就是占位地址。"
+      }
+    },
+    {
+      "id": "phase", "group": "target", "arg": "URL", "options": ["seconds"],
+      "en": {
+        "name": "Connection timing",
+        "short": "How long DNS, the proxy hop, TCP, TLS and the first byte each take.",
+        "checks": "Times one connection stage by stage: core DNS, the local SOCKS5 hop, TCP to the target, the TLS handshake and the first byte of the response.",
+        "when": "A site loads, but slowly, and you want to know which stage eats the time.",
+        "note": "Each stage is measured on its own, so one slow step stands out instead of hiding in a total."
+      },
+      "zh": {
+        "name": "连接耗时",
+        "short": "解析、代理、TCP、TLS、首字节，各花了多久。",
+        "checks": "把一次连接拆成几段分别计时：内核 DNS、本机 SOCKS5、到目标的 TCP、TLS 握手，以及响应的首字节。",
+        "when": "网站能打开，但是慢，想知道时间耗在哪一段。",
+        "note": "各阶段独立计时，慢的那一步会单独显出来，不会被总耗时掩盖。"
+      }
+    },
+    {
+      "id": "family", "group": "target", "arg": "URL", "options": ["seconds"],
+      "en": {
+        "name": "IPv4 / IPv6",
+        "short": "One connection per address family.",
+        "checks": "Connects to the target once over IPv4 and once over IPv6, each through the local proxy.",
+        "when": "Something works on one network and fails on another, or you are deciding whether to keep IPv6 switched on.",
+        "note": "A host with no AAAA record is reported as having no IPv6 address. It is not counted as a failed connection."
+      },
+      "zh": {
+        "name": "IPv4 / IPv6",
+        "short": "两种地址族，各连一次。",
+        "checks": "经本机代理，分别用 IPv4 和 IPv6 地址各连接目标一次。",
+        "when": "换个网络就连不上，或者在犹豫要不要保持 IPv6 开启时。",
+        "note": "域名没有 AAAA 记录时，会如实说明没有 IPv6 地址，不会算成连接失败。"
+      }
+    },
+    {
+      "id": "explain", "group": "target", "arg": "URL", "options": [],
+      "en": {
+        "name": "Rule and exit",
+        "short": "Which rule matched, and which node the request left through.",
+        "checks": "Sends a real request, then reads back the rule it matched and the full policy chain it travelled.",
+        "when": "Traffic leaves through an exit you did not expect, or a rule you wrote does not seem to apply.",
+        "note": "The answer comes from this request. It is not a guess based on whichever node is selected at the moment."
+      },
+      "zh": {
+        "name": "规则与出口",
+        "short": "命中了哪条规则，从哪个节点出去。",
+        "checks": "发出一次真实请求，再查出它命中的规则和走过的完整策略链。",
+        "when": "流量从意料之外的出口出去，或者自己写的规则好像没有生效时。",
+        "note": "结果来自这一次请求本身，不是拿当前选中的节点来推测。"
+      }
+    },
+    {
+      "id": "tls", "group": "target", "arg": "HOST", "options": ["seconds"],
+      "en": {
+        "name": "TLS certificate",
+        "short": "Host name, validity, trust chain and fingerprint.",
+        "checks": "Verifies the certificate's host name, validity period and trust chain, and shows a short summary of the certificate.",
+        "when": "A browser shows a certificate warning, or you suspect something on the path is intercepting HTTPS.",
+        "note": "Always uses HTTPS and never skips verification. Only a limited set of certificate fields is shown."
+      },
+      "zh": {
+        "name": "TLS 证书",
+        "short": "域名、有效期、信任链和证书摘要。",
+        "checks": "验证证书的域名、有效期和信任链，并显示证书摘要。",
+        "when": "浏览器提示证书有问题，或者怀疑线路上有人拦截 HTTPS 时。",
+        "note": "始终使用 HTTPS，不会绕过验证。证书只展示有限的几个字段。"
+      }
+    },
+    {
+      "id": "stability", "group": "link", "arg": "URL", "options": ["count", "interval", "seconds"],
+      "en": {
+        "name": "Short stability run",
+        "short": "A handful of requests, with failures and the spread of response times.",
+        "checks": "Sends a limited number of requests and reports how many failed and how the response-header times were spread.",
+        "when": "A connection works, drops, then works again.",
+        "note": "The whole run is capped at 120 seconds. If count, interval and time limit add up to more, you get the results collected so far, marked as timed out."
+      },
+      "zh": {
+        "name": "短时稳定性",
+        "short": "连续请求几次，看失败数和耗时分布。",
+        "checks": "发送有限次数的请求，报告失败了几次，以及响应头耗时的分布。",
+        "when": "连接时好时坏、断断续续时。",
+        "note": "整轮检查最多 120 秒。次数、间隔和时限加起来超过时，返回已经取得的结果，并明确标为超时。"
+      }
+    },
+    {
+      "id": "udp", "group": "link", "arg": "SERVER[:PORT]", "options": ["seconds"],
+      "en": {
+        "name": "UDP reachability",
+        "short": "A DNS probe through the proxy's UDP relay.",
+        "checks": "Sends one DNS probe to the server through the local SOCKS5 UDP relay. Port 53 is used unless you give another.",
+        "when": "Calls, games or QUIC fail although ordinary web pages load.",
+        "note": "Nothing is sent when UDP is switched off in settings, or while Claude protection is on."
+      },
+      "zh": {
+        "name": "UDP 连通",
+        "short": "经代理的 UDP 中继发一个 DNS 探针。",
+        "checks": "经本机 SOCKS5 的 UDP 中继，向服务器发送一个 DNS 探针。不写端口时用 53。",
+        "when": "网页正常，但语音通话、游戏或 QUIC 不通时。",
+        "note": "在设置里关闭了 UDP，或者 Claude 保护开启时，不会发送探针。"
+      }
+    },
+    {
+      "id": "ping", "group": "link", "arg": "HOST", "options": ["count"],
+      "en": {
+        "name": "Ping",
+        "short": "The system's ICMP echo.",
+        "checks": "Runs the system's ICMP ping against the host.",
+        "when": "You want to know whether the host answers at all from this machine.",
+        "note": "This is not the latency of a proxy node. System ping does not use the HTTP proxy, and whether TUN carries it depends on your routes. It is never imitated with TCP."
+      },
+      "zh": {
+        "name": "Ping",
+        "short": "系统的 ICMP 回显。",
+        "checks": "调用系统的 ICMP ping 探测目标主机。",
+        "when": "想知道从这台机器出发，对方到底有没有回应时。",
+        "note": "它不代表代理节点的延迟。系统 Ping 不走 HTTP 代理，是否被 TUN 接管取决于路由。工具不会用 TCP 冒充 ICMP。"
+      }
+    },
+    {
+      "id": "trace", "group": "link", "arg": "HOST", "options": ["hops"],
+      "en": {
+        "name": "Route trace",
+        "short": "Hop-by-hop replies from the system tracer.",
+        "checks": "Runs the system's route tracer and lists the hops that answered.",
+        "when": "You want to see where along the path the replies stop.",
+        "note": "A hop that stays silent does not mean the path is broken. Android often ships without traceroute; the tool then says it is unavailable."
+      },
+      "zh": {
+        "name": "路由追踪",
+        "short": "系统追踪工具的逐跳响应。",
+        "checks": "调用系统的路由追踪，列出有回应的每一跳。",
+        "when": "想看回应是在路径的哪一段消失时。",
+        "note": "某一跳不回应，不等于线路断了。Android 系统常常没有 traceroute，这时工具会明确提示不可用。"
+      }
+    },
+    {
+      "id": "download", "group": "link", "arg": "URL", "options": ["seconds", "bytes"],
+      "en": {
+        "name": "Capped download",
+        "short": "Receives a limited amount of data and throws it away.",
+        "checks": "Downloads from the URL until a time or size cap is reached, and discards the body as it arrives.",
+        "when": "Pages open, but large files crawl or stall.",
+        "note": "The server must answer with a success status. Reaching the cap is normal and does not count as a failure."
+      },
+      "zh": {
+        "name": "限量下载",
+        "short": "限时限流量地接收一段数据，收到即丢。",
+        "checks": "从目标地址下载，直到达到时间或流量上限；正文边收边丢，不保存。",
+        "when": "网页能开，但大文件下载很慢或者中途卡住时。",
+        "note": "需要服务器返回成功状态。正常达到上限不算失败。"
+      }
+    }
+  ],
+  "options": {
+    "count": {"flag": "--count", "range": "1–20", "default": "5",
+              "en": "Number of attempts", "zh": "次数"},
+    "interval": {"flag": "--interval-ms", "range": "100–5000", "default": "1000",
+                 "en": "Pause between attempts, in milliseconds", "zh": "两次之间的间隔，毫秒"},
+    "seconds": {"flag": "--seconds", "range": "1–30", "default": "10",
+                "en": "Time limit for one attempt, in seconds", "zh": "单次时限，秒"},
+    "bytes": {"flag": "--max-bytes", "range": "1024–16777216", "default": "8388608",
+              "en": "Download cap in bytes (8 MiB by default; the window takes whole MiB)", "zh": "下载上限，字节（默认 8 MiB，界面里按整数 MiB 输入）"},
+    "hops": {"flag": "--max-hops", "range": "1–16", "default": "8",
+             "en": "Furthest hop to probe", "zh": "最大跳数"}
+  },
+  "symptoms": [
+    {"en": "A site will not open", "zh": "网站打不开", "tools": ["check", "explain"]},
+    {"en": "It opens, but slowly", "zh": "能打开，但是慢", "tools": ["phase", "download"]},
+    {"en": "It works, then drops", "zh": "时好时坏", "tools": ["stability"]},
+    {"en": "Traffic leaves through the wrong exit", "zh": "出口不对", "tools": ["explain", "dns"]},
+    {"en": "A certificate warning appears", "zh": "提示证书有问题", "tools": ["tls"]},
+    {"en": "Calls, games or QUIC fail", "zh": "通话、游戏或 QUIC 不通", "tools": ["udp"]},
+    {"en": "Trouble only on IPv6, or only on IPv4", "zh": "只有 IPv6 或只有 IPv4 出问题", "tools": ["family"]},
+    {"en": "Not sure the host answers at all", "zh": "不确定对方有没有回应", "tools": ["ping", "trace"]}
+  ]
+}

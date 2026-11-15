@@ -1,0 +1,109 @@
+<!-- title: 下载 Clash of Rust -->
+<!-- description: Clash of Rust 的 Windows、Debian/Ubuntu、macOS、Android 安装包，直接来自 GitHub Releases，附安装步骤和 SHA256 校验方法。 -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>选一个适合你设备的安装包</h1>
+    <p class="lead">所有文件都直接来自 GitHub Releases，里面已经带有 mihomo 内核和 Geo 数据。准备好订阅链接或本地配置，装完就能连接。</p>
+  </div>
+  <div class="banner scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/station-small.webp">
+      <img src="{{root}}assets/station.webp" width="2172" height="724" alt="像素画：乡间小站的站台上停着一辆堆满包裹的手推车，旁边是一节敞着门的货运车厢，蓝猫蹲在最上面的箱子上。">
+    </picture>
+  </div>
+</section>
+
+<div class="wrap doc" data-downloads>
+  <section>
+    <div class="release" id="preview">
+      <div class="switch js-only" role="group" aria-label="版本通道">
+        <button type="button" data-channel="stable" aria-pressed="true">正式版</button>
+        <button type="button" data-channel="preview" aria-pressed="false">预发布版</button>
+      </div>
+      <p class="release-meta" aria-live="polite"><b data-version>0.7.1</b><span data-channel-note>日常使用选这个。</span><a data-notes href="{{repo}}/releases/tag/v0.7.1" target="_blank" rel="noopener">更新内容</a><span data-fetch-state></span></p>
+    </div>
+    <noscript><p>浏览器没有启用 JavaScript，显示的是保存的正式版列表，可能已过期；最新版本请查看 <a href="{{repo}}/releases">GitHub Releases</a>。</p></noscript>
+
+    <div class="os-list">
+      <section class="os" id="windows" data-os="windows">
+        <div><h2>Windows</h2><p>x64 与 ARM64</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">运行安装程序，按提示完成。覆盖安装旧版本时，订阅和个人设置都会保留。</p>
+          <p class="how">如果 Windows Defender 告警，先<a href="#verify">核对 SHA256</a>，再看<a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">告警处理说明</a>。没有核对过的告警，不能直接当成误报。</p>
+        </div>
+      </section>
+
+      <section class="os" id="linux" data-os="linux">
+        <div><h2>Debian / Ubuntu</h2><p>Ubuntu 20.04 及以上</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">在保存文件的目录里运行 <code>sudo apt install ./安装包文件名.deb</code>。装完之后，终端里就有 <code>cor</code> 命令。</p>
+          <p class="how">不确定架构？运行 <code>dpkg --print-architecture</code> 就能看到。</p>
+        </div>
+      </section>
+
+      <section class="os" id="macos" data-os="macos">
+        <div><h2>macOS</h2><p>macOS 14 及以上</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">打开 DMG，把 Clash of Rust 拖进“应用程序”，再从那里启动。</p>
+          <p class="how">应用没有经过 Apple 公证，第一次打开会被系统拦下。按 <a href="https://support.apple.com/zh-cn/102445" target="_blank" rel="noopener">Apple 的说明</a>，在“隐私与安全性”里放行。</p>
+        </div>
+      </section>
+
+      <section class="os" id="android" data-os="android">
+        <div><h2>Android</h2><p>Android 8.0 及以上</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">多数手机和平板选 ARM64。安装时，系统会要求你允许浏览器或文件管理器安装应用；第一次连接时，允许 VPN 请求。</p>
+          <p class="how">可以在快捷设置里添加开关磁贴。给单个应用指定出口，需要 Android 10 及以上。</p>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section id="verify">
+    <h2>安装之前，先核对文件</h2>
+    <p>每个安装包旁边都有一个 <code>.sha256</code> 文件，里面是一串哈希。在本机算出下载文件的哈希，和它比较，两者一致再安装。</p>
+<pre class="term" aria-label="计算 SHA256 的命令"><span class="c"># Windows PowerShell</span>
+Get-FileHash .\安装包文件名.exe -Algorithm SHA256
+
+<span class="c"># Linux</span>
+sha256sum 安装包文件名.deb
+
+<span class="c"># macOS</span>
+shasum -a 256 安装包文件名.dmg</pre>
+    <p>应用内更新时，客户端也会先做同样的校验，再安装。</p>
+  </section>
+
+  <section id="next">
+    <h2>装好之后</h2>
+    <p>添加订阅，选好节点，选择模式，然后连接。<a href="guide.html#first">使用指南</a>里有五步的说明；用 <a href="guide.html#cli"><code>cor</code></a> 的话，是五条命令。</p>
+  </section>
+
+  <section id="questions">
+    <h2>常见问题</h2>
+    <div class="qa">
+      <details><summary>正式版和预发布版，选哪个？</summary><p>日常使用选正式版。预发布版先带上新功能，目前是网络工具箱和终端界面，验证范围比正式版小。试用之前请备份配置；桌面端可以在应用里切回正式版。</p></details>
+      <details><summary>有 iOS 版吗？</summary><p>没有。仓库里只有 iOS 的界面原型，不提供可以安装的包。</p></details>
+      <details><summary>其他 Linux 发行版能用吗？</summary><p>目前只发布 DEB 包，验证范围是 Debian 和 Ubuntu 20.04 及以上。其他发行版需要自己从源码构建，见仓库里的开发文档。</p></details>
+      <details><summary>没有桌面环境的 Linux 能用吗？</summary><p>能。DEB 包里带有 <code>cor</code>，它不需要显示器。运行 <code>cor start</code>，服务器上建议用 TUN。</p></details>
+      <details><summary>升级会丢设置吗？</summary><p>不会。升级保留订阅和个人设置。Windows 的卸载程序可以选择删除全部数据，这一项默认不勾选。</p></details>
+    </div>
+  </section>
+</div>
+
+<section class="ask">
+  <div class="wrap">
+    <img src="{{root}}assets/cat.png" alt="" width="150" height="150" loading="lazy">
+    <div>
+      <h2>装好了、能用了？点个 Star 就是道谢。</h2>
+      <p>它能让更多人找到这个项目，而你只需要点一下。</p>
+      <div class="actions">
+        <a class="btn" href="{{repo}}" target="_blank" rel="noopener">{{star}}去 GitHub 点 Star<span data-stars></span></a>
+        <a class="btn ghost" href="{{repo}}/issues" target="_blank" rel="noopener">反馈问题</a>
+      </div>
+    </div>
+  </div>
+</section>

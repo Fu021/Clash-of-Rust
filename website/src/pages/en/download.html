@@ -1,0 +1,109 @@
+<!-- title: Download Clash of Rust -->
+<!-- description: Installers for Windows, Debian/Ubuntu, macOS and Android from GitHub Releases, with install steps and SHA256 verification. -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>Pick the package for your machine</h1>
+    <p class="lead">Every file comes straight from GitHub Releases and already contains the mihomo core and Geo data. Bring a subscription link or a local configuration, and you can connect.</p>
+  </div>
+  <div class="banner scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/station-small.webp">
+      <img src="{{root}}assets/station.webp" width="2172" height="724" alt="Pixel art of a small country railway halt. A trolley stacked with parcels waits on the platform beside a goods wagon, and the blue cat sits on the top crate.">
+    </picture>
+  </div>
+</section>
+
+<div class="wrap doc" data-downloads>
+  <section>
+    <div class="release" id="preview">
+      <div class="switch js-only" role="group" aria-label="Release channel">
+        <button type="button" data-channel="stable" aria-pressed="true">Stable</button>
+        <button type="button" data-channel="preview" aria-pressed="false">Preview</button>
+      </div>
+      <p class="release-meta" aria-live="polite"><b data-version>0.7.1</b><span data-channel-note>For everyday use.</span><a data-notes href="{{repo}}/releases/tag/v0.7.1" target="_blank" rel="noopener">Release notes</a><span data-fetch-state></span></p>
+    </div>
+    <noscript><p>JavaScript is off. This saved stable list may be out of date; check <a href="{{repo}}/releases">GitHub Releases</a> for the latest version.</p></noscript>
+
+    <div class="os-list">
+      <section class="os" id="windows" data-os="windows">
+        <div><h2>Windows</h2><p>x64 and ARM64</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">Run the installer and follow the prompts. Upgrading over an older version keeps your subscriptions and settings.</p>
+          <p class="how">If Windows Defender raises an alert, <a href="#verify">check the SHA256</a> first, then read the <a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">alert notes</a>. An alert you cannot explain is not a false positive until it has been checked.</p>
+        </div>
+      </section>
+
+      <section class="os" id="linux" data-os="linux">
+        <div><h2>Debian / Ubuntu</h2><p>Ubuntu 20.04 or later</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">In the folder where you saved the file, run <code>sudo apt install ./the-file-name.deb</code>. The <code>cor</code> command is on your PATH afterwards.</p>
+          <p class="how">Not sure which architecture you have? <code>dpkg --print-architecture</code> prints it.</p>
+        </div>
+      </section>
+
+      <section class="os" id="macos" data-os="macos">
+        <div><h2>macOS</h2><p>macOS 14 or later</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">Open the DMG and drag Clash of Rust into Applications, then start it from there.</p>
+          <p class="how">The app is not notarized by Apple, so macOS stops it the first time. Allow it under Privacy &amp; Security as <a href="https://support.apple.com/en-us/102445" target="_blank" rel="noopener">Apple describes</a>.</p>
+        </div>
+      </section>
+
+      <section class="os" id="android" data-os="android">
+        <div><h2>Android</h2><p>Android 8.0 or later</p><span class="yours" data-yours></span></div>
+        <div>
+          <ul class="pkgs" data-pkgs></ul>
+          <p class="how">Most phones and tablets take the ARM64 package. Android will ask you to let your browser or file manager install apps. On the first connection, allow the VPN request.</p>
+          <p class="how">You can add a quick-settings tile for the switch. Giving individual apps their own exit needs Android 10 or later.</p>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section id="verify">
+    <h2>Check the file before you install it</h2>
+    <p>Each installer has a <code>.sha256</code> file beside it holding one hash. Compute the hash of what you downloaded and compare the two. Install only if they match.</p>
+<pre class="term" aria-label="Commands that compute a SHA256 hash"><span class="c"># Windows PowerShell</span>
+Get-FileHash .\the-file-name.exe -Algorithm SHA256
+
+<span class="c"># Linux</span>
+sha256sum the-file-name.deb
+
+<span class="c"># macOS</span>
+shasum -a 256 the-file-name.dmg</pre>
+    <p>The app does the same check on its own before it installs an update.</p>
+  </section>
+
+  <section id="next">
+    <h2>After installing</h2>
+    <p>Add a subscription, pick a node, choose a mode and connect. The <a href="guide.html#first">guide</a> walks through it in five steps, and the same thing takes five commands with <a href="guide.html#cli"><code>cor</code></a>.</p>
+  </section>
+
+  <section id="questions">
+    <h2>Questions people ask</h2>
+    <div class="qa">
+      <details><summary>Stable or preview?</summary><p>Stable is for everyday use. Preview carries newer features first, at the moment the network toolbox and the terminal interface, and has been through a narrower round of validation. Back up your configuration before you try it. The desktop app can switch back to stable from inside the app.</p></details>
+      <details><summary>Is there an iOS version?</summary><p>No. The repository has an interface prototype for iOS and nothing you can install.</p></details>
+      <details><summary>What about other Linux distributions?</summary><p>Only DEB packages are published, and they are validated on Debian and on Ubuntu 20.04 and later. On other distributions you would need to build from source; see the developer docs in the repository.</p></details>
+      <details><summary>Does the Linux package work without a desktop?</summary><p>Yes. The DEB includes <code>cor</code>, which needs no display. Run <code>cor start</code>, and use TUN on a server.</p></details>
+      <details><summary>Will an update lose my settings?</summary><p>No. Upgrades keep subscriptions and personal settings. The Windows uninstaller can delete all data if you ask it to; that option is off by default.</p></details>
+    </div>
+  </section>
+</div>
+
+<section class="ask">
+  <div class="wrap">
+    <img src="{{root}}assets/cat.png" alt="" width="150" height="150" loading="lazy">
+    <div>
+      <h2>Installed and working? A star says thanks.</h2>
+      <p>It helps other people find the project, and it costs you one click.</p>
+      <div class="actions">
+        <a class="btn" href="{{repo}}" target="_blank" rel="noopener">{{star}}Star on GitHub<span data-stars></span></a>
+        <a class="btn ghost" href="{{repo}}/issues" target="_blank" rel="noopener">Report a problem</a>
+      </div>
+    </div>
+  </div>
+</section>

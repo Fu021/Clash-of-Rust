@@ -72,16 +72,6 @@
         {"name": "mihomo-windows-arm64-v1.19.33.zip", "size": 20212418, "digest": "sha256:a2a26869a14634c49f3fbcecc593b498ed8591fbdd7616b24475b3d60b148da3", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-windows-arm64-v1.19.33.zip"}
       ]
     },
-    "geo": {
-      "tag_name": "latest",
-      "published_at": "2026-11-10T04:16:11Z",
-      "assets": [
-        {"id": 730067750, "name": "country.mmdb", "size": 7621999, "digest": "sha256:c0c6ea5661a3167abb24bbbaf629605aa3856c425384cbf2897c5a0f41027663", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/730067750"},
-        {"id": 730067782, "name": "geoip.dat", "size": 16475153, "digest": "sha256:90b78ab861c1cdc3f871f305f9ceedfb8d6d6329e3a40295e6773e057297384c", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/730067782"},
-        {"id": 730067716, "name": "GeoLite2-ASN.mmdb", "size": 9054248, "digest": "sha256:3f729dfdbca46d6bc83fe084e15e335cef702b46f9d9afb8feaede36180959f4", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/730067716"},
-        {"id": 730067843, "name": "geosite.dat", "size": 4356186, "digest": "sha256:6dc3c32192511451a8eb706e224b00197d748a2d0a05a7c6b750536098b5daf7", "browser_download_url": "https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/730067843"}
-      ]
-    },
     "nsis": {
       "version": "3.13",
       "url": "https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13-setup.exe/download",

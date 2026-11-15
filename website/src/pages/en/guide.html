@@ -1,0 +1,269 @@
+<!-- title: Guide: install, connect and use Clash of Rust -->
+<!-- description: A practical guide to Clash of Rust: first connection, subscriptions, nodes and modes, rules, Android per-app routing, access checks, Claude protection, the cor command line, updates and troubleshooting. -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>From the installer to your first connection</h1>
+    <p class="lead">A working guide to the parts you will use most. The app's own labels are in Chinese, so they appear here as written, with a translation beside them.</p>
+  </div>
+  <div class="banner scene">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{root}}assets/guide-small.webp">
+      <img src="{{root}}assets/guide.webp" width="2172" height="724" alt="Pixel art of the blue cat standing on a crate, studying a route map pinned to a wooden notice board beside the railway line.">
+    </picture>
+  </div>
+</section>
+
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="On this page">
+    <p class="label">On this page</p>
+    <a href="#first">First connection</a>
+    <a href="#subscriptions">Subscriptions</a>
+    <a href="#modes">Nodes and modes</a>
+    <a href="#rules">Rules</a>
+    <a href="#android">Android per-app routing</a>
+    <a href="#checks">Access checks</a>
+    <a href="#protection">Claude protection</a>
+    <a href="#cli">Command line</a>
+    <a href="#tui">Terminal interface</a>
+    <a href="#updates">Updates and start at login</a>
+    <a href="#trouble">When something goes wrong</a>
+  </nav>
+
+  <div>
+    <section id="first">
+      <h2>First connection</h2>
+      <p>Install the package for your system from the <a href="download.html">download page</a>. The installer already contains the mihomo core and Geo data, so the only thing you need to bring is a subscription link or a local configuration file.</p>
+      <ol class="steps">
+        <li>Open <b>订阅</b> (Subscriptions) and add the link from your provider, or import a YAML file.</li>
+        <li>Choose <b>使用</b> (Use) on that subscription. Until you do, the client runs on a built-in profile that sends everything direct.</li>
+        <li>Open <b>代理</b> (Proxies), test the nodes and pick one.</li>
+        <li>On <b>首页</b> (Home), choose a mode, <b>规则</b> (Rule), <b>全局</b> (Global) or <b>直连</b> (Direct), and how traffic is captured: <b>系统代理</b> (System proxy) or <b>TUN</b>.</li>
+        <li>Connect. The first time you use TUN, the system may ask for permission. On Android, allow the VPN request.</li>
+      </ol>
+      <p>Closing the window does not stop anything. The interface process exits, the tray and the core keep running, and the window opens again from the tray.</p>
+    </section>
+
+    <section id="subscriptions">
+      <h2>Subscriptions</h2>
+      <p>Clash of Rust reads <b>mihomo / Clash Meta YAML</b>. It does not convert other formats. If a link returns share links, a Base64 list, or a sing-box or Xray configuration, the client says the format is not compatible and leaves your current subscription alone. Ask your provider for the Mihomo or Clash Meta link.</p>
+      <ul class="dots">
+        <li><b>Remote subscriptions</b> refresh automatically every 360 minutes. Set the interval anywhere from 0 to 10,080 minutes in settings; 0 turns it off.</li>
+        <li><b>Local files</b> can be renamed and removed but are never refreshed automatically.</li>
+        <li>If a download or validation fails, the saved subscription and the running state stay as they were.</li>
+        <li>While Claude protection is on, both scheduled and manual updates wait.</li>
+      </ul>
+<pre class="term" aria-label="Subscription commands"><span class="p">$ </span>cor profile add home 'https://example.com/subscription'
+<span class="p">$ </span>cor profile list
+<span class="p">$ </span>cor profile update --all
+<span class="p">$ </span>cor config set subscription_update_interval_minutes 720</pre>
+    </section>
+
+    <section id="modes">
+      <h2>Nodes and modes</h2>
+      <p>Nodes appear as a grid or a compact list. Test them, filter by name, and select one inside any group that allows manual selection. The tray menu can switch nodes and show the current speed without opening the window.</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">Mode</th><th scope="col">What it does</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">规则 Rule</th><td>Each connection is matched against the rules, which decide whether it goes through a node, straight out, or nowhere.</td></tr>
+          <tr><th scope="row">全局 Global</th><td>Everything leaves through the node selected in the GLOBAL group.</td></tr>
+          <tr><th scope="row">直连 Direct</th><td>Everything goes straight out. Nothing is proxied.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">Capture</th><th scope="col">What it does</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">系统代理 System proxy</th><td>Sets the operating system's proxy. Programs that respect that setting go through the client.</td></tr>
+          <tr><th scope="row">TUN</th><td>Creates a virtual network device and captures traffic at the network layer, including programs that ignore the system proxy. Recommended on servers.</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:1.2rem">In rule mode the node shown on the home page is the current choice of the default rule. Another rule may send a particular connection elsewhere; the <b>连接</b> (Connections) page shows the rule and route each connection really used.</p>
+    </section>
+
+    <section id="rules">
+      <h2>Rules</h2>
+      <p>The rules that come with a subscription are read-only, though you can change their order. Your own rules can be added, edited, switched off, moved and removed. A change is saved only after mihomo accepts the resulting configuration, and the subscription's original YAML is never rewritten.</p>
+      <h3>Quick rules</h3>
+      <p>Five switches for common cases. They are off by default and only add what the subscription does not already have.</p>
+      <div class="table-scroll"><table class="plain">
+        <tbody>
+          <tr><th scope="row"><code>ads</code></th><td>Reject advertising domains</td></tr>
+          <tr><th scope="row"><code>private-domain</code></th><td>Send private and local domains direct</td></tr>
+          <tr><th scope="row"><code>private-ip</code></th><td>Send private IP ranges direct</td></tr>
+          <tr><th scope="row"><code>cn-domain</code></th><td>Send mainland China domains direct</td></tr>
+          <tr><th scope="row"><code>cn-ip</code></th><td>Send mainland China IP ranges direct</td></tr>
+        </tbody>
+      </table></div>
+<pre class="term" aria-label="Rule commands"><span class="p">$ </span>cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1
+<span class="p">$ </span>cor rule shortcut ads on
+<span class="p">$ </span>cor rule list --filter example
+<span class="p">$ </span>cor network explain example.com   <span class="c"># which rule did it match?</span></pre>
+    </section>
+
+    <section id="android">
+      <h2>Android per-app routing</h2>
+      <p>In settings, open <b>应用分流</b> (Per-app routing) to decide which apps enter the VPN.</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">Mode</th><th scope="col">Selected apps</th><th scope="col">Other apps</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">All apps</th><td>Enter the VPN</td><td>Enter the VPN</td></tr>
+          <tr><th scope="row">Only selected</th><td>Enter the VPN</td><td>Use the system network</td></tr>
+          <tr><th scope="row">Exclude selected</th><td>Use the system network</td><td>Enter the VPN</td></tr>
+        </tbody>
+      </table></div>
+      <ul class="dots" style="margin-top:1.2rem">
+        <li>Entering the VPN does not force an app through a proxy node. The current mode and rules still decide where its traffic goes.</li>
+        <li>On Android 10 and later you can also give an app its own exit: direct, a policy group or one node. Android 8 and 9 offer the three modes above only.</li>
+        <li>Save while connected and the client asks to rebuild the VPN so the change takes effect.</li>
+        <li>If Android's own "Block connections without VPN" switch is on, it can still block the apps you left outside.</li>
+      </ul>
+      <p class="fine" style="margin-top:1rem">Full behaviour: <a href="{{docs}}/android-application-routing.md" target="_blank" rel="noopener">android-application-routing.md</a> (in Chinese).</p>
+    </section>
+
+    <section id="checks">
+      <h2>Access checks</h2>
+      <p>Three pages under <b>工具</b> (Tools) answer three different questions.</p>
+      <div class="table-scroll"><table class="plain">
+        <tbody>
+          <tr><th scope="row">网络诊断<br>Network diagnostics</th><td>Why does this one site not connect? Eleven on-demand checks, described on the <a href="tools.html">network tools page</a>.</td></tr>
+          <tr><th scope="row">IP 检测<br>IP check</th><td>What does the outside world see? Your exit IP, and whether GitHub, AI services and streaming sites answer through the current node. Results are grouped by category and can be filtered, re-run and exported.</td></tr>
+          <tr><th scope="row">A÷检测<br>A÷ check</th><td>Would Claude see anything unusual? Gathers clues about region, DNS, WebRTC and project configuration into one report.</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:1.2rem">A finished check means the observation was made, not that the service is available. Read the report itself: a failed item is recorded as failed and is never counted as reachable.</p>
+<pre class="term" aria-label="Check commands"><span class="p">$ </span>cor ip-check list
+<span class="p">$ </span>cor ip-check --category AI -o ai-report.json
+<span class="p">$ </span>cor claude check</pre>
+    </section>
+
+    <section id="protection">
+      <h2>Claude protection</h2>
+      <p>Protection is for the moments when you need one fixed exit and do not want a stray click or a stray connection to change it. It is off by default and lives on the A÷ check page.</p>
+      <h3>When you switch it on</h3>
+      <ul class="dots">
+        <li>The current node is pinned, and priority rules route Claude-related traffic through it.</li>
+        <li>TUN, strict routing, IPv6 and UDP handling and DNS takeover are enabled, with DNS sent over encrypted DoH through the same node.</li>
+        <li>Connections that would go around the pinned node are blocked as they happen. Existing connections in the core are closed first.</li>
+        <li>Changing node, mode or network settings is locked. Themes, accent colour and read-only pages still work.</li>
+        <li>Subscription updates pause. On Android, per-app exits pause and the VPN covers all apps.</li>
+      </ul>
+      <h3>When you switch it off</h3>
+      <p>Your original mode, capture method and node selection return. Your subscription, rules and DNS, IPv6 and UDP preferences were never rewritten, only overridden.</p>
+      <p>The confirm button waits three seconds before it can be pressed. In global mode, if the selected chain ends in a direct exit, protection refuses to start.</p>
+<pre class="term" aria-label="Protection commands"><span class="p">$ </span>cor claude protect on --yes
+<span class="p">$ </span>cor claude watch          <span class="c"># observe real routes and blocked requests</span>
+<span class="p">$ </span>cor claude protect off --yes</pre>
+      <p class="fine" style="margin-top:1rem">Detection offers clues; it cannot promise that a third-party service will accept you. Scope and limits: <a href="{{docs}}/claude-protection.md" target="_blank" rel="noopener">claude-protection.md</a> (in Chinese).</p>
+    </section>
+
+    <section id="cli">
+      <h2>Command line</h2>
+      <p><code>cor</code> is included in the desktop installers for Windows, Linux and macOS. It needs no display and shares the backend and core with the window: if the window is running, <code>cor</code> talks to it; if not, commands that need a backend start one without a window.</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">System</th><th scope="col">Where <code>cor</code> is</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Debian / Ubuntu</th><td><code>/usr/bin/cor</code>, on your PATH after installing the DEB</td></tr>
+          <tr><th scope="row">Windows</th><td><code>cor.exe</code> in the install folder, for example <code>C:\Program Files\Clash of Rust\cor.exe</code>. Add the folder to PATH if you use it often.</td></tr>
+          <tr><th scope="row">macOS</th><td><code>/Applications/Clash of Rust.app/Contents/MacOS/cor</code>. Link it into a folder on your PATH if you like.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>A first session</h3>
+<pre class="term" aria-label="A first session with cor"><span class="p">$ </span>cor profile add home 'https://example.com/subscription'
+<span class="p">$ </span>cor profile use home
+<span class="p">$ </span>cor start              <span class="c"># background; survives closing the terminal</span>
+<span class="p">$ </span>cor node select        <span class="c"># type to filter, pick by number, q to cancel</span>
+<span class="p">$ </span>cor proxy tun
+<span class="p">$ </span>cor status
+<span class="p">$ </span>cor stop               <span class="c"># stop the core and restore the network</span></pre>
+      <p>Use <code>cor start</code> for daily use. <code>cor run</code> stays in the foreground and stops when the terminal closes; it is meant for debugging.</p>
+      <h3>Commands by task</h3>
+      <div class="table-scroll">
+        <table class="plain">
+          <tbody>
+            <tr><th scope="row">Run</th><td><code>start</code> <code>stop</code> <code>restart</code> <code>status</code> <code>version</code></td><td>Start, stop and look at the backend. <code>status --watch</code> keeps refreshing.</td></tr>
+            <tr><th scope="row">Route</th><td><code>mode</code> <code>proxy</code> <code>env</code></td><td><code>mode rule|global|direct</code>, <code>proxy system|tun|off</code>, and proxy variables for your shell.</td></tr>
+            <tr><th scope="row">Subscriptions</th><td><code>profile</code></td><td><code>add</code>, <code>import</code>, <code>list</code>, <code>use</code>, <code>update</code>, <code>edit</code>, <code>remove</code>, <code>export</code></td></tr>
+            <tr><th scope="row">Nodes</th><td><code>node</code></td><td><code>list</code>, <code>select</code>, <code>test</code> for one node, one group or everything</td></tr>
+            <tr><th scope="row">Rules</th><td><code>rule</code></td><td><code>list</code>, <code>add</code>, <code>edit</code>, <code>move</code>, <code>enable</code>, <code>remove</code>, <code>shortcut</code></td></tr>
+            <tr><th scope="row">Connections</th><td><code>connection</code></td><td><code>list</code> and <code>show</code>: the rule and route of each live connection</td></tr>
+            <tr><th scope="row">Diagnose</th><td><code>network</code> <code>dns</code> <code>ip-check</code> <code>diagnose</code></td><td>The <a href="tools.html">eleven checks</a>, access checks, and a full report for bug reports</td></tr>
+            <tr><th scope="row">Settings</th><td><code>config</code></td><td><code>get</code>, <code>set</code>, <code>check</code>, <code>effective</code></td></tr>
+            <tr><th scope="row">Maintain</th><td><code>update</code> <code>geo</code> <code>autostart</code> <code>service</code> <code>completion</code></td><td>Updates, Geo data, start at login and shell completion</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:1.2rem"><code>cor help</code> lists the everyday commands, <code>cor help all</code> lists everything, and every command accepts <code>--help</code>.</p>
+      <h3>For scripts</h3>
+      <ul class="dots">
+        <li><code>--json</code> prints one machine-readable result; <code>--jsonl</code> prints one line per sample for status, logs and connections. Each line is wrapped as <code>{"schema":1,"command":"…","data":…}</code>.</li>
+        <li>Results go to stdout. Progress, permission prompts and errors go to stderr.</li>
+        <li>Secrets are hidden unless you pass <code>--show-secrets</code>. Destructive commands need <code>--yes</code>.</li>
+        <li><code>--timeout N</code> sets the wait for one backend request in seconds: 300 by default, 3,600 at most.</li>
+      </ul>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">Exit code</th><th scope="col">Meaning</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">0</th><td>Success, or the pipe downstream closed</td></tr>
+          <tr><th scope="row">1</th><td>The operation, a validation or a permission failed</td></tr>
+          <tr><th scope="row">2</th><td>The command or its arguments are malformed</td></tr>
+          <tr><th scope="row">3</th><td>The backend failed to start or cannot be reached</td></tr>
+          <tr><th scope="row">124</th><td>The request timed out</td></tr>
+          <tr><th scope="row">130</th><td>The query was interrupted</td></tr>
+        </tbody>
+      </table></div>
+      <p class="fine" style="margin-top:1rem">Every command and option: <a href="{{docs}}/cli.md" target="_blank" rel="noopener">cli.md</a> (in Chinese).</p>
+    </section>
+
+    <section id="tui">
+      <h2>Terminal interface</h2>
+      <p><code>cor ui</code> opens a keyboard-driven interface with four pages: home, nodes, connections and network checks. It is a prototype. Editing subscriptions, rules, updates and most settings still belong to the commands above. <code>cor ui --demo</code> shows it with made-up data and touches nothing.</p>
+      <div class="table-scroll"><table class="plain">
+        <thead><tr><th scope="col">Key</th><th scope="col">Action</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> <kbd>Tab</kbd></th><td>Switch between home, nodes, connections and network</td></tr>
+          <tr><th scope="row"><kbd>↑</kbd> <kbd>↓</kbd></th><td>Move through a list</td></tr>
+          <tr><th scope="row"><kbd>Enter</kbd></th><td>Open a group; choose a member, then confirm to switch</td></tr>
+          <tr><th scope="row"><kbd>/</kbd></th><td>Search, or type a target on the network page</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd></th><td>Go back, clear the search or cancel</td></tr>
+          <tr><th scope="row"><kbd>r</kbd></th><td>Read again now</td></tr>
+          <tr><th scope="row"><kbd>q</kbd> <kbd>Ctrl+C</kbd></th><td>Leave. The backend and the proxy stay as they are.</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:1.2rem">It needs a real terminal of at least 60 columns by 18 rows. Opening, browsing and leaving never start a backend or change the proxy; if nothing is running, it asks you to run <code>cor start</code> first.</p>
+    </section>
+
+    <section id="updates">
+      <h2>Updates and start at login</h2>
+      <p>The app checks for updates on the channel you chose, stable by default, and shows download progress with a way to cancel. An installer is verified against its SHA256 before it runs. Upgrading keeps your subscriptions and settings. On Android the system confirms the install.</p>
+<pre class="term" aria-label="Update commands"><span class="p">$ </span>cor update check
+<span class="p">$ </span>cor update download -o update.deb   <span class="c"># download and verify, do not install</span>
+<span class="p">$ </span>cor update install --yes
+<span class="p">$ </span>cor geo update                      <span class="c"># refresh Geo data</span></pre>
+      <h3>Start at login</h3>
+      <p>Choose one of the two, not both.</p>
+      <ul class="dots">
+        <li><b>Desktop app:</b> turn on 后台自启动 (start in background) in settings, or run <code>cor autostart on</code>. After you sign in, the backend and your saved network mode come back; the window stays closed until you open it.</li>
+        <li><b>Command line only:</b> <code>cor service install --yes</code> registers the backend for your user account. It is a per-user login item, not a system service that runs before sign-in.</li>
+      </ul>
+    </section>
+
+    <section id="trouble">
+      <h2>When something goes wrong</h2>
+      <div class="table-scroll"><table class="plain">
+        <tbody>
+          <tr><th scope="row">"Subscription format not compatible"</th><td>The link returned something other than mihomo YAML. Get the Mihomo or Clash Meta link from your provider.</td></tr>
+          <tr><th scope="row">One site will not open</th><td>Run the <a href="tools.html#check">website check</a>, then <a href="tools.html#explain">rule and exit</a>.</td></tr>
+          <tr><th scope="row">Windows Defender raises an alert</th><td>Compare the file with its <a href="download.html#verify">SHA256</a> first, then read the <a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">alert notes</a>. Do not wave through an alert you cannot explain.</td></tr>
+          <tr><th scope="row">macOS will not open the app</th><td>The DMG is not notarized by Apple. Follow <a href="https://support.apple.com/en-us/102445" target="_blank" rel="noopener">Apple's steps</a> to allow it in Privacy &amp; Security.</td></tr>
+          <tr><th scope="row"><code>cor</code> says the backend is not running</th><td>Run <code>cor start</code>. Read-only commands such as <code>status</code> and <code>node list</code> never start it for you.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Send a useful report</h3>
+      <p>The window has an 导出诊断 (Export diagnostics) button next to errors and results. From a terminal:</p>
+<pre class="term" aria-label="Diagnostic commands"><span class="p">$ </span>cor diagnose --output cor-diagnose.json
+<span class="p">$ </span>cor diagnose --offline -o cor-offline.json   <span class="c"># collect without touching the network</span></pre>
+      <p>Reports are never uploaded for you. Subscription credentials and the controller secret are left out, but logs can contain domains and IP addresses, so read a report before you attach it to an <a href="{{repo}}/issues" target="_blank" rel="noopener">issue</a>.</p>
+      <h3>Before you uninstall</h3>
+      <p>If you set up the command-line login item with a custom data folder, run <code>cor stop</code> and <code>cor service remove --yes</code> first. The Windows uninstaller offers to delete all configuration and data; that box is unticked by default.</p>
+    </section>
+  </div>
+</div>

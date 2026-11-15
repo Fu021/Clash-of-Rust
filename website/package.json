@@ -1,0 +1,10 @@
+{
+  "name": "clash-of-rust-website-checks",
+  "private": true,
+  "scripts": {
+    "test:browser": "node browser_check.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.0"
+  }
+}

@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import zipfile
@@ -23,6 +24,8 @@ FILES = ('Cargo.lock', 'apps/android/core/go.mod', 'apps/android/core/go.sum',
 SNAPSHOT = ROOT / 'target/dependency-snapshot'
 GEO = {'geoip.dat': 'GeoIP.dat', 'geosite.dat': 'GeoSite.dat',
        'country.mmdb': 'Country.mmdb', 'GeoLite2-ASN.mmdb': 'ASN.mmdb'}
+GEO_RELEASE = 'https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/tags/latest'
+GEO_ASSET = 'https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/assets/'
 
 
 def approved():
@@ -127,14 +130,49 @@ def geo_assets(upstream):
     release = upstream.get('geo')
     if release is None:
         return {}
-    assets = {asset['name']: asset for asset in release['assets'] if asset['name'] in GEO}
-    if set(assets) != set(GEO):
+    selected = [asset for asset in release['assets'] if asset['name'] in GEO]
+    assets = {asset['name']: asset for asset in selected}
+    if set(assets) != set(GEO) or len(selected) != len(GEO):
         raise ValueError('Dependency snapshot Geo resources are incomplete')
     for asset in assets.values():
         if (not re.fullmatch(r'sha256:[0-9a-f]{64}', asset.get('digest', ''))
                 or type(asset.get('size')) is not int or asset['size'] <= 0):
             raise ValueError('Dependency snapshot Geo identity is invalid')
     return assets
+
+
+def latest_geo_release(proxy=''):
+    release = read_json(GEO_RELEASE, proxy)
+    if (release.get('tag_name') != 'latest' or release.get('draft') is not False
+            or release.get('prerelease') is not False or not release.get('published_at')):
+        raise ValueError('Latest Geo release identity is invalid')
+    selected = []
+    for asset in release.get('assets', []):
+        if asset.get('name') not in GEO:
+            continue
+        identifier = asset.get('id')
+        if (type(identifier) is not int or identifier <= 0 or asset.get('state') != 'uploaded'
+                or asset.get('url') != GEO_ASSET + str(identifier)):
+            raise ValueError('Latest Geo asset identity is invalid')
+        selected.append({key: asset[key] for key in ('id', 'name', 'size', 'digest')}
+                        | {'browser_download_url': asset['url']})
+    result = {'tag_name': release['tag_name'], 'published_at': release['published_at'],
+              'assets': selected, 'resolution': 'latest'}
+    geo_assets({'geo': result})
+    return result
+
+
+def resolve_latest_geo(directory):
+    for attempt in range(3):
+        try:
+            release = latest_geo_release()
+            resources = freeze_geo(directory, {'geo': release})
+            return release, resources
+        except urllib.error.HTTPError as error:
+            if error.code != 404 or attempt == 2:
+                raise
+            print('Geo release changed during download; resolving latest again.', flush=True)
+            time.sleep(attempt + 1)
 
 
 def freeze_geo(directory, upstream):
@@ -212,12 +250,17 @@ def prepare_gradle(directory):
 
 
 def resource_release(name, cached, proxy='', version=None):
-    frozen = component(name) or approved()['upstream'].get(name)
+    frozen = component(name)
+    if frozen and (version is None or frozen['tag_name'] == version):
+        return frozen
+    frozen = approved()['upstream'].get(name)
     if frozen and (version is None or frozen['tag_name'] == version):
         return frozen
     repo = 'MetaCubeX/' + ('mihomo' if name == 'mihomo' else 'meta-rules-dat')
     endpoint = 'tags/' + version if version else 'latest'
     try:
+        if name == 'geo' and (version is None or version == 'latest'):
+            return latest_geo_release(proxy)
         return read_json('https://api.github.com/repos/' + repo + '/releases/' + endpoint, proxy)
     except (OSError, ValueError, http.client.HTTPException) as error:
         value = json.loads(cached.read_text()) if cached.is_file() else {}
@@ -261,6 +304,7 @@ def resolve(directory):
     baseline = {path: hashlib.sha256(original(path)).hexdigest() for path in FILES}
     upstream = {name: {**value, 'resolution': 'approved'}
                 for name, value in approved()['upstream'].items()}
+    upstream.pop('geo', None)
     files = {}
     for relative in FILES:
         if sha256(ROOT / relative) != baseline[relative]:
@@ -273,13 +317,14 @@ def resolve(directory):
     go_modules = [list(match) for match in re.findall(
         r'(?m)^(?:require\s+)?\s*([a-zA-Z0-9.-]+\.[a-z]+/\S+)\s+(v\S+)',
         (ROOT / 'apps/android/core/go.mod').read_text())]
+    upstream['geo'], resources = resolve_latest_geo(directory)
     value = {'schema': 1, 'commit': current_commit(), 'baseline': baseline, 'constraints': constraints(), 'files': files,
              'resolved_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-             'upstream': upstream, 'resources': freeze_geo(directory, upstream), 'warnings': [],
+             'upstream': upstream, 'resources': resources, 'warnings': [],
              'rust_packages': [{key: package[key] for key in ('name', 'version', 'source', 'checksum') if key in package}
                                for package in packages],
              'go_modules': go_modules,
-             'policy': 'Repository lockfiles and approved build versions only; apply the maintainer loop update policy and validate committed changes.'}
+             'policy': 'Repository lockfiles and approved build versions; latest Geo is verified once and reused for this run.'}
     if 'linux' in upstream:
         from prepared_vm_environment import freeze
         from prepared_vm import ARCHITECTURES
