@@ -123,6 +123,7 @@ fn matches_rule(kind: &str, payload: &str, host: &str, port: u16) -> Option<bool
     match kind {
         "MATCH" => Some(true),
         "DOMAIN" | "DOMAIN-SUFFIX" | "DOMAIN-KEYWORD" if literal.is_some() => Some(false),
+        "DOMAIN" | "DOMAIN-SUFFIX" | "DOMAIN-KEYWORD" if !payload.is_ascii() => None,
         "DOMAIN" => Some(domain == pattern),
         "DOMAIN-SUFFIX" => Some(
             domain == pattern

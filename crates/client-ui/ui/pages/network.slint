@@ -3,6 +3,7 @@ import { UiData, UiActions, Intent } from "../state.slint";
 import { Theme } from "../theme/palette.slint";
 import { PageScroll, ContentPanel, ActionButton, Field, Paragraph, Caption, Divider } from "../components/controls.slint";
 import { NetworkTools, NetworkToolMenu, NetworkToolHeading, NetworkToolOptions } from "../components/network-tools.slint";
+import { GeometryTarget } from "../components/geometry.slint";
 
 export component NetworkPage inherits PageSurface {
     HorizontalLayout {
@@ -15,7 +16,8 @@ export component NetworkPage inherits PageSurface {
                 chosen(index) => { UiActions.dispatch(Intent.network-tool, "" + index, ""); }
             }
         }
-        PageScroll {
+        detail := PageScroll {
+        width: max(0px, root.width - 156px * max(1, Theme.text-scale) - 16px);
         content-key: "" + UiData.network-tool;
         content-y <=> UiData.scroll-network;
         VerticalLayout {
@@ -55,5 +57,9 @@ export component NetworkPage inherits PageSurface {
             }
         }
         }
+    }
+    GeometryTarget {
+        key: "network-detail-viewport";
+        bounds: [detail.absolute-position.x, detail.absolute-position.y, detail.width, detail.height];
     }
 }

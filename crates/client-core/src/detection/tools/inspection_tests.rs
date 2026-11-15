@@ -43,6 +43,7 @@ fn static_rules_stop_at_unknown_conditions_and_respect_modes_and_boundaries() {
         "GEOIP,CN,DIRECT",
         "PROCESS-NAME,app,DIRECT",
         "IP-CIDR,192.0.2.0/24,DIRECT",
+        "DOMAIN-SUFFIX,例子.测试,DIRECT",
     ] {
         let entries = rule_preview::preview(
             &format!("rules: ['{rule}', 'MATCH,Proxy']"),

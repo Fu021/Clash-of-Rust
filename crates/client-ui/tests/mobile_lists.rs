@@ -39,6 +39,7 @@ slint::slint! {
     export { ReportItem } from "../ui/state.slint";
     export { MobileActions, MobileIntent } from "../ui/mobile/shared/state.slint";
     import { SettingsPage, SettingsNavigation } from "../ui/pages/settings.slint";
+    import { NetworkPage } from "../ui/pages/network.slint";
     import { UiData, ProfileItem, ConnectionItem, ReportItem } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
     export { UiGeometry } from "../ui/components/geometry.slint";
@@ -65,6 +66,14 @@ slint::slint! {
         in-out property <bool> busy <=> MobileData.probe-busy;
         in-out property <[string]> results <=> MobileData.probe-results;
         MobileNetwork { width: parent.width; height: parent.height; }
+    }
+
+    export component DesktopNetworkToolboxProbe inherits Window {
+        preferred-width: 950px; preferred-height: 700px;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <int> tool <=> UiData.network-tool;
+        in-out property <[string]> results <=> UiData.network-results;
+        NetworkPage { width: parent.width; height: parent.height; }
     }
 
     export component CountdownProbe inherits Window {
@@ -640,6 +649,40 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
             events.borrow().last().unwrap().0,
             MobileIntent::ExportDiagnostics
         );
+    }
+    probe.hide().unwrap();
+    drop(probe);
+    let desktop = DesktopNetworkToolboxProbe::new().unwrap();
+    let observed = targets.clone();
+    desktop
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    desktop.global::<UiGeometry>().set_enabled(true);
+    desktop.set_results(Rc::new(slint::VecModel::from(vec!["结果 · 示例".into()])).into());
+    desktop.show().unwrap();
+    for (width, height, scale) in [(800, 450, 1.3), (950, 700, 1.), (1280, 800, 1.)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        desktop.set_text_scale(scale);
+        let mut baseline = None;
+        for tool in [0, 14, 15, 16, 17] {
+            desktop.set_tool(tool);
+            advance(&clock, Duration::from_millis(300));
+            frame(&adapter, width as usize, height as usize);
+            targets.borrow_mut().clear();
+            let geometry = desktop.global::<UiGeometry>();
+            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+            frame(&adapter, width as usize, height as usize);
+            let bounds = targets.borrow();
+            let viewport = &bounds["network-detail-viewport"];
+            let expected_width = *baseline.get_or_insert(viewport[2]);
+            assert!((viewport[2] - expected_width).abs() < 2., "{viewport:?}");
+            assert!(viewport[2] > width as f32 / 2., "{viewport:?}");
+            assert!((viewport[0] + viewport[2] - width as f32).abs() < 2.);
+        }
     }
 }
 
