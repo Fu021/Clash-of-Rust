@@ -2,6 +2,7 @@
 /bin/
 /bundle/
 /dist/
+/website/dist/
 /ci-build/
 /dependency-snapshot/
 /tools/
