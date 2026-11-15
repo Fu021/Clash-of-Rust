@@ -18,6 +18,8 @@ pub(super) struct Recovery {
     executable: PathBuf,
     resources: PathBuf,
     running: bool,
+    #[serde(default)]
+    start_after_install: bool,
     settings_sha256: String,
     #[serde(default)]
     user_service: Option<UserService>,
@@ -46,6 +48,7 @@ fn session_lock(data_dir: &Path) -> Result<fs::File> {
 pub(crate) fn prepare_terminal_install(
     download: Arc<Downloaded>,
     engine: &Engine,
+    start_after_install: bool,
 ) -> Result<PathBuf> {
     let _lock = session_lock(&engine.store.root)?;
     anyhow::ensure!(
@@ -73,6 +76,7 @@ pub(crate) fn prepare_terminal_install(
         executable,
         resources: engine.resource_directory().to_owned(),
         running: engine.running(),
+        start_after_install,
         settings_sha256: settings_sha256(engine)?,
         user_service,
     });
@@ -289,8 +293,14 @@ async fn stop_owner(plan: &Plan, directory: &Path) -> Result<()> {
     Ok(())
 }
 
-fn restore_owner(plan: &Plan) -> Result<()> {
-    let recovery = plan.terminal.as_ref().context("缺少后台恢复信息")?;
+fn recovery_for(plan: &Plan, installed: bool) -> Result<Recovery> {
+    let mut recovery = plan.terminal.clone().context("缺少后台恢复信息")?;
+    recovery.running |= installed && recovery.start_after_install;
+    Ok(recovery)
+}
+
+fn restore_owner(plan: &Plan, installed: bool) -> Result<()> {
+    let recovery = &recovery_for(plan, installed)?;
     let data_dir = plan.data_dir.as_ref().context("缺少安装数据目录")?;
     let store = Store::at(data_dir.clone())?;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -424,19 +434,19 @@ fn check_interrupted() -> Result<()> {
 
 fn transaction(
     version: &str,
-    was_running: bool,
+    starts_core: bool,
     authorize: impl FnOnce() -> Result<()>,
     commit: impl FnOnce() -> Result<()>,
     install: impl FnOnce() -> Result<()>,
     committed: impl FnOnce() -> bool,
-    recover: impl FnOnce() -> Result<()>,
+    recover: impl FnOnce(bool) -> Result<()>,
 ) -> Outcome {
     let result = authorize().and_then(|()| commit()).and_then(|()| install());
     match result {
-        Ok(()) => match recover() {
+        Ok(()) => match recover(true) {
             Ok(()) => Outcome {
-                message: if was_running {
-                    format!("已更新至 {version}；已恢复后台和内核")
+                message: if starts_core {
+                    format!("已更新至 {version}；后台和内核已启动")
                 } else {
                     format!("已更新至 {version}；后台已恢复，内核保持关闭")
                 },
@@ -450,7 +460,7 @@ fn transaction(
             },
         },
         Err(error) => Outcome {
-            message: failure_message(&error, committed().then(recover)),
+            message: failure_message(&error, committed().then(|| recover(false))),
             error: true,
         },
     }
@@ -477,7 +487,7 @@ pub(super) fn helper(directory: &Path) {
         &plan.version,
         plan.terminal
             .as_ref()
-            .is_some_and(|recovery| recovery.running),
+            .is_some_and(|recovery| recovery.running || recovery.start_after_install),
         || {
             verify(&plan, directory)?;
             authorize(interactive)?;
@@ -501,7 +511,7 @@ pub(super) fn helper(directory: &Path) {
             install_package(&plan, interactive)
         },
         || directory.join("commit").exists(),
-        || restore_owner(&plan),
+        |installed| restore_owner(&plan, installed),
     );
     let saved = record_installation(
         &plan,
@@ -542,6 +552,7 @@ mod tests {
                 executable: "/opt/clash-of-rust/cor".into(),
                 resources: "/opt/clash-of-rust/resources".into(),
                 running: true,
+                start_after_install: false,
                 settings_sha256: "0".repeat(64),
                 user_service: None,
             }),
@@ -603,7 +614,7 @@ mod tests {
             || panic!("must not stop the owner"),
             || panic!("must not install changed bytes"),
             || false,
-            || panic!("the owner must remain running"),
+            |_| panic!("the owner must remain running"),
         );
         assert!(outcome.error);
         assert!(outcome.message.contains("安装包校验失败"));
@@ -618,7 +629,7 @@ mod tests {
             || panic!("must not stop the owner"),
             || panic!("must not install"),
             || false,
-            || panic!("must not start a second owner"),
+            |_| panic!("must not start a second owner"),
         );
         assert!(outcome.error);
         assert!(outcome.message.contains("authorization denied"));
@@ -647,7 +658,8 @@ mod tests {
                     bail!("disk full")
                 },
                 || committed.get(),
-                || {
+                |installed| {
+                    assert!(!installed);
                     events.borrow_mut().push("recover");
                     if recovery_fails {
                         bail!("core start failed");
@@ -680,7 +692,8 @@ mod tests {
                 || bail!("commit failed"),
                 || panic!("must not install after an unacknowledged shutdown"),
                 || stopped,
-                || {
+                |installed| {
+                    assert!(!installed);
                     recovered.set(true);
                     Ok(())
                 },
@@ -707,7 +720,8 @@ mod tests {
                     Ok(())
                 },
                 || panic!("successful installation has already committed"),
-                || {
+                |installed| {
+                    assert!(installed);
                     events.borrow_mut().push("recover");
                     Ok(())
                 },
@@ -728,7 +742,7 @@ mod tests {
             || Ok(()),
             || Ok(()),
             || panic!("successful installation has already committed"),
-            || bail!("service disabled during authorization"),
+            |_| bail!("service disabled during authorization"),
         );
         assert!(outcome.error);
         assert!(outcome.message.contains("已安装 0.6.7"));
@@ -747,6 +761,35 @@ mod tests {
         }))
         .unwrap();
         assert!(recovery.user_service.is_none());
+        assert!(!recovery.start_after_install);
+    }
+
+    #[test]
+    fn only_successful_explicit_updates_can_start_a_previously_stopped_core() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for running in [false, true] {
+            for start_after_install in [false, true] {
+                for installed in [false, true] {
+                    let mut plan = plan(data.path(), directory.path());
+                    let original = plan.terminal.as_mut().unwrap();
+                    original.running = running;
+                    original.start_after_install = start_after_install;
+                    let recovered = recovery_for(&plan, installed).unwrap();
+                    assert_eq!(
+                        recovered.running,
+                        running || installed && start_after_install
+                    );
+                    assert_eq!(plan.terminal.as_ref().unwrap().running, running);
+                    assert!(recovered_core_ready(recovered.running, &recovered).unwrap());
+                    if recovered.running {
+                        assert!(!recovered_core_ready(false, &recovered).unwrap());
+                    } else {
+                        assert!(recovered_core_ready(true, &recovered).is_err());
+                    }
+                }
+            }
+        }
     }
 
     #[test]

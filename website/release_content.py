@@ -9,12 +9,17 @@ SUFFIXES = ('windows-x64-setup.exe', 'windows-arm64-setup.exe', 'linux-amd64.deb
 
 def validate(data):
     date.fromisoformat(data['checked'])
+    series = data.get('series', '')
+    if not re.fullmatch(r'\d+\.\d+', series):
+        raise ValueError('Expected a major.minor release series')
     seen = set()
     for release in data['releases']:
         version = release['version']
         if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version) or version in seen:
             raise ValueError('Invalid or duplicate version: ' + version)
         seen.add(version)
+        if not version.startswith(series + '.'):
+            raise ValueError('Version outside the current release series: ' + version)
         if release['channel'] not in ('stable', 'preview') or (('-' in version) != (release['channel'] == 'preview')):
             raise ValueError('Version/channel mismatch: ' + version)
         date.fromisoformat(release['date'])
@@ -22,6 +27,11 @@ def validate(data):
             copy = release[lang]
             if not copy['title'].strip() or not copy['highlights'] or not all(isinstance(x,str) and x.strip() for x in copy['highlights']):
                 raise ValueError('Missing translated highlights: ' + version)
+        if len(release['en']['highlights']) != len(release['zh']['highlights']):
+            raise ValueError('Translated release highlights are out of sync: ' + version)
+        for field in ('summary', 'known'):
+            if bool(release['en'].get(field)) != bool(release['zh'].get(field)):
+                raise ValueError('Missing translated release field: ' + field)
     for channel in ('stable','preview'):
         snapshot = data['downloads'][channel]
         release = next((r for r in data['releases'] if 'v'+r['version'] == snapshot['tag'] and r['channel'] == channel), None)
@@ -54,4 +64,5 @@ def render(data, lang, repo, compact=False):
     content = '<div class="version-grid">'+''.join(parts)+'</div>'
     if compact:
         return '<section class="part versions"><div class="wrap"><div class="version-heading"><h2>'+('一路更新' if zh else 'Along the way')+'</h2><a href="releases.html">'+('查看版本记录 →' if zh else 'All version notes →')+'</a></div>'+content+'</div></section>'
-    return '<section class="page-head"><div class="wrap"><h1>'+('每一步，都有新进展。' if zh else 'A record of what’s changed.')+'</h1><p class="lead">'+('正式版，安心日用；预发布版，先试新功能。' if zh else 'Stable for everyday use. Preview to try what’s next.')+'</p></div></section><section class="wrap doc versions"><p>'+('以下为已整理的版本记录，完整历史见 ' if zh else 'Selected release notes. For the complete history, visit ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>.</p>'+content+'</section>'
+    series = escape(data['series'])
+    return '<section class="page-head"><div class="wrap"><h1>'+('版本记录' if zh else 'Release notes')+'</h1><p class="lead">'+(f'{series}.x 的主要更新。' if zh else f'Highlights from {series}.x.')+'</p></div></section><section class="wrap doc versions"><p>'+('完整历史见 ' if zh else 'Full history: ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>'+('。' if zh else '.')+'</p>'+content+'</section>'

@@ -1,0 +1,72 @@
+{
+  "home": {
+    "file": "app-home.png",
+    "width": 1200,
+    "height": 800,
+    "platform": "desktop",
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "theme": "light",
+    "source": "production-slint-preview"
+  },
+  "nodes": {
+    "file": "app-nodes.png",
+    "width": 1200,
+    "height": 800,
+    "platform": "desktop",
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "theme": "light",
+    "source": "production-slint-preview"
+  },
+  "subscriptions": {
+    "file": "app-subscriptions.png",
+    "width": 1200,
+    "height": 800,
+    "platform": "desktop",
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "theme": "light",
+    "source": "production-slint-preview"
+  },
+  "rules": {
+    "file": "app-rules.png",
+    "width": 1200,
+    "height": 800,
+    "platform": "desktop",
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "theme": "light",
+    "source": "production-slint-preview"
+  },
+  "network": {
+    "file": "app-network.png",
+    "width": 1200,
+    "height": 800,
+    "platform": "desktop",
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "theme": "light",
+    "source": "production-slint-preview"
+  },
+  "protection": {
+    "file": "app-protection.png",
+    "width": 1200,
+    "height": 800,
+    "platform": "desktop",
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "theme": "light",
+    "source": "production-slint-preview"
+  },
+  "applications": {
+    "file": "app-applications.png",
+    "width": 393,
+    "height": 852,
+    "platform": "android",
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "theme": "light",
+    "source": "production-slint-preview"
+  }
+}

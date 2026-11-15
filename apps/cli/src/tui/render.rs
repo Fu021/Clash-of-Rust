@@ -40,7 +40,7 @@ pub(super) fn fit(text: &str, width: usize) -> String {
     text
 }
 
-fn rate(value: u64) -> String {
+pub(super) fn rate(value: u64) -> String {
     let (number, unit) = if value >= 1024 * 1024 {
         (value as f64 / 1048576.0, "MiB")
     } else {
@@ -63,7 +63,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             if state.demo {
                 "演示 · 不连接后台"
             } else {
-                "原型"
+                "本机控制台"
             }
         ),
         Tone::Accent,
@@ -104,15 +104,39 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         Tone::Accent,
     ));
     lines.push(line(
+        format!(
+            "  {}     {}",
+            if state.page == Page::Settings {
+                "[5 设置]"
+            } else {
+                " 5 设置 "
+            },
+            if state.page == Page::Tools {
+                "[6 操作]"
+            } else {
+                " 6 操作 "
+            }
+        ),
+        Tone::Accent,
+    ));
+    lines.push(line(
         format!("  {}", "─".repeat(width.saturating_sub(4))),
         Tone::Muted,
     ));
-    let body_height = height.saturating_sub(10);
-    let body = match state.page {
-        Page::Home => home(state),
-        Page::Nodes => nodes(state, width.saturating_sub(6), body_height),
-        Page::Connections => connections(state, width.saturating_sub(6), body_height),
-        Page::Network => network(state),
+    let body_height = height.saturating_sub(11);
+    let body = if state.form.is_some() {
+        super::panels::editor(state, body_height)
+    } else if state.connection.is_some() {
+        super::panels::connection(state)
+    } else {
+        match state.page {
+            Page::Home => home(state),
+            Page::Nodes => nodes(state, width.saturating_sub(6), body_height),
+            Page::Connections => connections(state, width.saturating_sub(6), body_height),
+            Page::Network => network(state),
+            Page::Settings => super::panels::settings(state, width.saturating_sub(6), body_height),
+            Page::Tools => super::panels::tools(state, width.saturating_sub(6), body_height),
+        }
     };
     for (text, tone) in body.into_iter().take(body_height) {
         lines.push(Line {
@@ -126,7 +150,17 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             tone: Tone::Plain,
         });
     }
-    let (notice, tone) = if let Some(error) = &state.error {
+    let (notice, tone) = if let Some(operation) = &state.execution {
+        (
+            format!(
+                "执行 cor {}？Enter 确认 · Esc 取消；授权和结果将在普通终端显示",
+                operation.path
+            ),
+            Tone::Warning,
+        )
+    } else if let Some(message) = state.message.as_ref().filter(|_| state.form.is_some()) {
+        (message.clone(), Tone::Warning)
+    } else if let Some(error) = &state.error {
         (
             format!("读取失败（旧数据仅供参考）：{error}"),
             Tone::Warning,
@@ -153,7 +187,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         (message.clone(), Tone::Warning)
     } else {
         (
-            "退出界面保留后台和代理；按 1/2/3/4 或 Tab 切换页面".into(),
+            "退出界面保留后台和代理；按 1–6 或 Tab 切换页面".into(),
             Tone::Muted,
         )
     };
@@ -165,7 +199,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         (format!("  {notice}"), tone),
         (
             if state.page == Page::Network {
-                "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–4 切页   q 退出".into()
+                "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–6 切页   q 退出".into()
             } else {
                 "  ↑↓ 选择   Enter 打开/选择   / 搜索   Esc 返回   r 刷新   q 退出".into()
             },
@@ -235,7 +269,7 @@ fn home(state: &State) -> Vec<(String, Tone)> {
         return vec![
             ("尚未连接后台".into(), Tone::Warning),
             (
-                "界面不会自动启动内核。退出后使用 cor start，再重新打开。".into(),
+                "按 6 进入「操作」，选择 start 启动；浏览界面不会自动启动内核。".into(),
                 Tone::Muted,
             ),
         ];
@@ -363,6 +397,17 @@ fn nodes(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
         ),
         (String::new(), Tone::Plain),
     ];
+    if state
+        .group
+        .as_deref()
+        .and_then(|group| proxies.get(group))
+        .is_some_and(|group| group.kind.as_str() != "Selector")
+    {
+        rows[2] = (
+            "自动组 · 内核自行选择最优节点；在上一级手动组选择 AUTO 或具体节点".into(),
+            Tone::Muted,
+        );
+    }
     let available = height.saturating_sub(4).max(1);
     let offset = state.selected.saturating_sub(available - 1);
     let name_width = width.saturating_sub(24);

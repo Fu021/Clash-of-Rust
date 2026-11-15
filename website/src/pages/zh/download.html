@@ -2,8 +2,8 @@
 <!-- description: Clash of Rust 的 Windows、Debian/Ubuntu、macOS、Android 安装包，直接来自 GitHub Releases，附安装步骤和 SHA256 校验方法。 -->
 <section class="page-head">
   <div class="wrap">
-    <h1>选一个适合你设备的安装包</h1>
-    <p class="lead">所有文件都直接来自 GitHub Releases，里面已经带有 mihomo 内核和 Geo 数据。准备好订阅链接或本地配置，装完就能连接。</p>
+    <h1>下载，安装，开始连接。</h1>
+    <p class="lead">安装包来自 GitHub Releases，内含 mihomo 与 Geo 数据。选择设备和架构即可。</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -30,7 +30,7 @@
         <div>
           <ul class="pkgs" data-pkgs></ul>
           <p class="how">运行安装程序，按提示完成。覆盖安装旧版本时，订阅和个人设置都会保留。</p>
-          <p class="how">如果 Windows Defender 告警，先<a href="#verify">核对 SHA256</a>，再看<a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">告警处理说明</a>。没有核对过的告警，不能直接当成误报。</p>
+          <p class="how">Defender 告警时先<a href="#verify">核对 SHA256</a>，再按<a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">告警说明</a>处理。</p>
         </div>
       </section>
 
@@ -64,8 +64,8 @@
   </section>
 
   <section id="verify">
-    <h2>安装之前，先核对文件</h2>
-    <p>每个安装包旁边都有一个 <code>.sha256</code> 文件，里面是一串哈希。在本机算出下载文件的哈希，和它比较，两者一致再安装。</p>
+    <h2>核对 SHA256</h2>
+    <p>将本机计算的哈希与安装包旁的 <code>.sha256</code> 文件比较，一致后安装。</p>
 <pre class="term" aria-label="计算 SHA256 的命令"><span class="c"># Windows PowerShell</span>
 Get-FileHash .\安装包文件名.exe -Algorithm SHA256
 
@@ -79,7 +79,7 @@ shasum -a 256 安装包文件名.dmg</pre>
 
   <section id="next">
     <h2>装好之后</h2>
-    <p>添加订阅，选好节点，选择模式，然后连接。<a href="guide.html#first">使用指南</a>里有五步的说明；用 <a href="guide.html#cli"><code>cor</code></a> 的话，是五条命令。</p>
+    <p>添加订阅，选节点，再连接。选择 <a href="guide.html#gui">GUI 指南</a>或 <a href="guide.html#tui">TUI 指南</a>，对应的 CLI 命令也在旁边。</p>
   </section>
 
   <section id="questions">
@@ -98,8 +98,8 @@ shasum -a 256 安装包文件名.dmg</pre>
   <div class="wrap">
     <img src="{{root}}assets/cat.png" alt="" width="150" height="150" loading="lazy">
     <div>
-      <h2>装好了、能用了？点个 Star 就是道谢。</h2>
-      <p>它能让更多人找到这个项目，而你只需要点一下。</p>
+      <h2>一起参与。</h2>
+      <p>反馈问题、贡献代码，或为项目点一颗 Star。</p>
       <div class="actions">
         <a class="btn" href="{{repo}}" target="_blank" rel="noopener">{{star}}去 GitHub 点 Star<span data-stars></span></a>
         <a class="btn ghost" href="{{repo}}/issues" target="_blank" rel="noopener">反馈问题</a>

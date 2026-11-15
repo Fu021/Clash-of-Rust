@@ -25,7 +25,7 @@ macro_rules! command {
 pub static COMMANDS: &[Spec] = &[
     command!(
         "ui",
-        "打开终端界面原型；退出界面保留后台和代理",
+        "打开终端界面；含设置与管理命令，退出保留后台和代理",
         "ui [--demo]",
         0,
         0,
@@ -523,11 +523,11 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "update install",
-        "下载安装更新；Linux 终端等待结果，失败尝试恢复后台",
-        "update install [--yes]",
+        "下载安装更新；Linux 终端成功后启动，失败恢复原状态",
+        "update install [--yes] [--no-start]",
         0,
         0,
-        ""
+        "no-start"
     ),
     command!(
         "autostart",
@@ -989,6 +989,7 @@ fn option_help(key: &str) -> String {
         "no-color" => "纯文本输出；CLI 默认不使用颜色",
         "demo" => "使用虚构数据预览终端界面，不连接后台或改变网络",
         "no-core" => "仅运行后台，暂不启动内核",
+        "no-start" => "Linux 终端更新成功后保留原内核开关状态",
         "network-only" => "刷新当前内核出站和 DNS，关闭旧连接；不重启内核",
         "watch" | "follow" => "持续输出新采样/日志，Ctrl+C 结束",
         "interval" => "采样秒数，默认 1，最小 0.25",
@@ -1290,6 +1291,17 @@ mod tests {
         assert!(parsed.flag("yes"));
         assert!(args(&["start", "--network-only"]).is_err());
         assert!(help("restart").contains("关闭旧连接"));
+    }
+    #[test]
+    fn update_can_explicitly_preserve_a_stopped_core_without_changing_other_commands() {
+        assert!(
+            args(&["update", "install", "--no-start"])
+                .unwrap()
+                .flag("no-start")
+        );
+        assert!(args(&["update", "check", "--no-start"]).is_err());
+        assert!(args(&["start", "--no-start"]).is_err());
+        assert!(help("update install").contains("--no-start"));
     }
     #[test]
     fn diagnostics_can_export_local_evidence_without_starting_a_backend() {

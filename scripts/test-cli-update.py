@@ -51,7 +51,7 @@ def endpoint(data):
     return json.loads(path.read_text()) if path.exists() else None
 
 
-def stage(package, data, running, user_service=None):
+def stage(package, data, running, user_service=None, start_after_install=None):
     directory = Path(tempfile.mkdtemp(prefix='clash-of-rust-update-'))
     staged = directory/'package.deb'
     shutil.copy2(package, staged)
@@ -70,6 +70,8 @@ def stage(package, data, running, user_service=None):
     }
     if user_service is not None:
         plan['terminal']['user_service'] = user_service
+    if start_after_install is not None:
+        plan['terminal']['start_after_install'] = start_after_install
     write_json(directory/'plan.json', plan)
     write_json(data/'update-install.json', {
         'version': version, 'state': 'preparing', 'message': 'CI terminal installation',
@@ -208,7 +210,7 @@ def exercise(package, report, phase):
                     if running:
                         cli(data, 'proxy', 'off')
                         cli(data, 'start')
-                    directory = stage(package, data, running)
+                    directory = stage(package, data, running, start_after_install=True)
                     directories.append(directory)
                     payload = directory/'package.deb'
                     payload.write_bytes(b'not a Debian archive\n')
@@ -230,7 +232,7 @@ def exercise(package, report, phase):
                         cli(data, 'stop')
                         cli(data, 'config', 'get', 'update_prereleases')
                     original = endpoint(data)['pid']
-                    directory = stage(package, data, running)
+                    directory = stage(package, data, running, start_after_install=False)
                     directories.append(directory)
                     original_settings = (data/'settings.json').read_bytes()
                     original_binary = sha256(CLI)
@@ -246,6 +248,18 @@ def exercise(package, report, phase):
                             'Reinstall did not preserve the verified CLI bytes')
                     require(not directory.exists(), 'Successful helper did not clean its temporary directory')
                     checks[f'real_deb_install_restores_{"core" if running else "daemon_only"}'] = True
+                cli(data, 'stop')
+                cli(data, 'config', 'get', 'update_prereleases')
+                directory = stage(package, data, False, start_after_install=True)
+                directories.append(directory)
+                status = run_helper(directory, data)
+                require(status['state'] == 'succeeded' and not status['error'],
+                        'Install with automatic startup failed')
+                require(cli(data, 'status')['running'],
+                        'Successful install did not automatically start the previously stopped core')
+                require('后台和内核已启动' in status['message'],
+                        'Successful startup was not reported')
+                checks['successful_install_starts_previously_stopped_core'] = True
                 exercise_picker(data)
                 checks['terminal_picker_search_cancel_and_interrupt'] = True
             write_json(report/f'{phase}-result.json', {'status': 'passed', 'checks': checks})
@@ -324,6 +338,20 @@ def exercise_service(package, report):
             require((data/'settings.json').read_bytes() == original_settings,
                     'Service recovery changed settings')
             checks['service_restore' if managed else 'enabled_service_adopts_detached_daemon'] = True
+        cli(data, 'stop')
+        cli(data, 'config', 'get', 'update_prereleases')
+        directory = stage(package, data, False, user_service=recovery, start_after_install=True)
+        directories.append(directory)
+        status = run_helper(directory, data)
+        service_status = cli(data, 'service', 'status')
+        require(status['state'] == 'succeeded' and not status['error']
+                and cli(data, 'status')['running'],
+                'Automatic startup did not recover the core')
+        require(service_status['active'] and service_status['ownership'] == 'service'
+                and service_status['main_pid'] == endpoint(data)['pid'],
+                'Automatic startup bypassed the matching enabled service')
+        require(unit.read_bytes() == original_unit, 'Automatic startup rewrote the login service')
+        checks['stopped_core_auto_starts_in_original_service'] = True
         write_json(report/'service-result.json', {'status': 'passed', 'checks': checks})
     except Exception as error:
         write_json(report/'service-result.json', {'status': 'failed', 'checks': checks, 'error': str(error)})

@@ -2,8 +2,8 @@
 <!-- description: Installers for Windows, Debian/Ubuntu, macOS and Android from GitHub Releases, with install steps and SHA256 verification. -->
 <section class="page-head">
   <div class="wrap">
-    <h1>Pick the package for your machine</h1>
-    <p class="lead">Every file comes straight from GitHub Releases and already contains the mihomo core and Geo data. Bring a subscription link or a local configuration, and you can connect.</p>
+    <h1>Download. Install. Connect.</h1>
+    <p class="lead">Installers come from GitHub Releases, with mihomo and Geo data included. Choose your device and architecture.</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -30,7 +30,7 @@
         <div>
           <ul class="pkgs" data-pkgs></ul>
           <p class="how">Run the installer and follow the prompts. Upgrading over an older version keeps your subscriptions and settings.</p>
-          <p class="how">If Windows Defender raises an alert, <a href="#verify">check the SHA256</a> first, then read the <a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">alert notes</a>. An alert you cannot explain is not a false positive until it has been checked.</p>
+          <p class="how">For a Defender alert, <a href="#verify">check SHA256</a>, then follow the <a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">alert notes</a>.</p>
         </div>
       </section>
 
@@ -64,8 +64,8 @@
   </section>
 
   <section id="verify">
-    <h2>Check the file before you install it</h2>
-    <p>Each installer has a <code>.sha256</code> file beside it holding one hash. Compute the hash of what you downloaded and compare the two. Install only if they match.</p>
+    <h2>Verify SHA256</h2>
+    <p>Compare your local hash with the installer's <code>.sha256</code> file. Install when they match.</p>
 <pre class="term" aria-label="Commands that compute a SHA256 hash"><span class="c"># Windows PowerShell</span>
 Get-FileHash .\the-file-name.exe -Algorithm SHA256
 
@@ -79,7 +79,7 @@ shasum -a 256 the-file-name.dmg</pre>
 
   <section id="next">
     <h2>After installing</h2>
-    <p>Add a subscription, pick a node, choose a mode and connect. The <a href="guide.html#first">guide</a> walks through it in five steps, and the same thing takes five commands with <a href="guide.html#cli"><code>cor</code></a>.</p>
+    <p>Add a subscription, choose a node and connect. Follow the <a href="guide.html#gui">GUI guide</a> or <a href="guide.html#tui">TUI guide</a>, with CLI commands alongside.</p>
   </section>
 
   <section id="questions">
@@ -98,8 +98,8 @@ shasum -a 256 the-file-name.dmg</pre>
   <div class="wrap">
     <img src="{{root}}assets/cat.png" alt="" width="150" height="150" loading="lazy">
     <div>
-      <h2>Installed and working? A star says thanks.</h2>
-      <p>It helps other people find the project, and it costs you one click.</p>
+      <h2>Join in.</h2>
+      <p>Report a problem, contribute code, or give the project a star.</p>
       <div class="actions">
         <a class="btn" href="{{repo}}" target="_blank" rel="noopener">{{star}}Star on GitHub<span data-stars></span></a>
         <a class="btn ghost" href="{{repo}}/issues" target="_blank" rel="noopener">Report a problem</a>

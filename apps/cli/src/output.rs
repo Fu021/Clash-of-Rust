@@ -76,7 +76,13 @@ pub async fn confirm(args: &Args, message: &str) -> Result<()> {
         std::io::stdin().is_terminal(),
         "{message}；非交互模式请明确传入 --yes"
     );
-    eprint!("{message} [y/N] ");
+    let answer = read_line(&format!("{message} [y/N] ")).await?;
+    ensure!(matches!(answer.trim(), "y" | "Y" | "yes"), "操作已取消");
+    Ok(())
+}
+
+pub(crate) async fn read_line(prompt: &str) -> Result<String> {
+    eprint!("{prompt}");
     std::io::stderr().flush()?;
     // Tokio stdin uses a blocking-pool read that cannot be cancelled. A plain
     // reader thread keeps Ctrl+C responsive and never delays runtime shutdown.
@@ -88,9 +94,7 @@ pub async fn confirm(args: &Args, message: &str) -> Result<()> {
             let result = std::io::stdin().read_line(&mut answer).map(|_| answer);
             let _ = sender.send(result);
         })?;
-    let answer = receiver.await??;
-    ensure!(matches!(answer.trim(), "y" | "Y" | "yes"), "操作已取消");
-    Ok(())
+    Ok(receiver.await??)
 }
 
 pub fn on_off(value: &str) -> Result<bool> {

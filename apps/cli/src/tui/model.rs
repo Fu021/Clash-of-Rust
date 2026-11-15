@@ -1,5 +1,6 @@
+use super::form::{self, Form};
 use super::input::Key;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use clash_client_runtime::{
     control::{Meta, Owner, Poll},
     engine::{Scope, Snapshot},
@@ -11,6 +12,8 @@ pub(super) enum Page {
     Nodes,
     Connections,
     Network,
+    Settings,
+    Tools,
 }
 
 impl Page {
@@ -19,7 +22,7 @@ impl Page {
             Self::Home => Scope::Home,
             Self::Nodes => Scope::Proxies,
             Self::Connections => Scope::Connections,
-            Self::Network => Scope::Other,
+            Self::Network | Self::Settings | Self::Tools => Scope::Other,
         }
     }
 }
@@ -43,10 +46,14 @@ impl Target {
             "订阅已经变化，请重新选择节点"
         );
         let group = poll.snapshot.proxies.proxies.get(self.group.as_str());
+        let group = group.context("策略组已不存在，请重新选择")?;
         ensure!(
-            group.is_some_and(|group| group.kind.as_str() == "Selector"
-                && group.all.iter().any(|node| node.as_str() == self.node)),
-            "策略组或节点已经变化，请刷新列表"
+            group.kind.as_str() == "Selector",
+            "自动策略组由内核选择节点，不能手动固定成员；请在上一级手动组选择 AUTO 或具体节点"
+        );
+        ensure!(
+            group.all.iter().any(|node| node.as_str() == self.node),
+            "节点已不在这个策略组中，请重新选择"
         );
         Ok(())
     }
@@ -58,6 +65,8 @@ pub(super) enum Action {
     Select(Target),
     CheckNetwork(clash_client_core::network_tools::Tool, String),
     CancelNetwork,
+    Execute(crate::args::Args),
+    ReviewForm,
 }
 
 pub(super) struct State {
@@ -74,6 +83,10 @@ pub(super) struct State {
     pub demo: bool,
     pub network_results: Vec<String>,
     pub network_tool: usize,
+    pub form: Option<Form>,
+    pub execution: Option<crate::args::Args>,
+    pub connection: Option<String>,
+    pub detail_offset: usize,
 }
 
 impl State {
@@ -92,6 +105,10 @@ impl State {
             demo,
             network_results: Vec::new(),
             network_tool: 0,
+            form: None,
+            execution: None,
+            connection: None,
+            detail_offset: 0,
         }
     }
 
@@ -104,9 +121,14 @@ impl State {
         self.poll = poll;
         self.error = None;
         if changed {
+            if self.form.is_some() || self.confirmation.is_some() {
+                self.message = Some("后台或当前订阅已变化，已取消旧表单，请重新选择".into());
+            }
             self.group = None;
             self.selected = 0;
             self.confirmation = None;
+            self.form = None;
+            self.execution = None;
         }
         if self.page != Page::Network {
             self.selected = self.selected.min(self.items().len().saturating_sub(1));
@@ -116,6 +138,7 @@ impl State {
     pub fn failure(&mut self, message: String) {
         self.error = Some(message);
         self.confirmation = None;
+        self.execution = None;
     }
 
     pub fn release_page(&mut self) {
@@ -131,15 +154,33 @@ impl State {
         self.confirmation = None;
         self.message = None;
         self.network_results.clear();
+        self.form = None;
+        self.execution = None;
+        self.connection = None;
+        self.detail_offset = 0;
     }
 
     pub fn items(&self) -> Vec<&str> {
+        let query = self.query.to_lowercase();
+        if self.page == Page::Settings {
+            return clash_client_core::config::READABLE_SETTINGS
+                .iter()
+                .copied()
+                .filter(|key| key.contains(&query) || form::setting_title(key).contains(&query))
+                .collect();
+        }
+        if self.page == Page::Tools {
+            return form::commands()
+                .filter(|spec| spec.path.contains(&query) || spec.description.contains(&query))
+                .map(|spec| spec.path)
+                .collect();
+        }
         let Some(poll) = &self.poll else {
             return Vec::new();
         };
-        let query = self.query.to_lowercase();
         match self.page {
             Page::Home | Page::Network => Vec::new(),
+            Page::Settings | Page::Tools => unreachable!(),
             Page::Nodes => {
                 let proxies = &poll.snapshot.proxies.proxies;
                 match self.group.as_deref().and_then(|group| proxies.get(group)) {
@@ -171,13 +212,66 @@ impl State {
         }
     }
 
+    pub fn entering_text(&self) -> bool {
+        self.searching || self.form.as_ref().is_some_and(|form| form.editing)
+    }
+
     pub fn key(&mut self, key: Key) -> Action {
+        if let Some(form) = &mut self.form {
+            if form.editing {
+                match key {
+                    Key::Escape => {
+                        form.editing = false;
+                        form.draft.clear();
+                    }
+                    Key::Enter => form.apply_edit(),
+                    Key::Back => {
+                        form.draft.pop();
+                    }
+                    Key::Clear => form.draft.clear(),
+                    Key::Char(character) => form.append(&character.to_string()),
+                    Key::Paste(text) => form.append(&text),
+                    _ => {}
+                }
+                return Action::None;
+            }
+            if self.execution.is_some() {
+                return match key {
+                    Key::Enter => {
+                        let args = self.execution.take().unwrap();
+                        if self.demo {
+                            self.message = Some("演示模式：未执行操作或保存设置".into());
+                            Action::None
+                        } else {
+                            Action::Execute(args)
+                        }
+                    }
+                    Key::Escape | Key::Back => {
+                        self.execution = None;
+                        Action::None
+                    }
+                    _ => Action::None,
+                };
+            }
+            match key {
+                Key::Up => form.selected = form.selected.saturating_sub(1),
+                Key::Down | Key::Tab => form.selected = (form.selected + 1).min(form.fields.len()),
+                Key::Escape => {
+                    self.form = None;
+                }
+                Key::Enter if form.selected < form.fields.len() => form.begin_edit(),
+                Key::Enter => return Action::ReviewForm,
+                _ => {}
+            }
+            return Action::None;
+        }
         if self.searching {
             match key {
                 Key::Escape | Key::Enter => self.searching = false,
                 Key::Back => {
                     self.query.pop();
                 }
+                Key::Clear => self.query.clear(),
                 Key::Char(character)
                     if self.query.len() + character.len_utf8() <= 256
                         && !character.is_control() =>
@@ -218,6 +312,34 @@ impl State {
                 _ => Action::None,
             };
         }
+        if self.connection.is_some() {
+            match key {
+                Key::Up => {
+                    self.detail_offset = self.detail_offset.saturating_sub(1);
+                    return Action::None;
+                }
+                Key::Down => {
+                    self.detail_offset = (self.detail_offset + 1).min(64);
+                    return Action::None;
+                }
+                Key::Char('x' | 'd') => {
+                    let path = if key == Key::Char('x') {
+                        "connection close"
+                    } else {
+                        "connection show"
+                    };
+                    let mut form =
+                        Form::new(form::commands().find(|spec| spec.path == path).unwrap());
+                    form.fields[0]
+                        .value
+                        .clone_from(self.connection.as_ref().unwrap());
+                    form.selected = form.fields.len();
+                    self.form = Some(form);
+                    return Action::None;
+                }
+                _ => {}
+            }
+        }
         match key {
             Key::Char('[' | ']') if self.page == Page::Network => {
                 let count = clash_client_core::network_tools::Tool::ALL.len();
@@ -240,13 +362,17 @@ impl State {
                     Page::Home => Page::Nodes,
                     Page::Nodes => Page::Connections,
                     Page::Connections => Page::Network,
-                    Page::Network => Page::Home,
+                    Page::Network => Page::Settings,
+                    Page::Settings => Page::Tools,
+                    Page::Tools => Page::Home,
                 };
             }
             Key::Char('1') => self.page = Page::Home,
             Key::Char('2') => self.page = Page::Nodes,
             Key::Char('3') => self.page = Page::Connections,
             Key::Char('4') => self.page = Page::Network,
+            Key::Char('5') => self.page = Page::Settings,
+            Key::Char('6') => self.page = Page::Tools,
             Key::Char('/') if self.page != Page::Home => {
                 if self.page == Page::Network {
                     self.query.clear();
@@ -265,11 +391,25 @@ impl State {
                 self.selected = (self.selected + 1).min(count.saturating_sub(1));
             }
             Key::Back | Key::Escape => {
+                self.connection = None;
+                self.detail_offset = 0;
                 self.group = None;
                 self.query.clear();
                 self.selected = 0;
             }
             Key::Enter if self.page == Page::Nodes => self.enter_node(),
+            Key::Enter if self.page == Page::Connections => {
+                self.connection = self.items().get(self.selected).map(|id| (*id).to_owned());
+                self.detail_offset = 0;
+            }
+            Key::Enter if self.page == Page::Tools => {
+                if let Some(path) = self.items().get(self.selected)
+                    && let Some(spec) = form::commands().find(|spec| spec.path == *path)
+                {
+                    self.form = Some(Form::new(spec));
+                }
+            }
+            Key::Enter if self.page == Page::Settings => self.edit_setting(),
             Key::Enter if self.page == Page::Network => {
                 self.selected = 0;
                 self.network_results.clear();
@@ -317,16 +457,59 @@ impl State {
             return;
         };
         let poll = self.poll.as_ref().unwrap();
+        if poll
+            .snapshot
+            .proxies
+            .proxies
+            .get(group.as_str())
+            .is_some_and(|group| group.kind.as_str() != "Selector")
+        {
+            self.message = None;
+            return;
+        }
         let target = Target {
             profile: poll.meta.settings.active_profile.clone(),
             group: group.clone(),
             node: name,
         };
         match target.validate(poll) {
-            Ok(()) if self.error.is_none() => self.confirmation = Some(target),
+            Ok(()) if self.error.is_none() => {
+                self.message = None;
+                self.confirmation = Some(target);
+            }
             Ok(()) => self.message = Some("后台状态过期，请先刷新".into()),
             Err(error) => self.message = Some(error.to_string()),
         }
+    }
+
+    fn edit_setting(&mut self) {
+        let Some(key) = self.items().get(self.selected).copied() else {
+            return;
+        };
+        if !clash_client_core::config::MUTABLE_SETTINGS.contains(&key) {
+            let mut form = Form::new(
+                form::commands()
+                    .find(|spec| spec.path == "config get")
+                    .unwrap(),
+            );
+            form.fields[0].value = key.into();
+            form.selected = form.fields.len();
+            self.form = Some(form);
+            self.message = Some("只读状态；此表单查看完整值，修改请使用专用管理命令".into());
+            return;
+        }
+        let Some(poll) = &self.poll else {
+            self.message = Some("后台未运行；请在「操作」页启动或读取配置".into());
+            return;
+        };
+        if self.error.is_some() {
+            self.message = Some("后台状态过期，请先刷新".into());
+            return;
+        }
+        self.form = Some(Form::setting(
+            key,
+            &form::setting_value(&poll.meta.settings, key),
+        ));
     }
 }
 

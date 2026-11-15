@@ -8,9 +8,12 @@ or after changing Chinese headings, so the subset font covers the new characters
 Font sources are read from website/.cache/fonts (not committed); see README.md.
 """
 from html.parser import HTMLParser
+import argparse
+import json
 from pathlib import Path
 import shutil
-import sys
+import subprocess
+import tomllib
 
 from PIL import Image
 
@@ -48,15 +51,43 @@ def illustrations():
         webp(banner.resize((banner.width // 2, banner.height // 2), Image.LANCZOS), f"{name}-small.webp", 84)
 
 
-def screenshots():
+def screenshots(options):
+    if not options.gui_previews or not options.android_preview or not options.terminal_previews or not options.terminal_commit:
+        raise ValueError("shots requires current GUI, Android and actual PTY preview paths and the terminal source commit")
+    version = tomllib.loads((REPO / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     sources = {
-        "app-home-light.webp": REPO / "docs/images/home-0.7.0-light.png",
-        "app-home-dark.webp": REPO / "docs/images/home-0.7.0-dark.png",
-        "app-network.webp": SRC / "art/network.png",
+        "home": options.gui_previews / "home-light.png",
+        "nodes": options.gui_previews / "proxies-light.png",
+        "subscriptions": options.gui_previews / "subscriptions-light.png",
+        "rules": options.gui_previews / "rules-light.png",
+        "network": options.gui_previews / "network-light.png",
+        "protection": options.gui_previews / "ai-check-light.png",
+        "applications": options.android_preview / "android/settings-light.png",
     }
+    records = {}
     for name, source in sources.items():
-        webp(Image.open(source).convert("RGB"), name, lossless=True)
+        image = Image.open(source)
+        if image.format != "PNG":
+            raise ValueError(f"Not a production PNG preview: {source}")
+        target = OUT / f"app-{name}.png"
+        shutil.copyfile(source, target)
+        records[name] = {"file": target.name, "width": image.width, "height": image.height,
+                         "platform": "android" if name == "applications" else "desktop",
+                         "version": version, "commit": commit, "theme": "light",
+                         "source": "production-slint-preview"}
+    terminal = {}
+    for name in ("home", "network"):
+        record = json.loads((options.terminal_previews / f"background-tui-{name}.json").read_text())
+        if record.get("source") != "actual-cor-pty" or not any(version in line["text"] for line in record["lines"]):
+            raise ValueError(f"The {name} PTY capture is not from {version}")
+        terminal[name] = {**record, "version": version, "commit": options.terminal_commit}
+    (SRC / "content/screenshots.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
+    (SRC / "content/terminal.json").write_text(json.dumps(terminal, ensure_ascii=False, indent=2) + "\n")
+    for obsolete in ("app-home-light.webp", "app-home-dark.webp", "app-network.webp"):
+        (OUT / obsolete).unlink(missing_ok=True)
     shutil.copyfile(REPO / "resources/icons/app.png", OUT / "cat.png")
+    print(f"  {len(records)} current GUI previews and {len(terminal)} actual PTY frames")
 
 
 def dither_tiles(block=8, columns=32, rows=12):
@@ -153,9 +184,16 @@ def fonts():
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("steps", nargs="*", choices=("art", "shots", "dither", "fonts"))
+    parser.add_argument("--gui-previews", type=Path)
+    parser.add_argument("--android-preview", type=Path)
+    parser.add_argument("--terminal-previews", type=Path)
+    parser.add_argument("--terminal-commit")
+    options = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    steps = {"art": illustrations, "shots": screenshots, "dither": dither_tiles, "fonts": fonts}
-    chosen = sys.argv[1:] or list(steps)
+    steps = {"art": illustrations, "shots": lambda: screenshots(options), "dither": dither_tiles, "fonts": fonts}
+    chosen = options.steps or ["art", "dither", "fonts"]
     for step in chosen:
         print(f"{step}:")
         steps[step]()

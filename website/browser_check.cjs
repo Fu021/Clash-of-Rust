@@ -55,6 +55,14 @@ async function stop() {
   });
 }
 
+async function settleImages(page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    for (const image of document.images) image.loading = "eager";
+    await Promise.all([...document.images].map(image => image.decode()));
+  });
+}
+
 async function checkPage(context, origin, route, width) {
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
@@ -68,11 +76,7 @@ async function checkPage(context, origin, route, width) {
   try {
     const response = await page.goto(origin + route, { waitUntil: "load", timeout: 20000 });
     assert.equal(response.status(), 200, route);
-    await page.evaluate(async () => {
-      await document.fonts.ready;
-      for (const image of document.images) image.loading = "eager";
-      await Promise.all([...document.images].map(image => image.decode()));
-    });
+    await settleImages(page);
     const state = await page.evaluate(() => ({
       width: document.documentElement.scrollWidth,
       viewport: innerWidth,
@@ -89,13 +93,65 @@ async function checkPage(context, origin, route, width) {
           releases.downloads[channel].tag.slice(1));
       }
     }
+    if (route.endsWith("/guide")) {
+      await page.locator('[data-guide-select="tui"]').click();
+      assert.equal(await page.locator("#tui").isVisible(), true);
+      assert.equal(await page.locator("#gui").isVisible(), false);
+      assert.equal(await page.locator('[data-guide-for="gui"]:visible').count(), 0);
+      assert.ok((await page.locator("[data-set-lang]").getAttribute("href")).endsWith("#tui"));
+      if (route === "/guide") {
+        await page.screenshot({ path: path.join(output, `${width}-guide-tui.png`), fullPage: true });
+      }
+      await page.locator('[data-guide-select="gui"]').click();
+      await settleImages(page);
+      assert.equal(await page.locator("#gui").isVisible(), true);
+      assert.equal(await page.locator("#tui").isVisible(), false);
+      await page.goto(origin + route + "#tui-pages", { waitUntil: "load" });
+      assert.equal(await page.locator("#tui-pages").isVisible(), true);
+      await page.locator('[data-guide-select="gui"]').click();
+    }
+    if (route === "/" || route === "/en/") {
+      const shots = page.locator("[data-demo-frame]");
+      for (let index = 0; index < await shots.count(); index++) {
+        await page.locator(`[data-demo-step="${index}"]`).click();
+        assert.equal(await shots.nth(index).isVisible(), true);
+        assert.equal(await page.locator("[data-demo-frame]:visible").count(), 1);
+      }
+      await page.locator('[data-demo-step="0"]').click();
+    }
     assert.deepEqual(errors, [], `${width} ${route}`);
-    if (["/zh/", "/zh/download", "/zh/tools"].includes(route)) {
-      const name = route === "/zh/" ? "home" : route.split("/").pop();
+    if (["/", "/download", "/tools", "/guide", "/releases"].includes(route)) {
+      const name = route === "/" ? "home" : route.slice(1);
       await page.screenshot({ path: path.join(output, `${width}-${name}.png`), fullPage: true });
     }
     report.pages.push({ route, width, status: "passed" });
     console.log(`Verified ${width}px ${route}`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function checkHeroResizing(context, origin) {
+  const page = await context.newPage();
+  try {
+    for (const route of ["/", "/en/"]) {
+      await page.goto(origin + route, { waitUntil: "load" });
+      for (const width of [1920, 1280, 800, 360, 1920]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const zoom of [.8, 1, 1.25, 1.5, 2]) {
+          const geometry = await page.evaluate(zoom => {
+            document.documentElement.style.zoom = String(zoom);
+            const scene = document.querySelector(".hero .scene").getBoundingClientRect();
+            const picture = document.querySelector(".hero .scene img").getBoundingClientRect();
+            return { scene: scene.width, picture: picture.width, left: picture.left - scene.left };
+          }, zoom);
+          assert.ok(geometry.scene > 0 && Math.abs(geometry.scene - geometry.picture) < 2 &&
+            Math.abs(geometry.left) < 2, `Hero resize ${route} ${width}px ${zoom}: ${JSON.stringify(geometry)}`);
+        }
+      }
+      await page.evaluate(() => { document.documentElement.style.zoom = ""; });
+    }
+    report.hero_resize_and_zoom = "passed";
   } finally {
     await page.close();
   }
@@ -115,8 +171,21 @@ async function run() {
       ? route.continue() : route.abort());
     try {
       for (const route of ["/", "/tools", "/guide", "/download", "/releases",
-        "/zh/", "/zh/tools", "/zh/guide", "/zh/download", "/zh/releases"]) {
+        "/en/", "/en/tools", "/en/guide", "/en/download", "/en/releases"]) {
         await checkPage(context, origin, route, viewport.width);
+      }
+      if (viewport.width === 1280) {
+        await checkHeroResizing(context, origin);
+        const page = await context.newPage();
+        await page.goto(origin, { waitUntil: "load" });
+        assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+        await page.locator(".top [data-set-lang]").click();
+        assert.equal(await page.locator("html").getAttribute("lang"), "en");
+        await page.locator(".top [data-set-lang]").click();
+        assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+        assert.equal(await page.locator(".hero-copy").evaluate(element => getComputedStyle(element).animationName), "none");
+        report.language_and_reduced_motion = "passed";
+        await page.close();
       }
     } finally {
       await context.close();
@@ -127,9 +196,15 @@ async function run() {
   });
   try {
     const page = await context.newPage();
-    await page.goto(origin + "/zh/download", { waitUntil: "load", timeout: 20000 });
+    await page.goto(origin + "/download", { waitUntil: "load", timeout: 20000 });
     assert.equal(await page.locator("[data-pkgs] a").count(), 18);
     assert.equal(await page.locator('[data-channel="preview"]').isVisible(), false);
+    await page.goto(origin + "/guide", { waitUntil: "load", timeout: 20000 });
+    assert.equal(await page.locator("#gui").isVisible(), true);
+    assert.equal(await page.locator("#tui").isVisible(), true);
+    await page.goto(origin + "/en/guide", { waitUntil: "load", timeout: 20000 });
+    assert.equal(await page.locator("html").getAttribute("lang"), "en");
+    assert.equal(await page.locator("#tui").isVisible(), true);
     report.no_javascript = "passed";
   } finally {
     await context.close();

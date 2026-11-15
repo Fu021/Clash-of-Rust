@@ -162,6 +162,8 @@ pub enum Command {
         version: String,
         preview: bool,
         terminal: bool,
+        #[serde(default)]
+        start_after_install: bool,
     },
     UpdateCommitTerminal {
         directory: PathBuf,
@@ -217,6 +219,30 @@ struct Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_update_start_preference_defaults_to_legacy_recovery() {
+        let legacy = serde_json::json!({
+            "command": "update-selected", "version": "0.7.2",
+            "preview": false, "terminal": true,
+        });
+        assert!(matches!(
+            serde_json::from_value::<Command>(legacy.clone()).unwrap(),
+            Command::UpdateSelected {
+                start_after_install: false,
+                ..
+            }
+        ));
+        let mut current = legacy;
+        current["start_after_install"] = serde_json::json!(true);
+        assert!(matches!(
+            serde_json::from_value::<Command>(current).unwrap(),
+            Command::UpdateSelected {
+                start_after_install: true,
+                ..
+            }
+        ));
+    }
 
     fn protected_settings() -> Settings {
         use crate::claude_check::protection::{Previous, Protection};
@@ -340,6 +366,7 @@ mod tests {
                 version: "0.7.1".into(),
                 preview: false,
                 terminal: true,
+                start_after_install: true,
             },
             Command::UpdateCommitTerminal {
                 directory: "/tmp/update".into(),

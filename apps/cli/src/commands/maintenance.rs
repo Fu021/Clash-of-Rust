@@ -193,20 +193,29 @@ async fn update(args: &Args) -> Result<()> {
             (None, None, settings.update_prereleases)
         };
     if args.path == "update install" {
+        let terminal = cfg!(target_os = "linux")
+            && clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none();
+        ensure!(
+            !args.flag("no-start") || terminal,
+            "--no-start 仅支持 Linux 纯终端安装"
+        );
         let available =
             clash_client_runtime::update::check_with_prereleases(port, include_prereleases)
                 .await?
                 .context("当前更新通道没有可安装的版本")?;
-        output::confirm(args, &update_install_prompt(&available)).await?;
+        let mut prompt = update_install_prompt(&available);
+        if terminal && !args.flag("no-start") {
+            prompt.push_str("\n安装成功后自动启动后台和内核；失败恢复原状态。");
+        }
+        output::confirm(args, &prompt).await?;
         if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
             eprintln!("正在下载安装包并校验 SHA256…");
         }
-        let terminal = cfg!(target_os = "linux")
-            && clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none();
         let operation = Command::UpdateSelected {
             version: available.version,
             preview: available.preview,
             terminal,
+            start_after_install: terminal && !args.flag("no-start"),
         };
         #[cfg(target_os = "linux")]
         if terminal {

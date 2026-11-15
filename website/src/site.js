@@ -8,12 +8,12 @@ const say = (english, chinese) => (ZH ? chinese : english);
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-/* Remember an explicit language choice so English pages stop redirecting. */
-for (const link of $$("[data-set-lang]")) {
-  link.addEventListener("click", () => {
-    try { localStorage.setItem("cor-lang", link.dataset.setLang); } catch (_) {}
-  });
+const languageLinks = $$("[data-set-lang]").map(link => [link, link.getAttribute("href")]);
+function syncLanguageLinks() {
+  for (const [link, base] of languageLinks) link.setAttribute("href", base + location.hash);
 }
+syncLanguageLinks();
+window.addEventListener("hashchange", syncLanguageLinks);
 
 async function github(path) {
   const controller = new AbortController();
@@ -61,14 +61,40 @@ for (const figure of $$("[data-shots]")) {
   }
 }
 
-/* Guide: mark the section being read in the table of contents. */
+const guide = $("[data-guide]");
+if (guide) {
+  const panels = $$("[data-guide-panel]", guide);
+  const buttons = $$("[data-guide-select]", guide);
+  function selectGuide(name) {
+    for (const panel of panels) panel.hidden = panel.dataset.guidePanel !== name;
+    for (const button of buttons) button.setAttribute("aria-pressed", String(button.dataset.guideSelect === name));
+    for (const link of $$("[data-guide-for]", guide)) link.hidden = link.dataset.guideFor !== name;
+    for (const link of $$(".toc a", guide)) link.removeAttribute("aria-current");
+  }
+  function selectFromHash() {
+    const hash = location.hash.slice(1);
+    const target = document.getElementById(hash);
+    const panel = target?.closest("[data-guide-panel]");
+    if (panel) selectGuide(panel.dataset.guidePanel);
+    else if (!hash) selectGuide("gui");
+  }
+  for (const button of buttons) button.addEventListener("click", () => {
+    selectGuide(button.dataset.guideSelect);
+    history.replaceState(null, "", "#" + button.dataset.guideSelect);
+    syncLanguageLinks();
+  });
+  selectGuide("gui");
+  selectFromHash();
+  window.addEventListener("hashchange", selectFromHash);
+}
+
 const tocLinks = $$(".toc a[href^='#']");
 if (tocLinks.length && "IntersectionObserver" in window) {
   const byId = new Map(tocLinks.map(link => [link.hash.slice(1), link]));
   const visible = new Set();
   const observer = new IntersectionObserver(entries => {
     for (const entry of entries) entry.isIntersecting ? visible.add(entry.target.id) : visible.delete(entry.target.id);
-    const first = [...byId.keys()].find(id => visible.has(id));
+    const first = [...byId.keys()].find(id => visible.has(id) && !byId.get(id).hidden);
     if (!first) return;
     for (const [id, link] of byId) id === first ? link.setAttribute("aria-current", "true") : link.removeAttribute("aria-current");
   }, { rootMargin: "-10% 0px -55% 0px" });
@@ -223,6 +249,8 @@ for (const tour of $$("[data-demo]")) {
     show((current+1)%frames.length);
     timer = setInterval(() => show((current+1)%frames.length, false), 5000);
   });
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  motion.addEventListener("change", () => { if (motion.matches) pause(); });
   document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
   window.addEventListener("pagehide", pause);
   if ("IntersectionObserver" in window) new IntersectionObserver(entries => {

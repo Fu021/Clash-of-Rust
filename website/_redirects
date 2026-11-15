@@ -1,2 +1,6 @@
-/features /zh/guide 301
-/features.html /zh/guide 301
+/features /guide 301
+/features.html /guide 301
+/zh / 301
+/zh/ / 301
+/zh/index.html / 301
+/zh/:page /:page 301

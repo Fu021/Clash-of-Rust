@@ -5,6 +5,8 @@ use super::{
 };
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
+#[path = "feature_tests.rs"]
+mod features;
 
 #[test]
 fn prototype_preserves_machine_commands_and_rejects_machine_output_for_ui() {
@@ -55,6 +57,7 @@ fn decoder_preserves_fragmented_unicode_and_arrow_sequences() {
         vec![Key::Escape]
     );
     assert_eq!(decoder.feed(b"\x03", now), vec![Key::Interrupt]);
+    assert_eq!(decoder.feed(b"\x15", now), vec![Key::Clear]);
 }
 
 #[test]
@@ -223,7 +226,14 @@ fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
 #[test]
 fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection() {
     for (columns, rows) in [(40, 10), (60, 18), (80, 24), (100, 30), (180, 70)] {
-        for page in [Page::Home, Page::Nodes, Page::Connections, Page::Network] {
+        for page in [
+            Page::Home,
+            Page::Nodes,
+            Page::Connections,
+            Page::Network,
+            Page::Settings,
+            Page::Tools,
+        ] {
             let mut state = State::new(true);
             state.page = page;
             state.error = Some("恶意文本\x1b[2J\n不应控制终端".repeat(100));

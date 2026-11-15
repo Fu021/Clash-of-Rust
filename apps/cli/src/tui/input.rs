@@ -9,6 +9,7 @@ pub(super) enum Key {
     Enter,
     Escape,
     Back,
+    Clear,
     Tab,
     Interrupt,
 }
@@ -79,6 +80,7 @@ impl Decoder {
                 9 => (1, Some(Key::Tab)),
                 10 | 13 => (1, Some(Key::Enter)),
                 8 | 127 => (1, Some(Key::Back)),
+                21 => (1, Some(Key::Clear)),
                 27 => {
                     let since = *self.escape_since.get_or_insert(now);
                     if self.bytes.len() == 1 {

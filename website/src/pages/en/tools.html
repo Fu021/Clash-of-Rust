@@ -2,8 +2,8 @@
 <!-- description: What each of the eleven network checks in Clash of Rust does, when to use it, its command, options, limits and report format. -->
 <section class="page-head">
   <div class="wrap">
-    <h1>Eleven checks, from the name to the last hop<span class="preview">0.7.2 preview</span></h1>
-    <p class="lead">When something will not connect, the toolbox follows one request through DNS, the proxy, TLS and the exit, and tells you which step failed. It is in the window, in <code>cor network</code> and in the terminal interface.</p>
+    <h1>From DNS to the exit, find the cause.<span class="preview">0.7.2 preview</span></h1>
+    <p class="lead">Eleven on-demand checks. GUI, TUI and CLI share the same results.</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -14,6 +14,13 @@
 </section>
 
 <div class="wrap doc">
+  <section id="interface">
+    <h2>Choose a tool. Enter a target. Read the result.</h2>
+    <p>Open Network diagnostics, choose a tool and enter a domain or URL. Options and results stay in one card; leaving the page clears them.</p>
+    {{shot:network}}
+    <details class="benchmark-details"><summary>See the terminal interface</summary>{{terminal:network}}<p>Run <code>cor ui</code>, press <kbd>4</kbd>, use <kbd>[</kbd> / <kbd>]</kbd> to choose a tool, <kbd>/</kbd> to enter a target and <kbd>Enter</kbd> to run it.</p></details>
+    <div class="interface-links"><a href="guide.html#gui">GUI guide</a><a href="guide.html#tui">TUI guide</a><a href="#check">Tools and CLI commands ↓</a></div>
+  </section>
   <section id="choose">
     <h2>Start from what you see</h2>
     <p>You do not need to know the tools by name. Find the symptom, then run the check beside it.</p>
@@ -21,7 +28,7 @@
   </section>
 
   <section id="rules-of-the-road">
-    <h2>What every check has in common</h2>
+    <h2>Check scope</h2>
     <ul class="dots">
       <li>It runs only when you ask. Nothing scans in the background.</li>
       <li>Website and HTTP checks go through the core's local proxy as it is now. A check never starts the core, switches node or falls back to a direct connection.</li>
@@ -34,9 +41,9 @@
 
   <section id="limits">
     <h2>Options and limits</h2>
-    <p>Defaults are 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB download cap and 8 hops. The window shows the options that apply to the selected tool and returns to the defaults when you switch tools. The terminal interface always uses the defaults; set anything else with <code>cor network</code>.</p>
+    <p>Defaults: 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB cap and 8 hops. The GUI shows relevant options. Direct TUI checks use defaults; customize through CLI, or the Actions page added in source.</p>
     {{tools:options}}
-    <p style="margin-top:1.2rem">Every run also has an overall budget, so nothing waits forever: a stability run stops at 120 seconds. System output is kept up to 8 KiB per stream, and a report holds at most 48 entries of 2,048 characters each.</p>
+    <p style="margin-top:1.2rem">Stability checks stop at 120 seconds. System output is capped at 8 KiB per stream; reports at 48 entries of 2,048 characters.</p>
   </section>
 
   <section id="protection">

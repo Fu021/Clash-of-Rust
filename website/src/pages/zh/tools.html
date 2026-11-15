@@ -2,8 +2,8 @@
 <!-- description: Clash of Rust 十一项网络检查分别查什么、什么时候用，以及对应的命令、参数、限制和报告格式。 -->
 <section class="page-head">
   <div class="wrap">
-    <h1>十一项检查，从域名查到最后一跳<span class="preview">0.7.2 预发布</span></h1>
-    <p class="lead">连不上的时候，工具箱跟着一次请求走过 DNS、代理、TLS 和出口，告诉你是哪一步出了问题。窗口里、<code>cor network</code> 里、终端界面里都能用。</p>
+    <h1>从解析到出口，逐步排查。<span class="preview">0.7.2 预发布</span></h1>
+    <p class="lead">十一项按需运行的检查。GUI、TUI 与 CLI 共用同一套结果。</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -14,6 +14,13 @@
 </section>
 
 <div class="wrap doc">
+  <section id="interface">
+    <h2>选工具，查目标，看结果。</h2>
+    <p>在“网络诊断”选择工具，输入域名或网址后运行。参数和结果在同一张卡片里，离开页面即清除。</p>
+    {{shot:network}}
+    <details class="benchmark-details"><summary>在终端界面中查看</summary>{{terminal:network}}<p>运行 <code>cor ui</code> 后按 <kbd>4</kbd>，用 <kbd>[</kbd> / <kbd>]</kbd> 选工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行。</p></details>
+    <div class="interface-links"><a href="guide.html#gui">GUI 指南</a><a href="guide.html#tui">TUI 指南</a><a href="#check">工具与 CLI 命令 ↓</a></div>
+  </section>
   <section id="choose">
     <h2>从你看到的现象找起</h2>
     <p>不用先记住工具的名字。找到对应的现象，运行旁边的检查。</p>
@@ -21,7 +28,7 @@
   </section>
 
   <section id="rules-of-the-road">
-    <h2>每项检查都遵守的几条</h2>
+    <h2>检查范围</h2>
     <ul class="dots">
       <li>只在你点下去的时候运行，后台不做任何扫描。</li>
       <li>网站和 HTTP 类检查经过内核现有的本机代理。检查不会启动内核、切换节点，也不会回退到直连。</li>
@@ -34,9 +41,9 @@
 
   <section id="limits">
     <h2>参数与上限</h2>
-    <p>默认值是：5 次、间隔 1000 毫秒、单次时限 10 秒、下载上限 8 MiB、最多 8 跳。窗口里只显示当前工具用得到的参数，切换工具后恢复默认值。终端界面始终使用默认值，要改参数请用 <code>cor network</code>。</p>
+    <p>默认 5 次、间隔 1000 毫秒、单次 10 秒、下载上限 8 MiB、最多 8 跳。GUI 按工具显示参数；TUI 直接检查使用默认值，自定义参数用 CLI，源码新增的“操作”页也可填写。</p>
     {{tools:options}}
-    <p style="margin-top:1.2rem">每次运行还有总预算，不会无限等待：稳定性检查最多 120 秒。系统命令的输出每路最多保留 8 KiB，一份报告最多 48 项，每项最多 2048 个字符。</p>
+    <p style="margin-top:1.2rem">稳定性检查最多 120 秒。系统输出每路最多 8 KiB，报告最多 48 项，每项最多 2048 字符。</p>
   </section>
 
   <section id="protection">

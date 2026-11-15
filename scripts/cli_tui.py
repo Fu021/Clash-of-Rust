@@ -162,7 +162,33 @@ def verify(console, resources, report):
             terminal.send(b'3')
             terminal.wait('github.com')
             terminal.capture(report, 'connections')
-            terminal.send(b'4')
+            terminal.send(b'\r')
+            terminal.wait('连接详情')
+            terminal.wait('命中规则')
+            terminal.capture(report, 'connection-detail')
+            terminal.send(b'\x1b5')
+            terminal.wait('混合代理端口')
+            terminal.capture(report, 'settings')
+            terminal.send(b'/accent_color\r\r')
+            terminal.wait('config set')
+            terminal.send(b'\r')
+            terminal.wait('输入中')
+            terminal.send(b'q6')
+            terminal.wait('tealq6')
+            if terminal.process.poll() is not None:
+                raise RuntimeError('Typing q into a setting exited TUI')
+            terminal.send(b'\x1b')
+            terminal.wait('teal')
+            terminal.send(b'\x1b6')
+            terminal.wait('管理操作')
+            terminal.send(b'/service status\r\r')
+            terminal.wait('cor service status')
+            terminal.capture(report, 'operation')
+            terminal.send(b'\r')
+            terminal.wait('执行 cor service status')
+            terminal.send(b'\r')
+            terminal.wait('演示模式')
+            terminal.send(b'\x1b4')
             terminal.wait('网站检查')
             terminal.send(b'\r')
             terminal.wait('实际线路')
@@ -188,6 +214,8 @@ def verify(console, resources, report):
     (report/'verification.json').write_text(json.dumps({
         'status': 'passed', 'source': 'real-pty',
         'checks': ['no-tty-rejected', 'read-only-no-backend', 'search-and-confirmation',
-                   'literal-q-search', 'network-tools-and-cancel', 'resize',
+                   'literal-q-search', 'connection-details', 'settings-edit-and-cancel',
+                   'operation-demo-no-side-effects', 'literal-q-setting',
+                   'network-tools-and-cancel', 'resize',
                    'q-restores-terminal', 'ctrl-c-restores-terminal'],
     }), encoding='utf-8')

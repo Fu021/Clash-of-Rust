@@ -118,21 +118,23 @@ pub(super) async fn execute(
         return Ok(Value::Null);
     }
     if matches!(&operation, Command::UpdateInstall) {
-        return install_update(shared, disconnected, false, None).await;
+        return install_update(shared, disconnected, false, false, None).await;
     }
     if matches!(&operation, Command::UpdatePrepareTerminal) {
-        return install_update(shared, disconnected, true, None).await;
+        return install_update(shared, disconnected, true, false, None).await;
     }
     if let Command::UpdateSelected {
         version,
         preview,
         terminal,
+        start_after_install,
     } = &operation
     {
         return install_update(
             shared,
             disconnected,
             *terminal,
+            *start_after_install,
             Some((version.clone(), *preview)),
         )
         .await;
@@ -362,8 +364,10 @@ async fn install_update(
     shared: &Arc<Mutex<Engine>>,
     mut disconnected: Option<watch::Receiver<bool>>,
     terminal: bool,
+    start_after_install: bool,
     expected: Option<(String, bool)>,
 ) -> Result<Value> {
+    anyhow::ensure!(!start_after_install || terminal, "自动启动仅支持终端安装");
     #[cfg(not(target_os = "linux"))]
     anyhow::ensure!(!terminal, "当前平台不支持 Linux 终端安装交接");
     crate::update::ensure_installable()?;
@@ -388,7 +392,11 @@ async fn install_update(
             engine.settings.update_prereleases == prereleases,
             "更新通道已改变，请重新检查更新"
         );
-        let directory = crate::update::prepare_terminal_install(Arc::new(download), &engine)?;
+        let directory = crate::update::prepare_terminal_install(
+            Arc::new(download),
+            &engine,
+            start_after_install,
+        )?;
         return Ok(json!({"installer":directory,"shutdown":false}));
     }
     #[cfg(any(windows, target_os = "macos"))]

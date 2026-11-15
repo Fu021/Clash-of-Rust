@@ -1,5 +1,7 @@
+mod form;
 mod input;
 mod model;
+mod panels;
 mod render;
 mod terminal;
 #[cfg(test)]
@@ -81,7 +83,7 @@ pub async fn run(args: &Args) -> Result<()> {
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
         "cor ui 需要交互终端；脚本请使用 cor --json status"
     );
-    let mut terminal = terminal::Terminal::enter(!args.flag("no-color"))?;
+    let mut terminal = Some(terminal::Terminal::enter(!args.flag("no-color"))?);
     let mut state = State::new(args.flag("demo"));
     let mut input = input::Decoder::default();
     let mut request: Option<Request> = None;
@@ -89,14 +91,17 @@ pub async fn run(args: &Args) -> Result<()> {
     let mut dirty = true;
     let mut previous_size = (0, 0);
     loop {
-        let size = terminal.size()?;
+        let size = terminal.as_ref().unwrap().size()?;
         if size != previous_size {
             previous_size = size;
             dirty = true;
         }
-        let keys = input.feed(&terminal.read()?, std::time::Instant::now());
+        let keys = input.feed(
+            &terminal.as_mut().unwrap().read()?,
+            std::time::Instant::now(),
+        );
         for key in keys {
-            if key == Key::Interrupt || (key == Key::Char('q') && !state.searching) {
+            if key == Key::Interrupt || (key == Key::Char('q') && !state.entering_text()) {
                 return Ok(());
             }
             if request.is_some()
@@ -104,7 +109,7 @@ pub async fn run(args: &Args) -> Result<()> {
                 && !(state.page == Page::Network
                     && matches!(
                         key,
-                        Key::Tab | Key::Escape | Key::Char('1'..='4' | '[' | ']')
+                        Key::Tab | Key::Escape | Key::Char('1'..='6' | '[' | ']')
                     ))
             {
                 continue;
@@ -112,6 +117,46 @@ pub async fn run(args: &Args) -> Result<()> {
             let page = state.page;
             match state.key(key) {
                 Action::None => {}
+                Action::ReviewForm => {
+                    if let Some(form) = &state.form {
+                        match form.args(args) {
+                            Ok(operation) => {
+                                state.execution = Some(operation);
+                                state.message = None;
+                            }
+                            Err(error) => state.message = Some(format!("{error:#}")),
+                        }
+                    }
+                }
+                Action::Execute(operation) => {
+                    request = None;
+                    state.saving = false;
+                    drop(terminal.take());
+                    eprintln!("\ncor {} · 使用相同账户和数据目录\n", operation.path);
+                    let result = Box::pin(crate::commands::execute(&operation)).await;
+                    if operation.path == "update install" {
+                        eprintln!(
+                            "\n已退出 TUI 以释放程序文件；安装结果请用 cor update status 查看"
+                        );
+                        return result;
+                    }
+                    match result {
+                        Ok(()) => eprintln!("\n命令已完成"),
+                        Err(error) => {
+                            eprintln!("\n操作失败：{error:#}");
+                            crate::diagnostics::failure_hint(Some(&operation));
+                        }
+                    }
+                    crate::output::read_line("按 Enter 返回 TUI；Ctrl+C 退出：").await?;
+                    terminal = Some(terminal::Terminal::enter(!args.flag("no-color"))?);
+                    input = input::Decoder::default();
+                    state.form = None;
+                    state.execution = None;
+                    state.release_page();
+                    last_refresh -= Duration::from_secs(5);
+                    dirty = true;
+                    break;
+                }
                 Action::Refresh => last_refresh -= Duration::from_secs(5),
                 Action::Select(target) => {
                     let args = args.clone();
@@ -179,7 +224,10 @@ pub async fn run(args: &Args) -> Result<()> {
             last_refresh = tokio::time::Instant::now();
         }
         if dirty {
-            terminal.draw(&render::frame(&state, size.0, size.1))?;
+            terminal
+                .as_mut()
+                .unwrap()
+                .draw(&render::frame(&state, size.0, size.1))?;
             dirty = false;
         }
         tokio::time::sleep(Duration::from_millis(40)).await;

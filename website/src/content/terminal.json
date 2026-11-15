@@ -1,0 +1,256 @@
+{
+  "home": {
+    "source": "actual-cor-pty",
+    "lines": [
+      {
+        "text": "  CLASH OF RUST   /   TERMINAL   原型",
+        "tone": "accent"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "  [1 首页]      2 节点       3 连接       4 网络",
+        "tone": "accent"
+      },
+      {
+        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+        "tone": "muted"
+      },
+      {
+        "text": "  ● 内核运行中   ·   CLI 后台   ·   0.7.2-fix.3.network-toolbox",
+        "tone": "accent"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "  代理方式      关闭 · 规则模式",
+        "tone": "plain"
+      },
+      {
+        "text": "  当前订阅      Memory workload",
+        "tone": "plain"
+      },
+      {
+        "text": "  参考线路      DIRECT",
+        "tone": "accent"
+      },
+      {
+        "text": "  Claude 保护   已关闭",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "  ↓ 下载  0.0 KiB/s     ↑ 上传  0.0 KiB/s     连接  0",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "  规则模式可有多个出口；连接页展示逐连接的实际规则与线路。",
+        "tone": "muted"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+        "tone": "muted"
+      },
+      {
+        "text": "  退出界面保留后台和代理；按 1/2/3/4 或 Tab 切换页面",
+        "tone": "muted"
+      },
+      {
+        "text": "  ↑↓ 选择   Enter 打开/选择   / 搜索   Esc 返回   r 刷新   q 退出",
+        "tone": "muted"
+      },
+      {
+        "text": "  v0.7.2-fix.3.network-toolbox   ·   本机后台   ·   每秒采样，变化时绘制",
+        "tone": "muted"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      }
+    ],
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "1e34a79e845a2b2eef79587620a54a3a3b839e27"
+  },
+  "network": {
+    "source": "actual-cor-pty",
+    "lines": [
+      {
+        "text": "  CLASH OF RUST   /   TERMINAL   原型",
+        "tone": "accent"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "   1 首页       2 节点       3 连接      [4 网络]",
+        "tone": "accent"
+      },
+      {
+        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+        "tone": "muted"
+      },
+      {
+        "text": "  网站检查  1/11",
+        "tone": "accent"
+      },
+      {
+        "text": "  网址：github.com",
+        "tone": "plain"
+      },
+      {
+        "text": "  DNS、双协议响应与本次实际线路",
+        "tone": "muted"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+        "tone": "muted"
+      },
+      {
+        "text": "  退出界面保留后台和代理；按 1/2/3/4 或 Tab 切换页面",
+        "tone": "muted"
+      },
+      {
+        "text": "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–4 切页   q 退出",
+        "tone": "muted"
+      },
+      {
+        "text": "  v0.7.2-fix.3.network-toolbox   ·   本机后台   ·   每秒采样，变化时绘制",
+        "tone": "muted"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      },
+      {
+        "text": "",
+        "tone": "plain"
+      }
+    ],
+    "version": "0.7.2-fix.3.network-toolbox",
+    "commit": "1e34a79e845a2b2eef79587620a54a3a3b839e27"
+  }
+}

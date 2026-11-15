@@ -2,7 +2,7 @@
 
     python website/build.py
 
-English pages land in dist/, Chinese pages in dist/zh/. Illustrations and fonts
+Chinese pages land in dist/, English pages in dist/en/. Illustrations and fonts
 come ready-made from src/assets; prepare_assets.py regenerates those.
 """
 from html import escape
@@ -17,6 +17,7 @@ SRC = ROOT / "src"
 DIST = ROOT / "dist"
 REPO_URL = "https://github.com/Fu021/Clash-of-Rust"
 DOCS_URL = f"{REPO_URL}/blob/main/docs"
+SITE_URL = "https://clash-of-rust.fu021.shop"
 PAGES = ("index", "tools", "guide", "download", "releases")
 SPACING = ("0.9", "1", "1.1", "1.2", "1.3", "1.4", "1.6")
 
@@ -26,7 +27,6 @@ TEXT = {
         "nav_label": "Site", "nav": {"tools": "Network tools", "guide": "Guide", "releases": "Versions", "download": "Download"},
         "other_lang": "中文", "other_label": "切换到中文", "star": "Star",
         "foot_note": "Free software under GPL-3.0. Runs on the mihomo core.",
-        "foot_art": "Illustrations were made for this site and are not screenshots of the app.",
         "foot_links": {"releases": "All releases", "issues": "Report a problem", "docs": "Developer docs"},
         "labels": {"checks": "What it checks", "when": "Use it when", "note": "Keep in mind", "options": "Options",
                    "none": "No extra options", "symptom": "What you see", "try": "Start with",
@@ -36,8 +36,7 @@ TEXT = {
         "html_lang": "zh-CN", "skip": "跳到正文", "home": "Clash of Rust 首页",
         "nav_label": "站内导航", "nav": {"tools": "网络工具", "guide": "使用指南", "releases": "版本记录", "download": "下载"},
         "other_lang": "English", "other_label": "Switch to English", "star": "Star",
-        "foot_note": "自由软件，以 GPL-3.0 发布，内核是 mihomo。",
-        "foot_art": "插画为本站绘制，不是应用截图。",
+        "foot_note": "开源 mihomo 客户端 · GPL-3.0",
         "foot_links": {"releases": "全部版本", "issues": "反馈问题", "docs": "开发文档"},
         "labels": {"checks": "查什么", "when": "什么时候用", "note": "留意", "options": "可调参数",
                    "none": "没有额外参数", "symptom": "现象", "try": "先用",
@@ -55,6 +54,45 @@ WORDMARK = (
     '<path class="wordmark-of" stroke-width="1.6" d="M55.2 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0 M68.8 17V6.2a3.5 3.5 0 0 1 4.4 -3.4 M66.8 8H72"/></svg>'
 )
 STAR = '<svg class="star" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 0h2v3h2v1h3v2h-1v1h-1v1h1v2h1v2h-2v-1H9v-1H8V9H4v1H3v1H2v1H0v-2h1V8h1V7H1V6H0V4h3V3h2z"/></svg>'
+
+CAPTURES = {
+    "home": ("首页：连接、模式、流量和网络信息", "Home: connection, mode, traffic and network details"),
+    "nodes": ("代理：策略组、节点与延迟", "Proxies: policy groups, nodes and latency"),
+    "subscriptions": ("订阅：添加、导入与切换配置", "Subscriptions: add, import and switch configurations"),
+    "rules": ("规则：快捷规则与自定义分流", "Rules: shortcuts and custom routing"),
+    "network": ("网络诊断：选择工具、输入目标并查看结果", "Diagnostics: choose a tool, enter a target and read the result"),
+    "protection": ("A÷检测：地区线索与 Claude 保护", "A÷ check: region clues and Claude protection"),
+    "applications": ("Android 应用分流：筛选并选择进入 VPN 的应用", "Android routing: find and select the apps that enter the VPN"),
+}
+
+
+def render_capture(name, lang, root, captures):
+    capture = captures[name]
+    label = CAPTURES[name][0 if lang == "zh" else 1]
+    phone = capture["platform"] == "android"
+    platform = "Android" if phone else ("桌面" if lang == "zh" else "Desktop")
+    note = "演示数据" if lang == "zh" else "Demo data"
+    return (f'<figure class="product-shot{" phone" if phone else ""}" data-capture-version="{escape(capture["version"])}">'
+            f'<div class="frame"><img src="{root}assets/{escape(capture["file"])}" '
+            f'width="{capture["width"]}" height="{capture["height"]}" alt="{escape(label)}" loading="lazy"></div>'
+            f'<figcaption>{escape(label)} · {platform} · {escape(capture["version"])} · {note}</figcaption></figure>')
+
+
+def render_terminal(name, lang, frames):
+    frame = frames[name]
+    if frame["source"] != "actual-cor-pty":
+        raise ValueError("Terminal illustrations must use actual PTY frames")
+    tones = {"plain", "muted", "accent", "selected", "warning"}
+    lines = []
+    for line in frame["lines"]:
+        if line["tone"] not in tones:
+            raise ValueError("Invalid terminal tone")
+        lines.append(f'<span class="tone-{line["tone"]}">{escape(line["text"])}</span>')
+    label = "实际终端画面 · 固定测试输入" if lang == "zh" else "Actual terminal frame · Fixed test input"
+    return (f'<figure class="product-shot terminal-shot" data-capture-version="{escape(frame["version"])}">'
+            '<div class="terminal-title" aria-hidden="true">cor ui</div>'
+            f'<pre class="terminal-capture" tabindex="0" aria-label="{label}">' + "\n".join(lines) + "</pre>"
+            f'<figcaption>{label} · Linux · {escape(frame["version"])}</figcaption></figure>')
 
 
 def tool_command(tool):
@@ -138,13 +176,14 @@ def render_tools(kind, lang, data, root):
 
 def layout(lang, page, title, description, body, release_data):
     text = TEXT[lang]
-    root = "" if lang == "en" else "../"
-    other =f"{root}zh/{page}.html" if lang == "en" else f"{root}{page}.html"
+    root = "" if lang == "zh" else "../"
+    other = f"en/{page}.html" if lang == "zh" else f"../{page}.html"
+    page_path = "" if page == "index" else page
+    canonical = f"{SITE_URL}/{'en/' if lang == 'en' else ''}{page_path}"
     current = ' aria-current="page"'
     nav = "".join(
         f'<a href="{name}.html"{current if name == page else ""}>{label}</a>'
         for name, label in text["nav"].items())
-    redirect = ""
     foot = text["foot_links"]
     release_json = json.dumps(release_data, ensure_ascii=True).replace("<", "\\u003c")
     return f"""<!doctype html>
@@ -155,12 +194,14 @@ def layout(lang, page, title, description, body, release_data):
 <title>{escape(title)}</title>
 <meta name="description" content="{escape(description)}">
 <meta name="theme-color" content="#f8f3e7">
-<link rel="alternate" hreflang="en" href="{root}{page}.html">
-<link rel="alternate" hreflang="zh-CN" href="{root}zh/{page}.html">
+<link rel="canonical" href="{canonical}">
+<link rel="alternate" hreflang="en" href="{SITE_URL}/en/{page_path}">
+<link rel="alternate" hreflang="zh-CN" href="{SITE_URL}/{page_path}">
+<link rel="alternate" hreflang="x-default" href="{SITE_URL}/{page_path}">
 <link rel="icon" href="{root}assets/cat.png">
 <link rel="preload" href="{root}assets/fonts/national-park.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}site.css">
-{redirect}<script type="application/json" id="release-data">{release_json}</script><script src="{root}site.js" defer></script>
+<script type="application/json" id="release-data">{release_json}</script><script src="{root}site.js" defer></script>
 </head>
 <body class="page-{page}">
 <a class="skip" href="#main">{text['skip']}</a>
@@ -178,7 +219,7 @@ def layout(lang, page, title, description, body, release_data):
 <footer class="foot">
   <div class="track" aria-hidden="true"></div>
   <div class="wrap">
-    <div><a class="brand" href="index.html" aria-label="{text['home']}">{WORDMARK}</a><p>{text['foot_note']}</p><p>{text['foot_art']}</p></div>
+    <div><a class="brand" href="index.html" aria-label="{text['home']}">{WORDMARK}</a><p>{text['foot_note']}</p></div>
     <nav aria-label="{text['nav_label']}">{nav}</nav>
     <nav><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
   </div>
@@ -191,25 +232,27 @@ def layout(lang, page, title, description, body, release_data):
 def build():
     data = json.loads((SRC / "content" / "tools.json").read_text(encoding="utf-8"))
     release_data = json.loads((SRC / "content" / "releases.json").read_text(encoding="utf-8"))
+    captures = json.loads((SRC / "content" / "screenshots.json").read_text(encoding="utf-8"))
+    terminal = json.loads((SRC / "content" / "terminal.json").read_text(encoding="utf-8"))
     validate(release_data)
     if DIST.resolve() != ROOT / "dist" or DIST.is_symlink():
         raise ValueError("Unsafe build output")
     if DIST.exists():
         shutil.rmtree(DIST)
-    (DIST / "zh").mkdir(parents=True)
+    (DIST / "en").mkdir(parents=True)
     shutil.copytree(SRC / "assets", DIST / "assets")
     for name in ("site.css", "site.js"):
         shutil.copyfile(SRC / name, DIST / name)
     for name in ("_headers", "_redirects", "robots.txt", "sitemap.xml"):
         shutil.copyfile(ROOT / name, DIST / name)
-    for lang in ("en", "zh"):
-        root = "" if lang == "en" else "../"
+    for lang in ("zh", "en"):
+        root = "" if lang == "zh" else "../"
         for page in PAGES:
             path = SRC / "pages" / lang / f"{page}.html"
             if page == "releases":
                 body = render_releases(release_data, lang, REPO_URL)
                 title = "版本记录 — Clash of Rust" if lang == "zh" else "Versions — Clash of Rust"
-                target = DIST / ("" if lang == "en" else "zh") / "releases.html"
+                target = DIST / ("" if lang == "zh" else "en") / "releases.html"
                 target.write_text(layout(lang, page, title, title, body, release_data), encoding="utf-8")
                 print(f"  {target.relative_to(ROOT)}")
                 continue
@@ -223,6 +266,8 @@ def build():
                     body = body.replace("{{"+block+"}}", (SRC / "partials" / lang / (block+".html")).read_text(encoding="utf-8"))
             body = body.replace("{{releases:home}}", render_releases(release_data, lang, REPO_URL, compact=True))
             body = re.sub(r"\{\{tools:(\w+)\}\}", lambda match: render_tools(match.group(1), lang, data, ""), body)
+            body = re.sub(r"\{\{shot:(\w+)\}\}", lambda match: render_capture(match.group(1), lang, root, captures), body)
+            body = re.sub(r"\{\{terminal:(\w+)\}\}", lambda match: render_terminal(match.group(1), lang, terminal), body)
             body = (body.replace("{{root}}", root).replace("{{repo}}", REPO_URL).replace("{{docs}}", DOCS_URL)
                     .replace("{{star}}", STAR))
             if page == "download":
@@ -234,7 +279,7 @@ def build():
             leftover = re.findall(r"\{\{[^}]*\}\}", body)
             if leftover:
                 raise ValueError(f"{lang}/{page}: unresolved {leftover[:3]}")
-            target = DIST / ("" if lang == "en" else "zh") / f"{page}.html"
+            target = DIST / ("" if lang == "zh" else "en") / f"{page}.html"
             target.write_text(layout(lang, page, meta["title"], meta["description"], body, release_data), encoding="utf-8", newline="\n")
             print(f"  {target.relative_to(ROOT)}")
 
