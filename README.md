@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="resources/icons/app.png" width="112" height="112" alt="Clash of Rust 图标">
+  <img src="resources/icons/app.png" width="80" height="80" alt="Clash of Rust 图标">
 </p>
 <h1 align="center">
   <picture>
@@ -18,7 +18,10 @@
   <a href="https://github.com/Fu021/Clash-of-Rust/releases"><img src="https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/total?label=downloads&amp;color=577cad" alt="全部版本累计下载次数"></a>
 </p>
 <p align="center">
-  <a href="#安装与使用">下载安装</a> ·
+  <a href="https://clash-of-rust.fhy021.workers.dev/"><img src="resources/icons/website-button.svg" width="176" height="44" alt="访问项目网站：功能介绍与软件下载"></a>
+  <a href="https://clash-of-rust.fhy021.workers.dev/download"><img src="resources/icons/download-button.svg" width="136" height="44" alt="下载安装：选择平台与架构"></a>
+</p>
+<p align="center">
   <a href="#界面预览">界面预览</a> ·
   <a href="#命令行">命令行</a> ·
   <a href="docs/README.md">使用与开发文档</a>
@@ -50,7 +53,7 @@
 
 ## 安装与使用
 
-从 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 下载对应系统和架构的安装包，附带 `.sha256` 校验文件。下表为 0.7.1 正式版链接。
+从[网站下载页](https://clash-of-rust.fhy021.workers.dev/download)或 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 下载对应系统和架构的安装包，附带 `.sha256` 校验文件。下表为 0.7.1 正式版链接。
 
 | 平台 | 安装包与下载次数 |
 | --- | --- |

@@ -43,14 +43,14 @@ python3 -B website/build.py --refresh-releases
 
 下载页还会按需读取 GitHub 的当前公开发行信息。接口失败、限流或内容不完整时保留已保存下载；不展示残缺的新版本。禁用 JavaScript 时仍提供正式版九包及校验链接，隐藏需要脚本的筛选和切换按钮。下载直接前往 GitHub，网站不代理或存储安装包。
 
-## 部署候选
+## 部署
 
-当前尚未部署，也没有新增 Actions 或自动发布入口。Cloudflare Pages 作为候选可采用：
+网站已部署到 [Cloudflare Workers](https://clash-of-rust.fhy021.workers.dev/)，使用静态资源托管。
 
 | 设置 | 值 |
 | --- | --- |
 | 项目根目录 | 仓库根目录 |
 | 构建命令 | `python3 -B website/build.py` |
-| 输出目录 | `website/dist` |
+| 部署命令 | `npx wrangler deploy --name clash-of-rust --assets ./website/dist --compatibility-date 2026-11-13` |
 
-保留仓库根目录是为了复制品牌与许可证资源。`_headers` 随输出复制；正式上线时另验域名、响应头、重定向和真实 GitHub API 的浏览器请求。配置依据：[静态 HTML](https://developers.cloudflare.com/pages/framework-guides/deploy-anything/)、[构建配置](https://developers.cloudflare.com/pages/configuration/build-configuration/)和[响应头](https://developers.cloudflare.com/pages/configuration/headers/)。
+保留仓库根目录是为了复制品牌与许可证资源。`_headers` 随输出复制；部署后检查响应头、重定向和真实 GitHub API 的浏览器请求。部署配置见 [Workers Builds 文档](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)。
