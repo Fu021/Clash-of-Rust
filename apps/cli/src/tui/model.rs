@@ -312,7 +312,7 @@ impl State {
                 _ => Action::None,
             };
         }
-        if self.connection.is_some() {
+        if let Some(connection) = &self.connection {
             match key {
                 Key::Up => {
                     self.detail_offset = self.detail_offset.saturating_sub(1);
@@ -330,9 +330,7 @@ impl State {
                     };
                     let mut form =
                         Form::new(form::commands().find(|spec| spec.path == path).unwrap());
-                    form.fields[0]
-                        .value
-                        .clone_from(self.connection.as_ref().unwrap());
+                    form.fields[0].value.clone_from(connection);
                     form.selected = form.fields.len();
                     self.form = Some(form);
                     return Action::None;

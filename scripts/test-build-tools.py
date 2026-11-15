@@ -1548,6 +1548,8 @@ class BuildTests(unittest.TestCase):
                          'apps/cli/src/commands/inspection/picker.rs',
                          'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'apps/cli/src/commands/maintenance.rs', 'scripts/test-cli-update.py',
+                         'apps/cli/src/tui/mod.rs', 'apps/cli/src/tui/model.rs',
+                         'apps/cli/src/tui/form.rs',
                          'installer/clash-of-rust.nsi', 'scripts/windows_ci.py',
                          'scripts/windows_update_tests.py', 'scripts/build-installer.py',
                          'crates/client-runtime/src/platform/windows/mod.rs'):

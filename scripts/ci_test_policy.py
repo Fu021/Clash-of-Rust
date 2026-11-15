@@ -124,6 +124,7 @@ def select(paths, extended=False):
         path.startswith(('crates/client-core/src/update', 'crates/client-core/src/config/',
                          'crates/client-core/src/download.rs', 'crates/client-core/src/geodata/',
                          'crates/client-runtime/src/update/', 'apps/cli/src/commands/maintenance.rs',
+                         'apps/cli/src/tui/',
                          'crates/client-runtime/src/control/', 'apps/cli/src/backend.rs',
                          'apps/cli/src/service', 'apps/cli/src/commands/inspection',
                          'crates/client-runtime/src/platform/linux/cli_service.rs',
