@@ -1,34 +1,55 @@
 use super::*;
 use crate::config::{Settings, Store};
-use std::{io::Read, path::Path};
+use std::{
+    io::{self, Read},
+    path::Path,
+};
 use yaml_serde::Value;
 
 pub(super) fn read(root: &Path) -> Result<Vec<Entry>> {
     let store = Store { root: root.into() };
-    let settings: Settings =
-        serde_json::from_reader(std::fs::File::open(root.join("settings.json"))?.take(1024 * 1024))
-            .map_err(|_| error::failure("config_unavailable", "已保存设置不可读或格式无效"))?;
+    let settings: Settings = serde_json::from_reader(
+        std::fs::File::open(root.join("settings.json"))
+            .map_err(read_error)?
+            .take(1024 * 1024),
+    )
+    .map_err(|_| error::failure("config_unavailable", "已保存设置不可读或格式无效"))?;
     let id = settings
         .active_profile
         .as_deref()
         .ok_or_else(|| error::failure("config_unavailable", "未选择订阅"))?;
-    let original = read_file(&store.profile_path(id)?)?;
+    let original_path = store
+        .profile_path(id)
+        .map_err(|_| error::failure("config_invalid", "已保存订阅索引无效"))?;
+    let original = read_file(&original_path)?;
     let effective = read_file(&store.runtime().join("config.yaml"))?;
     compare(&original, &effective)
 }
 
 pub(super) fn read_file(path: &Path) -> Result<String> {
-    let mut text = String::new();
-    std::fs::File::open(path)?
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(read_error)?
         .take(8 * 1024 * 1024 + 1)
-        .read_to_string(&mut text)?;
-    if text.len() > 8 * 1024 * 1024 {
+        .read_to_end(&mut bytes)
+        .map_err(read_error)?;
+    if bytes.len() > 8 * 1024 * 1024 {
         return Err(error::failure(
             "config_snapshot_limit",
             "配置超过本次 8 MiB 分析上限，未继续解析",
         ));
     }
-    Ok(text)
+    String::from_utf8(bytes).map_err(|_| error::failure("config_invalid", "配置文件不是有效 UTF-8"))
+}
+
+pub(super) fn read_error(error: io::Error) -> anyhow::Error {
+    match error.kind() {
+        io::ErrorKind::PermissionDenied => error::failure(
+            "permission_denied",
+            "无权读取已保存配置，请核对原用户和数据目录",
+        ),
+        _ => error::failure("config_unavailable", "已保存配置文件不可读取"),
+    }
 }
 
 pub(super) fn compare(original: &str, effective: &str) -> Result<Vec<Entry>> {
@@ -36,10 +57,9 @@ pub(super) fn compare(original: &str, effective: &str) -> Result<Vec<Entry>> {
         .map_err(|_| error::failure("config_invalid", "原订阅 YAML 无法解析"))?;
     let effective: Value = yaml_serde::from_str(effective)
         .map_err(|_| error::failure("config_invalid", "已生成配置 YAML 无法解析"))?;
-    ensure!(
-        original.is_mapping() && effective.is_mapping(),
-        "配置不是映射"
-    );
+    if !original.is_mapping() || !effective.is_mapping() {
+        return Err(error::failure("config_invalid", "配置根节点必须是映射"));
+    }
     let mut entries = Vec::new();
     for field in [
         "mode",

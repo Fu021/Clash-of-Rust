@@ -94,6 +94,51 @@ fn config_diff_never_emits_values_or_dynamic_field_names() {
 }
 
 #[test]
+fn config_file_failures_distinguish_missing_permissions_encoding_and_size() {
+    let temporary = tempfile::tempdir().unwrap();
+    let missing = temporary.path().join("private-missing.yaml");
+    for failure in [
+        config_diff::read_file(&missing).unwrap_err(),
+        config_diff::read(temporary.path()).unwrap_err(),
+    ] {
+        let entry = error::entry("配置", &failure);
+        assert_eq!(entry.code, "config_unavailable");
+        assert!(!entry.detail.contains("private-"));
+    }
+    let directory = config_diff::read_file(temporary.path()).unwrap_err();
+    assert!(matches!(
+        error::entry("配置", &directory).code,
+        "config_unavailable" | "permission_denied"
+    ));
+    let denied = config_diff::read_error(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "private-path/private-token",
+    ));
+    let entry = error::entry("配置", &denied);
+    assert_eq!(entry.code, "permission_denied");
+    assert!(!entry.detail.contains("private-"));
+    let invalid = temporary.path().join("invalid.yaml");
+    std::fs::write(&invalid, [0xff]).unwrap();
+    assert_eq!(
+        error::entry("配置", &config_diff::read_file(&invalid).unwrap_err()).code,
+        "config_invalid"
+    );
+    let oversized = temporary.path().join("oversized.yaml");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(8 * 1024 * 1024 + 1)
+        .unwrap();
+    assert_eq!(
+        error::entry("配置", &config_diff::read_file(&oversized).unwrap_err()).code,
+        "config_snapshot_limit"
+    );
+    for original in ["null", "[]", "plain text"] {
+        let failure = config_diff::compare(original, "rules: []").unwrap_err();
+        assert_eq!(error::entry("配置", &failure).code, "config_invalid");
+    }
+}
+
+#[test]
 fn traffic_handles_missing_metadata_saturates_counters_and_limits_output() {
     let mut connections = Vec::new();
     for index in 0..200 {
