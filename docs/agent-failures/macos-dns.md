@@ -16,6 +16,8 @@ CI `43694713473` 的 Intel Mac 先在 TUN 子会话就绪时超时，再在诊�
 
 `macos_test_network.py` 在安装测试前保存各启用网络服务的 DNS、搜索域、有效 HTTP/HTTPS/SOCKS/PAC 状态及代理排除项。测试正常、断言失败或超时后均清理本轮创建的 launchd 助手，再恢复基线；不接管已有助手，不替换公共 DNS，不改 Tailscale 路由。助手清理失败仍尝试网络恢复，但任务保持失败；恢复也不能覆盖原测试错误。助手启动阶段日志和清理前 DNS、路由现场在移除服务前保存，日志尾部同时写入 job 日志。
 
+`launchctl bootout` 后不能以首次 `print` 仍可见就立即断言卸载失败。保留最多 10 秒状态收敛窗口及每次结果，只有明确的服务不存在状态才移除本轮文件；一直存活、查询权限失败或持续超时仍失败。后续恢复成功也保留之前的失败观测，避免第二次清理覆盖首次现场。CI `43700368756` 两种 Mac 的真实代理/TUN 均通过，ARM64 首次清理未确认、随后确认服务消失；补充异步卸载与历史保留回归后须重新取得同提交验证。
+
 上传诊断前独立执行同一恢复入口，覆盖测试进程被外层超时终止的情况。按 [GitHub 官方通信要求](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#communication-requirements-for-github-hosted-runners)检查 GitHub、API、codeload、资源端点及实际 Actions 结果/缓存主机；仅从 runner URL 提取合法主机，不记录路径或令牌。HTTPS 验证保留证书校验，HTTP 403/404 只代表已连通，不等同于权限或上传成功。失败时刷新一次系统解析缓存，在 30 秒恢复窗口内有界重试，每轮最多另有 20 秒在途探测；仍失败保留原解析器直接查询及 job summary，不依赖附件成功。有效代理状态恢复不要求清除已禁用代理的旧地址。所有改写入口只允许可丢弃 macOS Actions runner；首次 DNS 故障和 TUN 助手超时触发仍待原生证据定位。
 
 ## 应用 DNS 接管

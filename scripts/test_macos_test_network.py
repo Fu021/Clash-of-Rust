@@ -201,6 +201,7 @@ class MacosTestNetworkTests(unittest.TestCase):
                 label = 'org.clashofrust.network.501'
                 paths = (label, root/'helper', root/'agent.plist')
                 with patch.object(guard, 'service_paths', return_value=paths), \
+                        patch.object(guard, 'SERVICE_STOP_SECONDS', 0), \
                         patch.object(guard.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
                     guard.network.write_report(guard.SERVICE, {'label': label, 'report': str(root)})
                     command.side_effect = [
@@ -217,6 +218,49 @@ class MacosTestNetworkTests(unittest.TestCase):
                             guard.cleanup_service()
                         run.assert_not_called()
                         self.assertTrue(guard.SERVICE.exists())
+
+    def test_launchd_asynchronous_bootout_waits_for_confirmed_removal(self):
+        with self.runner() as (root, _, _, command, _, pause):
+            label = 'org.clashofrust.network.501'
+            paths = (label, root/'helper', root/'agent.plist')
+            with patch.object(guard, 'service_paths', return_value=paths), \
+                    patch.object(guard.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                guard.network.write_report(guard.SERVICE, {'label': label, 'report': str(root)})
+                command.side_effect = [
+                    {'returncode': 0, 'stdout': 'running'},
+                    {'returncode': 0, 'stdout': 'helper log'},
+                    {'returncode': 0},
+                    {'returncode': 0, 'stdout': 'state = exiting'},
+                    {'returncode': 113, 'stderr': 'Could not find service'}]
+                guard.cleanup_service()
+                pause.assert_called_once()
+                run.assert_called_once()
+                report = json.loads((root/'proxy-smoke-network-service-cleanup.json').read_text())
+                self.assertEqual([item['returncode'] for item in report['attempts']], [0, 113])
+                self.assertFalse(guard.SERVICE.exists())
+
+    def test_failed_teardown_history_survives_successful_later_recovery(self):
+        with self.runner() as (root, _, _, command, _, _):
+            label = 'org.clashofrust.network.501'
+            paths = (label, root/'helper', root/'agent.plist')
+            with patch.object(guard, 'service_paths', return_value=paths), \
+                    patch.object(guard, 'SERVICE_STOP_SECONDS', 0), \
+                    patch.object(guard.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                guard.network.write_report(guard.SERVICE, {'label': label, 'report': str(root)})
+                command.side_effect = [
+                    {'returncode': 0}, {'returncode': 0}, {'returncode': 0},
+                    {'returncode': 0, 'stdout': 'state = exiting'}]
+                with self.assertRaisesRegex(RuntimeError, 'confirm isolated'):
+                    guard.cleanup_service()
+                run.assert_not_called()
+                command.side_effect = [
+                    {'returncode': 0}, {'returncode': 0}, {'returncode': 3},
+                    {'returncode': 113, 'stderr': 'Could not find service'}]
+                guard.cleanup_service()
+                report = json.loads((root/'proxy-smoke-network-service-cleanup.json').read_text())
+                self.assertEqual(report['after']['returncode'], 113)
+                self.assertEqual(report['history'][0]['after']['returncode'], 0)
+                self.assertFalse(guard.SERVICE.exists())
 
     def test_existing_service_is_not_adopted_or_deleted(self):
         with self.runner() as (root, _, _, command, _, _):

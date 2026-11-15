@@ -21,6 +21,7 @@ HOSTS = ('github.com', 'api.github.com', 'codeload.github.com',
 PROXIES = ('webproxy', 'securewebproxy', 'socksfirewallproxy',
            'autoproxyurl', 'proxyautodiscovery')
 RECOVERY_SECONDS = 30
+SERVICE_STOP_SECONDS = 10
 
 
 def require_runner():
@@ -258,9 +259,24 @@ def cleanup_service():
     (output/'proxy-smoke-network-service.log').write_text(log.get('stdout', '') + log.get('stderr', ''))
     print('macOS test helper before cleanup:\n' + log.get('stdout', '') + log.get('stderr', ''), flush=True)
     stopped = network.command(['/usr/bin/sudo', '-n', '/bin/launchctl', 'bootout', 'system/' + label], timeout=20)
-    after = network.command(['/usr/bin/sudo', '-n', '/bin/launchctl', 'print', 'system/' + label], timeout=5)
-    network.write_report(output/'proxy-smoke-network-service-cleanup.json',
-                         {'bootout': stopped, 'after': after})
+    path = output/'proxy-smoke-network-service-cleanup.json'
+    previous = json.loads(path.read_text()) if path.exists() else {}
+    history = [*previous.get('history', []), previous] if previous else []
+    history = [{key: value for key, value in item.items() if key != 'history'}
+               for item in history[-3:]]
+    attempts = []
+    deadline = time.monotonic() + SERVICE_STOP_SECONDS
+    while True:
+        after = network.command(
+            ['/usr/bin/sudo', '-n', '/bin/launchctl', 'print', 'system/' + label], timeout=2)
+        attempts.append({'observed_at': time.time(), **after})
+        network.write_report(path, {'bootout': stopped, 'after': after,
+                                    'attempts': attempts, 'history': history})
+        if after['returncode'] == 113:
+            break
+        if after['returncode'] not in (0, None) or time.monotonic() >= deadline:
+            break
+        time.sleep(min(.2, max(0, deadline - time.monotonic())))
     if after['returncode'] != 113:
         raise RuntimeError('Unable to confirm isolated launchd network service was removed')
     subprocess.run(['/usr/bin/sudo', '-n', '/bin/rm', '-rf', str(directory), str(agent)],
