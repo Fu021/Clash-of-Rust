@@ -1,7 +1,7 @@
 import { PageSurface } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { PageScroll, Label, Caption, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Paragraph, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 component SortHeading inherits Rectangle {
     in property <string> label;
@@ -35,6 +35,7 @@ component SortHeading inherits Rectangle {
     TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-sort, root.field, ""); } }
 }
 export component ConnectionsPage inherits PageSurface {
+    property <bool> summary-open;
     property <string> sort-field: UiData.connection-sort;
     property <bool> sort-descending: UiData.descending;
     property <length> available: root.width - 24px - 48px - 72px;
@@ -46,6 +47,16 @@ export component ConnectionsPage inherits PageSurface {
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Field { placeholder: "搜索域名、IP、规则或代理链"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
             Caption { text: UiData.connection-count + " 条活跃连接"; horizontal-stretch: 0; }
+            ActionButton { text: root.summary-open ? "收起汇总" : "流量汇总"; quiet: true;
+                geometry-key: "connections-summary-toggle";
+                clicked => { root.summary-open = !root.summary-open; }
+            }
+        }
+        if root.summary-open: Panel {
+            height: min(150px, root.height * 0.3); vertical-stretch: 0;
+            PageScroll {
+                for line in UiData.connection-summary: Paragraph { text: line; font-size: Theme.detail-size; }
+            }
         }
         Panel {
             vertical-stretch: 1;

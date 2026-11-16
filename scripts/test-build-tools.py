@@ -1372,14 +1372,89 @@ class BuildTests(unittest.TestCase):
                                  return_value=reference), \
                     patch.object(windows_update_tests, 'write_barrier', side_effect=barrier), \
                     patch.object(windows_update_tests, 'installed_hashes',
-                                 side_effect=readable_hashes):
+                                 side_effect=readable_hashes), \
+                    patch.object(windows_update_tests, 'verify_independent_core') as independent:
                 windows_update_tests.verify_write_failures(package, installed, payload, execute)
+                independent.assert_called_once()
             report = json.loads((directory/'target/windows-update-report.json').read_text())
             self.assertTrue(report['completed'])
             self.assertEqual(len(candidate_barriers), len(windows_update_tests.CASES))
             for case in report['cases']:
                 self.assertTrue(case['attempts'][1]['original_files_unchanged'])
                 self.assertTrue(all(attempt['retry_succeeded'] for attempt in case['attempts']))
+
+    def test_windows_independent_core_update_checks_traffic_and_preserves_external_files(self):
+        for outcome in ('success', 'installer-fails', 'core-exits', 'core-modified'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                payload = directory/'payload'
+                installed = directory/'自定义安装目录 with spaces'
+                external = directory/'separate-core'
+                external.mkdir()
+                executable = external/'mihomo.exe'
+                config = external/'config.yaml'
+                executable.write_bytes(b'independent core')
+                config.write_text('rules: [MATCH,DIRECT]')
+                package = directory/'setup.exe'
+                for name in (
+                    'clash-of-rust.exe', 'clash-desktop-ui.exe', 'cor.exe',
+                    'clash-tun-launcher.exe', 'resources/mihomo.exe',
+                    'resources/GeoIP.dat', 'resources/GeoSite.dat',
+                ):
+                    target = payload/name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b'verified candidate')
+                shutil.copytree(payload, installed)
+                process = SimpleNamespace(pid=123, poll=lambda: None)
+                probes = []
+
+                def probe():
+                    probes.append(True)
+                    return 'fixture payload digest'
+
+                def execute(installer, arguments, expected_code):
+                    self.assertEqual(installer, package)
+                    self.assertEqual(arguments, ['/S', '/UPDATE', f'/D={installed}'])
+                    self.assertEqual(expected_code, 0)
+                    self.assertTrue(probes)
+                    self.assertIsNone(process.poll())
+                    self.assertNotEqual((installed/'clash-desktop-ui.exe').read_bytes(),
+                                        (payload/'clash-desktop-ui.exe').read_bytes())
+                    if outcome == 'installer-fails':
+                        (directory/'installer-failure.json').write_text(
+                            '{"stage":"preflight","exit_code":68}')
+                        raise RuntimeError('expected exit 0, got 68')
+                    shutil.copytree(payload, installed, dirs_exist_ok=True)
+                    if outcome == 'core-exits':
+                        process.poll = lambda: 0
+                    elif outcome == 'core-modified':
+                        config.write_text('unexpectedly modified')
+
+                record = {}
+                with patch.object(windows_update_tests, 'independent_core', return_value=
+                                  contextlib.nullcontext((process, executable, config, probe))):
+                    if outcome == 'installer-fails':
+                        with self.assertRaisesRegex(RuntimeError, 'got 68'):
+                            windows_update_tests.verify_independent_core(
+                                package, installed, payload, directory, execute, record)
+                        self.assertFalse(record['completed'])
+                        self.assertEqual(record['failure']['exit_code'], 68)
+                    elif outcome in ('core-exits', 'core-modified'):
+                        with self.assertRaises(AssertionError):
+                            windows_update_tests.verify_independent_core(
+                                package, installed, payload, directory, execute, record)
+                        self.assertFalse(record['completed'])
+                        self.assertIn('error', record)
+                    else:
+                        windows_update_tests.verify_independent_core(
+                            package, installed, payload, directory, execute, record)
+                        self.assertTrue(record['completed'])
+                        self.assertTrue(record['same_process_alive'])
+                        self.assertTrue(record['payload_verified'])
+                        self.assertEqual(len(probes), 2)
+                self.assertEqual(executable.read_bytes(), b'independent core')
+                if outcome != 'core-modified':
+                    self.assertEqual(config.read_text(), 'rules: [MATCH,DIRECT]')
 
     def test_windows_installer_exit_keeps_bounded_failure_context(self):
         with tempfile.TemporaryDirectory() as temporary:

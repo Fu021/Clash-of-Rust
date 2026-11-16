@@ -134,6 +134,8 @@ component NodeCard inherits MCard {
     if root.detailed: VerticalLayout { spacing: MobileTypography.small-gap;
         MSmall { text: "完整名称：" + root.item.name; wrap: word-wrap; }
         MSmall { text: "协议：" + root.item.kind + (root.selected ? (MobileData.protected ? " · 已锁定" : " · 使用中") : ""); wrap: word-wrap; }
+        if root.item.details != "": MSmall { text: root.item.details; wrap: word-wrap; }
+        MSmall { text: "最近延迟：" + root.item.delay + "；测量时间未提供，不保证当前健康。实际出口以网站检查为准。"; wrap: word-wrap; }
     }
 }
 export component MobileProxies inherits PageSurface {
@@ -288,6 +290,7 @@ export component MobileSubscriptions inherits PageSurface {
     } }
 }
 component ConnectionsToolbar inherits VerticalLayout {
+    property <bool> summary-open;
     alignment: start; spacing: MobileTypography.small-gap; vertical-stretch: 0;
     padding: 12px;
     MField {
@@ -305,6 +308,16 @@ component ConnectionsToolbar inherits VerticalLayout {
             geometry-key: "connections-close-all";
             text: "关闭全部"; width: max(100px, MobileTypography.font-size(15) * 4 + 16px); horizontal-stretch: 0; danger: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
         MSmall { col: 0; row: 1; colspan: parent.narrow ? 1 : 2; text: MobileData.connection-count + " 条活跃连接"; preferred-width: 0px; }
+        MButton { col: 0; row: 2; colspan: 2; text: root.summary-open ? "收起流量汇总" : "流量汇总"; quiet: true;
+            geometry-key: "connections-summary-toggle";
+            clicked => { root.summary-open = !root.summary-open; }
+        }
+    }
+    if root.summary-open: Rectangle {
+        height: 150px; horizontal-stretch: 1;
+        MScroll {
+            for line in MobileData.connection-summary: MParagraph { text: line; font-size: MobileTypography.font-size(12); }
+        }
     }
 }
 component ConnectionsRow inherits Rectangle {
@@ -694,6 +707,14 @@ export component MobileNetwork inherits PageSurface {
                     text: "导出诊断"; compact: true;
                     width: max(96px, MobileTypography.font-size(14) * 4 + 24px); horizontal-stretch: 0;
                     clicked => { MobileActions.request(MobileIntent.export-diagnostics, "网络工具检查", ""); }
+                }
+            }
+            if MobileData.network-tool == 0 && MobileData.probe-results.length > 0: GridLayout {
+                spacing: 8px;
+                for tool[index] in [1, 2, 4, 11]: MButton {
+                    col: mod(index, 2); row: floor(index / 2);
+                    text: NetworkTools.titles[tool]; quiet: true;
+                    clicked => { MobileActions.request(MobileIntent.network-tool, "" + tool, ""); }
                 }
             }
         }

@@ -194,7 +194,7 @@ def verify(console, resources, report):
             terminal.wait('实际线路')
             terminal.capture(report, 'network')
             terminal.send(b']')
-            terminal.wait('DNS 对照')
+            terminal.wait('DNS 查询')
             terminal.send(b'[')
             terminal.wait('网站检查')
             terminal.send(b'\x1b')

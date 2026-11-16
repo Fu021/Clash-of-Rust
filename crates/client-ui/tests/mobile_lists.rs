@@ -560,12 +560,12 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
             let bounds = targets.borrow();
             let first = &bounds["network-tool:0"];
             let second = &bounds["network-tool:1"];
-            let last = &bounds["network-tool:17"];
+            let last = &bounds["network-tool:11"];
             assert!(first[3] >= 48.);
             assert_eq!(first[0], second[0]);
             assert_eq!(first[2], last[2]);
             assert!(bounds["network-group:target"][1] < first[1]);
-            assert!(bounds["network-group:link"][1] > bounds["network-tool:5"][1]);
+            assert!(bounds["network-group:link"][1] > bounds["network-tool:4"][1]);
         }
         click("network-tool:1");
         assert!(probe.get_opened());
@@ -602,17 +602,17 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
             delta_y: -2000.,
         });
         render();
-        let last = targets.borrow()["network-tool:17"].clone();
+        let last = targets.borrow()["network-tool:11"].clone();
         assert!(last[1] >= 0. && last[1] + last[3] <= height as f32 + 1.);
-        click("network-tool:17");
+        click("network-tool:11");
         assert!(probe.get_opened());
-        assert_eq!(probe.get_tool(), 17);
+        assert_eq!(probe.get_tool(), 11);
         probe.set_busy(false);
-        for tool in [14, 15, 16] {
+        for tool in [4, 10, 11] {
             probe.set_tool(tool);
             render();
             let bounds = targets.borrow();
-            assert!(!bounds.contains_key("network-target"));
+            assert!(bounds.contains_key("network-target"));
             let viewport = &bounds["network-detail-viewport"];
             assert!(
                 (viewport[0] + viewport[2] - width as f32).abs() < 2.,
@@ -625,7 +625,7 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
             click("network-run");
             assert_eq!(events.borrow().last().unwrap().0, MobileIntent::Probe);
         }
-        probe.set_tool(10);
+        probe.set_tool(9);
         render();
         {
             let bounds = targets.borrow();
@@ -668,7 +668,7 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
         adapter.set_size(slint::PhysicalSize::new(width, height));
         desktop.set_text_scale(scale);
         let mut baseline = None;
-        for tool in [0, 14, 15, 16, 17] {
+        for tool in [0, 4, 9, 10, 11] {
             desktop.set_tool(tool);
             advance(&clock, Duration::from_millis(300));
             frame(&adapter, width as usize, height as usize);

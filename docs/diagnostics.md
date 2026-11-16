@@ -126,16 +126,15 @@ Android 文档选择、导出和导入失败另外在应用日志中记录 `DOCU
 | `dns_timeout` / `dns_failed` / `dns_no_address` | 内核解析超时、失败或无地址 |
 | `dns_response_invalid` / `dns_no_record` | 记录响应缺少状态，或查询成功但没有指定类型的回答 |
 | `controller_query_failed` / `controller_response_limit` / `controller_response_invalid` | 控制查询被拒、响应超过上限或格式/完整性异常 |
-| `config_unavailable` / `config_invalid` / `config_snapshot_limit` | 已保存配置不可用、格式无效或超过单文件 8 MiB 分析上限 |
-| `rule_unknown` / `rule_no_match` | 静态规则存在未知前置条件，或没有可确认命中；不等于网络请求失败 |
-| `metric_unavailable` | 内核未提供指标，不使用估算值替代 |
-| `node_not_found` / `node_path_unknown` / `node_delay_stale` | 节点不存在、选择链不确定，或上次测速失败且当前状态未知 |
 | `family_no_address` / `family_timeout` | 此地址族无记录或实际连接超时；无 IPv6 不等于绕行 |
+| `trace_destination_unconfirmed` | 未观察到目标逐跳响应；可能达到跳数上限、设备不回包或输出无法识别，不等于网站不可用 |
 | `proxy_authentication` / `proxy_response_invalid` | 本机 SOCKS5 认证拒绝或响应不合规 |
 | `proxy_rule_denied` / `proxy_target_unreachable` / `proxy_target_refused` | 规则拒绝、目标不可达或连接拒绝 |
 | `proxy_command_unsupported` / `proxy_family_unsupported` / `proxy_target_failed` | 代理不支持命令、地址族或其他连接失败 |
 | `http_timeout` / `http_connect_failed` / `http_body_failed` / `http_failed` | HTTP 超时、连接、正文或其他请求失败 |
 | `tls_failed` / `certificate_display_invalid` | TLS/证书验证失败，或握手成功后证书字段无法展示 |
+| `tls_certificate_expired` / `tls_certificate_not_yet_valid` | 证书过期或尚未生效 |
+| `tls_certificate_name` / `tls_certificate_issuer` / `tls_certificate_invalid` | 域名不匹配、未知颁发机构/链不完整或其他证书验证失败 |
 | `download_http_status` / `empty_response` | 下载收到非成功状态或无正文 |
 | `udp_invalid_response` / `udp_no_response` / `udp_io_failed` | DNS 响应不匹配、无响应或 UDP 通信失败 |
 | `component_unavailable` / `permission_denied` / `process_failed` | 系统组件缺失、拒绝权限或探针非零退出 |

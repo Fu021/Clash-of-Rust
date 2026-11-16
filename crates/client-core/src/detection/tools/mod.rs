@@ -1,12 +1,9 @@
-mod config_diff;
 mod datagram;
 mod error;
 mod http;
-mod inspection;
 #[cfg(test)]
 mod inspection_tests;
 mod process;
-mod rule_preview;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -23,7 +20,6 @@ pub enum Tool {
     Dns,
     Phase,
     Family,
-    Explain,
     Tls,
     Stability,
     Udp,
@@ -32,20 +28,14 @@ pub enum Tool {
     Download,
     Tcp,
     Http,
-    RulePreview,
-    ConfigDiff,
-    Traffic,
-    Performance,
-    Node,
 }
 
 impl Tool {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 12] = [
         Self::Website,
         Self::Dns,
         Self::Phase,
         Self::Family,
-        Self::Explain,
         Self::Tls,
         Self::Stability,
         Self::Udp,
@@ -54,11 +44,6 @@ impl Tool {
         Self::Download,
         Self::Tcp,
         Self::Http,
-        Self::RulePreview,
-        Self::ConfigDiff,
-        Self::Traffic,
-        Self::Performance,
-        Self::Node,
     ];
 
     pub fn parse(value: &str) -> Result<Self> {
@@ -85,7 +70,6 @@ impl Tool {
             Self::Dns => "dns",
             Self::Phase => "phase",
             Self::Family => "family",
-            Self::Explain => "explain",
             Self::Tls => "tls",
             Self::Stability => "stability",
             Self::Udp => "udp",
@@ -94,21 +78,15 @@ impl Tool {
             Self::Download => "download",
             Self::Tcp => "tcp",
             Self::Http => "http",
-            Self::RulePreview => "rule",
-            Self::ConfigDiff => "config-diff",
-            Self::Traffic => "traffic",
-            Self::Performance => "performance",
-            Self::Node => "node",
         }
     }
 
     pub fn title(self) -> &'static str {
         match self {
             Self::Website => "网站检查",
-            Self::Dns => "DNS 对照",
+            Self::Dns => "DNS 查询",
             Self::Phase => "连接耗时",
             Self::Family => "IPv4 / IPv6",
-            Self::Explain => "规则与出口",
             Self::Tls => "TLS 证书",
             Self::Stability => "短时稳定性",
             Self::Udp => "UDP 连通",
@@ -116,12 +94,7 @@ impl Tool {
             Self::Trace => "路由追踪",
             Self::Download => "限量下载",
             Self::Tcp => "TCP 端口",
-            Self::Http => "HTTP 响应详情",
-            Self::RulePreview => "规则预判",
-            Self::ConfigDiff => "配置差异",
-            Self::Traffic => "流量分解",
-            Self::Performance => "内核运行",
-            Self::Node => "节点运行详情",
+            Self::Http => "HTTP 检查",
         }
     }
 
@@ -131,29 +104,23 @@ impl Tool {
 
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Website => "DNS、双协议响应与本次实际线路",
-            Self::Dns => "比较系统与内核解析，不同结果不等于故障",
-            Self::Phase => "经本机代理检查 TCP、TLS 与首字节耗时",
-            Self::Family => "分别连接目标 IPv4 与 IPv6 地址",
-            Self::Explain => "通过真实请求查看命中规则与策略链",
-            Self::Tls => "检查 HTTPS 信任链、有效期与证书摘要",
-            Self::Stability => "最多 20 次请求，只保留本次结果",
+            Self::Website => "快速定位解析、响应和实际命中规则；详细分析使用专项工具",
+            Self::Dns => "查询记录、TTL 和返回码，对照系统与内核解析",
+            Self::Phase => "分段测量代理建连、TLS 与首字节；代理建连含代理侧处理",
+            Self::Family => "经当前代理分别访问目标 IPv4 / IPv6，不代表本机地址族能力",
+            Self::Tls => "仅检查 TLS 握手和证书，不发送 HTTP 请求",
+            Self::Stability => "分别统计传输失败、HTTP 状态与耗时分布",
             Self::Udp => "经内核 UDP 中继向目标 DNS 服务器发送探针",
             Self::Ping => "系统 ICMP 探针，不代表代理节点延迟",
             Self::Trace => "系统逐跳探针，部分跳不响应属于常见情况",
-            Self::Download => "最多接收 16 MiB，正文即时丢弃",
+            Self::Download => "限时限量测量接收吞吐，样本不代表线路最大带宽",
             Self::Tcp => "经当前代理连接指定端口，不发送应用数据",
-            Self::Http => "检查响应头及有界正文摘要，不保留正文",
-            Self::RulePreview => "不发起目标连接；动态条件无法确认时明确标注",
-            Self::ConfigDiff => "对照原订阅和已生成配置，只显示脱敏摘要",
-            Self::Traffic => "按主机、进程、策略和规则汇总当前连接",
-            Self::Performance => "按需读取内核版本、连接数量与托管堆信息",
-            Self::Node => "读取指定节点的类型、历史测速与策略选择，不主动测速",
+            Self::Http => "分析方法、状态和安全响应头；Cookie 和认证头不展示",
         }
     }
 
     pub fn needs_target(self) -> bool {
-        !matches!(self, Self::ConfigDiff | Self::Traffic | Self::Performance)
+        true
     }
 }
 
@@ -216,7 +183,7 @@ impl Options {
             Tool::Family => self.seconds * 2 + 10,
             Tool::Trace => u64::from(self.max_hops) * 3 + 10,
             Tool::Ping => u64::from(self.count) * 2 + 10,
-            Tool::Website | Tool::Explain | Tool::Dns => 40,
+            Tool::Website | Tool::Dns => 40,
             _ => self.seconds + 10,
         };
         Duration::from_secs(seconds)
@@ -255,7 +222,6 @@ pub struct Environment {
     pub api: Option<Api>,
     pub protected: bool,
     pub udp_enabled: bool,
-    pub data_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -381,39 +347,6 @@ pub async fn run(
         report.finish(start);
         return Ok(report);
     }
-    if !tool.needs_target() || tool == Tool::Node {
-        if tool == Tool::Node
-            && (target.is_empty() || target.len() > 1024 || target.chars().any(char::is_control))
-        {
-            report.entries.push(Entry::error(
-                "检查参数",
-                "目标过长或包含控制字符",
-                "invalid_target",
-            ));
-        } else {
-            report.target = if tool == Tool::Node {
-                bounded(target, 256)
-            } else {
-                "当前实例".into()
-            };
-            match tokio::time::timeout(
-                options.budget(tool),
-                inspection::run(tool, target, &context, &mut report),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => report.entries.push(error::entry("检查失败", &error)),
-                Err(_) => report.entries.push(Entry::error(
-                    "检查停止",
-                    "已达到本次检查时限",
-                    "probe_timeout",
-                )),
-            }
-        }
-        report.finish(start);
-        return Ok(report);
-    }
     let url = match probe::diagnostic_url(target) {
         Ok(url) => url,
         Err(_) => {
@@ -442,7 +375,7 @@ pub async fn run(
     } else {
         let operation = async {
             match tool {
-                Tool::Website | Tool::Explain => {
+                Tool::Website => {
                     let result = probe::diagnose(
                         target,
                         context.port,
@@ -450,28 +383,22 @@ pub async fn run(
                         context.protected,
                     )
                     .await?;
-                    if tool == Tool::Explain {
-                        report.entries.push(from_check("实际线路", result.route));
-                        report.entries.push(from_check("网站响应", result.response));
-                    } else {
-                        for (label, check) in [
-                            ("系统 DNS", result.system_dns),
-                            ("内核 DNS", result.core_dns),
-                            ("本机代理", result.proxy),
-                            ("HTTPS", result.https),
-                            ("HTTP", result.http),
-                            ("采用协议", result.response),
-                            ("实际线路", result.route),
-                        ] {
-                            report.entries.push(from_check(label, check));
-                        }
+                    for (label, check) in [
+                        ("系统 DNS", result.system_dns),
+                        ("内核 DNS", result.core_dns),
+                        ("本机代理", result.proxy),
+                        ("HTTPS", result.https),
+                        ("HTTP", result.http),
+                        ("采用协议", result.response),
+                        ("实际线路", result.route),
+                    ] {
+                        report.entries.push(from_check(label, check));
                     }
                     Ok(())
                 }
                 Tool::Dns => http::dns(&url, &context, &options, &mut report).await,
                 Tool::Tcp => transport::tcp(&url, target, &context, &options, &mut report).await,
                 Tool::Http => http::inspect(&url, &context, &options, &mut report).await,
-                Tool::RulePreview => rule_preview::run(&url, &context, &mut report).await,
                 Tool::Stability => http::stability(&url, &context, &options, &mut report).await,
                 Tool::Download => http::download(&url, &context, &options, &mut report).await,
                 Tool::Phase | Tool::Tls | Tool::Family => {
@@ -481,7 +408,6 @@ pub async fn run(
                 Tool::Ping | Tool::Trace => {
                     process::run(tool, &url, &context, &options, &mut report).await
                 }
-                Tool::ConfigDiff | Tool::Traffic | Tool::Performance | Tool::Node => unreachable!(),
             }
         };
         match tokio::time::timeout(options.budget(tool), operation).await {

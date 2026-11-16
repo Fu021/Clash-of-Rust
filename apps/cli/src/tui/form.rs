@@ -20,7 +20,7 @@ pub(super) struct Form {
 pub(super) fn commands() -> impl Iterator<Item = &'static Spec> {
     COMMANDS
         .iter()
-        .filter(|spec| !matches!(spec.path, "ui" | "run"))
+        .filter(|spec| !matches!(spec.path, "ui" | "run") && !spec.retired())
 }
 
 pub(super) fn setting_title(key: &str) -> &str {

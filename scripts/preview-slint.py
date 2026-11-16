@@ -374,7 +374,7 @@ def main() -> None:
     parser.add_argument("--sidebar-collapsed", action="store_true", help="preview the desktop's manually collapsed sidebar")
     parser.add_argument("--list-view", action="store_true", help="preview proxies and subscriptions as lists")
     parser.add_argument("--shortcuts", action="store_true", help="show the rule shortcut selection dialog")
-    parser.add_argument("--network-tool", type=int, choices=range(18), default=0, help="select a network toolbox page")
+    parser.add_argument("--network-tool", type=int, choices=range(12), default=0, help="select a network toolbox page")
     parser.add_argument("--network-detail", action="store_true", help="open the selected network tool on a phone")
     parser.add_argument("--notice", default="", help="show the production floating notice above page content and dialogs")
     parser.add_argument("--notice-error", action="store_true", help="show a persistent error banner with diagnostic export actions")

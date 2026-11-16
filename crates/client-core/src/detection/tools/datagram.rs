@@ -210,7 +210,6 @@ mod tests {
                     api: None,
                     protected: false,
                     udp_enabled: true,
-                    data_dir: None,
                 },
                 Options {
                     seconds: 1,

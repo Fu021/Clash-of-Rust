@@ -4,51 +4,42 @@ import { GeometryTarget } from "geometry.slint";
 import { Motion } from "motion.slint";
 
 export global NetworkTools {
-    out property <[string]> titles: ["网站检查", "DNS 对照", "连接耗时", "IPv4 / IPv6", "规则与出口", "TLS 证书", "短时稳定性", "UDP 连通", "Ping", "路由追踪", "限量下载", "TCP 端口", "HTTP 响应详情", "规则预判", "配置差异", "流量分解", "内核运行", "节点运行详情"];
-    pure public function needs-target(index: int) -> bool { return index < 14 || index == 17; }
+    out property <[string]> titles: ["网站检查", "DNS 查询", "连接耗时", "IPv4 / IPv6", "TLS 证书", "短时稳定性", "UDP 连通", "Ping", "路由追踪", "限量下载", "TCP 端口", "HTTP 检查"];
+    pure public function needs-target(index: int) -> bool { return index >= 0 && index < 12; }
     out property <[string]> summaries: [
         "解析、响应与出口", "系统与内核解析", "TCP、TLS 与首字节",
-        "地址与连接可用性", "命中规则与完整策略链", "证书、域名与有效期",
+        "目标地址族连接能力", "证书、域名与有效期",
         "有限次请求与延迟波动", "UDP 响应与当前线路", "ICMP 往返与丢包",
         "逐跳响应与未响应", "有上限的下载速度检查",
-        "指定端口的握手", "状态、响应头与正文长度", "不连接目标的静态判断",
-        "订阅与生成配置摘要", "当前连接按类汇总", "内核版本、连接与托管堆", "节点类型与策略选择"
+        "指定端口的握手", "方法、状态与安全响应头"
     ];
     out property <[image]> icons: [
         @image-url("../icons/globe.svg"), @image-url("../icons/network-dns.svg"),
         @image-url("../icons/timer.svg"), @image-url("../icons/split.svg"),
-        @image-url("../icons/route.svg"), @image-url("../icons/shield-check.svg"),
+        @image-url("../icons/shield-check.svg"),
         @image-url("../icons/chart-no-axes-combined.svg"), @image-url("../icons/radio-tower.svg"),
         @image-url("../icons/radar.svg"), @image-url("../icons/waypoints.svg"),
         @image-url("../icons/download.svg"), @image-url("../icons/network.svg"),
-        @image-url("../icons/globe.svg"), @image-url("../icons/route.svg"),
-        @image-url("../icons/settings.svg"), @image-url("../icons/chart-no-axes-combined.svg"),
-        @image-url("../icons/chart-no-axes-combined.svg"), @image-url("../icons/route.svg")
+        @image-url("../icons/globe.svg")
     ];
     out property <[string]> target-labels: [
-        "网址", "域名", "网址", "网址", "网址", "域名或网址",
+        "网址", "域名", "网址", "网址", "域名或网址",
         "网址", "DNS 响应目标", "域名或 IP", "域名或 IP", "下载网址",
-        "主机与端口", "网址", "网址或目标 IP", "", "", "", "节点或策略组完整名称"
+        "主机与端口", "网址"
     ];
     out property <[string]> hints: [
-        "DNS、双协议响应与本次实际线路",
-        "比较系统与内核解析，不同结果不等于故障",
-        "经本机代理检查 TCP、TLS 与首字节耗时",
-        "分别连接目标 IPv4 与 IPv6 地址",
-        "通过真实请求查看命中规则与策略链",
-        "检查 HTTPS 信任链、有效期与证书摘要",
-        "最多 20 次请求，只保留本次结果",
+        "快速定位解析、响应与实际规则；详细分析使用专项工具",
+        "查询记录、TTL 和返回码，对照系统与内核解析",
+        "分段测量代理建连、TLS 与首字节，明确代理侧处理开销",
+        "经代理分别连接目标地址族，不代表本机 IPv6 能力",
+        "仅验证 TLS 握手和证书，不发送 HTTP 请求",
+        "分别统计传输失败、HTTP 状态与耗时分布",
         "经内核 UDP 中继向目标 DNS 服务器发送探针",
         "系统 ICMP 探针，不代表代理节点延迟",
         "系统逐跳探针，部分跳不响应属于常见情况",
-        "最多接收 16 MiB，正文即时丢弃",
+        "限时限量测量吞吐，样本不代表线路最大带宽",
         "经当前代理连接端口，不发送应用数据",
-        "读取有界响应详情，Cookie 和认证头不展示",
-        "不连接目标；动态条件无法确认时明确标注",
-        "对照原订阅和最后生成配置，不显示正文或凭据",
-        "只统计当前连接，不保留历史",
-        "按需读取内核指标，托管堆不是进程总内存",
-        "输入节点页中的完整名称，不主动测速"
+        "分析方法、状态和安全响应头；Cookie 和认证头不展示"
     ];
 }
 
@@ -66,7 +57,7 @@ export component NetworkToolOptions inherits Rectangle {
     property <[string]> record-types: ["ADDR", "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA", "PTR", "CAA"];
     property <[string]> methods: ["HEAD", "GET", "OPTIONS"];
     out property <string> encoded: root.count + "|" + root.interval + "|" + root.seconds + "|" + root.megabytes + "|" + root.hops + "|" + root.record-types[root.record-index] + "|" + root.methods[root.method-index];
-    property <[int]> fields: root.tool == 1 ? [5] : root.tool == 12 ? [6, 2] : root.tool == 6 ? [0, 1, 2] : root.tool == 8 ? [0] : root.tool == 9 ? [4] : root.tool == 10 ? [2, 3] : (root.tool == 2 || root.tool == 3 || root.tool == 5 || root.tool == 7 || root.tool == 11) ? [2] : [];
+    property <[int]> fields: root.tool == 1 ? [5] : root.tool == 11 ? [6, 2] : root.tool == 5 ? [0, 1, 2] : root.tool == 7 ? [0] : root.tool == 8 ? [4] : root.tool == 9 ? [2, 3] : (root.tool == 2 || root.tool == 3 || root.tool == 4 || root.tool == 6 || root.tool == 10) ? [2] : [];
     property <[string]> titles: ["次数 · 1～20", "间隔 · 毫秒", "时限 · 秒", "流量上限 · MiB", "最大跳数 · 1～16"];
     property <[string]> values: [root.count, root.interval, root.seconds, root.megabytes, root.hops];
     property <int> columns: root.width >= 520px * Theme.text-scale ? 3 : root.width >= 300px * Theme.text-scale ? 2 : 1;
@@ -175,12 +166,12 @@ export component NetworkToolMenu inherits VerticalLayout {
     alignment: start; spacing: 3px;
     for title[index] in NetworkTools.titles: VerticalLayout {
         spacing: 3px;
-        if index == 0 || index == 6 || index == 11 || index == 13: Rectangle {
+        if index == 0 || index == 5 || index == 10: Rectangle {
             height: group-title.preferred-height + (index == 0 ? 14px : 24px);
-            GeometryTarget { key: index == 0 ? "network-group:target" : index == 6 ? "network-group:link" : index == 11 ? "network-group:protocol" : "network-group:runtime"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+            GeometryTarget { key: index == 0 ? "network-group:target" : index == 5 ? "network-group:link" : "network-group:protocol"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
             group-title := Caption {
                 x: 9px; y: index == 0 ? 6px : 16px; width: parent.width - 18px;
-                text: index == 0 ? "目标检查" : index == 6 ? "链路分析" : index == 11 ? "协议检查" : "规则与运行"; font-size: root.detail-size;
+                text: index == 0 ? "目标检查" : index == 5 ? "链路分析" : "端口与 HTTP"; font-size: root.detail-size;
             }
         }
         NetworkToolEntry {

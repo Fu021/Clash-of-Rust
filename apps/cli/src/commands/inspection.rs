@@ -23,6 +23,23 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             let report = network_check(args, &args.positional[0]).await?;
             output::emit(args, serde_json::to_value(report)?)
         }
+        "network explain" | "network rule" => {
+            bail!("此独立工具已移除；请用 cor network check URL 查看真实命中规则与出口")
+        }
+        "network config-diff" => {
+            bail!(
+                "配置差异摘要已移除；请用 cor config get、cor config check 或 cor config effective 检查配置"
+            )
+        }
+        "network traffic" => {
+            bail!("流量汇总已移至连接页；命令行请用 cor connection list 查看当前连接")
+        }
+        "network performance" => {
+            bail!("内核指标摘要已移除；请用 cor status 或 cor diagnose 查看状态与诊断")
+        }
+        "network node" => {
+            bail!("节点信息已移至代理页详情；命令行请用 cor node list 查看节点")
+        }
         path if path.starts_with("network ") => {
             use clash_client_core::network_tools::Tool;
             let tool = Tool::parse(path.trim_start_matches("network "))?;
@@ -90,7 +107,6 @@ pub(crate) async fn network_tool(
                 api: None,
                 protected: true,
                 udp_enabled: false,
-                data_dir: None,
             },
             options,
         )
@@ -107,14 +123,12 @@ pub(crate) async fn network_tool(
                 .transpose()?,
             protected: poll.meta.settings.claude_protection.is_some(),
             udp_enabled: poll.meta.settings.udp,
-            data_dir: Some(backend::data_root(args)?),
         },
         None => clash_client_core::network_tools::Environment {
             port: None,
             api: None,
             protected: true,
             udp_enabled: false,
-            data_dir: Some(backend::data_root(args)?),
         },
     };
     clash_client_core::network_tools::run(tool, target, environment, options).await

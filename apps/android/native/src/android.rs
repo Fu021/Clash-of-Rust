@@ -830,7 +830,6 @@ async fn run_loop(
                         let tool = core::network_tools::Tool::at(state.network_tool).unwrap_or(core::network_tools::Tool::Website);
                         let environment = core::network_tools::Environment {
                             port, api, protected, udp_enabled: state.session.settings.udp,
-                            data_dir: Some(state.session.store.root.clone()),
                         };
                         let options = core::network_tools::Options::from_fields(&request.b);
                         let send = updates.clone();
@@ -2580,7 +2579,7 @@ struct GroupView {
     name: String,
     group: api::Proxy,
     expanded: bool,
-    nodes: Vec<(String, api::Proxy)>,
+    nodes: Vec<(String, api::Proxy, String)>,
     count: usize,
     page: usize,
     testing: bool,
@@ -2601,6 +2600,7 @@ struct Projection {
     groups: Vec<GroupView>,
     profiles: Vec<config::Profile>,
     connections: Vec<api::Connection>,
+    connection_summary: Vec<String>,
     rules: Vec<(usize, rule_manager::Row)>,
     policies: Vec<String>,
     shortcuts: [bool; 5],
@@ -2694,6 +2694,7 @@ fn project(state: &State) -> Projection {
             .copied()
             .unwrap_or(0)
             .min(count.saturating_sub(1) / 48);
+        let parent_group = name.as_str();
         let nodes = indices
             .into_iter()
             .skip(page * 48)
@@ -2709,7 +2710,8 @@ fn project(state: &State) -> Projection {
                 if let Some(&delay) = state.node_delays.get(&name) {
                     proxy.delay = Some(delay);
                 }
-                (name, proxy)
+                let details = proxy_order::node_details(&name, parent_group, &s.proxies);
+                (name, proxy, details)
             })
             .collect();
         groups.push(GroupView {
@@ -2988,6 +2990,11 @@ fn project(state: &State) -> Projection {
         groups,
         profiles: s.profiles.clone(),
         connections,
+        connection_summary: if state.page == 3 {
+            core::connection::traffic_summary(&s.connections.connections)
+        } else {
+            Vec::new()
+        },
         rates: (
             format!("{}/s", bytes(s.rates.0)),
             format!("{}/s", bytes(s.rates.1)),
@@ -3543,6 +3550,10 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                 .collect(),
         ),
     ));
+    data.set_connection_summary(stable(
+        data.get_connection_summary(),
+        rows(p.connection_summary.into_iter().map(Into::into).collect()),
+    ));
     data.set_profiles(stable(
         data.get_profiles(),
         rows(
@@ -3588,7 +3599,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     let group_id = name.clone();
                     let node_items = nodes
                         .into_iter()
-                        .map(|(name, node)| NodeItem {
+                        .map(|(name, node, details)| NodeItem {
                             group: group_id.clone().into(),
                             selected: name == group.now.as_str(),
                             name: name.into(),
@@ -3596,6 +3607,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                             delay: proxy_order::delay_label(node.delay).into(),
                             tone: proxy_order::delay_tone(node.delay),
                             valid: true,
+                            details: details.into(),
                         })
                         .collect::<Vec<_>>();
                     GroupItem {

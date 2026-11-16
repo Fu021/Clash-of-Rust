@@ -1,6 +1,8 @@
 //! Connection sampling and ordering without retaining a second metadata snapshot.
 use crate::api::{Connection, ConnectionRates};
 use std::{cmp::Ordering, time::Duration};
+mod summary;
+pub use summary::traffic_summary;
 
 pub fn hostname(connection: &Connection) -> &str {
     if connection.metadata.sniff_host.is_empty() {
@@ -66,6 +68,7 @@ pub fn detail_values(connection: &Connection, resolved: &str) -> Vec<(&'static s
         ),
         ("目标端口", connection.metadata.destination_port.to_string()),
         ("协议", connection.metadata.network.to_string()),
+        ("进程", connection.metadata.process.to_string()),
         (
             "匹配规则",
             format!("{} {}", connection.rule, connection.rule_payload)

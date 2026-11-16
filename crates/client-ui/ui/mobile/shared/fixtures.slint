@@ -58,7 +58,7 @@ export component MobileFixture inherits Rectangle {
             {id: "Proxy", title: root.long-names ? root.long-name : "🚀 Proxy 策略 ❤️", detail: "Selector · 6 个节点", current: root.long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", expanded: true,
                 page: "6 个节点", nodes: [
                     {left: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, valid: true},
-                     right: {group: "Proxy", name: root.long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, valid: true, selected: true}},
+                     right: {group: "Proxy", name: root.long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, valid: true, selected: true, details: "所属策略组：Proxy\n当前选择链：🇩🇪 德国 01 · IPv6\n实际出口以网站检查为准。"}},
                     {left: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, valid: true},
                      right: {group: "Proxy", name: "🚀 🇯🇵 日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, valid: true}},
                     {left: {group: "Proxy", name: "🇺🇸 美国 01 ❤️", kind: "VLESS", delay: "868 ms", tone: 3, valid: true},
@@ -72,6 +72,12 @@ export component MobileFixture inherits Rectangle {
             {id: "local", name: "默认直连", source: "default.yaml", detail: "本地配置", local: true, builtin: true},
             {id: "imported", name: "本地导入的配置", source: "", detail: "本地配置", local: true}
         ];
+        MobileData.connection-summary = [
+            "全部当前连接 24 条 · 累计字节快照，非全日用量",
+            "主机 · api.github.com · 4 条 · ↑ 24576 B · ↓ 1887436 B",
+            "进程 · browser.exe · 12 条 · ↑ 49152 B · ↓ 3774872 B",
+            "策略链 · Proxy → 德国 01 · 16 条 · ↑ 65536 B · ↓ 5033162 B",
+            "规则类型 · DomainSuffix · 16 条 · ↑ 65536 B · ↓ 5033162 B"];
         MobileData.connections = [
             {id: "1", host: root.long-names ? "very-long-service-name.api.github.example.com:443" : "api.github.com:443", detail: "tcp · 10:31:20", rule: root.long-names ? "DOMAIN-SUFFIX very-long-service-name.example.com" : "DOMAIN-SUFFIX github.com", route: root.long-names ? "Proxy → " + root.long-name : "Proxy → 德国 01 · IPv6", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
             {id: "2", host: "www.google.com:443", detail: "tcp · 10:31:24", rule: "DOMAIN-SUFFIX google.com", route: "Proxy → 德国 01 · IPv6", up: "1.8 KiB/s", down: "86 KiB/s", upload: "18 KiB", download: "980 KiB"},

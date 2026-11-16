@@ -448,6 +448,8 @@ pub struct Metadata {
     pub destination_port: Text,
     #[serde(default)]
     pub network: Network,
+    #[serde(default)]
+    pub process: Text,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectionRates {
@@ -1625,6 +1627,11 @@ rules: ['MATCH,group']\n";
         assert!(std::sync::Arc::ptr_eq(&a.chains[0].0, &b.chains[0].0));
         assert_eq!(a.metadata.network, Network::Tcp);
         assert_eq!(b.metadata.network, Network::Udp);
+        assert_eq!(a.metadata.process.as_str(), "browser");
+        assert!(std::sync::Arc::ptr_eq(
+            &a.metadata.process.0,
+            &b.metadata.process.0
+        ));
         assert!(TEXT_POOL.with(|pool| pool.borrow().is_none()));
         assert!(serde_json::from_str::<Connections>(r#"{"connections":[{"id":123}]}"#).is_err());
         assert!(TEXT_POOL.with(|pool| pool.borrow().is_none()));

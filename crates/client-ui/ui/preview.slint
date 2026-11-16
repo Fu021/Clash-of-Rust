@@ -129,10 +129,16 @@ export component Preview inherits AppWindow {
             {id: "telegram", title: "Telegram", value: "无法连接", detail: "未获得响应", tone: 3},
             {id: "x", title: "X", value: "402 ms", delay: "402 ms", delay-tone: 2, detail: "HTTP 200", tone: 1}];
         UiData.protection-status = "正在开启保护，切换 TUN、规则与 DNS…";
+        UiData.connection-summary = [
+            "全部当前连接 24 条 · 累计字节快照，非全日用量",
+            "主机 · api.github.com · 4 条 · ↑ 24576 B · ↓ 1887436 B",
+            "进程 · browser.exe · 12 条 · ↑ 49152 B · ↓ 3774872 B",
+            "策略链 · Proxy → 德国 01 · 16 条 · ↑ 65536 B · ↓ 5033162 B",
+            "规则类型 · DomainSuffix · 16 条 · ↑ 65536 B · ↓ 5033162 B"];
         UiData.connection-details = [
             {label: "连接名称", value: "api.github.com"}, {label: "域名", value: "api.github.com"},
             {label: "嗅探域名", value: "api.github.com"}, {label: "目标 IP", value: "140.82.112.6"},
-            {label: "目标端口", value: "443"}, {label: "协议", value: "tcp"},
+            {label: "目标端口", value: "443"}, {label: "协议", value: "tcp"}, {label: "进程", value: "browser.exe"},
             {label: "匹配规则", value: "DOMAIN-SUFFIX github.com"},
             {label: "代理链", value: "Proxy → 自动选择 → 德国 01 · IPv6"},
             {label: "上传速度", value: "2.4 KiB/s"}, {label: "下载速度", value: "128 KiB/s"},
@@ -142,7 +148,7 @@ export component Preview inherits AppWindow {
         UiData.connection-selected-id = "9f1a0f02-d63e-4cfe-832e-4ed947af10de";
         UiData.groups = [{id: "Proxy", title: root.preview-long-names ? root.long-name : "🚀 Proxy 策略 ❤️", detail: "Selector · 10 个节点", current: root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", expanded: true, testing: false, page: "10 个节点 · 1–10", previous: false, next: false,
             nodes: [
-                {left: {group: "Proxy", name: root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true}, right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, selected: false, valid: true}},
+                {left: {group: "Proxy", name: root.preview-long-names ? root.long-name : "🇩🇪 德国 01 · IPv6", kind: "AnyTLS", delay: "45 ms", tone: 1, selected: true, valid: true, details: "所属策略组：Proxy\n当前选择链：🇩🇪 德国 01 · IPv6\n延迟为最近测量，测量时间未提供。实际出口以网站检查为准。"}, right: {group: "Proxy", name: "香港 02", kind: "VLESS", delay: "28 ms", tone: 1, selected: false, valid: true}},
                 {left: {group: "Proxy", name: "🚀 🇯🇵 日本 01", kind: "Shadowsocks", delay: "64 ms", tone: 1, selected: false, valid: true}, right: {group: "Proxy", name: "新加坡 01", kind: "Trojan", delay: "376 ms", tone: 2, selected: false, valid: true}},
                 {left: {group: "Proxy", name: "🇺🇸 美国 01 ❤️", kind: "VLESS", delay: "868 ms", tone: 3, selected: false, valid: true}, right: {group: "Proxy", name: "DIRECT", kind: "Direct", delay: "未测速", tone: 4, selected: false, valid: true}},
                 {left: {group: "Proxy", name: "日本 02 · 备用入口 · 用于确认完整名称不会丢失", kind: "Trojan", delay: "超时", tone: 3, valid: true}, right: {group: "Proxy", name: "US-美国 02", kind: "VLESS", delay: "128 ms", tone: 1, valid: true}},

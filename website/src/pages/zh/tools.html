@@ -1,9 +1,9 @@
-<!-- title: 网络工具箱：Clash of Rust 的十八项检查 -->
+<!-- title: 网络工具箱：Clash of Rust 的十二项检查 -->
 <!-- description: Clash of Rust 网络检查分别查什么、什么时候用，以及对应的命令、参数、限制和报告格式。 -->
 <section class="page-head">
   <div class="wrap">
-    <h1>从解析到出口，逐步排查。<span class="preview">0.7.2 预发布</span></h1>
-    <p class="lead">十八项按需检查，GUI、TUI 与 CLI 共用结果。新增七项从 0.7.2-fix.4 提供。</p>
+    <h1>从解析到出口，逐步排查。<span class="preview">开发中</span></h1>
+    <p class="lead">当前源码收敛为十二项按需检查，GUI、TUI 与 CLI 共用逻辑。下列调整尚未发布，已公开的 0.7.2-fix.4 仍为十八项；配图保留其真实旧版标注。</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -41,6 +41,13 @@
 
   {{tools:articles}}
 
+  <section id="runtime">
+    <h2>工具调整与信息归属</h2>
+    <p id="explain">规则与出口已并入<a href="#check">网站检查</a>，依据真实请求显示命中规则及策略链。</p>
+    <p><span id="rule"></span><span id="config-diff"></span>移除静态规则预判和配置类型差异摘要。配置查询使用 <code>cor config get</code>、<code>cor config effective</code>，校验使用 <code>cor config check</code>。</p>
+    <p><span id="traffic"></span><span id="node"></span><span id="performance"></span>流量汇总归连接页，节点信息归代理页详情，内核状态沿用状态和诊断入口。旧 CLI 命令返回迁移提示及非零退出码，不自动执行另一项检查。</p>
+  </section>
+
   <section id="limits">
     <h2>参数与上限</h2>
     <p>默认 5 次、间隔 1000 毫秒、单次 10 秒、下载上限 8 MiB、最多 8 跳。GUI 按工具显示参数；TUI 直接检查使用默认值，自定义参数可在“操作”页或 CLI 填写。</p>
@@ -68,7 +75,7 @@
     <p>加 <code>--json</code> 直接输出报告，或者用 <code>--output FILE</code> 保存到文件。</p>
 <pre class="term" aria-label="保存报告的命令"><span class="p">$ </span>cor network phase example.com --seconds 5
 <span class="p">$ </span>cor network stability example.com --count 10 --interval-ms 500
-<span class="p">$ </span>cor network explain example.com --json
+<span class="p">$ </span>cor network check example.com --json
 <span class="p">$ </span>cor network tls example.com --output tls-report.json</pre>
     <p>JSON 里有 <code>schema</code>、<code>tool</code>、只保留源站的 <code>target</code>、<code>elapsed_ms</code>、<code>status</code> 和一组 <code>entries</code>。每一项包含 <code>label</code>、<code>detail</code>、<code>code</code> 和 <code>success</code>；<code>success</code> 为 <code>null</code> 表示这是一条说明，或者结果未能确认。<code>cor network check</code> 沿用原来的 JSON 结构。</p>
   </section>

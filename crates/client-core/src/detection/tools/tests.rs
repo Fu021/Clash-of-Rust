@@ -6,7 +6,6 @@ fn environment() -> Environment {
         api: None,
         protected: true,
         udp_enabled: true,
-        data_dir: None,
     }
 }
 

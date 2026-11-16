@@ -2449,7 +2449,6 @@ impl App {
                     api,
                     protected,
                     udp_enabled: self.settings.udp,
-                    data_dir: Store::default_root().ok(),
                 };
                 let options = network_tools::Options::from_fields(&fields);
                 let (task, handle) = Task::perform(

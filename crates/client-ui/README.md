@@ -33,7 +33,7 @@
 
 ## 无需 Rust 编译的外观预览
 
-网络页使用共享 `NetworkToolMenu`、`NetworkToolHeading` 和 `NetworkToolOptions`，手机单页、桌面/Pad 双栏；各工具使用独立离线预览数据。生命周期、参数和平台限制集中在[网络工具箱](../../docs/network-tools.md)；`--network-tool 0..10` 选择工具，手机用 `--network-detail` 打开详情。
+网络页使用共享 `NetworkToolMenu`、`NetworkToolHeading` 和 `NetworkToolOptions`，手机单页、桌面/Pad 双栏；各工具使用独立离线预览数据。生命周期、参数和平台限制集中在[网络工具箱](../../docs/network-tools.md)；`--network-tool 0..11` 选择工具，手机用 `--network-detail` 打开详情。流量汇总使用连接页已有快照，节点类型与策略信息归代理页详情，不增加后台轮询。
 
 语法检查使用与应用依赖一致的官方 **Slint Viewer 1.18.1**（`slint-viewer`）。截图和交互预览使用含彩色字形支持的官方主线 **Viewer 1.19.0**（`slint-viewer-main`），安装到用户持久目录并校验官方下载摘要。脚本优先选择后者渲染；可通过 `--viewer PATH` 和 `--check-viewer PATH` 分别指定，不把个人路径写入仓库配置。
 

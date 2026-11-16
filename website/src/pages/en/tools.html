@@ -1,9 +1,9 @@
-<!-- title: Network toolbox: eighteen checks in Clash of Rust -->
+<!-- title: Network toolbox: twelve checks in Clash of Rust -->
 <!-- description: What the network checks in Clash of Rust do, when to use them, and their commands, options, limits and report format. -->
 <section class="page-head">
   <div class="wrap">
-    <h1>From DNS to the exit, find the cause.<span class="preview">0.7.2 preview</span></h1>
-    <p class="lead">Eighteen on-demand checks, shared by GUI, TUI and CLI. The seven additions require 0.7.2-fix.4.</p>
+    <h1>From DNS to the exit, find the cause.<span class="preview">In development</span></h1>
+    <p class="lead">Current source provides twelve focused checks shared by GUI, TUI and CLI. These changes are unreleased; the published 0.7.2-fix.4 still has eighteen tools. Images retain their actual earlier-version captions.</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -41,6 +41,13 @@
 
   {{tools:articles}}
 
+  <section id="runtime">
+    <h2>Tool changes and information locations</h2>
+    <p id="explain">Rule and exit is now part of the <a href="#check">website check</a>, which observes the matched rule and policy chain of a real request.</p>
+    <p><span id="rule"></span><span id="config-diff"></span>Static rule prediction and configuration shape summaries are removed. Read configuration with <code>cor config get</code> or <code>cor config effective</code>; validate with <code>cor config check</code>.</p>
+    <p><span id="traffic"></span><span id="node"></span><span id="performance"></span>Traffic summaries belong to Connections, node information to Proxy details, and core state to existing status and diagnostic entries. Old CLI commands return migration guidance and a non-zero exit code without running another check.</p>
+  </section>
+
   <section id="limits">
     <h2>Options and limits</h2>
     <p>Defaults: 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB cap and 8 hops. The GUI shows relevant options. Direct TUI checks use defaults; customize through Actions or CLI.</p>
@@ -68,7 +75,7 @@
     <p>Add <code>--json</code> to print the report, or <code>--output FILE</code> to save it.</p>
 <pre class="term" aria-label="Saving a report"><span class="p">$ </span>cor network phase example.com --seconds 5
 <span class="p">$ </span>cor network stability example.com --count 10 --interval-ms 500
-<span class="p">$ </span>cor network explain example.com --json
+<span class="p">$ </span>cor network check example.com --json
 <span class="p">$ </span>cor network tls example.com --output tls-report.json</pre>
     <p>The JSON holds <code>schema</code>, <code>tool</code>, a <code>target</code> reduced to its origin, <code>elapsed_ms</code>, <code>status</code> and a list of <code>entries</code>. Each entry has a <code>label</code>, a <code>detail</code>, a <code>code</code> and <code>success</code>, where <code>null</code> means a note or something that could not be confirmed. <code>cor network check</code> keeps its earlier JSON shape.</p>
   </section>

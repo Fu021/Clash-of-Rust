@@ -14,18 +14,6 @@ fn client(context: &Environment, seconds: u64) -> Result<Client> {
         .build()?)
 }
 
-async fn route(response: &reqwest::Response, context: &Environment, report: &mut Report) {
-    let mut observer = crate::update::RouteObserver::new(response, context.api.clone());
-    let detail = observer
-        .observation()
-        .await
-        .map(|route| format!("{} · {} ({})", route.chain, route.rule, route.rule_payload));
-    report.entries.push(match detail {
-        Some(detail) => Entry::ok("实际线路", detail),
-        None => Entry::unknown("实际线路", "未捕获到本次连接记录", "route_not_observed"),
-    });
-}
-
 pub(super) async fn dns(
     url: &Url,
     context: &Environment,
@@ -225,6 +213,15 @@ pub(super) async fn inspect(
             response.version()
         ),
     ));
+    report.entries.push(Entry::unknown(
+        "业务状态",
+        if response.status().is_client_error() || response.status().is_server_error() {
+            "已收到 HTTP 错误响应；传输连通不代表业务可用"
+        } else {
+            "已收到响应；业务是否可用还取决于目标服务"
+        },
+        "information",
+    ));
     for name in [
         "content-type",
         "content-length",
@@ -232,11 +229,18 @@ pub(super) async fn inspect(
         "cache-control",
         "allow",
         "strict-transport-security",
+        "content-security-policy",
+        "x-content-type-options",
+        "referrer-policy",
     ] {
         if let Some(value) = response.headers().get(name) {
             report.entries.push(Entry::ok(
                 name,
-                bounded(value.to_str().unwrap_or("无法显示"), 256),
+                if name == "content-security-policy" {
+                    "已设置（策略正文已隐藏）".into()
+                } else {
+                    bounded(value.to_str().unwrap_or("无法显示"), 256)
+                },
             ));
         }
     }
@@ -247,7 +251,6 @@ pub(super) async fn inspect(
             "information",
         ));
     }
-    route(&response, context, report).await;
     if options.method != "HEAD" {
         let mut size = 0usize;
         while size < 4096 {
@@ -282,19 +285,18 @@ pub(super) async fn stability(
     let client = client(context, options.seconds)?;
     let mut delays = Vec::with_capacity(usize::from(options.count));
     let mut failed = 0;
+    let mut statuses = std::collections::BTreeMap::<u16, usize>::new();
     for index in 0..options.count {
         let start = Instant::now();
         match client.get(url.clone()).send().await {
             Ok(response) => {
                 let millis = start.elapsed().as_millis();
                 delays.push(millis);
+                *statuses.entry(response.status().as_u16()).or_default() += 1;
                 report.entries.push(Entry::ok(
                     &format!("请求 {}", index + 1),
                     format!("HTTP {} · {millis} ms", response.status().as_u16()),
                 ));
-                if index == 0 {
-                    route(&response, context, report).await;
-                }
             }
             Err(error) => {
                 failed += 1;
@@ -313,7 +315,7 @@ pub(super) async fn stability(
         Entry::new(
             "请求结果",
             format!(
-                "成功 {} / {} · 失败 {failed}；HTTP 错误状态也属于收到网站响应",
+                "收到响应 {} / {} · 传输失败 {failed}；HTTP 业务状态另列",
                 delays.len(),
                 options.count
             ),
@@ -321,6 +323,19 @@ pub(super) async fn stability(
             if failed == 0 { "ok" } else { "http_failed" },
         ),
     );
+    report.entries.push(Entry::unknown(
+        "HTTP 状态分布",
+        if statuses.is_empty() {
+            "未收到 HTTP 响应".into()
+        } else {
+            statuses
+                .iter()
+                .map(|(status, count)| format!("{status} × {count}"))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        },
+        "information",
+    ));
     if let (Some(first), Some(last)) = (delays.first(), delays.last()) {
         report.entries.push(Entry::ok(
             "响应头耗时",
@@ -357,7 +372,6 @@ pub(super) async fn download(
         ));
         return Ok(());
     }
-    route(&response, context, report).await;
     let deadline = tokio::time::Instant::from_std(start) + Duration::from_secs(options.seconds);
     let mut bytes = 0u64;
     let reason = loop {
@@ -407,7 +421,7 @@ pub(super) async fn download(
     ));
     report.entries.push(Entry::unknown(
         "接收内容",
-        "即时丢弃，不写文件或保留正文",
+        "即时丢弃，不写文件或保留正文；平均吞吐包含建连等待，仅代表本次限量样本",
         "information",
     ));
     Ok(())

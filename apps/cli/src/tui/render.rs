@@ -247,12 +247,7 @@ fn network(state: &State) -> Vec<(String, Tone)> {
     if tool.needs_target() {
         lines.push((
             format!(
-                "{}{}：{}",
-                if tool == clash_client_core::network_tools::Tool::Node {
-                    "节点名称"
-                } else {
-                    "目标"
-                },
+                "目标{}：{}",
                 if state.searching {
                     "（输入中）"
                 } else {

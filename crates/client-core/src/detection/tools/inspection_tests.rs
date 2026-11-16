@@ -1,5 +1,9 @@
 use super::*;
 use serde_json::json;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 
 fn offline() -> Environment {
     Environment {
@@ -7,224 +11,46 @@ fn offline() -> Environment {
         api: None,
         protected: false,
         udp_enabled: true,
-        data_dir: None,
     }
 }
 
 #[test]
-fn static_rules_stop_at_unknown_conditions_and_respect_modes_and_boundaries() {
-    for (rule, host, expected) in [
+fn tls_certificate_failures_keep_specific_causes_without_bypassing_verification() {
+    use tokio_rustls::rustls::{CertificateError, Error};
+    for (cause, code) in [
+        (CertificateError::Expired, "tls_certificate_expired"),
         (
-            "DOMAIN-SUFFIX,example.test,Proxy",
-            "sub.example.test",
-            "Proxy",
+            CertificateError::NotValidYet,
+            "tls_certificate_not_yet_valid",
         ),
-        (
-            "DOMAIN-SUFFIX,example.test,Proxy",
-            "badexample.test",
-            "DIRECT",
-        ),
-        ("DOMAIN-KEYWORD,EXAMPLE,Proxy", "Example.Test", "Proxy"),
-        ("IP-CIDR,192.0.2.0/24,Proxy", "192.0.2.5", "Proxy"),
-        ("IP-CIDR,0.0.0.0/0,Proxy", "198.51.100.5", "Proxy"),
-        ("IP-CIDR6,2001:db8::/32,Proxy", "2001:db8::1", "Proxy"),
-        ("DST-PORT,443,Proxy", "example.test", "Proxy"),
-        ("NETWORK,TCP,Proxy", "example.test", "Proxy"),
+        (CertificateError::NotValidForName, "tls_certificate_name"),
+        (CertificateError::UnknownIssuer, "tls_certificate_issuer"),
+        (CertificateError::BadSignature, "tls_certificate_invalid"),
     ] {
-        let raw = format!("mode: rule\nrules: ['{rule}', 'MATCH,DIRECT']");
-        let entries = rule_preview::preview(&raw, host, 443, false).unwrap();
-        assert!(
-            entries.last().unwrap().detail.ends_with(expected),
-            "{entries:?}"
-        );
+        let failure = transport::tls_error(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            Error::InvalidCertificate(cause),
+        ));
+        assert_eq!(error::entry("TLS", &failure).code, code);
     }
-    for rule in [
-        "RULE-SET,private,DIRECT",
-        "GEOIP,CN,DIRECT",
-        "PROCESS-NAME,app,DIRECT",
-        "IP-CIDR,192.0.2.0/24,DIRECT",
-        "DOMAIN-SUFFIX,例子.测试,DIRECT",
-    ] {
-        let entries = rule_preview::preview(
-            &format!("rules: ['{rule}', 'MATCH,Proxy']"),
-            "example.test",
-            443,
-            false,
-        )
-        .unwrap();
-        assert_eq!(entries.last().unwrap().code, "rule_unknown");
-        assert!(!entries.last().unwrap().detail.contains("private"));
-    }
-    for (mode, policy) in [("direct", "DIRECT"), ("global", "GLOBAL")] {
-        let entries = rule_preview::preview(
-            &format!("mode: {mode}\nrules: ['MATCH,Proxy']"),
-            "example.test",
-            443,
-            false,
-        )
-        .unwrap();
-        assert!(entries.last().unwrap().detail.contains(policy));
-    }
-    let protected =
-        rule_preview::preview("rules: ['MATCH,DIRECT']", "claude.ai", 443, true).unwrap();
-    assert_eq!(protected.last().unwrap().code, "rule_unknown");
-}
-
-#[test]
-fn config_diff_never_emits_values_or_dynamic_field_names() {
-    let original = "secret: private-token\nproxies: [{name: secret-name, server: secret-host, password: secret-password}]\ndns: {nameserver: ['https://secret-doh/?key=secret-key']}\nsecret-field: secret-value";
-    let effective = "secret: other-token\nproxies: []\ndns: {enable: true, enhanced-mode: fake-ip}\ntun: {enable: true}\nrules: ['MATCH,DIRECT']";
-    let entries = config_diff::compare(original, effective).unwrap();
-    let encoded = serde_json::to_string(&entries).unwrap();
-    for hidden in [
-        "private-token",
-        "secret-",
-        "other-token",
-        "MATCH",
-        "https://",
-    ] {
-        assert!(!encoded.contains(hidden), "{encoded}");
-    }
-    assert!(
-        entries
-            .iter()
-            .any(|entry| entry.label == "proxies" && entry.detail.contains("1 项 → 列表 0 项"))
-    );
-    assert!(config_diff::compare("bad: [", effective).is_err());
-}
-
-#[test]
-fn config_file_failures_distinguish_missing_permissions_encoding_and_size() {
-    let temporary = tempfile::tempdir().unwrap();
-    let missing = temporary.path().join("private-missing.yaml");
-    for failure in [
-        config_diff::read_file(&missing).unwrap_err(),
-        config_diff::read(temporary.path()).unwrap_err(),
-    ] {
-        let entry = error::entry("配置", &failure);
-        assert_eq!(entry.code, "config_unavailable");
-        assert!(!entry.detail.contains("private-"));
-    }
-    let directory = config_diff::read_file(temporary.path()).unwrap_err();
-    assert!(matches!(
-        error::entry("配置", &directory).code,
-        "config_unavailable" | "permission_denied"
-    ));
-    let denied = config_diff::read_error(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        "private-path/private-token",
-    ));
-    let entry = error::entry("配置", &denied);
-    assert_eq!(entry.code, "permission_denied");
-    assert!(!entry.detail.contains("private-"));
-    let invalid = temporary.path().join("invalid.yaml");
-    std::fs::write(&invalid, [0xff]).unwrap();
-    assert_eq!(
-        error::entry("配置", &config_diff::read_file(&invalid).unwrap_err()).code,
-        "config_invalid"
-    );
-    let oversized = temporary.path().join("oversized.yaml");
-    std::fs::File::create(&oversized)
-        .unwrap()
-        .set_len(8 * 1024 * 1024 + 1)
-        .unwrap();
-    assert_eq!(
-        error::entry("配置", &config_diff::read_file(&oversized).unwrap_err()).code,
-        "config_snapshot_limit"
-    );
-    for original in ["null", "[]", "plain text"] {
-        let failure = config_diff::compare(original, "rules: []").unwrap_err();
-        assert_eq!(error::entry("配置", &failure).code, "config_invalid");
-    }
-}
-
-#[test]
-fn traffic_handles_missing_metadata_saturates_counters_and_limits_output() {
-    let mut connections = Vec::new();
-    for index in 0..200 {
-        connections.push(json!({"metadata":{"host":format!("host-{index}.test"),"process":"app"},"chains":["node","Proxy"],"rule":"Domain","upload":u64::MAX,"download":2}));
-    }
-    connections.push(json!({}));
-    let snapshot = serde_json::from_value(json!({"connections":connections})).unwrap();
-    let mut report = Report {
-        schema: 1,
-        tool: Tool::Traffic,
-        target: "当前实例".into(),
-        elapsed_ms: 0,
-        status: "unavailable",
-        entries: Vec::new(),
-    };
-    inspection::summarize(snapshot, &mut report);
-    assert!(report.entries.len() <= 34);
-    assert_eq!(
-        report
-            .entries
-            .iter()
-            .filter(|entry| entry.label == "主机")
-            .count(),
-        8
-    );
-    assert!(
-        report
-            .entries
-            .iter()
-            .any(|entry| entry.detail.contains("未提供"))
-    );
-    let empty = serde_json::from_value(json!({"connections":[]})).unwrap();
-    report.entries.clear();
-    inspection::summarize(empty, &mut report);
-    assert!(report.entries[0].detail.starts_with("0 个"));
-}
-
-#[test]
-fn node_information_keeps_emoji_and_reports_missing_or_cyclic_targets() {
-    let proxies = serde_json::from_value(json!({"proxies":{
-        "Proxy":{"type":"Selector","all":["AUTO"],"now":"AUTO"},
-        "AUTO":{"type":"URLTest","all":["🇰🇷 韩国 01"],"now":"🇰🇷 韩国 01"},
-        "🇰🇷 韩国 01":{"type":"Trojan","history":[{"delay":123}]},
-        "Loop":{"type":"Selector","all":["Loop"],"now":"Loop"}
-    }}))
-    .unwrap();
-    let mut report = Report {
-        schema: 1,
-        tool: Tool::Node,
-        target: "AUTO".into(),
-        elapsed_ms: 0,
-        status: "unavailable",
-        entries: Vec::new(),
-    };
-    inspection::node("AUTO", &proxies, &mut report);
-    assert!(
-        report
-            .entries
-            .iter()
-            .any(|entry| entry.detail.contains("AUTO → 🇰🇷 韩国 01"))
-    );
-    report.entries.clear();
-    inspection::node("Loop", &proxies, &mut report);
-    assert!(
-        report
-            .entries
-            .iter()
-            .any(|entry| entry.code == "node_path_unknown")
-    );
-    report.entries.clear();
-    inspection::node("Missing", &proxies, &mut report);
-    assert_eq!(report.entries[0].code, "node_not_found");
+    let failure = transport::tls_error(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+    assert_eq!(error::entry("TLS", &failure).code, "tls_failed");
 }
 
 #[test]
 fn dns_details_keep_empty_answers_and_limits_explicit() {
-    let records = http::dns_entries(
-        &json!({"Status":0, "Answer":[{"type":16,"TTL":30,"data":"private-token"}]}),
-        "TXT",
-    )
-    .unwrap();
-    assert!(
-        !serde_json::to_string(&records)
-            .unwrap()
-            .contains("private-token")
-    );
+    for kind in ["TXT", "A"] {
+        let records = http::dns_entries(
+            &json!({"Status":0, "Answer":[{"type":16,"TTL":30,"data":"private-token"},{"type":6,"TTL":30,"data":"private-contact"}]}),
+            kind,
+        )
+        .unwrap();
+        assert!(
+            !serde_json::to_string(&records)
+                .unwrap()
+                .contains("private-")
+        );
+    }
     let empty = http::dns_entries(&json!({"Status":0, "Answer":[]}), "MX").unwrap();
     assert_eq!(empty.last().unwrap().code, "dns_no_record");
     assert_eq!(
@@ -232,13 +58,6 @@ fn dns_details_keep_empty_answers_and_limits_explicit() {
         "dns_failed"
     );
     assert!(http::dns_entries(&json!({}), "A").is_err());
-    let mixed = http::dns_entries(
-        &json!({"Status":0, "Answer":[{"type":16,"TTL":30,"data":"private-token"},{"type":6,"TTL":30,"data":"private-contact"}]}),
-        "A",
-    )
-    .unwrap();
-    let encoded = serde_json::to_string(&mixed).unwrap();
-    assert!(!encoded.contains("private-"), "{encoded}");
     for fields in ["5|1000|10|8|8|AAAA|GET", "5|1000|10|8|8|TXT|OPTIONS"] {
         Options::from_fields(fields).validate().unwrap();
     }
@@ -277,10 +96,6 @@ async fn invalid_tcp_ports_are_rejected_before_opening_the_proxy() {
 
 #[tokio::test]
 async fn tcp_probe_sends_no_application_bytes_and_cancellation_closes_the_socket() {
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
     for cancel in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -324,8 +139,7 @@ async fn tcp_probe_sends_no_application_bytes_and_cancellation_closes_the_socket
             task.abort();
             assert!(task.await.unwrap_err().is_cancelled());
         } else {
-            let report = task.await.unwrap().unwrap();
-            assert_eq!(report.status, "complete", "{report:?}");
+            assert_eq!(task.await.unwrap().unwrap().status, "complete");
         }
         server.await.unwrap();
     }
@@ -333,7 +147,6 @@ async fn tcp_probe_sends_no_application_bytes_and_cancellation_closes_the_socket
 
 #[tokio::test]
 async fn tcp_timeout_covers_an_unresponsive_socks_handshake() {
-    use tokio::{io::AsyncReadExt, net::TcpListener};
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
@@ -369,43 +182,8 @@ async fn tcp_timeout_covers_an_unresponsive_socks_handshake() {
 }
 
 #[tokio::test]
-async fn no_target_tools_ignore_stale_input_and_never_start_or_write_data() {
-    let temporary = tempfile::tempdir().unwrap();
-    let missing = temporary.path().join("missing");
-    for tool in [Tool::ConfigDiff, Tool::Traffic, Tool::Performance] {
-        let report = run(
-            tool,
-            "\nold url",
-            Environment {
-                data_dir: Some(missing.clone()),
-                ..offline()
-            },
-            Options::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.target, "当前实例");
-        assert!(
-            report
-                .entries
-                .iter()
-                .any(|entry| entry.success == Some(false))
-        );
-        assert!(!missing.exists());
-    }
-    let report = run(Tool::Node, "", offline(), Options::default())
-        .await
-        .unwrap();
-    assert_eq!(report.entries[0].code, "invalid_target");
-}
-
-#[tokio::test]
 async fn http_details_do_not_follow_redirects_or_save_private_headers_and_bodies() {
     for (method, status) in [("HEAD", 302), ("GET", 403), ("OPTIONS", 500)] {
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpListener,
-        };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let expected = method.to_owned();
@@ -449,11 +227,13 @@ async fn http_details_do_not_follow_redirects_or_save_private_headers_and_bodies
         .await
         .unwrap();
         server.await.unwrap();
+        assert_eq!(report.status, "complete", "{report:?}");
         assert!(
             report.entries.iter().any(
                 |entry| entry.label == "网站响应" && entry.detail.contains(&status.to_string())
             )
         );
+        assert!(!report.entries.iter().any(|entry| entry.label == "实际线路"));
         let encoded = serde_json::to_string(&report).unwrap();
         for hidden in [
             "private-body",
@@ -468,65 +248,47 @@ async fn http_details_do_not_follow_redirects_or_save_private_headers_and_bodies
 }
 
 #[tokio::test]
-async fn performance_reads_one_stream_sample_without_waiting_for_eof() {
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
+async fn stability_distinguishes_http_errors_from_transport_failures() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let api = Api::new(&crate::config::Settings {
-        controller_port: listener.local_addr().unwrap().port(),
-        ..Default::default()
-    })
-    .unwrap();
-    let server = tokio::spawn(async move {
-        for body in [
-            r#"{"version":"fixture"}"#,
-            r#"{"connections":[]}"#,
-            r#"{"inuse":1048576}"#,
-        ] {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") {
-                request.push(stream.read_u8().await.unwrap());
+    let port = listener.local_addr().unwrap().port();
+    let server =
+        tokio::spawn(async move {
+            for status in [200, 403, 500] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await.unwrap());
+                    assert!(request.len() < 4096);
+                }
+                stream.write_all(format!(
+                "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ).as_bytes()).await.unwrap();
             }
-            if body.contains("inuse") {
-                stream
-                    .write_all(
-                        format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}\n").as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-                let mut closed = [0];
-                assert_eq!(
-                    tokio::time::timeout(Duration::from_secs(2), stream.read(&mut closed))
-                        .await
-                        .unwrap()
-                        .unwrap(),
-                    0
-                );
-            } else {
-                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-            }
-        }
-    });
+        });
     let report = run(
-        Tool::Performance,
-        "",
+        Tool::Stability,
+        "http://example.test/",
         Environment {
-            api: Some(api),
+            port: Some(port),
             ..offline()
         },
-        Options::default(),
+        Options {
+            count: 3,
+            interval_ms: 100,
+            ..Options::default()
+        },
     )
     .await
     .unwrap();
     server.await.unwrap();
     assert_eq!(report.status, "complete", "{report:?}");
-    assert!(
-        report
-            .entries
-            .iter()
-            .any(|entry| entry.detail.contains("1048576 B"))
-    );
+    assert!(report.entries[0].detail.contains("传输失败 0"));
+    let statuses = report
+        .entries
+        .iter()
+        .find(|entry| entry.label == "HTTP 状态分布")
+        .unwrap();
+    for status in ["200 × 1", "403 × 1", "500 × 1"] {
+        assert!(statuses.detail.contains(status));
+    }
 }

@@ -44,6 +44,7 @@ component NodeCard inherits ContentPanel {
     if root.detailed: VerticalLayout { spacing: Theme.content-gap;
         Caption { text: "完整名称：" + root.node.name; wrap: word-wrap; }
         Caption { text: "协议：" + root.node.kind; wrap: word-wrap; }
+        Caption { text: root.node.details; wrap: word-wrap; }
     }
 }
 export component ProxiesPage inherits PageSurface {

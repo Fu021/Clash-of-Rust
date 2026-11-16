@@ -136,8 +136,8 @@ pub(super) async fn tcp(
         .entries
         .push(Entry::ok("本机代理 TCP", format!("{local} ms")));
     report.entries.push(Entry::ok(
-        "目标 TCP",
-        format!("端口 {port} · {remote} ms（含代理侧 DNS）"),
+        "代理建立目标连接",
+        format!("端口 {port} · {remote} ms（含代理侧 DNS、规则及出站处理）"),
     ));
     report.entries.push(Entry::unknown(
         "检查范围",
@@ -165,6 +165,8 @@ async fn exchange(
     destination: &str,
     context: &Environment,
     report: &mut Report,
+    handshake_only: bool,
+    connector: &TlsConnector,
 ) -> Result<()> {
     let host = url.host_str().context("缺少域名")?.trim_matches(['[', ']']);
     let port = url.port_or_known_default().context("目标端口未知")?;
@@ -173,9 +175,12 @@ async fn exchange(
         .entries
         .push(Entry::ok("本机代理 TCP", format!("{local} ms")));
     report.entries.push(Entry::ok(
-        "目标 TCP",
-        format!("{remote} ms（含代理侧 DNS；沿用当前线路）"),
+        "代理建立目标连接",
+        format!("{remote} ms（含代理侧 DNS、规则及出站处理；沿用当前线路）"),
     ));
+    if handshake_only && url.scheme() != "https" {
+        return Ok(());
+    }
     let mut path = url.path().to_owned();
     if let Some(query) = url.query() {
         path.push('?');
@@ -188,10 +193,7 @@ async fn exchange(
     if url.scheme() == "https" {
         let start = Instant::now();
         let name = rustls::pki_types::ServerName::try_from(host.to_owned())?;
-        let mut secure = tls()?
-            .connect(name, stream)
-            .await
-            .map_err(|_| error::failure("tls_failed", "TLS 握手或证书验证失败，未绕过验证"))?;
+        let mut secure = connector.connect(name, stream).await.map_err(tls_error)?;
         report.entries.push(Entry::ok(
             "TLS 握手",
             format!("{} ms", start.elapsed().as_millis()),
@@ -201,7 +203,7 @@ async fn exchange(
             "TLS 协议",
             format!("{:?}", session.protocol_version().context("TLS 协议未知")?),
         ));
-        if let Some(chain) = session.peer_certificates() {
+        if handshake_only && let Some(chain) = session.peer_certificates() {
             report.entries.push(Entry::ok(
                 "证书验证",
                 format!(
@@ -218,6 +220,9 @@ async fn exchange(
                     "certificate_display_invalid",
                 ));
             }
+        }
+        if handshake_only {
+            return Ok(());
         }
         let start = Instant::now();
         secure.write_all(request.as_bytes()).await?;
@@ -259,6 +264,7 @@ pub(super) async fn run(
     report: &mut Report,
 ) -> Result<()> {
     proxy_port(context)?;
+    let connector = tls()?;
     if tool == Tool::Family {
         let addresses = resolve(url, context).await?;
         for (label, v6) in [("IPv4", false), ("IPv6", true)] {
@@ -277,7 +283,14 @@ pub(super) async fn run(
             let start = Instant::now();
             match tokio::time::timeout(
                 Duration::from_secs(options.seconds),
-                exchange(url, &address.to_string(), context, &mut sample),
+                exchange(
+                    url,
+                    &address.to_string(),
+                    context,
+                    &mut sample,
+                    true,
+                    &connector,
+                ),
             )
             .await
             {
@@ -293,7 +306,7 @@ pub(super) async fn run(
                 )),
             }
         }
-        report.entries.push(Entry::unknown("检查路径", "强制目标 IP，经本机 SOCKS5 代理；IP 规则可能与普通域名请求不同。没有 IPv6 地址不代表 TUN 绕行", "information"));
+        report.entries.push(Entry::unknown("检查路径", "强制目标 IP，经本机 SOCKS5 代理；HTTPS 验证原域名证书，HTTP 仅建立连接。IP 规则可能与域名请求不同；结果不代表本机或节点入口的地址族能力", "information"));
         return Ok(());
     }
     let mut url = url.clone();
@@ -326,7 +339,7 @@ pub(super) async fn run(
     }
     tokio::time::timeout(
         Duration::from_secs(options.seconds),
-        exchange(&url, &host, context, report),
+        exchange(&url, &host, context, report, tool == Tool::Tls, &connector),
     )
     .await
     .map_err(|_| error::failure("connection_timeout", "本次连接达到时限，已停止检查"))??;
@@ -336,6 +349,36 @@ pub(super) async fn run(
         "information",
     ));
     Ok(())
+}
+
+pub(super) fn tls_error(failure: std::io::Error) -> anyhow::Error {
+    use rustls::CertificateError;
+    let certificate = failure
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<rustls::Error>());
+    let (code, detail) = match certificate {
+        Some(rustls::Error::InvalidCertificate(
+            CertificateError::Expired | CertificateError::ExpiredContext { .. },
+        )) => ("tls_certificate_expired", "证书已过期，未绕过验证"),
+        Some(rustls::Error::InvalidCertificate(
+            CertificateError::NotValidYet | CertificateError::NotValidYetContext { .. },
+        )) => (
+            "tls_certificate_not_yet_valid",
+            "证书尚未生效，请核对系统时间",
+        ),
+        Some(rustls::Error::InvalidCertificate(
+            CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
+        )) => ("tls_certificate_name", "证书与目标域名不匹配，未绕过验证"),
+        Some(rustls::Error::InvalidCertificate(CertificateError::UnknownIssuer)) => (
+            "tls_certificate_issuer",
+            "证书颁发机构不受信任或证书链不完整，未绕过验证",
+        ),
+        Some(rustls::Error::InvalidCertificate(_)) => {
+            ("tls_certificate_invalid", "证书验证失败，未绕过验证")
+        }
+        _ => ("tls_failed", "TLS 握手失败，未降级或绕过验证"),
+    };
+    error::failure(code, detail)
 }
 
 fn field<'a>(data: &mut &'a [u8]) -> Result<(u8, &'a [u8])> {

@@ -468,6 +468,10 @@ impl State {
             }
             Key::Enter if self.page == Page::Settings => self.edit_setting(),
             Key::Enter if self.page == Page::Network => {
+                if self.query.trim().is_empty() {
+                    self.error = Some("请输入域名、IP 或网址".into());
+                    return Action::None;
+                }
                 self.selected = 0;
                 self.network_results.clear();
                 if self.demo {

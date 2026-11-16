@@ -132,6 +132,7 @@ impl App {
                         kind,
                         delay: delay_label,
                         tone: proxy_order::delay_tone(delay),
+                        details: proxy_order::node_details(name, group, &self.snapshot.proxies).into(),
                     }
                 };
                 for pair in indices[start..(start + PAGE_SIZE).min(count)].chunks(2) {
@@ -622,6 +623,14 @@ impl App {
         } else {
             reconcile(&models.connections, Vec::new());
         }
+        data.set_connection_summary(strings(
+            data.get_connection_summary(),
+            if self.page == Page::Connections {
+                connection::traffic_summary(&self.snapshot.connections.connections)
+            } else {
+                Vec::new()
+            },
+        ));
         if self.page == Page::Rules {
             self.present_rules(data, models, &query);
         } else {

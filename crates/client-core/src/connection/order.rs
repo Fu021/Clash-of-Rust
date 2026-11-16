@@ -133,6 +133,29 @@ pub fn sorted_indices<T: AsRef<str>>(
     indices
 }
 
+pub fn node_details(name: &str, group: &str, proxies: &crate::api::Proxies) -> String {
+    let path = crate::active_route::path_from_snapshot(name, proxies)
+        .map(|path| path.join(" → "))
+        .unwrap_or_else(|| "策略链循环、过深或成员缺失，无法确认".into());
+    let group: String = group
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(128)
+        .collect();
+    format!(
+        "所属策略组：{}\n当前选择链：{}\n延迟为最近测量，不保证当前健康；测量时间未提供。自动组可能变化，单次出口以网站检查的真实连接为准。",
+        if group.is_empty() {
+            "未提供"
+        } else {
+            &group
+        },
+        path.chars()
+            .filter(|character| !character.is_control())
+            .take(512)
+            .collect::<String>()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +225,19 @@ mod tests {
         assert_eq!(nodes[ordered[59]], "node59");
         assert_eq!(nodes[ordered[60]], "node60");
         assert_eq!(nodes[ordered[124]], "node124");
+    }
+
+    #[test]
+    fn node_details_follow_groups_and_keep_uncertain_paths_explicit() {
+        let proxies = serde_json::from_str(
+            r#"{"proxies":{"Auto":{"type":"URLTest","now":"node","all":["node"]},"node":{"type":"Shadowsocks"},"Cycle":{"type":"Selector","now":"Cycle","all":["Cycle"]}}}"#,
+        )
+        .unwrap();
+        let details = node_details("Auto", "Parent\nGroup", &proxies);
+        assert!(details.contains("所属策略组：ParentGroup"));
+        assert!(details.contains("当前选择链：Auto → node"));
+        assert!(details.contains("测量时间未提供"));
+        assert!(node_details("Cycle", "Parent", &proxies).contains("无法确认"));
+        assert!(node_details("Missing", "Parent", &proxies).contains("无法确认"));
     }
 }

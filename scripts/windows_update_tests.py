@@ -2,12 +2,16 @@
 from contextlib import contextmanager
 import csv
 import hashlib
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -137,6 +141,118 @@ def installed_hashes(installed):
             for path in installed.rglob('*') if path.is_file()}
 
 
+@contextmanager
+def independent_core(payload, directory):
+    from proxy_benchmark import BLOCK, Payload
+    external = directory/'独立 Mihomo with spaces'
+    external.mkdir()
+    executable = external/'mihomo.exe'
+    shutil.copyfile(payload/'resources/mihomo.exe', executable)
+    for name in ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'):
+        shutil.copyfile(payload/'resources'/name, external/name)
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        proxy_port = reservation.getsockname()[1]
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Payload)
+    config = external/'config.yaml'
+    write_json(config, {
+        'mixed-port': proxy_port, 'bind-address': '127.0.0.1', 'allow-lan': False,
+        'mode': 'rule', 'log-level': 'warning', 'ipv6': False,
+        'dns': {'enable': False}, 'tun': {'enable': False},
+        'proxies': [], 'rules': ['MATCH,DIRECT'],
+    })
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with (directory/'independent-core.log').open('wb') as log:
+            with subprocess.Popen(
+                [str(executable), '-d', str(external), '-f', str(config)],
+                cwd=external, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            ) as process:
+                def probe():
+                    if process.poll() is not None:
+                        raise RuntimeError('Independent Mihomo exited during the update test')
+                    connection = HTTPConnection('127.0.0.1', proxy_port, timeout=2)
+                    try:
+                        connection.request(
+                            'GET', f'http://127.0.0.1:{server.server_port}/small',
+                            headers={'Connection': 'close'})
+                        response = connection.getresponse()
+                        body = response.read(len(BLOCK)+1)
+                        if response.status != 200 or body != BLOCK:
+                            raise AssertionError('Independent Mihomo did not forward the fixture payload')
+                        return hashlib.sha256(body).hexdigest()
+                    finally:
+                        connection.close()
+                try:
+                    deadline = time.monotonic()+20
+                    while True:
+                        try:
+                            probe()
+                            break
+                        except OSError:
+                            if process.poll() is not None or time.monotonic() >= deadline:
+                                raise
+                            time.sleep(.1)
+                    yield process, executable, config, probe
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=10)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def verify_independent_core(package, installed, payload, directory, execute, record):
+    record.update({'completed': False, 'expected_exit_code': 0})
+    try:
+        with independent_core(payload, directory) as (process, executable, config, probe):
+            if executable.resolve().is_relative_to(installed.resolve()):
+                raise AssertionError('Independent Mihomo must live outside the installation')
+            original = {path: sha256(path) for path in (executable, config)}
+            record.update({
+                'pid': process.pid, 'executable': str(executable),
+                'separate_installation': True, 'proxy_before': probe(),
+            })
+            renderer = installed/'clash-desktop-ui.exe'
+            renderer.write_bytes((payload/renderer.name).read_bytes()+b'independent-core-update-probe')
+            (package.parent/'installer-failure.json').unlink(missing_ok=True)
+            execute(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+            record['proxy_after'] = probe()
+            if record['proxy_before'] != record['proxy_after'] or process.poll() is not None:
+                raise AssertionError('Update disrupted the independent Mihomo process or traffic')
+            for relative in (
+                'clash-of-rust.exe', 'clash-desktop-ui.exe', 'cor.exe',
+                'clash-tun-launcher.exe', 'resources/mihomo.exe', 'resources/GeoIP.dat',
+                'resources/GeoSite.dat',
+            ):
+                if sha256(installed/relative) != sha256(payload/relative):
+                    raise AssertionError('Independent-core update did not install the verified payload')
+            if any(sha256(path) != digest for path, digest in original.items()):
+                raise AssertionError('Update modified the independent Mihomo installation')
+            if failure_record(package) is not None or list(installed.glob('*.update-backup.exe')):
+                raise AssertionError('Independent-core update left failure evidence or backup files')
+            record.update({'external_files_unchanged': True, 'payload_verified': True,
+                           'same_process_alive': True, 'completed': True})
+    except Exception as failure:
+        record['error'] = str(failure)[:2048]
+        log = directory/'independent-core.log'
+        if log.is_file():
+            with log.open('rb') as stream:
+                stream.seek(max(0, log.stat().st_size-4096))
+                record['core_log_tail'] = stream.read(4096).decode('utf-8', errors='replace')
+        raise
+    finally:
+        record['failure'] = failure_record(package)
+
+
 def verify_write_failures(package, installed, payload, execute):
     if os.name != 'nt' or os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Windows update reproduction requires a disposable Actions runner')
@@ -199,6 +315,12 @@ def verify_write_failures(package, installed, payload, execute):
                     attempt['retry_succeeded'] = True
                     write_json(report_path, report)
                 print('Windows update reproduction:', json.dumps(record, ensure_ascii=False), flush=True)
+            report['independent_core'] = {}
+            verify_independent_core(
+                package, installed, payload, directory, execute, report['independent_core'])
+            write_json(report_path, report)
+            print('Windows independent-core update:',
+                  json.dumps(report['independent_core'], ensure_ascii=False), flush=True)
         report['completed'] = True
     finally:
         renderer.write_bytes(original)

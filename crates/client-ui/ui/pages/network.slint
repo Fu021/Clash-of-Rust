@@ -54,6 +54,14 @@ export component NetworkPage inherits PageSurface {
                         clicked => { UiActions.dispatch(Intent.export-diagnostics, "网络工具检查", ""); }
                     }
                 }
+                if UiData.network-tool == 0 && UiData.network-results.length > 0: GridLayout {
+                    spacing: 8px;
+                    for tool[index] in [1, 2, 4, 11]: ActionButton {
+                        col: mod(index, 2); row: floor(index / 2);
+                        text: NetworkTools.titles[tool]; quiet: true;
+                        clicked => { UiActions.dispatch(Intent.network-tool, "" + tool, ""); }
+                    }
+                }
             }
         }
         }

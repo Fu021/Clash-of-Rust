@@ -227,14 +227,17 @@ fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
 }
 
 #[test]
-fn read_only_instance_tools_run_without_a_target_and_leave_no_page_history() {
+fn network_tools_require_a_target_and_leave_no_page_history() {
     use clash_client_core::network_tools::Tool;
-    for tool in [Tool::ConfigDiff, Tool::Traffic, Tool::Performance] {
+    for tool in Tool::ALL {
         let mut state = State::new(false);
         state.key(Key::Char('4'));
         state.release_page();
         state.query.clear();
         state.network_tool = tool.index() as usize;
+        assert!(tool.needs_target());
+        assert!(!matches!(state.key(Key::Enter), Action::CheckNetwork(_, _)));
+        state.query = "example.test".into();
         assert!(
             matches!(state.key(Key::Enter), Action::CheckNetwork(selected, _) if selected == tool)
         );

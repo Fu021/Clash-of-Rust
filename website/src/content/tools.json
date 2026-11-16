@@ -1,17 +1,14 @@
 {
   "groups": [
     {"id": "target", "en": "Target checks", "zh": "目标检查",
-     "note_en": "Six checks aimed at one site or host name.",
-     "note_zh": "针对某个网站或域名的六项检查。"},
+     "note_en": "Five checks aimed at one site or host name.",
+     "note_zh": "针对某个网站或域名的五项检查。"},
     {"id": "link", "en": "Link analysis", "zh": "链路分析",
      "note_en": "Five checks about the quality of the path itself.",
      "note_zh": "关于线路本身质量的五项检查。"},
     {"id": "protocol", "en": "Protocol checks", "zh": "协议检查",
      "note_en": "TCP handshakes and bounded HTTP responses.",
-     "note_zh": "TCP 握手与有界 HTTP 响应。"},
-    {"id": "runtime", "en": "Rules and runtime", "zh": "规则与运行",
-     "note_en": "Read-only snapshots. No persistent monitoring.",
-     "note_zh": "按需读取快照，不常驻监控。"}
+     "note_zh": "TCP 握手与有界 HTTP 响应。"}
   ],
   "tools": [
     {
@@ -34,14 +31,14 @@
     {
       "id": "dns", "group": "target", "arg": "HOST", "options": ["type"],
       "en": {
-        "name": "DNS comparison",
+        "name": "DNS query",
         "short": "The system resolver and the core, side by side.",
         "checks": "Resolves one host name with the system resolver and with the core, and shows both answers next to each other.",
         "when": "A site opens in one app but not in another, or you suspect a wrong or hijacked answer.",
         "note": "Different answers are not a fault on their own. The controller query returns real upstream addresses even with Fake-IP. Version 0.7.2-fix.4 adds record types, TTL and available AA/RA flags; TXT/SOA bodies are hidden."
       },
       "zh": {
-        "name": "DNS 对照",
+        "name": "DNS 查询",
         "short": "系统解析和内核解析，并排比较。",
         "checks": "同一个域名分别交给系统解析器和内核解析，把两边的结果并排列出。",
         "when": "同一个网站在这个应用能开、另一个应用打不开，或者怀疑解析结果被污染、被劫持时。",
@@ -53,16 +50,16 @@
       "en": {
         "name": "Connection timing",
         "short": "How long DNS, the proxy hop, TCP, TLS and the first byte each take.",
-        "checks": "Times one connection stage by stage: core DNS, the local SOCKS5 hop, TCP to the target, the TLS handshake and the first byte of the response.",
+        "checks": "Times an independent core DNS query, the local SOCKS5 connection, proxy establishment of the target connection, TLS and the first response byte.",
         "when": "A site loads, but slowly, and you want to know which stage eats the time.",
-        "note": "Each stage is measured on its own, so one slow step stands out instead of hiding in a total."
+        "note": "Proxy establishment includes proxy-side DNS, routing and outbound handling. It is not a pure remote TCP handshake; do not add the independent DNS query to these timings."
       },
       "zh": {
         "name": "连接耗时",
         "short": "解析、代理、TCP、TLS、首字节，各花了多久。",
-        "checks": "把一次连接拆成几段分别计时：内核 DNS、本机 SOCKS5、到目标的 TCP、TLS 握手，以及响应的首字节。",
+        "checks": "分别计时独立内核 DNS 查询、本机 SOCKS5、代理建立目标连接、TLS 握手与首字节。",
         "when": "网站能打开，但是慢，想知道时间耗在哪一段。",
-        "note": "各阶段独立计时，慢的那一步会单独显出来，不会被总耗时掩盖。"
+        "note": "代理建连包含代理侧 DNS、规则和出站处理，不是纯目标 TCP 握手；独立 DNS 查询不能与其简单相加。"
       }
     },
     {
@@ -72,31 +69,14 @@
         "short": "One connection per address family.",
         "checks": "Connects to the target once over IPv4 and once over IPv6, each through the local proxy.",
         "when": "Something works on one network and fails on another, or you are deciding whether to keep IPv6 switched on.",
-        "note": "A host with no AAAA record is reported as having no IPv6 address. It is not counted as a failed connection."
+        "note": "Tests proxy access to the target address family, not local or node-ingress IPv6. HTTPS validates the original host; HTTP stops after connecting. Missing AAAA is not a connection failure."
       },
       "zh": {
         "name": "IPv4 / IPv6",
         "short": "两种地址族，各连一次。",
         "checks": "经本机代理，分别用 IPv4 和 IPv6 地址各连接目标一次。",
         "when": "换个网络就连不上，或者在犹豫要不要保持 IPv6 开启时。",
-        "note": "域名没有 AAAA 记录时，会如实说明没有 IPv6 地址，不会算成连接失败。"
-      }
-    },
-    {
-      "id": "explain", "group": "target", "arg": "URL", "options": [],
-      "en": {
-        "name": "Rule and exit",
-        "short": "Which rule matched, and which node the request left through.",
-        "checks": "Sends a real request, then reads back the rule it matched and the full policy chain it travelled.",
-        "when": "Traffic leaves through an exit you did not expect, or a rule you wrote does not seem to apply.",
-        "note": "The answer comes from this request. It is not a guess based on whichever node is selected at the moment."
-      },
-      "zh": {
-        "name": "规则与出口",
-        "short": "命中了哪条规则，从哪个节点出去。",
-        "checks": "发出一次真实请求，再查出它命中的规则和走过的完整策略链。",
-        "when": "流量从意料之外的出口出去，或者自己写的规则好像没有生效时。",
-        "note": "结果来自这一次请求本身，不是拿当前选中的节点来推测。"
+        "note": "验证代理访问目标地址族，不代表本机或节点入口 IPv6。HTTPS 验证原域名，HTTP 建连即止；无 AAAA 不算连接失败。"
       }
     },
     {
@@ -106,14 +86,14 @@
         "short": "Host name, validity, trust chain and fingerprint.",
         "checks": "Verifies the certificate's host name, validity period and trust chain, and shows a short summary of the certificate.",
         "when": "A browser shows a certificate warning, or you suspect something on the path is intercepting HTTPS.",
-        "note": "Always uses HTTPS and never skips verification. Only a limited set of certificate fields is shown."
+        "note": "Stops after the TLS handshake without sending HTTP. Never skips verification. Expiry, host mismatch and issuer failures are distinguished."
       },
       "zh": {
         "name": "TLS 证书",
         "short": "域名、有效期、信任链和证书摘要。",
         "checks": "验证证书的域名、有效期和信任链，并显示证书摘要。",
         "when": "浏览器提示证书有问题，或者怀疑线路上有人拦截 HTTPS 时。",
-        "note": "始终使用 HTTPS，不会绕过验证。证书只展示有限的几个字段。"
+        "note": "TLS 握手完成即止，不发送 HTTP，不绕过验证；区分过期、域名不符和颁发机构等错误。"
       }
     },
     {
@@ -121,14 +101,14 @@
       "en": {
         "name": "Short stability run",
         "short": "A handful of requests, with failures and the spread of response times.",
-        "checks": "Sends a limited number of requests and reports how many failed and how the response-header times were spread.",
+        "checks": "Reports transport failures separately from HTTP status counts, plus minimum, median and maximum response-header time.",
         "when": "A connection works, drops, then works again.",
         "note": "The whole run is capped at 120 seconds. If count, interval and time limit add up to more, you get the results collected so far, marked as timed out."
       },
       "zh": {
         "name": "短时稳定性",
         "short": "连续请求几次，看失败数和耗时分布。",
-        "checks": "发送有限次数的请求，报告失败了几次，以及响应头耗时的分布。",
+        "checks": "分别统计传输失败、HTTP 状态分布，以及响应头耗时的最低、中位和最高值。",
         "when": "连接时好时坏、断断续续时。",
         "note": "整轮检查最多 120 秒。次数、间隔和时限加起来超过时，返回已经取得的结果，并明确标为超时。"
       }
@@ -208,33 +188,8 @@
     },
     {
       "id":"http","group":"protocol","arg":"URL","options":["method","seconds"],
-      "en":{"name":"HTTP response","short":"Status, safe headers and bounded body size.","checks":"Sends HEAD, GET or OPTIONS; reads at most 4 KiB of body and discards it.","when":"A site answers but behaves unexpectedly.","note":"Requires 0.7.2-fix.4. No redirect following. Cookies, authorization headers and body text are not retained."},
-      "zh":{"name":"HTTP 响应详情","short":"状态、受限响应头与正文长度。","checks":"发送 HEAD、GET 或 OPTIONS，最多接收 4 KiB 正文并丢弃。","when":"网站有响应但行为异常时。","note":"0.7.2-fix.4 起提供。不跟随重定向，不保留 Cookie、认证头和正文。"}
-    },
-    {
-      "id":"rule","group":"runtime","arg":"URL","options":[],
-      "en":{"name":"Rule preview","short":"An offline estimate, with uncertainty shown.","checks":"Reads the last generated configuration and stops at the first condition it cannot evaluate.","when":"Checking simple domain, IP or port rules without contacting a target.","note":"Requires 0.7.2-fix.4. Dynamic rules, Geo and process conditions remain unknown. Use Rule and exit for a real request."},
-      "zh":{"name":"规则预判","short":"离线判断，无法确认时明确说明。","checks":"读取最后生成的配置，遇到无法判断的条件立即停止。","when":"不连接目标，检查简单域名、IP 或端口规则时。","note":"0.7.2-fix.4 起提供。动态规则、Geo 和进程条件保持未知；实际线路使用“规则与出口”。"}
-    },
-    {
-      "id":"config-diff","group":"runtime","arg":"","options":[],
-      "en":{"name":"Configuration diff","short":"Original versus generated configuration.","checks":"Compares field types, item counts and whether selected sections changed.","when":"Understanding which settings overrode a subscription.","note":"Requires 0.7.2-fix.4. A disk snapshot, not proof of live state. Values, node addresses, DNS servers and credentials are hidden."},
-      "zh":{"name":"配置差异","short":"原订阅与生成配置摘要。","checks":"比较字段类型、条目数和所选配置块是否变化。","when":"想知道哪些设置覆盖了订阅时。","note":"0.7.2-fix.4 起提供。磁盘快照不代表实时状态；不显示节点地址、DNS 上游或凭据。"}
-    },
-    {
-      "id":"traffic","group":"runtime","arg":"","options":[],
-      "en":{"name":"Traffic breakdown","short":"Current connections grouped four ways.","checks":"Groups by host, process, policy chain and rule type; shows eight groups per category.","when":"Identifying which active connections account for traffic.","note":"Requires 0.7.2-fix.4. No history; totals cover live connections only. Process details depend on the core and OS."},
-      "zh":{"name":"流量分解","short":"四种分组查看当前连接。","checks":"按主机、进程、策略链和规则类型汇总，每类显示八组。","when":"查看哪些活跃连接占用了流量时。","note":"0.7.2-fix.4 起提供。不留历史，仅统计仍在内核中的连接；进程信息取决于系统和内核。"}
-    },
-    {
-      "id":"performance","group":"runtime","arg":"","options":[],
-      "en":{"name":"Core runtime","short":"Version, connections and managed heap.","checks":"Reads one bounded sample, then closes the metrics stream.","when":"Checking the core without starting a background monitor.","note":"Requires 0.7.2-fix.4. Managed heap is not process RSS. Missing metrics are reported, never estimated."},
-      "zh":{"name":"内核运行","short":"版本、连接与托管堆。","checks":"读取一次有界样本后关闭指标流。","when":"不启动常驻监控，查看内核情况时。","note":"0.7.2-fix.4 起提供。托管堆不是 RSS；未提供的指标不推算。"}
-    },
-    {
-      "id":"node","group":"runtime","arg":"NODE","options":[],
-      "en":{"name":"Node runtime","short":"Type, groups and current selection.","checks":"Looks up a full node name, its last delay and selected policy path without retesting.","when":"Understanding an automatic or nested group.","note":"Requires 0.7.2-fix.4. Names with spaces or emoji must be quoted in CLI. Past delay does not prove current health."},
-      "zh":{"name":"节点运行详情","short":"类型、所属组与当前选择。","checks":"按完整名称查看最近延迟和策略链，不主动测速。","when":"查看自动组或多层策略组时。","note":"0.7.2-fix.4 起提供。CLI 中带空格或 emoji 的名称须加引号；历史延迟不代表现在可达。"}
+      "en":{"name":"HTTP inspection","short":"Methods, status, safe headers and bounded body size.","checks":"Sends HEAD, GET or OPTIONS; separates transport reachability from business status. Reads at most 4 KiB of body and discards it.","when":"A site answers but behaves unexpectedly.","note":"No redirect following or extra route lookup. Cookies, authorization headers and body text are not retained."},
+      "zh":{"name":"HTTP 检查","short":"方法、状态、安全响应头与正文长度。","checks":"发送 HEAD、GET 或 OPTIONS，区分传输连通与业务状态，最多接收 4 KiB 正文并丢弃。","when":"网站有响应但行为异常时。","note":"不跟随重定向，不额外查询策略链，不保留 Cookie、认证头和正文。"}
     }
   ],
   "options": {
@@ -254,10 +209,10 @@
                "en":"HTTP request method","zh":"HTTP 请求方法"}
   },
   "symptoms": [
-    {"en": "A site will not open", "zh": "网站打不开", "tools": ["check", "explain"]},
+    {"en": "A site will not open", "zh": "网站打不开", "tools": ["check"]},
     {"en": "It opens, but slowly", "zh": "能打开，但是慢", "tools": ["phase", "download"]},
     {"en": "It works, then drops", "zh": "时好时坏", "tools": ["stability"]},
-    {"en": "Traffic leaves through the wrong exit", "zh": "出口不对", "tools": ["explain", "dns"]},
+    {"en": "Traffic leaves through the wrong exit", "zh": "出口不对", "tools": ["check", "dns"]},
     {"en": "A certificate warning appears", "zh": "提示证书有问题", "tools": ["tls"]},
     {"en": "Calls, games or QUIC fail", "zh": "通话、游戏或 QUIC 不通", "tools": ["udp"]},
     {"en": "Trouble only on IPv6, or only on IPv4", "zh": "只有 IPv6 或只有 IPv4 出问题", "tools": ["family"]},

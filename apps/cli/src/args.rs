@@ -10,6 +10,11 @@ pub struct Spec {
     pub max: usize,
     pub options: &'static str,
 }
+impl Spec {
+    pub fn retired(&self) -> bool {
+        self.description.starts_with("已移除")
+    }
+}
 macro_rules! command {
     ($path:literal, $description:literal, $usage:literal, $min:literal, $max:literal, $options:literal) => {
         Spec {
@@ -378,7 +383,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "network explain",
-        "查看真实请求的规则与出口",
+        "已移除；请用 network check 查看规则与出口",
         "network explain URL",
         1,
         1,
@@ -450,7 +455,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "network rule",
-        "静态预判规则，不连接目标",
+        "已移除；请用 network check 查看实际命中",
         "network rule URL",
         1,
         1,
@@ -458,7 +463,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "network config-diff",
-        "对照原订阅和生成配置的脱敏摘要",
+        "已移除；请用 config get/check/effective",
         "network config-diff",
         0,
         0,
@@ -466,7 +471,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "network traffic",
-        "汇总当前连接的流量分组",
+        "已移除；流量汇总位于连接页",
         "network traffic",
         0,
         0,
@@ -474,7 +479,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "network performance",
-        "单次读取内核运行指标",
+        "已移除；请用 status 或 diagnose",
         "network performance",
         0,
         0,
@@ -482,7 +487,7 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "network node",
-        "查看节点和策略组的运行详情",
+        "已移除；节点信息位于代理页",
         "network node NODE",
         1,
         1,
@@ -992,7 +997,8 @@ pub fn help(prefix: &str) -> String {
         prefix == "all"
             || (!prefix.is_empty()
                 && spec.path.starts_with(&(prefix.to_owned() + " "))
-                && spec.path != "profile import")
+                && spec.path != "profile import"
+                && !spec.retired())
     }) {
         out += &format!("  {:<25} {}\n", spec.path, spec.description);
     }
@@ -1204,6 +1210,7 @@ fn next_commands(path: &str) -> BTreeSet<String> {
     };
     let mut candidates = COMMANDS
         .iter()
+        .filter(|spec| !spec.retired())
         .filter_map(|spec| {
             spec.path
                 .strip_prefix(prefix.as_str())?
@@ -1445,6 +1452,29 @@ mod tests {
         );
         assert!(!complete(&["config", "get", ""]).contains("controller_port\n"));
         assert!(!complete(&["config", "set", ""]).contains("active_profile\n"));
+    }
+    #[test]
+    fn retired_network_tools_keep_explicit_help_but_leave_menus_and_completion() {
+        let menu = help("network");
+        let candidates = complete(&["network".into(), "".into()]);
+        for command in [
+            "explain",
+            "rule",
+            "config-diff",
+            "traffic",
+            "performance",
+            "node",
+        ] {
+            let path = format!("network {command}");
+            assert!(!menu.contains(&path));
+            assert!(!candidates.lines().any(|candidate| candidate == command));
+            assert!(help(&path).contains("已移除"));
+            assert!(help("all").contains(&path));
+        }
+        for tool in clash_client_core::network_tools::Tool::ALL {
+            assert!(menu.contains(&format!("network {}", tool.id())));
+            assert!(candidates.lines().any(|candidate| candidate == tool.id()));
+        }
     }
     #[test]
     fn completion_scripts_delegate_to_the_contextual_entry_point() {
