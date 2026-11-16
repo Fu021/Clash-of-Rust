@@ -7381,7 +7381,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_release_requires_current_main_push_ci_and_every_job(self):
         self.assertEqual(release.verified_run(self.client(),self.commit)['id'],77)
-        for changes in ({'event':'pull_request'}, {'path':'.github/workflows/release.yml'}, {'head_branch':'other'},
+        for changes in ({'event':'pull_request'}, {'event':'workflow_dispatch'}, {'path':'.github/workflows/release.yml'}, {'head_branch':'other'},
                         {'head_sha':'b'*40}, {'head_repository':{'full_name':'other/project'}},
                         {'status':'in_progress'}, {'conclusion':'failure'}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -7426,6 +7426,24 @@ class ReleaseTests(unittest.TestCase):
             release.verified_run(self.client(changes, main='b'*40),self.commit,77,check_only=True)
         with self.assertRaises(ValueError):
             release.verified_run(self.client(changes,jobs=[]),self.commit,77,check_only=True)
+
+    def test_check_mode_accepts_current_manual_main_ci_with_all_required_jobs(self):
+        changes = {'event':'workflow_dispatch'}
+        self.assertEqual(release.verified_run(self.client(changes), self.commit, 77, check_only=True)['id'], 77)
+        for invalid in ({'head_branch':'other'}, {'head_repository':{'full_name':'fork/project'}},
+                        {'head_sha':'b'*40}, {'status':'in_progress'}, {'conclusion':'failure'},
+                        {'path':'.github/workflows/release.yml'}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                release.verified_run(self.client(changes | invalid), self.commit, 77, check_only=True)
+        with self.assertRaises(ValueError):
+            release.verified_run(self.client(changes, main='b'*40), self.commit, 77, check_only=True)
+        jobs = [{'name':name,'status':'completed','conclusion':'success'} for name in release.CI_JOBS]
+        for invalid_jobs in ([], jobs[:-1], [jobs[0] | {'conclusion':'skipped'}] + jobs[1:]):
+            with self.subTest(jobs=invalid_jobs), self.assertRaises(ValueError):
+                release.verified_run(self.client(changes, jobs=invalid_jobs), self.commit, 77, check_only=True)
+        for mode in ({}, {'prerelease':True}):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                release.verified_run(self.client(changes), self.commit, 77, **mode)
 
     def test_release_version_and_notes_are_read_from_tested_commit(self):
         with patch.object(release,'git',return_value='[package]\nversion="0.4.11"'), patch.object(release.subprocess,'check_output',return_value=self.notes):

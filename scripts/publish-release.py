@@ -176,8 +176,9 @@ def verified_run(client, commit, run_id=None, check_only=False, prerelease=False
     run = client(f'/actions/runs/{run_id}')
     require(run['path'].split('@', 1)[0] == '.github/workflows/ci.yml', 'Selected run is not the build CI')
     main_ci = run['event'] == 'push' and run['head_branch'] == 'main'
-    require(main_ci or ((check_only or prerelease) and run['event'] == 'pull_request'),
-            'Release requires main-branch push CI; branch PR CI requires test-only or explicit prerelease mode')
+    manual_check_ci = check_only and run['event'] == 'workflow_dispatch' and run['head_branch'] == 'main'
+    require(main_ci or manual_check_ci or ((check_only or prerelease) and run['event'] == 'pull_request'),
+            'Release requires main-branch push CI; manual main CI requires test-only mode; branch PR CI requires test-only or explicit prerelease mode')
     require(run['head_repository']['full_name'].lower() == client.repo.lower(), 'CI repository mismatch')
     require(run['head_sha'] == commit, 'CI commit differs from the checked-out commit')
     require(run['status'] == 'completed' and run['conclusion'] == 'success', 'CI has not completed successfully')
@@ -432,7 +433,7 @@ def publish(client, commit, tag, notes, files, source_branch='main', prerelease=
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run-id', type=int, help='Successful CI run; PR CI requires --check or --prerelease and an explicit run ID')
+    parser.add_argument('--run-id', type=int, help='Successful CI run; manual main CI requires --check; PR CI requires --check or --prerelease')
     parser.add_argument('--check', action='store_true', help='Verify the complete packaging/tests run without publishing')
     parser.add_argument('--prerelease', action='store_true', help='Explicitly publish a prerelease, including from same-repository PR branches')
     parser.add_argument('--resolve', action='store_true', help='Verify CI and emit immutable source/run metadata for packaging')

@@ -10,7 +10,7 @@
 
 在 Actions 中选择 **Publish Release → Run workflow**：
 
-- `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
+- `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main push CI。不发布核验也接受显式指定的 main 手动 CI，仍要求全部必需 job 和两套兼容回执通过；公开发布不接受手动 CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
 - `check_only`：默认勾选，核验同提交 CI 已完成安装验证的九组候选包、SHA256 和收据，不重新打包、不创建或修改 Release。安装包保存在所选 CI 的 `package-{system}-{arch}` 附件中，无需下载到本地。
 - `prerelease`：经维护者确认后显式发布预发布版，须关闭 `check_only`。可在开发/修复分支上运行，必须指定同仓库、同分支头成功的 PR CI，源码使用合法预发布版本，并提交 `docs/releases/<完整版本>.md`。不能用此开关发布无后缀的正式版本；两种模式同时勾选会在前置校验失败。
 
