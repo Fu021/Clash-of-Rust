@@ -1,7 +1,7 @@
 <section class="app-demo" data-demo>
   <h3>From the home screen to every rule.</h3>
   <div class="demo-controls">
-    <div class="switch" role="group" aria-label="Interface tour">
+    <div class="switch js-only" role="group" aria-label="Interface tour; choosing a view pauses automatic rotation">
       <button type="button" data-demo-step="0" aria-pressed="true" aria-controls="app-demo-view">Home</button>
       <button type="button" data-demo-step="1" aria-pressed="false" aria-controls="app-demo-view">Nodes</button>
       <button type="button" data-demo-step="2" aria-pressed="false" aria-controls="app-demo-view">Rules</button>
@@ -9,7 +9,7 @@
       <button type="button" data-demo-step="4" aria-pressed="false" aria-controls="app-demo-view">Protection</button>
       <button type="button" data-demo-step="5" aria-pressed="false" aria-controls="app-demo-view">App routing</button>
     </div>
-    <button type="button" class="btn ghost" data-demo-play aria-pressed="false">Play tour</button>
+    <button class="btn small ghost js-only" type="button" data-demo-toggle aria-pressed="false" aria-label="Pause automatic switching">Pause</button>
   </div>
   <div class="demo-view" id="app-demo-view">
     <div data-demo-frame="0">{{shot:home}}</div>

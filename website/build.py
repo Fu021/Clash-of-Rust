@@ -18,13 +18,13 @@ DIST = ROOT / "dist"
 REPO_URL = "https://github.com/Fu021/Clash-of-Rust"
 DOCS_URL = f"{REPO_URL}/blob/main/docs"
 SITE_URL = "https://clash-of-rust.fu021.shop"
-PAGES = ("index", "tools", "guide", "download", "releases")
+PAGES = ("index", "start", "guide", "tui", "cli", "tools", "download", "releases")
 SPACING = ("0.9", "1", "1.1", "1.2", "1.3", "1.4", "1.6")
 
 TEXT = {
     "en": {
         "html_lang": "en", "skip": "Skip to content", "home": "Clash of Rust home",
-        "nav_label": "Site", "nav": {"tools": "Network tools", "guide": "Guide", "releases": "Versions", "download": "Download"},
+        "nav_label": "Site", "menu": "Menu", "nav": {"start": "Get started", "guide": "Manual", "tools": "Network tools", "download": "Download"},
         "other_lang": "中文", "other_label": "切换到中文", "star": "Star",
         "foot_note": "Free software under GPL-3.0. Runs on the mihomo core.",
         "foot_links": {"releases": "All releases", "issues": "Report a problem", "docs": "Developer docs"},
@@ -34,7 +34,7 @@ TEXT = {
     },
     "zh": {
         "html_lang": "zh-CN", "skip": "跳到正文", "home": "Clash of Rust 首页",
-        "nav_label": "站内导航", "nav": {"tools": "网络工具", "guide": "使用指南", "releases": "版本记录", "download": "下载"},
+        "nav_label": "站内导航", "menu": "导航", "nav": {"start": "快速上手", "guide": "功能手册", "tools": "网络工具", "download": "下载"},
         "other_lang": "English", "other_label": "Switch to English", "star": "Star",
         "foot_note": "开源 mihomo 客户端 · GPL-3.0",
         "foot_links": {"releases": "全部版本", "issues": "反馈问题", "docs": "开发文档"},
@@ -44,15 +44,6 @@ TEXT = {
     },
 }
 
-WORDMARK = (
-    '<svg class="wordmark" viewBox="0 0 116 19" fill="none" aria-hidden="true">'
-    '<path stroke="currentColor" stroke-width="1.8" d="M9.6 8.5A5 5 0 1 0 9.6 15.5 M13.4 2V17 M16.8 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0 '
-    'M26.8 7V17 M35.8 8.6C34.8 7.1 29.8 6.7 29.8 9.6C29.8 12.2 36.2 11.5 36.2 14.3C36.2 17.6 30.6 17.5 29.4 15.6 M39.6 2V17 '
-    'M39.6 12a4 4.6 0 0 1 8 0V17 M80.8 7V17 M80.8 11.8a4.6 4.6 0 0 1 5 -4.5 M89.2 7V12a4 4.6 0 0 0 8 0 M97.2 7V17 '
-    'M106.2 8.6C105.2 7.1 100.2 6.7 100.2 9.6C100.2 12.2 106.6 11.5 106.6 14.3C106.6 17.6 101 17.5 99.8 15.6 '
-    'M111 3.4V13.6a3 3 0 0 0 3.9 3 M109 8H114.4"/>'
-    '<path class="wordmark-of" stroke-width="1.6" d="M55.2 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0 M68.8 17V6.2a3.5 3.5 0 0 1 4.4 -3.4 M66.8 8H72"/></svg>'
-)
 STAR = '<svg class="star" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 0h2v3h2v1h3v2h-1v1h-1v1h1v2h1v2h-2v-1H9v-1H8V9H4v1H3v1H2v1H0v-2h1V8h1V7H1V6H0V4h3V3h2z"/></svg>'
 
 CAPTURES = {
@@ -72,9 +63,11 @@ def render_capture(name, lang, root, captures):
     phone = capture["platform"] == "android"
     platform = "Android" if phone else ("桌面" if lang == "zh" else "Desktop")
     note = "演示数据" if lang == "zh" else "Demo data"
+    expand = "放大：" if lang == "zh" else "Enlarge: "
     return (f'<figure class="product-shot{" phone" if phone else ""}" data-capture-version="{escape(capture["version"])}">'
-            f'<div class="frame"><img src="{root}assets/{escape(capture["file"])}" '
-            f'width="{capture["width"]}" height="{capture["height"]}" alt="{escape(label)}" loading="lazy"></div>'
+            f'<a class="frame capture-open" href="{root}assets/{escape(capture["file"])}" data-enlarge '
+            f'aria-label="{expand}{escape(label)}"><img src="{root}assets/{escape(capture["file"])}" '
+            f'width="{capture["width"]}" height="{capture["height"]}" alt="{escape(label)}" loading="lazy"></a>'
             f'<figcaption>{escape(label)} · {platform} · {escape(capture["version"])} · {note}</figcaption></figure>')
 
 
@@ -182,8 +175,9 @@ def layout(lang, page, title, description, body, release_data):
     canonical = f"{SITE_URL}/{'en/' if lang == 'en' else ''}{page_path}"
     current = ' aria-current="page"'
     nav = "".join(
-        f'<a href="{name}.html"{current if name == page else ""}>{label}</a>'
+        f'<a href="{name}.html"{current if name == page or name == "guide" and page in ("tui", "cli") else ""}>{label}</a>'
         for name, label in text["nav"].items())
+    wordmark = f'<img class="wordmark" src="{root}assets/wordmark.svg" width="116" height="19" alt="">'
     foot = text["foot_links"]
     release_json = json.dumps(release_data, ensure_ascii=True).replace("<", "\\u003c")
     return f"""<!doctype html>
@@ -207,21 +201,26 @@ def layout(lang, page, title, description, body, release_data):
 <a class="skip" href="#main">{text['skip']}</a>
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="index.html" aria-label="{text['home']}"><img src="{root}assets/cat.png" alt="" width="30" height="30">{WORDMARK}</a>
-    <nav aria-label="{text['nav_label']}">{nav}</nav>
+    <a class="brand" href="index.html" aria-label="{text['home']}"><img src="{root}assets/cat.png" alt="" width="30" height="30">{wordmark}</a>
+    <nav class="main-nav" aria-label="{text['nav_label']}">{nav}</nav>
     <a class="lang" href="{other}" lang="{'zh-CN' if lang == 'en' else 'en'}" aria-label="{text['other_label']}" data-set-lang="{'zh' if lang == 'en' else 'en'}">{text['other_lang']}</a>
     <a class="btn small ghost" href="{REPO_URL}" target="_blank" rel="noopener">{STAR}{text['star']}<span data-stars></span></a>
+    <details class="mobile-menu"><summary>{text['menu']}</summary><nav aria-label="{text['nav_label']}">{nav}<a href="releases.html">{'版本记录' if lang == 'zh' else 'Versions'}</a><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub ↗</a></nav></details>
   </div>
 </header>
 <main id="main">
 {body}
 </main>
+<dialog class="image-view" data-image-view aria-label="{'软件画面' if lang == 'zh' else 'Application screenshot'}">
+  <div class="image-tools"><button class="btn small" type="button" data-image-close aria-label="{'关闭大图' if lang == 'zh' else 'Close image'}">{'关闭' if lang == 'zh' else 'Close'} · Esc</button></div>
+  <img alt="">
+</dialog>
 <footer class="foot">
   <div class="track" aria-hidden="true"></div>
   <div class="wrap">
-    <div><a class="brand" href="index.html" aria-label="{text['home']}">{WORDMARK}</a><p>{text['foot_note']}</p></div>
+    <div><a class="brand" href="index.html" aria-label="{text['home']}">{wordmark}</a><p>{text['foot_note']}</p></div>
     <nav aria-label="{text['nav_label']}">{nav}</nav>
-    <nav><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
+    <nav><a href="releases.html">{'版本记录' if lang == 'zh' else 'Versions'}</a><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
   </div>
 </footer>
 </body>
@@ -241,6 +240,7 @@ def build():
         shutil.rmtree(DIST)
     (DIST / "en").mkdir(parents=True)
     shutil.copytree(SRC / "assets", DIST / "assets")
+    shutil.copyfile(ROOT.parent / "resources/icons/wordmark-light.svg", DIST / "assets/wordmark.svg")
     for name in ("site.css", "site.js"):
         shutil.copyfile(SRC / name, DIST / name)
     for name in ("_headers", "_redirects", "robots.txt", "sitemap.xml"):
@@ -250,7 +250,7 @@ def build():
         for page in PAGES:
             path = SRC / "pages" / lang / f"{page}.html"
             if page == "releases":
-                body = render_releases(release_data, lang, REPO_URL)
+                body = render_releases(release_data, lang, REPO_URL, root=root)
                 title = "版本记录 — Clash of Rust" if lang == "zh" else "Versions — Clash of Rust"
                 target = DIST / ("" if lang == "zh" else "en") / "releases.html"
                 target.write_text(layout(lang, page, title, title, body, release_data), encoding="utf-8")
@@ -265,6 +265,14 @@ def build():
                 for block in ("memory", "showcase"):
                     body = body.replace("{{"+block+"}}", (SRC / "partials" / lang / (block+".html")).read_text(encoding="utf-8"))
             body = body.replace("{{releases:home}}", render_releases(release_data, lang, REPO_URL, compact=True))
+            manual_labels = ("窗口 GUI", "终端 TUI", "命令行 CLI") if lang == "zh" else ("Window · GUI", "Terminal · TUI", "Commands · CLI")
+            manuals = '<nav class="manual-nav" aria-label="' + ("手册类型" if lang == "zh" else "Manuals") + '">'
+            manuals += "".join(f'<a href="{name}.html"{" aria-current=page" if name == page else ""}>{label}</a>'
+                               for name, label in zip(("guide", "tui", "cli"), manual_labels))
+            body = body.replace("{{manuals}}", manuals + "</nav>")
+            body = re.sub(r'<nav class="toc" aria-label="([^"]+)">\s*<p class="label">[^<]+</p>(.*?)</nav>',
+                          lambda match: f'<details class="toc" data-toc open><summary>{match[1]}</summary>'
+                          f'<nav aria-label="{match[1]}">{match[2]}</nav></details>', body, flags=re.S)
             body = re.sub(r"\{\{tools:(\w+)\}\}", lambda match: render_tools(match.group(1), lang, data, ""), body)
             body = re.sub(r"\{\{shot:(\w+)\}\}", lambda match: render_capture(match.group(1), lang, root, captures), body)
             body = re.sub(r"\{\{terminal:(\w+)\}\}", lambda match: render_terminal(match.group(1), lang, terminal), body)

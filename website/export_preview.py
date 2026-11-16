@@ -9,8 +9,8 @@ DIST = ROOT / 'dist'
 def export():
     assets = {}
     for path in (DIST / 'assets').rglob('*'):
-        if path.is_file() and path.suffix in ('.webp','.png','.woff2'):
-            mime = {'.woff2':'font/woff2', '.webp':'image/webp', '.png':'image/png'}[path.suffix]
+        if path.is_file() and path.suffix in ('.webp','.png','.woff2','.svg'):
+            mime = {'.woff2':'font/woff2', '.webp':'image/webp', '.png':'image/png', '.svg':'image/svg+xml'}[path.suffix]
             assets[path.relative_to(DIST).as_posix()] = 'data:'+mime+';base64,'+base64.b64encode(path.read_bytes()).decode()
     pages = {p.relative_to(DIST).as_posix(): p.read_text(encoding='utf-8') for p in DIST.rglob('*.html')}
     css = (DIST/'site.css').read_text(encoding='utf-8')

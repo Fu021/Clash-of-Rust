@@ -1,187 +1,94 @@
-<!-- title: 使用指南：图形界面、终端界面与命令行 -->
-<!-- description: 选择 GUI 或 TUI 教程，了解订阅、节点、规则、Android 应用分流、网络检查与更新；每一步附对应 cor 命令。 -->
+<!-- title: GUI 功能手册 — Clash of Rust -->
+<!-- description: 窗口界面的订阅、节点、规则、应用分流、连接、检测、保护、设置与恢复说明，覆盖桌面、手机和平板。 -->
 <section class="page-head">
-  <div class="wrap">
-    <h1>选一种顺手的用法。</h1>
-    <p class="lead">窗口、终端界面和命令行，共用后台与配置。按你习惯的方式开始。</p>
-  </div>
-  <div class="banner scene">
-    <picture>
-      <source media="(max-width: 640px)" srcset="{{root}}assets/guide-small.webp">
-      <img src="{{root}}assets/guide.webp" width="2172" height="724" alt="蓝猫在铁路边查看线路图。">
-    </picture>
-  </div>
+  <div class="wrap"><h1>窗口里的每一处，都讲清楚。</h1><p class="lead">当前预发布版的 GUI 功能参考，覆盖桌面、手机和平板。第一次使用，先看<a href="start.html#gui">快速上手</a>。</p>{{manuals}}</div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/manual-small.webp"><img src="{{root}}assets/manual.webp" width="2172" height="724" alt="蓝猫在铁路调度室里翻看线路手册。"></picture></div>
 </section>
-
-<div class="wrap doc with-toc" data-guide>
-  <nav class="toc" aria-label="本页目录">
-    <p class="label">本页目录</p>
-    <a href="#first" data-guide-for="gui">首次连接</a>
-    <a href="#subscriptions" data-guide-for="gui">订阅</a>
-    <a href="#modes" data-guide-for="gui">节点与模式</a>
-    <a href="#rules" data-guide-for="gui">规则</a>
-    <a href="#android" data-guide-for="gui">Android 应用分流</a>
-    <a href="#checks" data-guide-for="gui">访问检测</a>
-    <a href="#protection" data-guide-for="gui">Claude 保护</a>
-    <a href="#tui-first" data-guide-for="tui">打开终端界面</a>
-    <a href="#tui-pages" data-guide-for="tui">查状态、选节点</a>
-    <a href="#tui-manage" data-guide-for="tui">设置与管理</a>
-    <a href="#cli">CLI 与脚本</a>
-    <a href="#updates">更新与自启动</a>
-    <a href="#trouble">导出诊断</a>
-  </nav>
-
+<div class="wrap doc with-toc" id="gui">
+  <nav class="toc" aria-label="本页目录"><p class="label">本页目录</p><a href="#first">首页与连接</a><a href="#subscriptions">订阅</a><a href="#modes">节点与模式</a><a href="#rules">规则</a><a href="#android">Android 分流</a><a href="#connections">连接与日志</a><a href="#checks">检测与工具</a><a href="#protection">Claude 保护</a><a href="#settings">设置与计划任务</a><a href="#updates">更新与自启动</a><a href="#trouble">错误与恢复</a><a href="#other">其他操作方式</a></nav>
   <div>
-    <div class="switch guide-selector js-only" role="group" aria-label="教程类型">
-      <button type="button" data-guide-select="gui" aria-controls="gui" aria-pressed="true">窗口界面 GUI</button>
-      <button type="button" data-guide-select="tui" aria-controls="tui" aria-pressed="false">终端界面 TUI</button>
-    </div>
-    <div class="guide-panel" id="gui" data-guide-panel="gui">
-      <section id="first">
-        <h2>第一次连接</h2>
-        <div class="guide-step">
-          <ol class="steps">
-            <li><a href="download.html">安装客户端</a>，打开“订阅”，添加 mihomo / Clash Meta 格式的链接或导入 YAML。</li>
-            <li>在订阅上点“使用”，再到“代理”页测速、选择节点。</li>
-            <li>回到首页，选择规则、全局或直连模式，再连接。TUN 首次使用需要系统授权，Android 需允许 VPN。</li>
-          </ol>
-          <aside class="command-side"><p>对应 CLI</p><pre class="term">cor profile add home 'https://example.com/subscription'
-cor profile use home
-cor start
-cor node select</pre></aside>
-        </div>
-        {{shot:home}}
-        <p>桌面关闭窗口后，托盘与内核继续运行；Android 离开界面也不会停止 VPN。</p>
-      </section>
-
-      <section id="subscriptions">
-        <h2>订阅</h2>
-        <div class="guide-step">
-          <div><p>远程订阅可定时更新，本地配置可改名、编辑或删除。下载失败会保留原配置；内置“默认直连”不可编辑或删除。</p><p>设置中的自动更新间隔以分钟计，默认 360，填 0 关闭，最大 10080。Claude 保护期间暂停更新。</p></div>
-          <aside class="command-side"><p>对应 CLI</p><pre class="term">cor profile list
-cor profile update --all
-cor config set subscription_update_interval_minutes 720</pre></aside>
-        </div>
-        {{shot:subscriptions}}
-      </section>
-
-      <section id="modes">
-        <h2>节点与模式</h2>
-        <div class="guide-step">
-          <div><p>代理页支持搜索、测速及宫格 / 列表切换。手动策略组可选节点；AUTO 等自动组由内核选择。</p><ul class="dots"><li><b>规则：</b>按每条连接匹配的规则选择出口。</li><li><b>全局：</b>使用 GLOBAL 策略组。</li><li><b>直连：</b>不经过代理节点。</li></ul><p>系统代理接管遵守代理设置的程序；TUN 在网络层接管。连接页显示每条连接的实际规则与线路。</p></div>
-          <aside class="command-side"><p>对应 CLI</p><pre class="term">cor node select
-cor mode rule
-cor proxy tun
-cor connection list</pre></aside>
-        </div>
-        {{shot:nodes}}
-      </section>
-
-      <section id="rules">
-        <h2>规则</h2>
-        <div class="guide-step">
-          <div><p>右上角“快捷规则”提供广告拦截、私有网络及国内直连。默认关闭，只补充订阅中缺少的规则。</p><p>自定义规则可编辑、停用和排序；订阅原有规则保持只读。修改校验通过后保存，不改写原始 YAML。</p></div>
-          <aside class="command-side"><p>对应 CLI</p><pre class="term">cor rule shortcut ads on
-cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1
-cor network explain example.com</pre></aside>
-        </div>
-        {{shot:rules}}
-      </section>
-
-      <section id="android">
-        <h2>Android 应用分流</h2>
-        <p>设置 → 应用分流，先选哪些应用进入 VPN。搜索名称或包名，核对已选列表，再保存；已连接时用“保存并重连”。</p>
-        <div class="table-scroll"><table class="plain"><thead><tr><th>模式</th><th>选中的应用</th><th>其余应用</th></tr></thead><tbody>
-          <tr><th>全部应用</th><td>进入 VPN</td><td>进入 VPN</td></tr>
-          <tr><th>仅选中</th><td>进入 VPN</td><td>使用原有网络</td></tr>
-          <tr><th>排除选中</th><td>使用原有网络</td><td>进入 VPN</td></tr>
-        </tbody></table></div>
-        {{shot:applications}}
-        <p>Android 10+ 可在“应用规则”中命名规则组、筛选应用，并指定节点、策略组、DIRECT 或 REJECT；默认拦截失效出口。未指定出口的应用仍遵循当前模式和规则。</p>
-        <p>Claude 保护期间覆盖全部应用，暂停应用指定出口，关闭后恢复。系统若启用“阻止不使用 VPN 的连接”，VPN 外的应用也可能被拦住。<a href="{{docs}}/android-application-routing.md">完整分流说明 ↗</a></p>
-      </section>
-
-      <section id="checks">
-        <h2>访问检测</h2>
-        <p>“网络诊断”排查解析、连接与实际出口；“IP 检测”查看出口 IP 和服务可达性；“A÷检测”汇总 Claude 相关地区与配置线索。完成检查不代表服务一定可用，结论以逐项结果为准。</p>
-        {{shot:network}}
-        <p><a class="more" href="tools.html">查看全部网络工具</a></p>
-      </section>
-
-      <section id="protection">
-        <h2>Claude 保护</h2>
-        <div class="guide-step">
-          <div><p>在 A÷检测页开启，固定具体节点，启用严格 TUN、加密 DNS 和实时拦截。开启前会关闭现有内核连接。</p><p>节点、规则、更新等网络修改会锁定；主题、强调色与只读浏览仍可用。关闭后恢复原模式、节点与网络偏好。保护提供连接约束，不保证第三方服务接受请求。</p></div>
-          <aside class="command-side"><p>对应 CLI</p><pre class="term">cor claude protect on --yes
-cor claude watch
-cor claude protect off --yes</pre></aside>
-        </div>
-        {{shot:protection}}
-        <p><a href="{{docs}}/claude-protection.md">保护范围与恢复行为 ↗</a></p>
-      </section>
-    </div>
-
-    <div class="guide-panel" id="tui" data-guide-panel="tui">
-      <section id="tui-first">
-        <h2>打开终端界面</h2>
-        <div class="guide-step">
-          <div><p>Windows、Linux、macOS 安装包附带 <code>cor</code>。安装后运行 <code>cor ui</code>；需要交互终端，最小 60 列 × 18 行。</p><p>打开、浏览和退出不会启动后台或改变代理。首次使用先添加订阅并执行 <code>cor start</code>，之后 GUI、TUI 和 CLI 管理同一后台。</p></div>
-          <aside class="command-side"><p>启动与演示</p><pre class="term">cor start
-cor ui
-cor ui --demo</pre><p><code>--demo</code> 使用虚构数据，不联网、不保存。</p></aside>
-        </div>
-        {{terminal:home}}
-      </section>
-
-      <section id="tui-pages">
-        <h2>查状态、选节点</h2>
-        <div class="table-scroll"><table class="plain"><thead><tr><th>按键</th><th>操作</th></tr></thead><tbody>
-          <tr><th><kbd>1</kbd>–<kbd>4</kbd> / <kbd>Tab</kbd></th><td>首页、节点、连接、网络</td></tr>
-          <tr><th><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></th><td>选择条目、打开策略组，确认后切换节点</td></tr>
-          <tr><th><kbd>/</kbd> / <kbd>Esc</kbd></th><td>输入搜索；返回、清除或取消</td></tr>
-          <tr><th><kbd>r</kbd> / <kbd>q</kbd></th><td>刷新 / 退出，保留后台和代理</td></tr>
-        </tbody></table></div>
-        <p>网络页用 <kbd>[</kbd> / <kbd>]</kbd> 切换工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行；切页清除结果。需要自定义参数时使用旁边的 CLI 命令。</p>
-        <aside class="command-side"><p>同一套网络检查</p><pre class="term">cor network check example.com
-cor network stability example.com --count 10</pre></aside>
-        {{terminal:network}}
-      </section>
-
-      <section id="tui-manage">
-        <h2>设置与管理</h2>
-        <p class="source-note">当前预发布版提供上面四页。源码中的 TUI 已增加“设置”和“操作”两页，尚未发布；请勿把源码功能当作当前安装包功能。</p>
-        <p>新版使用 <kbd>5</kbd> / <kbd>6</kbd> 进入设置和操作，表单复用 CLI 校验及系统授权，执行前确认。当前安装包可直接使用 <code>cor config</code>、<code>cor profile</code>、<code>cor rule</code> 等命令。</p>
-        <p>两种入口都遵守 Claude 保护。<a href="{{docs}}/cli/tui.md">源码 TUI 操作说明 ↗</a></p>
-      </section>
-    </div>
-
-    <section id="cli">
-      <h2>CLI 与脚本</h2>
-      <p><code>cor help</code> 找常用命令，<code>cor help all</code> 看全部入口。只读查询不会启动内核；需要机器读取时加 <code>--json</code>，持续观察用 <code>--jsonl</code>。</p>
-<pre class="term" aria-label="CLI 查询示例">cor status
-cor --json node list
-cor --json connection list
-cor service status</pre>
-      <p>结果写入 stdout，进度与错误写入 stderr。GUI、TUI、脚本和 AI 共用业务与权限。<a href="{{docs}}/cli.md">完整命令与退出码 ↗</a></p>
+    <section id="first">
+      <h2>首页与连接</h2>
+      <p>首页展示内核运行状态、当前订阅、参考节点、流量与网络信息。连接按钮启停内核；切换代理方式决定哪些程序的连接进入内核。</p>
+      <ul class="dots"><li><b>系统代理：</b>接管遵守系统代理设置的程序；终端和部分应用可能不使用它。</li><li><b>TUN：</b>从网络层接管，桌面首次使用需要系统授权；Android 由系统确认 VPN。</li><li><b>关闭：</b>停止当前实例的系统代理或 TUN 接管，不代表其他 VPN 也已关闭。</li></ul>
+      {{shot:home}}
+      <p>首页延迟属于服务检查，节点延迟属于测速目标，不能直接比较。参考节点也不是所有连接的实际出口，到“连接”页核对逐条线路。</p>
     </section>
-
+    <section id="subscriptions">
+      <h2>订阅</h2>
+      <p>添加远程链接或导入本地 YAML，保存后点“使用”才切换当前订阅。远程订阅可更新来源；本地订阅可编辑、改名或删除，删除不会移除用户原文件。</p>
+      <p>下载或校验失败保留原订阅与运行状态。删除正在使用的订阅会回到“默认直连”；内置默认直连不可编辑或删除。</p>
+      {{shot:subscriptions}}
+      <p>支持搜索、宫格与列表。手机将部分操作收在详情里。自动更新间隔见<a href="#settings">计划任务</a>；Claude 保护期间暂停订阅修改和更新。</p>
+    </section>
+    <section id="modes">
+      <h2>节点与模式</h2>
+      <p>在“代理”页搜索、测速，并切换宫格或紧凑列表。手动组可以选择成员，AUTO 等自动组由内核选择。详情展示节点资料和可用操作。</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>模式</th><th>出口选择</th></tr></thead><tbody><tr><th>规则</th><td>逐条匹配规则，策略组可继续指向其他组。</td></tr><tr><th>全局</th><td>使用 GLOBAL 策略组。</td></tr><tr><th>直连</th><td>不经过代理节点。</td></tr></tbody></table></div>
+      {{shot:nodes}}
+      <p>测速是指定目标的连通性与耗时，不代表带宽。超时不等于节点已被删除。节点全部失败时保留当前模式，并提供排错入口；更新下载有独立的恢复路径。</p>
+    </section>
+    <section id="rules">
+      <h2>规则</h2>
+      <p>“快捷规则”提供广告拦截、私有网络及国内直连等选项，默认关闭，只补充订阅缺少的规则。自定义规则可新增、编辑、停用、删除和排序。</p>
+      <p>规则按顺序匹配，先命中的生效。订阅原规则保持只读，可调整顺序；修改通过内核校验后保存，不改写原始 YAML。重复的启用规则会被拒绝。</p>
+      {{shot:rules}}
+      <p>规则模式下 Android 指定应用出口优先于普通规则；全局、直连和 Claude 保护期间暂停应用出口规则。想核对某个网址，使用<a href="tools.html#explain">规则与出口</a>。</p>
+    </section>
+    <section id="android">
+      <h2>Android 应用分流</h2>
+      <p>设置 → 应用分流，先决定哪些应用进入 VPN。按名称或包名搜索，可筛选已选应用与系统应用；“全部应用”不显示选择列表。</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>范围</th><th>选中的应用</th><th>其余应用</th></tr></thead><tbody><tr><th>全部应用</th><td>进入 VPN</td><td>进入 VPN</td></tr><tr><th>仅选中</th><td>进入 VPN</td><td>使用原有网络</td></tr><tr><th>排除选中</th><td>使用原有网络</td><td>进入 VPN</td></tr></tbody></table></div>
+      {{shot:applications}}
+      <h3>给应用指定出口</h3>
+      <p>Android 10+ 的“应用规则”可建立命名规则组，筛选应用，选择节点、策略组、DIRECT 或 REJECT。规则跟随订阅保存；切换订阅不把旧出口套到新节点上。Android 8/9 仍可设置 VPN 范围，但不支持指定出口。</p>
+      <p>默认勾选“目标失效时阻止连接”。目标消失或身份改变时，真实连接被拦截才产生可恢复警告；单纯测速超时不是目标失效。取消该选项则跟随普通配置。应用未进入 VPN 时，指定出口不生效。</p>
+      <h3>保存与恢复</h3>
+      <p>连接中使用“保存并重连”，系统接受新 VPN 后才替换原连接；失败时保留原连接。普通模式遵守 UDP 开关，不支持 UDP 的出口会拦截对应 UDP，不偷偷换线路。</p>
+      <p>Claude 保护期间覆盖全部应用，暂停指定出口并锁定修改，关闭后恢复。系统“阻止不使用 VPN 的连接”可能拦住 VPN 范围外的应用。<a href="{{docs}}/android-application-routing.md">完整边界说明 ↗</a></p>
+    </section>
+    <section id="connections">
+      <h2>连接与日志</h2>
+      <p>连接页显示当前活动连接，可筛选并查看域名、目标、协议、命中规则、策略链与流量。详情支持复制和关闭连接；关闭后应用可能重新发起请求。</p>
+      <p>日志页查看内核与后台消息，可清空显示或导出诊断。日志、域名和 IP 可能包含个人信息，分享前检查。页面不代替长期流量审计。</p>
+    </section>
+    <section id="checks">
+      <h2>检测与工具</h2>
+      <p>“IP 检测”查看出口与服务可达性；“A÷检测”汇总 Claude 地区、DNS 与配置线索；“网络诊断”从网站检查到 DNS、TLS 和实际出口逐步排查。</p>
+      {{shot:network}}
+      <p>工具按需运行，只保留当前结果，切页取消并清空。HTTP 有响应不等于能登录。各工具的输入、参数、报告状态和保护限制见<a href="tools.html">网络工具手册</a>。</p>
+    </section>
+    <section id="protection">
+      <h2>Claude 保护</h2>
+      <p>在 A÷检测页开启，固定具体节点，启用严格 TUN、加密 DNS 和实时拦截；开启前关闭已有内核连接。没有 IPv6 上联不视为绕行。</p>
+      {{shot:protection}}
+      <p>节点、规则、订阅、更新、Geo、自启动和计划任务等网络修改锁定；主题、强调色、字号和只读浏览仍可用。保护暂停 Android 应用出口并临时接管 UDP，关闭后恢复原偏好。</p>
+      <p>保护状态持久保存，重启后恢复。可随时通过原入口关闭；它约束连接，不保证第三方服务接受请求。<a href="{{docs}}/claude-protection.md">保护范围与操作权限 ↗</a></p>
+    </section>
+    <section id="settings">
+      <h2>设置与计划任务</h2>
+      <p>常规与外观提供窗口大小、托盘速度、主题、强调色和字号；网络提供端口、IPv6、UDP、DNS 和 Fake-IP。网络修改可能重载内核，按界面反馈确认实际生效。</p>
+      <p>订阅自动更新、自动检查软件更新以分钟设置，默认 360，填 0 关闭，最大 10080。保护期间暂停相关任务；手动检查更新不受自动间隔限制。</p>
+      <p>Fake-IP 排除项使用独立编辑入口，不需要修改原订阅。手机、平板与桌面尽量保持相同的字段，空间不足时操作收进详情。</p>
+    </section>
     <section id="updates">
       <h2>更新与自启动</h2>
-      <div class="guide-step">
-        <div><p>设置中选择正式版或预发布版，调整检查间隔；填 0 关闭自动检查。安装前校验 SHA256，升级保留订阅和设置，Android 由系统确认安装。</p><p>桌面打开“后台自启动”，登录后保持窗口关闭。纯命令行可用用户服务，两种自启方式选一种。</p></div>
-        <aside class="command-side"><p>对应 CLI</p><pre class="term">cor update check
-cor update install
-cor geo update
-cor service install --yes</pre></aside>
-      </div>
+      <p>设置 → 更新，默认只检查正式版，开启“包含预发布版本”后才纳入更高版本的预发布。安装前验证 SHA256；Android 还需系统确认，不能降回低版本安装包。</p>
+      <p>Geo 更新校验整组数据后替换，失败保留原数据。遇到下载、权限或安装失败，先按可恢复提示处理，也可<a href="download.html">手动下载</a>，不要删除配置。</p>
+      <p>桌面开启“后台自启动”后，登录时保持窗口关闭；若托盘最终不可用，才打开窗口提示。CLI 用户服务是另一种自启方式，二者选一种。Android VPN 由前台服务维持，不等同于桌面登录自启。</p>
     </section>
-
     <section id="trouble">
-      <h2>导出诊断</h2>
-      <p>GUI 从“日志”页或错误提示导出；TUI 用户可退出后运行下列命令。报告不自动上传，分享前检查域名、IP 等信息。</p>
-<pre class="term" aria-label="导出诊断">cor diagnose --output cor-diagnose.json
-cor diagnose --offline --output cor-offline.json</pre>
-      <p>网站打不开，先做<a href="tools.html#check">网站检查</a>，再查<a href="tools.html#explain">规则与出口</a>；安装问题见<a href="download.html#questions">下载页常见问题</a>。</p>
+      <h2>错误与恢复</h2>
+      <p>普通通知会自动消失；可恢复警告提供重试或导出；严重错误说明阻塞原因；Claude 保护告警独立显示。取消提示不会修复原因。</p>
+      <p>从“日志”页或错误提示导出诊断，记录发生时间和操作步骤。报告不会自动上传；分享前检查域名、IP 等信息。内核启动失败时保留现场，用恢复入口重试。</p>
+      <p>网站问题先查<a href="tools.html#check">网站检查</a>，安装问题见<a href="download.html#questions">常见问题</a>。无界面时可用独立的<a href="cli.html#diagnostics">CLI 诊断</a>。</p>
+    </section>
+    <section id="other">
+      <h2>其他操作方式</h2>
+      <div class="cards manual-cards">
+        <div class="card" id="tui"><h3>终端 TUI</h3><p><span id="tui-first">启动与授权、</span><span id="tui-pages">六个页面、</span><span id="tui-manage">设置和操作</span>已移到独立手册。</p><a class="more" href="tui.html">打开 TUI 手册 →</a></div>
+        <div class="card" id="cli"><h3>命令行 CLI</h3><p>命令、参数、JSON、退出码和后台服务均可独立查阅。</p><a class="more" href="cli.html">打开 CLI 手册 →</a></div>
+      </div>
     </section>
   </div>
 </div>

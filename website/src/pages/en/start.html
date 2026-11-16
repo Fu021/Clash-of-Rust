@@ -1,0 +1,64 @@
+<!-- title: Get started — Clash of Rust -->
+<!-- description: Make your first connection through the window, terminal interface or command line, with separate paths for desktop and Android. -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>Make your first connection.</h1>
+    <p class="lead">Have a mihomo / Clash Meta subscription URL or YAML configuration ready. Choose the interface that suits you.</p>
+    <div class="interface-links"><a class="chip" href="#gui">Window · GUI</a><a class="chip" href="#tui">Terminal · TUI</a><a class="chip" href="#cli">Commands · CLI</a></div>
+  </div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/start-small.webp"><img src="{{root}}assets/start.webp" width="2172" height="724" alt="A blue cat with a travel bag prepares to leave a country station."></picture></div>
+</section>
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="On this page"><p class="label">On this page</p><a href="#gui">Window · GUI</a><a href="#tui">Terminal · TUI</a><a href="#cli">Commands · CLI</a><a href="#help">Need help?</a></nav>
+  <div>
+    <section id="gui">
+      <h2>Window · GUI</h2>
+      <p>Available on Windows, Debian / Ubuntu, macOS and Android.</p>
+      <ol class="steps">
+        <li><a href="download.html">Download and install</a> the package for your device, then open Clash of Rust.</li>
+        <li>Open Subscriptions, add a URL or import YAML, then choose Use. The app does not provide proxy servers.</li>
+        <li>Open Proxies, test latency and choose a member of a manual policy group. Automatic groups such as AUTO select their own member.</li>
+        <li>Return Home, choose Rule mode and connect. Desktop supports system proxy or TUN; Android uses a VPN. Approve the operating system's request when prompted.</li>
+        <li>Check that the core is running, then inspect traffic in Connections. Use Network diagnostics if a site does not open.</li>
+      </ol>
+      {{shot:home}}
+      <p>Phones and tablets use bottom navigation or a sidebar. Resolve any existing Android VPN conflict first. On desktop, closing the window leaves the tray running; choosing Quit ends the client.</p>
+      <p><a class="more" href="guide.html">Read the GUI manual →</a></p>
+    </section>
+    <section id="tui">
+      <h2>Terminal · TUI</h2>
+      <p>Desktop installers include <code>cor</code>. Use an interactive terminal at least 60 columns × 18 rows. <a href="cli.html#install">Cannot find cor?</a></p>
+      <pre class="term" aria-label="Open the terminal interface">cor ui</pre>
+      <ol class="steps">
+        <li>Press <kbd>6</kbd> for Actions, find <code>profile add</code>, fill in a name and subscription URL or local path, then review and confirm.</li>
+        <li>Use <code>profile use</code> to choose that profile, then run <code>start</code>. Authorization opens in the normal terminal; press Enter afterwards to return.</li>
+        <li>Press <kbd>2</kbd> for Nodes, open a manual policy group with Enter, choose a member and confirm.</li>
+        <li>Run <code>proxy</code> in Actions and choose <code>system</code> or <code>tun</code>. TUN is recommended for headless servers.</li>
+        <li>Press <kbd>1</kbd> to check status. <kbd>q</kbd> exits the interface while the backend and proxy keep running.</li>
+      </ol>
+      {{terminal:home}}
+      <p><a class="more" href="tui.html">Read the TUI manual →</a></p>
+    </section>
+    <section id="cli">
+      <h2>Commands · CLI</h2>
+      <p>For scripts, SSH and AI. Locate <code>cor</code> using the <a href="cli.html#install">installation notes</a>, then replace the example URL with your subscription.</p>
+      <pre class="term" aria-label="First connection from the command line">cor profile add home 'https://example.com/subscription'
+cor profile use home
+cor start
+cor node select
+cor proxy tun
+cor status</pre>
+      <p>The interactive picker accepts text filters, numbers and <code>q</code> to cancel. TUN may require administrator authorization; desktop users can also choose <code>cor proxy system</code>. Use <code>start</code> for everyday background operation.</p>
+      <p><a class="more" href="cli.html">Read the CLI manual →</a></p>
+    </section>
+    <section id="help">
+      <h2>Need help?</h2>
+      <div class="cards">
+        <div class="card"><h3>Cannot connect</h3><p>Check the selected profile, node reachability and system permission. <a href="guide.html#trouble">Find recovery options</a>.</p></div>
+        <div class="card"><h3>One site fails</h3><p>Start with the <a href="tools.html#check">website check</a>, then inspect <a href="tools.html#explain">rules and exit</a>.</p></div>
+        <div class="card"><h3>An update fails</h3><p>Keep your configuration, resolve the reported cause and retry, or <a href="download.html">download an installer</a>.</p></div>
+      </div>
+      <p>GUI, TUI and CLI share the current account's backend and configuration. Start with one interface and switch whenever you like.</p>
+    </section>
+  </div>
+</div>

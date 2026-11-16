@@ -13,13 +13,15 @@
   </div>
 </section>
 
-<div class="wrap doc">
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="本页目录"><p class="label">本页目录</p><a href="#interface">操作入口</a><a href="#choose">按现象选择</a><a href="#target">目标检查</a><a href="#link">链路分析</a><a href="#protocol">协议检查</a><a href="#runtime">规则与运行</a><a href="#limits">参数与上限</a><a href="#protection">保护限制</a><a href="#reports">报告与导出</a></nav>
+  <div>
   <section id="interface">
     <h2>选工具，查目标，看结果。</h2>
     <p>在“网络诊断”选择工具，输入域名或网址后运行。参数和结果在同一张卡片里，离开页面即清除。</p>
     {{shot:network}}
     <details class="benchmark-details"><summary>在终端界面中查看</summary>{{terminal:network}}<p>运行 <code>cor ui</code> 后按 <kbd>4</kbd>，用 <kbd>[</kbd> / <kbd>]</kbd> 选工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行。</p></details>
-    <div class="interface-links"><a href="guide.html#gui">GUI 指南</a><a href="guide.html#tui">TUI 指南</a><a href="#check">工具与 CLI 命令 ↓</a></div>
+    <div class="interface-links"><a href="guide.html#checks">GUI 手册</a><a href="tui.html#network">TUI 手册</a><a href="cli.html#network">CLI 手册</a><a href="#check">逐项检查 ↓</a></div>
   </section>
   <section id="choose">
     <h2>从你看到的现象找起</h2>
@@ -41,7 +43,7 @@
 
   <section id="limits">
     <h2>参数与上限</h2>
-    <p>默认 5 次、间隔 1000 毫秒、单次 10 秒、下载上限 8 MiB、最多 8 跳。GUI 按工具显示参数；TUI 直接检查使用默认值，自定义参数用 CLI，源码新增的“操作”页也可填写。</p>
+    <p>默认 5 次、间隔 1000 毫秒、单次 10 秒、下载上限 8 MiB、最多 8 跳。GUI 按工具显示参数；TUI 直接检查使用默认值，自定义参数可在“操作”页或 CLI 填写。</p>
     {{tools:options}}
     <p style="margin-top:1.2rem">稳定性检查最多 120 秒。系统输出每路最多 8 KiB，报告最多 48 项，每项最多 2048 字符。</p>
   </section>
@@ -84,4 +86,5 @@
     <p style="margin-top:1.4rem">工具箱随 0.7.2 预发布版加入，0.7.1 正式版里只有网站检查。<a class="more" href="download.html#preview">下载预发布版</a></p>
     <p class="fine" style="margin-top:1rem">权威说明以仓库里的 <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> 为准。</p>
   </section>
+  </div>
 </div>

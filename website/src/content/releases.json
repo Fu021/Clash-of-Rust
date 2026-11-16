@@ -1,5 +1,5 @@
 {
-  "checked": "2026-11-15",
+  "checked": "2026-11-16",
   "series": "0.7",
   "downloads": {
     "stable": {
@@ -18,22 +18,47 @@
       }
     },
     "preview": {
-      "tag": "v0.7.2-fix.3.network-toolbox",
-      "published": "2026-11-15T00:10:38Z",
+      "tag": "v0.7.2-fix.4.network-inspection",
+      "published": "2026-11-15T16:53:49Z",
       "sizes": {
-        "windows-x64-setup.exe": 51086305,
-        "windows-arm64-setup.exe": 47519688,
-        "linux-amd64.deb": 52805248,
-        "linux-arm64.deb": 49003196,
-        "macos-arm64.dmg": 56428560,
-        "macos-x64.dmg": 61338090,
-        "android-arm64.apk": 68135577,
-        "android-armv7.apk": 66771613,
-        "android-x64.apk": 70900371
+        "windows-x64-setup.exe": 51279948,
+        "windows-arm64-setup.exe": 47713944,
+        "linux-amd64.deb": 52994508,
+        "linux-arm64.deb": 49176792,
+        "macos-arm64.dmg": 56724475,
+        "macos-x64.dmg": 74875556,
+        "android-arm64.apk": 68283033,
+        "android-armv7.apk": 66906781,
+        "android-x64.apk": 71060115
       }
     }
   },
   "releases": [
+    {
+      "version": "0.7.2-fix.4.network-inspection",
+      "channel": "preview",
+      "date": "2026-11-15",
+      "en": {
+        "title": "More ways to inspect a connection",
+        "highlights": [
+          "Seven more network tools: TCP ports, HTTP details, rule prediction, configuration diff, traffic breakdown, core runtime and node details. DNS supports record types.",
+          "CLI queries stay read-only; node selection is interactive, and terminal updates restore the backend and service state.",
+          "TUI has dedicated Settings and Actions pages, with the same validation and authorization as CLI."
+        ],
+        "known": "Rule prediction marks dynamic conditions as unknown. System probes depend on platform support and are restricted during Claude protection.",
+        "summary": "Eighteen network tools, plus clearer CLI and TUI management."
+      },
+      "zh": {
+        "title": "连接细节，看得更清楚",
+        "highlights": [
+          "新增 TCP 端口、HTTP 详情、规则预判、配置差异、流量分解、内核运行与节点详情七项工具；DNS 可选记录类型。",
+          "CLI 查询保持只读，支持交互选节点，终端更新后恢复后台和服务状态。",
+          "TUI 提供独立的设置与操作页，沿用 CLI 校验与系统授权。"
+        ],
+        "known": "规则预判对动态条件返回未知；系统探针依赖平台能力，Claude 保护期间受限。",
+        "summary": "十八项网络工具，CLI 与 TUI 管理入口更完整。"
+      }
+    },
     {
       "version": "0.7.2-fix.3.network-toolbox",
       "channel": "preview",

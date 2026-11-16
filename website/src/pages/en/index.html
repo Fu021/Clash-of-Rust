@@ -9,11 +9,11 @@
       <a class="btn" href="download.html" data-download-button>Download</a>
       <a class="btn ghost" href="{{repo}}" target="_blank" rel="noopener">{{star}}Star on GitHub<span data-stars></span></a>
     </div>
+    <p class="hero-start"><a class="more" href="start.html">New here? Make your first connection →</a></p>
   </div>
   <div class="scene">
     <picture>
-      <source media="(max-width: 640px)" srcset="{{root}}assets/hero-narrow.webp">
-      <img src="{{root}}assets/hero.webp" srcset="{{root}}assets/hero.webp 1774w, {{root}}assets/hero@2x.webp 3548w" sizes="100vw" width="1774" height="887" alt="A country railway junction: tracks lead to a bridge, a town and a siding, with a blue cat watching from the signal cabin." fetchpriority="high">
+      <img src="{{root}}assets/hero.webp" srcset="{{root}}assets/hero-small.webp 887w, {{root}}assets/hero.webp 1774w, {{root}}assets/hero@2x.webp 3548w" sizes="100vw" width="1774" height="887" alt="A country railway junction: tracks lead to a bridge, a town and a siding, with a blue cat watching from the signal cabin." fetchpriority="high">
     </picture>
     <p class="tag proxy"><b>Proxy</b><span>Through a node</span></p>
     <p class="tag direct"><b>Direct</b><span>On your network</span></p>
@@ -75,7 +75,7 @@
 <span class="p">$ </span>cor start
 <span class="p">$ </span>cor node select
 <span class="p">$ </span>cor status</pre>
-      <div class="interface-links"><a class="more" href="guide.html#tui">Terminal guide</a><a class="more" href="guide.html#cli">CLI commands</a></div>
+      <div class="interface-links"><a class="more" href="tui.html">TUI manual</a><a class="more" href="cli.html">CLI manual</a></div>
     </div>
     {{terminal:home}}
   </div>

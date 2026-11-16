@@ -1,7 +1,7 @@
 <section class="app-demo" data-demo>
   <h3>从首页到每一条规则。</h3>
   <div class="demo-controls">
-    <div class="switch" role="group" aria-label="界面导览">
+    <div class="switch js-only" role="group" aria-label="界面导览，选择后暂停自动切换">
       <button type="button" data-demo-step="0" aria-pressed="true" aria-controls="app-demo-view">首页</button>
       <button type="button" data-demo-step="1" aria-pressed="false" aria-controls="app-demo-view">节点</button>
       <button type="button" data-demo-step="2" aria-pressed="false" aria-controls="app-demo-view">规则</button>
@@ -9,7 +9,7 @@
       <button type="button" data-demo-step="4" aria-pressed="false" aria-controls="app-demo-view">保护</button>
       <button type="button" data-demo-step="5" aria-pressed="false" aria-controls="app-demo-view">应用分流</button>
     </div>
-    <button type="button" class="btn ghost" data-demo-play aria-pressed="false">播放导览</button>
+    <button class="btn small ghost js-only" type="button" data-demo-toggle aria-pressed="false" aria-label="暂停自动切换">暂停</button>
   </div>
   <div class="demo-view" id="app-demo-view">
     <div data-demo-frame="0">{{shot:home}}</div>

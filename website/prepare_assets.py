@@ -38,14 +38,15 @@ def webp(image, name, quality=84, lossless=False):
     print(f"  {name:28} {image.size[0]}x{image.size[1]}  {path.stat().st_size / 1024:.0f} KiB")
 
 
-def illustrations():
-    hero = Image.open(RAW / "hero.png").convert("RGB")
-    webp(hero, "hero.webp", 86)
-    webp(hero.resize((hero.width * 2, hero.height * 2), Image.NEAREST), "hero@2x.webp", 76)
-    # A tighter crop for phones: the signal cabin, the cat and the three lamps.
-    width, height = hero.size
-    webp(hero.crop((int(width * 0.36), int(height * 0.10), width, height)), "hero-narrow.webp", 86)
-    for name in ("tools", "terminal", "station", "guide"):
+def illustrations(names=None):
+    if not names or "hero" in names:
+        hero = Image.open(RAW / "hero.png").convert("RGB")
+        webp(hero.resize((hero.width // 2, hero.height // 2), Image.LANCZOS), "hero-small.webp", 84)
+        webp(hero, "hero.webp", 86)
+        webp(hero.resize((hero.width * 2, hero.height * 2), Image.NEAREST), "hero@2x.webp", 76)
+    for name in ("tools", "terminal", "station", "guide", "start", "manual", "versions"):
+        if names and name not in names:
+            continue
         banner = Image.open(RAW / f"{name}.png").convert("RGB")
         webp(banner, f"{name}.webp", 84)
         webp(banner.resize((banner.width // 2, banner.height // 2), Image.LANCZOS), f"{name}-small.webp", 84)
@@ -76,18 +77,27 @@ def screenshots(options):
                          "platform": "android" if name == "applications" else "desktop",
                          "version": version, "commit": commit, "theme": "light",
                          "source": "production-slint-preview"}
-    terminal = {}
-    for name in ("home", "network"):
-        record = json.loads((options.terminal_previews / f"background-tui-{name}.json").read_text())
-        if record.get("source") != "actual-cor-pty" or not any(version in line["text"] for line in record["lines"]):
-            raise ValueError(f"The {name} PTY capture is not from {version}")
-        terminal[name] = {**record, "version": version, "commit": options.terminal_commit}
-    (SRC / "content/screenshots.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
-    (SRC / "content/terminal.json").write_text(json.dumps(terminal, ensure_ascii=False, indent=2) + "\n")
+    terminal_screenshots(options.terminal_previews, options.terminal_commit)
     for obsolete in ("app-home-light.webp", "app-home-dark.webp", "app-network.webp"):
         (OUT / obsolete).unlink(missing_ok=True)
     shutil.copyfile(REPO / "resources/icons/app.png", OUT / "cat.png")
-    print(f"  {len(records)} current GUI previews and {len(terminal)} actual PTY frames")
+    (SRC / "content/screenshots.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
+    print(f"  {len(records)} current GUI previews")
+
+
+def terminal_screenshots(previews, commit):
+    import re
+    if not previews or not commit or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("terminal requires actual PTY previews and their full source commit")
+    version = tomllib.loads((REPO / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    terminal = {}
+    for name in ("home", "network"):
+        record = json.loads((previews / f"background-tui-{name}.json").read_text())
+        if record.get("source") != "actual-cor-pty" or not any(version in line["text"] for line in record["lines"]):
+            raise ValueError(f"The {name} PTY capture is not from {version}")
+        terminal[name] = {**record, "version": version, "commit": commit}
+    (SRC / "content/terminal.json").write_text(json.dumps(terminal, ensure_ascii=False, indent=2) + "\n")
+    print(f"  {len(terminal)} actual PTY frames")
 
 
 def dither_tiles(block=8, columns=32, rows=12):
@@ -185,14 +195,17 @@ def fonts():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("steps", nargs="*", choices=("art", "shots", "dither", "fonts"))
+    parser.add_argument("steps", nargs="*", choices=("art", "shots", "terminal", "dither", "fonts"))
     parser.add_argument("--gui-previews", type=Path)
     parser.add_argument("--android-preview", type=Path)
     parser.add_argument("--terminal-previews", type=Path)
     parser.add_argument("--terminal-commit")
+    parser.add_argument("--art-name", action="append", choices=("hero", "tools", "terminal", "station", "guide", "start", "manual", "versions"))
     options = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    steps = {"art": illustrations, "shots": lambda: screenshots(options), "dither": dither_tiles, "fonts": fonts}
+    steps = {"art": lambda: illustrations(options.art_name), "shots": lambda: screenshots(options),
+             "terminal": lambda: terminal_screenshots(options.terminal_previews, options.terminal_commit),
+             "dither": dither_tiles, "fonts": fonts}
     chosen = options.steps or ["art", "dither", "fonts"]
     for step in chosen:
         print(f"{step}:")

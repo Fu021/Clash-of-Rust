@@ -1,187 +1,94 @@
-<!-- title: Guide: graphical interface, terminal interface and CLI -->
-<!-- description: Choose the GUI or TUI guide for subscriptions, nodes, rules, Android app routing, checks and updates, with cor commands beside each step. -->
+<!-- title: GUI manual — Clash of Rust -->
+<!-- description: A reference for subscriptions, nodes, rules, app routing, connections, checks, protection, settings and recovery on desktop and Android. -->
 <section class="page-head">
-  <div class="wrap">
-    <h1>Choose your way to connect.</h1>
-    <p class="lead">Window, terminal interface or commands: the same backend and configuration.</p>
-  </div>
-  <div class="banner scene">
-    <picture>
-      <source media="(max-width: 640px)" srcset="{{root}}assets/guide-small.webp">
-      <img src="{{root}}assets/guide.webp" width="2172" height="724" alt="The blue cat reads a route map beside the railway.">
-    </picture>
-  </div>
+  <div class="wrap"><h1>Know your way around the window.</h1><p class="lead">A GUI reference for the current preview on desktop, phones and tablets. New here? Begin with <a href="start.html#gui">your first connection</a>.</p>{{manuals}}</div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/manual-small.webp"><img src="{{root}}assets/manual.webp" width="2172" height="724" alt="A blue cat studies a routing manual in a railway signal box."></picture></div>
 </section>
-
-<div class="wrap doc with-toc" data-guide>
-  <nav class="toc" aria-label="On this page">
-    <p class="label">On this page</p>
-    <a href="#first" data-guide-for="gui">First connection</a>
-    <a href="#subscriptions" data-guide-for="gui">Subscriptions</a>
-    <a href="#modes" data-guide-for="gui">Nodes and modes</a>
-    <a href="#rules" data-guide-for="gui">Rules</a>
-    <a href="#android" data-guide-for="gui">Android app routing</a>
-    <a href="#checks" data-guide-for="gui">Access checks</a>
-    <a href="#protection" data-guide-for="gui">Claude protection</a>
-    <a href="#tui-first" data-guide-for="tui">Open the TUI</a>
-    <a href="#tui-pages" data-guide-for="tui">Status and nodes</a>
-    <a href="#tui-manage" data-guide-for="tui">Settings and management</a>
-    <a href="#cli">CLI and automation</a>
-    <a href="#updates">Updates and autostart</a>
-    <a href="#trouble">Export diagnostics</a>
-  </nav>
-
+<div class="wrap doc with-toc" id="gui">
+  <nav class="toc" aria-label="On this page"><p class="label">On this page</p><a href="#first">Home and connection</a><a href="#subscriptions">Subscriptions</a><a href="#modes">Nodes and modes</a><a href="#rules">Rules</a><a href="#android">Android routing</a><a href="#connections">Connections and logs</a><a href="#checks">Checks and tools</a><a href="#protection">Claude protection</a><a href="#settings">Settings and schedules</a><a href="#updates">Updates and autostart</a><a href="#trouble">Errors and recovery</a><a href="#other">Other interfaces</a></nav>
   <div>
-    <div class="switch guide-selector js-only" role="group" aria-label="Guide interface">
-      <button type="button" data-guide-select="gui" aria-controls="gui" aria-pressed="true">Graphical GUI</button>
-      <button type="button" data-guide-select="tui" aria-controls="tui" aria-pressed="false">Terminal TUI</button>
-    </div>
-    <div class="guide-panel" id="gui" data-guide-panel="gui">
-      <section id="first">
-        <h2>Your first connection</h2>
-        <div class="guide-step">
-          <ol class="steps">
-            <li><a href="download.html">Install the app</a>. Open Subscriptions and add a mihomo / Clash Meta link or import YAML.</li>
-            <li>Choose Use on the subscription, then test and select a node under Proxies.</li>
-            <li>Return home, choose rule, global or direct mode, then connect. TUN needs system authorization; Android asks for VPN permission.</li>
-          </ol>
-          <aside class="command-side"><p>CLI equivalent</p><pre class="term">cor profile add home 'https://example.com/subscription'
-cor profile use home
-cor start
-cor node select</pre></aside>
-        </div>
-        {{shot:home}}
-        <p>On desktop, the tray and core keep running after the window closes. Leaving the Android interface does not stop the VPN.</p>
-      </section>
-
-      <section id="subscriptions">
-        <h2>Subscriptions</h2>
-        <div class="guide-step">
-          <div><p>Remote subscriptions can refresh on a schedule. Local files can be renamed, edited or removed. Failed downloads keep the existing configuration; built-in Default Direct cannot be edited or removed.</p><p>The interval is in minutes: 360 by default, 0 to disable, up to 10080. Updates pause during Claude protection.</p></div>
-          <aside class="command-side"><p>CLI equivalent</p><pre class="term">cor profile list
-cor profile update --all
-cor config set subscription_update_interval_minutes 720</pre></aside>
-        </div>
-        {{shot:subscriptions}}
-      </section>
-
-      <section id="modes">
-        <h2>Nodes and modes</h2>
-        <div class="guide-step">
-          <div><p>Search, test latency and switch between grid and list. Selectors allow manual choices; automatic groups such as AUTO are managed by the core.</p><ul class="dots"><li><b>Rule:</b> each connection follows its matching rule.</li><li><b>Global:</b> uses the GLOBAL group.</li><li><b>Direct:</b> skips proxy nodes.</li></ul><p>System proxy handles apps that follow proxy settings; TUN takes over at the network layer. Connections shows the rule and actual path of each connection.</p></div>
-          <aside class="command-side"><p>CLI equivalent</p><pre class="term">cor node select
-cor mode rule
-cor proxy tun
-cor connection list</pre></aside>
-        </div>
-        {{shot:nodes}}
-      </section>
-
-      <section id="rules">
-        <h2>Rules</h2>
-        <div class="guide-step">
-          <div><p>Quick rules at the top right cover ads, private networks and direct access to mainland China. They start off and add only rules missing from the subscription.</p><p>Edit, disable and reorder your own rules; subscription rules stay read-only. Changes are validated before saving, without rewriting the source YAML.</p></div>
-          <aside class="command-side"><p>CLI equivalent</p><pre class="term">cor rule shortcut ads on
-cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1
-cor network explain example.com</pre></aside>
-        </div>
-        {{shot:rules}}
-      </section>
-
-      <section id="android">
-        <h2>Android app routing</h2>
-        <p>Open Settings → App routing. Choose which apps enter the VPN, search by name or package, review the selection and save. While connected, choose Save and reconnect.</p>
-        <div class="table-scroll"><table class="plain"><thead><tr><th>Mode</th><th>Selected apps</th><th>Other apps</th></tr></thead><tbody>
-          <tr><th>All apps</th><td>Enter VPN</td><td>Enter VPN</td></tr>
-          <tr><th>Only selected</th><td>Enter VPN</td><td>Original network</td></tr>
-          <tr><th>Exclude selected</th><td>Original network</td><td>Enter VPN</td></tr>
-        </tbody></table></div>
-        {{shot:applications}}
-        <p>On Android 10+, use App rules to name a rule group, find apps and assign a node, policy group, DIRECT or REJECT. Missing exits are blocked by default. Unassigned apps follow the current mode and rules.</p>
-        <p>Claude protection temporarily covers all apps and suspends app-specific exits, restoring them afterwards. Android's Block connections without VPN can also block excluded apps. <a href="{{docs}}/android-application-routing.md">Full routing behavior ↗</a></p>
-      </section>
-
-      <section id="checks">
-        <h2>Access checks</h2>
-        <p>Network diagnostics checks DNS, connections and the actual exit. IP check shows your exit IP and service reachability. A÷ check collects Claude-related region and configuration clues. Finishing a check does not prove a service works: read each result.</p>
-        {{shot:network}}
-        <p><a class="more" href="tools.html">Explore all network tools</a></p>
-      </section>
-
-      <section id="protection">
-        <h2>Claude protection</h2>
-        <div class="guide-step">
-          <div><p>Enable it on A÷ check to pin a specific node, apply strict TUN and encrypted DNS, and monitor for bypasses. Existing core connections are closed when it starts.</p><p>Network changes such as nodes, rules and updates are locked. Themes, accents and read-only pages remain available. Disabling restores your mode, node and network preferences. Protection constrains connections; it cannot guarantee a service will accept them.</p></div>
-          <aside class="command-side"><p>CLI equivalent</p><pre class="term">cor claude protect on --yes
-cor claude watch
-cor claude protect off --yes</pre></aside>
-        </div>
-        {{shot:protection}}
-        <p><a href="{{docs}}/claude-protection.md">Protection scope and recovery ↗</a></p>
-      </section>
-    </div>
-
-    <div class="guide-panel" id="tui" data-guide-panel="tui">
-      <section id="tui-first">
-        <h2>Open the terminal interface</h2>
-        <div class="guide-step">
-          <div><p>Windows, Linux and macOS installers include <code>cor</code>. Run <code>cor ui</code> in an interactive terminal of at least 60 columns × 18 rows.</p><p>Opening, browsing and exiting do not start a backend or change the proxy. Add a subscription and run <code>cor start</code> first. GUI, TUI and CLI then share that backend.</p></div>
-          <aside class="command-side"><p>Launch and demo</p><pre class="term">cor start
-cor ui
-cor ui --demo</pre><p><code>--demo</code> uses fictional data, without network access or saving.</p></aside>
-        </div>
-        {{terminal:home}}
-      </section>
-
-      <section id="tui-pages">
-        <h2>Status and node selection</h2>
-        <div class="table-scroll"><table class="plain"><thead><tr><th>Keys</th><th>Action</th></tr></thead><tbody>
-          <tr><th><kbd>1</kbd>–<kbd>4</kbd> / <kbd>Tab</kbd></th><td>Home, nodes, connections and network</td></tr>
-          <tr><th><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></th><td>Select an item, open a group and confirm a node change</td></tr>
-          <tr><th><kbd>/</kbd> / <kbd>Esc</kbd></th><td>Search; go back, clear or cancel</td></tr>
-          <tr><th><kbd>r</kbd> / <kbd>q</kbd></th><td>Refresh / quit, leaving the backend and proxy running</td></tr>
-        </tbody></table></div>
-        <p>On Network, use <kbd>[</kbd> / <kbd>]</kbd> to choose a tool, <kbd>/</kbd> to enter a target and <kbd>Enter</kbd> to run it. Leaving clears the result. Use CLI options for custom parameters.</p>
-        <aside class="command-side"><p>The same network checks</p><pre class="term">cor network check example.com
-cor network stability example.com --count 10</pre></aside>
-        {{terminal:network}}
-      </section>
-
-      <section id="tui-manage">
-        <h2>Settings and management</h2>
-        <p class="source-note">The current preview includes the four pages above. Source code adds Settings and Actions; these are not released yet.</p>
-        <p>The new pages use <kbd>5</kbd> / <kbd>6</kbd>, reuse CLI validation and system authorization, and confirm before execution. For the current installer, use <code>cor config</code>, <code>cor profile</code> and <code>cor rule</code> commands.</p>
-        <p>Both interfaces enforce Claude protection. <a href="{{docs}}/cli/tui.md">Source TUI guide ↗</a></p>
-      </section>
-    </div>
-
-    <section id="cli">
-      <h2>CLI and automation</h2>
-      <p>Use <code>cor help</code> for common commands, or <code>cor help all</code> for every entry. Read-only queries do not start the core. Add <code>--json</code> for machines or <code>--jsonl</code> for streaming output.</p>
-<pre class="term" aria-label="CLI queries">cor status
-cor --json node list
-cor --json connection list
-cor service status</pre>
-      <p>Results go to stdout; progress and errors go to stderr. GUI, TUI, scripts and AI use the same business logic and permissions. <a href="{{docs}}/cli.md">All commands and exit codes ↗</a></p>
+    <section id="first">
+      <h2>Home and connection</h2>
+      <p>Home shows core status, the selected profile, a reference node, traffic and network details. The connection button starts or stops the core; the proxy method determines which applications enter it.</p>
+      <ul class="dots"><li><b>System proxy:</b> handles applications that honor system proxy settings. Terminals and some apps may ignore them.</li><li><b>TUN:</b> captures at the network layer. Desktop requires system authorization on first use; Android asks for VPN permission.</li><li><b>Off:</b> releases this instance's system proxy or TUN. Other VPNs may still be active.</li></ul>
+      {{shot:home}}
+      <p>Home service latency and node-test latency measure different targets. A reference node is not every connection's actual exit; inspect individual paths in Connections.</p>
     </section>
-
+    <section id="subscriptions">
+      <h2>Subscriptions</h2>
+      <p>Add a remote URL or import local YAML, then choose Use to activate it. Remote profiles can update from their source. Local profiles can be edited, renamed or removed without deleting your original file.</p>
+      <p>Download or validation failures preserve the existing profile and running state. Removing the active profile returns to Default direct, which cannot be edited or removed.</p>
+      {{shot:subscriptions}}
+      <p>Search, grid and list views are available. Phones keep some actions in details. See <a href="#settings">schedules</a> for automatic updates; Claude protection pauses subscription changes and updates.</p>
+    </section>
+    <section id="modes">
+      <h2>Nodes and modes</h2>
+      <p>Search and test nodes in Proxies, using a grid or compact list. Select members of manual groups; automatic groups such as AUTO choose for themselves. Details show node information and available actions.</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>Mode</th><th>Exit selection</th></tr></thead><tbody><tr><th>Rule</th><td>Matches each connection against ordered rules; groups may lead to other groups.</td></tr><tr><th>Global</th><td>Uses the GLOBAL policy group.</td></tr><tr><th>Direct</th><td>Bypasses proxy nodes.</td></tr></tbody></table></div>
+      {{shot:nodes}}
+      <p>Latency tests measure reachability and response time, not bandwidth. A timeout does not mean a node was removed. If every node fails, the mode is preserved and recovery options appear; update downloads have a separate fallback.</p>
+    </section>
+    <section id="rules">
+      <h2>Rules</h2>
+      <p>Quick rules offer ad blocking, private-network and China-direct options. They start disabled and only add missing rules. Custom rules can be added, edited, disabled, removed and reordered.</p>
+      <p>The first matching rule wins. Subscription rules remain read-only but can be reordered. Changes are validated before saving and do not rewrite the original YAML. Duplicate enabled rules are rejected.</p>
+      {{shot:rules}}
+      <p>In Rule mode, Android app-specific exits take priority over ordinary rules. Global, Direct and Claude protection suspend them. Use <a href="tools.html#explain">rules and exit</a> to inspect a URL.</p>
+    </section>
+    <section id="android">
+      <h2>Android app routing</h2>
+      <p>Open Settings → App routing to decide which apps enter the VPN. Search names or package IDs, filter selected or system apps, and review your selection. All apps mode hides the selection list.</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>Scope</th><th>Selected apps</th><th>Other apps</th></tr></thead><tbody><tr><th>All apps</th><td>Enter VPN</td><td>Enter VPN</td></tr><tr><th>Only selected</th><td>Enter VPN</td><td>Use the original network</td></tr><tr><th>Exclude selected</th><td>Use the original network</td><td>Enter VPN</td></tr></tbody></table></div>
+      {{shot:applications}}
+      <h3>Choose an app's exit</h3>
+      <p>On Android 10+, App rules supports named groups, app filtering and a node, policy group, DIRECT or REJECT exit. Rules belong to their profile; switching profiles does not attach an old exit to a new node. Android 8/9 supports VPN scope but not app-specific exits.</p>
+      <p>Block connections when the target is missing is enabled by default. A recoverable warning appears when a real connection is blocked by a missing or changed target; latency timeouts alone do not make it missing. Disable this option to fall back to the ordinary configuration. Apps outside VPN scope cannot use these exits.</p>
+      <h3>Save and recover</h3>
+      <p>While connected, choose Save and reconnect. The old VPN is replaced only after the system accepts the new one; failure keeps the old connection. Normal mode respects your UDP switch. An exit without UDP support blocks that UDP traffic rather than changing routes.</p>
+      <p>Claude protection covers all apps, suspends app exits and locks edits; disabling it restores your settings. Android's Block connections without VPN setting may block excluded apps too. <a href="{{docs}}/android-application-routing.md">Full routing boundaries ↗</a></p>
+    </section>
+    <section id="connections">
+      <h2>Connections and logs</h2>
+      <p>Connections lists active requests with filtering and details for domains, targets, protocols, matched rules, policy chains and traffic. Copy details or close a connection; an application may reconnect afterwards.</p>
+      <p>Logs shows core and backend messages, with clear and diagnostic export actions. Logs, domains and IPs may contain personal information; review before sharing. This page is not a long-term traffic audit.</p>
+    </section>
+    <section id="checks">
+      <h2>Checks and tools</h2>
+      <p>IP check shows exits and service reachability. A÷ check gathers Claude region, DNS and configuration clues. Network diagnostics follows requests through website checks, DNS, TLS and actual exits.</p>
+      {{shot:network}}
+      <p>Tools run on demand and keep only the current result; leaving cancels and clears it. An HTTP response does not prove login works. Inputs, options, report states and protection limits are in the <a href="tools.html">network tools manual</a>.</p>
+    </section>
+    <section id="protection">
+      <h2>Claude protection</h2>
+      <p>Enable it in A÷ check to pin a concrete node, apply strict TUN and encrypted DNS, and monitor bypasses. Existing core connections close before activation. A network without IPv6 is not treated as a bypass.</p>
+      {{shot:protection}}
+      <p>Network changes—including nodes, rules, profiles, updates, Geo, autostart and schedules—are locked. Theme, accent, font size and read-only browsing remain available. Protection suspends Android app exits and temporarily captures UDP; disabling it restores your preferences.</p>
+      <p>Protection persists across restarts and can be disabled from the same entry. It constrains connections, not third-party service acceptance. <a href="{{docs}}/claude-protection.md">Scope and allowed actions ↗</a></p>
+    </section>
+    <section id="settings">
+      <h2>Settings and schedules</h2>
+      <p>General and Appearance offer window size, tray speed, theme, accent and font size. Network includes ports, IPv6, UDP, DNS and Fake-IP. Network changes may reload the core; check the result shown by the app.</p>
+      <p>Automatic subscription updates and software checks use minutes: default 360, 0 disables them, maximum 10080. Protection pauses the relevant tasks. Manual update checks ignore the automatic interval.</p>
+      <p>Fake-IP exclusions have a dedicated editor and do not require changing the original profile. Phones, tablets and desktops share fields where possible; compact screens move actions into details.</p>
+    </section>
     <section id="updates">
       <h2>Updates and autostart</h2>
-      <div class="guide-step">
-        <div><p>Choose stable or preview in Settings and set the check interval; 0 disables automatic checks. SHA256 is verified before installation. Upgrades keep your configuration; Android confirms installation.</p><p>Enable Background autostart on desktop to start at login with the window closed. CLI users can install a user service instead. Choose one autostart method.</p></div>
-        <aside class="command-side"><p>CLI equivalent</p><pre class="term">cor update check
-cor update install
-cor geo update
-cor service install --yes</pre></aside>
-      </div>
+      <p>Settings → Update checks stable releases by default. Include prereleases adds newer previews. Installers are verified with SHA256. Android also requires system confirmation and cannot install a lower version as a normal update.</p>
+      <p>Geo updates replace data only after validating the full set; failure keeps the old data. Follow recoverable prompts for download, permission or installation errors, or <a href="download.html">download manually</a>. Keep your configuration.</p>
+      <p>Desktop Background autostart logs in with the window closed. If the tray remains unavailable after waiting, a window opens to explain. CLI user services are an alternative; choose one autostart method. Android's foreground VPN service is separate from desktop login autostart.</p>
     </section>
-
     <section id="trouble">
-      <h2>Export diagnostics</h2>
-      <p>In the GUI, export from Logs or an error notice. TUI users can exit and run these commands. Reports are not uploaded automatically; review domains and IP addresses before sharing.</p>
-<pre class="term" aria-label="Export diagnostics">cor diagnose --output cor-diagnose.json
-cor diagnose --offline --output cor-offline.json</pre>
-      <p>For an unreachable site, start with <a href="tools.html#check">Website check</a>, then <a href="tools.html#explain">Rule and exit</a>. For installation, see the <a href="download.html#questions">download FAQ</a>.</p>
+      <h2>Errors and recovery</h2>
+      <p>Ordinary notices dismiss automatically. Recoverable warnings offer retry or export; serious errors explain blockers. Claude protection alerts are separate. Dismissing a message does not fix its cause.</p>
+      <p>Export diagnostics from Logs or an error prompt and record the time and steps. Nothing uploads automatically. Review domains and IPs before sharing, and preserve evidence if the core fails to start.</p>
+      <p>For websites, use the <a href="tools.html#check">website check</a>; for installation, read <a href="download.html#questions">common questions</a>. Without a window, use <a href="cli.html#diagnostics">CLI diagnostics</a>.</p>
+    </section>
+    <section id="other">
+      <h2>Other interfaces</h2>
+      <div class="cards manual-cards">
+        <div class="card" id="tui"><h3>Terminal · TUI</h3><p><span id="tui-first">Startup and authorization, </span><span id="tui-pages">six pages, </span><span id="tui-manage">settings and actions</span> now have their own manual.</p><a class="more" href="tui.html">Open the TUI manual →</a></div>
+        <div class="card" id="cli"><h3>Commands · CLI</h3><p>Look up commands, options, JSON, exit codes and backend services independently.</p><a class="more" href="cli.html">Open the CLI manual →</a></div>
+      </div>
     </section>
   </div>
 </div>

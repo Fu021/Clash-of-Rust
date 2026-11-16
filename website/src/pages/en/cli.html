@@ -1,0 +1,137 @@
+<!-- title: CLI manual — Clash of Rust -->
+<!-- description: Find cor and manage the backend, profiles, nodes, rules, checks, updates and services, with JSON, exit codes and diagnostic exports. -->
+<section class="page-head">
+  <div class="wrap"><h1>Explicit commands. Readable results.</h1><p class="lead">An independent reference for terminals, scripts and AI. Begin with the <a href="start.html#cli">CLI quick start</a>. Commands continue to evolve alongside GUI and TUI.</p>{{manuals}}</div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/guide-small.webp"><img src="{{root}}assets/guide.webp" width="2172" height="724" alt="A blue cat unfolds a railway map and checks each route."></picture></div>
+</section>
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="On this page"><p class="label">On this page</p><a href="#install">Find cor</a><a href="#runtime">Backend and proxy</a><a href="#profiles">Profiles</a><a href="#nodes">Nodes and policy chains</a><a href="#rules">Rules</a><a href="#connections">Connections and logs</a><a href="#network">Checks and protection</a><a href="#config">Configuration</a><a href="#updates">Software and Geo updates</a><a href="#services">Autostart and services</a><a href="#automation">Scripts and exit codes</a><a href="#diagnostics">Export diagnostics</a></nav>
+  <div>
+    <section id="install">
+      <h2>Find cor</h2>
+      <p>Desktop installers include the core, Geo and CLI; no extra runtime is required. Android does not provide this desktop CLI.</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>System</th><th>Entry</th></tr></thead><tbody><tr><th>Debian / Ubuntu</th><td>Run <code>cor</code> after installing the DEB, at <code>/usr/bin/cor</code>.</td></tr><tr><th>Windows</th><td>Run <code>cor.exe</code> in the installation directory, or add that directory to PATH.</td></tr><tr><th>macOS</th><td><code>/Applications/Clash of Rust.app/Contents/MacOS/cor</code>; optionally create your own PATH symlink.</td></tr></tbody></table></div>
+      <pre class="term" aria-label="Version and help">cor version
+cor help
+cor help all
+cor help profile add</pre>
+      <p>Every command supports <code>--help</code>. This reference targets the latest preview; check your installed version if a command is missing.</p>
+    </section>
+    <section id="runtime">
+      <h2>Backend and proxy</h2>
+      <pre class="term" aria-label="Backend and proxy commands">cor start
+cor status
+cor mode rule
+cor proxy tun
+cor restart
+cor stop</pre>
+      <p><code>start</code> runs in the background after the terminal closes. <code>run</code> is foreground debugging tied to that terminal. Proxy methods are <code>system</code>, <code>tun</code> and <code>off</code>; modes are <code>rule</code>, <code>global</code> and <code>direct</code>.</p>
+      <p>An existing GUI shares its backend. Status, node lists, connection queries, service status, help and version do not start the backend or core. TUN uses system authorization; <code>--yes</code> does not replace administrator permission.</p>
+      <p><code>cor env --shell bash</code> prints proxy environment statements without changing the parent shell. <code>--unset</code> prints removal statements. See the <a href="{{docs}}/cli/runtime.md">runtime reference ↗</a>.</p>
+    </section>
+    <section id="profiles">
+      <h2>Profiles</h2>
+      <pre class="term" aria-label="Profile commands">cor profile add home 'https://example.com/subscription'
+cor profile use home
+cor profile list
+cor profile update --all
+cor profile import ./subscription.yaml --name local
+cor profile export home --output profile.yaml
+cor profile remove local --yes</pre>
+      <p>Use a full ID or unique name; duplicates require an ID. Import from a local path or stdin. Failed updates keep the old configuration. Updating all returns nonzero if any item fails while preserving successful updates.</p>
+      <p>Credentials are hidden by default. A complete backup requires <code>--show-secrets</code> and careful storage. Default direct cannot be removed; removing the active profile falls back to it. See <a href="{{docs}}/cli/profiles-and-rules.md">profile editing and file boundaries ↗</a>.</p>
+    </section>
+    <section id="nodes">
+      <h2>Nodes and policy chains</h2>
+      <pre class="term" aria-label="Node commands">cor node list
+cor node select
+cor node select PROXY '🇺🇸 US 01'
+cor node test --group PROXY
+cor node test --all</pre>
+      <p>Replace example groups and nodes with real names from your profile. The interactive picker accepts filters, numbers, <code>/</code> to clear, and <code>q</code> or EOF to cancel; it requires a running core. Scripts and JSON must supply GROUP NODE. Quote values containing spaces in your shell.</p>
+      <p>Offline lists read the saved profile and mark <code>offline=true</code>, <code>source=saved_profile</code>; they do not claim live selections or latency. Status may show a reference chain such as PROXY → AUTO → node. Use connection details for actual per-request exits.</p>
+    </section>
+    <section id="rules">
+      <h2>Rules</h2>
+      <pre class="term" aria-label="Rule commands">cor rule list --json
+cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1
+cor rule shortcut ads on</pre>
+      <p>Edit, move, toggle or remove custom rules. Use stable IDs from the list in scripts. Positions start at 1; duplicates and core configuration are validated before saving. Subscription rules stay read-only and original YAML is not rewritten.</p>
+      <p>Quick rules are <code>ads</code>, <code>private-domain</code>, <code>private-ip</code>, <code>cn-domain</code> and <code>cn-ip</code>, all initially disabled. <code>--profile</code> selects a particular profile.</p>
+    </section>
+    <section id="connections">
+      <h2>Connections and logs</h2>
+      <pre class="term" aria-label="Connection and log queries">cor connection list
+cor connection show CONNECTION_ID
+cor --jsonl connection list --watch --sort download-rate
+cor logs --follow</pre>
+      <p>Replace CONNECTION_ID with a real list ID. Queries do not start the core. When stopped, a one-time list is empty and marked offline; details and continuous queries explain unavailability. <code>cor connection close CONNECTION_ID</code> closes one connection; its app may reconnect.</p>
+      <p>Nodes, connections and rules accept <code>--limit</code> and <code>--offset</code>: default 100, maximum 10000, after filtering and sorting. Review logs for domains and IPs before sharing.</p>
+    </section>
+    <section id="network">
+      <h2>Checks and Claude protection</h2>
+      <pre class="term" aria-label="Network checks and protection">cor network check example.com
+cor network explain example.com --json
+cor network tls example.com --output tls-report.json
+cor ip-check --category AI --output ai-report.json
+cor claude protect on --yes
+cor claude protect off --yes</pre>
+      <p>See <a href="tools.html">network tools</a> for all checks, options and report states. Checks do not implicitly start the core or turn failure into a direct-route success. Protection or unknown protection state disables system probes that could bypass it.</p>
+      <p>Protection pins a node and strict TUN, locks network changes and keeps appearance and read-only access available. Disabling restores previous settings. It does not guarantee third-party service acceptance.</p>
+      <h3>Environment and browser checks</h3>
+      <pre class="term" aria-label="Claude environment, project and browser checks">cor claude check --output claude-report.json
+cor claude audit --offline --output claude-projects.json
+cor claude browser --open --output browser-report.json
+cor claude watch</pre>
+      <p><code>check</code> gathers network and region clues. <code>audit --offline</code> reads the current terminal and recorded project configuration without making detection requests. <code>browser --open</code> opens a local sampling page and requires a real browser; SSH sessions without one do not produce invented results. These checks do not read account cookies or login tokens.</p>
+      <p><code>watch</code> observes protection coverage and related connections until Ctrl+C. A completed check returning 0 means execution finished; read report fields for availability and risk.</p>
+    </section>
+    <section id="config">
+      <h2>Configuration</h2>
+      <pre class="term" aria-label="Read and change settings">cor config get
+cor config set theme_mode dark
+cor config set subscription_update_interval_minutes 720
+cor config set update_check_interval_minutes 0</pre>
+      <p>Subscription and update intervals use minutes: 0 disables, default 360, maximum 10080. A pure CLI backend does not add an automatic software-check task. <code>cor help config set</code> lists writable fields; shared validation still applies.</p>
+      <pre class="term" aria-label="Validate and export the effective configuration">cor config check
+cor config effective --output effective.yaml</pre>
+      <p><code>check</code> validates the merged configuration; <code>effective</code> exports runtime YAML with overrides and credentials removed by default. Neither rewrites the original profile. Sensitive values require an explicit <code>--show-secrets</code>.</p>
+      <p>The same account shares GUI data by default. <code>--data-dir</code> and <code>--resources</code> choose separate data and resources; keep them for queries, updates and diagnostics. Linux root can select a user with <code>--user</code>; this does not make TUN a user-isolated network.</p>
+    </section>
+    <section id="updates">
+      <h2>Software and Geo updates</h2>
+      <pre class="term" aria-label="Update commands">cor update check
+cor update install
+cor update status
+cor geo status
+cor geo update</pre>
+      <p>Stable releases are the default. <code>cor config set update_prereleases true</code> includes newer previews. The actual target is shown before confirmation; only preview targets carry a preview warning. Installer and Geo updates validate data and keep recovery evidence on failure.</p>
+      <p>Headless Linux authorizes in the terminal, waits for installation and restores the backend automatically. <code>--no-start</code> preserves the previous core on/off state. Other desktops hand off to a system installer; handoff is not installation success. Check <code>update status</code>.</p>
+      <p>Unattended systems can use <code>cor update download --output cor-update.deb</code> and ask an administrator to install; change the filename for your platform. <code>--timeout N</code> extends slow-network waits, default 300 seconds, maximum 3600.</p>
+    </section>
+    <section id="services">
+      <h2>Autostart and services</h2>
+      <pre class="term" aria-label="User backend service">cor service install --yes
+cor service status
+cor service remove --yes</pre>
+      <p>This configures CLI backend startup at the current user's login; use <code>start</code> now. Linux uses a systemd user unit, macOS a LaunchAgent, Windows a current-user login task. This is not a system service before login.</p>
+      <p>Status separates configuration, enablement, running state and backend ownership; unobserved values remain unknown. <code>autostart on</code> controls desktop background startup. Choose one method. Removing autostart does not stop the current core.</p>
+    </section>
+    <section id="automation">
+      <h2>Scripts and exit codes</h2>
+      <pre class="term" aria-label="Machine-readable queries">cor --json status
+cor --json node list
+cor --jsonl status --watch</pre>
+      <p>The JSON envelope has <code>schema</code>, <code>command</code> and <code>data</code>. Results go to stdout; progress, authorization and errors go to stderr. Choose either <code>--json</code> or <code>--jsonl</code>, with the latter for continuous samples.</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody><tr><th>0</th><td>Success or a closed downstream pipe. Check report fields for actual availability.</td></tr><tr><th>1</th><td>Operation, validation or permission failure.</td></tr><tr><th>2</th><td>Invalid command or arguments.</td></tr><tr><th>3</th><td>Backend failed to start or is unreachable.</td></tr><tr><th>124</th><td>Request timeout.</td></tr><tr><th>130</th><td>Query interrupted.</td></tr></tbody></table></div>
+      <p><code>completion bash</code>, <code>zsh</code>, <code>fish</code> and <code>powershell</code> print completion scripts. <code>--no-color</code> gives plain text. AI should read JSON and exit codes rather than guess screen coordinates.</p>
+    </section>
+    <section id="diagnostics">
+      <h2>Export diagnostics</h2>
+      <pre class="term" aria-label="Online and offline diagnostics">cor diagnose --output cor-diagnose.json
+cor diagnose --offline --output cor-offline.json</pre>
+      <p>Diagnostics never starts the backend or restores TUN. Export offline when the backend is unreachable. Keep the original account, <code>--user</code>, <code>--data-dir</code> and <code>--resources</code>. Nothing uploads automatically; review domains, IPs and logs before sharing.</p>
+      <p>See the <a href="{{docs}}/cli.md">CLI reference ↗</a> for all options, permissions and user isolation. Control keys belong to the local interface; do not share <code>control.json</code>.</p>
+    </section>
+  </div>
+</div>

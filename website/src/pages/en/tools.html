@@ -13,13 +13,15 @@
   </div>
 </section>
 
-<div class="wrap doc">
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="On this page"><p class="label">On this page</p><a href="#interface">Interfaces</a><a href="#choose">Choose by symptom</a><a href="#target">Target checks</a><a href="#link">Link analysis</a><a href="#protocol">Protocol checks</a><a href="#runtime">Rules and runtime</a><a href="#limits">Options and limits</a><a href="#protection">Protection limits</a><a href="#reports">Reports and exports</a></nav>
+  <div>
   <section id="interface">
     <h2>Choose a tool. Enter a target. Read the result.</h2>
     <p>Open Network diagnostics, choose a tool and enter a domain or URL. Options and results stay in one card; leaving the page clears them.</p>
     {{shot:network}}
     <details class="benchmark-details"><summary>See the terminal interface</summary>{{terminal:network}}<p>Run <code>cor ui</code>, press <kbd>4</kbd>, use <kbd>[</kbd> / <kbd>]</kbd> to choose a tool, <kbd>/</kbd> to enter a target and <kbd>Enter</kbd> to run it.</p></details>
-    <div class="interface-links"><a href="guide.html#gui">GUI guide</a><a href="guide.html#tui">TUI guide</a><a href="#check">Tools and CLI commands ↓</a></div>
+    <div class="interface-links"><a href="guide.html#checks">GUI manual</a><a href="tui.html#network">TUI manual</a><a href="cli.html#network">CLI manual</a><a href="#check">Explore the checks ↓</a></div>
   </section>
   <section id="choose">
     <h2>Start from what you see</h2>
@@ -41,7 +43,7 @@
 
   <section id="limits">
     <h2>Options and limits</h2>
-    <p>Defaults: 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB cap and 8 hops. The GUI shows relevant options. Direct TUI checks use defaults; customize through CLI, or the Actions page added in source.</p>
+    <p>Defaults: 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB cap and 8 hops. The GUI shows relevant options. Direct TUI checks use defaults; customize through Actions or CLI.</p>
     {{tools:options}}
     <p style="margin-top:1.2rem">Stability checks stop at 120 seconds. System output is capped at 8 KiB per stream; reports at 48 entries of 2,048 characters.</p>
   </section>
@@ -84,4 +86,5 @@
     <p style="margin-top:1.4rem">The toolbox arrived in the 0.7.2 preview; stable 0.7.1 has only the website check. <a class="more" href="download.html#preview">Get the preview</a></p>
     <p class="fine" style="margin-top:1rem">Source of record: <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> in the repository (in Chinese).</p>
   </section>
+  </div>
 </div>

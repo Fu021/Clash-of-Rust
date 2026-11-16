@@ -1,0 +1,64 @@
+<!-- title: 快速上手 — Clash of Rust -->
+<!-- description: 从安装到首次连接，分别选择窗口、终端界面或命令行；手机与桌面各有清楚的操作路径。 -->
+<section class="page-head">
+  <div class="wrap">
+    <h1>先连上，再慢慢了解。</h1>
+    <p class="lead">准备一份 mihomo / Clash Meta 订阅链接或 YAML 配置。选择你习惯的入口，完成第一次连接。</p>
+    <div class="interface-links"><a class="chip" href="#gui">窗口 GUI</a><a class="chip" href="#tui">终端 TUI</a><a class="chip" href="#cli">命令行 CLI</a></div>
+  </div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/start-small.webp"><img src="{{root}}assets/start.webp" width="2172" height="724" alt="蓝猫背着行囊，从乡间小站准备出发。"></picture></div>
+</section>
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="本页目录"><p class="label">本页目录</p><a href="#gui">窗口 GUI</a><a href="#tui">终端 TUI</a><a href="#cli">命令行 CLI</a><a href="#help">连接不顺？</a></nav>
+  <div>
+    <section id="gui">
+      <h2>窗口 GUI</h2>
+      <p>Windows、Debian / Ubuntu、macOS 和 Android 均可使用。</p>
+      <ol class="steps">
+        <li><a href="download.html">下载并安装</a>对应设备的安装包，打开 Clash of Rust。</li>
+        <li>进入“订阅”，添加订阅链接或导入 YAML，再点“使用”。软件不提供代理节点。</li>
+        <li>进入“代理”，测速后在手动策略组中选择节点；AUTO 等自动组由内核选优。</li>
+        <li>回到首页，选“规则”模式并连接。桌面可选系统代理或 TUN；Android 使用 VPN。首次接管时按系统提示授权。</li>
+        <li>确认首页显示内核运行，到“连接”查看实际流量；网站打不开时再用“网络诊断”。</li>
+      </ol>
+      {{shot:home}}
+      <p>手机和平板的入口在底栏或侧栏。Android 若已有其他 VPN，需先处理系统的 VPN 冲突；桌面关闭窗口后由托盘继续管理，选择“退出”才结束客户端。</p>
+      <p><a class="more" href="guide.html">查阅 GUI 功能手册 →</a></p>
+    </section>
+    <section id="tui">
+      <h2>终端 TUI</h2>
+      <p>桌面安装包附带 <code>cor</code>，需要至少 60 列 × 18 行的交互终端。<a href="cli.html#install">找不到 cor？</a></p>
+      <pre class="term" aria-label="打开终端界面">cor ui</pre>
+      <ol class="steps">
+        <li>按 <kbd>6</kbd> 进入“操作”，搜索 <code>profile add</code>，填写名称和订阅链接或本地文件路径，检查并确认执行。</li>
+        <li>用 <code>profile use</code> 选择刚添加的订阅，再执行 <code>start</code>。系统授权会回到普通终端处理，完成后按 Enter 返回。</li>
+        <li>按 <kbd>2</kbd> 进入节点页，选中手动策略组后按 Enter，选择成员并确认。</li>
+        <li>在“操作”里执行 <code>proxy</code>，选择 <code>system</code> 或 <code>tun</code>。没有桌面环境的服务器建议选 TUN。</li>
+        <li>按 <kbd>1</kbd> 核对状态；<kbd>q</kbd> 只退出终端界面，后台与代理继续运行。</li>
+      </ol>
+      {{terminal:home}}
+      <p><a class="more" href="tui.html">查阅 TUI 功能手册 →</a></p>
+    </section>
+    <section id="cli">
+      <h2>命令行 CLI</h2>
+      <p>适合脚本、SSH 和 AI。先按<a href="cli.html#install">安装说明</a>找到 <code>cor</code>，将示例链接替换为自己的订阅。</p>
+      <pre class="term" aria-label="命令行首次连接">cor profile add home 'https://example.com/subscription'
+cor profile use home
+cor start
+cor node select
+cor proxy tun
+cor status</pre>
+      <p>交互选择支持文字筛选、编号和 <code>q</code> 取消。TUN 可能请求管理员授权；有桌面环境也可使用 <code>cor proxy system</code>。日常后台运行用 <code>start</code>。</p>
+      <p><a class="more" href="cli.html">查阅 CLI 功能手册 →</a></p>
+    </section>
+    <section id="help">
+      <h2>连接不顺？</h2>
+      <div class="cards">
+        <div class="card"><h3>还没连上</h3><p>确认订阅已选用、节点可达、系统授权已完成。<a href="guide.html#trouble">查看恢复入口</a>。</p></div>
+        <div class="card"><h3>某个网站打不开</h3><p>先做<a href="tools.html#check">网站检查</a>，再查<a href="tools.html#explain">规则与出口</a>。</p></div>
+        <div class="card"><h3>更新或安装失败</h3><p>保留原配置，按错误原因重试；需要时<a href="download.html">手动下载安装包</a>。</p></div>
+      </div>
+      <p>GUI、TUI、CLI 共用当前账户的后台和配置。只需选择一种入门方式，之后可以随时切换。</p>
+    </section>
+  </div>
+</div>

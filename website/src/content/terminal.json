@@ -3,7 +3,7 @@
     "source": "actual-cor-pty",
     "lines": [
       {
-        "text": "  CLASH OF RUST   /   TERMINAL   原型",
+        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
         "tone": "accent"
       },
       {
@@ -15,11 +15,15 @@
         "tone": "accent"
       },
       {
+        "text": "   5 设置       6 操作",
+        "tone": "accent"
+      },
+      {
         "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
         "tone": "muted"
       },
       {
-        "text": "  ● 内核运行中   ·   CLI 后台   ·   0.7.2-fix.3.network-toolbox",
+        "text": "  ● 内核运行中   ·   CLI 后台   ·   0.7.2-fix.4.network-inspection",
         "tone": "accent"
       },
       {
@@ -95,15 +99,11 @@
         "tone": "plain"
       },
       {
-        "text": "",
-        "tone": "plain"
-      },
-      {
         "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
         "tone": "muted"
       },
       {
-        "text": "  退出界面保留后台和代理；按 1/2/3/4 或 Tab 切换页面",
+        "text": "  退出界面保留后台和代理；按 1–6 或 Tab 切换页面",
         "tone": "muted"
       },
       {
@@ -111,7 +111,7 @@
         "tone": "muted"
       },
       {
-        "text": "  v0.7.2-fix.3.network-toolbox   ·   本机后台   ·   每秒采样，变化时绘制",
+        "text": "  v0.7.2-fix.4.network-inspection   ·   本机后台   ·   每秒采样，变化时绘制",
         "tone": "muted"
       },
       {
@@ -123,14 +123,14 @@
         "tone": "plain"
       }
     ],
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "1e34a79e845a2b2eef79587620a54a3a3b839e27"
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514"
   },
   "network": {
     "source": "actual-cor-pty",
     "lines": [
       {
-        "text": "  CLASH OF RUST   /   TERMINAL   原型",
+        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
         "tone": "accent"
       },
       {
@@ -142,15 +142,19 @@
         "tone": "accent"
       },
       {
+        "text": "   5 设置       6 操作",
+        "tone": "accent"
+      },
+      {
         "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
         "tone": "muted"
       },
       {
-        "text": "  网站检查  1/11",
+        "text": "  网站检查  1/18",
         "tone": "accent"
       },
       {
-        "text": "  网址：github.com",
+        "text": "  目标：github.com",
         "tone": "plain"
       },
       {
@@ -222,23 +226,19 @@
         "tone": "plain"
       },
       {
-        "text": "",
-        "tone": "plain"
-      },
-      {
         "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
         "tone": "muted"
       },
       {
-        "text": "  退出界面保留后台和代理；按 1/2/3/4 或 Tab 切换页面",
+        "text": "  退出界面保留后台和代理；按 1–6 或 Tab 切换页面",
         "tone": "muted"
       },
       {
-        "text": "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–4 切页   q 退出",
+        "text": "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–6 切页   q 退出",
         "tone": "muted"
       },
       {
-        "text": "  v0.7.2-fix.3.network-toolbox   ·   本机后台   ·   每秒采样，变化时绘制",
+        "text": "  v0.7.2-fix.4.network-inspection   ·   本机后台   ·   每秒采样，变化时绘制",
         "tone": "muted"
       },
       {
@@ -250,7 +250,7 @@
         "tone": "plain"
       }
     ],
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "1e34a79e845a2b2eef79587620a54a3a3b839e27"
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514"
   }
 }

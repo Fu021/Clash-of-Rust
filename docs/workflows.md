@@ -57,6 +57,8 @@ COSMIC 诊断按需手动执行一个 VM job，保留供后续桌面启动排障
 
 Actions 已验证范围、硬件专属边界与 macOS 助手卸载见[发布后说明](workflows/release.md#发布后说明与助手清理)。
 
+每次公开发行后另执行 [loop-website](loop-website.md)，核对实际下载、三类教程、双语与手机布局；浏览器验证复用现有 CI 的网站任务。
+
 ## UI 预览与静态资源
 
 最小预览命令与资源维护见[UI 预览](workflows/local-development.md#ui-预览与静态资源)。布局检查尺寸见[循环审查](loop-workflow.md#多尺寸-ui-检查)。

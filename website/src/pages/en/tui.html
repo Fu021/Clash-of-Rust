@@ -1,0 +1,81 @@
+<!-- title: TUI manual — Clash of Rust -->
+<!-- description: The six cor ui pages, keyboard controls, forms, system authorization, network tools and recovery, separate from GUI and scripting guides. -->
+<section class="page-head">
+  <div class="wrap"><h1>A guided interface in your terminal.</h1><p class="lead">Manage the same backend through lists and forms. This manual covers the current preview; begin with the <a href="start.html#tui">TUI quick start</a>.</p>{{manuals}}</div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/terminal-small.webp"><img src="{{root}}assets/terminal.webp" width="2172" height="724" alt="A blue cat watches an illuminated control panel in a railway signal box at night."></picture></div>
+</section>
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="On this page"><p class="label">On this page</p><a href="#first">Open and exit</a><a href="#keys">Keyboard controls</a><a href="#pages">Six pages</a><a href="#nodes">Node selection</a><a href="#connections">Connection details</a><a href="#network">Network tools</a><a href="#settings">Settings forms</a><a href="#manage">Actions and authorization</a><a href="#protection">Protection and read-only access</a><a href="#trouble">Recovery</a></nav>
+  <div>
+    <section id="first">
+      <h2>Open and exit</h2>
+      <pre class="term" aria-label="Start or preview offline">cor ui
+cor ui --demo</pre>
+      <p>Windows, Linux and macOS installers include cor. Use a real interactive terminal at least 60 columns × 18 rows; smaller terminals show a resize prompt. Demo mode uses fictional data, without network access or saving.</p>
+      <p>Opening, browsing and exiting do not start the backend or core. Use Actions to start one if needed. <kbd>q</kbd> / <kbd>Ctrl+C</kbd> exits while the existing backend and proxy remain running. Emoji rendering depends on your terminal font.</p>
+      {{terminal:home}}
+    </section>
+    <section id="keys">
+      <h2>Keyboard controls</h2>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>Key</th><th>Action</th></tr></thead><tbody>
+        <tr><th><kbd>1</kbd>–<kbd>6</kbd> / <kbd>Tab</kbd></th><td>Switch pages; Tab advances fields inside a form.</td></tr>
+        <tr><th><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></th><td>Select, open details or edit; confirm before execution.</td></tr>
+        <tr><th><kbd>/</kbd> / <kbd>Ctrl+U</kbd></th><td>Start searching or entering text; clear input.</td></tr>
+        <tr><th><kbd>Esc</kbd> / Backspace</th><td>Return to groups, clear search or cancel confirmation.</td></tr>
+        <tr><th><kbd>r</kbd></th><td>Retry reading immediately.</td></tr>
+        <tr><th><kbd>q</kbd> / <kbd>Ctrl+C</kbd></th><td>Exit TUI and restore the terminal.</td></tr>
+      </tbody></table></div>
+      <p>Page shortcuts become ordinary text inside input fields. Use <code>--no-color</code> or <code>NO_COLOR</code> to disable colors.</p>
+    </section>
+    <section id="pages">
+      <h2>Six pages</h2>
+      <dl class="facts">
+        <div class="sleepers"><dt>1 · Home</dt><dd>Core and backend state, profile, reference chain, protection, rates and connection count.</dd></div>
+        <div class="sleepers"><dt>2 · Nodes</dt><dd>Find groups and nodes, read latency and confirm a manual selection.</dd></div>
+        <div class="sleepers"><dt>3 · Connections</dt><dd>Filter active connections, inspect details and request closure.</dd></div>
+        <div class="sleepers"><dt>4 · Network</dt><dd>Choose an on-demand tool, enter its target and read the result.</dd></div>
+        <div class="sleepers"><dt>5 · Settings</dt><dd>Inspect values, edit supported fields, review and submit.</dd></div>
+        <div class="sleepers"><dt>6 · Actions</dt><dd>Forms generated from the command catalog cover profiles, rules, updates, services and more.</dd></div>
+      </dl>
+      <p>Only the current page's data is read, sampled once a second. Drawing updates changed lines, without accumulating connection or command-output history.</p>
+    </section>
+    <section id="nodes">
+      <h2>Node selection</h2>
+      <p>Press <kbd>2</kbd>, find and open a manual policy group, choose a member and confirm again. Spaces, emoji and punctuation are preserved. Automatic groups show the core's choice and cannot be manually assigned a member.</p>
+      <p>Profiles, membership and protection are rechecked before submission. Choosing AUTO in a parent manual group does not become invalid just because AUTO changes its internal node.</p>
+    </section>
+    <section id="connections">
+      <h2>Connection details</h2>
+      <p>Press <kbd>3</kbd> and Enter on a connection for domains, destination IP/port, protocol, time, rule, actual path and traffic. <kbd>d</kbd> adds resolution details; <kbd>x</kbd> opens a close-connection confirmation.</p>
+      <p>If the connection disappears, the original ID is reported as unavailable; another connection is never substituted. The source application may reconnect after closure.</p>
+    </section>
+    <section id="network">
+      <h2>Network tools</h2>
+      <p>Press <kbd>4</kbd>, choose a tool with <kbd>[</kbd> / <kbd>]</kbd>, then <kbd>/</kbd> to enter a target. Enter ends input; another Enter runs the check. Scroll with <kbd>↑</kbd> / <kbd>↓</kbd> and cancel with <kbd>Esc</kbd>.</p>
+      {{terminal:network}}
+      <p>Configuration diff, traffic breakdown and core runtime need no target. Node details requires the full name. Direct checks use defaults; Actions accepts count and time limits. Changing pages cancels and clears results.</p>
+      <p><a href="tools.html">Read the tools, options and limits →</a></p>
+    </section>
+    <section id="settings">
+      <h2>Settings forms</h2>
+      <p>Press <kbd>5</kbd> and Enter to edit a writable field or inspect a read-only value. Proxy, profile, rule and protection changes use dedicated actions. Secrets are neither shown nor prefilled.</p>
+      <p>Drafts are not saved. Choose Review and execute, then confirm again to submit. Cancelling a field restores its previous value; leaving the form discards drafts. The backend still validates ranges, permission and current state.</p>
+    </section>
+    <section id="manage">
+      <h2>Actions and authorization</h2>
+      <p>Press <kbd>6</kbd> and search for an action such as <code>profile add</code>, <code>rule add</code>, <code>update install</code> or <code>service status</code>. Fill positional arguments and options separately, without shell quotes. Arrays use JSON; boolean options accept <code>true</code> or an empty field.</p>
+      <p>Confirmation temporarily restores the normal terminal for output, download progress and authorization. It skips neither confirmation nor system permission. Press Enter to return; software installation exits TUI after completion or handoff to release files that need replacement.</p>
+      <p>Ctrl+C during authorization or a continuous command exits the whole CLI; already submitted work may continue. Foreground <code>run</code> and another <code>ui</code> session remain direct CLI entries.</p>
+    </section>
+    <section id="protection">
+      <h2>Protection and read-only access</h2>
+      <p>Claude protection allows navigation, status, reports and appearance edits. Network mutations—including profiles, nodes, rules, updates, Geo and autostart—remain locked. Forms do not bypass backend permission checks.</p>
+      <p>After a read failure, old snapshots are marked as reference data and cannot be submitted. Browsing or testing cannot implicitly start a stopped core during protection.</p>
+    </section>
+    <section id="trouble">
+      <h2>Recovery</h2>
+      <p>Press <kbd>r</kbd> to retry, or enlarge a small terminal. If recovery fails, exit and <a href="cli.html#diagnostics">export diagnostics</a> using the original account and data directory.</p>
+      <p>TUI does not require fixed colors or screen coordinates. Automation should prefer <a href="cli.html#automation">CLI JSON and exit codes</a>. See the <a href="{{docs}}/cli/tui.md">full terminal reference ↗</a>.</p>
+    </section>
+  </div>
+</div>

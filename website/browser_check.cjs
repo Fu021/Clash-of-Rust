@@ -8,14 +8,17 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const { chromium } = require("playwright");
 
+execFileSync("python3", ["-B", path.join(__dirname, "build.py")], { stdio: "inherit" });
 const root = path.join(__dirname, "dist");
 const output = path.join(__dirname, "browser-report");
 const releases = JSON.parse(fs.readFileSync(path.join(__dirname, "src/content/releases.json"), "utf8"));
 const mime = {
   ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript",
   ".woff2": "font/woff2", ".webp": "image/webp", ".png": "image/png",
+  ".svg": "image/svg+xml",
 };
 const headers = {};
 for (const line of fs.readFileSync(path.join(root, "_headers"), "utf8").split("\n")) {
@@ -58,14 +61,16 @@ async function stop() {
 async function settleImages(page) {
   await page.evaluate(async () => {
     await document.fonts.ready;
-    for (const image of document.images) image.loading = "eager";
-    await Promise.all([...document.images].map(image => image.decode()));
+    const images = [...document.images].filter(image => image.hasAttribute("src"));
+    for (const image of images) image.loading = "eager";
+    await Promise.all(images.map(image => image.decode()));
   });
 }
 
 async function checkPage(context, origin, route, width) {
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
+  const activate = locator => width === 360 ? locator.tap() : locator.click();
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("response", response => {
@@ -81,50 +86,76 @@ async function checkPage(context, origin, route, width) {
       width: document.documentElement.scrollWidth,
       viewport: innerWidth,
       heading: document.querySelector("h1")?.textContent.trim(),
-      broken: [...document.images].filter(image => !image.naturalWidth).length,
+      broken: [...document.images].filter(image => image.hasAttribute("src") && !image.naturalWidth).length,
+      illustration: document.querySelector(".scene img")?.naturalWidth,
     }));
-    assert.ok(state.heading && !state.broken && state.width <= state.viewport + 1,
+    assert.ok(state.heading && state.illustration && !state.broken && state.width <= state.viewport + 1,
       `${width} ${route}: ${JSON.stringify(state)}`);
+    const menu = page.locator(".mobile-menu");
+    if (width <= 1000) {
+      assert.equal(await menu.locator("nav").isVisible(), false);
+      await activate(menu.locator("summary"));
+      assert.equal(await menu.locator("nav").isVisible(), true);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
+      assert.equal(overflow, false, `Open menu overflow: ${route}`);
+      await page.keyboard.press("Escape");
+      assert.equal(await menu.locator("nav").isVisible(), false);
+    }
+    const toc = page.locator("[data-toc]");
+    if (await toc.count()) {
+      if (width <= 900) {
+        assert.equal(await toc.locator("nav").isVisible(), false);
+        await activate(toc.locator("summary"));
+      }
+      assert.equal(await toc.locator("nav").isVisible(), true);
+      await activate(toc.locator("a").first());
+      if (width <= 900) assert.equal(await toc.locator("nav").isVisible(), false);
+      await page.evaluate(() => scrollTo(0, 0));
+    }
     if (route.endsWith("/download")) {
       for (const channel of ["preview", "stable"]) {
-        await page.locator(`[data-channel="${channel}"]`).click();
+        await activate(page.locator(`[data-channel="${channel}"]`));
         assert.equal(await page.locator("[data-pkgs] a").count(), 18, `${channel} downloads`);
         assert.equal((await page.locator("[data-version]").textContent()).trim(),
           releases.downloads[channel].tag.slice(1));
       }
     }
-    if (route.endsWith("/guide")) {
-      await page.locator('[data-guide-select="tui"]').click();
-      assert.equal(await page.locator("#tui").isVisible(), true);
-      assert.equal(await page.locator("#gui").isVisible(), false);
-      assert.equal(await page.locator('[data-guide-for="gui"]:visible').count(), 0);
-      assert.ok((await page.locator("[data-set-lang]").getAttribute("href")).endsWith("#tui"));
-      if (route === "/guide") {
-        await page.screenshot({ path: path.join(output, `${width}-guide-tui.png`), fullPage: true });
-      }
-      await page.locator('[data-guide-select="gui"]').click();
-      await settleImages(page);
-      assert.equal(await page.locator("#gui").isVisible(), true);
-      assert.equal(await page.locator("#tui").isVisible(), false);
-      await page.goto(origin + route + "#tui-pages", { waitUntil: "load" });
-      assert.equal(await page.locator("#tui-pages").isVisible(), true);
-      await page.locator('[data-guide-select="gui"]').click();
+    if (["guide", "tui", "cli"].some(name => route.endsWith("/" + name))) {
+      assert.equal(await page.locator(".manual-nav a").count(), 3);
+      assert.equal(await page.locator(".manual-nav [aria-current]").count(), 1);
+    }
+    const imageLink = page.locator("[data-enlarge]").first();
+    if (await imageLink.count()) {
+      await activate(imageLink);
+      assert.equal(await page.locator("[data-image-view]").isVisible(), true);
+      const enlarged = page.locator("[data-image-view] img");
+      await enlarged.evaluate(image => image.decode());
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator("[data-image-view]").isVisible(), false);
+      assert.equal(await imageLink.evaluate(link => link === document.activeElement), true);
+      await activate(imageLink);
+      await activate(page.locator("[data-image-close]"));
+      assert.equal(await page.locator("[data-image-view]").isVisible(), false);
     }
     if (route === "/" || route === "/en/") {
       const shots = page.locator("[data-demo-frame]");
+      const height = await page.locator(".demo-view").evaluate(view => view.getBoundingClientRect().height);
       for (let index = 0; index < await shots.count(); index++) {
-        await page.locator(`[data-demo-step="${index}"]`).click();
+        await activate(page.locator(`[data-demo-step="${index}"]`));
         assert.equal(await shots.nth(index).isVisible(), true);
         assert.equal(await page.locator("[data-demo-frame]:visible").count(), 1);
+        assert.ok(Math.abs(await page.locator(".demo-view").evaluate(view => view.getBoundingClientRect().height) - height) < 2,
+          `Tour height changed: ${route} frame ${index}`);
       }
-      await page.locator('[data-demo-step="0"]').click();
+      await activate(page.locator('[data-demo-step="0"]'));
     }
     assert.deepEqual(errors, [], `${width} ${route}`);
-    if (["/", "/download", "/tools", "/guide", "/releases"].includes(route)) {
-      const name = route === "/" ? "home" : route.slice(1);
+    if (width !== 800 || !route.startsWith("/en/")) {
+      const name = route === "/" ? "home" : route === "/en/" ? "en-home" : route.slice(1).replaceAll("/", "-");
+      await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 0); });
       await page.screenshot({ path: path.join(output, `${width}-${name}.png`), fullPage: true });
     }
-    report.pages.push({ route, width, status: "passed" });
+    report.pages.push({ route, width, input: width === 360 ? "touch" : "mouse", status: "passed" });
     console.log(`Verified ${width}px ${route}`);
   } finally {
     await page.close();
@@ -143,10 +174,14 @@ async function checkHeroResizing(context, origin) {
             document.documentElement.style.zoom = String(zoom);
             const scene = document.querySelector(".hero .scene").getBoundingClientRect();
             const picture = document.querySelector(".hero .scene img").getBoundingClientRect();
-            return { scene: scene.width, picture: picture.width, left: picture.left - scene.left };
+            const image = document.querySelector(".hero .scene img");
+            return { scene: scene.width, picture: picture.width, left: picture.left - scene.left,
+              ratio: picture.width / picture.height, original: image.naturalWidth / image.naturalHeight,
+              overflow: document.documentElement.scrollWidth > innerWidth + 1 };
           }, zoom);
           assert.ok(geometry.scene > 0 && Math.abs(geometry.scene - geometry.picture) < 2 &&
-            Math.abs(geometry.left) < 2, `Hero resize ${route} ${width}px ${zoom}: ${JSON.stringify(geometry)}`);
+            Math.abs(geometry.left) < 2 && Math.abs(geometry.ratio - geometry.original) < .01 && !geometry.overflow,
+            `Hero resize ${route} ${width}px ${zoom}: ${JSON.stringify(geometry)}`);
         }
       }
       await page.evaluate(() => { document.documentElement.style.zoom = ""; });
@@ -157,6 +192,105 @@ async function checkHeroResizing(context, origin) {
   }
 }
 
+async function checkTour(origin) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: "block" });
+  await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+  const page = await context.newPage();
+  const active = () => page.locator('[data-demo-step][aria-pressed="true"]').getAttribute("data-demo-step");
+  try {
+    await page.goto(origin, { waitUntil: "load" });
+    await page.locator("[data-demo]").scrollIntoViewIfNeeded();
+    await page.mouse.move(1, 1);
+    const first = await active();
+    await page.waitForFunction(previous => document.querySelector('[data-demo-step][aria-pressed="true"]').dataset.demoStep !== previous,
+      first, { timeout: 7000 });
+    await page.locator("[data-demo-toggle]").focus();
+    const focused = await active();
+    await page.waitForTimeout(3900);
+    assert.equal(await active(), focused, "Tour moved while keyboard focus was inside");
+    await page.locator(".brand").first().evaluate(link => link.focus({ preventScroll: true }));
+    await page.waitForFunction(previous => document.querySelector('[data-demo-step][aria-pressed="true"]').dataset.demoStep !== previous,
+      focused, { timeout: 7000 });
+    await page.locator("[data-demo]").hover();
+    const hovering = await active();
+    await page.waitForTimeout(3900);
+    assert.equal(await active(), hovering, "Tour moved while hovered");
+    await page.mouse.move(1, 1);
+    await page.locator('[data-demo-step="2"]').click();
+    assert.equal(await page.locator("[data-demo-toggle]").getAttribute("aria-label"), "继续自动切换");
+    await page.locator(".brand").first().evaluate(link => link.focus({ preventScroll: true }));
+    await page.mouse.move(1, 1);
+    await page.waitForTimeout(3900);
+    assert.equal(await active(), "2", "Manual selection did not pause");
+    await page.locator("[data-demo-toggle]").click();
+    assert.equal(await page.locator("[data-demo-toggle]").getAttribute("aria-label"), "暂停自动切换");
+    await page.locator(".brand").first().evaluate(link => link.focus({ preventScroll: true }));
+    await page.mouse.move(1, 1);
+    await page.waitForFunction(() => document.querySelector('[data-demo-step][aria-pressed="true"]').dataset.demoStep !== "2",
+      null, { timeout: 7000 });
+    await page.locator('[data-demo-frame]:visible [data-enlarge]').click();
+    const enlarged = await active();
+    assert.equal(await page.locator("[data-image-view]").isVisible(), true);
+    await page.mouse.move(1, 1);
+    await page.waitForTimeout(3900);
+    assert.equal(await active(), enlarged, "Tour moved while the enlarged image was open");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("[data-image-view]").isVisible(), false);
+    assert.equal(await page.locator('[data-demo-frame]:visible [data-enlarge]').evaluate(link => link === document.activeElement), true);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.waitForFunction(() => document.querySelector("[data-demo-toggle]").disabled);
+    const reduced = await active();
+    await page.waitForTimeout(3900);
+    assert.equal(await active(), reduced, "Reduced motion did not stop autoplay");
+    assert.equal(await page.locator("[data-demo-status]").getAttribute("aria-live"), "off");
+    report.automatic_tour = "passed";
+  } finally {
+    await context.close();
+  }
+}
+
+async function checkDownloadFallbacks(origin) {
+  function record(channel) {
+    const snapshot = releases.downloads[channel];
+    const assets = Object.entries(snapshot.sizes).flatMap(([suffix, size]) => {
+      const name = `Clash-of-Rust-${snapshot.tag.slice(1)}-${suffix}`;
+      return [name, name + ".sha256"].map(file => ({ name: file, state: "uploaded", size: file === name ? size : 65,
+        browser_download_url: `https://github.com/Fu021/Clash-of-Rust/releases/download/${snapshot.tag}/${file}` }));
+    });
+    return { tag_name: snapshot.tag, draft: false, prerelease: channel === "preview",
+      published_at: snapshot.published, assets };
+  }
+  for (const mode of ["valid", "offline", "missing-checksum", "unsafe-url"]) {
+    const context = await browser.newContext({ viewport: { width: 360, height: 640 }, serviceWorkers: "block" });
+    await context.route("**/*", route => {
+      const url = new URL(route.request().url());
+      if (url.origin === origin) return route.continue();
+      if (url.hostname !== "api.github.com" || mode === "offline") return route.abort();
+      const stable = record("stable");
+      const preview = record("preview");
+      if (mode === "missing-checksum") preview.assets.pop();
+      if (mode === "unsafe-url") preview.assets[0].browser_download_url = "https://example.invalid/installer";
+      const json = url.pathname.endsWith("/releases/latest") ? stable
+        : url.pathname.endsWith("/releases") ? [preview, stable] : { stargazers_count: 1 };
+      return route.fulfill({ status: 200, json });
+    });
+    try {
+      const page = await context.newPage();
+      await page.goto(origin + "/download", { waitUntil: "load" });
+      const expected = mode === "valid" ? "已与 GitHub 核对。" : `显示 ${releases.checked} 的列表`;
+      await page.waitForFunction(text => document.querySelector("[data-fetch-state]").textContent.includes(text),
+        expected, { timeout: 10000 });
+      await page.locator('[data-channel="preview"]').click();
+      assert.equal(await page.locator("[data-pkgs] a").count(), 18);
+      assert.equal(await page.locator('[data-pkgs] a[href*="example.invalid"]').count(), 0);
+      assert.equal((await page.locator("[data-version]").textContent()).trim(), releases.downloads.preview.tag.slice(1));
+    } finally {
+      await context.close();
+    }
+  }
+  report.download_fallbacks = "passed";
+}
+
 async function run() {
   fs.mkdirSync(output, { recursive: true });
   await new Promise((resolve, reject) => {
@@ -165,13 +299,16 @@ async function run() {
   });
   const origin = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ headless: true });
-  for (const viewport of [{ width: 1280, height: 800 }, { width: 360, height: 640 }]) {
-    const context = await browser.newContext({ viewport, reducedMotion: "reduce", serviceWorkers: "block" });
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 800, height: 1280 }, { width: 360, height: 640 }]) {
+    const context = await browser.newContext({
+      viewport, reducedMotion: "reduce", serviceWorkers: "block",
+      isMobile: viewport.width === 360, hasTouch: viewport.width === 360,
+    });
     await context.route("**/*", route => new URL(route.request().url()).origin === origin
       ? route.continue() : route.abort());
     try {
-      for (const route of ["/", "/tools", "/guide", "/download", "/releases",
-        "/en/", "/en/tools", "/en/guide", "/en/download", "/en/releases"]) {
+      for (const route of ["/", "/start", "/guide", "/tui", "/cli", "/tools", "/download", "/releases",
+        "/en/", "/en/start", "/en/guide", "/en/tui", "/en/cli", "/en/tools", "/en/download", "/en/releases"]) {
         await checkPage(context, origin, route, viewport.width);
       }
       if (viewport.width === 1280) {
@@ -191,20 +328,30 @@ async function run() {
       await context.close();
     }
   }
+  await checkTour(origin);
+  await checkDownloadFallbacks(origin);
   const context = await browser.newContext({
     viewport: { width: 360, height: 640 }, javaScriptEnabled: false, serviceWorkers: "block",
   });
   try {
     const page = await context.newPage();
+    await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
     await page.goto(origin + "/download", { waitUntil: "load", timeout: 20000 });
     assert.equal(await page.locator("[data-pkgs] a").count(), 18);
     assert.equal(await page.locator('[data-channel="preview"]').isVisible(), false);
-    await page.goto(origin + "/guide", { waitUntil: "load", timeout: 20000 });
-    assert.equal(await page.locator("#gui").isVisible(), true);
-    assert.equal(await page.locator("#tui").isVisible(), true);
-    await page.goto(origin + "/en/guide", { waitUntil: "load", timeout: 20000 });
-    assert.equal(await page.locator("html").getAttribute("lang"), "en");
-    assert.equal(await page.locator("#tui").isVisible(), true);
+    for (const language of ["", "/en"]) {
+      for (const name of ["start", "guide", "tui", "cli"]) {
+        await page.goto(origin + language + "/" + name, { waitUntil: "load", timeout: 20000 });
+        assert.equal(await page.locator("html").getAttribute("lang"), language ? "en" : "zh-CN");
+        assert.equal(await page.locator("[data-toc] nav").isVisible(), true);
+        assert.equal(await page.locator(".doc section").first().isVisible(), true);
+      }
+      await page.goto(origin + language + "/guide#tui-pages", { waitUntil: "load", timeout: 20000 });
+      assert.equal(await page.locator("#tui-pages").isVisible(), true);
+      assert.equal(await page.locator('#tui a[href="tui.html"]').count(), 1);
+      await page.locator(".mobile-menu summary").click();
+      assert.equal(await page.locator(".mobile-menu nav").isVisible(), true);
+    }
     report.no_javascript = "passed";
   } finally {
     await context.close();

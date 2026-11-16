@@ -61,31 +61,49 @@ for (const figure of $$("[data-shots]")) {
   }
 }
 
-const guide = $("[data-guide]");
-if (guide) {
-  const panels = $$("[data-guide-panel]", guide);
-  const buttons = $$("[data-guide-select]", guide);
-  function selectGuide(name) {
-    for (const panel of panels) panel.hidden = panel.dataset.guidePanel !== name;
-    for (const button of buttons) button.setAttribute("aria-pressed", String(button.dataset.guideSelect === name));
-    for (const link of $$("[data-guide-for]", guide)) link.hidden = link.dataset.guideFor !== name;
-    for (const link of $$(".toc a", guide)) link.removeAttribute("aria-current");
-  }
-  function selectFromHash() {
-    const hash = location.hash.slice(1);
-    const target = document.getElementById(hash);
-    const panel = target?.closest("[data-guide-panel]");
-    if (panel) selectGuide(panel.dataset.guidePanel);
-    else if (!hash) selectGuide("gui");
-  }
-  for (const button of buttons) button.addEventListener("click", () => {
-    selectGuide(button.dataset.guideSelect);
-    history.replaceState(null, "", "#" + button.dataset.guideSelect);
-    syncLanguageLinks();
+const menu = $(".mobile-menu");
+if (menu) {
+  menu.addEventListener("keydown", event => {
+    if (event.key === "Escape" && menu.open) {
+      menu.open = false;
+      $("summary", menu).focus();
+    }
   });
-  selectGuide("gui");
-  selectFromHash();
-  window.addEventListener("hashchange", selectFromHash);
+  for (const link of $$("a", menu)) link.addEventListener("click", () => { menu.open = false; });
+}
+
+for (const toc of $$("[data-toc]")) {
+  const compact = window.matchMedia("(max-width: 900px)");
+  const sync = () => { toc.open = !compact.matches; };
+  sync();
+  compact.addEventListener("change", sync);
+  for (const link of $$("a", toc)) link.addEventListener("click", () => {
+    if (compact.matches) toc.open = false;
+  });
+}
+
+const imageView = $("[data-image-view]");
+if (imageView && typeof imageView.showModal === "function") {
+  let opener;
+  $("[data-image-close]", imageView).addEventListener("click", () => imageView.close());
+  for (const link of $$("[data-enlarge]")) link.addEventListener("click", event => {
+    if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    opener = link;
+    const image = $("img", imageView);
+    image.src = link.href;
+    image.alt = $("img", link).alt;
+    imageView.showModal();
+  });
+  imageView.addEventListener("click", event => {
+    if (event.target !== imageView) return;
+    const rect = imageView.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) imageView.close();
+  });
+  imageView.addEventListener("close", () => {
+    $("img", imageView).removeAttribute("src");
+    opener?.focus({ preventScroll: true });
+  });
 }
 
 const tocLinks = $$(".toc a[href^='#']");
@@ -222,18 +240,17 @@ if (downloads) {
     render();
   });
 }
-/* A user-started tour of genuine component screenshots. No network or proxy actions. */
+/* The tour uses genuine component screenshots and never changes network settings. */
 for (const tour of $$("[data-demo]")) {
   const frames = $$("[data-demo-frame]", tour);
   const steps = $$("[data-demo-step]", tour);
-  const play = $("[data-demo-play]", tour);
+  const toggle = $("[data-demo-toggle]", tour);
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let current = 0;
   let timer = null;
-  function pause() {
-    clearInterval(timer); timer = null;
-    play.setAttribute("aria-pressed", "false");
-    play.textContent = say("Play tour", "播放导览");
-  }
+  let inView = !("IntersectionObserver" in window);
+  let pausedByUser = false;
+  let hovering = false;
   function show(index, announce = true) {
     current = index;
     frames.forEach((frame,i) => { frame.hidden = i !== current; });
@@ -241,20 +258,51 @@ for (const tour of $$("[data-demo]")) {
     const status = $("[data-demo-status]",tour);
     status.setAttribute("aria-live", announce ? "polite" : "off");
     status.textContent = `${current+1} / ${frames.length} · ${steps[current].textContent}`;
+    toggle.disabled = motion.matches;
+    toggle.setAttribute("aria-pressed", String(pausedByUser || motion.matches));
+    toggle.textContent = motion.matches ? say("Motion off", "动效已关闭")
+      : pausedByUser ? say("Resume", "继续") : say("Pause", "暂停");
+    toggle.setAttribute("aria-label", motion.matches ? say("Reduced motion is enabled", "已遵循减少动态效果设置")
+      : pausedByUser ? say("Resume automatic switching", "继续自动切换") : say("Pause automatic switching", "暂停自动切换"));
   }
-  steps.forEach((button,index) => button.addEventListener("click", () => { pause(); show(index); }));
-  play.addEventListener("click", () => {
-    if (timer !== null) { pause(); return; }
-    play.textContent = say("Pause tour", "暂停导览"); play.setAttribute("aria-pressed", "true");
-    show((current+1)%frames.length);
-    timer = setInterval(() => show((current+1)%frames.length, false), 5000);
+  function canAdvance() {
+    return inView && !motion.matches && !pausedByUser && !hovering && !document.hidden
+      && !imageView?.open && !tour.contains(document.activeElement);
+  }
+  function schedule() {
+    clearTimeout(timer);
+    timer = null;
+    if (!canAdvance()) return;
+    timer = setTimeout(() => {
+      if (canAdvance()) show((current+1)%frames.length, false);
+      schedule();
+    }, 3500);
+  }
+  steps.forEach((button,index) => button.addEventListener("click", () => {
+    pausedByUser = true;
+    show(index);
+    schedule();
+  }));
+  toggle.addEventListener("click", () => {
+    pausedByUser = !pausedByUser;
+    show(current, false);
+    schedule();
   });
-  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  motion.addEventListener("change", () => { if (motion.matches) pause(); });
-  document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
-  window.addEventListener("pagehide", pause);
+  tour.addEventListener("mouseenter", () => { hovering = true; schedule(); });
+  tour.addEventListener("mouseleave", () => { hovering = false; schedule(); });
+  tour.addEventListener("focusin", schedule);
+  tour.addEventListener("focusout", event => {
+    if (!tour.contains(event.relatedTarget)) queueMicrotask(schedule);
+  });
+  motion.addEventListener("change", () => { show(current, false); schedule(); });
+  imageView?.addEventListener("close", schedule);
+  document.addEventListener("visibilitychange", schedule);
+  window.addEventListener("pagehide", () => { clearTimeout(timer); timer = null; });
+  window.addEventListener("pageshow", schedule);
   if ("IntersectionObserver" in window) new IntersectionObserver(entries => {
-    if (!entries[0].isIntersecting) pause();
+    inView = entries[0].isIntersecting;
+    schedule();
   }).observe(tour);
   show(0, false);
+  schedule();
 }

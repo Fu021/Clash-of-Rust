@@ -1,0 +1,137 @@
+<!-- title: CLI 功能手册 — Clash of Rust -->
+<!-- description: cor 命令行的安装位置、后台、订阅、节点、规则、网络检查、更新、服务、JSON、退出码与诊断导出。 -->
+<section class="page-head">
+  <div class="wrap"><h1>命令明确，结果可读。</h1><p class="lead">面向终端、脚本和 AI 的独立手册。首次连接见<a href="start.html#cli">CLI 快速上手</a>；所有命令仍与 GUI、TUI 同步维护。</p>{{manuals}}</div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/guide-small.webp"><img src="{{root}}assets/guide.webp" width="2172" height="724" alt="蓝猫在铁路边展开线路图，逐条核对连接方向。"></picture></div>
+</section>
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="本页目录"><p class="label">本页目录</p><a href="#install">找到 cor</a><a href="#runtime">后台与代理</a><a href="#profiles">订阅</a><a href="#nodes">节点与策略链</a><a href="#rules">规则</a><a href="#connections">连接与日志</a><a href="#network">检测与保护</a><a href="#config">配置</a><a href="#updates">软件与 Geo 更新</a><a href="#services">自启与服务</a><a href="#automation">脚本与退出码</a><a href="#diagnostics">诊断导出</a></nav>
+  <div>
+    <section id="install">
+      <h2>找到 cor</h2>
+      <p>桌面安装包已附带内核、Geo 与 CLI，不需要额外安装运行时。Android 不提供这个桌面命令行。</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>系统</th><th>入口</th></tr></thead><tbody><tr><th>Debian / Ubuntu</th><td>安装 DEB 后运行 <code>cor</code>，路径为 <code>/usr/bin/cor</code>。</td></tr><tr><th>Windows</th><td>运行安装目录下的 <code>cor.exe</code>，或自行将该目录加入 PATH。</td></tr><tr><th>macOS</th><td><code>/Applications/Clash of Rust.app/Contents/MacOS/cor</code>，可自建 PATH 符号链接。</td></tr></tbody></table></div>
+      <pre class="term" aria-label="查看版本与帮助">cor version
+cor help
+cor help all
+cor help profile add</pre>
+      <p>每条命令支持 <code>--help</code>。当前文档针对最新预发布版；旧安装包缺少命令时先核对版本。</p>
+    </section>
+    <section id="runtime">
+      <h2>后台与代理</h2>
+      <pre class="term" aria-label="后台与代理命令">cor start
+cor status
+cor mode rule
+cor proxy tun
+cor restart
+cor stop</pre>
+      <p><code>start</code> 在后台运行，关闭终端仍继续；<code>run</code> 是依赖当前终端的前台调试入口。代理可选 <code>system</code>、<code>tun</code>、<code>off</code>，模式可选 <code>rule</code>、<code>global</code>、<code>direct</code>。</p>
+      <p>GUI 已运行时复用同一后台。<code>status</code>、节点列表、连接查询、服务状态、帮助与版本不会启动后台或内核。TUN 沿用系统授权，<code>--yes</code> 不代替管理员许可。</p>
+      <p><code>cor env --shell bash</code> 只输出代理环境变量语句，不修改父终端；以 <code>--unset</code> 生成清除语句。完整运行边界见<a href="{{docs}}/cli/runtime.md">运行说明 ↗</a>。</p>
+    </section>
+    <section id="profiles">
+      <h2>订阅</h2>
+      <pre class="term" aria-label="订阅命令">cor profile add home 'https://example.com/subscription'
+cor profile use home
+cor profile list
+cor profile update --all
+cor profile import ./subscription.yaml --name local
+cor profile export home --output profile.yaml
+cor profile remove local --yes</pre>
+      <p>用完整 ID 或唯一名称定位订阅；重名使用 ID。支持本地路径或标准输入导入。更新失败保留原配置；全部更新有失败项时返回非零，其他成功项正常保存。</p>
+      <p>默认隐藏凭据，完整备份须显式加 <code>--show-secrets</code> 并妥善保存。内置默认直连不可删除；删除当前订阅会切回默认直连。元数据编辑与原文件边界见<a href="{{docs}}/cli/profiles-and-rules.md">订阅说明 ↗</a>。</p>
+    </section>
+    <section id="nodes">
+      <h2>节点与策略链</h2>
+      <pre class="term" aria-label="节点命令">cor node list
+cor node select
+cor node select PROXY '🇺🇸 US 01'
+cor node test --group PROXY
+cor node test --all</pre>
+      <p>示例组名和节点名要替换为订阅中的真实名称。交互支持筛选、编号、<code>/</code> 清除、<code>q</code> 或 EOF 取消；需要已运行的内核。脚本和 JSON 必须提供 GROUP NODE，含空格的值用 shell 引号。</p>
+      <p>离线列表读取已保存订阅，标记 <code>offline=true</code> 与 <code>source=saved_profile</code>，不冒充实时选择或测速。<code>status</code> 的规则参考链如 PROXY → AUTO → 节点，不代表每个连接；实际出口看连接详情。</p>
+    </section>
+    <section id="rules">
+      <h2>规则</h2>
+      <pre class="term" aria-label="规则命令">cor rule list --json
+cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1
+cor rule shortcut ads on</pre>
+      <p>自定义规则可编辑、移动、开关或删除；脚本使用列表返回的稳定 ID。位置从 1 开始，保存前校验重复和内核配置。订阅原规则只读，原始 YAML 不被重写。</p>
+      <p>快捷规则为 <code>ads</code>、<code>private-domain</code>、<code>private-ip</code>、<code>cn-domain</code>、<code>cn-ip</code>，默认关闭。<code>--profile</code> 可指定订阅。</p>
+    </section>
+    <section id="connections">
+      <h2>连接与日志</h2>
+      <pre class="term" aria-label="连接与日志查询">cor connection list
+cor connection show CONNECTION_ID
+cor --jsonl connection list --watch --sort download-rate
+cor logs --follow</pre>
+      <p>将 CONNECTION_ID 换成列表里的真实 ID。查询不启动内核；停止时单次连接列表为空并标记离线，详情和持续查询会说明不可用。关闭连接用 <code>cor connection close CONNECTION_ID</code>，原应用可能重连。</p>
+      <p>节点、连接与规则列表支持 <code>--limit</code>、<code>--offset</code>；默认 100，最大 10000，先筛选排序再分页。日志可能含域名和 IP，分享前检查。</p>
+    </section>
+    <section id="network">
+      <h2>检测与 Claude 保护</h2>
+      <pre class="term" aria-label="网络检测与保护">cor network check example.com
+cor network explain example.com --json
+cor network tls example.com --output tls-report.json
+cor ip-check --category AI --output ai-report.json
+cor claude protect on --yes
+cor claude protect off --yes</pre>
+      <p>完整工具、参数和报告状态见<a href="tools.html">网络工具</a>。检查不隐式启动内核，不把失败改成直连成功；保护开启或状态未知时禁止可能绕过保护的系统探针。</p>
+      <p>保护固定节点和严格 TUN，锁定网络修改，外观及只读操作可用；关闭后恢复原设置。它不保证第三方服务接受请求。</p>
+      <h3>环境与浏览器检查</h3>
+      <pre class="term" aria-label="Claude 环境、项目与浏览器检查">cor claude check --output claude-report.json
+cor claude audit --offline --output claude-projects.json
+cor claude browser --open --output browser-report.json
+cor claude watch</pre>
+      <p><code>check</code> 查看网络和地区线索；<code>audit --offline</code> 读取当前终端及已记录项目的配置，不发起检测请求。<code>browser --open</code> 打开本机采样页，需要真实浏览器参与；SSH 中没有浏览器时不伪造结果。这些检查不读取账户 Cookie 或登录令牌。</p>
+      <p><code>watch</code> 持续观察保护接管状态和相关连接，按 Ctrl+C 结束查询。检测完成的退出码为 0 只代表执行完成，可用性与风险仍看报告字段。</p>
+    </section>
+    <section id="config">
+      <h2>配置</h2>
+      <pre class="term" aria-label="读取与修改设置">cor config get
+cor config set theme_mode dark
+cor config set subscription_update_interval_minutes 720
+cor config set update_check_interval_minutes 0</pre>
+      <p>订阅和更新间隔单位为分钟，0 关闭，默认 360，最大 10080。纯 CLI 后台不额外启动软件自动检查任务。字段清单与可写范围由 <code>cor help config set</code> 提供；修改仍经共享校验。</p>
+      <pre class="term" aria-label="校验并导出运行配置">cor config check
+cor config effective --output effective.yaml</pre>
+      <p><code>check</code> 校验实际合并配置，<code>effective</code> 导出包含覆盖项的运行 YAML，默认移除凭据；不会改写原订阅。完整敏感内容仅在显式使用 <code>--show-secrets</code> 时提供。</p>
+      <p>同一账户默认与 GUI 共用数据。<code>--data-dir</code>、<code>--resources</code> 指定独立目录与资源；查询、更新和诊断要沿用原参数。Linux root 可用 <code>--user</code> 显式选择用户，TUN 不因此变成用户隔离网络。</p>
+    </section>
+    <section id="updates">
+      <h2>软件与 Geo 更新</h2>
+      <pre class="term" aria-label="更新命令">cor update check
+cor update install
+cor update status
+cor geo status
+cor geo update</pre>
+      <p>默认只检查正式版；<code>cor config set update_prereleases true</code> 纳入更高版本预发布。确认前显示实际目标，仅预发布目标附风险提示。安装与 Geo 都先校验，失败保留恢复信息。</p>
+      <p>Linux 无窗口时在当前终端授权、等待安装并自动恢复后台；<code>--no-start</code> 保留原内核开关状态。其他桌面交给系统安装助手，助手启动不等于安装成功。用 <code>update status</code> 查看实际结果。</p>
+      <p>无人值守可用 <code>cor update download --output cor-update.deb</code> 下载后交管理员安装，按平台换文件名。慢网可用 <code>--timeout N</code> 延长等待，默认 300 秒、最大 3600。</p>
+    </section>
+    <section id="services">
+      <h2>自启与服务</h2>
+      <pre class="term" aria-label="用户后台服务">cor service install --yes
+cor service status
+cor service remove --yes</pre>
+      <p>为当前用户配置登录后 CLI 后台自启，当前会话仍用 <code>start</code>。Linux 使用 systemd 用户单元，macOS 使用 LaunchAgent，Windows 使用当前用户登录任务。不是登录前的系统服务。</p>
+      <p>状态区分已配置、已启用、运行中和后台归属；未观测到的值保持未确认。<code>autostart on</code> 管理的是桌面后台自启，建议与 CLI 服务二选一。移除自启不停止当前内核。</p>
+    </section>
+    <section id="automation">
+      <h2>脚本与退出码</h2>
+      <pre class="term" aria-label="机器可读查询">cor --json status
+cor --json node list
+cor --jsonl status --watch</pre>
+      <p>JSON 外层包含 <code>schema</code>、<code>command</code>、<code>data</code>。结果写 stdout，进度、授权和错误写 stderr。<code>--json</code> 与 <code>--jsonl</code> 二选一，后者适合持续采样。</p>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>退出码</th><th>含义</th></tr></thead><tbody><tr><th>0</th><td>成功或下游管道关闭；检测可用性仍看报告字段。</td></tr><tr><th>1</th><td>操作、校验或权限失败。</td></tr><tr><th>2</th><td>命令或参数格式错误。</td></tr><tr><th>3</th><td>后台启动失败或不可达。</td></tr><tr><th>124</th><td>请求超时。</td></tr><tr><th>130</th><td>查询被中断。</td></tr></tbody></table></div>
+      <p><code>completion bash</code>、<code>zsh</code>、<code>fish</code>、<code>powershell</code> 输出补全脚本；<code>--no-color</code> 输出纯文本。AI 优先读取 JSON 和退出码，不猜屏幕坐标。</p>
+    </section>
+    <section id="diagnostics">
+      <h2>诊断导出</h2>
+      <pre class="term" aria-label="在线与离线诊断">cor diagnose --output cor-diagnose.json
+cor diagnose --offline --output cor-offline.json</pre>
+      <p>诊断不会启动后台或恢复 TUN；后台不可达时仍可导出离线报告。沿用原账户、<code>--user</code>、<code>--data-dir</code> 与 <code>--resources</code>。报告不自动上传，分享前检查域名、IP 及日志。</p>
+      <p>系统权限、用户隔离、全部参数见<a href="{{docs}}/cli.md">CLI 权威说明 ↗</a>。控制密钥只用于本机接口，不应分享 <code>control.json</code>。</p>
+    </section>
+  </div>
+</div>

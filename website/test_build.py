@@ -4,12 +4,17 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path
 import re
+import shutil
 import struct
+import tempfile
 import unittest
+from unittest import mock
 from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 import build
 from release_content import validate
+
+REPO_ROOT = build.ROOT.parent
 
 class Document(HTMLParser):
     def __init__(self):
@@ -26,14 +31,27 @@ class Document(HTMLParser):
 class SiteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        temporary = tempfile.TemporaryDirectory(prefix="cor-website-test-")
+        cls.addClassCleanup(temporary.cleanup)
+        original_root, original_dist = build.ROOT, build.DIST
+        cls.addClassCleanup(setattr, build, "ROOT", original_root)
+        cls.addClassCleanup(setattr, build, "DIST", original_dist)
+        build.ROOT = Path(temporary.name) / "website"
+        build.DIST = build.ROOT / "dist"
+        build.ROOT.mkdir()
+        for name in ("_headers", "_redirects", "robots.txt", "sitemap.xml"):
+            shutil.copyfile(original_root/name, build.ROOT/name)
+        icons = build.ROOT.parent / "resources/icons"
+        icons.mkdir(parents=True)
+        shutil.copyfile(REPO_ROOT/"resources/icons/wordmark-light.svg", icons/"wordmark-light.svg")
         cls.data=json.loads((build.SRC/'content/releases.json').read_text(encoding='utf-8'))
         build.build()
     def test_current_snapshot(self):
         validate(self.data)
     def test_tool_catalog_matches_the_shared_cli_and_both_languages(self):
         catalog = json.loads((build.SRC/'content/tools.json').read_text())
-        core = (build.ROOT.parent/'crates/client-core/src/detection/tools/mod.rs').read_text()
-        commands = (build.ROOT.parent/'apps/cli/src/args.rs').read_text()
+        core = (REPO_ROOT/'crates/client-core/src/detection/tools/mod.rs').read_text()
+        commands = (REPO_ROOT/'apps/cli/src/args.rs').read_text()
         identifier_body = core.split("pub fn id(self)")[1].split("pub fn title(self)")[0]
         identifiers = re.findall(r'Self::\w+ => "([^"]+)"', identifier_body)
         self.assertEqual([tool['id'] for tool in catalog['tools']], identifiers)
@@ -62,7 +80,7 @@ class SiteTests(unittest.TestCase):
         docs={}
         for path in build.DIST.rglob('*.html'):
             parser=Document();parser.feed(path.read_text(encoding='utf-8'));docs[path.resolve()]=parser
-        self.assertEqual(len(docs),10)
+        self.assertEqual(len(docs), 2 * len(build.PAGES))
         for path,doc in docs.items():
             for ref in doc.refs:
                 url=urlsplit(ref)
@@ -81,7 +99,10 @@ class SiteTests(unittest.TestCase):
         self.assertIn('Sitemap: https://clash-of-rust.fu021.shop/sitemap.xml',
                       (build.DIST/'robots.txt').read_text())
         entries = ET.parse(build.DIST/'sitemap.xml').getroot()
-        self.assertEqual(len(entries), 10)
+        self.assertEqual(len(entries), 2 * len(build.PAGES))
+        self.assertEqual({urlsplit(entry[0].text).path for entry in entries},
+                         {prefix + ('' if name == 'index' else name)
+                          for prefix in ('/', '/en/') for name in build.PAGES})
         for entry in entries:
             url = urlsplit(entry[0].text)
             self.assertEqual(url.netloc, 'clash-of-rust.fu021.shop')
@@ -118,25 +139,54 @@ class SiteTests(unittest.TestCase):
                 self.assertNotIn('Illustrations were made', source)
                 self.assertNotIn('插画为本站绘制', source)
         self.assertNotIn('navigator.language', (build.SRC/'site.js').read_text())
-    def test_bilingual_structure_and_guide_commands_match(self):
+    def test_bilingual_structure_and_manual_commands_match(self):
         for name in build.PAGES:
             chinese = (build.DIST/(name+'.html')).read_text()
             english = (build.DIST/'en'/(name+'.html')).read_text()
             zh = Document(); zh.feed(chinese)
             en = Document(); en.feed(english)
             self.assertEqual(zh.ids, en.ids, name)
-            if name == 'guide':
+            if name in ('start', 'guide', 'tui', 'cli', 'tools'):
                 commands = r'<pre class="term"[^>]*>(.*?)</pre>'
                 self.assertEqual(re.findall(commands,chinese,re.S), re.findall(commands,english,re.S))
-                for document in (zh,en):
-                    panels = {attrs['data-guide-panel'] for tag,attrs in document.elements if 'data-guide-panel' in attrs}
-                    self.assertEqual(panels, {'gui','tui'})
-                    self.assertTrue(any(attrs.get('href','').endswith('/cli/tui.md') for tag,attrs in document.elements))
-    def test_current_gui_and_real_terminal_captures(self):
+    def test_independent_manuals_and_legacy_anchors(self):
+        self.assertTrue({'start', 'guide', 'tui', 'cli'} <= set(build.PAGES))
+        legacy = {'gui', 'tui', 'cli', 'tui-first', 'tui-pages', 'tui-manage', 'first',
+                  'subscriptions', 'modes', 'rules', 'android', 'checks', 'protection', 'updates', 'trouble'}
+        for language in ('', 'en'):
+            guide = (build.DIST/language/'guide.html').read_text()
+            parser = Document(); parser.feed(guide)
+            self.assertTrue(legacy <= parser.ids)
+            self.assertNotIn('command-side', guide)
+            self.assertNotIn('data-guide-panel', guide)
+            for name in ('guide', 'tui', 'cli'):
+                document = Document()
+                document.feed((build.DIST/language/(name+'.html')).read_text())
+                manual_links = {attrs['href'] for tag, attrs in document.elements
+                                if tag == 'a' and attrs.get('href') in ('guide.html', 'tui.html', 'cli.html')}
+                self.assertEqual(manual_links, {'guide.html', 'tui.html', 'cli.html'})
+                self.assertTrue(any(tag == 'details' and 'data-toc' in attrs for tag, attrs in document.elements))
+    def test_all_pages_have_illustrations_and_exact_readme_wordmark(self):
+        self.assertEqual((build.DIST/'assets/wordmark.svg').read_bytes(),
+                         (REPO_ROOT/'resources/icons/wordmark-light.svg').read_bytes())
+        for page in build.DIST.rglob('*.html'):
+            document = Document(); document.feed(page.read_text())
+            self.assertTrue(any(tag == 'img' and attrs.get('src', '').endswith('.webp')
+                                and attrs.get('alt') for tag, attrs in document.elements), page.name)
+            self.assertTrue(any(tag == 'img' and attrs.get('src', '').endswith('wordmark.svg')
+                                for tag, attrs in document.elements), page.name)
+        for language in ('', 'en'):
+            home = (build.DIST/language/'index.html').read_text()
+            self.assertNotIn('hero-narrow.webp', home)
+            self.assertNotIn('data-demo-play', home)
+    def test_traceable_gui_and_real_terminal_captures(self):
         captures = json.loads((build.SRC/'content/screenshots.json').read_text())
         terminal = json.loads((build.SRC/'content/terminal.json').read_text())
-        versions = {record['version'] for record in [*captures.values(),*terminal.values()]}
-        self.assertEqual(versions, {self.data['downloads']['preview']['tag'][1:]})
+        published = {release['version'] for release in self.data['releases']}
+        self.assertEqual(len({capture['version'] for capture in captures.values()}), 1)
+        for record in [*captures.values(), *terminal.values()]:
+            self.assertIn(record['version'], published)
+            self.assertRegex(record['commit'], r'^[0-9a-f]{40}$')
         self.assertEqual(set(captures), set(build.CAPTURES))
         for capture in captures.values():
             image = (build.SRC/'assets'/capture['file']).read_bytes()
@@ -148,19 +198,22 @@ class SiteTests(unittest.TestCase):
             self.assertEqual(frame['source'],'actual-cor-pty')
             self.assertTrue(any(frame['version'] in line['text'] for line in frame['lines']))
         for language in ('','en'):
-            for page in ('index','guide','tools'):
+            for page in ('index','start','guide','tui','tools'):
                 source = (build.DIST/language/(page+'.html')).read_text()
                 self.assertIn('data-capture-version=',source)
-                self.assertIn('terminal-capture',source)
+                if page != 'guide':
+                    self.assertIn('terminal-capture',source)
                 self.assertNotIn('app-home-light.webp',source)
                 self.assertNotIn('app-network.webp',source)
     def test_preview_embeds_assets(self):
         import export_preview
-        export_preview.export()
+        with mock.patch.multiple(export_preview, ROOT=build.ROOT, DIST=build.DIST):
+            export_preview.export()
         parser=Document();parser.feed((build.ROOT/'preview.html').read_text(encoding='utf-8'))
         self.assertEqual(parser.refs,[])
         source=(build.ROOT/'preview.html').read_text(encoding='utf-8')
         self.assertTrue('data:font/woff2;base64,' in source, 'Missing embedded WOFF2 font')
         self.assertTrue('data:image/webp;base64,' in source, 'Missing embedded WebP image')
+        self.assertTrue('data:image/svg+xml;base64,' in source, 'Missing embedded README wordmark')
 
 if __name__=='__main__':unittest.main()

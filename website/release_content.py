@@ -42,7 +42,7 @@ def validate(data):
         if set(snapshot['sizes']) != set(SUFFIXES) or not all(type(n) is int and n > 0 for n in snapshot['sizes'].values()):
             raise ValueError('Expected nine positive package sizes: ' + channel)
 
-def render(data, lang, repo, compact=False):
+def render(data, lang, repo, compact=False, root=''):
     zh = lang == 'zh'
     labels = {'stable':'正式版' if zh else 'Stable', 'preview':'预发布版' if zh else 'Preview'}
     rows = data['releases']
@@ -65,4 +65,6 @@ def render(data, lang, repo, compact=False):
     if compact:
         return '<section class="part versions"><div class="wrap"><div class="version-heading"><h2>'+('一路更新' if zh else 'Along the way')+'</h2><a href="releases.html">'+('查看版本记录 →' if zh else 'All version notes →')+'</a></div>'+content+'</div></section>'
     series = escape(data['series'])
-    return '<section class="page-head"><div class="wrap"><h1>'+('版本记录' if zh else 'Release notes')+'</h1><p class="lead">'+(f'{series}.x 的主要更新。' if zh else f'Highlights from {series}.x.')+'</p></div></section><section class="wrap doc versions"><p>'+('完整历史见 ' if zh else 'Full history: ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>'+('。' if zh else '.')+'</p>'+content+'</section>'
+    alt = '蓝猫在车站张贴新的线路告示。' if zh else 'The blue cat puts up a new railway notice at the station.'
+    banner = f'<div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{root}assets/versions-small.webp"><img src="{root}assets/versions.webp" width="2172" height="724" alt="{alt}"></picture></div>'
+    return '<section class="page-head"><div class="wrap"><h1>'+('版本记录' if zh else 'Release notes')+'</h1><p class="lead">'+(f'{series}.x 的主要更新。' if zh else f'Highlights from {series}.x.')+'</p></div>'+banner+'</section><section class="wrap doc versions"><p>'+('完整历史见 ' if zh else 'Full history: ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>'+('。' if zh else '.')+'</p>'+content+'</section>'

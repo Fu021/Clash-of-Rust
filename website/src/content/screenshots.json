@@ -4,8 +4,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -14,8 +14,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -24,8 +24,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -34,8 +34,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -44,8 +44,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -54,8 +54,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -64,8 +64,8 @@
     "width": 393,
     "height": 852,
     "platform": "android",
-    "version": "0.7.2-fix.3.network-toolbox",
-    "commit": "6fd88215ed086f2ad31247aaec39f1c73ef18407",
+    "version": "0.7.2-fix.4.network-inspection",
+    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514",
     "theme": "light",
     "source": "production-slint-preview"
   }

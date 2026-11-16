@@ -1,0 +1,81 @@
+<!-- title: TUI 功能手册 — Clash of Rust -->
+<!-- description: cor ui 的六个页面、按键、表单、系统授权、网络工具与退出恢复，独立于 GUI 和脚本教程。 -->
+<section class="page-head">
+  <div class="wrap"><h1>在终端里，也能按步操作。</h1><p class="lead">用列表与表单管理同一后台，无需先记住命令。本手册对应当前预发布版；首次使用见<a href="start.html#tui">TUI 快速上手</a>。</p>{{manuals}}</div>
+  <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/terminal-small.webp"><img src="{{root}}assets/terminal.webp" width="2172" height="724" alt="夜色中的铁路调度室，蓝猫守着亮起的操作台。"></picture></div>
+</section>
+<div class="wrap doc with-toc">
+  <nav class="toc" aria-label="本页目录"><p class="label">本页目录</p><a href="#first">打开与退出</a><a href="#keys">通用按键</a><a href="#pages">六个页面</a><a href="#nodes">节点选择</a><a href="#connections">连接详情</a><a href="#network">网络工具</a><a href="#settings">设置表单</a><a href="#manage">操作与授权</a><a href="#protection">保护与只读</a><a href="#trouble">故障恢复</a></nav>
+  <div>
+    <section id="first">
+      <h2>打开与退出</h2>
+      <pre class="term" aria-label="启动或离线演示">cor ui
+cor ui --demo</pre>
+      <p>Windows、Linux、macOS 安装包附带 cor。需要真实交互终端，最小 60 列 × 18 行；太小时显示调整提示。演示模式使用虚构数据，不联网、不保存。</p>
+      <p>打开、浏览和退出不自行启动后台或内核。没有后台时可在“操作”页启动；<kbd>q</kbd> / <kbd>Ctrl+C</kbd> 退出后，既有后台和代理继续运行。终端字体决定 emoji 是否可见。</p>
+      {{terminal:home}}
+    </section>
+    <section id="keys">
+      <h2>通用按键</h2>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>按键</th><th>用途</th></tr></thead><tbody>
+        <tr><th><kbd>1</kbd>–<kbd>6</kbd> / <kbd>Tab</kbd></th><td>切换页面；表单内 Tab 选择下一项。</td></tr>
+        <tr><th><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></th><td>选择项目，打开详情或编辑；执行前确认。</td></tr>
+        <tr><th><kbd>/</kbd> / <kbd>Ctrl+U</kbd></th><td>开始搜索或输入；清空输入。</td></tr>
+        <tr><th><kbd>Esc</kbd> / 退格</th><td>返回组列表、清除搜索或取消确认。</td></tr>
+        <tr><th><kbd>r</kbd></th><td>立即重试读取。</td></tr>
+        <tr><th><kbd>q</kbd> / <kbd>Ctrl+C</kbd></th><td>退出 TUI，恢复终端显示。</td></tr>
+      </tbody></table></div>
+      <p>输入字段时，页面快捷键按普通文本处理。可使用 <code>--no-color</code> 或 <code>NO_COLOR</code> 关闭颜色。</p>
+    </section>
+    <section id="pages">
+      <h2>六个页面</h2>
+      <dl class="facts">
+        <div class="sleepers"><dt>1 · 首页</dt><dd>内核与后台状态、订阅、参考策略链、保护、速率和连接数。</dd></div>
+        <div class="sleepers"><dt>2 · 节点</dt><dd>搜索策略组与节点，查看延迟，在手动组中确认选择。</dd></div>
+        <div class="sleepers"><dt>3 · 连接</dt><dd>筛选活动连接，查看详情并进入关闭连接操作。</dd></div>
+        <div class="sleepers"><dt>4 · 网络</dt><dd>按需选择工具、填写目标、运行并查看当前结果。</dd></div>
+        <div class="sleepers"><dt>5 · 设置</dt><dd>查看设置值，编辑可修改项，检查后提交。</dd></div>
+        <div class="sleepers"><dt>6 · 操作</dt><dd>通过命令目录生成的表单管理订阅、规则、更新、服务等。</dd></div>
+      </dl>
+      <p>只读取当前页所需数据，每秒采样，绘制只更新变化行；不积累连接或命令输出历史。</p>
+    </section>
+    <section id="nodes">
+      <h2>节点选择</h2>
+      <p>按 <kbd>2</kbd>，搜索并打开手动策略组，选择成员后再次确认。名称中的空格、emoji 和标点原样保留；自动组只显示内核当前选择，不能手动改其成员。</p>
+      <p>等待确认期间若订阅、成员或保护状态改变，提交会重新校验。上级手动组选择 AUTO 后，AUTO 内部正常换节点不会误判目标消失。</p>
+    </section>
+    <section id="connections">
+      <h2>连接详情</h2>
+      <p>按 <kbd>3</kbd> 选中连接后回车，查看域名、目标 IP/端口、协议、时间、规则、实际线路和流量。<kbd>d</kbd> 补充解析详情，<kbd>x</kbd> 打开关闭连接确认。</p>
+      <p>连接已消失时会说明原 ID 已不可用，不把其他连接替换进详情。关闭后，原应用可能自动重新连接。</p>
+    </section>
+    <section id="network">
+      <h2>网络工具</h2>
+      <p>按 <kbd>4</kbd>，用 <kbd>[</kbd> / <kbd>]</kbd> 切换工具。<kbd>/</kbd> 输入目标，回车结束输入，再按回车运行；<kbd>↑</kbd> / <kbd>↓</kbd> 滚动结果，<kbd>Esc</kbd> 取消。</p>
+      {{terminal:network}}
+      <p>配置差异、流量分解和内核运行不需要目标。节点详情使用完整节点名。直接检查采用默认参数；在“操作”页可填写次数、时限等选项。切页取消并清除结果。</p>
+      <p><a href="tools.html">逐项查看工具、参数与限制 →</a></p>
+    </section>
+    <section id="settings">
+      <h2>设置表单</h2>
+      <p>按 <kbd>5</kbd>，回车编辑可修改项；只读项查看完整值。代理、订阅、规则和保护使用各自的专用操作。密钥不显示、不回填。</p>
+      <p>草稿不写盘。选“检查并执行”后再次回车才提交；取消本项恢复编辑前内容，退出表单丢弃草稿。后台仍会校验数值、权限与当前状态。</p>
+    </section>
+    <section id="manage">
+      <h2>操作与授权</h2>
+      <p>按 <kbd>6</kbd> 搜索操作，例如 <code>profile add</code>、<code>rule add</code>、<code>update install</code>、<code>service status</code>。位置参数与选项分别填写，字段内不需要 shell 引号；数组使用 JSON，布尔选项填 <code>true</code> 或留空。</p>
+      <p>确认后暂时回到普通终端，显示结果、下载进度或系统授权，不跳过确认与系统权限。完成后按 Enter 返回；安装完成或交接后退出 TUI，以释放需要被替换的程序。</p>
+      <p>授权或持续命令期间 Ctrl+C 会退出整个 CLI，已提交操作仍以实际状态为准。前台调试 <code>run</code> 和再次打开 <code>ui</code> 不放入表单。</p>
+    </section>
+    <section id="protection">
+      <h2>保护与只读</h2>
+      <p>Claude 保护期间可导航、查看状态、读取报告和修改纯外观。订阅、节点、规则、更新、Geo、自启动等网络修改继续锁定，表单不另设权限后门。</p>
+      <p>读取失败时旧快照标为参考，不能据此提交。打开 TUI 不会通过测速或浏览隐式启动停止的内核。</p>
+    </section>
+    <section id="trouble">
+      <h2>故障恢复</h2>
+      <p>先按 <kbd>r</kbd> 重读状态；终端太小时扩大窗口。不能恢复时退出，用独立的<a href="cli.html#diagnostics">诊断导出</a>，沿用原账户和数据目录。</p>
+      <p>TUI 不依赖固定颜色或屏幕坐标。自动化优先使用<a href="cli.html#automation">CLI JSON 与退出码</a>。完整终端行为见<a href="{{docs}}/cli/tui.md">权威说明 ↗</a>。</p>
+    </section>
+  </div>
+</div>
