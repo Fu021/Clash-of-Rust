@@ -373,6 +373,23 @@ pub async fn run(engine: &mut Engine, profile: &Path) {
         .await
         .unwrap();
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
+    let mut runtime: yaml_serde::Value = yaml_serde::from_str(
+        &std::fs::read_to_string(engine.store.runtime().join("config.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert!(runtime["dns"]["listen"].is_null());
+    runtime["dns"]["listen"] = format!("127.0.0.1:{listen_port}").into();
+    runtime["tun"]["enable"] = true.into();
+    engine
+        .api
+        .reload(&yaml_serde::to_string(&runtime).unwrap())
+        .await
+        .unwrap();
+    let live: serde_json::Value = engine.api.get("configs").await.unwrap();
+    assert_eq!(live["tun"]["enable"], true);
+    tokio::net::TcpStream::connect(("127.0.0.1", listen_port))
+        .await
+        .expect("The managed fixture DNS listener must accept TCP connections");
     let enable = move || service::protection_dns_at(Some(listen_port));
     let error = tokio::task::spawn_blocking(enable)
         .await

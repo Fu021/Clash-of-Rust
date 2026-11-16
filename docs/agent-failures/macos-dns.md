@@ -22,6 +22,8 @@ CI `43694713473` 的 Intel Mac 先在 TUN 子会话就绪时超时，再在诊�
 
 ## 应用 DNS 接管
 
+原生集成夹具不能依赖订阅中的 `dns.listen`：共享运行配置会移除此字段。测试先断言清洗结果，再通过已认证控制器给实际内核显式加载本机高端口监听，保留 TUN，并确认 TCP 监听就绪后验证分域冲突和真实 DNS 流量。CI `43845022867` 的两种 macOS 架构曾在预期的分域冲突断言前收到 `Connection refused`；这是夹具仍依赖旧配置契约，不应通过放宽订阅监听清洗或将查询直接转给上游桩来规避。
+
 Tailscale 的独立补充分域解析器可以继续成为 macOS 全局 DNS，即使本应用已修改各网络服务的 DNS；因此不能把网络服务写入成功当成保护生效，也不应要求用户关闭 Tailscale DNS。[CI 40470411381](https://github.com/Fu021/Clash-of-Rust/actions/runs/40470411381) 证实独立临时解析器可能未被系统选中；[CI 40478327297](https://github.com/Fu021/Clash-of-Rust/actions/runs/40478327297) 与[故障实验 40481813828](https://github.com/Fu021/Clash-of-Rust/actions/runs/40481813828) 进一步证明默认解析器竞争和 DNS 故障回退可落到 VPN 或物理网络，不能仅调整优先级或仅验证首选路径。
 
 修复采用可撤销的动态服务 DNS 覆盖：默认解析器统一指向助手独占的 `127.0.0.1:53`，仅转发到内核随机高端口，根分域中的私有/搜索后缀克隆为独立分域，保留原服务器、端口和接口，不复制 configd 生成的内部身份。覆盖 State 和 Setup 运行缓存而不写 SCPreferences；Apple 的 [configd 合并逻辑](https://github.com/apple-oss-distributions/configd/blob/main/Plugins/IPMonitor/ip_plugin.c)优先采用 Setup 服务器，不能只改 State。标准端口兼容不识别 `ServerPort` 的 `resolv.conf` 客户端，回归包括原生解析和 `dig` TCP/UDP；端口占用须先拒绝接管，转发应有并发与超时限制并随租约清理。SCDynamicStore 通知由同一助手线程串行处理重连与恢复；先保存新旧并集的恢复记录，再原子写入全部变化。恢复按托管地址/端口和分域字段组比较，保留外部修改，不重建已删除服务。运行中出现冲突时隔离为本机 DNS 并报告，不能以恢复 VPN 默认 DNS 处理错误；失败后限频重试。旧 journal 仍可清理，助手协议升级见[代理状态与安全恢复](desktop.md#系统代理状态与安全恢复)。
