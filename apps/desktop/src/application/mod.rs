@@ -374,6 +374,10 @@ struct App {
     error: bool,
     notice_critical: bool,
     notice_network_recovery: bool,
+    notice_update_failure: bool,
+    pending_update_failure: Option<String>,
+    installation_root: Option<std::path::PathBuf>,
+    installation_notice: Option<(std::path::PathBuf, update::InstallationStatus)>,
     core_failure: Option<String>,
     notice_visible: bool,
     notice_started: Option<std::time::Instant>,
@@ -430,7 +434,9 @@ impl App {
         }
         app.set_window_size(window_state.size());
         app.window_state = window_state;
-        app.prepare_initialization();
+        app.prepare_initialization(update::startup_outcome());
+        app.installation_root = Store::default_root().ok();
+        app.read_installation_notice(None);
         app.trace_startup("process_start");
         if let Ok(store) = startup_store() {
             app.startup_trace.persist(store.root);
@@ -464,15 +470,19 @@ impl App {
         )
     }
 
-    fn prepare_initialization(&mut self) {
+    fn prepare_initialization(&mut self, update_outcome: Option<(String, bool)>) {
         self.core_failure = None;
         self.error = false;
         self.notice_visible = false;
         self.notice_critical = false;
+        self.notice_update_failure = false;
         self.busy = true;
         self.working = true;
         if let Some(error) = self.tray_failure.clone() {
             self.show_notice(tray_unavailable(&error), true);
+        }
+        if let Some((message, error)) = update_outcome {
+            self.update_outcome(message, error);
         }
     }
 
@@ -520,7 +530,7 @@ impl App {
                 None => (None, None, notice, error),
             };
         let core_failure = engine.is_none().then(|| notice.clone());
-        let mut app = Self {
+        Self {
             confirmation: None,
             profile_editor: None,
             import_open: false,
@@ -565,6 +575,10 @@ impl App {
             error,
             notice_critical: core_failure.is_some(),
             notice_network_recovery: false,
+            notice_update_failure: false,
+            pending_update_failure: None,
+            installation_root: None,
+            installation_notice: None,
             core_failure,
             notice_visible: error,
             notice_started: error.then(std::time::Instant::now),
@@ -631,11 +645,7 @@ impl App {
             network_test_generation: 0,
             network_test_task: None,
             updates: update::State::default(),
-        };
-        if let Some((message, error)) = update::startup_outcome() {
-            app.update_outcome(message, error);
         }
-        app
     }
 
     fn ready_to_retry(&self) -> bool {
@@ -958,8 +968,17 @@ impl App {
                 }
             },
             Message::DismissNotice => {
+                if self.notice_update_failure {
+                    if !self.acknowledge_update_failure() {
+                        return Task::none();
+                    }
+                    if self.updates.failure == self.pending_update_failure {
+                        self.updates.failure = None;
+                    }
+                    self.pending_update_failure = None;
+                }
                 self.dismiss_notice();
-                self.updates.failure = None;
+                self.restore_update_failure();
             }
             Message::UnreachableRecovered(generation, result) => {
                 if generation != self.delay_generation || self.recovery_aborter.take().is_none() {
@@ -1041,6 +1060,7 @@ impl App {
                     return Task::none();
                 }
                 self.dismiss_notice();
+                self.restore_update_failure();
                 if self.engine.is_some() && !self.backend_remote {
                     return self.dispatch(Action::Start);
                 }
@@ -2055,6 +2075,7 @@ impl App {
                     if !error {
                         return self.exit();
                     }
+                    self.read_installation_notice(Some(&session.directory));
                     update::cleanup(&session.directory);
                 }
                 if platform::exit_requested()
@@ -2263,6 +2284,7 @@ impl App {
                 if reply.running {
                     if self.core_failure.is_some() && self.notice_critical {
                         self.dismiss_notice();
+                        self.restore_update_failure();
                     }
                     self.core_failure = None;
                 } else if core_failed {
@@ -2587,8 +2609,7 @@ impl App {
 
     fn install_download(&mut self, downloaded: Arc<update::Downloaded>) -> Task<Message> {
         if self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some() {
-            self.updates
-                .fail(clash_client_core::protection::READ_ONLY_NOTICE.into());
+            self.fail_update(clash_client_core::protection::READ_ONLY_NOTICE.into());
             return Task::none();
         }
         self.updates.prepare_install(downloaded.clone());
@@ -3301,7 +3322,7 @@ mod async_state_tests {
     fn core_initialization_preserves_a_tray_failure_as_a_recoverable_warning() {
         let mut app = app();
         app.tray_failure = Some("当前桌面没有可用托盘宿主".into());
-        app.prepare_initialization();
+        app.prepare_initialization(None);
         assert!(app.core_failure.is_none());
         assert!(app.error && app.notice_visible);
         assert!(!app.notice_critical);
@@ -3315,6 +3336,34 @@ mod async_state_tests {
         app.show_notice("内核已启动".into(), false);
         assert!(app.error && app.notice_visible);
         assert_eq!(app.notice, expected);
+    }
+
+    #[test]
+    fn initialization_presents_update_failure_after_clearing_the_placeholder_error() {
+        let mut app = app();
+        let failure = "更新失败：安装程序退出（代码 68）；请检查安装目录写入权限后重试";
+        app.prepare_initialization(Some((failure.into(), true)));
+        assert!(app.core_failure.is_none());
+        assert!(app.busy && app.working);
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+        assert_eq!(app.notice, failure);
+        assert_eq!(app.updates.failure.as_deref(), Some(failure));
+        assert_eq!(app.issue_events.back().unwrap()["error"], failure);
+        let _ = app.update(Message::NoticeExpired(app.notice_revision));
+        app.show_notice("内核已启动".into(), false);
+        assert_eq!(app.notice, failure);
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+    }
+
+    #[test]
+    fn successful_update_initialization_keeps_the_tray_warning_actionable() {
+        let mut app = app();
+        app.tray_failure = Some("当前桌面没有可用托盘宿主".into());
+        app.prepare_initialization(Some(("已更新至测试版本".into(), false)));
+        assert!(app.core_failure.is_none());
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+        assert!(app.notice.contains("当前桌面没有可用托盘宿主"));
+        assert_eq!(app.updates.outcome.as_deref(), Some("已更新至测试版本"));
     }
 
     #[test]

@@ -68,6 +68,9 @@ def main():
                  'update_preparation_releases_owner', '--', '--test-threads=1'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for case in ('application::ui_tests::network_report_is_replaced_and_late_results_cannot_reappear_after_navigation',
+                     'application::ui_tests::startup_install_failure_reaches_the_visible_recoverable_notice_and_close_action',
+                     'application::async_state_tests::initialization_presents_update_failure_after_clearing_the_placeholder_error',
+                     'application::async_state_tests::successful_update_initialization_keeps_the_tray_warning_actionable',
                      'application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions',
                      'application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release',
                      'application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it',

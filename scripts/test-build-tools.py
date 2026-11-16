@@ -2077,6 +2077,9 @@ class BuildTests(unittest.TestCase):
                    command[command.index('-p')+1] == 'clash-of-rust'
                    or 'mobile_lists' in command]
         for case in (
+                'application::ui_tests::startup_install_failure_reaches_the_visible_recoverable_notice_and_close_action',
+                'application::async_state_tests::initialization_presents_update_failure_after_clearing_the_placeholder_error',
+                'application::async_state_tests::successful_update_initialization_keeps_the_tray_warning_actionable',
                 'application::ui_tests::protection_locks_rule_controls_and_proxy_mode_without_a_warning_or_draft_change',
                 'application::ui_tests::protection_rejects_confirmations_that_would_save_or_delete',
                 'application::ui_tests::a_stopped_protected_core_exposes_a_retry_without_disabling_protection',

@@ -23,8 +23,61 @@ pub struct InstallationStatus {
     pub error: bool,
     pub updated_at: u64,
     directory: PathBuf,
+    #[serde(default)]
+    acknowledged: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     installer_failure: Option<windows::Failure>,
+}
+
+impl InstallationStatus {
+    pub fn needs_notification(&self) -> bool {
+        self.error && self.state == "failed" && !self.acknowledged
+    }
+
+    pub fn matches_directory(&self, directory: &Path) -> bool {
+        self.directory == directory
+    }
+
+    pub fn acknowledge(&self, data_dir: &Path) -> Result<bool> {
+        if !self.needs_notification() {
+            return Ok(false);
+        }
+        let lock = open_installation_lock(data_dir)?;
+        lock.try_lock()
+            .context("无法锁定安装记录进行确认，请稍后重试")?;
+        let Some(mut current) = installation_status(data_dir)? else {
+            return Ok(false);
+        };
+        if !current.needs_notification()
+            || current.directory != self.directory
+            || current.version != self.version
+            || current.state != self.state
+            || current.updated_at != self.updated_at
+            || current.message != self.message
+        {
+            return Ok(false);
+        }
+        current.acknowledged = true;
+        crate::config::atomic_write(
+            &data_dir.join("update-install.json"),
+            &serde_json::to_vec(&current)?,
+        )
+        .context("无法保存安装失败确认")?;
+        Ok(true)
+    }
+}
+
+fn open_installation_lock(data_dir: &Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(data_dir.join("update-install.lock"))
+        .context("无法打开安装记录锁")
 }
 
 fn load_installation_status(data_dir: &Path) -> Result<Option<InstallationStatus>> {
@@ -67,14 +120,7 @@ fn record_installation(
     let Some(data_dir) = &plan.data_dir else {
         return Ok(());
     };
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let lock = options.open(data_dir.join("update-install.lock"))?;
+    let lock = open_installation_lock(data_dir)?;
     lock.lock().context("无法锁定安装记录")?;
     if let Some(previous) = load_installation_status(data_dir)? {
         if state != "preparing" && previous.directory != directory {
@@ -96,6 +142,7 @@ fn record_installation(
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs(),
         directory: directory.into(),
+        acknowledged: false,
         installer_failure: windows::read_failure(directory),
     };
     crate::config::atomic_write(
@@ -695,6 +742,105 @@ mod tests {
             installation_status(data.path()).unwrap().unwrap().message,
             "下一次安装"
         );
+    }
+
+    #[test]
+    fn installation_failure_confirmation_survives_restart_and_retains_the_record() {
+        let data = tempfile::tempdir().unwrap();
+        let download = tempfile::tempdir().unwrap();
+        let plan = status_plan(data.path(), download.path());
+        record_installation(
+            &plan,
+            download.path(),
+            "failed",
+            "安装失败（代码 68）",
+            true,
+        )
+        .unwrap();
+        let failure = installation_status(data.path()).unwrap().unwrap();
+        assert!(failure.needs_notification());
+        assert!(failure.acknowledge(data.path()).unwrap());
+        download.close().unwrap();
+        let confirmed = installation_status(data.path()).unwrap().unwrap();
+        assert!(!confirmed.needs_notification());
+        assert!(confirmed.error);
+        assert_eq!(confirmed.state, "failed");
+        assert_eq!(confirmed.message, "安装失败（代码 68）");
+        assert_eq!(confirmed.version, plan.version);
+        assert!(!failure.acknowledge(data.path()).unwrap());
+    }
+
+    #[test]
+    fn an_old_failure_confirmation_cannot_acknowledge_a_new_installation() {
+        let data = tempfile::tempdir().unwrap();
+        let previous = tempfile::tempdir().unwrap();
+        let next = tempfile::tempdir().unwrap();
+        let plan = status_plan(data.path(), previous.path());
+        record_installation(&plan, previous.path(), "failed", "安装失败", true).unwrap();
+        let old = installation_status(data.path()).unwrap().unwrap();
+        record_installation(&plan, next.path(), "preparing", "正在准备", false).unwrap();
+        assert!(!old.acknowledge(data.path()).unwrap());
+        let current = installation_status(data.path()).unwrap().unwrap();
+        assert_eq!(current.state, "preparing");
+        assert!(!current.needs_notification());
+        record_installation(&plan, next.path(), "failed", "安装失败", true).unwrap();
+        assert!(!old.acknowledge(data.path()).unwrap());
+        assert!(
+            installation_status(data.path())
+                .unwrap()
+                .unwrap()
+                .needs_notification()
+        );
+    }
+
+    #[test]
+    fn legacy_and_recovered_failure_records_remain_actionable_until_confirmed() {
+        let data = tempfile::tempdir().unwrap();
+        let download = tempfile::tempdir().unwrap();
+        let plan = status_plan(data.path(), download.path());
+        record_installation(&plan, download.path(), "installing", "尚未完成", false).unwrap();
+        let path = data.path().join("update-install.json");
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("acknowledged");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        fs::write(
+            download.path().join("outcome.json"),
+            serde_json::to_vec(&Outcome {
+                message: "安装权限被拒绝".into(),
+                error: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let failure = installation_status(data.path()).unwrap().unwrap();
+        assert!(failure.needs_notification());
+        assert!(failure.acknowledge(data.path()).unwrap());
+        download.close().unwrap();
+        let confirmed = installation_status(data.path()).unwrap().unwrap();
+        assert_eq!(confirmed.state, "failed");
+        assert_eq!(confirmed.message, "安装权限被拒绝");
+        assert!(!confirmed.needs_notification());
+    }
+
+    #[test]
+    fn busy_installation_records_reject_confirmation_without_losing_the_failure() {
+        let data = tempfile::tempdir().unwrap();
+        let download = tempfile::tempdir().unwrap();
+        let plan = status_plan(data.path(), download.path());
+        record_installation(&plan, download.path(), "failed", "安装失败", true).unwrap();
+        let failure = installation_status(data.path()).unwrap().unwrap();
+        let lock = open_installation_lock(data.path()).unwrap();
+        lock.lock().unwrap();
+        assert!(failure.acknowledge(data.path()).is_err());
+        assert!(
+            installation_status(data.path())
+                .unwrap()
+                .unwrap()
+                .needs_notification()
+        );
+        drop(lock);
+        assert!(failure.acknowledge(data.path()).unwrap());
     }
 
     #[test]

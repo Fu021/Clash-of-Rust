@@ -271,6 +271,40 @@ fn home_mode_choices_have_visible_hit_targets_and_dispatch_each_action() {
 }
 
 #[test]
+fn startup_install_failure_reaches_the_visible_recoverable_notice_and_close_action() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Home);
+    let failure = "更新失败：安装程序退出（代码 68）；请检查安装目录后重试";
+    app.prepare_initialization(Some((failure.into(), true)));
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let events = pointer_events(&window);
+    track_targets(&window);
+    app.present_slint(&data, &mut models);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    assert!(window.get_notice_mounted());
+    assert_eq!(data.get_notice(), failure);
+    assert!(data.get_notice_error() && !data.get_notice_critical());
+    click_target(&window, "notice-message");
+    assert!(events.borrow().is_empty());
+    let coordinates: Vec<f32> = window.get_notice_close_target().iter().collect();
+    assert!(coordinates[2] > 0.0 && coordinates[3] > 0.0);
+    ui_testing::click(
+        window.window(),
+        coordinates[0] + coordinates[2] / 2.0,
+        coordinates[1] + coordinates[3] / 2.0,
+    );
+    assert_eq!(events.borrow().last().unwrap().0, Intent::DismissNotice);
+    let _ = app.ui_intent(Intent::DismissNotice, "", "");
+    app.present_slint(&data, &mut models);
+    assert!(data.get_notice().is_empty());
+    window.hide().unwrap();
+}
+
+#[test]
 fn errors_require_an_explicit_close_and_success_messages_allow_body_clicks() {
     ui_testing::initialize(950, 700);
     let window = AppWindow::new().unwrap();

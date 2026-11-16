@@ -10,7 +10,9 @@
 
 `data.local_evidence.update_installation` 区分记录已采集和不可读取；采集成功后的 `data` 来自 `update-install.json`，保存目标版本、状态、结果时间与可读原因。新版 Windows 安装器在写入失败时产生 `installer-failure.json`，读取上限 4 KiB。安装助手先将其持久保存到安装记录的 `installer_failure`，再发布结果供界面清理下载目录。该记录随后由桌面诊断和 `cor diagnose`／`--offline` 读取；只有临时文件而没有持久字段的旧版本不能保证重启后仍有这些细节。
 
-桌面报告的 `data.context.update` 保留检查状态、失败及成功结果、安装交接是否尚在等待，`notice_level` 和 `notice_visible` 标明当前提示的等级与可见性。严重错误挡住更新错误时，更新原因仍在此处和最近事件中保留。
+桌面启动恢复未确认的安装失败，关闭对应警告只保存 `acknowledged` 标记，不删除错误、退出码或文件阶段；关闭其他严重提示不确认安装失败。`cor update status` 和诊断仍能读取已确认的失败，关闭警告不表示安装已修复。晚到的旧确认不会标记新安装，记录锁占用或写盘失败时提示保留并可重试。
+
+桌面报告的 `data.context.update` 保留检查状态、失败及成功结果、安装交接是否尚在等待，`pending_failure` 单独记录等待用户确认的警告，不随候选或通道状态重置清空。`notice_level` 和 `notice_visible` 标明当前提示的等级与可见性。严重错误挡住更新错误时，更新原因仍在此处和最近事件中保留。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -108,7 +110,7 @@ Linux 的桌面导出及 `cor diagnose`／`--offline` 另保存：
 | `APP_TARGET_MISSING_REJECTED` / `missing_rejected` 增加 | 实际连接因失效策略被拦截；日志每分钟至多一条，后台服务触发可恢复提醒；显式 REJECT、测速失败及 UDP 能力不足不计入 |
 | `udp_rejected` 增加 | 目标仍存在但不支持 UDP，拒绝该 UDP，不能继续落到其他出站 |
 
-`incident_notifications` 保留尝试、已投递、限频和被拒绝次数，最近投递状态（`posted`、`rate_limited`、`permission_denied`、`notifications_disabled`、`channel_disabled`、`delivery_failed`）、系统通知权限及两类通道状态。服务事件仅持久保存类型、严重度及待查看序号，应用确认后不反复播放；系统通知点击可重新显示对应简要警告。不保存错误原文、应用列表、节点或订阅地址，详细原因仍在应用错误记录与服务日志中。通知被限频或拒绝不等于已显示，更不改变网络规则。
+`incident_notifications` 保留尝试、已投递、限频和被拒绝次数，最近投递状态（`posted`、`rate_limited`、`permission_denied`、`notifications_disabled`、`channel_disabled`、`delivery_failed`）、系统通知权限及两类通道状态。服务事件仅持久保存类型、严重度及待查看序号，应用在前台实际接纳警告后才确认；严重提示遮挡、Activity 在后台或原生确认调用失败时保留待呈现事件，重试不重复填充错误历史，旧回调不确认新序号。系统通知点击可重新显示对应简要警告。不保存错误原文、应用列表、节点或订阅地址，详细原因仍在应用错误记录与服务日志中。通知被限频或拒绝不等于已显示，更不改变网络规则。
 
 Android 内核缓冲日志附 `[observed_at=UTC时间]`，代表客户端收到日志的时间，不等同内核产生事件的精确时间；仍受现有缓冲及单条长度上限约束，不能恢复已丢失的历史。
 

@@ -40,7 +40,8 @@ impl App {
             "notice_level":if !self.error {"status"} else if self.notice_critical {"critical"} else {"recoverable"},
             "notice_visible":self.notice_visible,
             "update":{"checking":self.updates.checking,"status":self.updates.status,
-                "failure":self.updates.failure,"outcome":self.updates.outcome,
+                "failure":self.updates.failure,"pending_failure":self.pending_update_failure,
+                "outcome":self.updates.outcome,
                 "install_pending":self.updates.install_pending,
                 "installer_active":self.updates.installing.is_some()},
             "page":format!("{:?}",self.page),"running":self.snapshot.running,
@@ -128,7 +129,7 @@ mod tests {
     fn dismissing_a_tray_warning_keeps_the_failure_in_diagnostics() {
         let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
         app.tray_failure = Some("当前桌面没有可用托盘宿主".into());
-        app.prepare_initialization();
+        app.prepare_initialization(None);
         app.dismiss_notice();
         let startup = app.startup_diagnostics();
         assert_eq!(startup["tray_state"], "failed");

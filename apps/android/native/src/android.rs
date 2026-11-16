@@ -248,7 +248,7 @@ struct State {
     notice_network_recovery: bool,
     notice_followup: bool,
     issue_events: VecDeque<Value>,
-    system_incident_seen: u64,
+    system_incidents: crate::incident_delivery::Delivery,
     copied: (i32, Arc<str>),
     logs: VecDeque<(String, String)>,
     log_level: String,
@@ -537,6 +537,7 @@ enum Update {
     ),
     DownloadProgress(u64, core::update::Progress),
     Downloaded(u64, std::result::Result<(), String>),
+    IncidentPresented(u64),
 }
 async fn run_loop(
     root: PathBuf,
@@ -561,7 +562,7 @@ async fn run_loop(
         notice_network_recovery: false,
         notice_followup: false,
         issue_events: VecDeque::new(),
-        system_incident_seen: 0,
+        system_incidents: crate::incident_delivery::Delivery::default(),
         copied: Default::default(),
         logs: VecDeque::new(),
         log_level: "全部等级".into(),
@@ -1026,6 +1027,20 @@ async fn run_loop(
             }
             value = update_rx.recv() => {
                 match value {
+                    Some(Update::IncidentPresented(sequence)) => {
+                        if state.system_incidents.can_confirm(sequence, state.visible) {
+                            match state.session.native.request(json!({
+                                "op":"acknowledge-incident","sequence":sequence
+                            })) {
+                                Ok(_) => {
+                                    state.system_incidents.confirm(sequence, state.visible);
+                                }
+                                Err(error) => {
+                                    log::warn!("Incident acknowledgement unavailable: {error:#}");
+                                }
+                            }
+                        }
+                    }
                     Some(Update::ProtectionVerified(token, result)) => {
                         if let Some(change) = state.protection_change.as_mut()
                             && change.deadline == token {
@@ -1492,17 +1507,13 @@ async fn run_loop(
         let incident = &state.session.platform["incident_notifications"];
         let sequence = incident["sequence"].as_u64().unwrap_or(0);
         let mut system_notice = false;
-        if sequence > state.system_incident_seen && state.notice.is_empty() {
-            state.system_incident_seen = sequence;
+        let mut record_system_notice = false;
+        if state.system_incidents.pending(sequence) && state.notice.is_empty() {
+            record_system_notice = state.system_incidents.observe(sequence);
             state.notice = incident["message"].as_str().unwrap_or("").into();
             state.notice_error = true;
             state.notice_critical = incident["critical"].as_bool().unwrap_or(false);
             system_notice = true;
-            if let Err(error) = state.session.native.request(json!({
-                "op":"acknowledge-incident","sequence":sequence
-            })) {
-                log::warn!("Incident acknowledgement unavailable: {error:#}");
-            }
         }
         let view = project(&state);
         state.completed = None;
@@ -1521,15 +1532,19 @@ async fn run_loop(
             {
                 log::warn!("Incident notification unavailable: {error:#}");
             }
-            state
-                .issue_events
-                .push_back(core::support::incident(&notice, notice_critical));
-            while state.issue_events.len() > 20 {
-                state.issue_events.pop_front();
+            if !system_notice || record_system_notice {
+                state
+                    .issue_events
+                    .push_back(core::support::incident(&notice, notice_critical));
+                while state.issue_events.len() > 20 {
+                    state.issue_events.pop_front();
+                }
             }
         }
         let weak = weak.clone();
         let gate = profile_gate.clone();
+        let incident_sequence = system_notice.then_some(sequence);
+        let incident_acknowledgement = updates.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
                 if let Some(ticket) = profile_completed {
@@ -1539,11 +1554,12 @@ async fn run_loop(
                 apply(&ui, view);
                 if !notice.is_empty() {
                     let current = ui.global::<MobileView>();
-                    if !current.get_notice().is_empty()
+                    let presented = if !current.get_notice().is_empty()
                         && current.get_notice_error()
                         && notice_followup
                     {
                         ui.invoke_notify(format!("{}\n\n{notice}", current.get_notice()).into());
+                        true
                     } else if notice_critical
                         || (!current.get_notice_modal()
                             && (!current.get_notice_error()
@@ -1554,6 +1570,13 @@ async fn run_loop(
                         current.set_notice_critical(notice_critical);
                         current.set_notice_recover_network(notice_network_recovery);
                         ui.invoke_notify(notice.into());
+                        true
+                    } else {
+                        false
+                    };
+                    if presented && let Some(sequence) = incident_sequence {
+                        let _ =
+                            incident_acknowledgement.try_send(Update::IncidentPresented(sequence));
                     }
                 }
             }

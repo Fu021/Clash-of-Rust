@@ -6,18 +6,92 @@ pub(super) const LIFETIME: Duration = Duration::from_secs(5);
 
 impl App {
     pub(super) fn fail_update(&mut self, reason: String) {
+        let directory = self.updates.install_directory.clone();
+        self.installation_notice = None;
         self.updates.fail(reason);
-        if let Some(message) = self.updates.failure.clone() {
-            self.show_notice(message, true);
+        self.pending_update_failure = self.updates.failure.clone();
+        self.restore_update_failure();
+        if let Some(directory) = directory {
+            self.read_installation_notice(Some(&directory));
         }
     }
 
     pub(super) fn update_outcome(&mut self, message: String, error: bool) {
+        self.installation_notice = None;
         if error {
-            self.updates.failure = Some(message.clone());
-            self.show_notice(message, true);
+            self.pending_update_failure = Some(message.clone());
+            self.updates.failure = Some(message);
+            self.restore_update_failure();
         } else {
             self.updates.outcome = Some(message);
+        }
+    }
+
+    pub(super) fn read_installation_notice(&mut self, directory: Option<&std::path::Path>) {
+        if let Some(root) = self.installation_root.clone() {
+            self.load_installation_notice(&root, directory);
+        }
+    }
+
+    fn load_installation_notice(
+        &mut self,
+        data_dir: &std::path::Path,
+        directory: Option<&std::path::Path>,
+    ) {
+        let status = match update::installation_status(data_dir) {
+            Ok(Some(status)) if status.needs_notification() => status,
+            Ok(_) => return,
+            Err(error) => {
+                self.show_notice_followup(format!("读取上次安装结果失败：{error:#}"), true);
+                return;
+            }
+        };
+        if directory.is_some_and(|directory| !status.matches_directory(directory))
+            || (directory.is_none()
+                && (self.updates.outcome.is_some()
+                    || self
+                        .pending_update_failure
+                        .as_ref()
+                        .is_some_and(|failure| failure != &status.message)))
+        {
+            return;
+        }
+        if self.pending_update_failure.as_ref() != Some(&status.message) {
+            self.update_outcome(status.message.clone(), true);
+        }
+        self.installation_notice = Some((data_dir.to_owned(), status));
+    }
+
+    pub(super) fn acknowledge_update_failure(&mut self) -> bool {
+        let Some((root, status)) = &self.installation_notice else {
+            return true;
+        };
+        match status.acknowledge(root) {
+            Ok(_) => {
+                self.installation_notice = None;
+                true
+            }
+            Err(error) => {
+                let message = format!(
+                    "{}\n\n无法保存安装失败确认：{error:#}；请稍后重试关闭提示。",
+                    status.message
+                );
+                if self.notice != message {
+                    self.show_notice(message, true);
+                }
+                self.notice_update_failure = true;
+                false
+            }
+        }
+    }
+
+    pub(super) fn restore_update_failure(&mut self) {
+        if let Some(message) = self.pending_update_failure.clone() {
+            let revision = self.notice_revision;
+            self.show_notice(message, true);
+            if self.notice_revision != revision {
+                self.notice_update_failure = true;
+            }
         }
     }
 
@@ -51,11 +125,13 @@ impl App {
 
     pub(super) fn show_notice_followup(&mut self, text: String, error: bool) {
         if self.notice_visible && self.error {
+            let update_failure = self.notice_update_failure;
             self.present_notice(
                 format!("{}\n\n{text}", self.notice),
                 true,
                 self.notice_critical,
             );
+            self.notice_update_failure = update_failure;
         } else {
             self.show_notice(text, error);
         }
@@ -76,6 +152,7 @@ impl App {
         self.error = error;
         self.notice_critical = critical;
         self.notice_network_recovery = false;
+        self.notice_update_failure = false;
         self.notice_visible = true;
         self.notice_started = Some(Instant::now());
         self.notice_revision = self.notice_revision.wrapping_add(1);
@@ -105,6 +182,7 @@ impl App {
         self.notice_visible = false;
         self.notice_critical = false;
         self.notice_network_recovery = false;
+        self.notice_update_failure = false;
         self.notice_started = None;
         self.notice_revision = self.notice_revision.wrapping_add(1);
         if let Some(timer) = self.notice_timer.take() {
@@ -116,6 +194,137 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stored_installation_failure(
+        data_dir: &std::path::Path,
+        message: &str,
+    ) -> std::path::PathBuf {
+        let directory = data_dir.join("finished-update");
+        std::fs::write(
+            data_dir.join("update-install.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version":"0.7.2-fix.4.example", "state":"failed",
+                "message":message, "error":true, "updated_at":1,
+                "directory":directory,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        directory
+    }
+
+    #[test]
+    fn manually_reopening_recovers_an_install_failure_until_its_visible_notice_is_confirmed() {
+        let data = tempfile::tempdir().unwrap();
+        let failure = "更新失败：安装程序退出（代码 68）";
+        stored_installation_failure(data.path(), failure);
+        let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        app.installation_root = Some(data.path().to_owned());
+        app.prepare_initialization(None);
+        app.read_installation_notice(None);
+        assert_eq!(app.notice, failure);
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+        app.show_critical("内核无法启动".into());
+        let _ = app.update(Message::DismissNotice);
+        assert_eq!(app.notice, failure);
+        assert!(
+            update::installation_status(data.path())
+                .unwrap()
+                .unwrap()
+                .needs_notification()
+        );
+        let _ = app.update(Message::DismissNotice);
+        assert!(!app.notice_visible && app.updates.failure.is_none());
+        let status = update::installation_status(data.path()).unwrap().unwrap();
+        assert!(!status.needs_notification());
+        assert_eq!(status.message, failure);
+        let mut reopened = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        reopened.installation_root = Some(data.path().to_owned());
+        reopened.prepare_initialization(None);
+        reopened.read_installation_notice(None);
+        assert!(!reopened.notice_visible && reopened.updates.failure.is_none());
+    }
+
+    #[test]
+    fn old_install_records_cannot_replace_an_explicit_new_startup_result() {
+        let data = tempfile::tempdir().unwrap();
+        stored_installation_failure(data.path(), "上一次安装失败");
+        for error in [false, true] {
+            let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+            app.installation_root = Some(data.path().to_owned());
+            app.prepare_initialization(Some(("本次安装结果".into(), error)));
+            app.read_installation_notice(None);
+            assert!(app.installation_notice.is_none());
+            if error {
+                assert_eq!(app.notice, "本次安装结果");
+                assert_eq!(app.updates.failure.as_deref(), Some("本次安装结果"));
+            } else {
+                assert!(!app.notice_visible);
+                assert_eq!(app.updates.outcome.as_deref(), Some("本次安装结果"));
+            }
+        }
+    }
+
+    #[test]
+    fn failed_confirmation_preserves_the_notice_and_allows_retry_without_repeating_details() {
+        let data = tempfile::tempdir().unwrap();
+        let failure = "更新失败：安装目录不可写";
+        stored_installation_failure(data.path(), failure);
+        let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        app.installation_root = Some(data.path().to_owned());
+        app.prepare_initialization(None);
+        app.read_installation_notice(None);
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(data.path().join("update-install.lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let previous_events = app.issue_events.len();
+        for _ in 0..3 {
+            let _ = app.update(Message::DismissNotice);
+            assert!(app.notice_visible && app.error && app.notice_update_failure);
+            assert!(app.notice.starts_with(failure));
+            assert_eq!(app.notice.matches("无法保存安装失败确认").count(), 1);
+            assert_eq!(app.issue_events.len(), previous_events + 1);
+        }
+        assert!(
+            update::installation_status(data.path())
+                .unwrap()
+                .unwrap()
+                .needs_notification()
+        );
+        drop(lock);
+        let _ = app.update(Message::DismissNotice);
+        assert!(!app.notice_visible && app.updates.failure.is_none());
+        assert!(
+            !update::installation_status(data.path())
+                .unwrap()
+                .unwrap()
+                .needs_notification()
+        );
+    }
+
+    #[test]
+    fn only_the_matching_installation_can_supply_the_handoff_failure_record() {
+        let data = tempfile::tempdir().unwrap();
+        let failure = "更新失败：安装程序退出（代码 68）";
+        let directory = stored_installation_failure(data.path(), failure);
+        let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        app.installation_root = Some(data.path().to_owned());
+        app.prepare_initialization(None);
+        app.updates.install_directory = Some(data.path().join("another-update"));
+        app.fail_update("本次助手失败".into());
+        assert!(app.installation_notice.is_none());
+        assert_eq!(app.notice, "更新失败：本次助手失败");
+        app.updates.install_directory = Some(directory);
+        app.fail_update(failure.into());
+        assert!(app.installation_notice.is_some());
+        assert_eq!(app.notice, failure);
+        assert_eq!(app.updates.failure.as_deref(), Some(failure));
+    }
 
     #[test]
     fn a_repeated_notice_restarts_its_lifetime_and_ignores_old_expiry() {
@@ -234,6 +443,83 @@ mod tests {
         app.update_outcome("安装成功".into(), false);
         assert!(app.error && app.notice_critical);
         assert!(app.updates.failure.as_ref().unwrap().contains("写入权限"));
+    }
+
+    #[test]
+    fn dismissing_a_critical_error_reveals_the_unacknowledged_install_failure() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("内核无法启动")), None);
+        app.update_outcome("更新失败：安装程序退出（代码 68）".into(), true);
+        assert!(app.notice_critical);
+        assert!(!app.notice_update_failure);
+        let _ = app.update(Message::DismissNotice);
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+        assert!(app.notice_update_failure);
+        assert!(app.notice.contains("代码 68"));
+        assert!(app.updates.failure.is_some());
+        let _ = app.update(Message::DismissNotice);
+        assert!(!app.notice_visible);
+        assert!(app.updates.failure.is_none());
+        assert!(app.core_failure.is_some());
+    }
+
+    #[test]
+    fn update_state_resets_do_not_consume_the_pending_install_warning() {
+        for protection in [false, true] {
+            let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+            let failure = "更新失败：安装程序退出（代码 68）";
+            app.prepare_initialization(Some((failure.into(), true)));
+            if protection {
+                app.updates.pause_for_protection();
+            } else {
+                app.updates.reset_channel();
+            }
+            assert!(app.updates.failure.is_none());
+            app.show_critical("内核无法启动".into());
+            let _ = app.update(Message::DismissNotice);
+            assert!(app.notice_visible && app.error && !app.notice_critical);
+            assert!(app.notice_update_failure);
+            assert_eq!(app.notice, failure);
+            assert_eq!(app.pending_update_failure.as_deref(), Some(failure));
+            let _ = app.update(Message::DismissNotice);
+            assert!(!app.notice_visible);
+            assert!(app.pending_update_failure.is_none());
+        }
+    }
+
+    #[test]
+    fn confirming_an_older_warning_preserves_a_different_update_failure() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        app.prepare_initialization(Some(("更新失败：上一次安装失败".into(), true)));
+        app.updates.failure = Some("更新失败：另一次安装失败".into());
+        let _ = app.update(Message::DismissNotice);
+        assert!(!app.notice_visible && app.pending_update_failure.is_none());
+        assert_eq!(
+            app.updates.failure.as_deref(),
+            Some("更新失败：另一次安装失败")
+        );
+    }
+
+    #[test]
+    fn dismissing_install_diagnostics_acknowledges_the_same_failure() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.prepare_initialization(Some(("更新失败：安装目录不可写".into(), true)));
+        app.show_notice_followup("诊断已导出".into(), false);
+        assert!(app.notice.contains("安装目录不可写") && app.notice.contains("诊断已导出"));
+        let _ = app.update(Message::DismissNotice);
+        assert!(!app.notice_visible);
+        assert!(app.updates.failure.is_none());
+    }
+
+    #[test]
+    fn retrying_the_core_does_not_consume_the_pending_install_warning() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("内核无法启动")), None);
+        app.update_outcome("更新失败：安装文件被占用".into(), true);
+        let _ = app.update(Message::RestartCore);
+        assert!(app.busy && app.working);
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+        assert!(app.notice_update_failure);
+        assert!(app.notice.contains("安装文件被占用"));
+        assert!(app.updates.failure.is_some());
     }
 
     #[test]
