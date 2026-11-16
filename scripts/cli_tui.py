@@ -248,7 +248,7 @@ def verify_settings(console, resources, report):
         def call(*arguments):
             result = subprocess.run([*command, '--json', *arguments], capture_output=True,
                                     text=True, check=True, timeout=45)
-            return json.loads(result.stdout)
+            return json.loads(result.stdout)['data']
 
         try:
             call('config', 'set', 'delay_interval_minutes', '17')
