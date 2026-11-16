@@ -437,7 +437,7 @@ mod tests {
             let name = format!(".cor-cache-{}", uuid::Uuid::new_v4());
             let staged = parent.join(&name);
             std::fs::write(&staged, b"incomplete cache transfer").unwrap();
-            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0)).unwrap();
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o000)).unwrap();
         }
         let provider = Path::new("providers/.cor-cache-nodes.yaml");
         std::fs::write(original.path().join(provider), b"provider cache").unwrap();
