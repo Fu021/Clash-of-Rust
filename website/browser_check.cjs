@@ -167,7 +167,8 @@ async function checkHeroResizing(context, origin) {
   try {
     for (const route of ["/", "/en/"]) {
       await page.goto(origin + route, { waitUntil: "load" });
-      for (const width of [1920, 1280, 800, 360, 1920]) {
+      await page.evaluate(() => document.fonts.ready);
+      for (const width of [1920, 1280, 800, 641, 640, 360, 320, 1920]) {
         await page.setViewportSize({ width, height: 900 });
         for (const zoom of [.8, 1, 1.25, 1.5, 2]) {
           await page.evaluate(zoom => {
@@ -183,13 +184,38 @@ async function checkHeroResizing(context, origin) {
             const image = document.querySelector(".hero .scene img");
             const scene = document.querySelector(".hero .scene").getBoundingClientRect();
             const picture = image.getBoundingClientRect();
+            const tags = [...document.querySelectorAll(".hero .tag")].map(tag => {
+              const box = tag.getBoundingClientRect();
+              const description = tag.querySelector("span");
+              return { width: box.width, height: box.height, left: box.left, right: box.right,
+                top: box.top, bottom: box.bottom, description: description.innerText.trim(),
+                descriptionHeight: description.getBoundingClientRect().height };
+            });
             return { scene: scene.width, picture: picture.width, left: picture.left - scene.left,
               ratio: picture.width / picture.height, original: image.naturalWidth / image.naturalHeight,
+              sceneTop: scene.top, sceneBottom: scene.bottom, tags,
+              mask: getComputedStyle(document.querySelector(".hero .scene")).maskImage,
               overflow: document.documentElement.scrollWidth > innerWidth + 1 };
           });
           assert.ok(geometry.scene > 0 && Math.abs(geometry.scene - geometry.picture) < 2 &&
             Math.abs(geometry.left) < 2 && Math.abs(geometry.ratio - geometry.original) < .01 && !geometry.overflow,
             `Hero resize ${route} ${width}px ${zoom}: ${JSON.stringify(geometry)}`);
+          assert.equal(geometry.tags.length, 3, `Hero routing labels: ${route}`);
+          assert.equal(geometry.mask, "none", `Hero routing labels masked: ${route}`);
+          for (const tag of geometry.tags) {
+            assert.ok(tag.width > 0 && tag.height > 0 && tag.description && tag.descriptionHeight > 0 &&
+              tag.left >= -1 && tag.right <= width + 1 && tag.top >= geometry.sceneTop - 1 &&
+              tag.bottom <= geometry.sceneBottom + 1,
+              `Hero routing label ${route} ${width}px ${zoom}: ${JSON.stringify(tag)}`);
+          }
+          for (let index = 0; index < geometry.tags.length; index++) {
+            for (const other of geometry.tags.slice(index + 1)) {
+              const tag = geometry.tags[index];
+              assert.ok(tag.right <= other.left || other.right <= tag.left ||
+                tag.bottom <= other.top || other.bottom <= tag.top,
+                `Hero routing labels overlap ${route} ${width}px ${zoom}: ${JSON.stringify(geometry.tags)}`);
+            }
+          }
         }
       }
       await page.evaluate(() => { document.documentElement.style.zoom = ""; });

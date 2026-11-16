@@ -156,6 +156,9 @@ kbd { border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 5p
 
 .scene {
   position: relative; overflow: hidden; width: 100%; min-width: 0;
+}
+.scene picture {
+  display: block; width: 100%;
   -webkit-mask: url(assets/dither-in.png) 0 0 / auto 96px repeat-x,
                 linear-gradient(#000, #000) 0 95px / 100% calc(100% - 190px) no-repeat,
                 url(assets/dither-out.png) 0 100% / auto 96px repeat-x;
@@ -163,7 +166,6 @@ kbd { border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 5p
                 linear-gradient(#000, #000) 0 95px / 100% calc(100% - 190px) no-repeat,
                 url(assets/dither-out.png) 0 100% / auto 96px repeat-x;
 }
-.scene picture { display: block; width: 100%; }
 .scene img { display: block; width: 100%; max-width: none; }
 .hero .scene { margin-top: clamp(-7rem, -6vw, -2rem); }
 .hero .scene img { height: auto; }
@@ -186,7 +188,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 5p
 .page-head h1 { font-size: clamp(2.3rem, 5vw, 4rem); max-width: 14em; }
 .page-head .lead { margin-top: 1.1rem; }
 .banner { margin-top: clamp(1.5rem, 3vw, 2.5rem); }
-.banner.scene { -webkit-mask-size: auto 64px, 100% calc(100% - 126px), auto 64px; mask-size: auto 64px, 100% calc(100% - 126px), auto 64px;
+.banner.scene picture { -webkit-mask-size: auto 64px, 100% calc(100% - 126px), auto 64px; mask-size: auto 64px, 100% calc(100% - 126px), auto 64px;
   -webkit-mask-position: 0 0, 0 63px, 0 100%; mask-position: 0 0, 0 63px, 0 100%; }
 .banner img { height: clamp(11rem, 27vw, 26rem); object-fit: cover; }
 
@@ -384,10 +386,16 @@ noscript p { margin-top: 1.5rem; padding: 1rem 1.2rem; background: #f0a21f33; }
 }
 @media (max-width: 640px) {
   .wrap { width: calc(100% - 2.2rem); }
-  .hero .scene { margin-top: -1rem; }
-  .scene { -webkit-mask-size: auto 48px, 100% calc(100% - 94px), auto 48px; mask-size: auto 48px, 100% calc(100% - 94px), auto 48px;
+  .hero .scene { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin-top: .5rem; }
+  .hero .scene picture { grid-column: 1 / -1; grid-row: 1; }
+  .scene picture { -webkit-mask-size: auto 48px, 100% calc(100% - 94px), auto 48px; mask-size: auto 48px, 100% calc(100% - 94px), auto 48px;
     -webkit-mask-position: 0 0, 0 47px, 0 100%; mask-position: 0 0, 0 47px, 0 100%; }
-  .tag { display: none; }
+  .hero .tag { position: static; grid-row: 1; align-self: start; min-width: 0; margin: .5rem 2px 0; padding: .35rem .45rem; font-size: .75rem; line-height: 1.4; }
+  .hero .tag b { font-size: .875rem; }
+  .hero .tag::before { width: 6px; height: 6px; margin-right: .3rem; }
+  .hero .tag.proxy { grid-column: 1; }
+  .hero .tag.direct { grid-column: 2; }
+  .hero .tag.reject { grid-column: 3; }
   .chip { display: inline-flex; align-items: center; min-height: 44px; }
   :not(pre) > code { white-space: normal; overflow-wrap: anywhere; }
   .scene-note { display: block; margin-top: 0.8rem; }

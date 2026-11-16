@@ -39,7 +39,7 @@ python3 -B website/export_preview.py
 - `src/content/tools.json` 是网络工具的中英介绍、命令、参数及限制来源，须与 `docs/network-tools.md` 和实际 CLI 核对。新增工具注明最低可用版本；HTTP 检查使用已有代理，系统 Ping 与路由追踪不能笼统称为走代理。
 - 插画使用乡间铁路、道岔和蓝猫主题；原图在 `src/art/raw/`，网页图在 `src/assets/`，新增来源见[插画说明](src/art/README.md)。每个内容页均有插画，图片外框、按钮与卡片采用统一圆角。动效使用短时透明度、位移和颜色过渡，无常驻逐帧任务。
 - 首页导览可见时每 3.5 秒切换软件画面，选择画面后暂停，也可手动暂停/继续；悬停、焦点位于导览内、图片放大、切到其他标签页、导览离屏或系统减少动态效果时停用计时。切换预留共同高度，避免桌面与手机画面交替引发整页跳动；无脚本保留第一帧。
-- 字标在构建时直接复制 README 的 `resources/icons/wordmark-light.svg`；深色背景使用对应 `wordmark-dark.svg`，不以近似字体替换。首页桌面和手机使用同一张完整插画与比例，不另换手机裁图；其余横幅使用同源缩略图。手机导航及章节目录可折叠，图片可放大，命令和表格在局部滚动。
+- 字标在构建时直接复制 README 的 `resources/icons/wordmark-light.svg`；深色背景使用对应 `wordmark-dark.svg`，不以近似字体替换。首页桌面和手机使用同一张完整插画与比例，不另换手机裁图；代理、直连、拦截三种出口标签均保留，手机紧凑排列在画面上方，渐隐遮罩只作用于插画，不裁切标签。其余横幅使用同源缩略图。手机导航及章节目录可折叠，图片可放大，命令和表格在局部滚动。
 - `src/content/screenshots.json` 记录 GUI 截图的真实版本、来源提交、尺寸及平台；`terminal.json` 保留 CI 实际 PTY 帧。每类画面跨页复用，图注显示其真实版本，不随下载快照改标签。目前七张 GUI 画面已按 `0.7.2-fix.4.network-inspection` 源码重新生成，TUI 来自同提交 Memory Benchmark `43735184801`。GUI 使用正式 Slint 组件的演示数据，仅验证外观，不能代替工具实际联网或设备验收；TUI 不手写屏幕内容冒充实测。
 - 字体使用 National Park、Departure Mono 和 Noto Sans SC，许可证随 `src/assets/fonts/` 保留。来源分别为 https://github.com/benhoepner/National-Park 、https://departuremono.com/ 、https://github.com/notofonts/noto-cjk 。中文正文使用系统字体，标题使用真实 Medium 子集，避免伪加粗。
 - 修改中文标题、按钮或版本内容后检查展示字体的字形覆盖；有新增字形时执行 `python3 website/prepare_assets.py fonts` 更新子集。源字体放 `.cache/fonts/`，路径见脚本；首次准备需要 Pillow、fontTools 和 brotli，普通静态构建只需 Python 标准库。已有字形充分覆盖时保留字体文件，不为文案调整重复下载工具。
