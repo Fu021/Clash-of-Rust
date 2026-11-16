@@ -142,6 +142,23 @@ def installed_hashes(installed):
 
 
 @contextmanager
+def reserve_mixed_port():
+    for attempt in range(32):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            try:
+                tcp.bind(('127.0.0.1', 0))
+                port = tcp.getsockname()[1]
+                udp.bind(('127.0.0.1', port))
+            except OSError as failure:
+                if attempt == 31:
+                    raise OSError('No available TCP/UDP port for independent Mihomo') from failure
+                continue
+            yield port
+            return
+
+
+@contextmanager
 def independent_core(payload, directory):
     from proxy_benchmark import BLOCK, Payload
     external = directory/'独立 Mihomo with spaces'
@@ -150,9 +167,7 @@ def independent_core(payload, directory):
     shutil.copyfile(payload/'resources/mihomo.exe', executable)
     for name in ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'):
         shutil.copyfile(payload/'resources'/name, external/name)
-    with socket.socket() as reservation:
-        reservation.bind(('127.0.0.1', 0))
-        proxy_port = reservation.getsockname()[1]
+    with reserve_mixed_port() as proxy_port:
         server = ThreadingHTTPServer(('127.0.0.1', 0), Payload)
     config = external/'config.yaml'
     write_json(config, {
@@ -213,6 +228,7 @@ def independent_core(payload, directory):
 def verify_independent_core(package, installed, payload, directory, execute, record):
     record.update({'completed': False, 'expected_exit_code': 0})
     try:
+        (package.parent/'installer-failure.json').unlink(missing_ok=True)
         with independent_core(payload, directory) as (process, executable, config, probe):
             if executable.resolve().is_relative_to(installed.resolve()):
                 raise AssertionError('Independent Mihomo must live outside the installation')
@@ -223,7 +239,6 @@ def verify_independent_core(package, installed, payload, directory, execute, rec
             })
             renderer = installed/'clash-desktop-ui.exe'
             renderer.write_bytes((payload/renderer.name).read_bytes()+b'independent-core-update-probe')
-            (package.parent/'installer-failure.json').unlink(missing_ok=True)
             execute(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
             record['proxy_after'] = probe()
             if record['proxy_before'] != record['proxy_after'] or process.poll() is not None:

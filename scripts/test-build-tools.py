@@ -1383,6 +1383,78 @@ class BuildTests(unittest.TestCase):
                 self.assertTrue(case['attempts'][1]['original_files_unchanged'])
                 self.assertTrue(all(attempt['retry_succeeded'] for attempt in case['attempts']))
 
+    def test_windows_mixed_port_retries_udp_failure_and_reserves_both_protocols(self):
+        sockets = [MagicMock() for index in range(4)]
+        for reservation in sockets:
+            reservation.__enter__.return_value = reservation
+        sockets[0].getsockname.return_value = ('127.0.0.1', 53047)
+        sockets[1].bind.side_effect = PermissionError('UDP port excluded')
+        sockets[2].getsockname.return_value = ('127.0.0.1', 54048)
+        with patch.object(windows_update_tests.socket, 'socket', side_effect=sockets) as create:
+            with windows_update_tests.reserve_mixed_port() as port:
+                self.assertEqual(port, 54048)
+                sockets[1].bind.assert_called_once_with(('127.0.0.1', 53047))
+                sockets[3].bind.assert_called_once_with(('127.0.0.1', 54048))
+                for reservation in sockets[:2]:
+                    reservation.__exit__.assert_called_once()
+                for reservation in sockets[2:]:
+                    reservation.__exit__.assert_not_called()
+            self.assertEqual(create.call_args_list, [
+                call(socket.AF_INET, socket.SOCK_STREAM),
+                call(socket.AF_INET, socket.SOCK_DGRAM),
+            ] * 2)
+        for reservation in sockets:
+            reservation.__exit__.assert_called_once()
+
+    def test_windows_mixed_port_exhaustion_is_bounded_and_closes_sockets(self):
+        tcp = MagicMock()
+        udp = MagicMock()
+        for reservation in (tcp, udp):
+            reservation.__enter__.return_value = reservation
+        tcp.getsockname.return_value = ('127.0.0.1', 53047)
+        failure = PermissionError('UDP port excluded')
+        udp.bind.side_effect = failure
+        with patch.object(windows_update_tests.socket, 'socket',
+                          side_effect=[tcp, udp] * 32) as create:
+            with self.assertRaisesRegex(OSError, 'No available TCP/UDP port') as raised:
+                with windows_update_tests.reserve_mixed_port():
+                    self.fail('Excluded port was accepted')
+        self.assertIs(raised.exception.__cause__, failure)
+        self.assertEqual(create.call_count, 64)
+        self.assertEqual(tcp.__exit__.call_count, 32)
+        self.assertEqual(udp.__exit__.call_count, 32)
+
+    def test_windows_mixed_port_does_not_retry_errors_from_consumer(self):
+        tcp = MagicMock()
+        udp = MagicMock()
+        for reservation in (tcp, udp):
+            reservation.__enter__.return_value = reservation
+        tcp.getsockname.return_value = ('127.0.0.1', 54048)
+        with patch.object(windows_update_tests.socket, 'socket',
+                          side_effect=[tcp, udp]) as create:
+            with self.assertRaisesRegex(OSError, 'HTTP fixture failed'):
+                with windows_update_tests.reserve_mixed_port():
+                    raise OSError('HTTP fixture failed')
+        self.assertEqual(create.call_count, 2)
+        tcp.__exit__.assert_called_once()
+        udp.__exit__.assert_called_once()
+
+    def test_windows_independent_core_start_failure_discards_previous_installer_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            failure = directory/'installer-failure.json'
+            failure.write_text('{"exit_code":68}')
+            record = {}
+            with patch.object(windows_update_tests, 'independent_core',
+                              side_effect=RuntimeError('core startup failed')):
+                with self.assertRaisesRegex(RuntimeError, 'core startup failed'):
+                    windows_update_tests.verify_independent_core(
+                        directory/'setup.exe', directory/'installed', directory/'payload',
+                        directory, MagicMock(), record)
+            self.assertFalse(record['completed'])
+            self.assertIsNone(record['failure'])
+            self.assertFalse(failure.exists())
+
     def test_windows_independent_core_update_checks_traffic_and_preserves_external_files(self):
         for outcome in ('success', 'installer-fails', 'core-exits', 'core-modified'):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
