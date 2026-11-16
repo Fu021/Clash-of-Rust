@@ -200,7 +200,7 @@ pub(super) fn connection_rows(state: &State, width: usize) -> Vec<(String, Tone)
                 width,
             )
             .into_iter()
-            .map(|line| {
+            .map(move |line| {
                 (
                     line,
                     if label == "代理链" {

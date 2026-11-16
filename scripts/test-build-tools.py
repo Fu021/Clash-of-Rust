@@ -6152,6 +6152,10 @@ runpy.run_path(str(script), run_name='__main__')
                 ('Failed to download package archive for system-images/android-35: closed',True),
                 ('Failed to download package archive for emulator: unexpected EOF',True),
                 ('Failed to download package archive for emulator: connection reset by peer',True),
+                ('Error: Failed to write to file\nCaused by:\n    gzip decompression failed: Peer disconnected',True),
+                ('gzip decompression failed:\nconnection reset by peer',True),
+                ('gzip decompression failed: invalid gzip header',False),
+                ('Error: Failed to write to file\nCaused by:\n    No space left on device',False),
                 ('Package closed is not available',False)):
             with self.subTest(detail=detail), tempfile.TemporaryDirectory() as temporary:
                 with patch.object(android_build,'streamed_command',

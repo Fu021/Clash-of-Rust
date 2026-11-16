@@ -67,6 +67,8 @@ def install_sdk_packages(command, device_root):
                            r'|Could not resolve host|Failed to connect'
                            r'|Failed to download package archive[^\r\n]*:\s*'
                            r'(?:closed|unexpected EOF|connection reset by peer)\b'
+                           r'|gzip decompression failed:\s*'
+                           r'(?:Peer disconnected|unexpected EOF|connection reset by peer)\b'
                            r'|HTTP(?:/[0-9.]+)?\s+(?:429|50[0234])\b', re.I)
     for attempt in range(3):
         user_root = device_root/('sdk-download-'+str(attempt))
