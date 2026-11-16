@@ -175,8 +175,8 @@ pub fn snapshot(pipe: HANDLE, request: &Request) -> Result<Snapshot> {
     let bytes = std::fs::read(config_file)?;
     ensure!(bytes.len() <= 32 * 1024 * 1024, "内核配置过大");
     let mut config: yaml_serde::Mapping = yaml_serde::from_slice(&bytes)?;
-    crate::config::ingress::privileged(&mut config)?;
-    crate::config::ingress::provider_paths(&mut config, &original)?;
+    clash_client_core::config::ingress::privileged(&mut config)?;
+    clash_client_core::config::ingress::provider_paths(&mut config, &original)?;
     std::fs::write(
         directory.path().join("config.yaml"),
         yaml_serde::to_string(&config)?,

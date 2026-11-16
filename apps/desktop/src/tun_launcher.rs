@@ -152,6 +152,9 @@ mod macos_tun;
 #[path = "../../../crates/client-runtime/src/platform/proxy_state.rs"]
 mod proxy_state;
 #[cfg(all(target_os = "macos", not(test)))]
+#[path = "../../../crates/client-runtime/src/platform/macos/runtime.rs"]
+mod runtime;
+#[cfg(all(target_os = "macos", not(test)))]
 mod platform {
     pub use crate::proxy_state::{ProxyState, ProxyValue};
 }

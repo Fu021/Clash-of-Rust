@@ -1,7 +1,7 @@
 use super::{Mapping, Value};
 use anyhow::{Context, Result, ensure};
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 const FORBIDDEN: &[&str] = &[
     "external-ui",
@@ -125,14 +125,16 @@ pub fn provider_paths(config: &mut Mapping, original: &Path) -> Result<()> {
             } else {
                 supplied
             };
-            ensure!(
-                !relative.as_os_str().is_empty()
-                    && relative
-                        .components()
-                        .all(|part| matches!(part, Component::Normal(_))),
-                "Provider 路径不能越出运行目录"
-            );
-            *path = Value::from(relative.to_str().context("Provider 路径编码无效")?);
+            let mut normalized = PathBuf::new();
+            for component in relative.components() {
+                match component {
+                    Component::Normal(name) => normalized.push(name),
+                    Component::CurDir => {}
+                    _ => anyhow::bail!("Provider 路径不能越出运行目录"),
+                }
+            }
+            ensure!(!normalized.as_os_str().is_empty(), "Provider 路径不能为空");
+            *path = Value::from(normalized.to_str().context("Provider 路径编码无效")?);
         }
     }
     Ok(())
@@ -224,8 +226,14 @@ mod tests {
             config["proxy-providers"]["example"]["path"],
             "providers/nodes.yaml"
         );
+        config["proxy-providers"]["example"]["path"] = Value::from("./providers/nodes.yaml");
         provider_paths(&mut config, root.path()).unwrap();
-        for path in ["../outside", "/outside/nodes.yaml"] {
+        assert_eq!(
+            config["proxy-providers"]["example"]["path"],
+            "providers/nodes.yaml"
+        );
+        provider_paths(&mut config, root.path()).unwrap();
+        for path in ["", ".", "../outside", "/outside/nodes.yaml"] {
             let mut config: Mapping = yaml_serde::from_str(&format!(
                 "rule-providers: {{example: {{path: '{path}'}}}}\n"
             ))

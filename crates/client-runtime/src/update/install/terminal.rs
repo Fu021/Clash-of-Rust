@@ -4,6 +4,7 @@ use crate::{
     control::{self, Meta, Remote},
     engine::Engine,
 };
+use sha2::{Digest, Sha256};
 use std::{
     io::IsTerminal,
     os::fd::AsFd,
@@ -610,7 +611,7 @@ mod tests {
         let outcome = transaction(
             &plan.version,
             true,
-            || verify(&plan, download.path()),
+            || verify(&plan, download.path()).map(drop),
             || panic!("must not stop the owner"),
             || panic!("must not install changed bytes"),
             || false,

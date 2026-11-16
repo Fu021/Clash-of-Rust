@@ -28,7 +28,7 @@ fn open_at(directory: &File, name: &CStr, flags: i32, mode: libc::mode_t) -> Res
             directory.as_raw_fd(),
             name.as_ptr(),
             flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-            mode,
+            libc::c_uint::from(mode),
         )
     };
     ensure!(
@@ -170,8 +170,8 @@ impl Snapshot {
         let file = File::open(&path)?;
         ensure!(file.metadata()?.len() <= 32 * 1024 * 1024, "内核配置过大");
         let mut config: yaml_serde::Mapping = yaml_serde::from_reader(file)?;
-        crate::config::ingress::privileged(&mut config)?;
-        crate::config::ingress::provider_paths(&mut config, original)?;
+        clash_client_core::config::ingress::privileged(&mut config)?;
+        clash_client_core::config::ingress::provider_paths(&mut config, original)?;
         std::fs::write(path, yaml_serde::to_string(&config)?)?;
         std::fs::create_dir(directory.path().join("temp"))?;
         Ok(Self {
@@ -304,7 +304,10 @@ mod tests {
             let mut config: yaml_serde::Mapping =
                 yaml_serde::from_str(&format!("proxy-providers: {{example: {{path: '{path}'}}}}"))
                     .unwrap();
-            assert!(crate::config::ingress::provider_paths(&mut config, directory.path()).is_err());
+            assert!(
+                clash_client_core::config::ingress::provider_paths(&mut config, directory.path())
+                    .is_err()
+            );
         }
         assert_eq!(
             std::fs::read(outside.path().join("data")).unwrap(),
