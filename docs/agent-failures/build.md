@@ -110,6 +110,7 @@ Rust 工具链升级后须检查各平台展开 `cfg` 后的控制流；Linux �
 **防回归**
 
 - 工具链充足时执行与 CI 一致的 workspace Release Clippy 和测试；资源受限时明确标注未执行。
+- Rust 格式验收使用与 CI 相同的 `cargo fmt --all -- --check`；它只做静态格式检查，可在资源受限环境运行。单独入口的 rustfmt 结果不能代替 workspace 检查。
 - 测试与生产代码共享 helper 时检查 `cfg(test)` 和平台边界，避免测试专用分支进入生产编译。
 - Rust 导入按 `lib.rs` 的实际模块声明核对，不能把源码目录直接当模块路径；`#[path]` 映射到根模块的文件同样适用。[CI 40557511991](https://github.com/Fu021/Clash-of-Rust/actions/runs/40557511991) 的 DNS 测试曾误用 `crate::detection::claude`，实际入口为 `crate::claude_check`，导致桌面测试目标全部编译失败。
 - 检查返回值的 `must_use`：保留临时目录时显式处理返回路径，不能假定方法返回空值。

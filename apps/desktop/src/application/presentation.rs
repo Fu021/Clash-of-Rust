@@ -132,7 +132,8 @@ impl App {
                         kind,
                         delay: delay_label,
                         tone: proxy_order::delay_tone(delay),
-                        details: proxy_order::node_details(name, group, &self.snapshot.proxies).into(),
+                        details: proxy_order::node_details(name, group, &self.snapshot.proxies)
+                            .into(),
                     }
                 };
                 for pair in indices[start..(start + PAGE_SIZE).min(count)].chunks(2) {
