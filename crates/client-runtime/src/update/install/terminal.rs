@@ -220,7 +220,7 @@ fn authorize(interactive: bool) -> Result<()> {
 }
 
 fn install_package(plan: &Plan, interactive: bool) -> Result<()> {
-    verify(plan, plan.package.parent().context("安装包目录无效")?)?;
+    let verified = verify(plan, plan.package.parent().context("安装包目录无效")?)?;
     let mut command = if crate::platform::is_elevated() {
         foreground(Path::new("/usr/bin/dpkg"))?
     } else {
@@ -231,7 +231,7 @@ fn install_package(plan: &Plan, interactive: bool) -> Result<()> {
         command.args(["--", "/usr/bin/dpkg"]);
         command
     };
-    command.arg("-i").arg(&plan.package);
+    command.arg("-i").arg(&verified.path);
     let (status, detail) = wait_installer(&mut command)?;
     anyhow::ensure!(status.success(), "DEB 安装失败（{status}）：{detail}");
     Ok(())

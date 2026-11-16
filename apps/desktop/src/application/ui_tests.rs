@@ -1392,6 +1392,7 @@ pub(super) fn fixture(page: Page) -> App {
     app.updates.checking = false;
     app.settings.active_profile = Some("fixture".into());
     app.profiles.push(Profile {
+        builtin: false,
         id: "fixture".into(),
         name: "Test subscription".into(),
         source: String::new(),
@@ -2188,6 +2189,7 @@ fn profile_and_rule_source_popups_preserve_ids_and_filters() {
     let mut app = fixture(Page::Rules);
     app.busy = true;
     app.profiles.push(Profile {
+        builtin: false,
         id: "second".into(),
         name: "Second subscription".into(),
         source: String::new(),

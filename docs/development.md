@@ -47,6 +47,7 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 - 订阅先完整下载并校验有效 YAML，再事务保存/重载；不可达、超时、HTTP 错误、空白/错误页及截断均失败，保留内容、用量、时间、设置、草稿和运行状态，不切默认直连。成功才失效测速与检测结果。定时任务由唯一所有者执行，提交前复核订阅、来源、文件、开关及保护，丢弃过期结果；调度、通知及 Android 生命周期见[订阅说明](subscriptions.md)。
 - Geo 与安装包按[共享下载约束](../crates/client-core/src/download.rs)回退并缓冲写盘；逐路线下载和校验，最后路线允许慢网，不跳过 SHA256/大小校验或改节点。Geo 整组暂存、事务安装及恢复见 [Geo 复盘](agent-failures/android.md#geo-与安装包下载)；安装及必要重载成功才更新时间，Android 保留 VPN。
 - 控制器只监听本机，使用随机密钥并处理内部端口冲突；密钥不得进入日志、示例或界面。
+- 后台 `Command::check_protection` 使用穷尽匹配声明只读、外观差异和写入策略，新增命令必须明确分类；保持 JSON 命令名称和旧字段默认值，不以默认匹配隐式决定保护权限。
 - 系统代理、TUN、DNS、提权、自启动、通知与更新沿用平台入口，检查授权、拒绝、重复操作和失败清理。
 - Linux 发行构建与最老系统验证边界见[CI](workflows/ci.md#ci)和[打包验证](workflows/release.md#publish-release)；共享宿主内核的容器不等于旧系统内核验证，不以新版系统成功替代旧系统证据。
 - macOS 保护的动态 DNS、Tailscale 分域、原生就绪与失败隔离按[保护说明](claude-protection.md#dns-与-tailscale)执行；实现前查[DNS 共存复盘](agent-failures/macos-dns.md)。在可丢弃原生环境验证接管、重连、故障及恢复，不以配置写入成功代替实际解析，不要求用户调整 DNS。

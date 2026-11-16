@@ -685,6 +685,7 @@ mod tests {
     fn active_subscription_delete_is_explicit_and_editor_cancel_keeps_source() {
         let mut app = app();
         app.profiles.push(Profile {
+            builtin: false,
             id: "test".into(),
             name: "订阅".into(),
             source: "https://example.com/sub".into(),

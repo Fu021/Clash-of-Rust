@@ -10,6 +10,7 @@ mod authorization;
 pub(super) mod cf;
 pub use authorization::{administrator, run as run_command, shell_quote};
 use cf::{Owned, Ref};
+mod runtime;
 pub mod tun;
 
 #[link(name = "SystemConfiguration", kind = "framework")]

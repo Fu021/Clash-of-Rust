@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::{
-        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        fs::{MetadataExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -233,92 +233,6 @@ pub(crate) fn terminate(child: &mut std::process::Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
-fn restore_runtime_owner(directory: &std::fs::File, uid: u32) -> Result<()> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    fn visit(
-        directory: &std::fs::File,
-        uid: u32,
-        depth: usize,
-        remaining: &mut usize,
-    ) -> Result<()> {
-        ensure!(depth <= 32, "TUN 缓存目录层级过深");
-        // Enumerate an already-open directory. Never traverse a path supplied
-        // by a cache entry, follow links, or change a multiply-linked file.
-        let fd = unsafe { libc::dup(directory.as_raw_fd()) };
-        ensure!(fd >= 0, "无法读取 TUN 缓存目录");
-        let entries = unsafe { libc::fdopendir(fd) };
-        if entries.is_null() {
-            unsafe { libc::close(fd) };
-            bail!("无法列出 TUN 缓存目录");
-        }
-        struct Entries(*mut libc::DIR);
-        impl Drop for Entries {
-            fn drop(&mut self) {
-                unsafe { libc::closedir(self.0) };
-            }
-        }
-        let entries = Entries(entries);
-        let device = directory.metadata()?.dev();
-        loop {
-            unsafe { *libc::__error() = 0 };
-            let entry = unsafe { libc::readdir(entries.0) };
-            if entry.is_null() {
-                ensure!(
-                    std::io::Error::last_os_error().raw_os_error() == Some(0),
-                    "读取 TUN 缓存目录失败：{}",
-                    std::io::Error::last_os_error()
-                );
-                break;
-            }
-            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
-            if matches!(name.to_bytes(), b"." | b"..") {
-                continue;
-            }
-            ensure!(*remaining > 0, "TUN 缓存文件数量过多");
-            *remaining -= 1;
-            let flags = libc::O_NOFOLLOW | libc::O_CLOEXEC;
-            let mut fd = unsafe {
-                libc::openat(
-                    directory.as_raw_fd(),
-                    name.as_ptr(),
-                    flags | libc::O_DIRECTORY,
-                )
-            };
-            if fd < 0 {
-                // Metadata-only opening avoids device/FIFO I/O side effects.
-                fd = unsafe {
-                    libc::openat(
-                        directory.as_raw_fd(),
-                        name.as_ptr(),
-                        flags | libc::O_EVTONLY,
-                    )
-                };
-            }
-            if fd < 0 {
-                continue;
-            }
-            let file = unsafe { std::fs::File::from_raw_fd(fd) };
-            let metadata = file.metadata()?;
-            if metadata.dev() != device || (metadata.uid() != 0 && metadata.uid() != uid) {
-                continue;
-            }
-            if metadata.is_dir() {
-                visit(&file, uid, depth + 1, remaining)?;
-            } else if !metadata.is_file() || metadata.nlink() != 1 {
-                continue;
-            }
-            if metadata.uid() == 0 {
-                ensure!(
-                    unsafe { libc::fchown(file.as_raw_fd(), uid, u32::MAX) } == 0,
-                    "无法恢复 TUN 缓存所有者：{}",
-                    std::io::Error::last_os_error()
-                );
-            }
-        }
-        Ok(())
-    }
-    visit(directory, uid, 0, &mut 10_000)
-}
 fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> Result<()> {
     let directory = request.directory.context("缺少 TUN 配置目录")?;
     let config = request.config.context("缺少 TUN 配置")?;
@@ -330,14 +244,7 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     );
     check_user_file(&directory, uid, true)?;
     check_user_file(&config, uid, false)?;
-    let runtime = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(&directory)?;
-    ensure!(
-        runtime.metadata()?.uid() == uid,
-        "TUN 配置目录所有者发生变化"
-    );
+    let runtime = super::runtime::Snapshot::new(&directory, uid)?;
     ensure!(request.ports.len() <= 2, "TUN 端口参数无效");
     for port in request.ports {
         ensure!(port != 0, "TUN 端口参数无效");
@@ -352,11 +259,13 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     // supplied by the socket caller. The lease dies when its bridge disconnects.
     let mut child = Command::new(core)
         .args(["-d"])
-        .arg(&directory)
+        .arg(runtime.directory.path())
         .arg("-f")
-        .arg(&config)
+        .arg(runtime.directory.path().join("config.yaml"))
+        .current_dir(runtime.directory.path())
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("TMPDIR", runtime.directory.path().join("temp"))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -417,7 +326,7 @@ fn run_core(mut stream: UnixStream, request: Request, uid: u32, core: &Path) -> 
     })();
     terminate(&mut child);
     let _ = stream.shutdown(std::net::Shutdown::Both);
-    restore_runtime_owner(&runtime, uid)?;
+    runtime.save_cache()?;
     result
 }
 pub(crate) fn validate_session_path(socket: &Path, uid: u32) -> Result<()> {

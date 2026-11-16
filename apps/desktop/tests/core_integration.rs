@@ -314,7 +314,8 @@ async fn basic_system_proxy_and_tun() {
     } else {
         "proxies: []".into()
     };
-    std::fs::write(&profile, format!("{proxies}\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['{dns_address}']}}\ntun:\n  device: {device}\n  stack: system\n{tun_routes}  dns-hijack: []\n")).unwrap();
+    let untrusted_port = free_port();
+    std::fs::write(&profile, format!("{proxies}\nrules: ['IP-CIDR,203.0.113.0/24,REJECT,no-resolve', 'MATCH,DIRECT']\nlog-level: debug\ntunnels: ['tcp/udp,0.0.0.0:{untrusted_port},127.0.0.1:9,DIRECT']\ndns: {{enable: true, enhanced-mode: redir-host, nameserver: ['{dns_address}'], listen: '0.0.0.0:{untrusted_port}'}}\ntun:\n  device: {device}\n  stack: system\n{tun_routes}  dns-hijack: []\n")).unwrap();
     engine
         .import("Proxy smoke".into(), profile.display().to_string(), None)
         .await
@@ -326,6 +327,15 @@ async fn basic_system_proxy_and_tun() {
     let conflicting_controller =
         std::net::TcpListener::bind(("127.0.0.1", controller_port)).unwrap();
     engine.start().await.unwrap();
+    let generated: yaml_serde::Value = yaml_serde::from_str(
+        &std::fs::read_to_string(store.runtime().join("config.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert!(generated["tunnels"].is_null());
+    assert!(generated["dns"]["listen"].is_null());
+    assert!(std::net::TcpListener::bind(("0.0.0.0", untrusted_port)).is_ok());
+    assert!(std::net::UdpSocket::bind(("0.0.0.0", untrusted_port)).is_ok());
+    println!("PASS: subscription tunnels and DNS listeners never open in the real core");
     assert_ne!(engine.settings.controller_port, controller_port);
     assert_eq!(
         store.load_settings().unwrap().controller_port,
@@ -417,6 +427,8 @@ async fn basic_system_proxy_and_tun() {
     println!("PASS: changing mixed port updates native proxy endpoints and SOCKS forwards traffic");
     check_network_refresh(&mut engine, &store).await;
     engine.select_proxy_mode(ProxyMode::Tun).await.unwrap();
+    assert!(std::net::TcpListener::bind(("0.0.0.0", untrusted_port)).is_ok());
+    assert!(std::net::UdpSocket::bind(("0.0.0.0", untrusted_port)).is_ok());
     let state = engine.poll(Scope::Home).await.unwrap();
     assert!(state.running && state.tun && !state.system_proxy);
     engine.poll(Scope::Logs).await.unwrap();

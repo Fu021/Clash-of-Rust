@@ -173,34 +173,52 @@ pub enum Command {
 impl Command {
     pub(crate) fn check_protection(&self, settings: &Settings) -> anyhow::Result<()> {
         match self {
-            Self::Settings { settings: next, .. } => return settings.require_settings_change(next),
+            Self::Settings { settings: next, .. } => settings.require_settings_change(next),
             Self::ConfigSet { key, value } => {
                 let next = mutations::setting(settings, key, value.clone())?;
-                return settings.require_settings_change(&next);
+                settings.require_settings_change(&next)
             }
-            _ => {}
-        }
-        if !matches!(
-            self,
             Self::Meta
-                | Self::Start
-                | Self::Snapshot { .. }
-                | Self::RuleDocument { .. }
-                | Self::TrayNodes
-                | Self::Delay { .. }
-                | Self::RecoverUnreachable
-                | Self::Logs { .. }
-                | Self::ExportLogs
-                | Self::RecordFailure { .. }
-                | Self::CheckConfig
-                | Self::EffectiveConfig
-                | Self::Notify { .. }
-                | Self::Autostart { enabled: None }
-                | Self::Protect { enabled: false }
-        ) {
-            settings.require_mutable()?;
+            | Self::Start
+            | Self::Snapshot { .. }
+            | Self::RuleDocument { .. }
+            | Self::TrayNodes
+            | Self::Delay { .. }
+            | Self::RecoverUnreachable
+            | Self::Logs { .. }
+            | Self::ExportLogs
+            | Self::RecordFailure { .. }
+            | Self::CheckConfig
+            | Self::EffectiveConfig
+            | Self::Notify { .. }
+            | Self::Autostart { enabled: None }
+            | Self::Protect { enabled: false } => Ok(()),
+            Self::Stop
+            | Self::Restart
+            | Self::RecoverNetwork
+            | Self::Shutdown
+            | Self::Quit
+            | Self::RuleOverrides { .. }
+            | Self::RuleChange { .. }
+            | Self::Ports { .. }
+            | Self::Import { .. }
+            | Self::EditProfile { .. }
+            | Self::Activate { .. }
+            | Self::DeleteProfile { .. }
+            | Self::SaveRules { .. }
+            | Self::Select { .. }
+            | Self::Mode { .. }
+            | Self::Proxy { .. }
+            | Self::Protect { enabled: true }
+            | Self::Close { .. }
+            | Self::GeoUpdate
+            | Self::GeoInstall { .. }
+            | Self::Autostart { enabled: Some(_) }
+            | Self::UpdateInstall
+            | Self::UpdatePrepareTerminal
+            | Self::UpdateSelected { .. }
+            | Self::UpdateCommitTerminal { .. } => settings.require_mutable(),
         }
-        Ok(())
     }
 }
 
@@ -219,6 +237,35 @@ struct Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn additive_command_fields_keep_legacy_wire_defaults() {
+        let legacy = serde_json::json!({
+            "command": "import", "name": "example", "source": "https://example.invalid/sub",
+            "id": null
+        });
+        let parsed: Command = serde_json::from_value(legacy).unwrap();
+        assert!(matches!(
+            parsed,
+            Command::Import {
+                expect_current: false,
+                ..
+            }
+        ));
+        let mut current = serde_json::to_value(parsed).unwrap();
+        current["future_field"] = serde_json::json!(true);
+        assert!(matches!(
+            serde_json::from_value::<Command>(current).unwrap(),
+            Command::Import {
+                expect_current: false,
+                ..
+            }
+        ));
+        assert!(
+            serde_json::from_value::<Command>(serde_json::json!({"command": "unknown-command"}))
+                .is_err()
+        );
+    }
 
     #[test]
     fn terminal_update_start_preference_defaults_to_legacy_recovery() {

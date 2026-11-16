@@ -84,6 +84,7 @@ mod tests {
 
     fn profile(source: &str) -> Profile {
         Profile {
+            builtin: false,
             id: uuid::Uuid::new_v4().to_string(),
             name: "Fixture".into(),
             source: source.into(),

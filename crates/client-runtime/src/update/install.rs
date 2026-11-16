@@ -2,6 +2,7 @@
 use super::Downloaded;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -11,6 +12,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+mod package;
 mod windows;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -161,7 +163,7 @@ impl InstallSession {
     }
 }
 
-fn verify(plan: &Plan, directory: &Path) -> Result<()> {
+fn verify(plan: &Plan, directory: &Path) -> Result<package::Verified> {
     if plan.package.parent() != Some(directory)
         || !plan.executable.is_absolute()
         || plan
@@ -171,20 +173,7 @@ fn verify(plan: &Plan, directory: &Path) -> Result<()> {
     {
         bail!("更新路径无效");
     }
-    let mut file = fs::File::open(&plan.package).context("安装包已被删除或拦截")?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer).context("无法读取安装包")?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    if clash_client_core::file_hash::hex(hash.finalize()) != plan.sha256 {
-        bail!("安装包校验失败，已停止安装");
-    }
-    Ok(())
+    package::open(&plan.package, &plan.sha256)
 }
 
 fn command(executable: &Path) -> Command {
@@ -419,7 +408,7 @@ pub fn helper_main() -> bool {
             bail!("更新信息过大");
         }
         let plan: Plan = serde_json::from_slice(&data)?;
-        verify(&plan, &directory)?;
+        let verified = verify(&plan, &directory)?;
         record_installation(
             &plan,
             &directory,
@@ -427,7 +416,7 @@ pub fn helper_main() -> bool {
             "安装助手正在处理，尚未确认完成",
             false,
         )?;
-        install(&plan, &directory)?;
+        install(&plan, &directory, &verified)?;
         Ok(plan)
     })();
     let cancelled = directory.join("cancel").exists();
@@ -545,13 +534,13 @@ pub fn cleanup(directory: &Path) {
 }
 
 #[cfg(windows)]
-fn install(plan: &Plan, directory: &Path) -> Result<()> {
+fn install(plan: &Plan, directory: &Path, verified: &package::Verified) -> Result<()> {
     anyhow::ensure!(
         !plan.require_commit || supports_deferred_install(&plan.version),
         "旧安装包不支持延迟安装交接"
     );
     let mut installer = crate::platform::launch_update_installer(
-        &plan.package,
+        &verified.path,
         plan.require_commit.then_some((directory, plan.parent)),
     )?;
     fs::write(directory.join("ready"), b"")?;
@@ -559,7 +548,7 @@ fn install(plan: &Plan, directory: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn install(plan: &Plan, directory: &Path) -> Result<()> {
+fn install(_plan: &Plan, directory: &Path, verified: &package::Verified) -> Result<()> {
     if !Path::new("/usr/bin/dpkg").is_file() {
         bail!("当前系统没有 dpkg，无法安装 DEB");
     }
@@ -576,7 +565,7 @@ fn install(plan: &Plan, directory: &Path) -> Result<()> {
     };
     let mut child = install
         .arg("-i")
-        .arg(&plan.package)
+        .arg(&verified.path)
         .spawn()
         .context("无法启动 DEB 安装程序")?;
     fs::write(directory.join("ready"), b"")?;
@@ -589,12 +578,12 @@ fn install(plan: &Plan, directory: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn install(plan: &Plan, directory: &Path) -> Result<()> {
-    macos::install(plan, directory)
+fn install(plan: &Plan, directory: &Path, verified: &package::Verified) -> Result<()> {
+    macos::install(plan, directory, &verified.path)
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-fn install(_: &Plan, _: &Path) -> Result<()> {
+fn install(_: &Plan, _: &Path, _: &package::Verified) -> Result<()> {
     bail!("当前平台暂不支持自动安装");
 }
 

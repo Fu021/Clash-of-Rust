@@ -149,26 +149,72 @@ fn wait_for_shutdown_with(
 
 fn privileged_transaction(
     app: &Path,
-    replacement: &Path,
-    staged: &Path,
-    backup: &Path,
+    package: &Path,
+    sha256: &str,
     directory: &Path,
     parent: u32,
     require_commit: bool,
 ) -> String {
-    // One authorization covers staging, the atomic swap, rollback and cleanup.
-    // The GUI remains open until the validated staged app is ready to replace it.
     format!(
-        "set -eu\napp={}\nstaged={}\nbackup={}\nready={}\ncancel={}\ncommit={}\ndirectory={}\nsuccess=0\ncleanup() {{\n  if [ \"$success\" = 0 ] && [ -d \"$backup\" ] && [ ! -e \"$app\" ]; then /bin/mv \"$backup\" \"$app\"; fi\n  /bin/rm -rf \"$staged\"\n}}\ntrap cleanup EXIT\n/usr/bin/ditto {} \"$staged\"\n/usr/bin/codesign --verify --deep --strict \"$staged\"\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/usr/bin/touch \"$ready\"\ni=0\nwhile /bin/kill -0 {parent} 2>/dev/null{commit_wait}; do\n  [ -d \"$directory\" ] && [ ! -e \"$cancel\" ] || {{ echo '客户端取消了更新交接，已保留旧版本' >&2; exit 1; }}\n  [ \"$i\" -lt 450 ] || {{ echo '客户端未能正常退出，已保留旧版本' >&2; exit 1; }}\n  i=$((i+1))\n  /bin/sleep 0.1\ndone\n[ -d \"$directory\" ]\n[ ! -e \"$cancel\" ]\n/bin/mv \"$app\" \"$backup\"\n{}\n/bin/mv \"$staged\" \"$app\"\nsuccess=1\n/bin/rm -rf \"$backup\"\n",
+        r#"set -eu
+umask 077
+app={}
+package={}
+expected={}
+ready={}
+cancel={}
+commit={}
+directory={}
+frozen=$(/usr/bin/mktemp -d /private/tmp/clash-install-root.XXXXXXXX)
+staged="$frozen/next.app"
+backup="$frozen/previous.app"
+mount="$frozen/volume"
+success=0
+cleanup() {{
+  if [ "$success" = 0 ] && [ -d "$backup" ]; then
+    if [ ! -e "$app" ] && [ ! -L "$app" ] && /bin/mv -h "$backup" "$app"; then
+      :
+    else
+      echo "恢复失败，旧应用保留在 $backup" >&2
+      return 1
+    fi
+  fi
+  /usr/bin/hdiutil detach "$mount" >/dev/null 2>&1 || true
+  /bin/rm -rf "$frozen"
+}}
+trap cleanup EXIT
+/bin/cp -P "$package" "$frozen/package.dmg"
+[ -f "$frozen/package.dmg" ] && [ ! -L "$frozen/package.dmg" ]
+actual=$(/usr/bin/shasum -a 256 "$frozen/package.dmg" | /usr/bin/awk '{{print $1}}')
+[ "$actual" = "$expected" ] || {{ echo '安装包校验失败，已停止安装' >&2; exit 1; }}
+/bin/mkdir "$mount"
+/usr/bin/hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" "$frozen/package.dmg" >/dev/null
+/usr/bin/ditto "$mount/Clash of Rust.app" "$staged"
+/usr/bin/codesign --verify --deep --strict "$staged"
+[ -d "$directory" ]
+[ ! -e "$cancel" ]
+/usr/bin/touch "$ready"
+i=0
+while /bin/kill -0 {parent} 2>/dev/null{commit_wait}; do
+  [ -d "$directory" ] && [ ! -e "$cancel" ] || {{ echo '客户端取消了更新交接，已保留旧版本' >&2; exit 1; }}
+  [ "$i" -lt 450 ] || {{ echo '客户端未能正常退出，已保留旧版本' >&2; exit 1; }}
+  i=$((i+1))
+  /bin/sleep 0.1
+done
+[ -d "$directory" ]
+[ ! -e "$cancel" ]
+/bin/mv -h "$app" "$backup"
+[ ! -e "$app" ] && [ ! -L "$app" ]
+/bin/mv -h "$staged" "$app"
+success=1
+"#,
         shell_quote(&app.to_string_lossy()),
-        shell_quote(&staged.to_string_lossy()),
-        shell_quote(&backup.to_string_lossy()),
+        shell_quote(&package.to_string_lossy()),
+        shell_quote(sha256),
         shell_quote(&directory.join("ready").to_string_lossy()),
         shell_quote(&directory.join("cancel").to_string_lossy()),
         shell_quote(&directory.join("commit").to_string_lossy()),
         shell_quote(&directory.to_string_lossy()),
-        shell_quote(&replacement.to_string_lossy()),
-        ":",
         commit_wait = if require_commit {
             " || [ ! -e \"$commit\" ]"
         } else {
@@ -177,7 +223,7 @@ fn privileged_transaction(
     )
 }
 
-pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
+pub(super) fn install(plan: &Plan, directory: &Path, package: &Path) -> Result<()> {
     ensure_installable(&plan.executable)?;
     ensure!(plan.parent > 1, "更新交接进程无效");
     let app = app_path(&plan.executable)?;
@@ -195,7 +241,7 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
                 "-mountpoint",
             ])
             .arg(&mount)
-            .arg(&plan.package),
+            .arg(package),
         "挂载更新 DMG",
         60,
     );
@@ -220,9 +266,8 @@ pub(super) fn install(plan: &Plan, directory: &Path) -> Result<()> {
             stage(directory, "正在请求安装授权，请完成系统确认…")?;
             return administrator(&privileged_transaction(
                 app,
-                &replacement,
-                &staged,
-                &backup,
+                package,
+                &plan.sha256,
                 directory,
                 plan.parent,
                 plan.require_commit,
@@ -332,10 +377,48 @@ mod tests {
     #[test]
     fn privileged_handoff_also_waits_for_commit_only_when_requested() {
         let path = Path::new("/tmp/fixture");
-        let deferred = privileged_transaction(path, path, path, path, path, 123, true);
-        let immediate = privileged_transaction(path, path, path, path, path, 123, false);
+        let deferred = privileged_transaction(path, path, "trusted-hash", path, 123, true);
+        let immediate = privileged_transaction(path, path, "trusted-hash", path, 123, false);
         assert!(deferred.contains("while /bin/kill -0 123 2>/dev/null || [ ! -e \"$commit\" ]"));
         assert!(immediate.contains("while /bin/kill -0 123 2>/dev/null;"));
+        assert!(deferred.contains("expected='trusted-hash'"));
+        assert!(deferred.contains("[ \"$actual\" = \"$expected\" ]"));
+        assert!(deferred.contains("\"$frozen/package.dmg\""));
+    }
+
+    #[test]
+    fn privileged_rollback_preserves_the_backup_if_the_destination_is_occupied() {
+        let directory = tempfile::tempdir().unwrap();
+        let backup = directory.path().join("previous.app");
+        let app = directory.path().join("current.app");
+        fs::create_dir(&backup).unwrap();
+        fs::write(backup.join("old"), b"old app").unwrap();
+        fs::create_dir(&app).unwrap();
+        fs::write(app.join("external"), b"external change").unwrap();
+        let transaction = privileged_transaction(&app, &app, "hash", directory.path(), 123, false);
+        let cleanup = transaction
+            .split_once("cleanup() {")
+            .unwrap()
+            .1
+            .split_once("\n}\n")
+            .unwrap()
+            .0;
+        let script = format!(
+            "success=0\nbackup={}\napp={}\nfrozen={}\ncleanup() {{{cleanup}\n}}\ncleanup\n",
+            shell_quote(&backup.to_string_lossy()),
+            shell_quote(&app.to_string_lossy()),
+            shell_quote(&directory.path().to_string_lossy()),
+        );
+        assert!(
+            !Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(fs::read(backup.join("old")).unwrap(), b"old app");
+        assert_eq!(fs::read(app.join("external")).unwrap(), b"external change");
     }
 
     #[test]

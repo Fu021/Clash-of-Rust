@@ -78,6 +78,7 @@ pub(super) fn apply(map: &mut Mapping, settings: &Settings) -> Result<bool> {
         Some(Value::Mapping(dns)) => dns,
         _ => bail!("订阅 dns 必须是配置对象"),
     };
+    dns.remove(Value::from("listen"));
     let managed = settings.dns_override || dns.is_empty();
     let fake_ip = settings.fake_ip_enabled();
     if managed {

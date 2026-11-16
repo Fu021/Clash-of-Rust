@@ -9,8 +9,11 @@ use yaml_serde::{Mapping, Value};
 
 mod dns;
 pub use dns::{DEFAULT_DNS_NAMESERVERS, DEFAULT_FAKE_IP_EXCLUSIONS};
+pub mod ingress;
 mod ports;
 pub use ports::reserve_controller;
+mod profile;
+pub use profile::Profile;
 
 pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOSITE,category-ads-all,REJECT",
@@ -482,28 +485,6 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Profile {
-    pub id: String,
-    pub name: String,
-    pub source: String,
-    pub updated: u64,
-    pub usage: Option<String>,
-}
-
-impl Profile {
-    pub fn is_default(&self) -> bool {
-        self.name == "默认直连"
-            && Path::new(&self.source)
-                .file_name()
-                .is_some_and(|name| name == "default.yaml")
-    }
-
-    pub fn is_local(&self) -> bool {
-        !reqwest::Url::parse(&self.source).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Store {
     pub root: PathBuf,
@@ -573,6 +554,12 @@ impl Store {
         )
     }
     pub fn profiles(&self) -> Result<Vec<Profile>> {
+        self.read_profiles(false)
+    }
+    pub fn migrate_profiles(&self) -> Result<Vec<Profile>> {
+        self.read_profiles(true)
+    }
+    fn read_profiles(&self, persist_migration: bool) -> Result<Vec<Profile>> {
         let path = self.root.join("profiles.json");
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
@@ -581,8 +568,36 @@ impl Store {
                 return Err(error).with_context(|| format!("无法读取订阅索引：{}", path.display()));
             }
         };
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("订阅索引格式错误：{}", path.display()))
+        let records: Vec<serde_json::Value> = serde_json::from_slice(&bytes)
+            .with_context(|| format!("订阅索引格式错误：{}", path.display()))?;
+        let migrate = records.iter().any(|record| record.get("builtin").is_none());
+        let profiles: Vec<Profile> = records
+            .into_iter()
+            .map(|record| -> Result<Profile> {
+                let legacy = record.get("builtin").is_none();
+                let mut profile: Profile = serde_json::from_value(record)?;
+                if legacy
+                    && profile.name == "默认直连"
+                    && profile.source.is_empty()
+                    && self
+                        .profile_path(&profile.id)
+                        .ok()
+                        .and_then(|path| std::fs::read(path).ok())
+                        .is_some_and(|raw| {
+                            raw == include_bytes!("../../../../resources/default.yaml")
+                        })
+                {
+                    profile.builtin = true;
+                    profile.source = "default.yaml".into();
+                }
+                Ok(profile)
+            })
+            .collect::<Result<_>>()
+            .with_context(|| format!("订阅索引格式错误：{}", path.display()))?;
+        if persist_migration && migrate {
+            self.save_profiles(&profiles)?;
+        }
+        Ok(profiles)
     }
     pub fn save_profiles(&self, profiles: &[Profile]) -> Result<()> {
         atomic_write(
@@ -714,21 +729,7 @@ pub fn runtime_config_with_rules(
     } else if !builtin {
         apply_rules(&mut map, &settings.rule_overrides)?;
     }
-    // The application owns all ingress and controller settings. A subscription cannot
-    // expose the API, load a dashboard, or silently enable TUN.
-    for key in [
-        "external-ui",
-        "external-ui-url",
-        "external-controller-tls",
-        "external-controller-unix",
-        "external-controller-pipe",
-        "external-controller-cors",
-        "listeners",
-        "authentication",
-        "cor-application-rules",
-    ] {
-        map.remove(Value::from(key));
-    }
+    ingress::subscription(&mut map);
     for key in ["port", "socks-port", "redir-port", "tproxy-port"] {
         map.insert(Value::from(key), Value::from(0));
     }
@@ -1253,6 +1254,44 @@ mod tests {
     }
     use super::*;
     #[test]
+    fn loading_legacy_profiles_persists_identity_without_rewriting_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let raw = include_bytes!("../../../../resources/default.yaml");
+        atomic_write(&store.profile_path(&id).unwrap(), raw).unwrap();
+        let legacy = serde_json::json!([{
+            "id": id, "name": "默认直连", "source": "", "updated": 0, "usage": null
+        }]);
+        atomic_write(
+            &store.root.join("profiles.json"),
+            &serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        assert!(store.profiles().unwrap()[0].is_default());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(store.root.join("profiles.json")).unwrap()
+            )
+            .unwrap(),
+            legacy
+        );
+        let mut profiles = store.migrate_profiles().unwrap();
+        assert!(profiles[0].is_default());
+        profiles[0].name = "Direct".into();
+        store.save_profiles(&profiles).unwrap();
+        assert!(store.profiles().unwrap()[0].is_default());
+        assert_eq!(
+            std::fs::read(store.profile_path(&id).unwrap()).unwrap(),
+            raw
+        );
+        profiles[0].builtin = false;
+        profiles[0].name = "默认直连".into();
+        store.save_profiles(&profiles).unwrap();
+        assert!(!store.profiles().unwrap()[0].is_default());
+    }
+
+    #[test]
     fn profile_origin_distinguishes_imported_files_from_remote_subscriptions() {
         for (source, local) in [
             ("", true),
@@ -1264,6 +1303,7 @@ mod tests {
             ("HTTPS://example.test/subscription", false),
         ] {
             let profile = Profile {
+                builtin: false,
                 id: "fixture".into(),
                 name: "Imported".into(),
                 source: source.into(),
@@ -1497,6 +1537,11 @@ mod tests {
                     yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
                 assert_eq!(result["ipv6"].as_bool(), Some(ipv6));
                 let mut expected = original["dns"].clone();
+                expected
+                    .as_mapping_mut()
+                    .unwrap()
+                    .remove(Value::from("listen"));
+                assert!(result["dns"]["listen"].is_null());
                 expected["ipv6"] = Value::from(ipv6);
                 expected["ipv6-timeout"] = Value::from(dns::DEFAULT_IPV6_TIMEOUT_MS);
                 if dns_override {
@@ -1980,7 +2025,7 @@ mod tests {
 
     #[test]
     fn subscription_cannot_expose_controller_or_enable_tun() {
-        let raw = "proxies: []\nexternal-controller: 0.0.0.0:9090\nexternal-ui: ui\nlisteners: [{name: evil}]\nallow-lan: true\ntun: {enable: true}\n";
+        let raw = "proxies: []\nexternal-controller: 0.0.0.0:9090\nexternal-ui: ui\nlisteners: [{name: evil}]\nallow-lan: true\ntun: {enable: true}\ntunnels: ['tcp/udp,0.0.0.0:5555,example.invalid:443,DIRECT']\nexternal-doh-server: ':443'\ndns: {listen: '0.0.0.0:53', nameserver: [1.1.1.1]}\niptables: {enable: true}\nntp: {enable: true, write-to-system: true}\n";
         let settings = Settings::default();
         let result: Value = yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
         assert_eq!(
@@ -1991,6 +2036,19 @@ mod tests {
         assert_eq!(result["allow-lan"].as_bool(), Some(false));
         assert!(result["listeners"].is_null());
         assert!(result["external-ui"].is_null());
+        assert!(result["tunnels"].is_null());
+        assert!(result["external-doh-server"].is_null());
+        assert!(result["dns"]["listen"].is_null());
+        assert!(result["iptables"].is_null());
+        assert_eq!(result["ntp"]["write-to-system"], false);
+        let settings = Settings {
+            dns_override: false,
+            ..settings.clone()
+        };
+        let without_override: Value =
+            yaml_serde::from_str(&runtime_config(raw, &settings).unwrap()).unwrap();
+        assert!(without_override["dns"]["listen"].is_null());
+        assert_eq!(without_override["dns"]["nameserver"][0], "1.1.1.1");
         assert_eq!(result["geo-auto-update"].as_bool(), Some(false));
         assert_eq!(
             result["geox-url"]["geoip"].as_str(),

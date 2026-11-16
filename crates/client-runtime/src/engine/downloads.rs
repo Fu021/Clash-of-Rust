@@ -627,6 +627,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::at(root.path().to_owned()).unwrap();
         let profile = Profile {
+            builtin: false,
             id: uuid::Uuid::new_v4().to_string(),
             name: "Fixture".into(),
             source: "https://example.test/current".into(),
@@ -673,6 +674,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::at(root.path().to_owned()).unwrap();
         let profile = Profile {
+            builtin: false,
             id: uuid::Uuid::new_v4().to_string(),
             name: "Fixture".into(),
             source: "https://example.test/sub".into(),
@@ -726,6 +728,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::at(root.path().to_owned()).unwrap();
         let profile = Profile {
+            builtin: false,
             id: uuid::Uuid::new_v4().to_string(),
             name: "Fixture".into(),
             source: "https://example.test/sub".into(),

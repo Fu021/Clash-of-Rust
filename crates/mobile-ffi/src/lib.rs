@@ -117,41 +117,26 @@ impl Session {
         core::profile_transaction::recover(&store.root)?;
         core::geodata::recover(&store.runtime())?;
         let mut settings = store.load_settings()?;
-        let mut profiles = store.profiles()?;
+        let mut profiles = store.migrate_profiles()?;
         let first_profile = profiles.is_empty();
-        let legacy_default = profiles.iter().position(|profile| {
-            profile.name == "默认直连"
-                && profile.source.is_empty()
-                && store
-                    .profile_path(&profile.id)
-                    .ok()
-                    .and_then(|path| std::fs::read(path).ok())
-                    .is_some_and(|raw| {
-                        raw.as_slice() == include_bytes!("../../../resources/default.yaml")
-                    })
-        });
-        if let Some(index) = legacy_default {
-            profiles[index].source = "default.yaml".into();
-        }
-        if legacy_default.is_some() || !profiles.iter().any(Profile::is_default) {
+        if !profiles.iter().any(Profile::is_default) {
             let mut tx = core::profile_transaction::Transaction::new(&store.root)?;
-            if !profiles.iter().any(Profile::is_default) {
-                let id = uuid::Uuid::new_v4().to_string();
-                profiles.push(Profile {
-                    id: id.clone(),
-                    name: "默认直连".into(),
-                    source: "default.yaml".into(),
-                    updated: 0,
-                    usage: None,
-                });
-                if first_profile {
-                    settings.active_profile = Some(id.clone());
-                }
-                tx.stage(
-                    &store.profile_path(&id)?,
-                    include_bytes!("../../../resources/default.yaml"),
-                )?;
+            let id = uuid::Uuid::new_v4().to_string();
+            profiles.push(Profile {
+                builtin: true,
+                id: id.clone(),
+                name: "默认直连".into(),
+                source: "default.yaml".into(),
+                updated: 0,
+                usage: None,
+            });
+            if first_profile {
+                settings.active_profile = Some(id.clone());
             }
+            tx.stage(
+                &store.profile_path(&id)?,
+                include_bytes!("../../../resources/default.yaml"),
+            )?;
             tx.stage(
                 &store.root.join("profiles.json"),
                 &serde_json::to_vec_pretty(&profiles)?,
@@ -622,6 +607,7 @@ impl Session {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let mut profiles = self.profiles.clone();
         let profile = Profile {
+            builtin: false,
             id: id.clone(),
             name: name.trim().into(),
             source: source.into(),
@@ -1382,7 +1368,13 @@ mod tests {
         let id = session.profile().id.clone();
         let mut profiles = session.profiles.clone();
         profiles[0].source.clear();
-        session.store.save_profiles(&profiles).unwrap();
+        let mut legacy = serde_json::to_value(&profiles).unwrap();
+        legacy[0].as_object_mut().unwrap().remove("builtin");
+        core::config::atomic_write(
+            &session.store.root.join("profiles.json"),
+            &serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
         let migrated = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
         assert_eq!(migrated.profiles.len(), 1);
         assert_eq!(migrated.profile().id, id);
@@ -1393,7 +1385,7 @@ mod tests {
         migrated.store.save_profiles(&profiles).unwrap();
         let restored = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
         assert_eq!(restored.profile().id, id);
-        assert_eq!(restored.profiles.len(), 2);
+        assert_eq!(restored.profiles.len(), 1);
         assert_eq!(
             restored
                 .profiles
@@ -1402,6 +1394,10 @@ mod tests {
                 .count(),
             1
         );
+        profiles[0].builtin = false;
+        restored.store.save_profiles(&profiles).unwrap();
+        let restored = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        assert_eq!(restored.profiles.len(), 2);
     }
 
     #[tokio::test]

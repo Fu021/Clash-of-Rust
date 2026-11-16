@@ -388,6 +388,7 @@ mod tests {
             store.save_settings(&settings).unwrap();
             assert!(store.load_settings().unwrap().update_prereleases);
             let profile = crate::config::Profile {
+                builtin: false,
                 id: uuid::Uuid::new_v4().to_string(),
                 name: "ordinary-user fixture".into(),
                 source: "https://example.test/subscription".into(),

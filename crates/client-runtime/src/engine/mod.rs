@@ -296,7 +296,7 @@ impl Engine {
                 store.save_settings(&settings)?;
             }
         }
-        let mut profiles = store.profiles()?;
+        let mut profiles = store.migrate_profiles()?;
         if profiles.is_empty() {
             let raw = read_profile(&resources.join("default.yaml"))
                 .context("默认配置缺失，请重新安装")?;
@@ -304,6 +304,7 @@ impl Engine {
             let id = uuid::Uuid::new_v4().to_string();
             atomic_write(&store.profile_path(&id)?, raw.as_bytes())?;
             profiles.push(Profile {
+                builtin: true,
                 id: id.clone(),
                 name: "默认直连".into(),
                 source: resources.join("default.yaml").display().to_string(),
@@ -798,12 +799,20 @@ impl Engine {
 
     fn profile_payload(&self, raw: &str, settings: &Settings, id: &str) -> Result<String> {
         let builtin = self.profiles.iter().any(|p| p.id == id && p.is_default());
-        crate::config::runtime_config_with_rules(
+        let payload = crate::config::runtime_config_with_rules(
             raw,
             settings,
             settings.rule_profiles.get(id).map(AsRef::as_ref),
             builtin,
-        )
+        )?;
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let mut config: yaml_serde::Mapping = yaml_serde::from_str(&payload)?;
+            crate::config::ingress::provider_paths(&mut config, &self.store.runtime())?;
+            Ok(yaml_serde::to_string(&config)?)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        Ok(payload)
     }
 
     pub fn rule_document(&self, id: &str) -> Result<crate::rule_manager::Document> {
@@ -1179,6 +1188,7 @@ impl Engine {
         let payload = self.profile_payload(&raw, &self.settings, &id)?;
         let active = self.settings.active_profile.as_ref() == Some(&id);
         let profile = Profile {
+            builtin: false,
             id: id.clone(),
             name: if name.trim().is_empty() {
                 "未命名订阅".into()
