@@ -1249,7 +1249,7 @@ fn setting_values(key: &str) -> &'static [&'static str] {
         | "udp" => &["false", "true"],
         "theme_mode" => &["system", "light", "dark"],
         "accent_color" => &["teal", "blue", "purple", "rose", "amber", "slate"],
-        "node_sort" => &["latency_ascending", "latency_descending", "name"],
+        "node_sort" | "tui_node_sort" => &["latency_ascending", "latency_descending", "name"],
         _ => &[],
     }
 }

@@ -35,7 +35,7 @@
 | `prepared_vm_environment.py` | 共享模块 | 冻结隔离 APT 环境、独立配方、guest 包清单和模板清理；由输入解析和 Linux VM 入口调用，不在开发服务器准备环境。 |
 | `linux_apt.py` | 模块 | 限时安装系统依赖；按本轮 APT 签名索引校验虚拟机 DEB 下载缓存，失败回退正常下载。 |
 | `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证。 |
-| `windows_ci.py` | 模块 | Windows 普通用户、服务、安装器、更新及安装包/未压缩 EXE/DLL 的 Defender 验证，扫描证据进入打包收据。 |
+| `windows_ci.py` | 模块 | Windows 普通用户、服务、含空格和中文的自定义目录安装与更新，以及安装包/未压缩 EXE/DLL 的 Defender 验证；扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `macos_runner_network.py` | 共享模块 | 官方 Tailscale Action 接入前后保存、恢复并验证 runner 原生 DNS；由 `action_cache.py` 调用，报告并入 Mac 验收附件，不用于应用网络接管。 |
 | `macos_test_network.py` | 共享模块 | 可丢弃 Mac runner 安装测试前的网络快照、测试助手取证/清理、失败恢复和附件端点检查；由安装验收及上传前检查调用，不用于用户网络。 |

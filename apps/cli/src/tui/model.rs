@@ -1,6 +1,7 @@
 use super::form::{self, Form};
 use super::input::Key;
 use anyhow::{Context, Result, ensure};
+use clash_client_core::proxy_order::{self, NodeSort};
 use clash_client_runtime::{
     control::{Meta, Owner, Poll},
     engine::{Scope, Snapshot},
@@ -63,6 +64,7 @@ pub(super) enum Action {
     None,
     Refresh,
     Select(Target),
+    SetNodeSort(NodeSort),
     CheckNetwork(clash_client_core::network_tools::Tool, String),
     CancelNetwork,
     Execute(crate::args::Args),
@@ -113,6 +115,7 @@ impl State {
     }
 
     pub fn accept(&mut self, poll: Option<Poll>) {
+        let selected_node = self.selected_node();
         let changed = self
             .poll
             .as_ref()
@@ -131,7 +134,18 @@ impl State {
             self.execution = None;
         }
         if self.page != Page::Network {
-            self.selected = self.selected.min(self.items().len().saturating_sub(1));
+            let selected = {
+                let items = self.items();
+                let selected = if changed {
+                    None
+                } else {
+                    selected_node
+                        .as_deref()
+                        .and_then(|name| items.iter().position(|item| *item == name))
+                };
+                selected.unwrap_or(self.selected.min(items.len().saturating_sub(1)))
+            };
+            self.selected = selected;
         }
     }
 
@@ -184,12 +198,15 @@ impl State {
             Page::Nodes => {
                 let proxies = &poll.snapshot.proxies.proxies;
                 match self.group.as_deref().and_then(|group| proxies.get(group)) {
-                    Some(group) => group
-                        .all
-                        .iter()
-                        .map(|name| name.as_str())
-                        .filter(|name| name.to_lowercase().contains(&query))
-                        .collect(),
+                    Some(group) => proxy_order::sorted_indices(
+                        &group.all,
+                        poll.meta.settings.tui_node_sort,
+                        |name| proxies.get(name).and_then(|proxy| proxy.delay),
+                        |name| name.to_lowercase().contains(&query),
+                    )
+                    .into_iter()
+                    .map(|index| group.all[index].as_str())
+                    .collect(),
                     None => proxies
                         .iter()
                         .filter(|(_, proxy)| !proxy.all.is_empty())
@@ -214,6 +231,25 @@ impl State {
 
     pub fn entering_text(&self) -> bool {
         self.searching || self.form.as_ref().is_some_and(|form| form.editing)
+    }
+
+    fn selected_node(&self) -> Option<String> {
+        if self.page == Page::Nodes && self.group.is_some() {
+            self.items()
+                .get(self.selected)
+                .map(|name| (*name).to_owned())
+        } else {
+            None
+        }
+    }
+
+    fn restore_selected_node(&mut self, name: Option<&str>) {
+        if let Some(name) = name {
+            let index = self.items().iter().position(|item| *item == name);
+            if let Some(index) = index {
+                self.selected = index;
+            }
+        }
     }
 
     pub fn key(&mut self, key: Key) -> Action {
@@ -339,6 +375,29 @@ impl State {
             }
         }
         match key {
+            Key::Char('l' | 'n') if self.page == Page::Nodes => {
+                let mode = if key == Key::Char('l') {
+                    NodeSort::LatencyAscending
+                } else {
+                    NodeSort::Name
+                };
+                let Some(poll) = &self.poll else {
+                    self.message = Some("后台未运行，无法保存节点排序".into());
+                    return Action::None;
+                };
+                if self.error.is_some() {
+                    self.message = Some("后台状态过期，请先刷新".into());
+                } else if poll.meta.settings.tui_node_sort != mode {
+                    if self.demo {
+                        let selected_node = self.selected_node();
+                        self.poll.as_mut().unwrap().meta.settings.tui_node_sort = mode;
+                        self.restore_selected_node(selected_node.as_deref());
+                    } else {
+                        self.message = None;
+                        return Action::SetNodeSort(mode);
+                    }
+                }
+            }
             Key::Char('[' | ']') if self.page == Page::Network => {
                 let count = clash_client_core::network_tools::Tool::ALL.len();
                 self.network_tool = if key == Key::Char(']') {

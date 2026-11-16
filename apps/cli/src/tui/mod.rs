@@ -78,6 +78,32 @@ async fn select(args: &Args, target: Target) -> Result<Option<Poll>> {
     .context("节点切换等待超时；实际选择以刷新结果为准")?
 }
 
+async fn set_node_sort(
+    args: &Args,
+    mode: clash_client_core::proxy_order::NodeSort,
+) -> Result<Option<Poll>> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let remote = backend::connect(args, false)
+            .await?
+            .context("后台已退出，未保存节点排序")?;
+        let _: serde_json::Value = remote
+            .request(Command::ConfigSet {
+                key: "tui_node_sort".into(),
+                value: serde_json::to_value(mode)?,
+            })
+            .await?;
+        remote
+            .request(Command::Snapshot {
+                scope: Scope::Proxies,
+                header: true,
+            })
+            .await
+            .map(Some)
+    })
+    .await
+    .context("保存节点排序等待超时；实际状态以刷新结果为准")?
+}
+
 pub async fn run(args: &Args) -> Result<()> {
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
@@ -163,6 +189,15 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
                         select(&args, target)
+                            .await
+                            .map(|poll| Reply::Snapshot(poll.map(Box::new)))
+                    })));
+                }
+                Action::SetNodeSort(mode) => {
+                    let args = args.clone();
+                    state.saving = true;
+                    request = Some(Request(tokio::spawn(async move {
+                        set_node_sort(&args, mode)
                             .await
                             .map(|poll| Reply::Snapshot(poll.map(Box::new)))
                     })));

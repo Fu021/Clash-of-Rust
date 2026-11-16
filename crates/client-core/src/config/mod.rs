@@ -46,6 +46,7 @@ pub const READABLE_SETTINGS: &[&str] = &[
     "run_mode",
     "proxy_mode",
     "node_sort",
+    "tui_node_sort",
     "rule_overrides",
     "rule_profiles",
     "application_rules",
@@ -72,6 +73,7 @@ pub const MUTABLE_SETTINGS: &[&str] = &[
     "delay_interval_minutes",
     "subscription_update_interval_minutes",
     "node_sort",
+    "tui_node_sort",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +196,7 @@ pub struct Settings {
     pub run_mode: String,
     pub proxy_mode: crate::model::ProxyMode,
     pub node_sort: crate::proxy_order::NodeSort,
+    pub tui_node_sort: crate::proxy_order::NodeSort,
     pub rule_overrides: RuleOverrides,
     pub rule_profiles:
         std::collections::BTreeMap<String, std::sync::Arc<crate::rule_manager::ProfileRules>>,
@@ -239,6 +242,7 @@ impl Default for Settings {
             run_mode: "rule".into(),
             proxy_mode: crate::model::ProxyMode::Off,
             node_sort: crate::proxy_order::NodeSort::default(),
+            tui_node_sort: crate::proxy_order::NodeSort::LatencyAscending,
             rule_overrides: RuleOverrides::default(),
             rule_profiles: Default::default(),
             application_rules: Default::default(),
@@ -255,6 +259,7 @@ impl Settings {
         proposed.text_scale = self.text_scale;
         proposed.tray_speed = self.tray_speed;
         proposed.node_sort = self.node_sort;
+        proposed.tui_node_sort = self.tui_node_sort;
         *self == proposed
     }
 
@@ -988,6 +993,7 @@ mod tests {
         appearance.text_scale = 125;
         appearance.tray_speed = true;
         appearance.node_sort = crate::proxy_order::NodeSort::LatencyAscending;
+        appearance.tui_node_sort = crate::proxy_order::NodeSort::Name;
         assert!(before.require_settings_change(&appearance).is_ok());
         assert_eq!(appearance.claude_protection, before.claude_protection);
 
@@ -1082,6 +1088,24 @@ mod tests {
         };
         store.save_settings(&selected).unwrap();
         assert!(store.load_settings().unwrap().update_prereleases);
+    }
+
+    #[test]
+    fn terminal_sort_defaults_for_older_settings_and_survives_reload() {
+        use crate::proxy_order::NodeSort;
+
+        let legacy: Settings = serde_json::from_str(r#"{"node_sort":"name"}"#).unwrap();
+        assert_eq!(legacy.tui_node_sort, NodeSort::LatencyAscending);
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::at(root.path().to_owned()).unwrap();
+        let selected = Settings {
+            tui_node_sort: NodeSort::Name,
+            ..legacy
+        };
+        store.save_settings(&selected).unwrap();
+        let loaded = store.load_settings().unwrap();
+        assert_eq!(loaded.tui_node_sort, NodeSort::Name);
+        assert_eq!(loaded.node_sort, NodeSort::Name);
     }
 
     #[test]

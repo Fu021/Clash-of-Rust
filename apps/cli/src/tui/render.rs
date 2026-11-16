@@ -178,7 +178,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             if state.page == Page::Network {
                 "正在检查… Esc 取消"
             } else {
-                "正在提交节点切换…"
+                "正在保存操作…"
             }
             .into(),
             Tone::Accent,
@@ -200,6 +200,8 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         (
             if state.page == Page::Network {
                 "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–6 切页   q 退出".into()
+            } else if state.page == Page::Nodes {
+                "  ↑↓ 选择   Enter 打开   l 延迟   n 名称   / 搜索   Esc 返回   q 退出".into()
             } else {
                 "  ↑↓ 选择   Enter 打开/选择   / 搜索   Esc 返回   r 刷新   q 退出".into()
             },
@@ -397,6 +399,13 @@ fn nodes(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
         ),
         (
             format!(
+                "排序：{}   [l 延迟↑] [n 名称]",
+                poll.meta.settings.tui_node_sort
+            ),
+            Tone::Muted,
+        ),
+        (
+            format!(
                 "搜索{}：{}",
                 if state.searching {
                     "（输入中）"
@@ -415,12 +424,12 @@ fn nodes(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
         .and_then(|group| proxies.get(group))
         .is_some_and(|group| group.kind.as_str() != "Selector")
     {
-        rows[2] = (
+        rows[3] = (
             "自动组 · 内核自行选择最优节点；在上一级手动组选择 AUTO 或具体节点".into(),
             Tone::Muted,
         );
     }
-    let available = height.saturating_sub(4).max(1);
+    let available = height.saturating_sub(5).max(1);
     let offset = state.selected.saturating_sub(available - 1);
     let name_width = width.saturating_sub(24);
     for (index, name) in items.iter().enumerate().skip(offset).take(available) {

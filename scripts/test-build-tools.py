@@ -1393,6 +1393,19 @@ class BuildTests(unittest.TestCase):
                     windows._installer_exit(directory/'setup.exe', ['/S'], 0)
                 self.assertLess(len(str(error.exception)), 4300)
 
+    def test_windows_installer_keeps_nsis_directory_unquoted_and_last(self):
+        directory = r'C:\自定义 路径\Clash of Rust'
+        with patch.object(windows.subprocess, 'CREATE_NO_WINDOW', 0, create=True), \
+                patch.object(windows.subprocess, 'Popen') as process:
+            process.return_value.__enter__.return_value.wait.return_value = 0
+            for prefix in ('/D=', '_?='):
+                windows._installer_exit('setup.exe', ['/S', prefix+directory], 0)
+                self.assertEqual(process.call_args.args[0], 'setup.exe /S '+prefix+directory)
+            with self.assertRaisesRegex(ValueError, 'final argument'):
+                windows._installer_exit('setup.exe', ['/D='+directory, '/S'], 0)
+            with self.assertRaisesRegex(ValueError, 'Invalid'):
+                windows._installer_exit('setup.exe', ['/D="'+directory+'"'], 0)
+
     def test_installed_update_driver_runs_outside_the_runner_checkout(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

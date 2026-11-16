@@ -66,6 +66,79 @@ fn automatic_groups_do_not_offer_invalid_manual_actions() {
 }
 
 #[test]
+fn node_sort_keys_preserve_selection_and_show_the_saved_mode() {
+    use clash_client_core::proxy_order::NodeSort;
+
+    let mut state = State::new(true);
+    state.page = Page::Nodes;
+    state.group = Some("PROXY".into());
+    assert_eq!(
+        state.items(),
+        ["DIRECT", "🇺🇸 美国 02", "🇯🇵 日本 01", "AUTO"]
+    );
+    state.selected = 1;
+    assert!(matches!(state.key(Key::Char('n')), Action::None));
+    assert_eq!(
+        state.poll.as_ref().unwrap().meta.settings.tui_node_sort,
+        NodeSort::Name
+    );
+    assert_eq!(state.items()[state.selected], "🇺🇸 美国 02");
+    assert!(
+        render::frame(&state, 80, 24)
+            .iter()
+            .any(|line| line.text.contains("排序：名称排序"))
+    );
+    state.key(Key::Char('l'));
+    assert_eq!(state.items()[state.selected], "🇺🇸 美国 02");
+    let mut next = demo_poll();
+    next.snapshot
+        .proxies
+        .proxies
+        .get_mut("🇯🇵 日本 01")
+        .unwrap()
+        .delay = Some(10);
+    state.accept(Some(next));
+    assert_eq!(state.items()[state.selected], "🇺🇸 美国 02");
+    assert_eq!(state.items()[1], "🇯🇵 日本 01");
+
+    let mut connected = State::new(false);
+    connected.accept(Some(demo_poll()));
+    connected.page = Page::Nodes;
+    assert!(matches!(
+        connected.key(Key::Char('n')),
+        Action::SetNodeSort(NodeSort::Name)
+    ));
+    assert_eq!(
+        connected.poll.as_ref().unwrap().meta.settings.tui_node_sort,
+        NodeSort::LatencyAscending
+    );
+    connected.group = Some("PROXY".into());
+    connected.selected = 1;
+    let mut saved = demo_poll();
+    saved.meta.settings.tui_node_sort = NodeSort::Name;
+    connected.accept(Some(saved));
+    assert_eq!(connected.items()[connected.selected], "🇺🇸 美国 02");
+    assert!(matches!(connected.key(Key::Char('n')), Action::None));
+    let frame = render::frame(&connected, 60, 18);
+    assert!(frame.iter().any(|line| line.text.contains("[n 名称]")));
+    connected.key(Key::Char('/'));
+    connected.key(Key::Char('l'));
+    connected.key(Key::Char('n'));
+    assert_eq!(connected.query, "ln");
+    assert!(connected.items().is_empty());
+    connected.key(Key::Escape);
+    connected.key(Key::Back);
+    assert!(connected.query.is_empty());
+    assert!(connected.group.is_none());
+    connected.failure("offline".into());
+    assert!(matches!(connected.key(Key::Char('l')), Action::None));
+    assert_eq!(
+        connected.poll.as_ref().unwrap().meta.settings.tui_node_sort,
+        NodeSort::Name
+    );
+}
+
+#[test]
 fn settings_and_operations_follow_the_shared_command_catalogue() {
     let mut state = State::new(true);
     state.page = Page::Settings;

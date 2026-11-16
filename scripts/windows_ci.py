@@ -244,7 +244,16 @@ def run_unelevated(command, env, timeout=240, on_start=None, expected_code=0):
 
 
 def _installer_exit(executable,args,code,timeout=60):
-    with subprocess.Popen([str(executable),*map(str,args)],
+    arguments = list(map(str, args))
+    if any(argument.startswith(('/D=', '_?=')) for argument in arguments[:-1]):
+        raise ValueError('NSIS installation directory must be the final argument')
+    if arguments and arguments[-1].startswith(('/D=', '_?=')):
+        if '"' in arguments[-1] or '\0' in arguments[-1]:
+            raise ValueError('Invalid NSIS installation directory')
+        command = subprocess.list2cmdline([str(executable), *arguments[:-1]])+' '+arguments[-1]
+    else:
+        command = [str(executable), *arguments]
+    with subprocess.Popen(command,
                           creationflags=subprocess.CREATE_NO_WINDOW) as process:
         actual = process.wait(timeout=timeout)
     if actual != code:
@@ -429,11 +438,12 @@ def _verify_installed_package(package, binary, root, smoke):
     # and read/execute the installed application, without granting write access
     # or changing the production service directory's protected ACL.
     allow_ordinary_user_directory(root, permissions='RX')
-    installed = root/'production-installed'
+    installed = root/'自定义安装目录 with spaces'
     _installer_exit(package, ['/S', f'/D={installed}'], 0)
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as registration:
             assert winreg.QueryValueEx(registration, 'DisplayVersion')[0] == file_version(binary)
+            assert winreg.QueryValueEx(registration, 'InstallLocation')[0] == str(installed)
         assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
         assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
         validate_resources(installed/'resources', 'windows')

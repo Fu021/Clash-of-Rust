@@ -144,9 +144,9 @@ pub(super) fn scalar(key: &str, value: &Value) -> String {
                 ("accent_color", "rose") => "玫瑰",
                 ("accent_color", "amber") => "琥珀",
                 ("accent_color", "slate") => "石板",
-                ("node_sort", "name") => "名称排序",
-                ("node_sort", "latency_ascending") => "延迟从低到高",
-                ("node_sort", "latency_descending") => "延迟从高到低",
+                ("node_sort" | "tui_node_sort", "name") => "名称排序",
+                ("node_sort" | "tui_node_sort", "latency_ascending") => "延迟从低到高",
+                ("node_sort" | "tui_node_sort", "latency_descending") => "延迟从高到低",
                 ("evidence", "measured") => "实测",
                 ("evidence", "inferred") => "辅助线索",
                 ("evidence", "unknown") => "尚未确认",
@@ -168,7 +168,11 @@ pub(super) fn scalar(key: &str, value: &Value) -> String {
                 ("effective", "next-login") => "下次登录生效",
                 _ => s,
             };
-            if matches!(key, "theme_mode" | "accent_color" | "node_sort") && name != s {
+            if matches!(
+                key,
+                "theme_mode" | "accent_color" | "node_sort" | "tui_node_sort"
+            ) && name != s
+            {
                 return clean(&format!("{name}（{s}）"));
             }
             if matches!(key, "start" | "generated_at")
@@ -238,6 +242,7 @@ pub(super) fn label(key: &str) -> &str {
         "update_check_interval_minutes" => "自动检查更新间隔",
         "active_profile" => "当前订阅 ID",
         "node_sort" => "节点排序",
+        "tui_node_sort" => "终端节点排序",
         "rule_overrides" => "快捷规则",
         "rule_profiles" => "各订阅规则设置",
         "application_rules" => "各订阅应用出口规则",

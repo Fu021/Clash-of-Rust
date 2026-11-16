@@ -170,15 +170,23 @@ async function checkHeroResizing(context, origin) {
       for (const width of [1920, 1280, 800, 360, 1920]) {
         await page.setViewportSize({ width, height: 900 });
         for (const zoom of [.8, 1, 1.25, 1.5, 2]) {
-          const geometry = await page.evaluate(zoom => {
+          await page.evaluate(zoom => {
             document.documentElement.style.zoom = String(zoom);
-            const scene = document.querySelector(".hero .scene").getBoundingClientRect();
-            const picture = document.querySelector(".hero .scene img").getBoundingClientRect();
             const image = document.querySelector(".hero .scene img");
+            image.getBoundingClientRect();
+          }, zoom);
+          await page.waitForFunction(() => {
+            const image = document.querySelector(".hero .scene img");
+            return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+          });
+          const geometry = await page.evaluate(() => {
+            const image = document.querySelector(".hero .scene img");
+            const scene = document.querySelector(".hero .scene").getBoundingClientRect();
+            const picture = image.getBoundingClientRect();
             return { scene: scene.width, picture: picture.width, left: picture.left - scene.left,
               ratio: picture.width / picture.height, original: image.naturalWidth / image.naturalHeight,
               overflow: document.documentElement.scrollWidth > innerWidth + 1 };
-          }, zoom);
+          });
           assert.ok(geometry.scene > 0 && Math.abs(geometry.scene - geometry.picture) < 2 &&
             Math.abs(geometry.left) < 2 && Math.abs(geometry.ratio - geometry.original) < .01 && !geometry.overflow,
             `Hero resize ${route} ${width}px ${zoom}: ${JSON.stringify(geometry)}`);

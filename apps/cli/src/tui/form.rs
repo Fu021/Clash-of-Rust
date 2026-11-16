@@ -48,6 +48,7 @@ pub(super) fn setting_title(key: &str) -> &str {
         "run_mode" => "运行模式",
         "proxy_mode" => "代理方式",
         "node_sort" => "节点排序",
+        "tui_node_sort" => "终端节点排序",
         "rule_overrides" => "快捷规则",
         "rule_profiles" => "订阅规则",
         "application_rules" => "应用规则",
@@ -244,6 +245,7 @@ pub(super) fn setting_value(
         "run_mode" => json!(settings.run_mode),
         "proxy_mode" => json!(settings.proxy_mode),
         "node_sort" => json!(settings.node_sort),
+        "tui_node_sort" => json!(settings.tui_node_sort),
         "rule_overrides" => json!(settings.rule_overrides),
         "rule_profiles" => json!(format!("{} 份订阅的规则", settings.rule_profiles.len())),
         "application_rules" => json!(format!(

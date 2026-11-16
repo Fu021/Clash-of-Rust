@@ -88,6 +88,17 @@ async fn protected_display_patch_persists_without_starting_or_changing_protectio
     )
     .await
     .unwrap();
+    execute(
+        &shared,
+        Command::ConfigSet {
+            key: "tui_node_sort".into(),
+            value: json!("name"),
+        },
+        Owner::Daemon,
+        None,
+    )
+    .await
+    .unwrap();
     let settings = {
         let engine = shared.lock().await;
         assert!(!engine.running());
@@ -95,6 +106,10 @@ async fn protected_display_patch_persists_without_starting_or_changing_protectio
         assert_eq!(
             engine.store.load_settings().unwrap().accent_color,
             crate::config::AccentColor::Blue
+        );
+        assert_eq!(
+            engine.store.load_settings().unwrap().tui_node_sort,
+            clash_client_core::proxy_order::NodeSort::Name
         );
         assert!(!engine.store.runtime().join("config.yaml").exists());
         engine.settings.clone()
