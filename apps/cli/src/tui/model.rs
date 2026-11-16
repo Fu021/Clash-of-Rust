@@ -211,7 +211,9 @@ impl State {
                 .filter(|key| {
                     key.contains(&query)
                         || super::settings::title(key).to_lowercase().contains(&query)
-                        || super::settings::category(key).contains(&query)
+                        || super::settings::category(key)
+                            .to_lowercase()
+                            .contains(&query)
                 })
                 .collect();
         }
@@ -219,7 +221,10 @@ impl State {
             return super::settings::RULE_KEYS
                 .iter()
                 .copied()
-                .filter(|key| key.contains(&query) || super::settings::title(key).contains(&query))
+                .filter(|key| {
+                    key.contains(&query)
+                        || super::settings::title(key).to_lowercase().contains(&query)
+                })
                 .collect();
         }
         if self.page == Page::Tools {

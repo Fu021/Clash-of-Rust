@@ -342,6 +342,11 @@ def verify_profile_catalog(call, command, data, report):
         terminal.capture(report, 'shortcut-included')
         terminal.send(b'7')
         terminal.wait('[当前] 含规则线路')
+        terminal.resize(40, 10)
+        terminal.wait('[当前] 含规则线路', rows=10)
+        terminal.capture(report, 'profile-small')
+        terminal.resize(100, 30)
+        terminal.wait('订阅 · Enter')
         terminal.send('/备用线路\r\r'.encode())
         terminal.wait('设置 · 当前订阅')
         terminal.wait('值：备用线路')
@@ -367,8 +372,25 @@ def verify_profile_catalog(call, command, data, report):
         saved = json.loads((data/'settings.json').read_text())
         if not saved['rule_profiles'][second]['enabled'][0]:
             raise RuntimeError('TUI shortcut choice was not persisted')
+        if plain.read_text(encoding='utf-8') != plain_raw:
+            raise RuntimeError('TUI shortcut changes rewrote an original subscription')
+        terminal.send(b'\r')
+        terminal.wait('设置 · 广告拦截')
+        terminal.send(b'\x1b[C')
+        plain.write_text(included_raw, encoding='utf-8')
+        call('profile', 'update', second)
+        terminal.send(b'\x1b[B\r')
+        terminal.wait('保存广告拦截')
+        terminal.send(b'\r')
+        terminal.wait('草稿保留')
+        terminal.wait('订阅已包含此规则')
+        after = json.loads((data/'settings.json').read_text())
+        if not after['rule_profiles'][second]['enabled'][0]:
+            raise RuntimeError('Stale TUI shortcut draft changed a now-included rule')
+        terminal.capture(report, 'shortcut-stale-source-rejected')
+        terminal.send(b'\x1b')
         call('profile', 'use', first)
         terminal.wait('广告拦截：订阅已包含')
         terminal.capture(report, 'shortcut-external-profile-refresh')
-    if included.read_text(encoding='utf-8') != included_raw or plain.read_text(encoding='utf-8') != plain_raw:
+    if included.read_text(encoding='utf-8') != included_raw or plain.read_text(encoding='utf-8') != included_raw:
         raise RuntimeError('TUI shortcut changes rewrote an original subscription')

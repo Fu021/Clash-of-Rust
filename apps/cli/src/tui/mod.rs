@@ -124,6 +124,19 @@ async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
                 meta.settings.active_profile.as_deref() == operation.get("profile"),
                 "当前订阅已变化，请返回快捷规则页重新选择"
             );
+            if let Command::RuleChange {
+                id,
+                change: clash_client_runtime::control::RuleChange::Shortcut { index, .. },
+            } = &command
+            {
+                let document: clash_client_core::rule_manager::Document = remote
+                    .request(Command::RuleDocument { id: id.clone() })
+                    .await?;
+                ensure!(
+                    !document.included[*index],
+                    "订阅已包含此规则，无需重复添加；请返回刷新"
+                );
+            }
         }
         let _: serde_json::Value = remote.request(command).await?;
         let poll: Poll = remote

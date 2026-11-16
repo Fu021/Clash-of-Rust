@@ -353,13 +353,24 @@ fn categories_and_dedicated_pages_keep_shortcuts_out_of_general_settings() {
     let frame = render::frame(&state, 100, 40);
     assert!(frame.iter().any(|line| line.text.contains("常规与连接")));
     assert!(frame.iter().any(|line| line.text.contains("网络与 DNS")));
-    state.query = "网络与 DNS".into();
-    assert!(state.items().contains(&"fake_ip"));
-    assert!(!state.items().contains(&"update_prereleases"));
+    for query in ["网络与 DNS", "网络与 dns", "DNS", "dNs"] {
+        state.query = query.into();
+        assert!(state.items().contains(&"fake_ip"), "{query}");
+        assert!(!state.items().contains(&"update_prereleases"), "{query}");
+    }
     state.query.clear();
     state.key(Key::Char('8'));
     assert!(state.page == Page::Rules);
     assert_eq!(state.items(), settings::RULE_KEYS);
+    for query in ["IP", "ip", "Ip"] {
+        state.query = query.into();
+        assert_eq!(
+            state.items(),
+            ["shortcut_private_ip", "shortcut_cn_ip"],
+            "{query}"
+        );
+    }
+    state.query.clear();
     state.key(Key::Enter);
     assert!(state.form.is_none());
     assert!(state.message.as_deref().unwrap().contains("尚未读取"));
@@ -391,6 +402,11 @@ fn subscription_list_selects_names_and_confirms_without_using_cli_text() {
             .any(|line| { line.text.contains("[当前] 家庭线路") })
     );
     state.key(Key::Down);
+    for (columns, rows) in [(40, 1), (40, 10), (120, 40)] {
+        assert!(render::frame(&state, columns, rows).iter().any(|line| {
+            line.tone == render::Tone::Selected && line.text.contains("远程 SSH")
+        }));
+    }
     state.key(Key::Enter);
     let form = state.form.as_ref().unwrap();
     assert_eq!(form.fields[0].value, "profile-1");
@@ -443,6 +459,11 @@ fn included_shortcuts_are_read_only_and_scoped_metadata_is_released_on_page_exit
     });
     assert!(
         render::frame(&state, 80, 24)
+            .iter()
+            .any(|line| line.text.contains("订阅已包含"))
+    );
+    assert!(
+        render::frame(&state, 40, 1)
             .iter()
             .any(|line| line.text.contains("订阅已包含"))
     );
