@@ -67,11 +67,12 @@ class Session:
     def text(self):
         return '\n'.join(self.screen.get(index, '') for index in range(max(self.screen, default=0)+1))
 
-    def wait(self, text, timeout=15, rows=None):
+    def wait(self, text, timeout=15, rows=None, regex=False):
         deadline = time.monotonic()+timeout
         while True:
             self.pump(.05)
-            if text in self.text() and (rows is None or max(self.screen, default=0) < rows):
+            matched = re.search(text, self.text()) if regex else text in self.text()
+            if matched and (rows is None or max(self.screen, default=0) < rows):
                 return
             if self.process.poll() is not None or time.monotonic() >= deadline:
                 raise RuntimeError('TUI did not show '+repr(text)+': '+self.text()[-4000:])
@@ -257,7 +258,11 @@ def verify_settings(console, resources, report):
             original_port = call('config', 'get', 'mixed_port')['mixed_port']
             with Session([*command, 'ui']) as terminal:
                 terminal.wait('内核未运行')
-                terminal.send(b'5/delay_interval_minutes\r\r\r\x1523\r\x1b[B\r')
+                terminal.send(b'5/delay_interval_minutes\r')
+                terminal.wait(r'节点测速间隔[^\n]* 17(?:\n|$)', regex=True)
+                terminal.send(b'\r\r')
+                terminal.wait('输入中')
+                terminal.send(b'\x1523\r\x1b[B\r')
                 terminal.wait('保存节点测速间隔')
                 terminal.send(b'\r')
                 terminal.wait('已保存')
@@ -266,7 +271,12 @@ def verify_settings(console, resources, report):
                 if json.loads((data/'settings.json').read_text())['delay_interval_minutes'] != 23:
                     raise RuntimeError('TUI setting was not written to disk')
                 terminal.capture(report, 'setting-saved')
-                terminal.send(b'/\x15mixed_port\r\r\r\x150\r\x1b[B\r\r')
+                terminal.send(b'/\x15mixed_port\r\r\r')
+                terminal.wait('输入中')
+                terminal.wait('值：'+str(original_port))
+                terminal.send(b'\x150\r\x1b[B\r')
+                terminal.wait('保存混合代理端口')
+                terminal.send(b'\r')
                 terminal.wait('草稿保留')
                 terminal.wait('代理端口必须非零')
                 if call('config', 'get', 'mixed_port')['mixed_port'] != original_port:
@@ -284,6 +294,7 @@ def verify_settings(console, resources, report):
             if call('config', 'get', 'tui_node_sort')['tui_node_sort'] != 'name':
                 raise RuntimeError('TUI sort was not persisted')
             with Session([*command, 'ui']) as terminal:
+                terminal.wait('内核未运行')
                 terminal.send(b'2')
                 terminal.wait('名称排序')
                 call('config', 'set', 'tui_node_sort', 'latency_ascending')

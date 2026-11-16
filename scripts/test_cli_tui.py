@@ -9,9 +9,38 @@ import unittest
 from unittest.mock import patch
 
 import cli_tui
+import ci_test_policy
 
 
 class CliTuiTests(unittest.TestCase):
+    def test_terminal_driver_changes_select_the_actual_cli_and_tui_checks(self):
+        for path in ('scripts/cli_tui.py', 'scripts/test_cli_tui.py'):
+            with self.subTest(path=path):
+                plan = ci_test_policy.select([path])
+                self.assertTrue(plan['linux_user_tests'])
+                self.assertFalse(plan['extended_tests'])
+
+    def test_wait_matches_the_setting_row_instead_of_an_unrelated_value(self):
+        if os.name != 'posix':
+            self.skipTest('PTY requires Unix')
+        code = (
+            "import os,termios,tty\n"
+            "original=termios.tcgetattr(0)\n"
+            "tty.setraw(0)\n"
+            "os.write(1,'\\x1b[2J\\x1b[1;1H17 connections\\x1b[K"
+            "\\x1b[2;1H节点测速间隔 后台未连接\\x1b[K'.encode())\n"
+            "os.read(0,1)\n"
+            "os.write(1,'\\x1b[2J\\x1b[1;1H17 connections\\x1b[K"
+            "\\x1b[2;1H节点测速间隔 17\\x1b[K'.encode())\n"
+            "os.read(0,1)\n"
+            "termios.tcsetattr(0,termios.TCSANOW,original)\n"
+        )
+        with cli_tui.Session([sys.executable, '-c', code]) as terminal:
+            terminal.wait('后台未连接')
+            terminal.send(b'r')
+            terminal.wait(r'节点测速间隔[^\n]* 17(?:\n|$)', regex=True)
+            self.assertNotIn('后台未连接', terminal.text())
+
     def test_resize_waits_for_a_new_bounded_frame_even_when_old_text_already_matches(self):
         if os.name != 'posix':
             self.skipTest('PTY termios checks require a Unix terminal')

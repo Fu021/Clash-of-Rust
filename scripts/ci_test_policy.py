@@ -76,6 +76,7 @@ def select(paths, extended=False):
                          'crates/client-runtime/src/platform/linux/startup.rs',
                          'crates/client-runtime/src/platform/host_network'))
         or path in ('scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py',
+                    'scripts/cli_tui.py', 'scripts/test_cli_tui.py',
                     'scripts/ci_test_policy.py', 'apps/desktop/tests/core_integration.rs',
                     'apps/desktop/tests/support/protected_dns.rs',
                     'apps/desktop/tests/support/proxy_benchmark.rs',
