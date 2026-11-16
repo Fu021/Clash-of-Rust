@@ -56,6 +56,14 @@ fn check(file: &File, uid: u32, directory: bool) -> Result<std::fs::Metadata> {
 }
 
 fn host_state(path: &Path) -> bool {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(".cor-cache-"))
+        .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok())
+    {
+        return true;
+    }
     let name = path
         .components()
         .next()
@@ -230,8 +238,8 @@ impl Snapshot {
                 );
                 staged.sync_all()?;
                 set_owner(&staged, self.uid, self.original.metadata()?.gid())?;
-                // SAFETY: both names are single components in the same open directory; rename replaces an entry without following it.
                 ensure!(
+                    // SAFETY: both names are single components in the same open directory; rename replaces an entry without following it.
                     unsafe {
                         libc::renameat(
                             parent.as_raw_fd(),
@@ -255,8 +263,8 @@ impl Snapshot {
 }
 
 fn set_owner(file: &File, uid: u32, gid: u32) -> Result<()> {
-    // SAFETY: file owns a live fd; ownership is applied to that inode without resolving a path.
     ensure!(
+        // SAFETY: file owns a live fd; ownership is applied to that inode without resolving a path.
         unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } == 0,
         "无法设置运行缓存所有者"
     );
@@ -414,5 +422,45 @@ mod tests {
             std::fs::read(original.path().join("geo-transaction.json")).unwrap(),
             b"host transaction"
         );
+    }
+
+    #[test]
+    fn interrupted_cache_staging_does_not_block_the_next_session() {
+        // SAFETY: getuid takes no arguments and returns the test process identity.
+        let uid = unsafe { libc::getuid() };
+        let original = fixture();
+        std::fs::create_dir(original.path().join("providers")).unwrap();
+        for parent in [
+            original.path().to_owned(),
+            original.path().join("providers"),
+        ] {
+            let name = format!(".cor-cache-{}", uuid::Uuid::new_v4());
+            let staged = parent.join(&name);
+            std::fs::write(&staged, b"incomplete cache transfer").unwrap();
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0)).unwrap();
+        }
+        let provider = Path::new("providers/.cor-cache-nodes.yaml");
+        std::fs::write(original.path().join(provider), b"provider cache").unwrap();
+        let snapshot = Snapshot::new(original.path(), uid).unwrap();
+        assert!(
+            std::fs::read_dir(snapshot.directory.path())
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .as_encoded_bytes()
+                    .starts_with(b".cor-cache-"))
+        );
+        assert_eq!(
+            std::fs::read(snapshot.directory.path().join(provider)).unwrap(),
+            b"provider cache"
+        );
+        assert_eq!(
+            std::fs::read_dir(snapshot.directory.path().join("providers"))
+                .unwrap()
+                .count(),
+            1
+        );
+        snapshot.save_cache().unwrap();
     }
 }

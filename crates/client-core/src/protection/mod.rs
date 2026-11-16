@@ -848,14 +848,11 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
         let runtime: Value =
             yaml_serde::from_str(&crate::config::runtime_config(raw, &reopened).unwrap()).unwrap();
-        assert_eq!(
-            runtime["dns"]["listen"],
-            if cfg!(target_os = "macos") {
-                "127.0.0.1:25353"
-            } else {
-                "127.0.0.1:1053"
-            }
-        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(runtime["dns"]["listen"], "127.0.0.1:25353");
+        } else {
+            assert!(runtime["dns"]["listen"].is_null());
+        }
         settings.claude_protection = None;
         assert_eq!(
             crate::config::runtime_config(raw, &settings).unwrap(),

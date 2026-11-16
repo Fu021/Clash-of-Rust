@@ -1170,6 +1170,7 @@ fn profile_views_keep_local_actions_available_and_builtin_actions_disabled() {
     builtin.id = "builtin".into();
     builtin.name = "默认直连".into();
     builtin.source = "/fixture/default.yaml".into();
+    builtin.builtin = true;
     app.profiles.extend([remote, builtin]);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();

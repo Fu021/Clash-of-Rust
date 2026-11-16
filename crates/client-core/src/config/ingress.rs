@@ -223,14 +223,22 @@ mod tests {
         .unwrap();
         provider_paths(&mut config, root.path()).unwrap();
         assert_eq!(
-            config["proxy-providers"]["example"]["path"],
-            "providers/nodes.yaml"
+            Path::new(
+                config["proxy-providers"]["example"]["path"]
+                    .as_str()
+                    .unwrap()
+            ),
+            Path::new("providers/nodes.yaml")
         );
         config["proxy-providers"]["example"]["path"] = Value::from("./providers/nodes.yaml");
         provider_paths(&mut config, root.path()).unwrap();
         assert_eq!(
-            config["proxy-providers"]["example"]["path"],
-            "providers/nodes.yaml"
+            Path::new(
+                config["proxy-providers"]["example"]["path"]
+                    .as_str()
+                    .unwrap()
+            ),
+            Path::new("providers/nodes.yaml")
         );
         provider_paths(&mut config, root.path()).unwrap();
         for path in ["", ".", "../outside", "/outside/nodes.yaml"] {

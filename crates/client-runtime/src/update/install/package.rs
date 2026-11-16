@@ -124,8 +124,8 @@ fn freeze(source: File) -> Result<(File, PathBuf)> {
         "暂存时安装包大小发生变化"
     );
     let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
-    // SAFETY: file owns the fd, F_ADD_SEALS takes an integer mask, and no mapping exists.
     ensure!(
+        // SAFETY: file owns the fd, F_ADD_SEALS takes an integer mask, and no mapping exists.
         unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) } == 0,
         "无法冻结安装包：{}",
         std::io::Error::last_os_error()
