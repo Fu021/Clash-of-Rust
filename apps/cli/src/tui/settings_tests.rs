@@ -186,8 +186,15 @@ fn shortcut_values_follow_the_active_profile_and_stale_profile_drafts_are_cancel
     poll.meta.profiles[0].builtin = false;
     let mut state = State::new(false);
     state.accept(Some(poll));
-    state.page = Page::Settings;
+    state.page = Page::Rules;
     state.query = "shortcut_ads".into();
+    state.shortcuts = Some(crate::tui::catalog::Shortcuts {
+        profile: "test-profile".into(),
+        revision: state.poll.as_ref().unwrap().meta.view_revision,
+        included: [false; 5],
+        error: None,
+        sampled: std::time::Instant::now(),
+    });
     state.key(Key::Enter);
     assert!(state.form.is_some());
     state.accept(Some(demo_poll()));
@@ -270,7 +277,8 @@ fn sniffed_domains_are_searchable_and_long_detail_values_remain_scrollable() {
             .join("");
         assert!(all.contains("api.github.com"));
         if width >= 2 {
-            assert!(all.contains("域名：未提供"));
+            assert!(!all.contains("未提供"));
+            assert!(!all.contains("域名：嗅探"));
             assert!(all.contains("嗅探域名：api.github.com"));
         }
         assert!(matches!(state.key(Key::Down), Action::ScrollDetail(true)));
@@ -313,4 +321,143 @@ fn sniffed_domains_are_searchable_and_long_detail_values_remain_scrollable() {
             .iter()
             .any(|(line, _)| line.contains("已关闭"))
     );
+}
+
+#[test]
+fn settings_show_effective_fake_ip_and_empty_list_counts_instead_of_blank_values() {
+    let mut poll = demo_poll();
+    assert_eq!(settings::display(&poll, "fake_ip"), "开启");
+    assert!(settings::display(&poll, "fake_ip_exclusions").starts_with("0 项自定义"));
+    assert!(settings::display(&poll, "fake_ip_disabled_defaults").starts_with("0 项已停用"));
+    poll.meta.settings.dns_override = false;
+    assert_eq!(
+        settings::display(&poll, "fake_ip"),
+        "关闭（DNS 覆盖未开启）"
+    );
+    assert_eq!(
+        settings::open(&poll, "fake_ip").unwrap().fields[1].value,
+        "false"
+    );
+    assert!(settings::open(&poll, "fake_ip_exclusions").unwrap().fields[1].value == "[]");
+    for key in settings::KEYS {
+        assert!(!settings::display(&poll, key).trim().is_empty(), "{key}");
+    }
+}
+
+#[test]
+fn categories_and_dedicated_pages_keep_shortcuts_out_of_general_settings() {
+    let mut state = State::new(true);
+    state.page = Page::Settings;
+    assert!(!state.items().iter().any(|key| key.starts_with("shortcut_")));
+    assert!(!state.items().contains(&"active_profile"));
+    let frame = render::frame(&state, 100, 40);
+    assert!(frame.iter().any(|line| line.text.contains("常规与连接")));
+    assert!(frame.iter().any(|line| line.text.contains("网络与 DNS")));
+    state.query = "网络与 DNS".into();
+    assert!(state.items().contains(&"fake_ip"));
+    assert!(!state.items().contains(&"update_prereleases"));
+    state.query.clear();
+    state.key(Key::Char('8'));
+    assert!(state.page == Page::Rules);
+    assert_eq!(state.items(), settings::RULE_KEYS);
+    state.key(Key::Enter);
+    assert!(state.form.is_none());
+    assert!(state.message.as_deref().unwrap().contains("尚未读取"));
+}
+
+#[test]
+fn subscription_list_selects_names_and_confirms_without_using_cli_text() {
+    use clash_client_core::config::Profile;
+    let mut state = State::new(false);
+    let mut poll = demo_poll();
+    poll.meta.profiles = ["家庭线路", "远程 SSH"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| Profile {
+            id: format!("profile-{index}"),
+            name: name.into(),
+            source: "/tmp/example.yaml".into(),
+            updated: 0,
+            usage: None,
+            builtin: false,
+        })
+        .collect();
+    poll.meta.settings.active_profile = Some("profile-0".into());
+    state.accept(Some(poll));
+    state.page = Page::Profiles;
+    assert!(
+        render::frame(&state, 80, 24)
+            .iter()
+            .any(|line| { line.text.contains("[当前] 家庭线路") })
+    );
+    state.key(Key::Down);
+    state.key(Key::Enter);
+    let form = state.form.as_ref().unwrap();
+    assert_eq!(form.fields[0].value, "profile-1");
+    assert_eq!(form.visible_value(0), "远程 SSH");
+    assert_eq!(
+        state
+            .poll
+            .as_ref()
+            .unwrap()
+            .meta
+            .settings
+            .active_profile
+            .as_deref(),
+        Some("profile-0")
+    );
+    state.key(Key::Down);
+    assert!(matches!(state.key(Key::Enter), Action::ReviewForm));
+    state.execution = Some(state.form.as_ref().unwrap().args(&args()).unwrap());
+    let Action::ApplySetting(operation) = state.key(Key::Enter) else {
+        panic!("profile switching must stay inside TUI");
+    };
+    assert!(matches!(
+        settings::command(&operation).unwrap(),
+        clash_client_runtime::control::Command::Activate { id } if id == "profile-1"
+    ));
+}
+
+#[test]
+fn included_shortcuts_are_read_only_and_scoped_metadata_is_released_on_page_exit() {
+    use clash_client_core::config::Profile;
+    let mut state = State::new(false);
+    let mut poll = demo_poll();
+    poll.meta.profiles.push(Profile {
+        id: "profile".into(),
+        name: "包含快捷规则".into(),
+        source: "/tmp/example.yaml".into(),
+        updated: 0,
+        usage: None,
+        builtin: false,
+    });
+    poll.meta.settings.active_profile = Some("profile".into());
+    state.accept(Some(poll));
+    state.page = Page::Rules;
+    state.shortcuts = Some(crate::tui::catalog::Shortcuts {
+        profile: "profile".into(),
+        revision: 0,
+        included: [true, false, false, false, false],
+        error: None,
+        sampled: std::time::Instant::now(),
+    });
+    assert!(
+        render::frame(&state, 80, 24)
+            .iter()
+            .any(|line| line.text.contains("订阅已包含"))
+    );
+    state.key(Key::Enter);
+    assert!(state.form.is_none());
+    assert!(state.message.as_deref().unwrap().contains("无需重复添加"));
+    state.key(Key::Down);
+    state.key(Key::Enter);
+    assert!(state.form.is_some());
+    state.form = None;
+    state.poll.as_mut().unwrap().meta.view_revision += 1;
+    state.key(Key::Enter);
+    assert!(state.form.is_none());
+    assert!(state.message.as_deref().unwrap().contains("尚未读取"));
+    state.release_page();
+    assert!(state.shortcuts.is_none());
+    assert!(state.poll.is_none());
 }

@@ -1,3 +1,4 @@
+mod catalog;
 mod form;
 mod input;
 mod model;
@@ -20,8 +21,8 @@ use std::{io::IsTerminal, time::Duration};
 use tokio::task::JoinHandle;
 
 enum Reply {
-    Snapshot(Option<Box<Poll>>),
-    Saved(Box<Poll>),
+    Snapshot(Option<Box<Poll>>, Option<catalog::Shortcuts>),
+    Saved(Box<Poll>, Option<catalog::Shortcuts>),
     Network(Box<Result<clash_client_core::network_tools::Report, String>>),
 }
 
@@ -33,18 +34,23 @@ impl Drop for Request {
     }
 }
 
-async fn read(args: &Args, page: Page) -> Result<Option<Poll>> {
+async fn read(args: &Args, page: Page, cached: Option<catalog::Shortcuts>) -> Result<Reply> {
     tokio::time::timeout(Duration::from_secs(4), async {
         let Some(remote) = backend::connect(args, false).await? else {
-            return Ok(None);
+            return Ok(Reply::Snapshot(None, None));
         };
-        remote
+        let poll: Poll = remote
             .request(Command::Snapshot {
                 scope: page.scope(),
                 header: true,
             })
-            .await
-            .map(Some)
+            .await?;
+        let shortcuts = if page == Page::Rules {
+            catalog::read_shortcuts(&remote, &poll, cached).await
+        } else {
+            None
+        };
+        Ok(Reply::Snapshot(Some(Box::new(poll)), shortcuts))
     })
     .await
     .context("读取后台超时；按 r 重试，或退出后导出诊断")?
@@ -106,19 +112,32 @@ async fn set_node_sort(
     .context("保存节点排序等待超时；实际状态以刷新结果为准")?
 }
 
-async fn save_setting(context: &Args, operation: &Args) -> Result<Poll> {
+async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
     let command = settings::command(operation)?;
     tokio::time::timeout(Duration::from_secs(20), async {
         let remote = backend::connect(context, false)
             .await?
             .context("后台已退出，未保存设置")?;
+        if operation.path == "rule shortcut" {
+            let meta: clash_client_runtime::control::Meta = remote.request(Command::Meta).await?;
+            ensure!(
+                meta.settings.active_profile.as_deref() == operation.get("profile"),
+                "当前订阅已变化，请返回快捷规则页重新选择"
+            );
+        }
         let _: serde_json::Value = remote.request(command).await?;
-        remote
+        let poll: Poll = remote
             .request(Command::Snapshot {
                 scope: Scope::Other,
                 header: true,
             })
-            .await
+            .await?;
+        let shortcuts = if operation.path == "rule shortcut" {
+            catalog::read_shortcuts(&remote, &poll, None).await
+        } else {
+            None
+        };
+        Ok(Reply::Saved(Box::new(poll), shortcuts))
     })
     .await
     .context("保存或读取结果超时；实际状态以刷新结果为准，草稿仍保留")?
@@ -155,7 +174,7 @@ pub async fn run(args: &Args) -> Result<()> {
                 && !(state.page == Page::Network
                     && matches!(
                         key,
-                        Key::Tab | Key::Escape | Key::Char('1'..='6' | '[' | ']')
+                        Key::Tab | Key::Escape | Key::Char('1'..='8' | '[' | ']')
                     ))
             {
                 continue;
@@ -208,9 +227,7 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.saving = true;
                     state.message = None;
                     request = Some(Request(tokio::spawn(async move {
-                        save_setting(&args, &operation)
-                            .await
-                            .map(|poll| Reply::Saved(Box::new(poll)))
+                        save_setting(&args, &operation).await
                     })));
                 }
                 Action::ScrollDetail(down) => {
@@ -231,7 +248,7 @@ pub async fn run(args: &Args) -> Result<()> {
                     request = Some(Request(tokio::spawn(async move {
                         select(&args, target)
                             .await
-                            .map(|poll| Reply::Snapshot(poll.map(Box::new)))
+                            .map(|poll| Reply::Snapshot(poll.map(Box::new), None))
                     })));
                 }
                 Action::SetNodeSort(mode) => {
@@ -240,7 +257,7 @@ pub async fn run(args: &Args) -> Result<()> {
                     request = Some(Request(tokio::spawn(async move {
                         set_node_sort(&args, mode)
                             .await
-                            .map(|poll| Reply::Snapshot(poll.map(Box::new)))
+                            .map(|poll| Reply::Snapshot(poll.map(Box::new), None))
                     })));
                 }
                 Action::CancelNetwork => {
@@ -275,8 +292,11 @@ pub async fn run(args: &Args) -> Result<()> {
         if request.as_ref().is_some_and(|job| job.0.is_finished()) {
             let mut completed = request.take().unwrap();
             match (&mut completed.0).await {
-                Ok(Ok(Reply::Snapshot(poll))) => state.accept(poll.map(|poll| *poll)),
-                Ok(Ok(Reply::Saved(poll))) => {
+                Ok(Ok(Reply::Snapshot(poll, shortcuts))) => {
+                    state.accept(poll.map(|poll| *poll));
+                    state.shortcuts = shortcuts;
+                }
+                Ok(Ok(Reply::Saved(poll, shortcuts))) => {
                     let key = state.form.as_ref().and_then(|form| form.setting.clone());
                     let message = key.map(|key| {
                         format!(
@@ -286,6 +306,7 @@ pub async fn run(args: &Args) -> Result<()> {
                         )
                     });
                     state.accept(Some(*poll));
+                    state.shortcuts = shortcuts;
                     state.form = None;
                     state.execution = None;
                     state.message = message;
@@ -316,10 +337,9 @@ pub async fn run(args: &Args) -> Result<()> {
         if !state.demo && request.is_none() && last_refresh.elapsed() >= Duration::from_secs(1) {
             let args = args.clone();
             let page = state.page;
+            let cached = state.shortcuts.clone();
             request = Some(Request(tokio::spawn(async move {
-                read(&args, page)
-                    .await
-                    .map(|poll| Reply::Snapshot(poll.map(Box::new)))
+                read(&args, page, cached).await
             })));
             last_refresh = tokio::time::Instant::now();
         }

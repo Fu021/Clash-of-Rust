@@ -108,13 +108,15 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         Page::Network => "网络",
         Page::Settings => "设置",
         Page::Tools => "操作",
+        Page::Profiles => "订阅",
+        Page::Rules => "快捷规则",
     };
     let (notice, tone) = notice(state);
     if height <= 2 {
         let (text, tone) = focus_line(state, width);
         lines.push(line(text, tone));
         if height == 2 {
-            lines.push(line("q 退出 · Esc 返回 · 1–6 切页".into(), Tone::Muted));
+            lines.push(line("q 退出 · Esc 返回 · 1–8 切页".into(), Tone::Muted));
         }
         return lines;
     }
@@ -159,7 +161,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         ));
         lines.push(line(
             format!(
-                "  {}     {}",
+                "  {}     {}     {}     {}",
                 if state.page == Page::Settings {
                     "[5 设置]"
                 } else {
@@ -169,7 +171,17 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
                     "[6 操作]"
                 } else {
                     " 6 操作 "
-                }
+                },
+                if state.page == Page::Profiles {
+                    "[7 订阅]"
+                } else {
+                    " 7 订阅 "
+                },
+                if state.page == Page::Rules {
+                    "[8 快捷规则]"
+                } else {
+                    " 8 快捷规则 "
+                },
             ),
             Tone::Accent,
         ));
@@ -179,7 +191,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         ));
     } else if height >= 3 {
         lines.push(line(
-            format!("{page} · 1–6 切页 · Tab 下一页"),
+            format!("{page} · 1–8 切页 · Tab 下一页"),
             Tone::Accent,
         ));
     }
@@ -205,6 +217,8 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Page::Network => network(state, body_height),
             Page::Settings => super::panels::settings(state, width.saturating_sub(6), body_height),
             Page::Tools => super::panels::tools(state, width.saturating_sub(6), body_height),
+            Page::Profiles => super::catalog::profiles(state, width.saturating_sub(6), body_height),
+            Page::Rules => super::catalog::rules(state, width.saturating_sub(6), body_height),
         }
     };
     for (text, tone) in body
@@ -300,6 +314,8 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
             Page::Connections => connections(state, width, 1),
             Page::Settings => super::panels::settings(state, width, 1),
             Page::Tools => super::panels::tools(state, width, 1),
+            Page::Profiles => super::catalog::profiles(state, width, 1),
+            Page::Rules => super::catalog::rules(state, width, 1),
             Page::Network => vec![(
                 state
                     .network_results
@@ -382,7 +398,7 @@ fn notice(state: &State) -> (String, Tone) {
         (message.clone(), Tone::Warning)
     } else {
         (
-            "退出界面保留后台和代理；按 1–6 或 Tab 切换页面".into(),
+            "退出界面保留后台和代理；按 1–8 或 Tab 切换页面".into(),
             Tone::Muted,
         )
     }

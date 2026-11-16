@@ -459,7 +459,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 app.wait()
 
 
-def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-', tui=False, native_settings=False):
+def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-', tui=False, native_settings=False, tui_catalog=False):
     with tempfile.TemporaryDirectory(prefix='memory-cli-') as directory, (output/(prefix+'cor.log')).open('x') as log:
         data = Path(directory)
         env, port = client_fixture(data, workload, rule_overrides)
@@ -490,9 +490,14 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
                     if native_settings:
                         pages += [('settings', b'5', '设置 · Enter'),
                                   ('setting-editor', b'/ipv6\r\r', '设置 · IPv6')]
+                    if tui_catalog:
+                        pages += [('profiles', b'\x1b7', '订阅 · Enter'),
+                                  ('shortcuts', b'8', '快捷规则 · 当前订阅')]
                     for page, key, ready in pages:
                         terminal.send(key)
                         terminal.wait(ready)
+                        if tui_catalog and page == 'shortcuts':
+                            terminal.wait('广告拦截：')
                         name = prefix+'tui-'+page
                         terminal.capture(output/'terminal-previews', name)
                         measured = measure_process(benchmark, pid, name, output, seconds, env,
@@ -511,6 +516,25 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
                         if process['role'] == 'core'} != core_identity for row in closed):
                     raise RuntimeError('Closing TUI restarted or replaced the core')
                 terminal_scenes.append(name)
+                if tui_catalog:
+                    with Session([console, '--data-dir', data, '--resources', resources, 'ui'], env=env) as terminal:
+                        terminal.send(b'8')
+                        terminal.wait('快捷规则 · 当前订阅')
+                        terminal.wait('广告拦截：')
+                        name = prefix+'tui-reopened'
+                        terminal.capture(output/'terminal-previews', name)
+                        reopened = measure_process(benchmark, pid, name, output, seconds, env,
+                                                   mode='daemon', frontend=terminal.process.pid,
+                                                   on_tick=lambda: terminal.pump(0))
+                        terminal_scenes.append(name)
+                    name = prefix+'tui-reclosed'
+                    reclosed = measure_process(benchmark, pid, name, output, seconds, env, mode='daemon')
+                    terminal_scenes.append(name)
+                    if json.loads((data/'control.json').read_text())['pid'] != pid:
+                        raise RuntimeError('Reopening TUI replaced the daemon')
+                    if any({(process['pid'], process['start_time']) for process in row['processes']
+                            if process['role'] == 'core'} != core_identity for row in reopened+reclosed):
+                        raise RuntimeError('Reopening TUI restarted or replaced the core')
             if not core_running(port) or (data/'gui-session.json').exists():
                 raise RuntimeError('Headless measurement unexpectedly stopped or created a GUI')
             write_json(output/(prefix+'headless-proof.json'), {
@@ -717,7 +741,8 @@ def main():
                         bundle/'cor', resources, benchmark, output, args.seconds,
                         args.workload, overrides, prefix,
                         tui=(source/'apps/cli/src/tui/mod.rs').is_file(),
-                        native_settings=(source/'apps/cli/src/tui/settings.rs').is_file())
+                        native_settings=(source/'apps/cli/src/tui/settings.rs').is_file(),
+                        tui_catalog=(source/'apps/cli/src/tui/catalog.rs').is_file())
                     metadata['background_scenes'].append(prefix+'headless')
         write_json(output/'metadata.json', metadata)
     summarize(output, metadata)

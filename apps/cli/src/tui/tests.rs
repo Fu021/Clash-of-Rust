@@ -277,6 +277,8 @@ fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection
             Page::Network,
             Page::Settings,
             Page::Tools,
+            Page::Profiles,
+            Page::Rules,
         ] {
             let mut state = State::new(true);
             state.page = page;

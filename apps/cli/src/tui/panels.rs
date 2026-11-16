@@ -15,13 +15,23 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
     let items = state.items();
     lines.truncate(height.saturating_sub(1));
     let available = height.saturating_sub(lines.len()).max(1);
-    let offset = state.selected.saturating_sub(available - 1);
-    for (index, key) in items.iter().enumerate().skip(offset).take(available) {
+    let mut rows = Vec::new();
+    let mut selected_row = 0;
+    let mut category = "";
+    for (index, key) in items.iter().enumerate() {
+        let next_category = super::settings::category(key);
+        if next_category != category && available >= 3 {
+            rows.push((format!("── {next_category} ──"), Tone::Accent));
+            category = next_category;
+        }
+        if index == state.selected {
+            selected_row = rows.len();
+        }
         let value = state.poll.as_ref().map_or_else(
             || "后台未连接".into(),
             |poll| super::settings::display(poll, key),
         );
-        lines.push((
+        rows.push((
             if width < 50 {
                 format!(
                     "{} {}：{value}",
@@ -43,6 +53,8 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
             },
         ));
     }
+    let offset = selected_row.saturating_sub(available - 1);
+    lines.extend(rows.into_iter().skip(offset).take(available));
     lines
 }
 
@@ -187,29 +199,20 @@ pub(super) fn connection_rows(state: &State, width: usize) -> Vec<(String, Tone)
     };
     clash_client_core::connection::detail_values(connection, "")
         .into_iter()
+        .filter(|(_, value)| !value.trim().is_empty() && value != "—")
         .flat_map(|(label, value)| {
-            super::render::wrap(
-                &format!(
-                    "{label}：{}",
-                    if value.is_empty() {
-                        "未提供"
-                    } else {
-                        &value
-                    }
-                ),
-                width,
-            )
-            .into_iter()
-            .map(move |line| {
-                (
-                    line,
-                    if label == "代理链" {
-                        Tone::Accent
-                    } else {
-                        Tone::Plain
-                    },
-                )
-            })
+            super::render::wrap(&format!("{label}：{value}"), width)
+                .into_iter()
+                .map(move |line| {
+                    (
+                        line,
+                        if label == "代理链" {
+                            Tone::Accent
+                        } else {
+                            Tone::Plain
+                        },
+                    )
+                })
         })
         .collect()
 }
@@ -220,7 +223,7 @@ pub(super) fn connection(state: &State, width: usize, height: usize) -> Vec<(Str
     let mut lines = Vec::new();
     if height >= 3 {
         lines.push((
-            "连接详情 · ↑↓ 滚动 · Esc 返回 · d 解析 · x 关闭".into(),
+            "连接详情 · 空字段已隐藏 · ↑↓ 滚动 · Esc 返回 · d 解析 · x 关闭".into(),
             Tone::Accent,
         ));
     }

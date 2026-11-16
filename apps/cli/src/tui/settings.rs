@@ -4,28 +4,47 @@ use clash_client_runtime::control::{Command, Poll, RuleChange};
 use serde_json::{Value, json};
 
 pub(super) const KEYS: &[&str] = &[
-    "mixed_port",
     "run_mode",
     "proxy_mode",
-    "active_profile",
     "claude_protection",
+    "tui_node_sort",
+    "mixed_port",
     "dns_override",
     "fake_ip",
     "fake_ip_exclusions",
     "fake_ip_disabled_defaults",
     "ipv6",
     "udp",
+    "update_prereleases",
+    "update_check_interval_minutes",
     "delay_interval_minutes",
     "subscription_update_interval_minutes",
-    "update_check_interval_minutes",
-    "update_prereleases",
-    "tui_node_sort",
+];
+
+pub(super) const RULE_KEYS: &[&str] = &[
     "shortcut_ads",
     "shortcut_private_domain",
     "shortcut_private_ip",
     "shortcut_cn_domain",
     "shortcut_cn_ip",
 ];
+
+pub(super) fn category(key: &str) -> &'static str {
+    match key {
+        "run_mode" | "proxy_mode" | "claude_protection" | "tui_node_sort" => "常规与连接",
+        "mixed_port"
+        | "dns_override"
+        | "fake_ip"
+        | "fake_ip_exclusions"
+        | "fake_ip_disabled_defaults"
+        | "ipv6"
+        | "udp" => "网络与 DNS",
+        "update_prereleases" | "update_check_interval_minutes" => "软件更新",
+        "active_profile" => "订阅",
+        key if key.starts_with("shortcut_") => "快捷规则",
+        _ => "计划任务",
+    }
+}
 
 const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("shortcut_ads", "ads", "广告拦截"),
@@ -62,6 +81,7 @@ pub(super) fn value(poll: &Poll, key: &str) -> Value {
         match key {
             "proxy_mode" => json!(poll.snapshot.proxy_mode()),
             "run_mode" if !poll.snapshot.mode.is_empty() => json!(poll.snapshot.mode),
+            "fake_ip" => json!(poll.meta.settings.fake_ip_enabled()),
             _ => form::setting_value(&poll.meta.settings, key),
         }
     }
@@ -84,6 +104,17 @@ pub(super) fn display(poll: &Poll, key: &str) -> String {
             .find(|profile| Some(&profile.id) == poll.meta.settings.active_profile.as_ref())
             .map_or_else(|| "尚未选择".into(), |profile| profile.name.clone()),
         "tui_node_sort" => poll.meta.settings.tui_node_sort.to_string(),
+        "fake_ip" if !poll.meta.settings.dns_override => "关闭（DNS 覆盖未开启）".into(),
+        "fake_ip_exclusions" => format!(
+            "{} 项自定义 · {} 项有效排除",
+            poll.meta.settings.fake_ip_exclusions.len(),
+            poll.meta.settings.fake_ip_exclusion_entries().len()
+        ),
+        "fake_ip_disabled_defaults" => format!(
+            "{} 项已停用 · {} 项内置",
+            poll.meta.settings.fake_ip_disabled_defaults.len(),
+            clash_client_core::config::DEFAULT_FAKE_IP_EXCLUSIONS.len()
+        ),
         "run_mode" => match value.as_str().unwrap_or("") {
             "rule" => "规则".into(),
             "global" => "全局".into(),
@@ -141,7 +172,10 @@ fn choices(form: &mut Form, index: usize, values: &[(&str, &str)]) {
 }
 
 pub(super) fn open(poll: &Poll, key: &str) -> Result<Form> {
-    ensure!(KEYS.contains(&key), "该设置请使用操作页的专用入口");
+    ensure!(
+        KEYS.contains(&key) || RULE_KEYS.contains(&key) || key == "active_profile",
+        "该设置请使用操作页的专用入口"
+    );
     let value = value(poll, key);
     let mut form = Form::setting(key, &value);
     match key {

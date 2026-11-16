@@ -175,8 +175,15 @@ def verify(console, resources, report):
             terminal.capture(report, 'connection-detail')
             terminal.send(b'\x1b5')
             terminal.wait('混合代理端口')
+            terminal.wait('网络与 DNS')
+            terminal.send(b'/fake_ip\r')
+            terminal.wait('Fake-IP')
+            if re.search(r'Fake-IP\s+(?:开启|关闭)', terminal.text()) is None:
+                raise RuntimeError('TUI Fake-IP setting did not show its actual boolean state')
+            terminal.send(b'/\x15fake_ip_exclusions\r')
+            terminal.wait('项自定义')
             terminal.capture(report, 'settings')
-            terminal.send(b'/fake_ip_exclusions\r\r')
+            terminal.send(b'\r')
             terminal.wait('设置 · Fake-IP 排除项')
             terminal.send(b'\r')
             terminal.wait('输入中')
@@ -236,6 +243,7 @@ def verify(console, resources, report):
                    'operation-demo-no-side-effects', 'literal-q-setting',
                    'network-tools-and-cancel', 'node-sort-cycle', 'resize-and-tiny-detail-scroll',
                    'native-setting-save-failure-persistence-and-cross-client-refresh',
+                   'profile-list-selection-and-included-shortcut-state',
                    'q-restores-terminal', 'ctrl-c-restores-terminal'],
     }), encoding='utf-8')
 
@@ -299,6 +307,7 @@ def verify_settings(console, resources, report):
                 terminal.wait('名称排序')
                 call('config', 'set', 'tui_node_sort', 'latency_ascending')
                 terminal.wait('延迟从低到高')
+            verify_profile_catalog(call, command, data, report)
             if json.loads((data/'control.json').read_text())['pid'] != owner:
                 raise RuntimeError('Opening or closing TUI replaced the existing owner')
             if call('status')['running']:
@@ -309,3 +318,57 @@ def verify_settings(console, resources, report):
             raise
         else:
             call('stop')
+
+
+def verify_profile_catalog(call, command, data, report):
+    included = data/'included.yaml'
+    plain = data/'plain.yaml'
+    included_raw = 'proxies: []\nrules:\n  - GEOSITE,category-ads-all,REJECT\n  - MATCH,DIRECT\n'
+    plain_raw = 'proxies: []\nrules:\n  - MATCH,DIRECT\n'
+    included.write_text(included_raw, encoding='utf-8')
+    plain.write_text(plain_raw, encoding='utf-8')
+    call('profile', 'add', '含规则线路', str(included))
+    call('profile', 'add', '备用线路', str(plain))
+    profiles = call('profile', 'list')
+    first = next(profile['id'] for profile in profiles if profile['name'] == '含规则线路')
+    second = next(profile['id'] for profile in profiles if profile['name'] == '备用线路')
+    call('profile', 'use', first)
+    with Session([*command, 'ui']) as terminal:
+        terminal.wait('内核未运行')
+        terminal.send(b'8')
+        terminal.wait('广告拦截：订阅已包含')
+        terminal.send(b'\r')
+        terminal.wait('无需重复添加')
+        terminal.capture(report, 'shortcut-included')
+        terminal.send(b'7')
+        terminal.wait('[当前] 含规则线路')
+        terminal.send('/备用线路\r\r'.encode())
+        terminal.wait('设置 · 当前订阅')
+        terminal.wait('值：备用线路')
+        terminal.send(b'\x1b[B\r')
+        terminal.wait('保存当前订阅')
+        terminal.send(b'\r')
+        terminal.wait('已保存 · 当前订阅：备用线路')
+        if call('config', 'get', 'active_profile')['active_profile'] != second:
+            raise RuntimeError('TUI profile selection did not persist through the owner')
+        terminal.capture(report, 'profile-selected')
+        call('rule', 'shortcut', 'ads', 'off', '--profile', second)
+        terminal.send(b'8')
+        terminal.wait('广告拦截：关闭')
+        if '广告拦截：订阅已包含' in terminal.text():
+            raise RuntimeError('TUI reused shortcut metadata from the previous profile')
+        terminal.send(b'\r')
+        terminal.wait('设置 · 广告拦截')
+        terminal.send(b'\x1b[C\x1b[B\r')
+        terminal.wait('保存广告拦截')
+        terminal.send(b'\r')
+        terminal.wait('已保存 · 广告拦截')
+        terminal.capture(report, 'shortcut-saved')
+        saved = json.loads((data/'settings.json').read_text())
+        if not saved['rule_profiles'][second]['enabled'][0]:
+            raise RuntimeError('TUI shortcut choice was not persisted')
+        call('profile', 'use', first)
+        terminal.wait('广告拦截：订阅已包含')
+        terminal.capture(report, 'shortcut-external-profile-refresh')
+    if included.read_text(encoding='utf-8') != included_raw or plain.read_text(encoding='utf-8') != plain_raw:
+        raise RuntimeError('TUI shortcut changes rewrote an original subscription')

@@ -15,6 +15,8 @@ pub(super) enum Page {
     Network,
     Settings,
     Tools,
+    Profiles,
+    Rules,
 }
 
 impl Page {
@@ -23,7 +25,9 @@ impl Page {
             Self::Home => Scope::Home,
             Self::Nodes => Scope::Proxies,
             Self::Connections => Scope::Connections,
-            Self::Network | Self::Settings | Self::Tools => Scope::Other,
+            Self::Network | Self::Settings | Self::Tools | Self::Profiles | Self::Rules => {
+                Scope::Other
+            }
         }
     }
 }
@@ -91,6 +95,7 @@ pub(super) struct State {
     pub execution: Option<crate::args::Args>,
     pub connection: Option<String>,
     pub detail_offset: usize,
+    pub shortcuts: Option<super::catalog::Shortcuts>,
 }
 
 impl State {
@@ -113,6 +118,7 @@ impl State {
             execution: None,
             connection: None,
             detail_offset: 0,
+            shortcuts: None,
         }
     }
 
@@ -126,6 +132,7 @@ impl State {
         self.poll = poll;
         self.error = None;
         if changed {
+            self.shortcuts = None;
             let preserve_form = self
                 .form
                 .as_ref()
@@ -136,6 +143,17 @@ impl State {
             }
             self.group = None;
             self.selected = 0;
+            if self.page == Page::Profiles {
+                self.selected = self
+                    .poll
+                    .as_ref()
+                    .and_then(|poll| {
+                        self.items().iter().position(|id| {
+                            Some(*id) == poll.meta.settings.active_profile.as_deref()
+                        })
+                    })
+                    .unwrap_or(0);
+            }
             self.confirmation = None;
             if !preserve_form {
                 self.form = None;
@@ -181,12 +199,24 @@ impl State {
         self.execution = None;
         self.connection = None;
         self.detail_offset = 0;
+        self.shortcuts = None;
     }
 
     pub fn items(&self) -> Vec<&str> {
         let query = self.query.to_lowercase();
         if self.page == Page::Settings {
             return super::settings::KEYS
+                .iter()
+                .copied()
+                .filter(|key| {
+                    key.contains(&query)
+                        || super::settings::title(key).to_lowercase().contains(&query)
+                        || super::settings::category(key).contains(&query)
+                })
+                .collect();
+        }
+        if self.page == Page::Rules {
+            return super::settings::RULE_KEYS
                 .iter()
                 .copied()
                 .filter(|key| key.contains(&query) || super::settings::title(key).contains(&query))
@@ -203,7 +233,17 @@ impl State {
         };
         match self.page {
             Page::Home | Page::Network => Vec::new(),
-            Page::Settings | Page::Tools => unreachable!(),
+            Page::Settings | Page::Tools | Page::Rules => unreachable!(),
+            Page::Profiles => poll
+                .meta
+                .profiles
+                .iter()
+                .filter(|profile| {
+                    profile.name.to_lowercase().contains(&query)
+                        || profile.id.to_lowercase().contains(&query)
+                })
+                .map(|profile| profile.id.as_str())
+                .collect(),
             Page::Nodes => {
                 let proxies = &poll.snapshot.proxies.proxies;
                 match self.group.as_deref().and_then(|group| proxies.get(group)) {
@@ -242,7 +282,7 @@ impl State {
     }
 
     fn selected_node(&self) -> Option<String> {
-        if self.page == Page::Nodes && self.group.is_some() {
+        if self.page == Page::Profiles || self.page == Page::Nodes && self.group.is_some() {
             self.items()
                 .get(self.selected)
                 .map(|name| (*name).to_owned())
@@ -446,7 +486,9 @@ impl State {
                     Page::Connections => Page::Network,
                     Page::Network => Page::Settings,
                     Page::Settings => Page::Tools,
-                    Page::Tools => Page::Home,
+                    Page::Tools => Page::Profiles,
+                    Page::Profiles => Page::Rules,
+                    Page::Rules => Page::Home,
                 };
             }
             Key::Char('1') => self.page = Page::Home,
@@ -455,6 +497,8 @@ impl State {
             Key::Char('4') => self.page = Page::Network,
             Key::Char('5') => self.page = Page::Settings,
             Key::Char('6') => self.page = Page::Tools,
+            Key::Char('7') => self.page = Page::Profiles,
+            Key::Char('8') => self.page = Page::Rules,
             Key::Char('/') if self.page != Page::Home => {
                 if self.page == Page::Network {
                     self.query.clear();
@@ -491,7 +535,9 @@ impl State {
                     self.form = Some(Form::new(spec));
                 }
             }
-            Key::Enter if self.page == Page::Settings => self.edit_setting(),
+            Key::Enter if matches!(self.page, Page::Settings | Page::Rules | Page::Profiles) => {
+                self.edit_setting()
+            }
             Key::Enter if self.page == Page::Network => {
                 if self.query.trim().is_empty() {
                     self.error = Some("请输入域名、IP 或网址".into());
@@ -569,7 +615,11 @@ impl State {
     }
 
     fn edit_setting(&mut self) {
-        let Some(key) = self.items().get(self.selected).copied() else {
+        let Some(item) = self
+            .items()
+            .get(self.selected)
+            .map(|item| (*item).to_owned())
+        else {
             return;
         };
         let Some(poll) = &self.poll else {
@@ -580,8 +630,21 @@ impl State {
             self.message = Some("后台状态过期，请先刷新".into());
             return;
         }
-        match super::settings::open(poll, key) {
-            Ok(form) => {
+        let key = if self.page == Page::Profiles {
+            "active_profile"
+        } else {
+            &item
+        };
+        let form = if self.page == Page::Rules {
+            super::catalog::open_shortcut(self, key)
+        } else {
+            super::settings::open(poll, key)
+        };
+        match form {
+            Ok(mut form) => {
+                if self.page == Page::Profiles {
+                    form.fields[0].value = item;
+                }
                 self.form = Some(form);
                 self.message = None;
             }
