@@ -15,12 +15,13 @@ def export():
     pages = {p.relative_to(DIST).as_posix(): p.read_text(encoding='utf-8') for p in DIST.rglob('*.html')}
     css = (DIST/'site.css').read_text(encoding='utf-8')
     for key,value in assets.items(): css=css.replace(key,value)
-    payload = json.dumps({'pages':pages,'assets':assets,'css':css,'js':(DIST/'site.js').read_text(encoding='utf-8')},ensure_ascii=True).replace('<','\\u003c')
+    payload = json.dumps({'pages':pages,'assets':assets,'css':css,'theme':(DIST/'theme.js').read_text(encoding='utf-8'),'js':(DIST/'site.js').read_text(encoding='utf-8')},ensure_ascii=True).replace('<','\\u003c')
     shell = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Clash of Rust — 网站预览</title><style>html,body{margin:0;height:100%;background:#f8f3e7}iframe{width:100%;height:100%;border:0;display:block}</style><iframe title="Clash of Rust website"></iframe><script id="bundle" type="application/json">PAYLOAD</script><script>
 const bundle=JSON.parse(document.getElementById('bundle').textContent);
 function showPage(route){
  const [path,hash]=route.split('#');const key=path||'index.html';if(!bundle.pages[key])return;
  let html=bundle.pages[key].replace(/<link[^>]+rel="(?:stylesheet|preload)"[^>]*>/g,'');
+ html=html.replace(/<script src="[^"]*theme.js"><\\/script>/,()=>'<script>'+bundle.theme+'<\\/script>');
  html=html.replace('</head>',()=>'<style>'+bundle.css+'</style></head>');
  html=html.replace(/<script src="[^"]*site.js" defer><\\/script>/,'');
  for(const [name,data] of Object.entries(bundle.assets))html=html.split((key.startsWith('en/')?'../':'')+name).join(data);

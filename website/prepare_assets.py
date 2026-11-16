@@ -23,6 +23,8 @@ SRC = ROOT / "src"
 RAW = SRC / "art" / "raw"
 OUT = SRC / "assets"
 FONT_CACHE = ROOT / ".cache" / "fonts"
+ART_NAMES = ("hero", "tools", "terminal", "station", "guide", "start", "manual", "versions")
+NIGHT_ART_NAMES = tuple(name + "-night" for name in ART_NAMES if name != "terminal")
 
 BAYER = [
     [0, 32, 8, 40, 2, 34, 10, 42], [48, 16, 56, 24, 50, 18, 58, 26],
@@ -39,17 +41,14 @@ def webp(image, name, quality=84, lossless=False):
 
 
 def illustrations(names=None):
-    if not names or "hero" in names:
-        hero = Image.open(RAW / "hero.png").convert("RGB")
-        webp(hero.resize((hero.width // 2, hero.height // 2), Image.LANCZOS), "hero-small.webp", 84)
-        webp(hero, "hero.webp", 86)
-        webp(hero.resize((hero.width * 2, hero.height * 2), Image.NEAREST), "hero@2x.webp", 76)
-    for name in ("tools", "terminal", "station", "guide", "start", "manual", "versions"):
+    for name in (*ART_NAMES, *NIGHT_ART_NAMES):
         if names and name not in names:
             continue
         banner = Image.open(RAW / f"{name}.png").convert("RGB")
-        webp(banner, f"{name}.webp", 84)
+        webp(banner, f"{name}.webp", 86 if name == "hero" else 84)
         webp(banner.resize((banner.width // 2, banner.height // 2), Image.LANCZOS), f"{name}-small.webp", 84)
+        if name == "hero":
+            webp(banner.resize((banner.width * 2, banner.height * 2), Image.NEAREST), "hero@2x.webp", 76)
 
 
 def screenshots(options):
@@ -200,7 +199,7 @@ def main():
     parser.add_argument("--android-preview", type=Path)
     parser.add_argument("--terminal-previews", type=Path)
     parser.add_argument("--terminal-commit")
-    parser.add_argument("--art-name", action="append", choices=("hero", "tools", "terminal", "station", "guide", "start", "manual", "versions"))
+    parser.add_argument("--art-name", action="append", choices=(*ART_NAMES, *NIGHT_ART_NAMES))
     options = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     steps = {"art": lambda: illustrations(options.art_name), "shots": lambda: screenshots(options),

@@ -46,6 +46,11 @@ TEXT = {
 
 STAR = '<svg class="star" viewBox="0 0 12 12" aria-hidden="true"><path d="M5 0h2v3h2v1h3v2h-1v1h-1v1h1v2h1v2h-2v-1H9v-1H8V9H4v1H3v1H2v1H0v-2h1V8h1V7H1V6H0V4h3V3h2z"/></svg>'
 
+THEME_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7">'
+              '<g data-theme-icon="auto"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></g>'
+              '<g data-theme-icon="light" hidden><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/></g>'
+              '<g data-theme-icon="dark" hidden><path d="M20.5 14.5A9 9 0 0 1 9.5 3.5a9 9 0 1 0 11 11z"/></g></svg>')
+
 CAPTURES = {
     "home": ("首页：连接、模式、流量和网络信息", "Home: connection, mode, traffic and network details"),
     "nodes": ("代理：策略组、节点与延迟", "Proxies: policy groups, nodes and latency"),
@@ -167,6 +172,20 @@ def render_tools(kind, lang, data, root):
     raise ValueError(f"unknown tools block: {kind}")
 
 
+def render_artwork(body, root):
+    def night_sources(match):
+        picture = match[0]
+        image = re.search(r'assets/(hero|start|manual|guide|tools|station|versions)\.webp', picture)
+        if not image:
+            return picture
+        name = image[1]
+        return (f'<picture><source data-night data-small media="(prefers-color-scheme: dark) and (max-width: 640px)" '
+                f'srcset="{root}assets/{name}-night-small.webp">'
+                f'<source data-night media="(prefers-color-scheme: dark)" srcset="{root}assets/{name}-night.webp">'
+                + picture.removeprefix("<picture>"))
+    return re.sub(r"<picture>.*?</picture>", night_sources, body, flags=re.S)
+
+
 def layout(lang, page, title, description, body, release_data):
     text = TEXT[lang]
     root = "" if lang == "zh" else "../"
@@ -177,8 +196,12 @@ def layout(lang, page, title, description, body, release_data):
     nav = "".join(
         f'<a href="{name}.html"{current if name == page or name == "guide" and page in ("tui", "cli") else ""}>{label}</a>'
         for name, label in text["nav"].items())
-    wordmark = f'<img class="wordmark" src="{root}assets/wordmark.svg" width="116" height="19" alt="">'
+    versions = f'<a href="releases.html"{current if page == "releases" else ""}>{"版本记录" if lang == "zh" else "Versions"}</a>'
+    wordmark = (f'<picture class="brand-wordmark"><source data-night media="(prefers-color-scheme: dark)" '
+                f'srcset="{root}assets/wordmark-dark.svg"><img class="wordmark" src="{root}assets/wordmark.svg" '
+                'width="116" height="19" alt=""></picture>')
     foot = text["foot_links"]
+    body = render_artwork(body, root)
     release_json = json.dumps(release_data, ensure_ascii=True).replace("<", "\\u003c")
     return f"""<!doctype html>
 <html lang="{text['html_lang']}">
@@ -188,6 +211,8 @@ def layout(lang, page, title, description, body, release_data):
 <title>{escape(title)}</title>
 <meta name="description" content="{escape(description)}">
 <meta name="theme-color" content="#f8f3e7">
+<meta name="color-scheme" content="light dark">
+<script src="{root}theme.js"></script>
 <link rel="canonical" href="{canonical}">
 <link rel="alternate" hreflang="en" href="{SITE_URL}/en/{page_path}">
 <link rel="alternate" hreflang="zh-CN" href="{SITE_URL}/{page_path}">
@@ -203,9 +228,12 @@ def layout(lang, page, title, description, body, release_data):
   <div class="wrap">
     <a class="brand" href="index.html" aria-label="{text['home']}"><img src="{root}assets/cat.png" alt="" width="30" height="30">{wordmark}</a>
     <nav class="main-nav" aria-label="{text['nav_label']}">{nav}</nav>
-    <a class="lang" href="{other}" lang="{'zh-CN' if lang == 'en' else 'en'}" aria-label="{text['other_label']}" data-set-lang="{'zh' if lang == 'en' else 'en'}">{text['other_lang']}</a>
-    <a class="btn small ghost" href="{REPO_URL}" target="_blank" rel="noopener">{STAR}{text['star']}<span data-stars></span></a>
-    <details class="mobile-menu"><summary>{text['menu']}</summary><nav aria-label="{text['nav_label']}">{nav}<a href="releases.html">{'版本记录' if lang == 'zh' else 'Versions'}</a><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub ↗</a></nav></details>
+    <div class="header-actions">
+      <a class="lang" href="{other}" lang="{'zh-CN' if lang == 'en' else 'en'}" aria-label="{text['other_label']}" data-set-lang="{'zh' if lang == 'en' else 'en'}">{text['other_lang']}</a>
+      <a class="btn small ghost" href="{REPO_URL}" target="_blank" rel="noopener">{STAR}{text['star']}<span data-stars></span></a>
+      <button class="theme-toggle js-only" type="button" data-theme-toggle aria-label="{'主题：自动' if lang == 'zh' else 'Theme: automatic'}">{THEME_ICON}</button>
+    </div>
+    <details class="mobile-menu"><summary>{text['menu']}</summary><nav aria-label="{text['nav_label']}">{nav}{versions}<a href="{REPO_URL}" target="_blank" rel="noopener">GitHub ↗</a></nav></details>
   </div>
 </header>
 <main id="main">
@@ -220,7 +248,7 @@ def layout(lang, page, title, description, body, release_data):
   <div class="wrap">
     <div><a class="brand" href="index.html" aria-label="{text['home']}">{wordmark}</a><p>{text['foot_note']}</p></div>
     <nav aria-label="{text['nav_label']}">{nav}</nav>
-    <nav><a href="releases.html">{'版本记录' if lang == 'zh' else 'Versions'}</a><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
+    <nav>{versions}<a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
   </div>
 </footer>
 </body>
@@ -241,7 +269,8 @@ def build():
     (DIST / "en").mkdir(parents=True)
     shutil.copytree(SRC / "assets", DIST / "assets")
     shutil.copyfile(ROOT.parent / "resources/icons/wordmark-light.svg", DIST / "assets/wordmark.svg")
-    for name in ("site.css", "site.js"):
+    shutil.copyfile(ROOT.parent / "resources/icons/wordmark-dark.svg", DIST / "assets/wordmark-dark.svg")
+    for name in ("site.css", "site.js", "theme.js"):
         shutil.copyfile(SRC / name, DIST / name)
     for name in ("_headers", "_redirects", "robots.txt", "sitemap.xml"):
         shutil.copyfile(ROOT / name, DIST / name)

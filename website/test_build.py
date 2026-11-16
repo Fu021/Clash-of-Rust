@@ -43,7 +43,8 @@ class SiteTests(unittest.TestCase):
             shutil.copyfile(original_root/name, build.ROOT/name)
         icons = build.ROOT.parent / "resources/icons"
         icons.mkdir(parents=True)
-        shutil.copyfile(REPO_ROOT/"resources/icons/wordmark-light.svg", icons/"wordmark-light.svg")
+        for theme in ("light", "dark"):
+            shutil.copyfile(REPO_ROOT/f"resources/icons/wordmark-{theme}.svg", icons/f"wordmark-{theme}.svg")
         cls.data=json.loads((build.SRC/'content/releases.json').read_text(encoding='utf-8'))
         build.build()
     def test_current_snapshot(self):
@@ -90,6 +91,35 @@ class SiteTests(unittest.TestCase):
                 with self.subTest(page=path.name,ref=ref):
                     self.assertTrue(target.exists())
                     if url.fragment and target in docs:self.assertIn(unquote(url.fragment),docs[target].ids)
+    def test_current_navigation_includes_versions_and_manuals(self):
+        for language in ("", "en"):
+            for name in build.PAGES:
+                document = Document()
+                source = (build.DIST/language/(name+".html")).read_text()
+                document.feed(re.search(r"<header\b.*?</header>", source, flags=re.S)[0])
+                current = [attrs["href"] for tag, attrs in document.elements
+                           if tag == "a" and attrs.get("aria-current") == "page"]
+                expected = "guide" if name in ("tui", "cli") else name
+                if name != "index":
+                    self.assertTrue(current)
+                    self.assertEqual(set(current), {expected+".html"})
+                else:
+                    self.assertFalse(current)
+    def test_theme_assets_and_initialization(self):
+        self.assertEqual((build.DIST/"assets/wordmark-dark.svg").read_bytes(),
+                         (REPO_ROOT/"resources/icons/wordmark-dark.svg").read_bytes())
+        for page in build.DIST.rglob("*.html"):
+            source = page.read_text()
+            document = Document()
+            document.feed(source)
+            self.assertTrue(any(tag == "button" and "data-theme-toggle" in attrs
+                                for tag, attrs in document.elements))
+            self.assertTrue(any(tag == "source" and "data-night" in attrs
+                                for tag, attrs in document.elements))
+            self.assertLess(source.index('theme.js"></script>'), source.index('rel="stylesheet"'))
+            if page.stem != "tui":
+                self.assertIn("-night-small.webp", source)
+        self.assertEqual((build.DIST/"theme.js").read_bytes(), (build.SRC/"theme.js").read_bytes())
     def test_deployment_metadata_and_content_policy(self):
         for name in ('_headers', '_redirects', 'robots.txt', 'sitemap.xml'):
             self.assertEqual((build.DIST/name).read_bytes(), (build.ROOT/name).read_bytes())

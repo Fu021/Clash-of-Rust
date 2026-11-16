@@ -18,22 +18,49 @@
       }
     },
     "preview": {
-      "tag": "v0.7.2-fix.4.network-inspection",
-      "published": "2026-11-15T16:53:49Z",
+      "tag": "v0.7.2-fix.5.tui-update-feedback",
+      "published": "2026-11-16T20:34:08Z",
       "sizes": {
-        "windows-x64-setup.exe": 51279948,
-        "windows-arm64-setup.exe": 47713944,
-        "linux-amd64.deb": 52994508,
-        "linux-arm64.deb": 49176792,
-        "macos-arm64.dmg": 56724475,
-        "macos-x64.dmg": 74875556,
-        "android-arm64.apk": 68283033,
-        "android-armv7.apk": 66906781,
-        "android-x64.apk": 71060115
+        "windows-x64-setup.exe": 51312305,
+        "windows-arm64-setup.exe": 47708984,
+        "linux-amd64.deb": 52958344,
+        "linux-arm64.deb": 49166452,
+        "macos-arm64.dmg": 56747932,
+        "macos-x64.dmg": 61691087,
+        "android-arm64.apk": 68303513,
+        "android-armv7.apk": 66923165,
+        "android-x64.apk": 71088787
       }
     }
   },
   "releases": [
+    {
+      "version": "0.7.2-fix.5.tui-update-feedback",
+      "channel": "preview",
+      "date": "2026-11-16",
+      "en": {
+        "title": "A more usable TUI, visible update failures",
+        "highlights": [
+          "One TUI control cycles through name and both latency orders. Adaptive layouts keep small SSH terminals usable.",
+          "Common settings have direct switches and editors. Connection details and search cover original and sniffed domains.",
+          "The network toolbox focuses on twelve checks. Route trace explains unanswered hops; runtime information belongs in connection and node details.",
+          "Desktop installation failures survive startup and reopening until confirmed. Android waits for foreground presentation before acknowledging service warnings."
+        ],
+        "known": "TUI detail presentation and settings interaction still need refinement. System authorization uses the normal terminal where required. The short Linux memory benchmark does not show the backend returning fully to its initial usage after TUI exits. Device-specific installation failures remain subject to the system installer.",
+        "summary": "Direct TUI settings and small-terminal layouts, with update warnings that remain visible."
+      },
+      "zh": {
+        "title": "终端更好用，更新失败看得见",
+        "highlights": [
+          "TUI 用一个入口循环切换名称和两种延迟排序，自适应布局让小尺寸 SSH 终端仍能操作。",
+          "常用设置提供直接开关与编辑，连接详情和搜索同时覆盖原始域名与嗅探域名。",
+          "网络工具箱收敛为十二项，路由追踪解释无响应跳点，运行信息归连接与节点详情。",
+          "桌面安装失败提示在启动和重开后保留到确认，Android 服务警告等前台实际呈现后再确认。"
+        ],
+        "known": "TUI 详情展示与设置交互仍需完善。需要系统授权的操作仍经普通终端完成。短时 Linux 内存基准中，退出 TUI 后后台未完全回到初始占用。设备特定的安装失败仍受系统安装器影响。",
+        "summary": "TUI 直接设置与小终端布局更完整，更新失败提示持续可见。"
+      }
+    },
     {
       "version": "0.7.2-fix.4.network-inspection",
       "channel": "preview",

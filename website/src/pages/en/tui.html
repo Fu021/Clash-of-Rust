@@ -12,7 +12,7 @@
       <pre class="term" aria-label="Start or preview offline">cor ui
 cor ui --demo</pre>
       <p>Windows, Linux and macOS installers include cor. Use a real interactive terminal. Demo mode uses fictional data, without network access or saving.</p>
-      <p>The fix.5 candidate is awaiting release: the layout follows terminal size, compresses narrow screens and prioritizes the focused item or confirmation in tiny windows. Long connection details scroll. Version fix.4 and earlier still require 60 columns × 18 rows.</p>
+      <p>From fix.5, the layout follows terminal size, compresses narrow screens and prioritizes the focused item or confirmation in tiny windows. Long connection details scroll. Version fix.4 and earlier still require 60 columns × 18 rows.</p>
       <p>Opening, browsing and exiting do not start the backend or core. Use Actions to start one if needed. <kbd>q</kbd> / <kbd>Ctrl+C</kbd> exits while the existing backend and proxy remain running. Emoji rendering depends on your terminal font.</p>
       {{terminal:home}}
     </section>
@@ -44,25 +44,25 @@ cor ui --demo</pre>
       <h2>Node selection</h2>
       <p>Press <kbd>2</kbd>, find and open a manual policy group, choose a member and confirm again. Spaces, emoji and punctuation are preserved. Automatic groups show the core's choice and cannot be manually assigned a member.</p>
       <p>Profiles, membership and protection are rechecked before submission. Choosing AUTO in a parent manual group does not become invalid just because AUTO changes its internal node.</p>
-      <p>The fix.5 candidate is awaiting release: one <kbd>s</kbd> control cycles through name, ascending latency and descending latency. The page shows the mode actually saved by the backend and keeps the selected node during refresh and filtering.</p>
+      <p>From fix.5, one <kbd>s</kbd> control cycles through name, ascending latency and descending latency. The page shows the mode actually saved by the backend and keeps the selected node during refresh and filtering.</p>
     </section>
     <section id="connections">
       <h2>Connection details</h2>
       <p>Press <kbd>3</kbd> and Enter on a connection for domains, destination IP/port, protocol, time, rule, actual path and traffic. <kbd>d</kbd> adds resolution details; <kbd>x</kbd> opens a close-connection confirmation.</p>
       <p>If the connection disappears, the original ID is reported as unavailable; another connection is never substituted. The source application may reconnect after closure.</p>
-      <p>The fix.5 candidate is awaiting release: details share the GUI fields, with separate original and sniffed domains plus process information. Missing values are explicitly unavailable; no sniffed result is guessed. Lists prefer sniffed domains, and search covers both domains, IPs, rules and proxy chains. Use <kbd>↑</kbd> / <kbd>↓</kbd> to scroll wrapped details.</p>
+      <p>From fix.5, details include original and sniffed domains plus process information; no sniffed result is guessed. Lists prefer sniffed domains, and search covers both domains, IPs, rules and proxy chains. Use <kbd>↑</kbd> / <kbd>↓</kbd> to scroll wrapped details. Missing fields currently show “unavailable”; empty-field presentation still needs refinement.</p>
     </section>
     <section id="network">
       <h2>Network tools</h2>
       <p>Press <kbd>4</kbd>, choose a tool with <kbd>[</kbd> / <kbd>]</kbd>, then <kbd>/</kbd> to enter a target. Enter ends input; another Enter runs the check. Scroll with <kbd>↑</kbd> / <kbd>↓</kbd> and cancel with <kbd>Esc</kbd>.</p>
       {{terminal:network}}
-      <p>Current source has twelve checks, all requiring a target. Rule and exit is part of Website check. Traffic summaries belong to Connections and node information to Proxy details; see the <a href="tools.html#runtime">unreleased tool changes</a>. Direct checks use defaults; Actions accepts count and time limits. Changing pages cancels and clears results.</p>
+      <p>Version fix.5 has twelve checks, all requiring a target. Rule and exit is part of Website check. Traffic summaries belong to Connections and node information to Proxy details; see the <a href="tools.html#runtime">tool guide</a>. Direct checks use defaults; Actions accepts count and time limits. Changing pages cancels and clears results.</p>
       <p><a href="tools.html">Read the tools, options and limits →</a></p>
     </section>
     <section id="settings">
       <h2>Settings forms</h2>
       <p>Press <kbd>5</kbd> to inspect settings. Drafts are submitted only after confirmation. Cancelling a field restores its previous value; leaving the form discards drafts. The backend still validates ranges, permission and current state.</p>
-      <p>The fix.5 candidate is awaiting release: ports, DNS/Fake-IP, IPv6, UDP, update channels and intervals, run mode, profile selection and shortcut rules have direct switches, choices or editors. Use <kbd>Enter</kbd>, Space or arrow keys to choose, then move down to Save settings and confirm. Ordinary settings save inside TUI and read back the result; failures keep drafts. Proxy and protection authorization still uses the normal terminal. GUI accent, font and tray preferences stay outside common terminal settings; advanced commands remain available.</p>
+      <p>From fix.5, ports, DNS/Fake-IP, IPv6, UDP, update channels and intervals, run mode, profile selection and shortcut rules have switches, choices or editors. Use <kbd>Enter</kbd>, Space or arrow keys to choose, then move down to Save settings and confirm. Ordinary settings save inside TUI and read back the result; failures keep drafts. Proxy and protection authorization still uses the normal terminal. Settings categories, some empty values, shortcut-rule deduplication and profile selection interaction still need refinement. GUI accent, font and tray preferences stay outside common terminal settings; advanced commands remain available.</p>
     </section>
     <section id="manage">
       <h2>Actions and authorization</h2>

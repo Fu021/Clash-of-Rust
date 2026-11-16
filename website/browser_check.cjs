@@ -98,6 +98,16 @@ async function checkPage(context, origin, route, width) {
       assert.equal(await menu.locator("nav").isVisible(), true);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
       assert.equal(overflow, false, `Open menu overflow: ${route}`);
+      const name = route.split("/").filter(Boolean).pop();
+      const current = menu.locator('a[aria-current="page"]');
+      if (name && name !== "en") {
+        assert.equal(await current.count(), 1, `Current mobile navigation: ${route}`);
+        assert.equal(await current.getAttribute("href"), `${["tui", "cli"].includes(name) ? "guide" : name}.html`);
+        assert.notEqual(await current.evaluate(link => getComputedStyle(link).boxShadow), "none",
+          `Missing current-page underline: ${route}`);
+      } else {
+        assert.equal(await current.count(), 0);
+      }
       await page.keyboard.press("Escape");
       assert.equal(await menu.locator("nav").isVisible(), false);
     }
@@ -149,12 +159,27 @@ async function checkPage(context, origin, route, width) {
       }
       await activate(page.locator('[data-demo-step="0"]'));
     }
-    assert.deepEqual(errors, [], `${width} ${route}`);
     if (width !== 800 || !route.startsWith("/en/")) {
       const name = route === "/" ? "home" : route === "/en/" ? "en-home" : route.slice(1).replaceAll("/", "-");
-      await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 0); });
-      await page.screenshot({ path: path.join(output, `${width}-${name}.png`), fullPage: true });
+      for (const theme of width === 800 ? ["light"] : ["light", "dark"]) {
+        await page.evaluate(theme => {
+          window.siteTheme.setMode(theme);
+          document.activeElement?.blur();
+          scrollTo(0, 0);
+        }, theme);
+        await settleImages(page);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false,
+          `Theme overflow: ${width} ${route} ${theme}`);
+        const colors = await page.locator("body").evaluate(body => {
+          const style = getComputedStyle(body);
+          return { ink: style.color, paper: style.backgroundColor };
+        });
+        assert.notEqual(colors.ink, colors.paper, `Unreadable theme: ${route} ${theme}`);
+        await page.screenshot({ path: path.join(output, `${width}-${name}${theme === "dark" ? "-dark" : ""}.png`), fullPage: true });
+      }
+      await page.evaluate(() => window.siteTheme.setMode("light"));
     }
+    assert.deepEqual(errors, [], `${width} ${route}`);
     report.pages.push({ route, width, input: width === 360 ? "touch" : "mouse", status: "passed" });
     console.log(`Verified ${width}px ${route}`);
   } finally {
@@ -325,6 +350,78 @@ async function checkDownloadFallbacks(origin) {
   report.download_fallbacks = "passed";
 }
 
+async function checkThemes(origin) {
+  for (const fixture of [
+    { timezone: "Asia/Shanghai", before: "2026-11-16T18:59:49+08:00", pause: "2026-11-16T18:59:50+08:00", initial: "light", after: "dark" },
+    { timezone: "America/Los_Angeles", before: "2026-11-16T06:59:49-08:00", pause: "2026-11-16T06:59:50-08:00", initial: "dark", after: "light" },
+  ]) {
+    const context = await browser.newContext({
+      viewport: { width: 360, height: 640 }, timezoneId: fixture.timezone, colorScheme: "dark",
+      isMobile: true, hasTouch: true, reducedMotion: "reduce", serviceWorkers: "block",
+    });
+    await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+    try {
+      const page = await context.newPage();
+      await page.clock.install({ time: new Date(fixture.before) });
+      await page.clock.pauseAt(new Date(fixture.pause));
+      await page.goto(origin + "/releases", { waitUntil: "load" });
+      const theme = () => page.locator("html").getAttribute("data-theme");
+      const mode = () => page.locator("html").getAttribute("data-theme-mode");
+      assert.equal(await mode(), "auto");
+      assert.equal(await theme(), fixture.initial, `Local time: ${fixture.timezone}`);
+      await page.clock.fastForward(10000);
+      assert.equal(await theme(), fixture.after, `Local day/night boundary: ${fixture.timezone}`);
+      const button = page.locator("[data-theme-toggle]");
+      for (const expected of ["light", "dark", "auto"]) {
+        await button.tap();
+        assert.equal(await mode(), expected);
+        assert.equal(await theme(), expected === "auto" ? fixture.after : expected);
+        assert.equal(await button.locator("[data-theme-icon]:not([hidden])").getAttribute("data-theme-icon"), expected);
+      }
+      await button.tap();
+      await page.locator("[data-set-lang]").tap();
+      assert.equal(await page.locator("html").getAttribute("lang"), "en");
+      assert.equal(await mode(), "light", "Manual theme lost on language navigation");
+      assert.equal(await theme(), "light", "System preference overrode manual choice");
+      await page.reload({ waitUntil: "load" });
+      assert.equal(await mode(), "light", "Manual theme lost on reload");
+      const other = await context.newPage();
+      await other.goto(origin + "/start", { waitUntil: "load" });
+      await other.evaluate(() => window.siteTheme.setMode("dark"));
+      await page.bringToFront();
+      await page.clock.runFor(50);
+      assert.equal(await mode(), "dark", "Theme change did not reach another tab");
+      await other.close();
+      await page.evaluate(() => {
+        localStorage.removeItem("cor-site-theme");
+        dispatchEvent(new StorageEvent("storage", { key: "cor-site-theme", newValue: null }));
+      });
+      assert.equal(await mode(), "auto", "Cleared preference did not restore automatic mode");
+    } finally {
+      await context.close();
+    }
+  }
+  const context = await browser.newContext({ viewport: { width: 360, height: 640 }, serviceWorkers: "block" });
+  await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+  await context.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", { get() { throw new DOMException("Storage blocked", "SecurityError"); } });
+  });
+  try {
+    const page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(origin + "/releases", { waitUntil: "load" });
+    for (const expected of ["light", "dark", "auto"]) {
+      await page.locator("[data-theme-toggle]").click();
+      assert.equal(await page.locator("html").getAttribute("data-theme-mode"), expected);
+    }
+    assert.deepEqual(errors, [], "Blocked storage broke theme switching");
+  } finally {
+    await context.close();
+  }
+  report.themes_and_local_time = "passed";
+}
+
 async function run() {
   fs.mkdirSync(output, { recursive: true });
   await new Promise((resolve, reject) => {
@@ -340,6 +437,7 @@ async function run() {
     });
     await context.route("**/*", route => new URL(route.request().url()).origin === origin
       ? route.continue() : route.abort());
+    await context.addInitScript(() => { localStorage.setItem("cor-site-theme", "light"); });
     try {
       for (const route of ["/", "/start", "/guide", "/tui", "/cli", "/tools", "/download", "/releases",
         "/en/", "/en/start", "/en/guide", "/en/tui", "/en/cli", "/en/tools", "/en/download", "/en/releases"]) {
@@ -364,8 +462,9 @@ async function run() {
   }
   await checkTour(origin);
   await checkDownloadFallbacks(origin);
+  await checkThemes(origin);
   const context = await browser.newContext({
-    viewport: { width: 360, height: 640 }, javaScriptEnabled: false, serviceWorkers: "block",
+    viewport: { width: 360, height: 640 }, javaScriptEnabled: false, colorScheme: "dark", serviceWorkers: "block",
   });
   try {
     const page = await context.newPage();
@@ -373,6 +472,9 @@ async function run() {
     await page.goto(origin + "/download", { waitUntil: "load", timeout: 20000 });
     assert.equal(await page.locator("[data-pkgs] a").count(), 18);
     assert.equal(await page.locator('[data-channel="preview"]').isVisible(), false);
+    assert.equal(await page.locator("[data-theme-toggle]").isVisible(), false);
+    assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor), "rgb(16, 29, 35)");
+    assert.ok((await page.locator(".scene img").evaluate(image => image.currentSrc)).includes("-night"));
     for (const language of ["", "/en"]) {
       for (const name of ["start", "guide", "tui", "cli"]) {
         await page.goto(origin + language + "/" + name, { waitUntil: "load", timeout: 20000 });

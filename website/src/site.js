@@ -8,6 +8,36 @@ const say = (english, chinese) => (ZH ? chinese : english);
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+const themeButton = $("[data-theme-toggle]");
+const themeModes = ["auto", "light", "dark"];
+const themeNames = {
+  auto: say("Automatic", "自动"),
+  light: say("Day", "日间"),
+  dark: say("Night", "夜间"),
+};
+function syncTheme() {
+  const { theme, themeMode } = document.documentElement.dataset;
+  for (const source of $$("source[data-night]")) {
+    source.media = theme === "dark" ? source.hasAttribute("data-small") ? "(max-width: 640px)" : "all" : "not all";
+  }
+  if (!themeButton) return;
+  const next = themeModes[(themeModes.indexOf(themeMode) + 1) % themeModes.length];
+  const current = themeMode === "auto" ? `${themeNames.auto} (${themeNames[theme]})` : themeNames[themeMode];
+  const label = say(`Theme: ${current}. Switch to ${themeNames[next]}.`,
+    `主题：${current}。切换到${themeNames[next]}。`);
+  themeButton.setAttribute("aria-label", label);
+  themeButton.title = label;
+  for (const icon of $$("[data-theme-icon]", themeButton)) {
+    icon.toggleAttribute("hidden", icon.dataset.themeIcon !== themeMode);
+  }
+}
+document.addEventListener("site-theme-change", syncTheme);
+themeButton?.addEventListener("click", () => {
+  const current = document.documentElement.dataset.themeMode;
+  window.siteTheme?.setMode(themeModes[(themeModes.indexOf(current) + 1) % themeModes.length]);
+});
+syncTheme();
+
 const languageLinks = $$("[data-set-lang]").map(link => [link, link.getAttribute("href")]);
 function syncLanguageLinks() {
   for (const [link, base] of languageLinks) link.setAttribute("href", base + location.hash);
