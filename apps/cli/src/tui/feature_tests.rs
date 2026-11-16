@@ -194,8 +194,10 @@ fn settings_and_operations_follow_the_shared_command_catalogue() {
         "node_sort",
     ] {
         state.query = excluded.into();
-        assert!(state.items().is_empty(), "{excluded}");
+        assert!(!state.items().contains(&excluded), "{excluded}");
     }
+    state.query = "node_sort".into();
+    assert_eq!(state.items(), ["tui_node_sort"]);
     state.query.clear();
     state.page = Page::Tools;
     let items = state.items();
