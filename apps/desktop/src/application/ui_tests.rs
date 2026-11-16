@@ -714,6 +714,7 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
 fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Connections);
+    app.snapshot.connections.connections[0].metadata.process = "test-browser".into();
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
@@ -730,7 +731,7 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
         assert_eq!(bounds[3], close[3], "{key} must use the same button height");
     }
     let details = data.get_connection_details();
-    assert_eq!(details.row_count(), 14);
+    assert_eq!(details.row_count(), 15);
     for row in details.iter() {
         assert!(!row.value.is_empty());
         assert!(
@@ -741,6 +742,12 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     assert!(data.get_modal_copy().contains("下载速度：256.0 KiB/s"));
     assert!(data.get_modal_copy().contains("嗅探域名：one.test"));
     assert!(data.get_modal_copy().contains("目标 IP：—"));
+    assert!(
+        details
+            .iter()
+            .any(|row| row.label == "进程" && row.value == "test-browser")
+    );
+    assert!(data.get_modal_copy().contains("进程：test-browser"));
     let _ = app.update(Message::Finished(Box::new(Reply {
         view_revision: 0,
         remote: false,

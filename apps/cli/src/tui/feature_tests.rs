@@ -161,7 +161,7 @@ fn settings_and_operations_follow_the_shared_command_catalogue() {
     for spec in crate::args::COMMANDS {
         assert_eq!(
             items.contains(&spec.path),
-            !matches!(spec.path, "run" | "ui"),
+            !matches!(spec.path, "run" | "ui") && !spec.retired(),
             "{}",
             spec.path
         );
