@@ -53,10 +53,21 @@ impl TerminalAgent {
             .stdin(Stdio::inherit())
             .stdout(Stdio::from(OwnedFd::from(notification)))
             .stderr(Stdio::inherit());
+        // SAFETY: getpid takes no pointers and only queries this process.
         let parent = unsafe { libc::getpid() };
+        // SAFETY: after fork the closure only issues scalar Linux calls and
+        // constructs OS errors; it does not allocate, lock, or access borrowed
+        // parent state. The copied parent PID detects reparenting during setup.
         unsafe {
             command.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                if libc::prctl(
+                    libc::PR_SET_PDEATHSIG,
+                    libc::SIGTERM as libc::c_ulong,
+                    0 as libc::c_ulong,
+                    0 as libc::c_ulong,
+                    0 as libc::c_ulong,
+                ) != 0
+                {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::getppid() != parent {
@@ -95,6 +106,8 @@ impl Drop for TerminalAgent {
             Ok(None) => {}
             Ok(Some(_)) | Err(_) => return,
         }
+        // SAFETY: this Child is exclusively owned and was not reaped above.
+        // An exited but unreaped child retains its PID; kill takes no pointers.
         unsafe {
             libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
         }

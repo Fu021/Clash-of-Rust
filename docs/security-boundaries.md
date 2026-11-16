@@ -10,6 +10,12 @@ macOS 内核程序和运行数据分别固定在 root 私有临时目录。数�
 
 Mihomo 路径限制仍是边界的一部分。特权启动清空继承环境，不设置 `SAFE_PATHS` 或 `SKIP_SAFE_PATH_CHECK`，固定工作与临时目录；上游语义见 [v1.19.34 的 `constant/path.go`](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/constant/path.go)。这不是所有内核字段的允许列表，也不隔离已取得控制密钥的同用户进程或内核自身漏洞。
 
+### Linux 原生调用
+
+内核启动器借用存活文件句柄查询扩展属性，以 C 布局的 [capset V3 头和两个数据项](https://man7.org/linux/man-pages/man2/capget.2.html)提交 capabilities；版本头提供可写指针以接纳内核在版本不匹配时的回写，数据项只读，内存只在同步调用内借用。启动器及终端认证代理的 `prctl` 可变参数显式使用 `libc::c_ulong`，未使用参数为零，遵循 [Linux 手册的参数宽度约束](https://man7.org/linux/man-pages/man2/prctl.2.html#CAVEATS)，不依赖默认整数宽度。
+
+终端认证代理的 `pre_exec` 只执行不分配、不持锁的进程设置和身份查询，并保留父 PID 复核以拒绝设置期间的重新托管；[父死亡信号](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)的触发对象是创建子进程的父线程，多线程程序中该线程结束时，其他线程可能仍在运行。认证子进程由一个 `Child` 持有；退出时若它尚未被回收，先发 SIGTERM，再有界等待、强制终止并回收。源码的 SAFETY 说明记录具体指针、布局和生命周期前提，不代表全仓 FFI 已完成安全审计或已复现漏洞；真实授权与网络验证仍须使用可丢弃环境。
+
 ## 安装包固定与校验
 
 助手在内存中固定本次计划的 SHA256，校验失败即停止；安装程序读取时采用以下机制：

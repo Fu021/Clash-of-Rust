@@ -15,6 +15,7 @@ fn launch() -> anyhow::Result<()> {
     use trusted::{CORE, LAUNCHER, NETWORK_CAPABILITIES, installed_resources, open_at};
 
     ensure!(
+        // SAFETY: geteuid takes no pointers and only reads this process's credentials.
         unsafe { libc::geteuid() } != 0,
         "内核启动器不能以 root 运行"
     );
@@ -33,6 +34,8 @@ fn launch() -> anyhow::Result<()> {
     if permitted & NETWORK_CAPABILITIES == NETWORK_CAPABILITIES {
         use std::os::unix::io::AsRawFd;
         // A privileged executable clears the ambient set when exec'd.
+        // SAFETY: core owns the open FD for the entire call, and the name is a
+        // static C string. A null buffer with size zero requests only the size.
         let size = unsafe {
             libc::fgetxattr(
                 core.as_raw_fd(),
@@ -57,7 +60,7 @@ fn launch() -> anyhow::Result<()> {
             permitted: u32,
             inheritable: u32,
         }
-        let header = Header {
+        let mut header = Header {
             version: 0x2008_0522,
             pid: 0,
         };
@@ -70,29 +73,36 @@ fn launch() -> anyhow::Result<()> {
             },
             Data::default(),
         ];
-        if unsafe { libc::syscall(libc::SYS_capset, &header, data.as_ptr()) } != 0 {
+        // SAFETY: repr(C) matches the V3 layout and its two initialized Data
+        // entries. The header is writable for version negotiation on error;
+        // both stack allocations outlive the call. Pid zero targets this thread.
+        if unsafe { libc::syscall(libc::SYS_capset, &raw mut header, data.as_ptr()) } != 0 {
             return Err(std::io::Error::last_os_error()).context("无法设置可继承的网络权限");
         }
+        // SAFETY: all four varargs are c_ulong, as required by the C ABI.
+        // This scalar operation reads no pointers; unused arguments are zero.
         if unsafe {
             libc::prctl(
                 libc::PR_CAP_AMBIENT,
-                libc::PR_CAP_AMBIENT_CLEAR_ALL,
-                0,
-                0,
-                0,
+                libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
             )
         } != 0
         {
             return Err(std::io::Error::last_os_error()).context("无法清理 ambient 权限");
         }
         for capability in [12, 13] {
+            // SAFETY: only CAP_NET_ADMIN/RAW are raised. All four scalar
+            // varargs are c_ulong, and unused arguments are zero.
             if unsafe {
                 libc::prctl(
                     libc::PR_CAP_AMBIENT,
-                    libc::PR_CAP_AMBIENT_RAISE,
-                    capability,
-                    0,
-                    0,
+                    libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                    capability as libc::c_ulong,
+                    0 as libc::c_ulong,
+                    0 as libc::c_ulong,
                 )
             } != 0
             {
