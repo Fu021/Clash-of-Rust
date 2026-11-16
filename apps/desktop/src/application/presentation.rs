@@ -182,20 +182,8 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, connection)| {
-                    (query.is_empty()
-                        || query.split_whitespace().all(|word| {
-                            [
-                                connection.metadata.host.as_ref(),
-                                connection.metadata.sniff_host.as_str(),
-                                connection.metadata.destination_ip.as_ref(),
-                                connection.rule.as_str(),
-                                connection.rule_payload.as_str(),
-                            ]
-                            .into_iter()
-                            .chain(connection.chains.iter().map(|name| name.as_str()))
-                            .any(|field| contains_query(field, word))
-                        }))
-                    .then_some(index)
+                    clash_client_core::connection::matches_query(connection, &query)
+                        .then_some(index)
                 })
                 .collect();
             if self.connection_sort.field.is_some() {

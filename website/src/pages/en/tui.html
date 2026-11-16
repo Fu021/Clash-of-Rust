@@ -11,7 +11,8 @@
       <h2>Open and exit</h2>
       <pre class="term" aria-label="Start or preview offline">cor ui
 cor ui --demo</pre>
-      <p>Windows, Linux and macOS installers include cor. Use a real interactive terminal at least 60 columns × 18 rows; smaller terminals show a resize prompt. Demo mode uses fictional data, without network access or saving.</p>
+      <p>Windows, Linux and macOS installers include cor. Use a real interactive terminal. Demo mode uses fictional data, without network access or saving.</p>
+      <p>In development, not yet released: the layout follows terminal size, compresses narrow screens and prioritizes the focused item or confirmation in tiny windows. Long connection details scroll. Published versions still require 60 columns × 18 rows.</p>
       <p>Opening, browsing and exiting do not start the backend or core. Use Actions to start one if needed. <kbd>q</kbd> / <kbd>Ctrl+C</kbd> exits while the existing backend and proxy remain running. Emoji rendering depends on your terminal font.</p>
       {{terminal:home}}
     </section>
@@ -43,12 +44,13 @@ cor ui --demo</pre>
       <h2>Node selection</h2>
       <p>Press <kbd>2</kbd>, find and open a manual policy group, choose a member and confirm again. Spaces, emoji and punctuation are preserved. Automatic groups show the core's choice and cannot be manually assigned a member.</p>
       <p>Profiles, membership and protection are rechecked before submission. Choosing AUTO in a parent manual group does not become invalid just because AUTO changes its internal node.</p>
-      <p>In development and not yet in a published release: press <kbd>l</kbd> for ascending latency or <kbd>n</kbd> for name order. The node page displays and saves the current choice.</p>
+      <p>In development and not yet released: one <kbd>s</kbd> control cycles through name, ascending latency and descending latency. The page shows the mode actually saved by the backend and keeps the selected node during refresh and filtering.</p>
     </section>
     <section id="connections">
       <h2>Connection details</h2>
       <p>Press <kbd>3</kbd> and Enter on a connection for domains, destination IP/port, protocol, time, rule, actual path and traffic. <kbd>d</kbd> adds resolution details; <kbd>x</kbd> opens a close-connection confirmation.</p>
       <p>If the connection disappears, the original ID is reported as unavailable; another connection is never substituted. The source application may reconnect after closure.</p>
+      <p>In development, not yet released: details share the GUI fields, with separate original and sniffed domains plus process information. Missing values are explicitly unavailable; no sniffed result is guessed. Lists prefer sniffed domains, and search covers both domains, IPs, rules and proxy chains. Use <kbd>↑</kbd> / <kbd>↓</kbd> to scroll wrapped details.</p>
     </section>
     <section id="network">
       <h2>Network tools</h2>
@@ -59,8 +61,8 @@ cor ui --demo</pre>
     </section>
     <section id="settings">
       <h2>Settings forms</h2>
-      <p>Press <kbd>5</kbd> and Enter to edit a writable field or inspect a read-only value. Proxy, profile, rule and protection changes use dedicated actions. Secrets are neither shown nor prefilled.</p>
-      <p>Drafts are not saved. Choose Review and execute, then confirm again to submit. Cancelling a field restores its previous value; leaving the form discards drafts. The backend still validates ranges, permission and current state.</p>
+      <p>Press <kbd>5</kbd> to inspect settings. Drafts are submitted only after confirmation. Cancelling a field restores its previous value; leaving the form discards drafts. The backend still validates ranges, permission and current state.</p>
+      <p>In development, not yet released: ports, DNS/Fake-IP, IPv6, UDP, update channels and intervals, run mode, profile selection and shortcut rules have direct switches, choices or editors. Use <kbd>Enter</kbd>, Space or arrow keys to choose, then move down to Save settings and confirm. Ordinary settings save inside TUI and read back the result; failures keep drafts. Proxy and protection authorization still uses the normal terminal. GUI accent, font and tray preferences stay outside common terminal settings; advanced commands remain available.</p>
     </section>
     <section id="manage">
       <h2>Actions and authorization</h2>
@@ -75,7 +77,7 @@ cor ui --demo</pre>
     </section>
     <section id="trouble">
       <h2>Recovery</h2>
-      <p>Press <kbd>r</kbd> to retry, or enlarge a small terminal. If recovery fails, exit and <a href="cli.html#diagnostics">export diagnostics</a> using the original account and data directory.</p>
+      <p>Press <kbd>r</kbd> to retry. A larger window can show more content. If recovery fails, exit and <a href="cli.html#diagnostics">export diagnostics</a> using the original account and data directory.</p>
       <p>TUI does not require fixed colors or screen coordinates. Automation should prefer <a href="cli.html#automation">CLI JSON and exit codes</a>. See the <a href="{{docs}}/cli/tui.md">full terminal reference ↗</a>.</p>
     </section>
   </div>

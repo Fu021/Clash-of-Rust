@@ -12,6 +12,28 @@ import cli_tui
 
 
 class CliTuiTests(unittest.TestCase):
+    def test_resize_waits_for_a_new_bounded_frame_even_when_old_text_already_matches(self):
+        if os.name != 'posix':
+            self.skipTest('PTY termios checks require a Unix terminal')
+        code = (
+            "import os,termios,time,tty\n"
+            "original=termios.tcgetattr(0)\n"
+            "tty.setraw(0)\n"
+            "os.write(1,b'\\x1b[2J\\x1b[20;1Hdomain.test\\x1b[K')\n"
+            "os.read(0,1)\n"
+            "time.sleep(.1)\n"
+            "os.write(1,b'\\x1b[2J\\x1b[1;1Hdomain.test\\x1b[K\\x1b[2;1Hq exit\\x1b[K')\n"
+            "os.read(0,1)\n"
+            "termios.tcsetattr(0,termios.TCSANOW,original)\n"
+        )
+        with cli_tui.Session([sys.executable, '-c', code]) as terminal:
+            terminal.wait('domain.test')
+            self.assertEqual(max(terminal.screen), 19)
+            terminal.resize(40, 2)
+            terminal.send(b'r')
+            terminal.wait('domain.test', rows=2)
+            self.assertLess(max(terminal.screen), 2)
+
     def test_pty_frames_survive_split_utf8_styles_and_real_terminal_exit(self):
         if os.name != 'posix':
             self.skipTest('PTY termios checks require a Unix terminal')

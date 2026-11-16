@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 #[path = "feature_tests.rs"]
 mod features;
+#[path = "settings_tests.rs"]
+mod settings_features;
 
 #[test]
 fn prototype_preserves_machine_commands_and_rejects_machine_output_for_ui() {
@@ -58,6 +60,10 @@ fn decoder_preserves_fragmented_unicode_and_arrow_sequences() {
     );
     assert_eq!(decoder.feed(b"\x03", now), vec![Key::Interrupt]);
     assert_eq!(decoder.feed(b"\x15", now), vec![Key::Clear]);
+    assert_eq!(
+        decoder.feed(b"\x1b[C\x1b[D", now),
+        vec![Key::Right, Key::Left]
+    );
 }
 
 #[test]
@@ -250,7 +256,20 @@ fn network_tools_require_a_target_and_leave_no_page_history() {
 
 #[test]
 fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection() {
-    for (columns, rows) in [(40, 10), (60, 18), (80, 24), (100, 30), (180, 70)] {
+    for (columns, rows) in [
+        (0, 0),
+        (0, 10),
+        (1, 1),
+        (2, 2),
+        (40, 1),
+        (40, 2),
+        (32, 8),
+        (40, 10),
+        (60, 18),
+        (80, 24),
+        (100, 30),
+        (180, 70),
+    ] {
         for page in [
             Page::Home,
             Page::Nodes,

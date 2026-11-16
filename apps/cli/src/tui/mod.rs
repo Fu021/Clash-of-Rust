@@ -3,6 +3,7 @@ mod input;
 mod model;
 mod panels;
 mod render;
+mod settings;
 mod terminal;
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,7 @@ use tokio::task::JoinHandle;
 
 enum Reply {
     Snapshot(Option<Box<Poll>>),
+    Saved(Box<Poll>),
     Network(Box<Result<clash_client_core::network_tools::Report, String>>),
 }
 
@@ -104,6 +106,24 @@ async fn set_node_sort(
     .context("保存节点排序等待超时；实际状态以刷新结果为准")?
 }
 
+async fn save_setting(context: &Args, operation: &Args) -> Result<Poll> {
+    let command = settings::command(operation)?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let remote = backend::connect(context, false)
+            .await?
+            .context("后台已退出，未保存设置")?;
+        let _: serde_json::Value = remote.request(command).await?;
+        remote
+            .request(Command::Snapshot {
+                scope: Scope::Other,
+                header: true,
+            })
+            .await
+    })
+    .await
+    .context("保存或读取结果超时；实际状态以刷新结果为准，草稿仍保留")?
+}
+
 pub async fn run(args: &Args) -> Result<()> {
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
@@ -183,6 +203,27 @@ pub async fn run(args: &Args) -> Result<()> {
                     dirty = true;
                     break;
                 }
+                Action::ApplySetting(operation) => {
+                    let args = args.clone();
+                    state.saving = true;
+                    state.message = None;
+                    request = Some(Request(tokio::spawn(async move {
+                        save_setting(&args, &operation)
+                            .await
+                            .map(|poll| Reply::Saved(Box::new(poll)))
+                    })));
+                }
+                Action::ScrollDetail(down) => {
+                    let width = render::content_width(size.0, size.1);
+                    let limit = panels::connection_rows(&state, width)
+                        .len()
+                        .saturating_sub(1);
+                    state.detail_offset = if down {
+                        state.detail_offset.saturating_add(1).min(limit)
+                    } else {
+                        state.detail_offset.min(limit).saturating_sub(1)
+                    };
+                }
                 Action::Refresh => last_refresh -= Duration::from_secs(5),
                 Action::Select(target) => {
                     let args = args.clone();
@@ -235,13 +276,37 @@ pub async fn run(args: &Args) -> Result<()> {
             let mut completed = request.take().unwrap();
             match (&mut completed.0).await {
                 Ok(Ok(Reply::Snapshot(poll))) => state.accept(poll.map(|poll| *poll)),
+                Ok(Ok(Reply::Saved(poll))) => {
+                    let key = state.form.as_ref().and_then(|form| form.setting.clone());
+                    let message = key.map(|key| {
+                        format!(
+                            "已保存 · {}：{}",
+                            settings::title(&key),
+                            settings::display(&poll, &key)
+                        )
+                    });
+                    state.accept(Some(*poll));
+                    state.form = None;
+                    state.execution = None;
+                    state.message = message;
+                }
                 Ok(Ok(Reply::Network(result))) => {
                     state.network_results = match *result {
                         Ok(report) => report.lines(),
                         Err(error) => vec![format!("检查失败 · {error}")],
                     };
                 }
-                Ok(Err(error)) => state.failure(format!("{error:#}")),
+                Ok(Err(error)) => {
+                    if state.saving
+                        && state
+                            .form
+                            .as_ref()
+                            .is_some_and(|form| form.setting.is_some())
+                    {
+                        state.message = Some(format!("保存失败或结果未确认，草稿保留：{error:#}"));
+                    }
+                    state.failure(format!("{error:#}"));
+                }
                 Err(error) => state.failure(format!("读取任务失败：{error}")),
             }
             state.saving = false;

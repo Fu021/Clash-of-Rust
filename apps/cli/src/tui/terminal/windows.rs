@@ -105,6 +105,8 @@ impl Mode {
             match key.wVirtualKeyCode {
                 0x26 => bytes.extend_from_slice(b"\x1b[A"),
                 0x28 => bytes.extend_from_slice(b"\x1b[B"),
+                0x25 => bytes.extend_from_slice(b"\x1b[D"),
+                0x27 => bytes.extend_from_slice(b"\x1b[C"),
                 _ => {
                     if let Some(character) = self.characters.feed(unsafe { key.uChar.UnicodeChar })
                         && character != '\0'

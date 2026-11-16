@@ -57,7 +57,7 @@ pub fn detail_values(connection: &Connection, resolved: &str) -> Vec<(&'static s
     vec![
         ("连接名称", name(connection).to_owned()),
         ("域名", connection.metadata.host.to_string()),
-        ("嗅探域名", hostname(connection).to_owned()),
+        ("嗅探域名", connection.metadata.sniff_host.to_string()),
         (
             "目标 IP",
             if connection.metadata.destination_ip.is_empty() {
@@ -216,6 +216,30 @@ pub fn name(connection: &Connection) -> &str {
     }
 }
 
+pub fn matches_query(connection: &Connection, lower_query: &str) -> bool {
+    lower_query.split_whitespace().all(|word| {
+        [
+            connection.metadata.host.as_ref(),
+            connection.metadata.sniff_host.as_str(),
+            connection.metadata.destination_ip.as_ref(),
+            connection.rule.as_str(),
+            connection.rule_payload.as_str(),
+        ]
+        .into_iter()
+        .chain(connection.chains.iter().map(|name| name.as_str()))
+        .any(|field| {
+            if field.is_ascii() && word.is_ascii() {
+                field
+                    .as_bytes()
+                    .windows(word.len())
+                    .any(|part| part.eq_ignore_ascii_case(word.as_bytes()))
+            } else {
+                field.to_lowercase().contains(word)
+            }
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +359,35 @@ mod tests {
         })).unwrap();
         assert_eq!(name(&connection), "mail.google.com");
         assert_eq!(connection.rule_payload.as_str(), "google.com");
+    }
+
+    #[test]
+    fn original_and_sniffed_domains_stay_distinct_and_both_participate_in_search() {
+        let mut connection: Connection = serde_json::from_value(serde_json::json!({
+            "id":"domains", "metadata":{"host":"original.test", "sniffHost":"SNIFFED.test", "destinationIP":"192.0.2.1"},
+            "rule":"DomainSuffix", "rulePayload":"test", "chains":["日本出口"]
+        })).unwrap();
+        let details = detail_values(&connection, "");
+        assert!(details.contains(&("域名", "original.test".into())));
+        assert!(details.contains(&("嗅探域名", "SNIFFED.test".into())));
+        for query in [
+            "original.test",
+            "sniffed.test",
+            "192.0.2",
+            "domainsuffix 日本",
+            "original.test sniffed.test",
+            "sniffed.test 192.0.2 日本",
+        ] {
+            assert!(matches_query(&connection, query), "{query}");
+        }
+        assert!(!matches_query(&connection, "missing.test"));
+        assert!(!matches_query(&connection, "sniffed.test missing.test"));
+        connection.metadata.sniff_host = "".into();
+        assert_eq!(name(&connection), "original.test");
+        assert!(detail_values(&connection, "").contains(&("嗅探域名", String::new())));
+        connection.metadata.host = "".into();
+        assert_eq!(name(&connection), "192.0.2.1");
+        assert!(detail_values(&connection, "").contains(&("域名", String::new())));
     }
 
     #[test]

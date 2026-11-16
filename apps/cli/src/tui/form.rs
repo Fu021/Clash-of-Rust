@@ -7,6 +7,7 @@ pub(super) struct Field {
     pub option: Option<&'static str>,
     pub secret: bool,
     pub locked: bool,
+    pub choices: Vec<(String, String)>,
 }
 
 pub(super) struct Form {
@@ -15,6 +16,7 @@ pub(super) struct Form {
     pub selected: usize,
     pub editing: bool,
     pub draft: String,
+    pub setting: Option<String>,
 }
 
 pub(super) fn commands() -> impl Iterator<Item = &'static Spec> {
@@ -78,6 +80,7 @@ impl Form {
                 option: None,
                 secret: false,
                 locked: false,
+                choices: Vec::new(),
             })
             .collect::<Vec<_>>();
         fields.extend(spec.options.split_whitespace().map(|key| Field {
@@ -93,6 +96,7 @@ impl Form {
             option: Some(key),
             secret: matches!(key, "source"),
             locked: false,
+            choices: Vec::new(),
         }));
         if matches!(spec.path, "profile add" | "config set") {
             fields[1].secret = true;
@@ -103,6 +107,7 @@ impl Form {
             selected: 0,
             editing: false,
             draft: String::new(),
+            setting: None,
         }
     }
 
@@ -112,12 +117,9 @@ impl Form {
         form.fields[0].secret = false;
         form.fields[0].locked = true;
         form.fields[0].label = "KEY（固定）".into();
+        form.setting = Some(key.into());
+        form.fields[1].label = "值".into();
         form.fields[1].secret = key == "secret";
-        let choices =
-            crate::args::complete(&["config".into(), "set".into(), key.into(), String::new()]);
-        if !choices.is_empty() {
-            form.fields[1].label = format!("VALUE（{}）", choices.trim().replace('\n', " / "));
-        }
         form.fields[1].value = if key == "secret" {
             String::new()
         } else {
@@ -128,6 +130,49 @@ impl Form {
         };
         form.selected = 1;
         form
+    }
+
+    pub fn navigate(&mut self, backwards: bool) {
+        let mut current = self.selected;
+        loop {
+            let next = if backwards {
+                current.saturating_sub(1)
+            } else {
+                (current + 1).min(self.fields.len())
+            };
+            if next == current {
+                break;
+            }
+            current = next;
+            if self.fields.get(next).is_none_or(|field| !field.locked) {
+                self.selected = next;
+                break;
+            }
+        }
+    }
+
+    pub fn cycle(&mut self, backwards: bool) -> bool {
+        let Some(field) = self
+            .fields
+            .get_mut(self.selected)
+            .filter(|field| !field.locked && !field.choices.is_empty())
+        else {
+            return false;
+        };
+        let count = field.choices.len();
+        let index = field
+            .choices
+            .iter()
+            .position(|(value, _)| *value == field.value);
+        let next = index.map_or(0, |index| {
+            if backwards {
+                (index + count - 1) % count
+            } else {
+                (index + 1) % count
+            }
+        });
+        field.value.clone_from(&field.choices[next].0);
+        true
     }
 
     pub fn begin_edit(&mut self) {
@@ -184,12 +229,29 @@ impl Form {
         }
         words.push("--".into());
         let mut missing = false;
-        for field in self.fields.iter().filter(|field| field.option.is_none()) {
+        for (index, field) in self
+            .fields
+            .iter()
+            .filter(|field| field.option.is_none())
+            .enumerate()
+        {
             if field.value.is_empty() {
                 missing = true;
             } else {
                 ensure!(!missing, "请按顺序填写参数，不能跳过前一个参数");
-                words.push(field.value.clone());
+                let value = if self.setting.as_deref().is_some_and(|key| {
+                    matches!(key, "fake_ip_exclusions" | "fake_ip_disabled_defaults")
+                }) && self.spec.path == "config set"
+                    && index == 1
+                    && !field.value.trim_start().starts_with('[')
+                {
+                    serde_json::to_string(&clash_client_core::config::parse_fake_ip_exclusions(
+                        &field.value,
+                    )?)?
+                } else {
+                    field.value.clone()
+                };
+                words.push(value);
             }
         }
         ensure!(
@@ -208,6 +270,8 @@ impl Form {
         };
         if field.secret && !value.is_empty() {
             "••••••".into()
+        } else if let Some((_, label)) = field.choices.iter().find(|(choice, _)| choice == value) {
+            label.clone()
         } else {
             value.clone()
         }

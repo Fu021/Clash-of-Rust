@@ -302,7 +302,7 @@ async fn select_node(args: &Args) -> Result<()> {
 }
 
 fn connection_json(c: &Connection) -> Value {
-    json!({"id":c.id,"name":connection::name(c),"host":c.metadata.host,"sniff_host":connection::hostname(c),
+    json!({"id":c.id,"name":connection::name(c),"host":c.metadata.host,"sniff_host":c.metadata.sniff_host,
         "ip":c.metadata.destination_ip,"port":c.metadata.destination_port,"network":c.metadata.network,
         "rule":c.rule,"rule_payload":c.rule_payload,"chain":c.chains,"upload":c.upload,"download":c.download,
         "upload_rate":c.rates.map(|r|r.upload),"download_rate":c.rates.map(|r|r.download),"start":c.start})
@@ -401,10 +401,7 @@ async fn connections(args: &Args) -> Result<()> {
         let mut indices: Vec<_> = (0..current.len())
             .filter(|&i| {
                 let c = &current[i];
-                connection::name(c).to_lowercase().contains(&filter)
-                    || c.rule.to_lowercase().contains(&filter)
-                    || c.chains.iter().any(|v| v.to_lowercase().contains(&filter))
-                    || c.id.contains(&filter)
+                connection::matches_query(c, &filter) || c.id.contains(&filter)
             })
             .collect();
         indices.sort_by(|&a, &b| sort.compare(&current[a], &current[b]));
@@ -897,6 +894,21 @@ impl Drop for AuditScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn connection_json_does_not_report_an_original_domain_as_a_sniffed_result() {
+        let mut connection = Connection::default();
+        connection.metadata.host = "original.test".into();
+        let value = connection_json(&connection);
+        assert_eq!(value["name"], "original.test");
+        assert_eq!(value["host"], "original.test");
+        assert_eq!(value["sniff_host"], "");
+        connection.metadata.sniff_host = "sniffed.test".into();
+        let value = connection_json(&connection);
+        assert_eq!(value["name"], "sniffed.test");
+        assert_eq!(value["host"], "original.test");
+        assert_eq!(value["sniff_host"], "sniffed.test");
+    }
+
     #[tokio::test]
     async fn network_option_errors_still_produce_machine_readable_reports() {
         for (tool, option, value) in [

@@ -2743,18 +2743,7 @@ fn project(state: &State) -> Projection {
         .connections
         .iter()
         .filter(|_| matches!(state.page, 0 | 3))
-        .filter(|c| {
-            query.is_empty()
-                || format!(
-                    "{} {} {} {:?}",
-                    core::connection::name(c),
-                    c.metadata.destination_ip,
-                    c.rule,
-                    c.chains
-                )
-                .to_lowercase()
-                .contains(&query)
-        })
+        .filter(|c| core::connection::matches_query(c, &query))
         .collect::<Vec<_>>();
     let field = if state.connection_sort.starts_with("名称") {
         core::connection::Field::Name

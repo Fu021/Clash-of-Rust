@@ -740,7 +740,8 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
         );
     }
     assert!(data.get_modal_copy().contains("下载速度：256.0 KiB/s"));
-    assert!(data.get_modal_copy().contains("嗅探域名：one.test"));
+    assert!(data.get_modal_copy().contains("域名：one.test"));
+    assert!(data.get_modal_copy().contains("嗅探域名：—"));
     assert!(data.get_modal_copy().contains("目标 IP：—"));
     assert!(
         details

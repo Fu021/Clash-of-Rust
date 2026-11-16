@@ -68,6 +68,8 @@ pub(super) enum Action {
     CheckNetwork(clash_client_core::network_tools::Tool, String),
     CancelNetwork,
     Execute(crate::args::Args),
+    ApplySetting(crate::args::Args),
+    ScrollDetail(bool),
     ReviewForm,
 }
 
@@ -124,14 +126,21 @@ impl State {
         self.poll = poll;
         self.error = None;
         if changed {
-            if self.form.is_some() || self.confirmation.is_some() {
+            let preserve_form = self
+                .form
+                .as_ref()
+                .and_then(|form| form.setting.as_deref())
+                .is_some_and(|key| !key.starts_with("shortcut_"));
+            if !preserve_form && (self.form.is_some() || self.confirmation.is_some()) {
                 self.message = Some("后台或当前订阅已变化，已取消旧表单，请重新选择".into());
             }
             self.group = None;
             self.selected = 0;
             self.confirmation = None;
-            self.form = None;
-            self.execution = None;
+            if !preserve_form {
+                self.form = None;
+                self.execution = None;
+            }
         }
         if self.page != Page::Network {
             let selected = {
@@ -177,10 +186,10 @@ impl State {
     pub fn items(&self) -> Vec<&str> {
         let query = self.query.to_lowercase();
         if self.page == Page::Settings {
-            return clash_client_core::config::READABLE_SETTINGS
+            return super::settings::KEYS
                 .iter()
                 .copied()
-                .filter(|key| key.contains(&query) || form::setting_title(key).contains(&query))
+                .filter(|key| key.contains(&query) || super::settings::title(key).contains(&query))
                 .collect();
         }
         if self.page == Page::Tools {
@@ -221,8 +230,7 @@ impl State {
                 .connections
                 .iter()
                 .filter(|connection| {
-                    connection.metadata.host.to_lowercase().contains(&query)
-                        || connection.metadata.destination_ip.contains(&query)
+                    clash_client_core::connection::matches_query(connection, &query)
                 })
                 .map(|connection| connection.id.as_ref())
                 .collect(),
@@ -278,6 +286,12 @@ impl State {
                         if self.demo {
                             self.message = Some("演示模式：未执行操作或保存设置".into());
                             Action::None
+                        } else if form.setting.is_some() && self.error.is_some() {
+                            self.message =
+                                Some("后台状态过期，草稿保留；等待读取恢复后再确认".into());
+                            Action::None
+                        } else if form.setting.is_some() && super::settings::inline(&args) {
+                            Action::ApplySetting(args)
                         } else {
                             Action::Execute(args)
                         }
@@ -290,18 +304,32 @@ impl State {
                 };
             }
             match key {
-                Key::Up => form.selected = form.selected.saturating_sub(1),
-                Key::Down | Key::Tab => form.selected = (form.selected + 1).min(form.fields.len()),
+                Key::Up => form.navigate(true),
+                Key::Down | Key::Tab => form.navigate(false),
+                Key::Left => {
+                    form.cycle(true);
+                }
+                Key::Right | Key::Char(' ') => {
+                    form.cycle(false);
+                }
                 Key::Escape => {
                     self.form = None;
                 }
-                Key::Enter if form.selected < form.fields.len() => form.begin_edit(),
+                Key::Enter if form.selected < form.fields.len() => {
+                    if !form.cycle(false) {
+                        form.begin_edit();
+                    }
+                }
+                Key::Enter if form.setting.is_some() && self.error.is_some() => {
+                    self.message = Some("后台状态过期，草稿保留；等待读取恢复后再保存".into());
+                }
                 Key::Enter => return Action::ReviewForm,
                 _ => {}
             }
             return Action::None;
         }
         if self.searching {
+            let selected_node = self.selected_node();
             match key {
                 Key::Escape | Key::Enter => self.searching = false,
                 Key::Back => {
@@ -325,6 +353,7 @@ impl State {
                 _ => {}
             }
             self.selected = 0;
+            self.restore_selected_node(selected_node.as_deref());
             return Action::None;
         }
         if self.confirmation.is_some() {
@@ -351,12 +380,10 @@ impl State {
         if let Some(connection) = &self.connection {
             match key {
                 Key::Up => {
-                    self.detail_offset = self.detail_offset.saturating_sub(1);
-                    return Action::None;
+                    return Action::ScrollDetail(false);
                 }
                 Key::Down => {
-                    self.detail_offset = (self.detail_offset + 1).min(64);
-                    return Action::None;
+                    return Action::ScrollDetail(true);
                 }
                 Key::Char('x' | 'd') => {
                     let path = if key == Key::Char('x') {
@@ -375,27 +402,25 @@ impl State {
             }
         }
         match key {
-            Key::Char('l' | 'n') if self.page == Page::Nodes => {
-                let mode = if key == Key::Char('l') {
-                    NodeSort::LatencyAscending
-                } else {
-                    NodeSort::Name
-                };
+            Key::Char('s') if self.page == Page::Nodes => {
                 let Some(poll) = &self.poll else {
                     self.message = Some("后台未运行，无法保存节点排序".into());
                     return Action::None;
                 };
+                let mode = match poll.meta.settings.tui_node_sort {
+                    NodeSort::Name => NodeSort::LatencyAscending,
+                    NodeSort::LatencyAscending => NodeSort::LatencyDescending,
+                    NodeSort::LatencyDescending => NodeSort::Name,
+                };
                 if self.error.is_some() {
                     self.message = Some("后台状态过期，请先刷新".into());
-                } else if poll.meta.settings.tui_node_sort != mode {
-                    if self.demo {
-                        let selected_node = self.selected_node();
-                        self.poll.as_mut().unwrap().meta.settings.tui_node_sort = mode;
-                        self.restore_selected_node(selected_node.as_deref());
-                    } else {
-                        self.message = None;
-                        return Action::SetNodeSort(mode);
-                    }
+                } else if self.demo {
+                    let selected_node = self.selected_node();
+                    self.poll.as_mut().unwrap().meta.settings.tui_node_sort = mode;
+                    self.restore_selected_node(selected_node.as_deref());
+                } else {
+                    self.message = None;
+                    return Action::SetNodeSort(mode);
                 }
             }
             Key::Char('[' | ']') if self.page == Page::Network => {
@@ -547,18 +572,6 @@ impl State {
         let Some(key) = self.items().get(self.selected).copied() else {
             return;
         };
-        if !clash_client_core::config::MUTABLE_SETTINGS.contains(&key) {
-            let mut form = Form::new(
-                form::commands()
-                    .find(|spec| spec.path == "config get")
-                    .unwrap(),
-            );
-            form.fields[0].value = key.into();
-            form.selected = form.fields.len();
-            self.form = Some(form);
-            self.message = Some("只读状态；此表单查看完整值，修改请使用专用管理命令".into());
-            return;
-        }
         let Some(poll) = &self.poll else {
             self.message = Some("后台未运行；请在「操作」页启动或读取配置".into());
             return;
@@ -567,10 +580,13 @@ impl State {
             self.message = Some("后台状态过期，请先刷新".into());
             return;
         }
-        self.form = Some(Form::setting(
-            key,
-            &form::setting_value(&poll.meta.settings, key),
-        ));
+        match super::settings::open(poll, key) {
+            Ok(form) => {
+                self.form = Some(form);
+                self.message = None;
+            }
+            Err(error) => self.message = Some(format!("{error:#}")),
+        }
     }
 }
 
@@ -584,7 +600,7 @@ pub(super) fn demo_poll() -> Poll {
     }}))
     .unwrap();
     let connections = serde_json::from_value(serde_json::json!({"connections":[
-        {"id":"demo-1","metadata":{"host":"github.com","destinationPort":"443","network":"tcp"},
+        {"id":"demo-1","metadata":{"host":"github.com","sniffHost":"api.github.com","destinationPort":"443","network":"tcp"},
          "chains":["🇺🇸 美国 02","AUTO","PROXY"],"rule":"DomainSuffix","rulePayload":"github.com",
          "download":2453667,"upload":42000},
         {"id":"demo-2","metadata":{"host":"example.com","destinationPort":"443","network":"tcp"},

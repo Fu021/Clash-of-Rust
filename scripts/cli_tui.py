@@ -67,11 +67,11 @@ class Session:
     def text(self):
         return '\n'.join(self.screen.get(index, '') for index in range(max(self.screen, default=0)+1))
 
-    def wait(self, text, timeout=15):
+    def wait(self, text, timeout=15, rows=None):
         deadline = time.monotonic()+timeout
         while True:
             self.pump(.05)
-            if text in self.text():
+            if text in self.text() and (rows is None or max(self.screen, default=0) < rows):
                 return
             if self.process.poll() is not None or time.monotonic() >= deadline:
                 raise RuntimeError('TUI did not show '+repr(text)+': '+self.text()[-4000:])
@@ -145,6 +145,10 @@ def verify(console, resources, report):
             terminal.wait('策略组')
             terminal.send(b'\x1b[B\r')
             terminal.wait('PROXY   ·')
+            terminal.wait('延迟从低到高')
+            for mode in ['延迟从高到低', '名称排序', '延迟从低到高']:
+                terminal.send(b's')
+                terminal.wait(mode)
             terminal.capture(report, 'nodes')
             terminal.send('/日本'.encode())
             terminal.wait('🇯🇵 日本 01')
@@ -164,21 +168,23 @@ def verify(console, resources, report):
             terminal.capture(report, 'connections')
             terminal.send(b'\r')
             terminal.wait('连接详情')
-            terminal.wait('命中规则')
+            terminal.wait('匹配规则')
+            terminal.wait('域名：github.com')
+            terminal.wait('嗅探域名：api.github.com')
             terminal.capture(report, 'connection-detail')
             terminal.send(b'\x1b5')
             terminal.wait('混合代理端口')
             terminal.capture(report, 'settings')
-            terminal.send(b'/accent_color\r\r')
-            terminal.wait('config set')
+            terminal.send(b'/fake_ip_exclusions\r\r')
+            terminal.wait('设置 · Fake-IP 排除项')
             terminal.send(b'\r')
             terminal.wait('输入中')
             terminal.send(b'q6')
-            terminal.wait('tealq6')
+            terminal.wait('[]q6')
             if terminal.process.poll() is not None:
                 raise RuntimeError('Typing q into a setting exited TUI')
             terminal.send(b'\x1b')
-            terminal.wait('teal')
+            terminal.wait('值：[]')
             terminal.send(b'\x1b6')
             terminal.wait('管理操作')
             terminal.send(b'/service status\r\r')
@@ -201,21 +207,94 @@ def verify(console, resources, report):
             terminal.send(b'3')
             terminal.wait('活跃连接')
             terminal.resize(55, 16)
-            terminal.wait('终端过小')
+            terminal.send(b'/\x15api.github.com')
+            terminal.wait('输入中', rows=16)
+            terminal.send(b'\r\r')
+            terminal.wait('嗅探域名：api.github.com', rows=16)
             terminal.capture(report, 'small')
+            terminal.resize(40, 2)
+            terminal.wait('api.github.com', rows=2)
+            for _ in range(24):
+                terminal.send(b'\x1b[B')
+                terminal.pump(.05)
+            terminal.wait('demo-1', rows=2)
+            terminal.capture(report, 'tiny')
             terminal.resize(80, 24)
-            terminal.wait('活跃连接')
+            terminal.wait('连接详情')
             terminal.capture(report, 'compact')
         if data.exists():
             raise RuntimeError('Demonstration mode wrote data or started a backend')
         terminal = Session([*command, '--demo'])
         terminal.wait('参考线路')
         terminal.close(b'\x03')
+    verify_settings(console, resources, report)
     (report/'verification.json').write_text(json.dumps({
         'status': 'passed', 'source': 'real-pty',
         'checks': ['no-tty-rejected', 'read-only-no-backend', 'search-and-confirmation',
                    'literal-q-search', 'connection-details', 'settings-edit-and-cancel',
                    'operation-demo-no-side-effects', 'literal-q-setting',
-                   'network-tools-and-cancel', 'resize',
+                   'network-tools-and-cancel', 'node-sort-cycle', 'resize-and-tiny-detail-scroll',
+                   'native-setting-save-failure-persistence-and-cross-client-refresh',
                    'q-restores-terminal', 'ctrl-c-restores-terminal'],
     }), encoding='utf-8')
+
+
+def verify_settings(console, resources, report):
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='cor-tui-settings-') as temporary:
+        data = Path(temporary)
+        command = [str(console), '--data-dir', str(data), '--resources', str(resources)]
+
+        def call(*arguments):
+            result = subprocess.run([*command, '--json', *arguments], capture_output=True,
+                                    text=True, check=True, timeout=45)
+            return json.loads(result.stdout)
+
+        try:
+            call('config', 'set', 'delay_interval_minutes', '17')
+            call('config', 'set', 'tui_node_sort', 'latency_descending')
+            owner = json.loads((data/'control.json').read_text())['pid']
+            original_port = call('config', 'get', 'mixed_port')['mixed_port']
+            with Session([*command, 'ui']) as terminal:
+                terminal.wait('内核未运行')
+                terminal.send(b'5/delay_interval_minutes\r\r\r\x1523\r\x1b[B\r')
+                terminal.wait('保存节点测速间隔')
+                terminal.send(b'\r')
+                terminal.wait('已保存')
+                if call('config', 'get', 'delay_interval_minutes')['delay_interval_minutes'] != 23:
+                    raise RuntimeError('TUI saved a setting without persisting through the owner')
+                if json.loads((data/'settings.json').read_text())['delay_interval_minutes'] != 23:
+                    raise RuntimeError('TUI setting was not written to disk')
+                terminal.capture(report, 'setting-saved')
+                terminal.send(b'/\x15mixed_port\r\r\r\x150\r\x1b[B\r\r')
+                terminal.wait('草稿保留')
+                terminal.wait('代理端口必须非零')
+                if call('config', 'get', 'mixed_port')['mixed_port'] != original_port:
+                    raise RuntimeError('Rejected TUI setting changed the active value')
+                terminal.capture(report, 'setting-rejected')
+                terminal.send(b'\x1b2r')
+                terminal.wait('延迟从高到低')
+                deadline = time.monotonic()+15
+                while '读取失败' in terminal.text():
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('TUI did not refresh after rejecting a setting')
+                    terminal.pump(.05)
+                terminal.send(b's')
+                terminal.wait('名称排序')
+            if call('config', 'get', 'tui_node_sort')['tui_node_sort'] != 'name':
+                raise RuntimeError('TUI sort was not persisted')
+            with Session([*command, 'ui']) as terminal:
+                terminal.send(b'2')
+                terminal.wait('名称排序')
+                call('config', 'set', 'tui_node_sort', 'latency_ascending')
+                terminal.wait('延迟从低到高')
+            if json.loads((data/'control.json').read_text())['pid'] != owner:
+                raise RuntimeError('Opening or closing TUI replaced the existing owner')
+            if call('status')['running']:
+                raise RuntimeError('TUI settings or sorting started a core')
+        except BaseException:
+            with contextlib.suppress(Exception):
+                call('stop')
+            raise
+        else:
+            call('stop')

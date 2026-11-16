@@ -459,7 +459,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 app.wait()
 
 
-def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-', tui=False):
+def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-', tui=False, native_settings=False):
     with tempfile.TemporaryDirectory(prefix='memory-cli-') as directory, (output/(prefix+'cor.log')).open('x') as log:
         data = Path(directory)
         env, port = client_fixture(data, workload, rule_overrides)
@@ -483,10 +483,14 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
             if tui:
                 from cli_tui import Session
                 with Session([console, '--data-dir', data, '--resources', resources, 'ui'], env=env) as terminal:
-                    for page, key, ready in (('home', b'1', '参考线路'),
-                                             ('nodes', b'2', '策略组'),
-                                             ('connections', b'3', '活跃连接'),
-                                             ('network', b'4', '网站检查')):
+                    pages = [('home', b'1', '参考线路'),
+                             ('nodes', b'2', '策略组'),
+                             ('connections', b'3', '活跃连接'),
+                             ('network', b'4', '网站检查')]
+                    if native_settings:
+                        pages += [('settings', b'5', '设置 · Enter'),
+                                  ('setting-editor', b'/ipv6\r\r', '设置 · IPv6')]
+                    for page, key, ready in pages:
                         terminal.send(key)
                         terminal.wait(ready)
                         name = prefix+'tui-'+page
@@ -712,7 +716,8 @@ def main():
                     metadata['terminal_scenes'] += headless_scene(
                         bundle/'cor', resources, benchmark, output, args.seconds,
                         args.workload, overrides, prefix,
-                        tui=(source/'apps/cli/src/tui/mod.rs').is_file())
+                        tui=(source/'apps/cli/src/tui/mod.rs').is_file(),
+                        native_settings=(source/'apps/cli/src/tui/settings.rs').is_file())
                     metadata['background_scenes'].append(prefix+'headless')
         write_json(output/'metadata.json', metadata)
     summarize(output, metadata)

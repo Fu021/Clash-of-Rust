@@ -6,6 +6,8 @@ pub(super) enum Key {
     Paste(String),
     Up,
     Down,
+    Left,
+    Right,
     Enter,
     Escape,
     Back,
@@ -102,6 +104,8 @@ impl Decoder {
                                 match self.bytes[end] {
                                     b'A' => Some(Key::Up),
                                     b'B' => Some(Key::Down),
+                                    b'C' => Some(Key::Right),
+                                    b'D' => Some(Key::Left),
                                     _ => None,
                                 },
                             ),

@@ -65,6 +65,8 @@ Linux 服务器可直接安装现有 DEB 并在 SSH 中使用 `cor`，无需启�
 | `connection close ID` | 关闭一条连接 |
 | `connection close --all --yes` | 关闭全部连接 |
 | `logs [--follow --level warning --filter TEXT --limit 100]` | 不做终端宽度截断，按等级/文本过滤，可实时跟随 |
+
+连接名称优先采用嗅探域名，JSON 的 `host` 与 `sniff_host` 分别保留原始域名和真实嗅探结果；未提供嗅探时 `sniff_host` 为空，不使用原始域名回填。`connection list --filter TEXT` 与 GUI、TUI、Android 共用域名、IP、规则、规则内容和代理链匹配，多词同时匹配；CLI 另保留按连接 ID 筛选。
 | `logs clear --yes` | 清空有界缓冲区 |
 | `logs export -o FILE` | 导出当前最多 500 条缓冲日志，控制接口密钥会替换 |
 
