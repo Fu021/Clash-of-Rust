@@ -92,32 +92,140 @@
     }
   ],
   "history": [
-    {"version": "0.6.6", "date": "2026-11-03"},
-    {"version": "0.6.5", "date": "2026-10-28"},
-    {"version": "0.6.4", "date": "2026-10-24"},
-    {"version": "0.6.2", "date": "2026-10-22"},
-    {"version": "0.6.1", "date": "2026-10-21"},
-    {"version": "0.6.0", "date": "2026-10-17"},
-    {"version": "0.5.11", "date": "2026-10-16"},
-    {"version": "0.5.10", "date": "2026-10-15"},
-    {"version": "0.5.9", "date": "2026-10-15"},
-    {"version": "0.5.8", "date": "2026-10-14"},
-    {"version": "0.5.7", "date": "2026-10-14"},
-    {"version": "0.5.6", "date": "2026-10-13"},
-    {"version": "0.5.5", "date": "2026-10-13"},
-    {"version": "0.5.4", "date": "2026-10-12"},
-    {"version": "0.5.3", "date": "2026-10-11"},
-    {"version": "0.5.2", "date": "2026-10-11"},
-    {"version": "0.5.1", "date": "2026-10-10"},
-    {"version": "0.4.12", "date": "2026-10-09"},
-    {"version": "0.4.11", "date": "2026-10-08"},
-    {"version": "0.4.10", "date": "2026-10-08"},
-    {"version": "0.4.9", "date": "2026-10-08"},
-    {"version": "0.4.8", "date": "2026-10-08"},
-    {"version": "0.4.7", "date": "2026-10-08"},
-    {"version": "0.4.6", "date": "2026-10-08"},
-    {"version": "0.4.5", "date": "2026-10-07"},
-    {"version": "0.4.3", "date": "2026-10-07"},
-    {"version": "0.4.2", "date": "2026-10-06"}
+    {
+      "version": "0.6.6", "date": "2026-11-03",
+      "zh": {"summary": "最低支持 Ubuntu 20.04，各页显示 Claude 保护状态；改进订阅格式兼容、IPv6 解析、Geo 恢复与 macOS 启动。"},
+      "en": {"summary": "Lowered the Ubuntu minimum to 20.04 and added Claude protection status across pages; improved subscription compatibility, IPv6 resolution, Geo recovery and macOS startup."}
+    },
+    {
+      "version": "0.6.5", "date": "2026-10-28",
+      "zh": {"summary": "修复断网启动后的联网恢复，完善 macOS 与 Tailscale 的 DNS 共存；加入订阅定时更新，统一规则拖动和下载恢复。"},
+      "en": {"summary": "Fixed recovery after starting offline and improved DNS coexistence with Tailscale on macOS; added scheduled subscription updates and refined rule dragging and download recovery."}
+    },
+    {
+      "version": "0.6.4", "date": "2026-10-24",
+      "zh": {"summary": "关闭窗口后释放独立界面进程以降低驻留内存；完善 GUI/CLI 状态同步、macOS 通知权限和更新通道。"},
+      "en": {"summary": "Released the separate UI process when closing the window to reduce resident memory; improved GUI/CLI state synchronization, macOS notification permissions and update channels."}
+    },
+    {
+      "version": "0.6.2", "date": "2026-10-22",
+      "zh": {"summary": "桌面安装包加入无需 GUI 的 cor 命令行，共用内核、订阅与设置；改进 Android VPN 连接、取消和更新反馈。"},
+      "en": {"summary": "Added the headless cor CLI to desktop packages, sharing the core, subscriptions and settings; improved Android VPN connection, cancellation and update feedback."}
+    },
+    {
+      "version": "0.6.1", "date": "2026-10-21",
+      "zh": {"summary": "统一桌面与 Android 的按钮、导航、弹窗和主题过渡；Claude 保护支持全局模式。"},
+      "en": {"summary": "Unified button, navigation, dialog and theme transitions across desktop and Android; added global-mode support to Claude protection."}
+    },
+    {
+      "version": "0.6.0", "date": "2026-10-17",
+      "zh": {"summary": "首次发布 Android 客户端，支持系统 VPN、应用分流、快捷磁贴和 APK 更新；适配手机与平板并保留桌面功能。"},
+      "en": {"summary": "Introduced the Android client with system VPN, per-app routing, quick-settings tiles and APK updates; adapted the interface for phones and tablets while retaining desktop features."}
+    },
+    {
+      "version": "0.5.11", "date": "2026-10-16",
+      "zh": {"summary": "桌面界面迁移至 Slint，统一字号、间距、主题与操作反馈；完善节点排序和下拉框选择。"},
+      "en": {"summary": "Moved the desktop interface to Slint with consistent typography, spacing, themes and interaction feedback; refined node sorting and dropdown selection."}
+    },
+    {
+      "version": "0.5.10", "date": "2026-10-15",
+      "zh": {"summary": "Claude 保护在 macOS 接管系统 DNS 并保留局域网解析；修复登录自启后更新时安装助手随旧进程退出的问题。"},
+      "en": {"summary": "Claude protection now manages macOS system DNS while preserving local resolution; fixed the update helper exiting with the old app after login autostart."}
+    },
+    {
+      "version": "0.5.9", "date": "2026-10-15",
+      "zh": {"summary": "新增默认关闭的 Claude 保护，固定节点并配置 TUN、加密 DNS 与相关规则；后台监测偏离保护线路的连接。"},
+      "en": {"summary": "Added opt-in Claude protection with a fixed node, TUN, encrypted DNS and related rules; monitors connections that deviate from the protected route."}
+    },
+    {
+      "version": "0.5.8", "date": "2026-10-14",
+      "zh": {"summary": "macOS 系统代理与 TUN 共用网络助手，减少重复授权；完善退出恢复、助手状态恢复及普通用户安装。"},
+      "en": {"summary": "Shared the macOS network helper between system proxy and TUN to reduce repeated authorization; improved exit cleanup, helper state recovery and installation by standard users."}
+    },
+    {
+      "version": "0.5.7", "date": "2026-10-14",
+      "zh": {"summary": "新增 A÷检测，整合 Claude 配置、本机网络和浏览器线索；报告区分风险、正常、辅助与未确认结果。"},
+      "en": {"summary": "Introduced A÷ checks combining Claude configuration, local network and browser signals; reports distinguish risks, normal findings, supporting signals and unconfirmed results."}
+    },
+    {
+      "version": "0.5.6", "date": "2026-10-13",
+      "zh": {"summary": "修复 macOS 从 TUN 切回系统代理后重启或更新误报端口占用；减少模式切换与登录自启的重复授权。"},
+      "en": {"summary": "Fixed false port conflicts during macOS restarts or updates after switching from TUN to system proxy; reduced repeated authorization during mode changes and login autostart."}
+    },
+    {
+      "version": "0.5.5", "date": "2026-10-13",
+      "zh": {"summary": "加入独立 DNS 覆盖与 IPv6 设置，优化连接保活和 Geo 加载；修复 macOS 自动更新的授权与应用替换。"},
+      "en": {"summary": "Added independent DNS override and IPv6 settings, refined connection keepalive and Geo loading, and fixed macOS update authorization and app replacement."}
+    },
+    {
+      "version": "0.5.4", "date": "2026-10-12",
+      "zh": {"summary": "修复 Linux 登录自启后的窗口与字体缩放，完善尺寸恢复；再次点击桌面图标可唤起已有窗口。"},
+      "en": {"summary": "Fixed Linux window and font scaling after login autostart, improved size restoration, and allowed the desktop icon to reopen the existing window."}
+    },
+    {
+      "version": "0.5.3", "date": "2026-10-11",
+      "zh": {"summary": "首次提供 Intel 与 Apple Silicon 的 macOS 原生客户端和 DMG，支持系统代理、托盘及登录后台启动。"},
+      "en": {"summary": "Introduced native macOS clients and DMG packages for Intel and Apple Silicon, with system proxy, tray and background login startup support."}
+    },
+    {
+      "version": "0.5.2", "date": "2026-10-11",
+      "zh": {"summary": "规则按订阅独立管理，支持编辑、启停、排序与恢复原序；快捷规则移入规则页并避免重复补入。"},
+      "en": {"summary": "Added per-subscription rule editing, toggling, reordering and order restoration; moved shortcut rules to the rules page and avoided duplicate additions."}
+    },
+    {
+      "version": "0.5.1", "date": "2026-10-10",
+      "zh": {"summary": "修复 Windows 普通用户自启权限与备用启动项反馈；改善配置原子保存、事务恢复和错误说明。"},
+      "en": {"summary": "Fixed Windows autostart permissions for standard users and fallback startup feedback; improved atomic configuration saves, transaction recovery and error details."}
+    },
+    {
+      "version": "0.4.12", "date": "2026-10-09",
+      "zh": {"summary": "修复 Ubuntu 自启托盘缺失、TUN 重复授权和窗口宽度恢复；加快 Windows 登录后的托盘显示。"},
+      "en": {"summary": "Fixed missing Ubuntu autostart tray icons, repeated TUN authorization and window width restoration; sped up the Windows tray after login."}
+    },
+    {
+      "version": "0.4.11", "date": "2026-10-08",
+      "zh": {"summary": "Linux TUN 改用原生授权助手，修复 Ubuntu 22.04/24.04 权限流程和任务栏图标；补充真实流量验证。"},
+      "en": {"summary": "Moved Linux TUN to a native authorization helper, fixed Ubuntu 22.04/24.04 permissions and taskbar icons, and added real-traffic validation."}
+    },
+    {
+      "version": "0.4.10", "date": "2026-10-08",
+      "zh": {"summary": "Linux 两架构改用 Ubuntu 22.04 构建以降低系统库要求；修复内核过早就绪判断，完善安装包扫描。"},
+      "en": {"summary": "Built both Linux architectures on Ubuntu 22.04 to lower system library requirements; fixed premature core readiness detection and refined installer scanning."}
+    },
+    {
+      "version": "0.4.9", "date": "2026-10-08",
+      "zh": {"summary": "新增 Windows 与 Linux ARM64 安装包；更新下载支持取消并清理临时文件。"},
+      "en": {"summary": "Added Windows and Linux ARM64 packages and cancellable update downloads with temporary-file cleanup."}
+    },
+    {
+      "version": "0.4.8", "date": "2026-10-08",
+      "zh": {"summary": "客户端和订阅统一更新入口，依次尝试内核代理、系统代理与直连；安装包重试后重新核对大小和 SHA256。"},
+      "en": {"summary": "Unified client and subscription updates with core proxy, system proxy and direct fallback; rechecks package size and SHA256 after retrying."}
+    },
+    {
+      "version": "0.4.7", "date": "2026-10-08",
+      "zh": {"summary": "更新检查加入代理回退和官方 Release 订阅源，细分网络错误；统一更新按钮并调整构建配置。"},
+      "en": {"summary": "Added proxy fallback and the official Release feed to update checks, with clearer network errors; unified update buttons and adjusted build settings."}
+    },
+    {
+      "version": "0.4.6", "date": "2026-10-08",
+      "zh": {"summary": "新增客户端内下载、SHA256 校验与自动安装，显示下载进度并在失败后允许重试；升级保留配置。"},
+      "en": {"summary": "Added in-app downloads, SHA256 verification and automatic installation with progress and retry on failure; upgrades preserve configuration."}
+    },
+    {
+      "version": "0.4.5", "date": "2026-10-07",
+      "zh": {"summary": "地区检测与 Linux 桌面集成迁移至原生 Rust，移除运行时脚本依赖；提供 Windows EXE 和 Debian/Ubuntu DEB 安装器。"},
+      "en": {"summary": "Moved region checks and Linux desktop integration to native Rust, removed runtime script dependencies, and provided Windows EXE and Debian/Ubuntu DEB installers."}
+    },
+    {
+      "version": "0.4.3", "date": "2026-10-07",
+      "zh": {"summary": "原始发行说明仅提示 Windows Defender 可能误报，未列出具体功能变更。"},
+      "en": {"summary": "The original notes only warn of possible Windows Defender false positives; no specific feature changes were listed."}
+    },
+    {
+      "version": "0.4.2", "date": "2026-10-06",
+      "zh": {"summary": "正式版加入启动及每六小时的更新检测，设置页可手动检查；提供独立新版本提示与语义版本比较。"},
+      "en": {"summary": "Added update checks at startup and every six hours, with manual checks in settings, a separate update notice and semantic version comparison."}
+    }
   ]
 }

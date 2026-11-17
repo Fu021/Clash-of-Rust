@@ -125,12 +125,10 @@ async function checkPage(context, origin, route, width) {
       await page.evaluate(() => scrollTo(0, 0));
     }
     if (route.endsWith("/download")) {
-      for (const channel of ["preview", "stable"]) {
-        await activate(page.locator(`[data-channel="${channel}"]`));
-        assert.equal(await page.locator("[data-pkgs] a").count(), 18, `${channel} downloads`);
-        assert.equal((await page.locator("[data-version]").textContent()).trim(),
-          releases.downloads.stable.tag.slice(1));
-      }
+      assert.equal(await page.locator("[data-channel]").count(), 0);
+      assert.equal(await page.locator("[data-pkgs] a").count(), 18, "Stable downloads");
+      assert.equal((await page.locator("[data-version]").textContent()).trim(),
+        releases.downloads.stable.tag.slice(1));
     }
     if (["guide", "tui", "cli"].some(name => route.endsWith("/" + name))) {
       assert.equal(await page.locator(".manual-nav a").count(), 3);
@@ -323,49 +321,54 @@ async function checkTour(origin) {
 }
 
 async function checkDownloadFallbacks(origin) {
-  function record(channel) {
+  const latestTag = releases.downloads.stable.tag.replace(/^v(\d+)\.(\d+)\.(\d+)$/, (_, major, minor, patch) =>
+    `v${major}.${minor}.${Number(patch) + 1}`);
+  function record(tag = latestTag) {
     const snapshot = releases.downloads.stable;
-    const tag = channel === "preview" ? snapshot.tag.replace(/^v(\d+)\.(\d+)\.(\d+)$/, (_, major, minor, patch) =>
-      `v${major}.${minor}.${Number(patch) + 1}-test.1`) : snapshot.tag;
     const assets = Object.entries(snapshot.sizes).flatMap(([suffix, size]) => {
       const name = `Clash-of-Rust-${tag.slice(1)}-${suffix}`;
       return [name, name + ".sha256"].map(file => ({ name: file, state: "uploaded", size: file === name ? size : 65,
         browser_download_url: `https://github.com/Fu021/Clash-of-Rust/releases/download/${tag}/${file}` }));
     });
-    return { tag_name: tag, draft: false, prerelease: channel === "preview",
-      published_at: channel === "preview" ? new Date(Date.parse(snapshot.published) + 1000).toISOString() : snapshot.published, assets };
+    return { tag_name: tag, draft: false, prerelease: false, published_at: snapshot.published, assets };
   }
-  for (const mode of ["valid", "offline", "missing-checksum", "unsafe-url", "latest-offline"]) {
-    const context = await browser.newContext({ viewport: { width: 360, height: 640 }, serviceWorkers: "block" });
-    await context.route("**/*", route => {
-      const url = new URL(route.request().url());
-      if (url.origin === origin) return route.continue();
-      if (url.hostname !== "api.github.com" || mode === "offline") return route.abort();
-      if (mode === "latest-offline" && url.pathname.endsWith("/releases/latest")) return route.abort();
-      const stable = record("stable");
-      const preview = record("preview");
-      if (mode === "missing-checksum") preview.assets.pop();
-      if (mode === "unsafe-url") preview.assets[0].browser_download_url = "https://example.invalid/installer";
-      if (mode === "latest-offline") {
-        preview.published_at = new Date(Date.parse(stable.published_at) - 1000).toISOString();
+  for (const language of ["", "/en"]) {
+    for (const mode of ["valid", "offline", "missing-checksum", "unsafe-url", "prerelease", "prerelease-tag", "draft"]) {
+      const context = await browser.newContext({ viewport: { width: 360, height: 640 }, serviceWorkers: "block" });
+      const releaseRequests = [];
+      await context.route("**/*", route => {
+        const url = new URL(route.request().url());
+        if (url.origin === origin) return route.continue();
+        if (url.pathname.includes("/releases")) releaseRequests.push(url.pathname + url.search);
+        if (url.hostname !== "api.github.com" || mode === "offline") return route.abort();
+        const stable = record(mode.startsWith("prerelease") ? latestTag + "-test.1" : latestTag);
+        if (mode === "missing-checksum") stable.assets.pop();
+        if (mode === "unsafe-url") stable.assets[0].browser_download_url = "https://example.invalid/installer";
+        if (mode === "prerelease") stable.prerelease = true;
+        if (mode === "draft") stable.draft = true;
+        const json = url.pathname.endsWith("/releases/latest") ? stable
+          : { stargazers_count: 1 };
+        return route.fulfill({ status: 200, json });
+      });
+      try {
+        const page = await context.newPage();
+        await page.goto(origin + language + "/download#preview", { waitUntil: "load" });
+        const expected = mode === "valid" ? "confirmed" : "fallback";
+        await page.waitForFunction(state => document.querySelector("[data-downloads]").dataset.releaseState === state,
+          expected, { timeout: 10000 });
+        assert.equal(await page.locator("[data-download-notice]").isVisible(), mode !== "valid");
+        assert.equal(await page.locator("[data-channel]").count(), 0);
+        assert.equal(await page.locator("[data-pkgs] a").count(), 18);
+        assert.equal(await page.locator('[data-pkgs] a[href*="example.invalid"]').count(), 0);
+        const expectedTag = mode === "valid" ? latestTag : releases.downloads.stable.tag;
+        assert.equal((await page.locator("[data-version]").textContent()).trim(), expectedTag.slice(1));
+        assert.deepEqual(releaseRequests, ["/repos/Fu021/Clash-of-Rust/releases/latest"]);
+        for (const href of await page.locator("[data-pkgs] a").evaluateAll(links => links.map(link => link.href))) {
+          assert.ok(href.startsWith(`https://github.com/Fu021/Clash-of-Rust/releases/download/${expectedTag}/`));
+        }
+      } finally {
+        await context.close();
       }
-      const json = url.pathname.endsWith("/releases/latest") ? stable
-        : url.pathname.endsWith("/releases") ? [preview, stable] : { stargazers_count: 1 };
-      return route.fulfill({ status: 200, json });
-    });
-    try {
-      const page = await context.newPage();
-      await page.goto(origin + "/download", { waitUntil: "load" });
-      const expected = mode === "valid" ? "已与 GitHub 核对。" : `显示 ${releases.checked} 的列表`;
-      await page.waitForFunction(text => document.querySelector("[data-fetch-state]").textContent.includes(text),
-        expected, { timeout: 10000 });
-      await page.locator('[data-channel="preview"]').click();
-      assert.equal(await page.locator("[data-pkgs] a").count(), 18);
-      assert.equal(await page.locator('[data-pkgs] a[href*="example.invalid"]').count(), 0);
-      const expectedTag = mode === "valid" ? record("preview").tag_name : releases.downloads.stable.tag;
-      assert.equal((await page.locator("[data-version]").textContent()).trim(), expectedTag.slice(1));
-    } finally {
-      await context.close();
     }
   }
   report.download_fallbacks = "passed";
@@ -579,7 +582,7 @@ async function run() {
     await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
     await page.goto(origin + "/download", { waitUntil: "load", timeout: 20000 });
     assert.equal(await page.locator("[data-pkgs] a").count(), 18);
-    assert.equal(await page.locator('[data-channel="preview"]').isVisible(), false);
+    assert.equal(await page.locator("[data-channel]").count(), 0);
     assert.equal(await page.locator("[data-theme-toggle]").isVisible(), false);
     assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor), "rgb(16, 29, 35)");
     assert.ok((await page.locator(".scene img").evaluate(image => image.currentSrc)).includes("-night"));

@@ -38,6 +38,10 @@ def validate(data):
             raise ValueError('Invalid or duplicate historical version: ' + version)
         seen.add(version)
         date.fromisoformat(release['date'])
+        for lang in ('en', 'zh'):
+            summary = release.get(lang, {}).get('summary')
+            if not isinstance(summary, str) or not summary.strip():
+                raise ValueError('Missing translated historical summary: ' + version)
     snapshot = data['downloads']['stable']
     release = next((r for r in data['releases'] if 'v'+r['version'] == snapshot['tag']), None)
     if release is None:
@@ -70,11 +74,12 @@ def render(data, lang, repo, compact=False, root=''):
     if compact:
         return '<section class="part versions"><div class="wrap"><div class="version-heading"><h2>'+('一路更新' if zh else 'Along the way')+'</h2><a href="releases.html">'+('查看版本记录 →' if zh else 'All version notes →')+'</a></div>'+content+'</div></section>'
     history = ''.join(
-        f'<li id="v{escape(item["version"])}"><a href="{repo}/releases/tag/v{escape(item["version"])}">'
-        f'v{escape(item["version"])}</a> · <time datetime="{item["date"]}">{item["date"]}</time></li>'
+        f'<li id="v{escape(item["version"])}"><h3><a href="{repo}/releases/tag/v{escape(item["version"])}">'
+        f'v{escape(item["version"])}</a></h3><time datetime="{item["date"]}">{item["date"]}</time>'
+        f'<p>{escape(item[lang]["summary"])}</p></li>'
         for item in data['history'])
     earlier = ('历史正式版' if zh else 'Earlier stable releases')
-    archive = f'<section class="release-history"><h2>{earlier}</h2><ul class="dots">{history}</ul></section>' if history else ''
+    archive = f'<section class="release-history"><h2>{earlier}</h2><ul class="release-archive">{history}</ul></section>' if history else ''
     alt = '蓝猫在车站张贴新的线路告示。' if zh else 'The blue cat puts up a new railway notice at the station.'
     banner = f'<div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{root}assets/versions-small.webp"><img src="{root}assets/versions.webp" width="2172" height="724" alt="{alt}"></picture></div>'
     return '<section class="page-head"><div class="wrap"><h1>'+('版本记录' if zh else 'Release notes')+'</h1><p class="lead">'+('历次正式版更新。' if zh else 'Stable releases through the years.')+'</p></div>'+banner+'</section><section class="wrap doc versions"><p>'+('完整发行说明见 ' if zh else 'Full release notes: ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>'+('。' if zh else '.')+'</p>'+content+archive+'</section>'

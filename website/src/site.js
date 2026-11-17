@@ -225,12 +225,9 @@ if (downloads) {
     { os: "android", suffix: "android-x64.apk", label: "x86_64 APK", hint: say("Emulators and x86 devices", "模拟器和 x86 设备") },
   ];
   const snapshot = JSON.parse(document.getElementById("release-data").textContent);
-  const releases = Object.fromEntries(Object.entries(snapshot.downloads).map(([channel,record]) =>
-    [channel, {tag:record.tag, published:record.published, sizes:PACKAGES.map(item => record.sizes[item.suffix])}]));
-  releases.preview = releases.stable;
-  let channel = location.hash === "#preview" ? "preview" : "stable";
+  let release = {tag:snapshot.downloads.stable.tag,
+    sizes:PACKAGES.map(item => snapshot.downloads.stable.sizes[item.suffix])};
   let state = "loading";
-  let previewIsStable = true;
 
   const mine = platform && $(`[data-os="${platform}"]`);
   if (mine) {
@@ -239,9 +236,9 @@ if (downloads) {
   }
 
   /* A release counts only when all nine installers and nine checksum files are public. */
-  function accept(record, prerelease) {
-    if (!record || record.draft !== false || record.prerelease !== prerelease || typeof record.tag_name !== "string" ||
-        !/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(record.tag_name) || !Array.isArray(record.assets)) return null;
+  function accept(record) {
+    if (!record || record.draft !== false || record.prerelease !== false || typeof record.tag_name !== "string" ||
+        !/^v\d+\.\d+\.\d+$/.test(record.tag_name) || !Array.isArray(record.assets)) return null;
     const sizes = [];
     for (const item of PACKAGES) {
       const name = `Clash-of-Rust-${record.tag_name.slice(1)}-${item.suffix}`;
@@ -252,24 +249,18 @@ if (downloads) {
       if (!installer || !find(`${name}.sha256`)) return null;
       sizes.push(installer.size);
     }
-    return { tag: record.tag_name, sizes, published: String(record.published_at || "") };
+    return { tag: record.tag_name, sizes };
   }
 
   function render() {
     const active = document.activeElement;
     const focusOs = active?.closest("[data-os]")?.dataset.os;
     const focusIndex = focusOs ? [...$$("a", $(`[data-os="${focusOs}"] [data-pkgs]`))].indexOf(active) : -1;
-    const release = releases[channel];
     const version = release.tag.slice(1);
-    for (const button of $$("[data-channel]")) button.setAttribute("aria-pressed", String(button.dataset.channel === channel));
     $("[data-version]").textContent = version;
     $("[data-notes]").href = `${WEB}/releases/tag/${release.tag}`;
-    $("[data-channel-note]").textContent = channel === "stable" ? say("For everyday use.", "日常使用选这个。")
-      : previewIsStable ? say("No preview is newer than stable right now, so this is the stable release.", "目前没有比正式版更新的预发布版，这里给出的是正式版。")
-      : say("Newer features with a narrower validation scope. Back up your settings first.", "新功能先行，验证范围较小。建议先备份配置。");
-    $("[data-fetch-state]").textContent = state === "loading" ? say("Checking GitHub…", "正在与 GitHub 核对…")
-      : state === "confirmed" ? say("Checked against GitHub just now.", "已与 GitHub 核对。")
-      : say(`Could not fully verify GitHub. Snapshot: ${snapshot.checked}; it may be out of date.`, `暂未完整核对 GitHub，显示 ${snapshot.checked} 的列表，可能已过期。`);
+    downloads.dataset.releaseState = state;
+    $("[data-download-notice]").hidden = state !== "fallback";
     for (const list of $$("[data-pkgs]")) {
       const os = list.closest("[data-os]").dataset.os;
       const first = PACKAGES.findIndex(item => item.os === os);
@@ -297,42 +288,15 @@ if (downloads) {
     if (focusIndex >= 0) $$('a', $(`[data-os="${focusOs}"] [data-pkgs]`))[focusIndex]?.focus({preventScroll:true});
   }
 
-  for (const button of $$("[data-channel]")) {
-    button.addEventListener("click", () => {
-      channel = button.dataset.channel;
-      try { history.replaceState(null, "", channel === "preview" ? "#preview" : location.pathname + location.search); } catch (_) { /* Embedded previews may not permit history changes. */ }
-      render();
-    });
-  }
-  window.addEventListener("hashchange", () => {
-    if (location.hash === "#preview" || location.hash === "") { channel = location.hash ? "preview" : "stable"; render(); }
-  });
   render();
 
-  Promise.allSettled([github("/releases/latest"), github("/releases?per_page=15")]).then(([latest, recent]) => {
-    const stable = latest.status === "fulfilled" && accept(latest.value, false);
-    if (stable) {
-      releases.stable = stable;
-      releases.preview = stable;
-      previewIsStable = true;
-    }
-    let confirmed = Boolean(stable);
-    if (recent.status === "fulfilled" && Array.isArray(recent.value)) {
-      const newest = recent.value.filter(record => record && record.draft === false && record.prerelease === true)
-        .sort((first, second) => String(second.published_at || "").localeCompare(String(first.published_at || "")))[0];
-      if (newest && String(newest.published_at || "") > releases.stable.published) {
-        const preview = accept(newest, true);
-        if (preview) {
-          releases.preview = preview;
-          previewIsStable = false;
-        } else confirmed = false;
-      } else if (stable) {
-        /* A preview older than stable is no longer worth offering. */
-        releases.preview = stable;
-        previewIsStable = true;
-      } else confirmed = false;
-    } else confirmed = false;
-    state = confirmed ? "confirmed" : "fallback";
+  github("/releases/latest").then(record => {
+    const stable = accept(record);
+    if (stable) release = stable;
+    state = stable ? "confirmed" : "fallback";
+    render();
+  }).catch(() => {
+    state = "fallback";
     render();
   });
 }

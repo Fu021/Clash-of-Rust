@@ -15,14 +15,10 @@
 
 <div class="wrap doc" data-downloads>
   <section>
-    <div class="release" id="preview">
-      <div class="switch js-only" role="group" aria-label="Release channel">
-        <button type="button" data-channel="stable" aria-pressed="true">Stable</button>
-        <button type="button" data-channel="preview" aria-pressed="false">Preview</button>
-      </div>
-      <p class="release-meta" aria-live="polite"><b data-version>{{stable_version}}</b><span data-channel-note>For everyday use.</span><a data-notes href="{{repo}}/releases/tag/{{stable_tag}}" target="_blank" rel="noopener">Release notes</a><span data-fetch-state></span></p>
+    <div class="release">
+      <p class="release-meta" aria-live="polite"><span>Stable</span><b data-version>{{stable_version}}</b><a data-notes href="{{repo}}/releases/tag/{{stable_tag}}" target="_blank" rel="noopener">Release notes</a><span data-download-notice hidden>Using a saved list. <a href="{{repo}}/releases/latest">See the latest stable release</a>.</span></p>
     </div>
-    <noscript><p>JavaScript is off. This saved stable list may be out of date; check <a href="{{repo}}/releases">GitHub Releases</a> for the latest version.</p></noscript>
+    <noscript><p>This list may be out of date. <a href="{{repo}}/releases/latest">See the latest stable release</a>.</p></noscript>
 
     <div class="os-list">
       <section class="os" id="windows" data-os="windows">
@@ -85,7 +81,6 @@ shasum -a 256 the-file-name.dmg</pre>
   <section id="questions">
     <h2>Questions people ask</h2>
     <div class="qa">
-      <details><summary>Stable or preview?</summary><p>Stable is for everyday use. Preview may carry newer features first and has been through a narrower round of validation. Back up your configuration before you try it. The desktop app can switch back to stable from inside the app.</p></details>
       <details><summary>Is there an iOS version?</summary><p>No. The repository has an interface prototype for iOS and nothing you can install.</p></details>
       <details><summary>What about other Linux distributions?</summary><p>Only DEB packages are published, and they are validated on Debian and on Ubuntu 20.04 and later. On other distributions you would need to build from source; see the developer docs in the repository.</p></details>
       <details><summary>Does the Linux package work without a desktop?</summary><p>Yes. The DEB includes <code>cor</code>, which needs no display. Run <code>cor start</code>, and use TUN on a server.</p></details>

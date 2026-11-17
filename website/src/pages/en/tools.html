@@ -3,7 +3,7 @@
 <section class="page-head">
   <div class="wrap">
     <h1>From DNS to the exit, find the cause.</h1>
-    <p class="lead">Version 0.7.2 provides twelve focused checks shared by GUI, TUI and CLI. Images show their actual capture versions.</p>
+    <p class="lead">Twelve network checks for GUI, TUI and CLI.</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -34,7 +34,7 @@
     <ul class="dots">
       <li>It runs only when you ask. Nothing scans in the background.</li>
       <li>Website and HTTP checks go through the core's local proxy as it is now. A check never starts the core, switches node or falls back to a direct connection.</li>
-      <li>Only the current result is kept. Switching page or tool cancels the check and clears the result, and a late answer is not filled in afterwards. Export first if you need it.</li>
+      <li>Switching page or tool cancels the check and clears the result. Export first if you need it.</li>
       <li>Reports leave out the URL path and query, any user name or password, and the downloaded body.</li>
     </ul>
   </section>
@@ -42,17 +42,17 @@
   {{tools:articles}}
 
   <section id="runtime">
-    <h2>Tool changes and information locations</h2>
-    <p id="explain">Rule and exit is now part of the <a href="#check">website check</a>, which observes the matched rule and policy chain of a real request.</p>
-    <p><span id="rule"></span><span id="config-diff"></span>Static rule prediction and configuration shape summaries are removed. Read configuration with <code>cor config get</code> or <code>cor config effective</code>; validate with <code>cor config check</code>.</p>
-    <p><span id="traffic"></span><span id="node"></span><span id="performance"></span>Traffic summaries belong to Connections, node information to Proxy details, and core state to existing status and diagnostic entries. Old CLI commands return migration guidance and a non-zero exit code without running another check.</p>
+    <h2>Rules, configuration and runtime status</h2>
+    <p id="explain">The <a href="#check">website check</a> shows the matched rule and policy chain of a real request.</p>
+    <p><span id="rule"></span><span id="config-diff"></span>Read configuration with <code>cor config get</code> or <code>cor config effective</code>; validate with <code>cor config check</code>.</p>
+    <p><span id="traffic"></span><span id="node"></span><span id="performance"></span>See Connections for traffic, Proxies for node details, and Home or diagnostics for core status.</p>
   </section>
 
   <section id="limits">
     <h2>Options and limits</h2>
     <p>Defaults: 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB cap and 8 hops. The GUI shows relevant options. In TUI, press <kbd>o</kbd> to edit the current tool's applicable options and apply them before running; CLI uses the flags below.</p>
     {{tools:options}}
-    <p style="margin-top:1.2rem">Stability checks stop at 120 seconds. System output is capped at 8 KiB per stream; reports at 48 entries of 2,048 characters.</p>
+    <p style="margin-top:1.2rem">Stability checks run for up to 120 seconds.</p>
   </section>
 
   <section id="protection">
@@ -92,8 +92,7 @@
         <tr><th scope="row">Terminal interface</th><td>Run <code>cor ui</code> and press <kbd>4</kbd>. <kbd>[</kbd> and <kbd>]</kbd> change tool, <kbd>/</kbd> enters the target, <kbd>Enter</kbd> runs it and <kbd>Esc</kbd> cancels.</td></tr>
       </tbody>
     </table>
-    <p style="margin-top:1.4rem">All twelve checks are included in stable 0.7.2. <a class="more" href="download.html">Download stable</a></p>
-    <p class="fine" style="margin-top:1rem">Source of record: <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> in the repository (in Chinese).</p>
+    <p style="margin-top:1.4rem"><a class="more" href="download.html">Download stable</a> · <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">Technical details (Chinese)</a></p>
   </section>
   </div>
 </div>

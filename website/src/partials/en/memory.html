@@ -1,1 +1,20 @@
-<section class="part memory-section" id="memory"><div class="wrap"><h2>Less memory. More room for everything else.</h2><p class="lead">Close the window to release the UI process. The tray and core keep working.</p><dl class="memory-stats"><div><dt>Command line</dt><dd><strong>11.2</strong> MiB <span>client PSS</span></dd><p>With core 54.8 MiB</p></div><div><dt>Window closed</dt><dd><strong>17.9</strong> MiB <span>client PSS</span></dd><p>With core 63.9 MiB</p></div><div><dt>Window open</dt><dd><strong>45.1</strong> MiB <span>client PSS</span></dd><p>With core 91.2 MiB</p></div></dl><p class="benchmark-context">v0.7.1 · Ubuntu 22.04 x64 · peak PSS. Results vary by device and configuration.</p><details class="benchmark-details"><summary>Measurement conditions and source</summary><div class="benchmark-body"><p>Release build, Slint software renderer, mihomo v1.19.33; 100 nodes, 5 policy groups, 1,000 rules, no traffic. Client figures include the host and UI process; totals also include the core. Peaks sampled for 10 seconds at 250 ms intervals. Open/closed window measurements use the same tray client. <a href="{{repo}}#内存占用">Full benchmark ↗</a></p></div></details></div></section>
+<section class="part memory-section" id="memory">
+  <div class="wrap">
+    <h2>Less memory. More room for everything else.</h2>
+    <p class="lead">Closing the GUI or exiting the TUI releases its UI process. The background service and core keep working.</p>
+    <dl class="memory-stats">
+      <div><dt>Command line</dt><dd><strong>11.93</strong> MiB <span>client PSS</span><p>With core 54.68 MiB</p></dd></div>
+      <div><dt>GUI closed, tray running</dt><dd><strong>18.23</strong> MiB <span>client PSS</span><p>With core 64.50 MiB</p></dd></div>
+      <div><dt>GUI home</dt><dd><strong>46.25</strong> MiB <span>client PSS</span><p>With core 92.39 MiB</p></dd></div>
+    </dl>
+    <dl class="memory-stats memory-tui">
+      <div><dt>First TUI home session</dt><dd><strong>14.86</strong> MiB <span>client PSS</span><p>With core 57.74 MiB</p></dd></div>
+      <div><dt>TUI closed after browsing pages</dt><dd><strong>14.53</strong> MiB <span>client PSS</span><p>With core 61.15 MiB</p></dd></div>
+    </dl>
+    <p class="benchmark-context">v0.7.2 · Ubuntu 22.04 x64 · peak PSS. Total memory does not fully return to its initial level after TUI exit.</p>
+    <details class="benchmark-details">
+      <summary>Measurement conditions and source</summary>
+      <div class="benchmark-body"><p>Release build, Slint software renderer, mihomo v1.19.33; 100 nodes, 5 policy groups, 1,000 rules, no traffic. Client figures include the background service and current GUI/TUI process, excluding the core; totals are listed separately. Peaks sampled for 10 seconds at 250 ms intervals. GUI open/closed measurements use the same tray client; TUI measurements come from a separate terminal lifecycle test. These are short Linux measurements. <a href="{{repo}}#内存占用">Full benchmark ↗</a></p></div>
+    </details>
+  </div>
+</section>

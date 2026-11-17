@@ -38,7 +38,6 @@
   --switch: #1c2b2c08;
   --switch-hover: #1c2b2c0d;
   --core-block: #1c2b2c40;
-  --preview-ink: #684000;
   --yours-ink: #155b24;
   --source-line: #b0472a38;
   --source-wash: #b0472a08;
@@ -68,7 +67,6 @@
   --switch: #d3e6df0c;
   --switch-hover: #d3e6df18;
   --core-block: #b6cdc46b;
-  --preview-ink: #f2c778;
   --yours-ink: #95d7a0;
   --source-line: #f0a17c66;
   --source-wash: #f0a17c0c;
@@ -91,7 +89,6 @@
     --switch: #d3e6df0c;
     --switch-hover: #d3e6df18;
     --core-block: #b6cdc46b;
-    --preview-ink: #f2c778;
     --yours-ink: #95d7a0;
     --source-line: #f0a17c66;
     --source-wash: #f0a17c0c;
@@ -316,7 +313,6 @@ kbd { border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 5p
 .tool-list b { font-family: var(--display); font-weight: 600; }
 .tool-list span { color: var(--soft); font-size: 0.95rem; }
 .tool-list a:hover span { color: var(--ink); }
-.preview { display: inline-block; font: var(--label); line-height: 1; padding: 0.4rem 0.55rem; border-radius: 6px; background: #f0a21f40; color: var(--preview-ink); vertical-align: 0.45em; margin-left: 0.6rem; letter-spacing: 0; white-space: nowrap; }
 
 /* Night band for the command line */
 .night { --soft: #a9bab5; margin-top: clamp(4rem, 9vw, 7.5rem); background: var(--night); color: #e8eee9; position: relative; padding: clamp(3rem, 7vw, 6rem) 0; }
@@ -482,9 +478,14 @@ noscript p { margin-top: 1.5rem; padding: 1rem 1.2rem; background: #f0a21f33; }
 .version-entry li + li { margin-top:.6rem; }
 .version-entry h2 { font-size:1.7rem; }
 .release-history { margin-top:3rem; padding-top:2rem; border-top:3px dashed var(--line); }
+.doc .release-archive { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 2.5rem; max-width:none; list-style:none; padding:0; }
+.release-archive > li { padding:1.25rem 0; border-bottom:1px solid var(--line); }
+.release-archive h3 { display:inline; font-size:1.1rem; margin-right:1rem; }
+.release-archive time { color:var(--soft); font-size:.9rem; white-space:nowrap; }
+.release-archive p { margin:.5rem 0 0; }
 .version-links { display:flex; flex-wrap:wrap; gap:1.4rem; margin-top:1.5rem; }
 .release-known { margin-top:1.2rem; color:var(--soft); }
-@media(max-width:640px) { .version-grid { grid-template-columns:1fr; } .version-entry h3 { font-size:1.35rem; } }
+@media(max-width:640px) { .version-grid, .doc .release-archive { grid-template-columns:1fr; } .version-entry h3 { font-size:1.35rem; } }
 .split > *, .memory > *, .with-toc > *, .cards > * { min-width:0; }
 .term { max-width:100%; }
 .terminal-shot { min-width: 0; }
@@ -516,6 +517,7 @@ main { animation: page-enter .24s ease-out both; }
 .memory-section::after { background:var(--sky); }
 .memory-section .lead { margin-top:1.3rem; }
 .memory-stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2rem; margin-top:2.5rem; }
+.memory-tui { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .memory-stats > div { border-top:2px solid var(--line); padding-top:1rem; }
 .memory-stats dt { font-size:1.15rem; }
 .memory-stats dd { margin-top:1rem; }

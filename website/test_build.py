@@ -67,7 +67,8 @@ class SiteTests(unittest.TestCase):
             if not tool['arg']:
                 self.assertFalse(build.tool_command(tool).endswith(' '))
     def test_inconsistent_release_data_rejected(self):
-        for field in ('channel','translation','package','date','duplicate','series','highlight','known','prerelease','history-duplicate'):
+        for field in ('channel','translation','package','date','duplicate','series','highlight','known','prerelease',
+                      'history-duplicate','history-translation','history-empty'):
             bad=copy.deepcopy(self.data)
             if field=='channel': bad['releases'][0]['channel']='invalid'
             if field=='translation': bad['releases'][0]['zh']['highlights']=[]
@@ -79,6 +80,8 @@ class SiteTests(unittest.TestCase):
             if field=='known': bad['releases'][0]['en'].pop('known')
             if field=='prerelease': bad['releases'][0]['version'] += '-test.1'
             if field=='history-duplicate': bad['history'].append(bad['history'][0])
+            if field=='history-translation': bad['history'][0].pop('en')
+            if field=='history-empty': bad['history'][0]['zh']['summary']=' '
             with self.subTest(field=field), self.assertRaises(ValueError): validate(bad)
     def test_navigation_and_assets(self):
         docs={}
@@ -158,6 +161,20 @@ class SiteTests(unittest.TestCase):
             source = (build.DIST/language/'download.html').read_text(encoding='utf-8')
             self.assertIn('<b data-version>' + tag[1:] + '</b>', source)
             self.assertIn(build.REPO_URL + '/releases/tag/' + tag, parser.refs)
+            self.assertFalse(any('data-channel' in attrs for _, attrs in parser.elements))
+            self.assertNotIn('preview', parser.ids)
+            self.assertIn(build.REPO_URL + '/releases/latest', parser.refs)
+    def test_historical_summaries_are_available_in_both_languages(self):
+        from html import escape
+        for language, directory in (('zh', ''), ('en', 'en')):
+            source = (build.DIST/directory/'releases.html').read_text(encoding='utf-8')
+            document = Document()
+            document.feed(source)
+            self.assertEqual({identifier for identifier in document.ids if identifier.startswith('v')},
+                             {'v'+release['version'] for release in self.data['releases'] + self.data['history']})
+            for release in self.data['history']:
+                self.assertIn(escape(release[language]['summary']), source)
+                self.assertIn(build.REPO_URL + '/releases/tag/v' + release['version'], document.refs)
     def test_chinese_default_and_explicit_english_routes(self):
         for language, html_language in (('', 'zh-CN'), ('en', 'en')):
             for name in build.PAGES:

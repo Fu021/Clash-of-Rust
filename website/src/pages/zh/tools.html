@@ -3,7 +3,7 @@
 <section class="page-head">
   <div class="wrap">
     <h1>从解析到出口，逐步排查。</h1>
-    <p class="lead">0.7.2 提供十二项按需检查，GUI、TUI 与 CLI 共用逻辑；配图标明其真实版本。</p>
+    <p class="lead">十二项网络检查，支持 GUI、TUI 和 CLI。</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -32,9 +32,9 @@
   <section id="rules-of-the-road">
     <h2>检查范围</h2>
     <ul class="dots">
-      <li>只在你点下去的时候运行，后台不做任何扫描。</li>
+      <li>按需运行，不在后台扫描。</li>
       <li>网站和 HTTP 类检查经过内核现有的本机代理。检查不会启动内核、切换节点，也不会回退到直连。</li>
-      <li>只保留当前这一次的结果。切换页面或工具会取消检查并清空结果，迟到的结果不会再补回来。需要的话先导出。</li>
+      <li>切换页面或工具会取消检查并清空结果，需要保留时先导出。</li>
       <li>报告里不包含网址的路径和查询参数、账号密码，以及下载到的正文。</li>
     </ul>
   </section>
@@ -42,17 +42,17 @@
   {{tools:articles}}
 
   <section id="runtime">
-    <h2>工具调整与信息归属</h2>
-    <p id="explain">规则与出口已并入<a href="#check">网站检查</a>，依据真实请求显示命中规则及策略链。</p>
-    <p><span id="rule"></span><span id="config-diff"></span>移除静态规则预判和配置类型差异摘要。配置查询使用 <code>cor config get</code>、<code>cor config effective</code>，校验使用 <code>cor config check</code>。</p>
-    <p><span id="traffic"></span><span id="node"></span><span id="performance"></span>流量汇总归连接页，节点信息归代理页详情，内核状态沿用状态和诊断入口。旧 CLI 命令返回迁移提示及非零退出码，不自动执行另一项检查。</p>
+    <h2>规则、配置与运行状态</h2>
+    <p id="explain"><a href="#check">网站检查</a>显示真实请求命中的规则及策略链。</p>
+    <p><span id="rule"></span><span id="config-diff"></span>用 <code>cor config get</code> 或 <code>cor config effective</code> 查询配置，<code>cor config check</code> 校验配置。</p>
+    <p><span id="traffic"></span><span id="node"></span><span id="performance"></span>流量汇总看连接页，节点详情看代理页，内核状态看首页或诊断报告。</p>
   </section>
 
   <section id="limits">
     <h2>参数与上限</h2>
     <p>默认 5 次、间隔 1000 毫秒、单次 10 秒、下载上限 8 MiB、最多 8 跳。GUI 按工具显示参数；TUI 按 <kbd>o</kbd> 在当前工具中编辑适用参数，应用后运行；CLI 使用以下选项。</p>
     {{tools:options}}
-    <p style="margin-top:1.2rem">稳定性检查最多 120 秒。系统输出每路最多 8 KiB，报告最多 48 项，每项最多 2048 字符。</p>
+    <p style="margin-top:1.2rem">稳定性检查最长 120 秒。</p>
   </section>
 
   <section id="protection">
@@ -92,8 +92,7 @@
         <tr><th scope="row">终端界面</th><td>运行 <code>cor ui</code>，按 <kbd>4</kbd> 进入。<kbd>[</kbd> 和 <kbd>]</kbd> 切换工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行，<kbd>Esc</kbd> 取消。</td></tr>
       </tbody>
     </table>
-    <p style="margin-top:1.4rem">十二项检查包含在 0.7.2 正式版中。<a class="more" href="download.html">下载正式版</a></p>
-    <p class="fine" style="margin-top:1rem">权威说明以仓库里的 <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> 为准。</p>
+    <p style="margin-top:1.4rem"><a class="more" href="download.html">下载正式版</a> · <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">详细技术说明</a></p>
   </section>
   </div>
 </div>
