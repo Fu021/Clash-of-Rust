@@ -118,15 +118,17 @@ async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
         let remote = backend::connect(context, false)
             .await?
             .context("后台已退出，未保存设置")?;
-        let _: serde_json::Value =
-            remote
-                .request(command)
-                .await
-                .context(if operation.path == "rule shortcut" {
-                    "快捷规则保存失败；若后台仍来自旧版，请退出旧版 GUI／cor 后台后重试"
-                } else {
-                    "设置保存失败"
-                })?;
+        let _: serde_json::Value = remote.request(command).await.map_err(|error| {
+            if operation.path == "rule shortcut"
+                && error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|cause| cause.kind() == std::io::ErrorKind::UnexpectedEof)
+            {
+                error.context("后台已断开；若仍为旧版，请退出旧版 GUI／cor 后台后重试")
+            } else {
+                error
+            }
+        })?;
         let poll: Poll = remote
             .request(Command::Snapshot {
                 scope: Scope::Other,

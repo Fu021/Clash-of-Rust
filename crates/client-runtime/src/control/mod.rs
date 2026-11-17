@@ -547,28 +547,6 @@ mod tests {
 
         {
             let mut engine = shared.lock().await;
-            Arc::make_mut(engine.settings.rule_profiles.get_mut(&first).unwrap()).enabled[1] =
-                false;
-        }
-        dispatch::execute(
-            &shared,
-            Command::ActiveShortcut {
-                id: first.clone(),
-                index: 0,
-                enabled: false,
-            },
-            Owner::Daemon,
-            None,
-        )
-        .await
-        .unwrap();
-        let settings = store.load_settings().unwrap();
-        assert!(!settings.rule_profiles[&first].enabled[0]);
-        assert!(!settings.rule_profiles[&first].enabled[1]);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), plain);
-
-        {
-            let mut engine = shared.lock().await;
             engine.settings.active_profile = Some(second);
             store.save_settings(&engine.settings).unwrap();
         }

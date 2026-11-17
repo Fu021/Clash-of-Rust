@@ -364,6 +364,7 @@ def verify_profile_catalog(call, command, data, report):
             raise RuntimeError('TUI reused shortcut metadata from the previous profile')
         terminal.send(b'\r')
         terminal.wait('设置 · 广告拦截')
+        call('rule', 'shortcut', 'private-domain', 'off', '--profile', second)
         terminal.send(b'\x1b[C\x1b[B\r')
         terminal.wait('保存广告拦截')
         terminal.send(b'\r')
@@ -372,6 +373,8 @@ def verify_profile_catalog(call, command, data, report):
         saved = json.loads((data/'settings.json').read_text())
         if not saved['rule_profiles'][second]['enabled'][0]:
             raise RuntimeError('TUI shortcut choice was not persisted')
+        if saved['rule_profiles'][second]['enabled'][1]:
+            raise RuntimeError('TUI shortcut save overwrote a concurrent CLI rule change')
         if plain.read_text(encoding='utf-8') != plain_raw:
             raise RuntimeError('TUI shortcut changes rewrote an original subscription')
         terminal.send(b'\r')
