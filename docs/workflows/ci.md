@@ -16,7 +16,7 @@ Windows 平台路径变化沿用更新专项，并在两种原生架构上运行
 
 先生成一次 `dependency-snapshot`，复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具与内核身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。四份 Geo 原包每轮从官方 `latest` 解析附件身份、大小和 SHA256，下载并校验后随该轮快照分发；解析后附件被上游替换而返回 404 时重新解析并有限重试。各平台应用时再次校验，Publish Release 复用同一轮快照；缺失、损坏或摘要不符仍失败。不同 CI 轮次可使用不同 Geo 数据，同一次构建及发布不混用。
 
-依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，仍须取得新提交的普通 push CI 与不发布打包验证；受限本机不执行依赖下载或构建。
+依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，须取得新提交的普通 push CI，并按[实际改动范围](../development.md#按改动选择验证)选择兼容、内存或发行核验；受限本机不执行依赖下载或构建。
 
 常规 CI 的运行时集成验证聚焦系统代理/TUN：真实授权、代理转发、TUN 实际流量、DNS 和断开后的路由恢复。各平台仍编译发行程序、执行 Clippy 和校验候选安装包，但不再构建和运行全部 Rust 测试程序；Python 构建与产物契约检查保留一次。三个 Android job 保留宿主请求门禁及会话退出的小型回归，完整移动源码回归在应用分流专项或扩展模式执行。Android 应用分流或其测试入口发生变化时自动追加分流专项；Linux 多用户/TUN 相关入口发生变化时追加隔离用户专项。更新、CLI 维护或控制交接相关路径变化时，六种桌面启用更新模块回归，Windows/macOS 验证锁外交接；平台安装回归见[候选包验收](install-validation.md#平台范围)。界面或桌面窗口宿主发生变化时，仅 Linux x64 追加节点网格缩放、快捷规则弹窗、移动规则行对齐、设置并发、通知倒计时及应用分流滚动回归；这不替代真实窗口连续拖动验收。变更范围无法判定时保守运行扩展测试，选取结果写入 job summary。
 
