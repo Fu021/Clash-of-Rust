@@ -8,6 +8,7 @@ pub(super) struct Shortcuts {
     pub profile: String,
     pub revision: u64,
     pub included: [bool; 5],
+    pub document: Option<std::sync::Arc<clash_client_core::rule_manager::Document>>,
     pub error: Option<String>,
     pub sampled: Instant,
 }
@@ -23,11 +24,13 @@ pub(super) async fn read_shortcuts(
     remote: &Remote,
     poll: &Poll,
     cached: Option<Shortcuts>,
+    include_rules: bool,
 ) -> Option<Shortcuts> {
     let profile = poll.meta.settings.active_profile.as_ref()?;
     if let Some(cached) = cached.filter(|cached| {
         cached.matches(poll)
             && cached.error.is_none()
+            && (!include_rules || cached.document.is_some())
             && cached.sampled.elapsed() < Duration::from_secs(5)
     }) {
         return Some(cached);
@@ -37,15 +40,20 @@ pub(super) async fn read_shortcuts(
             id: profile.clone(),
         })
         .await;
-    let (included, error) = match document {
-        Ok(document) if document.profile_id == *profile => (document.included, None),
-        Ok(_) => ([false; 5], Some("订阅已变化，请刷新后重试".into())),
-        Err(error) => ([false; 5], Some(format!("{error:#}"))),
+    let (included, document, error) = match document {
+        Ok(document) if document.profile_id == *profile => (
+            document.included,
+            include_rules.then(|| std::sync::Arc::new(document)),
+            None,
+        ),
+        Ok(_) => ([false; 5], None, Some("订阅已变化，请刷新后重试".into())),
+        Err(error) => ([false; 5], None, Some(format!("{error:#}"))),
     };
     Some(Shortcuts {
         profile: profile.clone(),
         revision: poll.meta.view_revision,
         included,
+        document,
         error,
         sampled: Instant::now(),
     })
@@ -162,9 +170,9 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
             .iter()
             .find(|profile| Some(&profile.id) == poll.meta.settings.active_profile.as_ref())
         {
-            None => Some("尚未选择订阅；按 7 打开订阅页".into()),
+            None => Some("尚未选择订阅；按 3 打开订阅页".into()),
             Some(profile) if profile.builtin => {
-                Some("内置订阅不使用快捷规则；按 7 选择其他订阅".into())
+                Some("内置订阅不使用快捷规则；按 3 选择其他订阅".into())
             }
             Some(_) => state
                 .shortcuts

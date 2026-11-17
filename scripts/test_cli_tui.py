@@ -14,6 +14,27 @@ import ci_test_policy
 
 
 class CliTuiTests(unittest.TestCase):
+    def test_navigation_keys_follow_current_and_historical_visible_headers(self):
+        terminal = cli_tui.Session.__new__(cli_tui.Session)
+        layouts = (
+            ('1 首页  2 节点  3 连接  4 网络\n[5 设置]  6 操作  7 订阅  8 快捷规则',
+             {'连接': b'3', '网络': b'4', '设置': b'5', '订阅': b'7', '快捷规则': b'8'}),
+            ('1 首页  2 节点  3 订阅  4 连接\n5 规则  [6 工具]  7 设置  8 操作',
+             {'连接': b'4', '工具': b'6', '设置': b'7', '订阅': b'3', '规则': b'5'}),
+        )
+        for header, expected in layouts:
+            terminal.screen = dict(enumerate(header.splitlines()))
+            for title, key in expected.items():
+                with self.subTest(header=header, title=title):
+                    self.assertEqual(terminal.page_key(title), key)
+            self.assertEqual(terminal.page_key('工具', '网络'),
+                             expected.get('工具', expected.get('网络')))
+            if '快捷规则' in expected:
+                with self.assertRaisesRegex(RuntimeError, 'navigation'):
+                    terminal.page_key('规则')
+            with self.assertRaisesRegex(RuntimeError, 'navigation'):
+                terminal.page_key('日')
+
     def test_desktop_capture_uses_checkout_identity_when_the_container_has_no_github_sha(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.object(cli_tui_preview, 'commit', return_value='a'*40), \

@@ -67,6 +67,27 @@ class Session:
     def text(self):
         return '\n'.join(self.screen.get(index, '') for index in range(max(self.screen, default=0)+1))
 
+    def page_key(self, *titles):
+        for title in titles:
+            match = re.search(r'(?:^|[\s\[])([1-8]) '+re.escape(title)+r'(?=$|[\s\]])',
+                              self.text(), re.MULTILINE)
+            if match:
+                return match[1].encode('ascii')
+        raise RuntimeError('TUI navigation did not contain: '+', '.join(titles))
+
+    def open_shortcuts(self):
+        if '快捷规则 · 当前订阅' in self.text():
+            return
+        try:
+            key = self.page_key('规则')
+        except RuntimeError:
+            self.send(self.page_key('快捷规则'))
+        else:
+            self.send(key)
+            self.wait('快捷规则 →')
+            self.send(b'\x1b\r')
+        self.wait('快捷规则 · 当前订阅')
+
     def wait(self, text, timeout=15, rows=None, regex=False):
         deadline = time.monotonic()+timeout
         while True:
@@ -167,7 +188,7 @@ def verify(console, resources, report):
                         header = '\n'.join(terminal.screen.get(index, '') for index in range(5))
                         navigation_ready = (
                             all(label in header for label in ('CLASH OF RUST', '[2 节点]',
-                                '1 首页', '3 连接', '4 工具', '5 设置', '6 操作', '7 订阅', '8 快捷规则'))
+                                '1 首页', '3 订阅', '4 连接', '5 规则', '6 工具', '7 设置', '8 操作'))
                             and terminal.screen.get(4) == '  '+'─'*(columns-5)
                             and '…' not in header)
                     if max(terminal.screen, default=0) == rows-1 and all(
@@ -193,7 +214,7 @@ def verify(console, resources, report):
                 raise RuntimeError('Typing q into search exited TUI')
             terminal.send(b'\x1b')
             time.sleep(.15)
-            terminal.send(b'3')
+            terminal.send(b'4')
             terminal.wait('github.com')
             terminal.capture(report, 'connections')
             terminal.send(b'\r')
@@ -202,7 +223,7 @@ def verify(console, resources, report):
             terminal.wait('域名：github.com')
             terminal.wait('嗅探域名：api.github.com')
             terminal.capture(report, 'connection-detail')
-            terminal.send(b'\x1b5')
+            terminal.send(b'\x1b7')
             terminal.wait('混合端口')
             terminal.wait('── 网络 ──')
             terminal.send(b'/fake_ip\r')
@@ -222,7 +243,7 @@ def verify(console, resources, report):
                 raise RuntimeError('Typing q into a setting exited TUI')
             terminal.send(b'\x1b')
             terminal.wait('新增：q6')
-            terminal.send(b'\x1b6')
+            terminal.send(b'\x1b8')
             terminal.wait('管理操作')
             terminal.send(b'/service status\r\r')
             terminal.wait('cor service status')
@@ -231,7 +252,7 @@ def verify(console, resources, report):
             terminal.wait('执行 cor service status')
             terminal.send(b'\r')
             terminal.wait('演示模式')
-            terminal.send(b'\x1b4')
+            terminal.send(b'\x1b6')
             terminal.wait('网站检查')
             terminal.send(b'\r')
             terminal.wait('实际线路')
@@ -269,7 +290,7 @@ def verify(console, resources, report):
                 terminal.wait(r'\)(?:\s|$)', rows=rows, regex=True)
                 terminal.capture(report, f'network-{columns}x{rows}')
             terminal.send(b'\x1b')
-            terminal.send(b'3')
+            terminal.send(b'4')
             terminal.wait('活跃连接')
             terminal.resize(55, 16)
             terminal.send(b'/\x15api.github.com')
@@ -311,6 +332,7 @@ def verify(console, resources, report):
                    'native-setting-save-failure-persistence-and-cross-client-refresh',
                    'fake-ip-list-add-disable-restore-and-stale-confirmation',
                    'profile-list-selection-and-included-shortcut-state',
+                   'rule-list-sources-add-move-disable-delete-and-stale-confirmation',
                    'q-restores-terminal', 'ctrl-c-restores-terminal'],
     }), encoding='utf-8')
 
@@ -333,7 +355,7 @@ def verify_settings(console, resources, report):
             original_port = call('config', 'get', 'mixed_port')['mixed_port']
             with Session([*command, 'ui']) as terminal:
                 terminal.wait('内核未运行')
-                terminal.send(b'5/delay_interval_minutes\r')
+                terminal.send(b'7/delay_interval_minutes\r')
                 terminal.wait(r'定时测速[^\n]* 17(?:\n|$)', regex=True)
                 terminal.send(b'\r\r')
                 terminal.wait('输入中')
@@ -377,6 +399,7 @@ def verify_settings(console, resources, report):
             verify_network_export(command, data, report)
             verify_fake_ip(call, command, data, report)
             verify_profile_catalog(call, command, data, report)
+            verify_rules(call, command, data, report)
             if json.loads((data/'control.json').read_text())['pid'] != owner:
                 raise RuntimeError('Opening or closing TUI replaced the existing owner')
             if call('status')['running']:
@@ -395,7 +418,7 @@ def verify_fake_ip(call, command, data, report):
     domain = 'tui.example.test'
     with Session([*command, 'ui']) as terminal:
         terminal.wait('内核未运行')
-        terminal.send(b'5/fake_ip_exclusions\r')
+        terminal.send(b'7/fake_ip_exclusions\r')
         terminal.wait('项自定义')
         terminal.send(b'\r')
         terminal.wait('设置 · Fake-IP 排除项')
@@ -440,6 +463,115 @@ def verify_fake_ip(call, command, data, report):
         terminal.wait('stale.example.test')
         terminal.capture(report, 'fake-ip-stale-confirmation')
 
+def verify_rules(call, command, data, report):
+    from cli_tui_preview import Gallery
+    gallery = Gallery(report)
+    source = data/'rules.yaml'
+    original = 'proxies: []\nrules:\n  - DOMAIN,original.test,DIRECT\n  - MATCH,DIRECT\n'
+    source.write_text(original, encoding='utf-8')
+    call('profile', 'add', '规则管理', str(source))
+    profile = next(item['id'] for item in call('profile', 'list') if item['name'] == '规则管理')
+    call('profile', 'use', profile)
+    for shortcut in ('ads', 'private-domain', 'private-ip', 'cn-domain', 'cn-ip'):
+        call('rule', 'shortcut', shortcut, 'off', '--profile', profile)
+    raw = 'DOMAIN,tui-rule.test,DIRECT'
+
+    def rows():
+        return call('rule', 'list', '--profile', profile)['items']
+
+    def operate(terminal, label):
+        terminal.send(b'\r')
+        terminal.wait('稳定 ID：')
+        for _ in range(8):
+            terminal.pump(.1)
+            if re.search(r'^\s*› '+re.escape(label)+r'\s*$', terminal.text(), re.MULTILINE):
+                terminal.send(b'\r')
+                return
+            terminal.send(b'\x1b[B')
+        raise RuntimeError('Rule operation was not reachable: '+label)
+
+    with Session([*command, 'ui'], columns=120, rows=40) as terminal:
+        terminal.wait('内核未运行')
+        terminal.send(b'5')
+        terminal.wait('快捷规则 →')
+        terminal.wait('original.test')
+        gallery.capture(terminal, '规则', '规则列表 · 实际来源与原文', demo=False)
+        for columns in (40, 60):
+            terminal.resize(columns, 24)
+            terminal.wait('original.test', rows=24)
+            gallery.capture(terminal, '规则', '规则列表 · 手机 SSH', demo=False, size=(columns, 24))
+        terminal.resize(120, 40)
+        terminal.wait('original.test', rows=40)
+        terminal.send(b'\x1b[B\r')
+        terminal.wait('新增规则 · 单行文本')
+        gallery.capture(terminal, '规则', '新增自定义规则 · 输入与策略提示', demo=False)
+        terminal.send(raw.encode()+b'\r')
+        terminal.wait('保存规则：'+raw)
+        gallery.capture(terminal, '规则', '新增自定义规则 · 原子保存确认', demo=False)
+        terminal.send(b'\r')
+        terminal.wait('已保存规则')
+        added = next(row for row in rows() if row['rule'] == raw)
+        if added['source'] != 'Custom' or added['position'] != 1:
+            raise RuntimeError('TUI rule addition lost its source or position')
+        terminal.send(b'\r')
+        terminal.wait('稳定 ID：')
+        gallery.capture(terminal, '规则', '自定义规则 · 全部适用操作', demo=False)
+        terminal.resize(40, 24)
+        terminal.wait('稳定 ID：', rows=24)
+        gallery.capture(terminal, '规则', '自定义规则操作 · 手机 SSH', demo=False, size=(40, 24))
+        terminal.resize(120, 40)
+        terminal.wait('稳定 ID：', rows=40)
+        terminal.send(b'\x1b')
+        terminal.wait('快捷规则 →')
+        operate(terminal, '下移')
+        terminal.wait('下移规则')
+        terminal.send(b'\r')
+        terminal.wait('已保存规则')
+        moved = next(row for row in rows() if row['id'] == added['id'])
+        if moved['position'] != 2:
+            raise RuntimeError('TUI rule move did not preserve the stable identity')
+        operate(terminal, '停用')
+        terminal.wait('停用规则')
+        terminal.send(b'\r')
+        terminal.wait('已保存规则')
+        if next(row for row in rows() if row['id'] == added['id'])['enabled']:
+            raise RuntimeError('TUI did not persist the disabled custom rule')
+        operate(terminal, '编辑')
+        terminal.wait('编辑规则 · 单行文本')
+        terminal.send(b'\x15INVALID\r')
+        terminal.wait('Enter 编辑')
+        terminal.wait('INVALID')
+        gallery.capture(terminal, '规则', '规则校验失败 · 保留输入', demo=False)
+        draft = 'DOMAIN,tui-edited.test,DIRECT'
+        terminal.send(b'\r\x15'+draft.encode()+b'\r')
+        terminal.wait('保存规则：'+draft)
+        call('rule', 'add', 'DOMAIN,concurrent.test,DIRECT', '--profile', profile)
+        terminal.send(b'\r')
+        terminal.wait(r'规则已(?:被另一客户端修改|变化)', regex=True)
+        terminal.wait(draft)
+        gallery.capture(terminal, '规则', '并发修改拒绝 · 保留输入和外部规则', demo=False)
+        current = rows()
+        if next(row for row in current if row['id'] == added['id'])['rule'] != raw:
+            raise RuntimeError('Old TUI confirmation overwrote a changed rule revision')
+        if not any(row['rule'] == 'DOMAIN,concurrent.test,DIRECT' for row in current):
+            raise RuntimeError('Old TUI confirmation discarded a concurrent addition')
+        terminal.send(b'\x1b')
+        terminal.wait('稳定 ID：')
+        terminal.send(b'\x1b')
+        terminal.wait('快捷规则 →')
+        terminal.wait('concurrent.test')
+        terminal.send(b'/tui-rule.test\r\x1b[B\x1b[B')
+        operate(terminal, '删除')
+        terminal.wait('删除规则')
+        terminal.send(b'\r')
+        terminal.wait('已保存规则')
+        if any(row['id'] == added['id'] for row in rows()):
+            raise RuntimeError('TUI rule deletion was not persisted')
+        if source.read_text(encoding='utf-8') != original:
+            raise RuntimeError('TUI rule management changed the original subscription')
+        gallery.capture(terminal, '规则', '删除自定义规则 · 保存后读回', demo=False)
+    gallery.render()
+
 
 def verify_network_export(command, data, report):
     from cli_tui_preview import Gallery
@@ -447,7 +579,7 @@ def verify_network_export(command, data, report):
     path = data/'network.json'
     with Session([*command, 'ui'], columns=120, rows=40) as terminal:
         terminal.wait('内核未运行')
-        terminal.send(b'4\x1b[D')
+        terminal.send(b'6\x1b[D')
         terminal.wait('HTTP 检查')
         terminal.send(b'/http://127.0.0.1:9/private?token=hidden\r\r')
         terminal.wait('检查状态 · 失败')
@@ -494,12 +626,12 @@ def verify_profile_catalog(call, command, data, report):
     verify_desktop_catalog(call, command, report, first, second)
     with Session([*command, 'ui']) as terminal:
         terminal.wait('内核未运行')
-        terminal.send(b'8')
+        terminal.open_shortcuts()
         terminal.wait('广告拦截：订阅已包含')
         terminal.send(b'\r')
         terminal.wait('无需重复添加')
         terminal.capture(report, 'shortcut-included')
-        terminal.send(b'7')
+        terminal.send(b'3')
         terminal.wait('[当前] 含规则线路')
         terminal.resize(40, 10)
         terminal.wait('[当前] 含规则线路', rows=10)
@@ -517,7 +649,7 @@ def verify_profile_catalog(call, command, data, report):
             raise RuntimeError('TUI profile selection did not persist through the owner')
         terminal.capture(report, 'profile-selected')
         call('rule', 'shortcut', 'ads', 'off', '--profile', second)
-        terminal.send(b'8')
+        terminal.open_shortcuts()
         terminal.wait('广告拦截：关闭')
         if '广告拦截：订阅已包含' in terminal.text():
             raise RuntimeError('TUI reused shortcut metadata from the previous profile')

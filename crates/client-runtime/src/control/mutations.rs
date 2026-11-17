@@ -36,6 +36,12 @@ pub enum RuleChange {
     },
 }
 
+impl RuleChange {
+    pub fn apply(self, document: &Document, draft: &mut ProfileRules) -> Result<()> {
+        rule(document, draft, self)
+    }
+}
+
 pub(super) fn setting(settings: &Settings, key: &str, value: Value) -> Result<Settings> {
     ensure!(
         crate::config::MUTABLE_SETTINGS.contains(&key),

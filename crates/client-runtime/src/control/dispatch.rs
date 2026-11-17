@@ -87,7 +87,7 @@ async fn change_rule(
     let mut draft =
         (*crate::rule_manager::ProfileRules::for_profile(&engine.settings, id, document.builtin))
             .clone();
-    super::mutations::rule(&document, &mut draft, change)?;
+    change.apply(&document, &mut draft)?;
     engine.save_profile_rules(id, draft).await
 }
 

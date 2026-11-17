@@ -49,7 +49,7 @@ Clash-of-Rust/
 │   ├── desktop/                   常驻桌面宿主、后台协调与状态投影
 │   ├── desktop-ui/                可关闭并重建的独立窗口进程
 │   ├── cli/                       cor 命令行、终端交互/设置投影与后台入口
-│   │   └── src/tui/               页面状态、参数表单、按需详情渲染；管理操作复用 CLI 分发
+│   │   └── src/tui/               页面状态、参数表单、按需详情与规则编辑；管理操作复用 CLI 分发
 │   ├── android/
 │   │   ├── native/                Rust / Slint / JNI 宿主
 │   │   ├── app/                   Java 生命周期、VPN、通知与系统交互

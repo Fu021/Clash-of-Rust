@@ -11,6 +11,8 @@ mod fake_ip_features;
 mod features;
 #[path = "network_tests.rs"]
 mod network_features;
+#[path = "rules_tests.rs"]
+mod rules_features;
 #[path = "settings_tests.rs"]
 mod settings_features;
 
@@ -75,10 +77,10 @@ fn escape_keeps_following_shortcuts_across_input_chunk_boundaries() {
     for split in [0, 1, 2] {
         let mut decoder = Decoder::default();
         let now = Instant::now();
-        let sequence = b"\x1b3";
+        let sequence = b"\x1b4";
         let mut keys = decoder.feed(&sequence[..split], now);
         keys.extend(decoder.feed(&sequence[split..], now + Duration::from_millis(20)));
-        assert_eq!(keys, [Key::Escape, Key::Char('3')]);
+        assert_eq!(keys, [Key::Escape, Key::Char('4')]);
         let mut state = State::new(true);
         state.page = Page::Network;
         for key in keys {
@@ -185,7 +187,7 @@ fn page_changes_release_old_lists_and_failures_cannot_confirm_stale_data() {
 #[test]
 fn network_check_in_demo_does_not_query_the_backend_and_clears_on_navigation() {
     let mut state = State::new(true);
-    state.key(Key::Char('4'));
+    state.key(Key::Char('6'));
     state.release_page();
     assert_eq!(state.query, "github.com");
     state.key(Key::Char('/'));
@@ -217,7 +219,7 @@ fn network_check_in_demo_does_not_query_the_backend_and_clears_on_navigation() {
 #[test]
 fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
     let mut state = State::new(false);
-    state.key(Key::Char('4'));
+    state.key(Key::Char('6'));
     state.release_page();
     state.network_results = vec!["旧结果".into()];
     assert!(matches!(state.key(Key::Left), Action::CancelNetwork));
@@ -242,7 +244,7 @@ fn network_tools_require_a_target_and_leave_no_page_history() {
     use clash_client_core::network_tools::Tool;
     for tool in Tool::ALL {
         let mut state = State::new(false);
-        state.key(Key::Char('4'));
+        state.key(Key::Char('6'));
         state.release_page();
         state.query.clear();
         state.network_tool = tool.index() as usize;
@@ -404,7 +406,7 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
         (Page::Settings, "设置"),
         (Page::Tools, "操作"),
         (Page::Profiles, "订阅"),
-        (Page::Rules, "快捷规则"),
+        (Page::Rules, "规则"),
     ] {
         let mut state = State::new(true);
         state.page = page;
@@ -436,7 +438,7 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
     state.key(Key::Enter);
     assert_eq!(render::frame(&state, 40, 12)[0].text.trim(), "[连接详情]");
     state.key(Key::Escape);
-    state.key(Key::Char('5'));
+    state.key(Key::Char('7'));
     state.query = "mixed_port".into();
     state.key(Key::Enter);
     assert!(state.form.is_some());
@@ -448,16 +450,17 @@ fn navigation_keeps_all_pages_below_eighty_columns_when_the_labels_fit() {
     let pages = [
         (Page::Home, "1 首页"),
         (Page::Nodes, "2 节点"),
-        (Page::Connections, "3 连接"),
-        (Page::Network, "4 工具"),
-        (Page::Settings, "5 设置"),
-        (Page::Tools, "6 操作"),
-        (Page::Profiles, "7 订阅"),
-        (Page::Rules, "8 快捷规则"),
+        (Page::Profiles, "3 订阅"),
+        (Page::Connections, "4 连接"),
+        (Page::Rules, "5 规则"),
+        (Page::Network, "6 工具"),
+        (Page::Settings, "7 设置"),
+        (Page::Tools, "8 操作"),
     ];
-    for (page, selected) in pages {
+    for (index, (page, selected)) in pages.into_iter().enumerate() {
         let mut state = State::new(true);
-        state.page = page;
+        state.key(Key::Char(char::from(b'1' + index as u8)));
+        assert!(state.page == page);
         for columns in [54, 60, 64, 72, 79, 80, 120] {
             let frame = render::frame(&state, columns, 30);
             let header = frame[..5]
@@ -473,6 +476,8 @@ fn navigation_keeps_all_pages_below_eighty_columns_when_the_labels_fit() {
             assert!(!header.contains('…'), "{columns}:\n{header}");
             assert!(frame.iter().all(|line| line.text.width() < columns));
         }
+        state.key(Key::Tab);
+        assert!(state.page == pages[(index + 1) % pages.len()].0);
     }
     let mut state = State::new(true);
     state.page = Page::Nodes;

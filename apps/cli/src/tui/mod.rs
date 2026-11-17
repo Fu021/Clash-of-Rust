@@ -6,6 +6,7 @@ mod model;
 mod network;
 mod panels;
 mod render;
+mod rules;
 mod settings;
 mod terminal;
 #[cfg(test)]
@@ -37,7 +38,12 @@ impl Drop for Request {
     }
 }
 
-async fn read(args: &Args, page: Page, cached: Option<catalog::Shortcuts>) -> Result<Reply> {
+async fn read(
+    args: &Args,
+    page: Page,
+    cached: Option<catalog::Shortcuts>,
+    include_rules: bool,
+) -> Result<Reply> {
     tokio::time::timeout(Duration::from_secs(4), async {
         let Some(remote) = backend::connect(args, false).await? else {
             return Ok(Reply::Snapshot(None, None));
@@ -49,7 +55,7 @@ async fn read(args: &Args, page: Page, cached: Option<catalog::Shortcuts>) -> Re
             })
             .await?;
         let shortcuts = if page == Page::Rules {
-            catalog::read_shortcuts(&remote, &poll, cached).await
+            catalog::read_shortcuts(&remote, &poll, cached, include_rules).await
         } else {
             None
         };
@@ -117,14 +123,19 @@ async fn set_node_sort(
 
 async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
     let command = settings::command(operation)?;
-    save_command(context, command, operation.path == "rule shortcut").await
+    save_command(context, command, operation.path == "rule shortcut", false).await
 }
 
-async fn save_command(context: &Args, command: Command, shortcut: bool) -> Result<Reply> {
+async fn save_command(
+    context: &Args,
+    command: Command,
+    shortcut: bool,
+    include_rules: bool,
+) -> Result<Reply> {
     tokio::time::timeout(Duration::from_secs(20), async {
         let remote = backend::connect(context, false)
             .await?
-            .context("后台已退出，未保存设置")?;
+            .context("后台已退出，未保存更改")?;
         let _: serde_json::Value = remote.request(command).await.map_err(|error| {
             if shortcut
                 && error
@@ -143,7 +154,7 @@ async fn save_command(context: &Args, command: Command, shortcut: bool) -> Resul
             })
             .await?;
         let shortcuts = if shortcut {
-            catalog::read_shortcuts(&remote, &poll, None).await
+            catalog::read_shortcuts(&remote, &poll, None, include_rules).await
         } else {
             None
         };
@@ -282,7 +293,14 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.saving = true;
                     state.message = None;
                     request = Some(Request(tokio::spawn(async move {
-                        save_command(&args, *command, false).await
+                        save_command(&args, *command, false, false).await
+                    })));
+                }
+                Action::SaveRules(command) => {
+                    let args = args.clone();
+                    state.saving = true;
+                    request = Some(Request(tokio::spawn(async move {
+                        save_command(&args, *command, true, true).await
                     })));
                 }
                 Action::ScrollDetail(down) => {
@@ -350,9 +368,20 @@ pub async fn run(args: &Args) -> Result<()> {
                 Ok(Ok(Reply::Snapshot(poll, shortcuts))) => {
                     state.accept(poll.map(|poll| *poll));
                     state.shortcuts = shortcuts;
+                    rules::sync(&mut state);
                 }
                 Ok(Ok(Reply::Saved(poll, shortcuts))) => {
                     let fake_ip = state.fake_ip.is_some();
+                    let rule_selection = state
+                        .rules
+                        .as_ref()
+                        .and_then(|rules| rules.menu.as_ref().map(|(id, _)| id.clone()));
+                    let added_rule = state
+                        .rules
+                        .as_ref()
+                        .and_then(|rules| rules.input.as_ref())
+                        .filter(|input| input.id.is_none())
+                        .map(|input| input.raw.clone());
                     let key = state.form.as_ref().and_then(|form| form.setting.clone());
                     let message = key.map(|key| {
                         format!(
@@ -363,6 +392,32 @@ pub async fn run(args: &Args) -> Result<()> {
                     });
                     state.accept(Some(*poll));
                     state.shortcuts = shortcuts;
+                    let saved_rules = state.rules.as_ref().is_some_and(rules::Browser::busy)
+                        && !state.shortcuts_open;
+                    if saved_rules {
+                        state.rules = None;
+                    }
+                    rules::sync(&mut state);
+                    if saved_rules {
+                        let selected = rule_selection.or_else(|| {
+                            state
+                                .rules
+                                .as_ref()?
+                                .rows
+                                .iter()
+                                .find(|row| {
+                                    row.source == clash_client_core::rule_manager::Source::Custom
+                                        && row.enabled
+                                        && added_rule.as_deref() == Some(row.raw.as_ref())
+                                })
+                                .map(|row| row.id.clone())
+                        });
+                        if let Some(index) = selected.and_then(|id| {
+                            state.items().iter().position(|candidate| *candidate == id)
+                        }) {
+                            state.selected = index;
+                        }
+                    }
                     state.form = None;
                     state.execution = None;
                     if fake_ip {
@@ -373,6 +428,8 @@ pub async fn run(args: &Args) -> Result<()> {
                             editor.saving_addition = false;
                         }
                         state.message = Some("已保存 Fake-IP 排除项".into());
+                    } else if saved_rules {
+                        state.message = Some("已保存规则".into());
                     } else {
                         state.message = message;
                     }
@@ -399,6 +456,7 @@ pub async fn run(args: &Args) -> Result<()> {
                 Ok(Err(error)) => {
                     if state.saving
                         && (state.fake_ip.is_some()
+                            || state.rules.as_ref().is_some_and(rules::Browser::busy)
                             || state
                                 .form
                                 .as_ref()
@@ -418,8 +476,9 @@ pub async fn run(args: &Args) -> Result<()> {
             let args = args.clone();
             let page = state.page;
             let cached = state.shortcuts.clone();
+            let include_rules = !state.shortcuts_open;
             request = Some(Request(tokio::spawn(async move {
-                read(&args, page, cached).await
+                read(&args, page, cached, include_rules).await
             })));
             last_refresh = tokio::time::Instant::now();
         }

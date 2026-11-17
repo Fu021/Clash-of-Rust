@@ -10,6 +10,10 @@ pub(super) fn has_notice(state: &State) -> bool {
         || state.error.is_some()
         || state.message.is_some()
         || state.saving
+        || state
+            .rules
+            .as_ref()
+            .is_some_and(|rules| rules.pending.is_some())
 }
 
 fn help(state: &State) -> &'static str {
@@ -19,6 +23,21 @@ fn help(state: &State) -> &'static str {
         "输入中 · Enter 保留草稿 · Ctrl+U 清空 · Esc 撤销本项 · Ctrl+C 退出"
     } else if state.searching {
         "Enter 完成输入 · Ctrl+U 清空 · Esc 取消 · Ctrl+C 退出"
+    } else if state.page == Page::Rules
+        && !state.shortcuts_open
+        && let Some(rules) = &state.rules
+    {
+        if rules.pending.is_some() {
+            "Enter 确认保存 · Esc 取消 · q 退出"
+        } else if rules.input.as_ref().is_some_and(|input| input.editing) {
+            "输入中 · Enter 检查并保存 · Ctrl+U 清空 · Esc 保留输入 · Ctrl+C 退出"
+        } else if rules.input.is_some() {
+            "Enter 编辑 · Esc 返回 · q 退出"
+        } else if rules.menu.is_some() {
+            "↑↓ 选择操作 · Enter 打开/确认 · Esc 返回 · q 退出"
+        } else {
+            "↑↓ 选择 · Enter 打开 · / 搜索 · r 刷新 · q 退出"
+        }
     } else if let Some(editor) = &state.fake_ip {
         if editor.pending.is_some() {
             "Enter 确认保存 · Esc 取消 · q 退出"

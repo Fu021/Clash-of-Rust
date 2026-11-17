@@ -11,7 +11,7 @@ from cli_tui import Session
 from workflow_artifacts import commit
 
 
-PAGES = ('首页', '节点', '连接', '工具', '设置', '操作', '订阅', '快捷规则')
+PAGES = ('首页', '节点', '订阅', '连接', '规则', '工具', '设置', '操作')
 PAGE_ACTIONS = {
     '首页': '查看内核、后台、订阅与流量；r 刷新，1–8 / Tab 切页，q / Ctrl+C 退出。',
     '节点': '↑↓ 选择，/ 搜索，Enter 打开策略组或确认切换；s 循环三种排序，Esc 返回。自动组只读。',
@@ -24,8 +24,8 @@ PAGE_ACTIONS = {
             '此处捕获校验及确认入口，系统授权和命令结果使用普通终端。',
     '订阅': '↑↓ 选择名称，/ 搜索，Enter 打开候选值；←→ 选择，向下选择保存并确认，'
             'Esc 取消；展示当前项与来源类型。',
-    '快捷规则': '查看五项规则及订阅包含状态，/ 搜索，Enter 打开，←→ / 空格切换，'
-                '向下保存并确认；订阅已包含的规则禁止重复添加。',
+    '规则': '查看原文、来源和启停状态，/ 搜索，Enter 打开上下移动、编辑、启停或删除；'
+            '订阅原规则只调序；快捷规则入口保留五项开关和订阅去重。',
 }
 DOWN = b'\x1b[B'
 UP = b'\x1b[A'
@@ -266,8 +266,8 @@ def verify_desktop(console, command, report):
     gallery = Gallery(report)
     with Session([*command, '--demo'], columns=120, rows=40) as terminal:
         for number, (page, expected) in enumerate(zip(PAGES, (
-                '参考线路', '策略组', '活跃连接', '网站检查', '混合端口',
-                '管理操作', '订阅 · Enter', '快捷规则 · 当前订阅')), 1):
+                '参考线路', '策略组', '订阅 · Enter', '活跃连接',
+                '规则 · Enter', '网站检查', '混合端口', '管理操作')), 1):
             visit(terminal, number, expected)
             gallery.capture(terminal, page, page+' · 主页面')
             terminal.resize(100, 30)
@@ -302,7 +302,7 @@ def verify_desktop(console, command, report):
         terminal.wait('AUTO   ·')
         gallery.capture(terminal, '节点', '自动策略组 · 只读状态')
 
-        visit(terminal, 3, 'github.com')
+        visit(terminal, 4, 'github.com')
         search(terminal, 'api.github.com')
         gallery.capture(terminal, '连接', '连接搜索 · 嗅探域名匹配')
         terminal.send(b'\r')
@@ -320,7 +320,7 @@ def verify_desktop(console, command, report):
             terminal.send(ESCAPE)
             terminal.wait('连接详情')
 
-        visit(terminal, 4, '网站检查')
+        visit(terminal, 6, '网站检查')
         tools = [path.split()[1] for path, _ in command_catalog(console)
                  if path.startswith('network ')]
         for index, tool in enumerate(tools):
@@ -341,7 +341,7 @@ def verify_desktop(console, command, report):
         gallery.capture(terminal, '工具', '演示结果 · 禁止导出虚构报告')
         terminal.send(ESCAPE)
 
-        visit(terminal, 5, '混合端口')
+        visit(terminal, 7, '混合端口')
         settings = []
         for _ in range(100):
             row = selected(terminal)
@@ -384,7 +384,7 @@ def verify_desktop(console, command, report):
         else:
             raise RuntimeError('Desktop setting catalogue did not reach its end')
 
-        visit(terminal, 6, '管理操作')
+        visit(terminal, 8, '管理操作')
         for path, description in command_catalog(console):
             search(terminal, path)
             for _ in range(100):
@@ -409,7 +409,7 @@ def verify_desktop_catalog(call, command, report, first, second):
     gallery = Gallery(report)
     with Session([*command, 'ui'], columns=120, rows=40) as terminal:
         terminal.wait('内核未运行')
-        visit(terminal, 7, '订阅 · Enter')
+        visit(terminal, 3, '订阅 · Enter')
         gallery.capture(terminal, '订阅', '订阅目录 · 当前项和来源类型', demo=False)
         terminal.send(b'\r')
         terminal.wait('设置 · 当前订阅')
@@ -430,12 +430,14 @@ def verify_desktop_catalog(call, command, report, first, second):
         gallery.capture(terminal, '订阅', '订阅切换 · 确认与取消', demo=False)
         terminal.send(ESCAPE)
         settle(terminal)
-        terminal.send(ESCAPE+b'8')
+        terminal.send(ESCAPE)
+        terminal.wait('订阅 · Enter')
+        terminal.open_shortcuts()
         terminal.wait('广告拦截：订阅已包含')
-        gallery.capture(terminal, '快捷规则', '快捷规则 · 订阅包含与去重', demo=False)
+        gallery.capture(terminal, '规则', '快捷规则 · 订阅包含与去重', demo=False)
         terminal.send(b'\r')
         terminal.wait('无需重复添加')
-        gallery.capture(terminal, '快捷规则', '订阅已有规则 · 禁止重复添加', demo=False)
+        gallery.capture(terminal, '规则', '订阅已有规则 · 禁止重复添加', demo=False)
         call('profile', 'use', second)
         terminal.wait('备用线路')
         deadline = time.monotonic()+15
@@ -443,19 +445,19 @@ def verify_desktop_catalog(call, command, report, first, second):
             if time.monotonic() > deadline:
                 raise RuntimeError('Shortcut gallery did not refresh after changing subscriptions')
             terminal.pump(.05)
-        gallery.capture(terminal, '快捷规则', '快捷规则 · 可编辑的独立订阅状态', demo=False)
+        gallery.capture(terminal, '规则', '快捷规则 · 可编辑的独立订阅状态', demo=False)
         for index in range(5):
             terminal.send(b'\r')
             terminal.wait('草稿不会自动保存')
             title = next(line.strip() for line in terminal.text().splitlines()
                          if line.strip().startswith('设置 · '))
-            gallery.capture(terminal, '快捷规则', title+' · 当前值', demo=False)
+            gallery.capture(terminal, '规则', title+' · 当前值', demo=False)
             terminal.send(b'\x1b[C')
             settle(terminal)
-            gallery.editor(terminal, '快捷规则', title+' · 候选值与保存', demo=False)
+            gallery.editor(terminal, '规则', title+' · 候选值与保存', demo=False)
             terminal.send(b'\r')
             terminal.wait('保存'+title.removeprefix('设置 · ')+'为')
-            gallery.capture(terminal, '快捷规则', title+' · 保存确认', demo=False)
+            gallery.capture(terminal, '规则', title+' · 保存确认', demo=False)
             terminal.send(ESCAPE)
             settle(terminal)
             terminal.send(ESCAPE)

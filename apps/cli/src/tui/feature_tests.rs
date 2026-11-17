@@ -356,7 +356,7 @@ fn setting_edit_cancel_confirm_demo_and_input_bounds_are_independent_of_shortcut
     state.key(Key::Enter);
     assert!(state.entering_text());
     state.key(Key::Char('q'));
-    state.key(Key::Char('6'));
+    state.key(Key::Char('8'));
     assert!(state.page == Page::Settings);
     state.key(Key::Escape);
     assert_eq!(

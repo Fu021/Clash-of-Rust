@@ -184,11 +184,13 @@ fn shortcut_values_follow_the_active_profile_and_stale_profile_drafts_are_cancel
     let mut state = State::new(false);
     state.accept(Some(poll));
     state.page = Page::Rules;
+    state.shortcuts_open = true;
     state.query = "shortcut_ads".into();
     state.shortcuts = Some(crate::tui::catalog::Shortcuts {
         profile: "test-profile".into(),
         revision: state.poll.as_ref().unwrap().meta.view_revision,
         included: [false; 5],
+        document: None,
         error: None,
         sampled: std::time::Instant::now(),
     });
@@ -360,8 +362,9 @@ fn categories_and_dedicated_pages_keep_shortcuts_out_of_general_settings() {
         assert!(!state.items().contains(&"update_prereleases"), "{query}");
     }
     state.query.clear();
-    state.key(Key::Char('8'));
+    state.key(Key::Char('5'));
     assert!(state.page == Page::Rules);
+    state.shortcuts_open = true;
     assert_eq!(state.items(), settings::RULE_KEYS);
     for query in ["IP", "ip", "Ip"] {
         state.query = query.into();
@@ -494,10 +497,12 @@ fn included_shortcuts_are_read_only_and_scoped_metadata_is_released_on_page_exit
     poll.meta.settings.active_profile = Some("profile".into());
     state.accept(Some(poll));
     state.page = Page::Rules;
+    state.shortcuts_open = true;
     state.shortcuts = Some(crate::tui::catalog::Shortcuts {
         profile: "profile".into(),
         revision: 0,
         included: [true, false, false, false, false],
+        document: None,
         error: None,
         sampled: std::time::Instant::now(),
     });

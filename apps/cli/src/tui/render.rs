@@ -92,16 +92,10 @@ pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 fn navigation(page: Page) -> [String; 2] {
-    let items = [
-        (Page::Home, "1 首页"),
-        (Page::Nodes, "2 节点"),
-        (Page::Connections, "3 连接"),
-        (Page::Network, "4 工具"),
-        (Page::Settings, "5 设置"),
-        (Page::Tools, "6 操作"),
-        (Page::Profiles, "7 订阅"),
-        (Page::Rules, "8 快捷规则"),
-    ];
+    let items = Page::ALL.map(|target| {
+        let number = Page::ALL.iter().position(|page| *page == target).unwrap() + 1;
+        (target, format!("{number} {}", target.title()))
+    });
     let mut rows = [String::new(), String::new()];
     for (row, items) in rows.iter_mut().zip(items.chunks(4)) {
         row.push_str("  ");
@@ -130,16 +124,10 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     };
     let spacious = columns >= 80 && rows >= 24;
     let page = match state.page {
-        Page::Home => "首页",
-        Page::Nodes => "节点",
         Page::Connections if state.connection.is_some() => "连接详情",
-        Page::Connections => "连接",
-        Page::Network => "工具",
         Page::Settings if state.fake_ip.is_some() => "Fake-IP 排除项",
-        Page::Settings => "设置",
-        Page::Tools => "操作",
-        Page::Profiles => "订阅",
-        Page::Rules => "快捷规则",
+        Page::Rules if state.shortcuts_open => "快捷规则",
+        page => page.title(),
     };
     if height <= 2 {
         let (text, tone) = focus_line(state, width);
@@ -202,7 +190,10 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             }
             Page::Tools => super::panels::tools(state, width.saturating_sub(6), body_height),
             Page::Profiles => super::catalog::profiles(state, width.saturating_sub(6), body_height),
-            Page::Rules => super::catalog::rules(state, width.saturating_sub(6), body_height),
+            Page::Rules if state.shortcuts_open => {
+                super::catalog::rules(state, content_width(columns, rows), body_height)
+            }
+            Page::Rules => super::rules::panel(state, content_width(columns, rows), body_height),
         }
     };
     for (text, tone) in body
@@ -248,7 +239,8 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
             Page::Settings => super::panels::settings(state, width, 1),
             Page::Tools => super::panels::tools(state, width, 1),
             Page::Profiles => super::catalog::profiles(state, width, 1),
-            Page::Rules => super::catalog::rules(state, width, 1),
+            Page::Rules if state.shortcuts_open => super::catalog::rules(state, width, 1),
+            Page::Rules => super::rules::panel(state, width, 1),
             Page::Network => vec![(
                 super::network::rows(state, width)
                     .get(state.selected)
@@ -306,6 +298,15 @@ fn notice(state: &State) -> (String, Tone) {
     } else if let Some(error) = &state.error {
         (
             format!("读取失败（旧数据仅供参考）：{error}"),
+            Tone::Warning,
+        )
+    } else if let Some((_, description)) = state
+        .rules
+        .as_ref()
+        .and_then(|rules| rules.pending.as_ref())
+    {
+        (
+            format!("{description}？Enter 确认 · Esc 取消"),
             Tone::Warning,
         )
     } else if let Some(target) = &state.confirmation {
@@ -397,7 +398,7 @@ fn home(state: &State) -> Vec<(String, Tone)> {
         return vec![
             ("尚未连接后台".into(), Tone::Warning),
             (
-                "按 6 进入「操作」，选择 start 启动；浏览界面不会自动启动内核。".into(),
+                "按 8 进入「操作」，选择 start 启动；浏览界面不会自动启动内核。".into(),
                 Tone::Muted,
             ),
         ];

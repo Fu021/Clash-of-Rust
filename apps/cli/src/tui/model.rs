@@ -20,6 +20,30 @@ pub(super) enum Page {
 }
 
 impl Page {
+    pub const ALL: [Self; 8] = [
+        Self::Home,
+        Self::Nodes,
+        Self::Profiles,
+        Self::Connections,
+        Self::Rules,
+        Self::Network,
+        Self::Settings,
+        Self::Tools,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Home => "首页",
+            Self::Nodes => "节点",
+            Self::Profiles => "订阅",
+            Self::Connections => "连接",
+            Self::Rules => "规则",
+            Self::Network => "工具",
+            Self::Settings => "设置",
+            Self::Tools => "操作",
+        }
+    }
+
     pub fn scope(self) -> Scope {
         match self {
             Self::Home => Scope::Home,
@@ -78,6 +102,7 @@ pub(super) enum Action {
     Execute(crate::args::Args),
     ApplySetting(crate::args::Args),
     SaveFakeIp(Box<clash_client_runtime::control::Command>),
+    SaveRules(Box<clash_client_runtime::control::Command>),
     ScrollDetail(bool),
     ScrollNetwork(bool),
     ReviewForm,
@@ -105,6 +130,8 @@ pub(super) struct State {
     pub connection: Option<String>,
     pub detail_offset: usize,
     pub shortcuts: Option<super::catalog::Shortcuts>,
+    pub rules: Option<super::rules::Browser>,
+    pub shortcuts_open: bool,
 }
 
 impl State {
@@ -131,6 +158,8 @@ impl State {
             connection: None,
             detail_offset: 0,
             shortcuts: None,
+            rules: None,
+            shortcuts_open: false,
         }
     }
 
@@ -149,7 +178,9 @@ impl State {
         }
         self.error = None;
         if changed {
+            let rule_draft = self.rules.as_ref().is_some_and(super::rules::Browser::busy);
             self.shortcuts = None;
+            self.rules = None;
             let preserve_form = self.form.as_ref().is_some_and(|form| {
                 form.network.is_some()
                     || form
@@ -158,7 +189,7 @@ impl State {
                         .is_some_and(|key| !key.starts_with("shortcut_"))
             });
             if !preserve_form {
-                self.message = if self.form.is_some() || self.confirmation.is_some() {
+                self.message = if self.form.is_some() || self.confirmation.is_some() || rule_draft {
                     Some("后台或当前订阅已变化，已取消旧表单，请重新选择".into())
                 } else {
                     None
@@ -226,6 +257,9 @@ impl State {
         self.connection = None;
         self.detail_offset = 0;
         self.shortcuts = None;
+        self.rules = None;
+        self.shortcuts_open = false;
+        super::rules::sync(self);
     }
 
     pub fn items(&self) -> Vec<&str> {
@@ -238,6 +272,12 @@ impl State {
                 .collect();
         }
         if self.page == Page::Rules {
+            if !self.shortcuts_open {
+                return self
+                    .rules
+                    .as_ref()
+                    .map_or_else(Vec::new, |rules| rules.items(&query));
+            }
             return super::settings::RULE_KEYS
                 .iter()
                 .copied()
@@ -306,6 +346,11 @@ impl State {
         self.searching
             || self.form.as_ref().is_some_and(|form| form.editing)
             || self.fake_ip.as_ref().is_some_and(|editor| editor.editing)
+            || self
+                .rules
+                .as_ref()
+                .and_then(|rules| rules.input.as_ref())
+                .is_some_and(|input| input.editing)
     }
 
     fn selected_node(&self) -> Option<String> {
@@ -435,6 +480,12 @@ impl State {
             self.restore_selected_node(selected_node.as_deref());
             return Action::None;
         }
+        if self.page == Page::Rules
+            && !self.shortcuts_open
+            && self.rules.as_ref().is_some_and(super::rules::Browser::busy)
+        {
+            return super::rules::key(self, key).unwrap_or(Action::None);
+        }
         if self.confirmation.is_some() {
             return match key {
                 Key::Enter => {
@@ -543,25 +594,15 @@ impl State {
                 return Action::CancelNetwork;
             }
             Key::Tab => {
-                self.page = match self.page {
-                    Page::Home => Page::Nodes,
-                    Page::Nodes => Page::Connections,
-                    Page::Connections => Page::Network,
-                    Page::Network => Page::Settings,
-                    Page::Settings => Page::Tools,
-                    Page::Tools => Page::Profiles,
-                    Page::Profiles => Page::Rules,
-                    Page::Rules => Page::Home,
-                };
+                let index = Page::ALL
+                    .iter()
+                    .position(|page| *page == self.page)
+                    .unwrap();
+                self.page = Page::ALL[(index + 1) % Page::ALL.len()];
             }
-            Key::Char('1') => self.page = Page::Home,
-            Key::Char('2') => self.page = Page::Nodes,
-            Key::Char('3') => self.page = Page::Connections,
-            Key::Char('4') => self.page = Page::Network,
-            Key::Char('5') => self.page = Page::Settings,
-            Key::Char('6') => self.page = Page::Tools,
-            Key::Char('7') => self.page = Page::Profiles,
-            Key::Char('8') => self.page = Page::Rules,
+            Key::Char(number @ '1'..='8') => {
+                self.page = Page::ALL[number as usize - '1' as usize];
+            }
             Key::Char('/') if self.page != Page::Home => {
                 if self.page == Page::Network {
                     self.query.clear();
@@ -579,6 +620,10 @@ impl State {
                 self.selected = (self.selected + 1).min(count.saturating_sub(1));
             }
             Key::Back | Key::Escape => {
+                if self.page == Page::Rules {
+                    self.shortcuts_open = false;
+                    super::rules::sync(self);
+                }
                 self.connection = None;
                 self.detail_offset = 0;
                 self.group = None;
@@ -596,6 +641,9 @@ impl State {
                 {
                     self.form = Some(Form::new(spec));
                 }
+            }
+            Key::Enter if self.page == Page::Rules && !self.shortcuts_open => {
+                super::rules::open(self);
             }
             Key::Enter if matches!(self.page, Page::Settings | Page::Rules | Page::Profiles) => {
                 self.edit_setting()
