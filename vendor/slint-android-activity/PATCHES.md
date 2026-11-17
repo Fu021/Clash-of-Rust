@@ -1,13 +1,13 @@
 # Slint Android backend patch
 
-This is the published `i-slint-backend-android-activity` 1.18.1 crate,
-SHA-256 `70d538003a566d7312572ac1435be0704934e46a63d55abdabede513f72332cb`.
+This is the published `i-slint-backend-android-activity` 1.19.0 crate,
+SHA-256 `1c1abcf6132800250b5c70198f5949a4fc42bf5e13f7e54cb6d34aa0d281522f`.
 Its original license files are included. The root Cargo.lock is authoritative.
 
-`androidwindowadapter.rs` backports upstream Slint commit
+The release already includes upstream Slint commit
 `611357480eb7a7eb4f1957d912512fadf99a6666`: suspend the renderer while
 the old Android window is still valid and request a redraw when a new window
-is initialized. Source:
+is initialized. This is no longer a local backport. Source:
 https://github.com/slint-ui/slint/commit/611357480eb7a7eb4f1957d912512fadf99a6666
 
 Local lifecycle handling draws the first frame on `InitWindow`, then requires
@@ -43,20 +43,28 @@ The Java helper also carries local IME compatibility changes:
 - On API 26–29, exclude stable system bars when choosing the keyboard edge.
   Navigation bars alone must report no keyboard, including landscape side bars;
   a real keyboard retains its full occlusion for the shared layout to subtract
-  the bottom safe area once.
+the bottom safe area once. In 1.19.0 this remains a local change in
+`dispatchLayoutInsets`; upstream still compares the raw system-bar occlusion.
+
+The 1.19.0 rebase retains the published Java package, JNI class name, input
+timestamps, text-selection behavior, clipboard handling, system-bar contrast,
+reduced-motion preference and low-memory GPU cleanup. It adapts the local
+surface recovery to `render_transformed` and keyboard cleanup to `hideCursor`;
+the older `render_transformed_with_post_callback` entry no longer exists.
 
 AndroidX reference:
 https://github.com/androidx/androidx/blob/androidx-main/core/core/src/main/java/androidx/core/view/SoftwareKeyboardControllerCompat.java
 
 Current Actions evidence and remaining failures are recorded in
 [the IME review](../../docs/agent-failures/android-ime.md).
-The same-commit CI on `3dd1f87` passed the production keyboard, layout, Back,
+The historical 1.18.1 CI on `3dd1f87` passed the production keyboard, layout, Back,
 rotation and lifecycle regressions on API 31 and 36. The earlier Gboard
 null-pointer crash did not recur, so the native cold-start controls did not run
 and its cause remains unconfirmed. Physical-device and OEM verification remain
-pending; historical multi-version results do not prove all-device compatibility.
+pending; historical multi-version results do not validate the 1.19.0 rebase
+or prove all-device compatibility.
 The upstream crate license files remain authoritative.
 
 Remove this override after updating Slint to a release containing equivalent
-window, density and IME fixes and verifying Activity recreation, VPN continuity and
+remaining surface, density and IME fixes and verifying Activity recreation, VPN continuity and
 multi-version keyboard behavior.

@@ -23,7 +23,7 @@
 
 正式应用使用 winit 与软件渲染器；Linux 的本地兼容改动见 [X11 帧同步补丁](../../vendor/winit/PATCHES.md)，实际缩放效果仍待合成器验收。系统代理、TUN、托盘、Dock、更新与文件选择由桌面平台负责；共享业务不依赖 Slint，Android 使用原生宿主，iOS 保留占位。
 
-节点名称、策略组名称和当前策略在列表、首页、详情和操作中均保持订阅原文，包括前后空格、国家代码、旗帜及普通 emoji；不删除前缀、不推断地区，也不自动补旗帜。桌面和 Android 使用随包的 [Noto Color Emoji](../../resources/fonts/SOURCE.md#noto-color-emoji) 及共享字体回退注册。桌面保留软件渲染器，局部回移 Slint 已合入的[彩色字形修复](../../vendor/slint-renderer-software/PATCHES.md)，Android 保留现有 Skia 路径。IP 检测与 Claude 保护/检测同样使用 emoji 国旗，摘要、结果、递归 DNS 和详情均传递文本，不再维护独立国旗图片或图片缓存。港澳台在报告中仍映射中国国旗并保留地区文字；这套报告映射不参与节点或策略组名称显示。
+节点名称、策略组名称和当前策略在列表、首页、详情和操作中均保持订阅原文，包括前后空格、国家代码、旗帜及普通 emoji；不删除前缀、不推断地区，也不自动补旗帜。桌面和 Android 使用随包的 [Noto Color Emoji](../../resources/fonts/SOURCE.md#noto-color-emoji) 及共享字体回退注册。桌面使用 Slint 1.19.0 官方软件渲染器的彩色字形支持，已移除旧回移覆盖；Android 保留 Skia 路径。IP 检测与 Claude 保护/检测同样使用 emoji 国旗，摘要、结果、递归 DNS 和详情均传递文本，不再维护独立国旗图片或图片缓存。港澳台在报告中仍映射中国国旗并保留地区文字；这套报告映射不参与节点或策略组名称显示。
 
 输入框在已提交文字和输入法组词文字均为空时才显示占位提示；组词尚未提交时也须隐藏提示，桌面与移动端共用这个条件。移动行标题可换行，右侧值限制宽度，完整内容仍在详情中展示。手机页头省去重复节点/订阅说明，字号至少 125% 时将必要运行状态另起一行，避免挤压页名与返回入口。
 
@@ -35,7 +35,7 @@
 
 网络页使用共享 `NetworkToolMenu`、`NetworkToolHeading` 和 `NetworkToolOptions`，手机单页、桌面/Pad 双栏；各工具使用独立离线预览数据。生命周期、参数和平台限制集中在[网络工具箱](../../docs/network-tools.md)；`--network-tool 0..11` 选择工具，手机用 `--network-detail` 打开详情。流量汇总使用连接页已有快照，节点类型与策略信息归代理页详情，不增加后台轮询。
 
-语法检查使用与应用依赖一致的官方 **Slint Viewer 1.18.1**（`slint-viewer`）。截图和交互预览使用含彩色字形支持的官方主线 **Viewer 1.19.0**（`slint-viewer-main`），安装到用户持久目录并校验官方下载摘要。脚本优先选择后者渲染；可通过 `--viewer PATH` 和 `--check-viewer PATH` 分别指定，不把个人路径写入仓库配置。
+语法检查、截图和交互预览统一使用与应用依赖一致的官方 **Slint Viewer 1.19.0**（`slint-viewer`），安装到用户持久目录并校验官方下载摘要。可通过 `--viewer PATH` 和 `--check-viewer PATH` 分别指定，不把个人路径写入仓库配置。桌面、Android、内嵌 Slint 测试和预览脚本均明确使用 **edition 1.18**，保留既有布局与状态语义；升级运行库不自动迁移语言行为。edition 的含义和迁移差异见[官方说明](https://docs.slint.dev/latest/docs/slint/guide/language/concepts/editions/)。
 
 ```sh
 python3 scripts/preview-slint.py --check

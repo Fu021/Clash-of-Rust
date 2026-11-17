@@ -1,4 +1,4 @@
-use slint::fontique_011::{fontique, shared_collection};
+use slint::fontique_012::{fontique, shared_collection};
 use std::sync::Arc;
 
 pub fn register_emoji() -> Result<(), slint::PlatformError> {

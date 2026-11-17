@@ -3,6 +3,7 @@ fn main() {
         return;
     }
     let config = slint_build::CompilerConfiguration::new()
+        .with_edition((1, 18))
         .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles);
     slint_build::compile_with_config(
         "../../../crates/client-ui/ui/mobile/android/window.slint",

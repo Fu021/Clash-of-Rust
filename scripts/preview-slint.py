@@ -77,7 +77,7 @@ def rendering_viewer(viewer):
     if not match or tuple(map(int, match.groups())) < (1, 19, 0):
         raise RuntimeError(
             'Accurate emoji previews require Slint Viewer 1.19 or newer. '
-            'Install the verified official mainline Viewer as slint-viewer-main, '
+            'Install the verified official Slint Viewer matching the application, '
             'or pass --viewer PATH. --check can still use the application’s pinned Viewer.')
     return {'version': version, 'emoji_font': 'resources/fonts/NotoColorEmoji-Regular.ttf',
             'font_fallback': 'bundled-first', 'mode': 'headless'}
@@ -236,7 +236,7 @@ def mobile_sheet(viewer, output, name, items, env):
 
 
 def run_viewer(viewer: str, arguments: list[str], env: dict[str, str]) -> None:
-    result = subprocess.run([viewer, *arguments], cwd=ROOT, env=env, text=True,
+    result = subprocess.run([viewer, '--edition', '1.18', *arguments], cwd=ROOT, env=env, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
     if result.stdout:
         print(result.stdout, end="")
@@ -357,7 +357,7 @@ def pairs(viewer: str, entries: list[dict], output: Path, env: dict[str, str]) -
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--viewer", default=shutil.which("slint-viewer-main") or shutil.which("slint-viewer"))
+    parser.add_argument("--viewer", default=shutil.which("slint-viewer") or shutil.which("slint-viewer-main"))
     parser.add_argument("--check-viewer", default=shutil.which("slint-viewer"),
                         help="Viewer matching the application’s pinned Slint version for syntax checks")
     parser.add_argument("--page", choices=["all", *PAGES, "tools"], default="all")
@@ -434,7 +434,8 @@ def main() -> None:
                   "preview-text-scale": round(args.text_scale * 100),
                   **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
-        subprocess.run([args.viewer, "--auto-reload", "--load-data", str(fixture), str(entry)],
+        subprocess.run([args.viewer, "--edition", "1.18", "--auto-reload",
+                        "--load-data", str(fixture), str(entry)],
                        cwd=ROOT, env=env, check=True)
         return
 

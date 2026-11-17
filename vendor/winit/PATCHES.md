@@ -13,6 +13,11 @@ The X11-only changes adapt the protocol introduced by upstream
 `eef2848c981606552fa18ccf472928d34d7ff7df`, without changing the 0.30 API or
 upgrading other platforms to the incompatible 0.31 API.
 
+Slint 1.19.0 still requires winit 0.30 and exposes `unstable-winit-030`.
+Its released backend does not replace this protocol or the local post-render
+acknowledgement. Keep this override while upgrading Slint; a newer Slint version
+alone is not evidence that the X11 patch can be removed.
+
 ## Local behavior
 
 - Enable the existing `x11rb` dependency's `sync` feature. No new package is added.

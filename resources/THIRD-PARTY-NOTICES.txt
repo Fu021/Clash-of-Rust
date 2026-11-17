@@ -59,15 +59,13 @@ English territory names: Unicode CLDR 46.0.0, Unicode License v3.
 https://github.com/unicode-org/cldr-json/tree/46.0.0
 The complete license is installed as resources/Unicode-LICENSE.txt.
 
-Slint 1.18.1 (SixtyFPS GmbH): https://github.com/slint-ui/slint/tree/v1.18.1
+Slint 1.19.0 (SixtyFPS GmbH): https://github.com/slint-ui/slint/tree/v1.19.0
 Used under GPL-3.0-only; the GPLv3 license is installed as LICENSE.
 The desktop uses winit and the Slint software renderer. Dependency versions
 and corresponding upstream sources are recorded in Cargo.lock.
-The software renderer includes the color-glyph changes from Slint PR #14567:
+The published software renderer includes the color-glyph changes from Slint PR #14567:
 https://github.com/slint-ui/slint/pull/14567
-Its modified 1.18.1 source and original licenses are in vendor/slint-renderer-software.
-The adaptation and its limits are documented there in PATCHES.md.
-The Android backend includes a window lifecycle fix backported from
-https://github.com/slint-ui/slint/commit/611357480eb7a7eb4f1957d912512fadf99a6666.
-Its modified source and original licenses are in vendor/slint-android-activity.
-Local IME and window-transition changes are documented there in PATCHES.md.
+The former local software-renderer override has been removed.
+The Android backend is based on its published 1.19.0 source; its original
+licenses remain in vendor/slint-android-activity. Local density, IME and
+window-transition changes are documented there in PATCHES.md.

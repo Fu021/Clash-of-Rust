@@ -112,6 +112,7 @@ def main():
                  '--locked', case, '--', '--exact', '--test-threads=1'])
         for package, target, cases in (
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
+                ('clash-client-ui', ['--test', 'emoji'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),
                 ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::']),

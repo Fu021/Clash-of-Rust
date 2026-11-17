@@ -1,6 +1,4 @@
-//! Slint 1.18.1 software-surface compatibility, isolated from application state.
-//! Remove the Windows damage hook when upgrading to a release containing
-//! https://github.com/slint-ui/slint/pull/13568. The Slint version is pinned.
+//! Software-surface compatibility, isolated from application state.
 use slint::private_unstable_api::re_exports::{LogicalRect, WindowInner};
 
 #[derive(Default)]
@@ -62,7 +60,6 @@ mod x11_resize_sync {
 
 #[cfg(windows)]
 mod windows {
-    use super::*;
     use slint::winit_030::{
         WinitWindowAccessor,
         winit::raw_window_handle::{HasWindowHandle, RawWindowHandle},
@@ -91,34 +88,6 @@ mod windows {
             let hwnd = handle.hwnd.get() as HWND;
             // The same procedure/id replaces itself; no heap state or dangling pointer.
             unsafe { SetWindowSubclass(hwnd, Some(drag_proc), DRAG_TIMER, 0) };
-            let mut rectangle = ::windows::Win32::Foundation::RECT::default();
-            let invalid = unsafe {
-                ::windows::Win32::Graphics::Gdi::GetUpdateRect(
-                    ::windows::Win32::Foundation::HWND(hwnd),
-                    Some(&mut rectangle),
-                    false,
-                )
-            }
-            .as_bool();
-            if invalid {
-                let scale = window.scale_factor();
-                let region = LogicalRect::new(
-                    [
-                        (rectangle.left as f32) / scale,
-                        (rectangle.top as f32) / scale,
-                    ]
-                    .into(),
-                    [
-                        ((rectangle.right - rectangle.left) as f32) / scale,
-                        ((rectangle.bottom - rectangle.top) as f32) / scale,
-                    ]
-                    .into(),
-                );
-                WindowInner::from_pub(window)
-                    .window_adapter()
-                    .renderer()
-                    .mark_dirty_region(region.into());
-            }
         });
     }
     unsafe extern "system" fn drag_proc(

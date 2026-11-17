@@ -37,7 +37,7 @@
 
 - 修复与新功能直接在 `main` 完成，确认远端状态再推送 `origin/main`；纯文档留本地随下次功能更新推送，不单独触发 CI/打包。用户指定保留分支、暂不推送等要求优先。
 - 推送前复查 diff、验证与工作区。禁止强推 `main`。分叉、冲突、凭据或权限异常时保留现场并说明阻塞。
-- 推送后跟进最终提交 CI，失败则修复并跟进新运行；通过后分别完成同提交 Android、Ubuntu 兼容验证，再做不发布核验。正式版发布流程完成同提交验证后，不再重复不发布打包。不以运行中收尾，按[历史耗时](docs/workflows.md#actions-跟进节奏)低频查询：CI 约 10 分钟首查、之后 5 分钟；打包约 7 分钟首查、之后 2～3 分钟，排队或长步骤延长。runner 未分配导致失败时自动重试失败 job，无需再次确认。
+- 按[改动范围](docs/development.md#按改动选择验证)选择验证，推送后跟进最终提交的相关 CI；失败则定位并修复。网站独立改版不派发客户端兼容、内存或不发布核验；客户端改动按受影响平台验证，公开发布前必须完成同提交 Android、Ubuntu 兼容及发布门禁。正式版发布流程完成同提交验证后，不再重复不发布打包。不以相关验证运行中收尾，按[历史耗时](docs/workflows.md#actions-跟进节奏)低频查询：CI 约 10 分钟首查、之后 5 分钟；打包约 7 分钟首查、之后 2～3 分钟，排队或长步骤延长。runner 未分配导致相关验证失败时自动重试失败 job，无需再次确认。
 - 最终合并前按[脚本说明](scripts/README.md)核对全仓调用关系，合并重复入口、删除弃用脚本并同步调用者。
 - [Publish Release](docs/workflows/release.md)默认用 `check_only=true`，复用同提交成功 CI 与依赖快照，核验附件及 Release 未变；流程结束前不推进来源分支。公开发布、签名、额外工作流、现有 Actions 之外的私网访问及版本调整须用户明确授权。
 - 常驻 **CI、Publish Release、Memory Benchmark**；维护者另已授权手动 [Android Compatibility](docs/workflows/android-compatibility.md) 与 [Ubuntu Compatibility](docs/workflows/ubuntu-compatibility.md)，复用同提交成功 CI 产物验证基础代理/TUN，发布前两者必须分别通过；Android 截图和诊断为可选扩展。长期保留手动 [COSMIC 启动诊断](docs/workflows/cosmic-startup.md)，不作为发布门禁。新增其他含临时工作流仍须维护者同意。源码与候选包归 CI；发布复用验收结果，仅保留发行签名后的必要验证与公开发布。

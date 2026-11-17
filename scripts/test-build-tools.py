@@ -2140,6 +2140,16 @@ class BuildTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'Accurate emoji previews'):
                         preview_slint.rendering_viewer('viewer')
 
+    def test_previews_keep_the_production_layout_edition(self):
+        for arguments in [['--check', 'preview.slint'],
+                          ['--screenshot', 'preview.png', 'preview.slint']]:
+            with self.subTest(arguments=arguments), patch.object(
+                    preview_slint.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
+                preview_slint.run_viewer('viewer', arguments, {})
+                self.assertEqual(run.call_args.args[0],
+                                 ['viewer', '--edition', '1.18', *arguments])
+
     def test_previews_use_bundled_font_fallback_instead_of_the_hosts_preferences(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
                 os.environ, {'SLINT_FONT_PATH': '/unrelated/font',
@@ -2317,6 +2327,7 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(all(('--exact' in command) == (not any(prefix in command for prefix in prefixes))
                             for command in focused))
         for package, target in (('clash-client-ui', 'ui_models'),
+                                ('clash-client-ui', 'emoji'),
                                 ('clash-desktop-ui', '--lib'),
                                 ('clash-client-core', '--lib')):
             self.assertTrue(any(command[command.index('-p')+1] == package and target in command
