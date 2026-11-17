@@ -78,6 +78,19 @@ async fn start(engine: &mut Engine) -> Result<()> {
     Ok(())
 }
 
+async fn change_rule(
+    engine: &mut Engine,
+    id: &str,
+    document: crate::rule_manager::Document,
+    change: RuleChange,
+) -> Result<()> {
+    let mut draft =
+        (*crate::rule_manager::ProfileRules::for_profile(&engine.settings, id, document.builtin))
+            .clone();
+    super::mutations::rule(&document, &mut draft, change)?;
+    engine.save_profile_rules(id, draft).await
+}
+
 pub(super) async fn execute(
     shared: &Arc<Mutex<Engine>>,
     operation: Command,
@@ -172,6 +185,7 @@ pub(super) async fn execute(
             | Command::Ports { .. }
             | Command::RuleOverrides { .. }
             | Command::RuleChange { .. }
+            | Command::ActiveShortcut { .. }
             | Command::SaveRules { .. }
             | Command::EditProfile { .. }
             | Command::Activate { .. }
@@ -242,14 +256,29 @@ pub(super) async fn execute(
         }
         Command::RuleChange { id, change } => {
             let document = engine.rule_document(&id)?;
-            let mut draft = (*crate::rule_manager::ProfileRules::for_profile(
-                &engine.settings,
+            change_rule(&mut engine, &id, document, change).await?;
+        }
+        Command::ActiveShortcut { id, index, enabled } => {
+            anyhow::ensure!(
+                engine.settings.active_profile.as_deref() == Some(id.as_str()),
+                "当前订阅已变化，请返回快捷规则页重新选择"
+            );
+            let document = engine.rule_document(&id)?;
+            anyhow::ensure!(
+                !document
+                    .included
+                    .get(index)
+                    .copied()
+                    .ok_or_else(|| anyhow::anyhow!("未知快捷规则"))?,
+                "订阅已包含此规则，无需重复添加；请返回刷新"
+            );
+            change_rule(
+                &mut engine,
                 &id,
-                document.builtin,
-            ))
-            .clone();
-            super::mutations::rule(&document, &mut draft, change)?;
-            engine.save_profile_rules(&id, draft).await?;
+                document,
+                RuleChange::Shortcut { index, enabled },
+            )
+            .await?;
         }
         Command::Ports { mixed } => engine.save_ports(mixed).await?,
         Command::Import { .. } => unreachable!("handled before locking the owner"),

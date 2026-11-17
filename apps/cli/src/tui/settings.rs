@@ -1,6 +1,6 @@
 use super::form::{self, Form};
 use anyhow::{Context, Result, ensure};
-use clash_client_runtime::control::{Command, Poll, RuleChange};
+use clash_client_runtime::control::{Command, Poll};
 use serde_json::{Value, json};
 
 pub(super) const KEYS: &[&str] = &[
@@ -310,18 +310,16 @@ pub(super) fn command(args: &crate::args::Args) -> Result<Command> {
             mode: first.clone(),
         },
         "profile use" => Command::Activate { id: first.clone() },
-        "rule shortcut" => Command::RuleChange {
+        "rule shortcut" => Command::ActiveShortcut {
             id: args
                 .get("profile")
                 .context("订阅身份缺失，请重新打开设置")?
                 .into(),
-            change: RuleChange::Shortcut {
-                index: SHORTCUTS
-                    .iter()
-                    .position(|(_, name, _)| *name == first.as_str())
-                    .context("未知快捷规则")?,
-                enabled: args.positional.get(1).context("开关状态缺失")? == "on",
-            },
+            index: SHORTCUTS
+                .iter()
+                .position(|(_, name, _)| *name == first.as_str())
+                .context("未知快捷规则")?,
+            enabled: args.positional.get(1).context("开关状态缺失")? == "on",
         },
         _ => anyhow::bail!("该操作需要普通终端授权"),
     })

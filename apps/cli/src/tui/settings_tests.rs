@@ -156,19 +156,14 @@ fn shortcut_values_follow_the_active_profile_and_stale_profile_drafts_are_cancel
     let mut form = settings::open(&poll, "shortcut_ads").unwrap();
     assert_eq!(form.fields[1].value, "off");
     form.cycle(false);
-    let clash_client_runtime::control::Command::RuleChange { id, change } =
+    let clash_client_runtime::control::Command::ActiveShortcut { id, index, enabled } =
         settings::command(&form.args(&args()).unwrap()).unwrap()
     else {
         panic!("shortcut must use per-profile rules");
     };
     assert_eq!(id, "test-profile");
-    assert!(matches!(
-        change,
-        clash_client_runtime::control::RuleChange::Shortcut {
-            index: 0,
-            enabled: true
-        }
-    ));
+    assert_eq!(index, 0);
+    assert!(enabled);
     Arc::make_mut(
         poll.meta
             .settings

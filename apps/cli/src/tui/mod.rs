@@ -118,27 +118,15 @@ async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
         let remote = backend::connect(context, false)
             .await?
             .context("后台已退出，未保存设置")?;
-        if operation.path == "rule shortcut" {
-            let meta: clash_client_runtime::control::Meta = remote.request(Command::Meta).await?;
-            ensure!(
-                meta.settings.active_profile.as_deref() == operation.get("profile"),
-                "当前订阅已变化，请返回快捷规则页重新选择"
-            );
-            if let Command::RuleChange {
-                id,
-                change: clash_client_runtime::control::RuleChange::Shortcut { index, .. },
-            } = &command
-            {
-                let document: clash_client_core::rule_manager::Document = remote
-                    .request(Command::RuleDocument { id: id.clone() })
-                    .await?;
-                ensure!(
-                    !document.included[*index],
-                    "订阅已包含此规则，无需重复添加；请返回刷新"
-                );
-            }
-        }
-        let _: serde_json::Value = remote.request(command).await?;
+        let _: serde_json::Value =
+            remote
+                .request(command)
+                .await
+                .context(if operation.path == "rule shortcut" {
+                    "快捷规则保存失败；若后台仍来自旧版，请退出旧版 GUI／cor 后台后重试"
+                } else {
+                    "设置保存失败"
+                })?;
         let poll: Poll = remote
             .request(Command::Snapshot {
                 scope: Scope::Other,

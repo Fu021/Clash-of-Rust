@@ -85,6 +85,11 @@ pub enum Command {
         id: String,
         change: RuleChange,
     },
+    ActiveShortcut {
+        id: String,
+        index: usize,
+        enabled: bool,
+    },
     Ports {
         mixed: u16,
     },
@@ -200,6 +205,7 @@ impl Command {
             | Self::Quit
             | Self::RuleOverrides { .. }
             | Self::RuleChange { .. }
+            | Self::ActiveShortcut { .. }
             | Self::Ports { .. }
             | Self::Import { .. }
             | Self::EditProfile { .. }
@@ -433,6 +439,11 @@ mod tests {
                     enabled: true,
                 },
             },
+            Command::ActiveShortcut {
+                id: "fixture".into(),
+                index: 0,
+                enabled: true,
+            },
             Command::Ports { mixed: 7897 },
             Command::Import {
                 name: "fixture".into(),
@@ -481,5 +492,135 @@ mod tests {
                 "{blocked:?} must be rejected during protection"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn active_shortcut_rechecks_profile_and_inclusion_at_the_owner() {
+        use crate::config::Store;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into()).unwrap();
+        let first = uuid::Uuid::new_v4().to_string();
+        let second = uuid::Uuid::new_v4().to_string();
+        let path = store.profile_path(&first).unwrap();
+        let plain = "proxies: []\nrules:\n  - MATCH,DIRECT\n";
+        let included =
+            "proxies: []\nrules:\n  - GEOSITE,category-ads-all,REJECT\n  - MATCH,DIRECT\n";
+        std::fs::write(&path, plain).unwrap();
+        let mut engine = crate::engine::test_support::fixture(store.clone());
+        engine.profiles = [first.clone(), second.clone()]
+            .into_iter()
+            .map(|id| Profile {
+                id,
+                name: "fixture".into(),
+                source: "fixture.yaml".into(),
+                updated: 0,
+                usage: None,
+                builtin: false,
+            })
+            .collect();
+        engine.settings.active_profile = Some(first.clone());
+        engine.settings.rule_profiles.insert(
+            first.clone(),
+            Arc::new(crate::rule_manager::ProfileRules::default()),
+        );
+        store.save_settings(&engine.settings).unwrap();
+        let shared = Arc::new(Mutex::new(engine));
+        let meta = dispatch::execute(&shared, Command::Meta, Owner::Daemon, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            meta["settings"]["active_profile"].as_str(),
+            Some(first.as_str())
+        );
+        let document = dispatch::execute(
+            &shared,
+            Command::RuleDocument { id: first.clone() },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(document["included"][0].as_bool(), Some(false));
+
+        {
+            let mut engine = shared.lock().await;
+            Arc::make_mut(engine.settings.rule_profiles.get_mut(&first).unwrap()).enabled[1] =
+                false;
+        }
+        dispatch::execute(
+            &shared,
+            Command::ActiveShortcut {
+                id: first.clone(),
+                index: 0,
+                enabled: false,
+            },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap();
+        let settings = store.load_settings().unwrap();
+        assert!(!settings.rule_profiles[&first].enabled[0]);
+        assert!(!settings.rule_profiles[&first].enabled[1]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), plain);
+
+        {
+            let mut engine = shared.lock().await;
+            engine.settings.active_profile = Some(second);
+            store.save_settings(&engine.settings).unwrap();
+        }
+        let saved = std::fs::read(store.root.join("settings.json")).unwrap();
+        let command = || Command::ActiveShortcut {
+            id: first.clone(),
+            index: 0,
+            enabled: true,
+        };
+        let error = dispatch::execute(&shared, command(), Owner::Daemon, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("当前订阅已变化"), "{error:#}");
+        assert_eq!(
+            std::fs::read(store.root.join("settings.json")).unwrap(),
+            saved
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), plain);
+
+        {
+            let mut engine = shared.lock().await;
+            engine.settings.active_profile = Some(first.clone());
+            store.save_settings(&engine.settings).unwrap();
+        }
+        std::fs::write(&path, included).unwrap();
+        let saved = std::fs::read(store.root.join("settings.json")).unwrap();
+        let error = dispatch::execute(&shared, command(), Owner::Daemon, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("订阅已包含此规则"), "{error:#}");
+        assert_eq!(
+            std::fs::read(store.root.join("settings.json")).unwrap(),
+            saved
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), included);
+        let error = dispatch::execute(
+            &shared,
+            Command::ActiveShortcut {
+                id: first,
+                index: 5,
+                enabled: true,
+            },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("未知快捷规则"), "{error:#}");
+        assert_eq!(
+            std::fs::read(store.root.join("settings.json")).unwrap(),
+            saved
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), included);
     }
 }
