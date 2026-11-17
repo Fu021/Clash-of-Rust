@@ -294,3 +294,77 @@ fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection
     assert_eq!(render::fit("🇺🇸 美国 / test", 8).width(), 8);
     assert_eq!(render::fit("宽字", 0), "");
 }
+
+#[test]
+fn phone_node_footer_wraps_all_actions_without_losing_the_selected_node() {
+    let mut state = State::new(true);
+    state.page = Page::Nodes;
+    state.group = Some("PROXY".into());
+    state.selected = 2;
+    let selected = state.items()[state.selected].to_owned();
+    for (columns, rows) in [(36, 16), (40, 12), (40, 20), (48, 24), (60, 18), (80, 20)] {
+        let frame = render::frame(&state, columns, rows);
+        let text = frame
+            .iter()
+            .map(|line| line.text.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for action in [
+            "↑↓ 选择",
+            "Enter 打开",
+            "s 排序",
+            "/ 搜索",
+            "Esc 返回",
+            "q 退出",
+        ] {
+            assert!(text.contains(action), "{columns}×{rows}: {action}\n{text}");
+        }
+        assert_eq!(text.matches("q 退出").count(), 1);
+        assert_eq!(text.matches("Esc 返回").count(), 1);
+        assert!(!text.contains('…'), "{columns}×{rows}:\n{text}");
+        assert!(
+            frame.iter().any(|line| {
+                line.tone == render::Tone::Selected && line.text.contains(&selected)
+            })
+        );
+        assert_eq!(frame.len(), rows);
+        assert!(frame.iter().all(|line| line.text.width() < columns));
+    }
+}
+
+#[test]
+fn phone_footer_wraps_failure_and_keeps_confirmation_and_input_keys_accurate() {
+    let mut state = State::new(true);
+    state.page = Page::Nodes;
+    state.message = Some("保存失败：订阅已包含此规则；旧配置保持不变，请刷新后重试。".into());
+    let frame = render::frame(&state, 40, 12);
+    let text = frame
+        .iter()
+        .map(|line| line.text.trim_end())
+        .collect::<String>();
+    assert!(text.contains(state.message.as_deref().unwrap()));
+    assert!(text.contains("q 退出"));
+    assert!(!text.contains('…'));
+    state.message = None;
+    state.group = Some("PROXY".into());
+    state.selected = 2;
+    state.key(Key::Enter);
+    let frame = render::frame(&state, 40, 12);
+    let text = frame
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<String>();
+    assert!(text.contains("Enter 确认"));
+    assert!(text.contains("Esc 取消"));
+    state.key(Key::Escape);
+    state.key(Key::Char('/'));
+    let frame = render::frame(&state, 40, 12);
+    let text = frame
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<String>();
+    assert!(text.contains("Enter 完成输入"));
+    assert!(text.contains("Ctrl+U 清空"));
+    assert!(text.contains("Ctrl+C 退出"));
+    assert!(!text.contains("q 退出"));
+}

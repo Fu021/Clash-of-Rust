@@ -1,6 +1,8 @@
 use super::model::{Page, State};
 use unicode_width::UnicodeWidthStr;
 
+mod footer;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Tone {
     Plain,
@@ -111,7 +113,6 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         Page::Profiles => "订阅",
         Page::Rules => "快捷规则",
     };
-    let (notice, tone) = notice(state);
     if height <= 2 {
         let (text, tone) = focus_line(state, width);
         lines.push(line(text, tone));
@@ -195,13 +196,8 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Tone::Accent,
         ));
     }
-    let footer_height = if spacious {
-        4
-    } else if height >= 10 {
-        2
-    } else {
-        usize::from(height >= 2)
-    };
+    let footer = footer::lines(state, width, height, spacious);
+    let footer_height = footer.len();
     let body_height = height.saturating_sub(lines.len() + footer_height);
     let body = if state.form.is_some() {
         super::panels::editor(state, body_height)
@@ -240,65 +236,12 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             tone: Tone::Plain,
         });
     }
-    if spacious {
-        lines.push(line("─".repeat(width), Tone::Muted));
-    }
-    if footer_height >= 2 {
-        lines.push(line(notice, tone));
-    } else if footer_height == 1
-        && (state.execution.is_some()
-            || state.confirmation.is_some()
-            || state.error.is_some()
-            || state.message.is_some()
-            || state.saving)
-    {
-        lines.push(line(notice, tone));
-        return lines;
-    }
-    if footer_height > 0 {
-        let help = if state.form.is_some() {
-            "↑↓ 选择 · Enter 编辑/确认 · Esc 返回 · q 退出"
-        } else if state.connection.is_some() {
-            "↑↓ 详情 · d 解析 · x 关闭 · Esc 返回 · q 退出"
-        } else if state.page == Page::Network {
-            "[ ] 工具 · / 输入 · Enter 检查 · Esc 取消 · q 退出"
-        } else if state.page == Page::Nodes {
-            "↑↓ 选择 · Enter 打开 · s 排序 · / 搜索 · Esc 返回 · q 退出"
-        } else {
-            "↑↓ 选择 · Enter 打开 · / 搜索 · Esc 返回 · q 退出"
-        };
-        lines.push(line(
-            if spacious {
-                help.into()
-            } else {
-                format!("q 退出 · Esc 返回 · {help}")
-            },
-            Tone::Muted,
-        ));
-    }
-    if spacious {
-        lines.push(line(
-            if state.error.is_some() {
-                "诊断：cor diagnose --output cor-diagnose.json".into()
-            } else {
-                format!(
-                    "v{} · 本机后台 · 每秒采样，变化时绘制",
-                    clash_client_core::VERSION
-                )
-            },
-            Tone::Muted,
-        ));
-    }
+    lines.extend(footer);
     lines
 }
 
 fn focus_line(state: &State, width: usize) -> (String, Tone) {
-    if state.execution.is_some()
-        || state.confirmation.is_some()
-        || state.error.is_some()
-        || state.message.is_some()
-        || state.saving
-    {
+    if footer::has_notice(state) {
         return notice(state);
     }
     let content = if state.form.is_some() {

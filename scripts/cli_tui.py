@@ -151,6 +151,23 @@ def verify(console, resources, report):
                 terminal.send(b's')
                 terminal.wait(mode)
             terminal.capture(report, 'nodes')
+            for columns, rows in [(40, 12), (36, 16), (48, 24), (60, 18), (100, 30)]:
+                terminal.resize(columns, rows)
+                deadline = time.monotonic()+5
+                actions = ['↑↓ 选择', 'Enter 打开', 's 排序', '/ 搜索', 'Esc 返回', 'q 退出']
+                while True:
+                    terminal.pump(.05)
+                    text = terminal.text()
+                    if max(terminal.screen, default=0) == rows-1 and all(
+                            action in text for action in actions):
+                        break
+                    if terminal.process.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError(f'Phone {columns}x{rows} hid node actions: {text}')
+                if text.count('q 退出') != 1 or text.count('Esc 返回') != 1:
+                    raise RuntimeError('Phone footer repeated exit or back actions')
+                if any('…' in line for line in text.splitlines()[-3:]):
+                    raise RuntimeError('Phone footer truncated actions instead of wrapping')
+                terminal.capture(report, f'nodes-{columns}x{rows}')
             terminal.send('/日本'.encode())
             terminal.wait('🇯🇵 日本 01')
             terminal.send(b'\r\r')
@@ -241,7 +258,8 @@ def verify(console, resources, report):
         'checks': ['no-tty-rejected', 'read-only-no-backend', 'search-and-confirmation',
                    'literal-q-search', 'connection-details', 'settings-edit-and-cancel',
                    'operation-demo-no-side-effects', 'literal-q-setting',
-                   'network-tools-and-cancel', 'node-sort-cycle', 'resize-and-tiny-detail-scroll',
+                   'network-tools-and-cancel', 'node-sort-cycle', 'phone-footer-wraps-actions',
+                   'resize-and-tiny-detail-scroll',
                    'native-setting-save-failure-persistence-and-cross-client-refresh',
                    'profile-list-selection-and-included-shortcut-state',
                    'q-restores-terminal', 'ctrl-c-restores-terminal'],
