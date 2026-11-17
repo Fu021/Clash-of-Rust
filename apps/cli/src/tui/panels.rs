@@ -81,7 +81,7 @@ pub(super) fn tools(state: &State, width: usize, height: usize) -> Vec<(String, 
             format!(
                 "{} {}  · {}",
                 if index == state.selected { "›" } else { " " },
-                fit(spec.description, width.saturating_sub(18)),
+                fit(spec.description, width.saturating_sub(spec.path.len() + 6)),
                 spec.path
             ),
             if index == state.selected {
@@ -94,9 +94,25 @@ pub(super) fn tools(state: &State, width: usize, height: usize) -> Vec<(String, 
     lines
 }
 
-pub(super) fn editor(state: &State, height: usize) -> Vec<(String, Tone)> {
+pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let form = state.form.as_ref().unwrap();
-    let mut lines = if let Some(key) = &form.setting {
+    let mut lines = if form.network == Some(super::network::Editor::Export) {
+        vec![
+            ("网络 · 导出本次结果".into(), Tone::Accent),
+            (
+                "保存现有证据，不重新运行检查；Esc 返回。".into(),
+                Tone::Muted,
+            ),
+        ]
+    } else if let Some(super::network::Editor::Parameters(tool)) = form.network {
+        vec![
+            (format!("{} · 参数", tool.title()), Tone::Accent),
+            (
+                "本页生效；切换工具恢复默认；Esc 丢弃草稿。".into(),
+                Tone::Muted,
+            ),
+        ]
+    } else if let Some(key) = &form.setting {
         vec![
             (
                 format!("设置 · {}", super::settings::title(key)),
@@ -118,7 +134,15 @@ pub(super) fn editor(state: &State, height: usize) -> Vec<(String, Tone)> {
             ),
         ]
     };
-    lines.truncate(height.saturating_sub(1));
+    lines = lines
+        .into_iter()
+        .flat_map(|(text, tone)| {
+            super::render::wrap(&text, width)
+                .into_iter()
+                .map(move |line| (line, tone))
+        })
+        .collect();
+    lines.truncate(height / 3);
     let available = height.saturating_sub(lines.len()).max(1);
     let indices = form
         .fields
@@ -128,28 +152,36 @@ pub(super) fn editor(state: &State, height: usize) -> Vec<(String, Tone)> {
         .map(|(index, _)| index)
         .chain(std::iter::once(form.fields.len()))
         .collect::<Vec<_>>();
-    let selected = indices
-        .iter()
-        .position(|index| *index == form.selected)
-        .unwrap_or(0);
-    let offset = selected.saturating_sub(available - 1);
-    for index in indices.into_iter().skip(offset) {
-        if lines.len() >= height {
-            break;
-        }
+    let mut fields = Vec::new();
+    let mut selected_end = 0;
+    for index in indices {
         let selected = index == form.selected;
         let text = if index == form.fields.len() {
-            if form.setting.is_some() {
+            if form.network == Some(super::network::Editor::Export) {
+                "导出 JSON →"
+            } else if form.network.is_some() {
+                "应用参数 →"
+            } else if form.setting.is_some() {
                 "保存设置 →"
             } else {
                 "检查并执行 →"
             }
             .into()
         } else {
+            let mut value = form.visible_value(index);
+            if selected && form.editing && value.chars().count() > 1024 {
+                value = format!(
+                    "…{}",
+                    value
+                        .chars()
+                        .skip(value.chars().count() - 1024)
+                        .collect::<String>()
+                );
+            }
             format!(
                 "{}：{}{}",
                 form.fields[index].label,
-                form.visible_value(index),
+                value,
                 if form.editing && selected {
                     " ▏"
                 } else if !form.fields[index].choices.is_empty() {
@@ -159,24 +191,33 @@ pub(super) fn editor(state: &State, height: usize) -> Vec<(String, Tone)> {
                 }
             )
         };
-        lines.push((
-            format!("{} {text}", if selected { "›" } else { " " }),
-            if selected {
-                Tone::Selected
-            } else {
-                Tone::Plain
-            },
-        ));
-    }
-    lines.push((
-        if form.editing {
-            "输入中 · Ctrl+U 清空 · Enter 保留草稿 · Esc 撤销本项"
-        } else {
-            "↑↓ 选项 · Enter 编辑/执行 · Esc 返回 · 所有写操作由后台最终校验"
+        fields.extend(
+            super::render::wrap(
+                &format!("{} {text}", if selected { "›" } else { " " }),
+                width,
+            )
+            .into_iter()
+            .map(|line| {
+                (
+                    line,
+                    if selected {
+                        Tone::Selected
+                    } else {
+                        Tone::Plain
+                    },
+                )
+            }),
+        );
+        if selected {
+            selected_end = fields.len();
         }
-        .into(),
-        Tone::Muted,
-    ));
+    }
+    lines.extend(
+        fields
+            .into_iter()
+            .skip(selected_end.saturating_sub(available))
+            .take(available),
+    );
     lines
 }
 

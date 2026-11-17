@@ -2,6 +2,7 @@ mod catalog;
 mod form;
 mod input;
 mod model;
+mod network;
 mod panels;
 mod render;
 mod settings;
@@ -24,6 +25,7 @@ enum Reply {
     Snapshot(Option<Box<Poll>>, Option<catalog::Shortcuts>),
     Saved(Box<Poll>, Option<catalog::Shortcuts>),
     Network(Box<Result<clash_client_core::network_tools::Report, String>>),
+    Exported(Result<String, String>),
 }
 
 struct Request(JoinHandle<Result<Reply>>);
@@ -161,6 +163,13 @@ pub async fn run(args: &Args) -> Result<()> {
     loop {
         let size = terminal.as_ref().unwrap().size()?;
         if size != previous_size {
+            if state.page == Page::Network && previous_size != (0, 0) {
+                network::resize(
+                    &mut state,
+                    render::content_width(previous_size.0, previous_size.1),
+                    render::content_width(size.0, size.1),
+                );
+            }
             previous_size = size;
             dirty = true;
         }
@@ -175,9 +184,10 @@ pub async fn run(args: &Args) -> Result<()> {
             if request.is_some()
                 && state.saving
                 && !(state.page == Page::Network
+                    && state.form.is_none()
                     && matches!(
                         key,
-                        Key::Tab | Key::Escape | Key::Char('1'..='8' | '[' | ']')
+                        Key::Tab | Key::Escape | Key::Char('1'..='8' | '[' | ']' | 'o')
                     ))
             {
                 continue;
@@ -186,7 +196,32 @@ pub async fn run(args: &Args) -> Result<()> {
             match state.key(key) {
                 Action::None => {}
                 Action::ReviewForm => {
-                    if let Some(form) = &state.form {
+                    if state.form.as_ref().and_then(|form| form.network)
+                        == Some(network::Editor::Export)
+                    {
+                        match network::prepare_export(&state) {
+                            Ok(export) => {
+                                state.saving = true;
+                                state.message = None;
+                                request = Some(Request(tokio::spawn(async move {
+                                    Ok(Reply::Exported(
+                                        tokio::task::spawn_blocking(move || export.save())
+                                            .await?
+                                            .map_err(|error| format!("{error:#}")),
+                                    ))
+                                })));
+                            }
+                            Err(error) => state.message = Some(format!("{error:#}")),
+                        }
+                    } else if state
+                        .form
+                        .as_ref()
+                        .is_some_and(|form| form.network.is_some())
+                    {
+                        if let Err(error) = network::apply(&mut state) {
+                            state.message = Some(format!("{error:#}"));
+                        }
+                    } else if let Some(form) = &state.form {
                         match form.args(args) {
                             Ok(operation) => {
                                 state.execution = Some(operation);
@@ -244,6 +279,9 @@ pub async fn run(args: &Args) -> Result<()> {
                         state.detail_offset.min(limit).saturating_sub(1)
                     };
                 }
+                Action::ScrollNetwork(down) => {
+                    network::scroll(&mut state, render::content_width(size.0, size.1), down);
+                }
                 Action::Refresh => last_refresh -= Duration::from_secs(5),
                 Action::Select(target) => {
                     let args = args.clone();
@@ -267,16 +305,13 @@ pub async fn run(args: &Args) -> Result<()> {
                     request = None;
                     state.saving = false;
                 }
-                Action::CheckNetwork(tool, target) => {
+                Action::CheckNetwork(tool, target, options) => {
                     let args = args.clone();
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
                         Ok(Reply::Network(Box::new(
                             crate::commands::inspection::network_tool(
-                                &args,
-                                tool,
-                                &target,
-                                clash_client_core::network_tools::Options::default(),
+                                &args, tool, &target, options,
                             )
                             .await
                             .map_err(|error| format!("{error:#}")),
@@ -314,12 +349,25 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.execution = None;
                     state.message = message;
                 }
-                Ok(Ok(Reply::Network(result))) => {
-                    state.network_results = match *result {
-                        Ok(report) => report.lines(),
-                        Err(error) => vec![format!("检查失败 · {error}")],
-                    };
-                }
+                Ok(Ok(Reply::Network(result))) => match *result {
+                    Ok(report) => {
+                        state.network_results = report.lines();
+                        state.network_report = Some(report);
+                    }
+                    Err(error) => {
+                        state.network_results = vec![format!("检查失败 · {error}")];
+                        state.network_report = None;
+                    }
+                },
+                Ok(Ok(Reply::Exported(result))) => match result {
+                    Ok(path) => {
+                        state.form = None;
+                        state.message = Some(format!("已导出：{path}"));
+                    }
+                    Err(error) => {
+                        state.message = Some(format!("导出失败，路径和报告保留：{error}"));
+                    }
+                },
                 Ok(Err(error)) => {
                     if state.saving
                         && state

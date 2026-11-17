@@ -34,7 +34,8 @@ fn network_report_is_replaced_and_late_results_cannot_reappear_after_navigation(
     app.probing = true;
     let generation = app.network_test_generation;
     let _ = app.update(Message::ProbeDone(generation, Ok(report())));
-    assert_eq!(app.test_results.len(), 8);
+    assert_eq!(app.test_results.len(), 9);
+    assert_eq!(app.test_results[0], "检查状态 · 完成 · 1 ms");
     assert!(!app.test_results.iter().any(|line| line.contains("旧记录")));
     let _ = app.update(Message::Navigate(Page::Home));
     assert!(app.test_results.is_empty());

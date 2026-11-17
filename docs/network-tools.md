@@ -39,14 +39,14 @@
 
 ## 参数与边界
 
-默认 5 次、间隔 1000 毫秒、单次时限 10 秒、下载上限 8 MiB、最大 8 跳。GUI 显示对应工具的参数，切换工具恢复默认值；CLI 接受下列对应选项。TUI 使用默认值，按 `[` / `]` 切换工具，`Esc` 取消；自定义参数使用 CLI。
+默认 5 次、间隔 1000 毫秒、单次时限 10 秒、下载上限 8 MiB、最大 8 跳。GUI 显示对应工具的参数，切换工具恢复默认值；CLI 接受下列对应选项。TUI 按 `[` / `]` 切换工具，`o` 直接编辑当前工具的目标和适用参数；DNS 类型与 HTTP 方法用左右键选择，数值按 Enter 编辑，向下选择「应用参数」。参数仅本页生效，切页或切换工具恢复默认，不写入设置或启动新后台；Esc 丢弃未应用的草稿，检查期间 Esc 取消请求。结果随宽度折行，用上下键逐显示行滚动，缩放时保留当前结果附近的位置。
 
 | 选项 | 有效范围 | 使用工具 |
 | --- | --- | --- |
 | `--count` | 1～20 | 稳定性、Ping |
 | `--interval-ms` | 100～5000 | 稳定性 |
-| `--seconds` | 1～30 | 耗时、地址族、TLS、稳定性、UDP、下载 |
-| `--max-bytes` | 1024～16777216 | 下载；GUI 以整数 MiB 输入 |
+| `--seconds` | 1～30 | 耗时、地址族、TLS、稳定性、UDP、下载、TCP、HTTP |
+| `--max-bytes` | 1024～16777216 | 下载；GUI 以整数 MiB、TUI 以整数 KiB 输入 |
 | `--max-hops` | 1～16 | 追踪 |
 | `--type` | ADDR、A、AAAA、CNAME、MX、TXT、NS、SOA、PTR、CAA | DNS；默认 ADDR（系统 A/AAAA 与内核真实地址对照） |
 | `--method` | HEAD、GET、OPTIONS | HTTP 检查；默认 HEAD |
@@ -63,6 +63,6 @@ HTTP 403、500 属于收到响应，稳定性按传输失败与 HTTP 状态分�
 
 Claude 保护开启或状态未知时，不查询系统 DNS，不发送 UDP、ICMP 或逐跳探针；这些工具返回不可用原因。用户关闭 UDP 时不发送 UDP 探针。其他工具仍经本机代理和现有规则，不借诊断绕过保护。
 
-新增工具的 JSON 包含 `schema`、`tool`、脱敏源站 `target`、`elapsed_ms`、`status` 和逐项 `entries`，每项含 `label`、`detail`、`success`、`code`。`success=null` 表示未确认或说明；`complete`、`partial`、`failed`、`unavailable` 不能互相替代。系统输出及正常达到流量/时限上限属于说明，不单独把成功检查降为部分完成；未捕获实际线路仍明确标为未确认。CLI 对 `failed/unavailable` 返回非零退出码，仍先输出报告；原有 `network check` 保留原 JSON 结构。
+新增工具的 JSON 包含 `schema`、`tool`、脱敏源站 `target`、`elapsed_ms`、`status` 和逐项 `entries`，每项含 `label`、`detail`、`success`、`code`。`success=null` 表示未确认或说明；`complete`、`partial`、`failed`、`unavailable` 不能互相替代。GUI、Android 和 TUI 的共享文本报告在首行显示本次检查状态及总耗时；“完成”表示测量完成，HTTP 503 等仍按证据说明服务状态，不等同服务正常。系统输出及正常达到流量/时限上限属于说明，不单独把成功检查降为部分完成；未捕获实际线路仍明确标为未确认。CLI 对 `failed/unavailable` 返回非零退出码，仍先输出报告；原有 `network check` 保留原 JSON 结构。
 
-GUI 诊断携带当前工具、结果和错误码；CLI 用 `--json` 或 `--output FILE` 保存。切页后当前结果被清除，需要时应先导出。错误码定义见[诊断说明](diagnostics.md#网络工具)。
+GUI 诊断携带当前工具、结果和错误码；CLI 用 `--json` 或 `--output FILE` 保存。TUI 按 `e` 填写 JSON 路径，将本次原报告脱敏后原子写入，不重新执行检查；失败保留路径和报告，演示模式不写文件。切页后当前结果被清除，需要时应先导出。错误码定义见[诊断说明](diagnostics.md#网络工具)。

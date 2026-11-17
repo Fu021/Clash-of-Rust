@@ -201,7 +201,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     let footer_height = footer.len();
     let body_height = height.saturating_sub(lines.len() + footer_height);
     let body = if state.form.is_some() {
-        super::panels::editor(state, body_height)
+        super::panels::editor(state, content_width(columns, rows), body_height)
     } else if state.searching && body_height <= 2 {
         vec![(format!("输入中：{} ▏", state.query), Tone::Selected)]
     } else if state.connection.is_some() {
@@ -211,7 +211,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Page::Home => home(state),
             Page::Nodes => nodes(state, width.saturating_sub(6), body_height, spacious),
             Page::Connections => connections(state, width.saturating_sub(6), body_height),
-            Page::Network => network(state, body_height),
+            Page::Network => network(state, content_width(columns, rows), body_height),
             Page::Settings => super::panels::settings(state, width.saturating_sub(6), body_height),
             Page::Tools => super::panels::tools(state, width.saturating_sub(6), body_height),
             Page::Profiles => super::catalog::profiles(state, width.saturating_sub(6), body_height),
@@ -246,7 +246,7 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
         return notice(state);
     }
     let content = if state.form.is_some() {
-        super::panels::editor(state, 1)
+        super::panels::editor(state, width, 1)
     } else if state.searching {
         vec![(format!("输入中：{} ▏", state.query), Tone::Selected)]
     } else if state.connection.is_some() {
@@ -261,10 +261,9 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
             Page::Profiles => super::catalog::profiles(state, width, 1),
             Page::Rules => super::catalog::rules(state, width, 1),
             Page::Network => vec![(
-                state
-                    .network_results
+                super::network::rows(state, width)
                     .get(state.selected)
-                    .cloned()
+                    .map(|row| row.text.clone())
                     .unwrap_or_else(|| {
                         format!(
                             "{} · {}",
@@ -330,7 +329,11 @@ fn notice(state: &State) -> (String, Tone) {
         )
     } else if state.saving {
         (
-            if state.page == Page::Network {
+            if state.form.as_ref().and_then(|form| form.network)
+                == Some(super::network::Editor::Export)
+            {
+                "正在导出本次结果…"
+            } else if state.page == Page::Network {
                 "正在检查… Esc 取消"
             } else {
                 "正在保存操作…"
@@ -348,7 +351,7 @@ fn notice(state: &State) -> (String, Tone) {
     }
 }
 
-fn network(state: &State, height: usize) -> Vec<(String, Tone)> {
+fn network(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let tool = clash_client_core::network_tools::Tool::ALL[state.network_tool];
     let mut lines = vec![(
         format!(
@@ -374,19 +377,28 @@ fn network(state: &State, height: usize) -> Vec<(String, Tone)> {
         ));
     }
     lines.extend([
+        (
+            format!(
+                "参数：{}",
+                super::network::summary(tool, &state.network_options)
+            ),
+            Tone::Muted,
+        ),
         (tool.hint().into(), Tone::Muted),
         (String::new(), Tone::Plain),
     ]);
+    let mut lines = lines
+        .into_iter()
+        .flat_map(|(text, tone)| wrap(&text, width).into_iter().map(move |line| (line, tone)))
+        .collect::<Vec<_>>();
     if !state.network_results.is_empty() {
-        lines.truncate(height.saturating_sub(1));
+        lines.truncate(height / 2);
     }
     lines.extend(
-        state
-            .network_results
-            .iter()
+        super::network::rows(state, width)
+            .into_iter()
             .skip(state.selected)
-            .cloned()
-            .map(|line| (line, Tone::Plain)),
+            .map(|row| (row.text, Tone::Plain)),
     );
     lines
 }

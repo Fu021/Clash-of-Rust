@@ -16,9 +16,7 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
         redact(value)
     };
     if let Some(path) = args.get("output") {
-        let bytes =
-            serde_json::to_vec_pretty(&json!({"schema":1,"command":args.path,"data":value}))?;
-        clash_client_core::config::atomic_write(&crate::backend::absolute(path)?, &bytes)?;
+        save(&crate::backend::absolute(path)?, &args.path, &value)?;
         if !args.flag("quiet") {
             eprintln!("已保存：{path}");
         }
@@ -32,6 +30,11 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
         crate::diagnostics::failure_hint(Some(args));
     }
     Ok(())
+}
+
+pub(crate) fn save(path: &std::path::Path, command: &str, value: &Value) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(&json!({"schema":1,"command":command,"data":value}))?;
+    clash_client_core::config::atomic_write(path, &bytes)
 }
 
 fn needs_failure_hint(args: &Args, value: &Value) -> bool {

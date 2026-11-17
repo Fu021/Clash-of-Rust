@@ -228,8 +228,36 @@ def verify(console, resources, report):
             terminal.capture(report, 'network')
             terminal.send(b']')
             terminal.wait('DNS 查询')
+            terminal.send(b'o')
+            terminal.wait('DNS 查询 · 参数')
+            terminal.send(b'\x1b[B\x1b[C')
+            terminal.wait('记录类型：A')
+            terminal.resize(40, 20)
+            terminal.wait('【网络】', rows=20)
+            terminal.wait('记录类型：A', rows=20)
+            terminal.capture(report, 'network-parameters-40x20')
+            terminal.resize(100, 30)
+            terminal.wait('CLASH OF RUST')
+            terminal.send(b'\x1b[B\r')
+            terminal.wait('参数：记录 A')
+            terminal.send(b'o')
+            terminal.wait('记录类型：A')
+            terminal.send(b'\x1b[B\x1b[C\x1b')
+            terminal.wait('参数：记录 A')
             terminal.send(b'[')
             terminal.wait('网站检查')
+            terminal.send(b'o')
+            terminal.wait('网站检查 · 参数')
+            terminal.send(b'\x1b[B\r\r')
+            terminal.wait('实际线路')
+            for columns, rows in ((36, 16), (40, 20), (55, 16), (80, 24)):
+                terminal.resize(columns, rows)
+                terminal.wait('网络', rows=rows)
+                for _ in range(64):
+                    terminal.send(b'\x1b[B')
+                    terminal.pump(.01)
+                terminal.wait(r'\)(?:\s|$)', rows=rows, regex=True)
+                terminal.capture(report, f'network-{columns}x{rows}')
             terminal.send(b'\x1b')
             terminal.send(b'3')
             terminal.wait('活跃连接')
@@ -252,6 +280,10 @@ def verify(console, resources, report):
             terminal.capture(report, 'compact')
         if data.exists():
             raise RuntimeError('Demonstration mode wrote data or started a backend')
+        from cli_tui_preview import verify_desktop
+        verify_desktop(console, command, report)
+        if data.exists():
+            raise RuntimeError('Desktop demonstration gallery created backend data')
         terminal = Session([*command, '--demo'])
         terminal.wait('参考线路')
         terminal.close(b'\x03')
@@ -261,7 +293,9 @@ def verify(console, resources, report):
         'checks': ['no-tty-rejected', 'read-only-no-backend', 'search-and-confirmation',
                    'literal-q-search', 'connection-details', 'settings-edit-and-cancel',
                    'operation-demo-no-side-effects', 'literal-q-setting',
-                   'network-tools-and-cancel', 'node-sort-cycle', 'phone-footer-wraps-actions',
+                   'network-tools-and-cancel', 'network-inline-parameters',
+                   'network-result-wrap-scroll-and-resize', 'network-export-and-recovery',
+                   'node-sort-cycle', 'phone-footer-wraps-actions',
                    'resize-and-tiny-detail-scroll',
                    'native-setting-save-failure-persistence-and-cross-client-refresh',
                    'profile-list-selection-and-included-shortcut-state',
@@ -328,6 +362,7 @@ def verify_settings(console, resources, report):
                 terminal.wait('名称排序')
                 call('config', 'set', 'tui_node_sort', 'latency_ascending')
                 terminal.wait('延迟从低到高')
+            verify_network_export(command, data, report)
             verify_profile_catalog(call, command, data, report)
             if json.loads((data/'control.json').read_text())['pid'] != owner:
                 raise RuntimeError('Opening or closing TUI replaced the existing owner')
@@ -339,6 +374,39 @@ def verify_settings(console, resources, report):
             raise
         else:
             call('stop')
+
+
+def verify_network_export(command, data, report):
+    from cli_tui_preview import Gallery
+    gallery = Gallery(report)
+    path = data/'network.json'
+    with Session([*command, 'ui'], columns=120, rows=40) as terminal:
+        terminal.wait('内核未运行')
+        terminal.send(b'4[')
+        terminal.wait('HTTP 检查')
+        terminal.send(b'/http://127.0.0.1:9/private?token=hidden\r\r')
+        terminal.wait('检查状态 · 失败')
+        gallery.capture(terminal, '网络', 'HTTP · 实际失败报告和总耗时', demo=False)
+        terminal.send(b'e')
+        terminal.wait('网络 · 导出本次结果')
+        gallery.capture(terminal, '网络', '导出本次报告 · 路径和导出入口', demo=False)
+        terminal.send(b'\r\x15'+str(data).encode()+b'\r\x1b[B\r')
+        terminal.wait('导出失败，路径和报告保留')
+        terminal.capture(report, 'network-export-rejected')
+        gallery.capture(terminal, '网络', '导出失败 · 保留路径和原报告', demo=False)
+        terminal.send(b'\x1b[A\r\x15'+str(path).encode()+b'\r\x1b[B\r')
+        terminal.wait('已导出：')
+        terminal.capture(report, 'network-exported')
+        gallery.capture(terminal, '网络', '修正路径 · 导出成功', demo=False)
+        saved = path.read_text()
+        payload = json.loads(saved)
+        result = payload['data']
+        if (payload['command'] != 'network http' or result['status'] != 'failed'
+                or not result['entries'] or 'elapsed_ms' not in result):
+            raise RuntimeError('TUI export lost the original failed measurement')
+        if '/private' in saved or 'token=' in saved or 'hidden' in saved:
+            raise RuntimeError('TUI export included private URL components')
+    gallery.render()
 
 
 def verify_profile_catalog(call, command, data, report):
@@ -354,6 +422,8 @@ def verify_profile_catalog(call, command, data, report):
     first = next(profile['id'] for profile in profiles if profile['name'] == '含规则线路')
     second = next(profile['id'] for profile in profiles if profile['name'] == '备用线路')
     call('profile', 'use', first)
+    from cli_tui_preview import verify_desktop_catalog
+    verify_desktop_catalog(call, command, report, first, second)
     with Session([*command, 'ui']) as terminal:
         terminal.wait('内核未运行')
         terminal.send(b'8')

@@ -17,6 +17,7 @@ pub(super) struct Form {
     pub editing: bool,
     pub draft: String,
     pub setting: Option<String>,
+    pub network: Option<super::network::Editor>,
 }
 
 pub(super) fn commands() -> impl Iterator<Item = &'static Spec> {
@@ -108,6 +109,7 @@ impl Form {
             editing: false,
             draft: String::new(),
             setting: None,
+            network: None,
         }
     }
 

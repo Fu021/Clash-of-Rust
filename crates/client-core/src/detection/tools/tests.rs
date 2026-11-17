@@ -109,6 +109,62 @@ fn successful_output_and_bounded_completion_do_not_become_partial_reports() {
     }
 }
 
+#[test]
+fn displayed_reports_distinguish_completion_failure_and_missing_evidence() {
+    for (entries, expected, displayed) in [
+        (
+            vec![Entry::ok("HTTP", "HTTP 503；收到响应不代表服务正常")],
+            "complete",
+            "检查状态 · 完成",
+        ),
+        (
+            vec![
+                Entry::ok("系统 DNS", "192.0.2.1"),
+                Entry::error("TLS", "证书过期", "tls_expired"),
+            ],
+            "partial",
+            "检查状态 · 部分完成",
+        ),
+        (
+            vec![Entry::error("代理", "连接被拒绝", "proxy_failed")],
+            "failed",
+            "检查状态 · 失败",
+        ),
+        (
+            vec![Entry::unknown(
+                "路由追踪",
+                "未确认到达目标",
+                "trace_not_reached",
+            )],
+            "unavailable",
+            "检查状态 · 不可用或未确认",
+        ),
+    ] {
+        let mut report = Report {
+            schema: 1,
+            tool: Tool::Http,
+            target: "https://example.test".into(),
+            elapsed_ms: 0,
+            status: "unavailable",
+            entries,
+        };
+        report.finish(Instant::now());
+        assert_eq!(report.status, expected);
+        let lines = report.lines();
+        assert!(lines[0].starts_with(displayed));
+        assert!(lines[0].ends_with(" ms"));
+        assert_eq!(lines[1], "目标 · https://example.test");
+        assert_eq!(
+            &lines[2..],
+            report
+                .entries
+                .iter()
+                .map(|entry| format!("{} · {}", entry.label, entry.detail))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
 #[tokio::test]
 async fn protection_rejects_raw_probes_before_opening_any_socket() {
     for tool in [Tool::Udp, Tool::Ping, Tool::Trace] {

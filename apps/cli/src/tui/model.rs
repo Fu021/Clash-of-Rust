@@ -69,11 +69,16 @@ pub(super) enum Action {
     Refresh,
     Select(Target),
     SetNodeSort(NodeSort),
-    CheckNetwork(clash_client_core::network_tools::Tool, String),
+    CheckNetwork(
+        clash_client_core::network_tools::Tool,
+        String,
+        clash_client_core::network_tools::Options,
+    ),
     CancelNetwork,
     Execute(crate::args::Args),
     ApplySetting(crate::args::Args),
     ScrollDetail(bool),
+    ScrollNetwork(bool),
     ReviewForm,
 }
 
@@ -90,7 +95,9 @@ pub(super) struct State {
     pub saving: bool,
     pub demo: bool,
     pub network_results: Vec<String>,
+    pub network_report: Option<clash_client_core::network_tools::Report>,
     pub network_tool: usize,
+    pub network_options: clash_client_core::network_tools::Options,
     pub form: Option<Form>,
     pub execution: Option<crate::args::Args>,
     pub connection: Option<String>,
@@ -113,7 +120,9 @@ impl State {
             saving: false,
             demo,
             network_results: Vec::new(),
+            network_report: None,
             network_tool: 0,
+            network_options: Default::default(),
             form: None,
             execution: None,
             connection: None,
@@ -133,11 +142,13 @@ impl State {
         self.error = None;
         if changed {
             self.shortcuts = None;
-            let preserve_form = self
-                .form
-                .as_ref()
-                .and_then(|form| form.setting.as_deref())
-                .is_some_and(|key| !key.starts_with("shortcut_"));
+            let preserve_form = self.form.as_ref().is_some_and(|form| {
+                form.network.is_some()
+                    || form
+                        .setting
+                        .as_deref()
+                        .is_some_and(|key| !key.starts_with("shortcut_"))
+            });
             if !preserve_form && (self.form.is_some() || self.confirmation.is_some()) {
                 self.message = Some("后台或当前订阅已变化，已取消旧表单，请重新选择".into());
             }
@@ -195,6 +206,8 @@ impl State {
         self.confirmation = None;
         self.message = None;
         self.network_results.clear();
+        self.network_report = None;
+        self.network_options = Default::default();
         self.form = None;
         self.execution = None;
         self.connection = None;
@@ -447,6 +460,25 @@ impl State {
             }
         }
         match key {
+            Key::Char('e') if self.page == Page::Network => {
+                if self.demo {
+                    self.message = Some("演示模式：未导出文件".into());
+                } else if self.network_report.is_some() {
+                    self.message = None;
+                    self.form = Some(super::network::export_editor());
+                } else {
+                    self.message = Some("请先完成一次检查，再导出本次结果".into());
+                }
+            }
+            Key::Char('o') if self.page == Page::Network => {
+                self.message = None;
+                self.form = Some(super::network::editor(
+                    clash_client_core::network_tools::Tool::ALL[self.network_tool],
+                    &self.query,
+                    &self.network_options,
+                ));
+                return Action::CancelNetwork;
+            }
             Key::Char('s') if self.page == Page::Nodes => {
                 let Some(poll) = &self.poll else {
                     self.message = Some("后台未运行，无法保存节点排序".into());
@@ -477,11 +509,16 @@ impl State {
                 };
                 self.selected = 0;
                 self.network_results.clear();
+                self.network_report = None;
+                self.network_options = Default::default();
+                self.message = None;
                 return Action::CancelNetwork;
             }
             Key::Escape if self.page == Page::Network => {
                 self.network_results.clear();
+                self.network_report = None;
                 self.selected = 0;
+                self.message = None;
                 return Action::CancelNetwork;
             }
             Key::Tab => {
@@ -508,17 +545,16 @@ impl State {
                 if self.page == Page::Network {
                     self.query.clear();
                     self.network_results.clear();
+                    self.network_report = None;
                 }
                 self.searching = true;
             }
             Key::Char('r') => return Action::Refresh,
+            Key::Up if self.page == Page::Network => return Action::ScrollNetwork(false),
+            Key::Down if self.page == Page::Network => return Action::ScrollNetwork(true),
             Key::Up => self.selected = self.selected.saturating_sub(1),
             Key::Down => {
-                let count = if self.page == Page::Network {
-                    self.network_results.len()
-                } else {
-                    self.items().len()
-                };
+                let count = self.items().len();
                 self.selected = (self.selected + 1).min(count.saturating_sub(1));
             }
             Key::Back | Key::Escape => {
@@ -550,6 +586,8 @@ impl State {
                 }
                 self.selected = 0;
                 self.network_results.clear();
+                self.network_report = None;
+                self.message = None;
                 if self.demo {
                     if self.network_tool != 0 {
                         let tool = clash_client_core::network_tools::Tool::ALL[self.network_tool];
@@ -575,6 +613,7 @@ impl State {
                     return Action::CheckNetwork(
                         clash_client_core::network_tools::Tool::ALL[self.network_tool],
                         self.query.clone(),
+                        self.network_options.clone(),
                     );
                 }
             }

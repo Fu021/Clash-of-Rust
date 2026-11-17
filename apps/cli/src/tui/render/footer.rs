@@ -24,7 +24,7 @@ fn help(state: &State) -> &'static str {
     } else if state.connection.is_some() {
         "↑↓ 详情 · d 解析 · x 关闭 · Esc 返回 · q 退出"
     } else if state.page == Page::Network {
-        "[ ] 工具 · / 输入 · Enter 检查 · Esc 取消 · q 退出"
+        "[ ] 工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出"
     } else if state.page == Page::Nodes {
         "↑↓ 选择 · Enter 打开 · s 排序 · / 搜索 · Esc 返回 · q 退出"
     } else {

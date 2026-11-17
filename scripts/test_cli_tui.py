@@ -9,12 +9,45 @@ import unittest
 from unittest.mock import patch
 
 import cli_tui
+import cli_tui_preview
 import ci_test_policy
 
 
 class CliTuiTests(unittest.TestCase):
+    def test_desktop_catalog_uses_actual_help_and_omits_retired_or_recursive_entries(self):
+        help_text = ('命令：\n  ui                        打开终端界面\n'
+                     '  run                       前台运行\n'
+                     '  profile import            从文件导入\n'
+                     '  network config-diff       已移除；请用 config get\n'
+                     '  network http              读取响应\n'
+                     '  --timeout N               通用选项\n')
+        with patch.object(cli_tui_preview.subprocess, 'run') as run:
+            run.return_value.stdout = help_text
+            self.assertEqual(cli_tui_preview.command_catalog('cor'),
+                             [('profile import', '从文件导入'), ('network http', '读取响应')])
+            self.assertEqual(run.call_args.args[0], ['cor', 'help', 'all'])
+
+    def test_desktop_preview_escapes_terminal_text_and_identifies_the_frame_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            gallery = cli_tui_preview.Gallery(temporary)
+            terminal = cli_tui.Session.__new__(cli_tui.Session)
+            terminal.screen = {0: '<script>bad()</script>', 1: 'q 退出'}
+            terminal.styles = {0: 'warning', 1: 'muted'}
+            with patch.object(cli_tui_preview, 'settle'):
+                gallery.capture(terminal, '首页', '实际 <终端>', size=(100, 2))
+            gallery.render()
+            document = (gallery.directory/'index.html').read_text()
+            self.assertNotIn('<script>bad()', document)
+            self.assertIn('&lt;script&gt;bad()', document)
+            self.assertIn('实际 &lt;终端&gt;', document)
+            self.assertEqual(json.loads(gallery.path.read_text())['frames'][0]['rows'], 2)
+            frame = gallery.directory/gallery.frames[0]['file']
+            frame.write_text(json.dumps({'source': 'synthetic', 'lines': []}))
+            with self.assertRaisesRegex(RuntimeError, 'synthetic'):
+                gallery.render()
+
     def test_terminal_driver_changes_select_the_actual_cli_and_tui_checks(self):
-        for path in ('scripts/cli_tui.py', 'scripts/test_cli_tui.py'):
+        for path in ('scripts/cli_tui.py', 'scripts/cli_tui_preview.py', 'scripts/test_cli_tui.py'):
             with self.subTest(path=path):
                 plan = ci_test_policy.select([path])
                 self.assertTrue(plan['linux_user_tests'])

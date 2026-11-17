@@ -233,6 +233,33 @@ fn settings_and_operations_follow_the_shared_command_catalogue() {
 }
 
 #[test]
+fn desktop_operation_rows_keep_the_complete_command_name_visible() {
+    let mut state = State::new(true);
+    state.page = Page::Tools;
+    for spec in form::commands() {
+        state.query = spec.path.into();
+        state.selected = state
+            .items()
+            .iter()
+            .position(|path| *path == spec.path)
+            .unwrap();
+        for (columns, rows) in [(80, 24), (100, 30), (120, 40)] {
+            let frame = render::frame(&state, columns, rows);
+            let selected = frame
+                .iter()
+                .find(|line| line.tone == render::Tone::Selected)
+                .unwrap();
+            assert!(
+                selected.text.trim_end().ends_with(spec.path),
+                "{} at {columns}×{rows}: {}",
+                spec.path,
+                selected.text
+            );
+        }
+    }
+}
+
+#[test]
 fn form_values_preserve_unicode_literals_and_original_account_without_shell_parsing() {
     let spec = form::commands()
         .find(|spec| spec.path == "node select")

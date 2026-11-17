@@ -272,13 +272,27 @@ pub struct Report {
 
 impl Report {
     pub fn lines(&self) -> Vec<String> {
-        std::iter::once(format!("目标 · {}", self.target))
-            .chain(
-                self.entries
-                    .iter()
-                    .map(|entry| format!("{} · {}", entry.label, entry.detail)),
-            )
-            .collect()
+        [
+            format!(
+                "检查状态 · {} · {} ms",
+                match self.status {
+                    "complete" => "完成",
+                    "partial" => "部分完成",
+                    "failed" => "失败",
+                    "unavailable" => "不可用或未确认",
+                    _ => "未知",
+                },
+                self.elapsed_ms
+            ),
+            format!("目标 · {}", self.target),
+        ]
+        .into_iter()
+        .chain(
+            self.entries
+                .iter()
+                .map(|entry| format!("{} · {}", entry.label, entry.detail)),
+        )
+        .collect()
     }
 
     fn finish(&mut self, start: Instant) {

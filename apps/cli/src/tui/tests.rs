@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 #[path = "feature_tests.rs"]
 mod features;
+#[path = "network_tests.rs"]
+mod network_features;
 #[path = "settings_tests.rs"]
 mod settings_features;
 
@@ -200,7 +202,8 @@ fn network_check_in_demo_does_not_query_the_backend_and_clears_on_navigation() {
             .iter()
             .any(|line| line.contains("实际线路"))
     );
-    state.key(Key::Down);
+    assert!(matches!(state.key(Key::Down), Action::ScrollNetwork(true)));
+    super::network::scroll(&mut state, 40, true);
     assert_eq!(state.selected, 1);
     state.key(Key::Enter);
     assert_eq!(state.network_results.len(), 8);
@@ -227,8 +230,8 @@ fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
     state.key(Key::Paste("example.test/a[1]".into()));
     state.key(Key::Enter);
     assert!(matches!(state.key(Key::Enter), Action::CheckNetwork(
-        clash_client_core::network_tools::Tool::Website, target
-    ) if target == "example.test/a[1]"));
+        clash_client_core::network_tools::Tool::Website, target, options
+    ) if target == "example.test/a[1]" && options.seconds == 10));
     assert!(matches!(state.key(Key::Escape), Action::CancelNetwork));
 }
 
@@ -242,10 +245,13 @@ fn network_tools_require_a_target_and_leave_no_page_history() {
         state.query.clear();
         state.network_tool = tool.index() as usize;
         assert!(tool.needs_target());
-        assert!(!matches!(state.key(Key::Enter), Action::CheckNetwork(_, _)));
+        assert!(!matches!(
+            state.key(Key::Enter),
+            Action::CheckNetwork(_, _, _)
+        ));
         state.query = "example.test".into();
         assert!(
-            matches!(state.key(Key::Enter), Action::CheckNetwork(selected, _) if selected == tool)
+            matches!(state.key(Key::Enter), Action::CheckNetwork(selected, _, _) if selected == tool)
         );
         state.network_results = vec!["本次结果".into()];
         state.key(Key::Char('1'));
