@@ -26,9 +26,9 @@ impl Updates {
 }
 
 pub(super) fn items(state: &State) -> Vec<&'static str> {
-    if state.poll.is_none() {
+    let Some(poll) = &state.poll else {
         return vec!["core"];
-    }
+    };
     let mut items = vec![
         "core",
         "proxy_mode",
@@ -41,6 +41,8 @@ pub(super) fn items(state: &State) -> Vec<&'static str> {
         .updates
         .available()
         .is_some_and(|update| update.package.is_some())
+        && state.error.is_none()
+        && poll.meta.settings.claude_protection.is_none()
     {
         items.push("update_install");
     }
@@ -202,12 +204,18 @@ pub(super) fn open(state: &mut State) -> Action {
             state.message = Some("演示模式：未发起更新检查".into());
             return Action::None;
         }
-        return Action::CheckUpdate;
+        return if state.updates.checking {
+            Action::None
+        } else {
+            Action::CheckUpdate
+        };
     }
     if key == "update_install" {
+        if state.updates.checking {
+            return Action::None;
+        }
         let result = (|| {
             mutable(state)?;
-            ensure!(!state.updates.checking, "请等本次更新检查结束后再安装");
             let available = state.updates.available().context("请先检查更新")?;
             ensure!(available.package.is_some(), "当前平台没有可自动安装的包");
             Ok::<_, anyhow::Error>(available.clone())
@@ -350,9 +358,15 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
                 }
             }
             "update_check" => format!("检查更新 · {}", update_status(state)),
-            "update_install" => {
-                format!("安装更新 · {}", state.updates.available().unwrap().version)
-            }
+            "update_install" => format!(
+                "安装更新 · {}{}",
+                state.updates.available().unwrap().version,
+                if state.updates.checking {
+                    "（检查中，暂不可安装）"
+                } else {
+                    ""
+                }
+            ),
             key => format!(
                 "{} · {}",
                 settings::title(key),

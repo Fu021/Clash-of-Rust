@@ -308,6 +308,29 @@ fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection
 }
 
 #[test]
+fn disconnected_lists_keep_a_visible_route_to_home_without_starting_the_backend() {
+    for page in [Page::Nodes, Page::Connections] {
+        let mut state = State::new(false);
+        state.page = page;
+        for (columns, rows) in [(40, 24), (60, 24), (120, 40)] {
+            let text = render::frame(&state, columns, rows)
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("尚未连接后台"), "{columns}×{rows}: {text}");
+            assert!(text.contains("按 1 回首页"), "{columns}×{rows}: {text}");
+        }
+        state.key(Key::Char('1'));
+        assert!(state.page == Page::Home);
+        assert_eq!(state.items(), ["core"]);
+        state.key(Key::Enter);
+        assert_eq!(state.form.as_ref().unwrap().spec.path, "start");
+        assert!(state.poll.is_none());
+    }
+}
+
+#[test]
 fn home_footer_lists_available_actions_and_keeps_tiny_terminals_usable() {
     let state = State::new(true);
     for (columns, rows) in [(120, 40), (100, 30), (40, 20), (32, 8)] {

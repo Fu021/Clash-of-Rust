@@ -411,14 +411,18 @@ fn network(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     lines
 }
 
+fn disconnected(width: usize, height: usize) -> Vec<(String, Tone)> {
+    wrap("尚未连接后台；按 1 回首页启动后台与内核。", width)
+        .into_iter()
+        .take(height)
+        .map(|text| (text, Tone::Warning))
+        .collect()
+}
+
 fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(String, Tone)> {
     let items = state.items();
     let Some(poll) = &state.poll else {
-        return wrap("尚未连接后台；按 1 回首页启动后台与内核。", width)
-            .into_iter()
-            .take(height)
-            .map(|text| (text, Tone::Warning))
-            .collect();
+        return disconnected(width, height);
     };
     let proxies = &poll.snapshot.proxies.proxies;
     let mut rows = vec![
@@ -525,7 +529,7 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
 
 fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let Some(poll) = &state.poll else {
-        return home(state);
+        return disconnected(width, height);
     };
     let items = state.items();
     let mut rows = vec![

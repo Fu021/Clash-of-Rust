@@ -116,6 +116,25 @@ fn update_installation_is_cancellable_and_keeps_the_displayed_selection() {
 }
 
 #[test]
+fn repeated_checks_keep_one_request_and_only_enable_installation_after_completion() {
+    let mut state = state();
+    home::accept(&mut state, Ok(Some(available(true))));
+    home::begin_check(&mut state, Instant::now()).unwrap();
+    select(&mut state, "update_check");
+    assert!(matches!(state.key(Key::Enter), Action::None));
+    assert!(state.message.is_none());
+    select(&mut state, "update_install");
+    assert!(matches!(state.key(Key::Enter), Action::None));
+    assert!(state.updates.pending.is_none());
+    assert!(state.message.is_none());
+    assert!(content(&state, 120, 40).contains("检查中，暂不可安装"));
+    home::accept(&mut state, Ok(Some(available(true))));
+    assert!(!content(&state, 120, 40).contains("检查中"));
+    state.key(Key::Enter);
+    assert!(state.updates.pending.is_some());
+}
+
+#[test]
 fn update_checking_obeys_schedule_and_does_not_duplicate_the_gui_owner() {
     let mut state = state();
     let now = Instant::now();
@@ -184,6 +203,7 @@ fn channel_changes_and_owner_loss_cancel_old_update_requests_and_confirmations()
 fn protection_blocks_home_mutations_and_updates_but_keeps_the_unlock_entry() {
     use clash_client_core::claude_check::protection::{Previous, Protection};
     let mut state = state();
+    home::accept(&mut state, Ok(Some(available(true))));
     home::begin_check(&mut state, Instant::now()).unwrap();
     state.poll.as_mut().unwrap().meta.settings.claude_protection =
         Some(std::sync::Arc::new(Protection::new(
@@ -197,6 +217,7 @@ fn protection_blocks_home_mutations_and_updates_but_keeps_the_unlock_entry() {
         )));
     assert!(home::sync(&mut state));
     assert!(!state.updates.checking);
+    assert!(!home::items(&state).contains(&"update_install"));
     assert!(home::begin_check(&mut state, Instant::now()).is_err());
     for key in ["core", "run_mode", "proxy_mode", "active_profile"] {
         select(&mut state, key);
@@ -207,6 +228,8 @@ fn protection_blocks_home_mutations_and_updates_but_keeps_the_unlock_entry() {
     select(&mut state, "claude_protection");
     state.key(Key::Enter);
     assert_eq!(state.form.as_ref().unwrap().spec.path, "claude protect");
+    state.poll.as_mut().unwrap().meta.settings.claude_protection = None;
+    assert!(home::items(&state).contains(&"update_install"));
 }
 
 #[test]
