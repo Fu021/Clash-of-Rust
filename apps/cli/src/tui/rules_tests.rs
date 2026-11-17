@@ -58,7 +58,7 @@ fn text(state: &State, columns: usize, rows: usize) -> String {
 fn rule_sources_have_discoverable_actions_and_subscription_rows_only_move() {
     let mut state = browser();
     for columns in [40, 60, 80, 120] {
-        let content = text(&state, columns, 24).replace(' ', "").replace('\n', "");
+        let content = text(&state, columns, 24).replace([' ', '\n'], "");
         for expected in [
             "规则",
             "快捷规则→",

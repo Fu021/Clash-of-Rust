@@ -390,20 +390,12 @@ fn review(state: &mut State, change: RuleChange, description: String) {
 
 pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let Some(browser) = &state.rules else {
-        let message = if state.poll.is_none() {
-            "规则 · 后台未连接，按 r 重试"
-        } else if state
-            .poll
-            .as_ref()
-            .unwrap()
-            .meta
-            .settings
-            .active_profile
-            .is_none()
-        {
-            "规则 · 尚未选择订阅，按 3 打开订阅页"
-        } else {
-            "规则 · 状态尚未读取，按 r 刷新"
+        let message = match &state.poll {
+            None => "规则 · 后台未连接，按 r 重试",
+            Some(poll) if poll.meta.settings.active_profile.is_none() => {
+                "规则 · 尚未选择订阅，按 3 打开订阅页"
+            }
+            Some(_) => "规则 · 状态尚未读取，按 r 刷新",
         };
         let mut lines = wrapped(vec![(message.into(), Tone::Accent)], width);
         if let Some(error) = state
