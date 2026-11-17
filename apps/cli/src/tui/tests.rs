@@ -302,6 +302,23 @@ fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection
 }
 
 #[test]
+fn home_footer_lists_refresh_and_exit_without_unavailable_actions() {
+    let state = State::new(true);
+    for (columns, rows) in [(120, 40), (100, 30), (40, 20), (32, 8)] {
+        let text = render::frame(&state, columns, rows)
+            .iter()
+            .map(|line| line.text.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("r 刷新"), "{columns}×{rows}:\n{text}");
+        assert!(text.contains("q 退出"), "{columns}×{rows}:\n{text}");
+        for action in ["Enter 打开", "/ 搜索", "Esc 返回", "↑↓ 选择"] {
+            assert!(!text.contains(action), "{columns}×{rows}: {action}\n{text}");
+        }
+    }
+}
+
+#[test]
 fn phone_node_footer_wraps_all_actions_without_losing_the_selected_node() {
     let mut state = State::new(true);
     state.page = Page::Nodes;

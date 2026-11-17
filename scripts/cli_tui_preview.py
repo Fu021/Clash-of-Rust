@@ -53,7 +53,15 @@ class Gallery:
                                              frames=self.frames), ensure_ascii=False, indent=2))
 
     def editor(self, terminal, page, title, *, demo=True):
+        actions = ('检查并执行 →', '保存设置 →', '应用参数 →', '导出 JSON →')
         self.capture(terminal, page, title, demo=demo)
+        if any(action in selected(terminal) for action in actions):
+            for _ in range(100):
+                previous = selected(terminal)
+                terminal.send(UP)
+                settle(terminal)
+                if selected(terminal) == previous:
+                    break
         visited = {selected(terminal)}
         for _ in range(100):
             current = selected(terminal)
@@ -70,6 +78,13 @@ class Gallery:
                                  demo=demo)
                 else:
                     raise RuntimeError(f'Desktop candidates did not return to the first value: {title}')
+            elif not any(action in current for action in actions):
+                label = current.removeprefix('› ').split('：', 1)[0]
+                terminal.send(b'\r')
+                terminal.wait('输入中')
+                self.capture(terminal, page, title+' · 输入 · '+label, demo=demo)
+                terminal.send(ESCAPE)
+                settle(terminal)
             previous = selected(terminal)
             terminal.send(DOWN)
             settle(terminal)
@@ -79,14 +94,12 @@ class Gallery:
             if current in visited:
                 raise RuntimeError(f'Desktop editor looped without reaching its action: {title}')
             visited.add(current)
-            if any(action in current for action in ('检查并执行 →', '保存设置 →',
-                                                    '应用参数 →', '导出 JSON →')):
+            if any(action in current for action in actions):
                 self.capture(terminal, page, title+' · 提交入口', demo=demo)
                 return
             if len(visited) % 8 == 0:
                 self.capture(terminal, page, title+' · 后续字段', demo=demo)
-        if not any(action in selected(terminal) for action in
-                   ('检查并执行 →', '保存设置 →', '应用参数 →', '导出 JSON →')):
+        if not any(action in selected(terminal) for action in actions):
             raise RuntimeError(f'Desktop editor did not expose its action: {title}')
 
     def render(self):

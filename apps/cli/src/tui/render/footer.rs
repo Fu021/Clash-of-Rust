@@ -27,6 +27,8 @@ fn help(state: &State) -> &'static str {
         "[ ] 工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出"
     } else if state.page == Page::Nodes {
         "↑↓ 选择 · Enter 打开 · s 排序 · / 搜索 · Esc 返回 · q 退出"
+    } else if state.page == Page::Home {
+        "r 刷新 · q 退出"
     } else {
         "↑↓ 选择 · Enter 打开 · / 搜索 · Esc 返回 · q 退出"
     }
@@ -87,6 +89,8 @@ pub(super) fn lines(
     if height < 10 {
         return vec![if has_notice(state) {
             line(&notice, tone)
+        } else if state.page == Page::Home {
+            line(help(state), Tone::Muted)
         } else if state.entering_text() {
             line("Ctrl+C 退出 · Esc 返回", Tone::Muted)
         } else {
