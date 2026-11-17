@@ -167,6 +167,8 @@ def verify(console, resources, report):
                     raise RuntimeError('Phone footer repeated exit or back actions')
                 if any('…' in line for line in text.splitlines()[-3:]):
                     raise RuntimeError('Phone footer truncated actions instead of wrapping')
+                if columns < 80 and terminal.screen.get(0) != '【节点】':
+                    raise RuntimeError('Phone node page lost its separate title')
                 terminal.capture(report, f'nodes-{columns}x{rows}')
             terminal.send('/日本'.encode())
             terminal.wait('🇯🇵 日本 01')
@@ -236,6 +238,7 @@ def verify(console, resources, report):
             terminal.wait('输入中', rows=16)
             terminal.send(b'\r\r')
             terminal.wait('嗅探域名：api.github.com', rows=16)
+            terminal.wait('【连接详情】', rows=16)
             terminal.capture(report, 'small')
             terminal.resize(40, 2)
             terminal.wait('api.github.com', rows=2)

@@ -106,6 +106,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     let page = match state.page {
         Page::Home => "首页",
         Page::Nodes => "节点",
+        Page::Connections if state.connection.is_some() => "连接详情",
         Page::Connections => "连接",
         Page::Network => "网络",
         Page::Settings => "设置",
@@ -191,12 +192,12 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Tone::Muted,
         ));
     } else if height >= 3 {
-        lines.push(line(
-            format!("{page} · 1–8 切页 · Tab 下一页"),
-            Tone::Accent,
-        ));
+        lines.push(line(format!("【{page}】"), Tone::Accent));
+        if height >= 10 {
+            lines.push(line("1–8 切页 · Tab 下一页".into(), Tone::Muted));
+        }
     }
-    let footer = footer::lines(state, width, height, spacious);
+    let footer = footer::lines(state, width, height, lines.len(), spacious);
     let footer_height = footer.len();
     let body_height = height.saturating_sub(lines.len() + footer_height);
     let body = if state.form.is_some() {
@@ -208,7 +209,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     } else {
         match state.page {
             Page::Home => home(state),
-            Page::Nodes => nodes(state, width.saturating_sub(6), body_height),
+            Page::Nodes => nodes(state, width.saturating_sub(6), body_height, spacious),
             Page::Connections => connections(state, width.saturating_sub(6), body_height),
             Page::Network => network(state, body_height),
             Page::Settings => super::panels::settings(state, width.saturating_sub(6), body_height),
@@ -253,7 +254,7 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
     } else {
         match state.page {
             Page::Home => home(state),
-            Page::Nodes => nodes(state, width, 1),
+            Page::Nodes => nodes(state, width, 1, false),
             Page::Connections => connections(state, width, 1),
             Page::Settings => super::panels::settings(state, width, 1),
             Page::Tools => super::panels::tools(state, width, 1),
@@ -494,7 +495,7 @@ fn home(state: &State) -> Vec<(String, Tone)> {
     ]
 }
 
-fn nodes(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
+fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(String, Tone)> {
     let items = state.items();
     let Some(poll) = &state.poll else {
         return home(state);
@@ -537,6 +538,9 @@ fn nodes(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
             "自动组 · 内核自行选择最优节点；在上一级手动组选择 AUTO 或具体节点".into(),
             Tone::Muted,
         );
+    }
+    if !spacious {
+        rows.retain(|(text, _)| !text.is_empty());
     }
     rows.truncate(height.saturating_sub(1));
     let available = height.saturating_sub(rows.len()).max(1);

@@ -54,7 +54,13 @@ fn wrap_help(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-pub(super) fn lines(state: &State, width: usize, height: usize, spacious: bool) -> Vec<Line> {
+pub(super) fn lines(
+    state: &State,
+    width: usize,
+    height: usize,
+    header_height: usize,
+    spacious: bool,
+) -> Vec<Line> {
     let line = |text: &str, tone| Line {
         text: fit(text, width),
         tone,
@@ -87,7 +93,7 @@ pub(super) fn lines(state: &State, width: usize, height: usize, spacious: bool) 
             line("q 退出 · Esc 返回", Tone::Muted)
         }];
     }
-    let budget = height.saturating_sub(4);
+    let budget = height.saturating_sub(header_height + 3);
     let mut help = wrap_help(help(state), width);
     help.truncate(budget.saturating_sub(1));
     let mut notice = wrap(

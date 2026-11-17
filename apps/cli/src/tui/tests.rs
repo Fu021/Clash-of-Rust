@@ -368,3 +368,42 @@ fn phone_footer_wraps_failure_and_keeps_confirmation_and_input_keys_accurate() {
     assert!(text.contains("Ctrl+C 退出"));
     assert!(!text.contains("q 退出"));
 }
+
+#[test]
+fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
+    for (page, title) in [
+        (Page::Home, "首页"),
+        (Page::Nodes, "节点"),
+        (Page::Connections, "连接"),
+        (Page::Network, "网络"),
+        (Page::Settings, "设置"),
+        (Page::Tools, "操作"),
+        (Page::Profiles, "订阅"),
+        (Page::Rules, "快捷规则"),
+    ] {
+        let mut state = State::new(true);
+        state.page = page;
+        for (columns, rows) in [(36, 16), (40, 12), (48, 24), (60, 18), (32, 8)] {
+            let frame = render::frame(&state, columns, rows);
+            assert_eq!(frame[0].text.trim_end(), format!("【{title}】"));
+            assert!(frame[0].tone == render::Tone::Accent);
+            if rows >= 10 {
+                assert!(frame[1].text.contains("1–8 切页"));
+                assert!(frame[1].text.contains("Tab 下一页"));
+            }
+        }
+    }
+    let mut state = State::new(true);
+    state.page = Page::Connections;
+    state.key(Key::Enter);
+    assert_eq!(
+        render::frame(&state, 40, 12)[0].text.trim_end(),
+        "【连接详情】"
+    );
+    state.key(Key::Escape);
+    state.key(Key::Char('5'));
+    state.query = "mixed_port".into();
+    state.key(Key::Enter);
+    assert!(state.form.is_some());
+    assert_eq!(render::frame(&state, 40, 12)[0].text.trim_end(), "【设置】");
+}
