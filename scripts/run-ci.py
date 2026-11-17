@@ -67,8 +67,9 @@ def main():
             run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
                  'update_preparation_releases_owner', '--', '--test-threads=1'])
         if args.system == 'windows':
-            run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
-                 'platform::windows_service::', '--', '--test-threads=1'])
+            for case in ('platform::windows_service::', 'platform::windows_process::'):
+                run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
+                     case, '--', '--test-threads=1'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for case in ('application::ui_tests::network_report_is_replaced_and_late_results_cannot_reappear_after_navigation',
                      'application::ui_tests::startup_install_failure_reaches_the_visible_recoverable_notice_and_close_action',

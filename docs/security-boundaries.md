@@ -20,7 +20,9 @@ Mihomo 路径限制仍是边界的一部分。特权启动清空继承环境，�
 
 管道创建使用的安全描述符和 `SECURITY_ATTRIBUTES` 保持存活直到同步调用返回，句柄随后只交给一个 `OwnedHandle`。管道没有启用 overlapped I/O，读写缓冲区和结果长度只在调用期间借用，写入长度受 64 KiB 消息上限约束；非等待模式不改变同步缓冲区生命周期。客户端保留管道名称存储，在 `CreateFileW` 失败后立即保存 [GetLastError](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-getlasterror)，再判断是否重试，避免错误格式化或临时存储释放影响线程错误码。
 
-系统目录查询从调用前就用单一所有者托管返回指针，遵循 [SHGetKnownFolderPath](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath) 在成功和失败时都需释放输出的契约；空指针或失败状态不会进入 UTF-16 读取。账户查询先检查 [GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation) 的大小探测错误和最小结构长度，再分配指针对齐的存储，成功且返回长度在容量内才读取 `TOKEN_USER`；SID 转换期间保留原缓冲区，转换结果使用 `LocalFree` 释放。当前进程伪句柄只借用，进程/令牌/快照等新句柄才交给 `OwnedHandle`。这部分覆盖服务管道与安全辅助模块，进程创建、SCM 及其他平台 FFI 仍按各自调用约束逐步复核。
+系统目录查询从调用前就用单一所有者托管返回指针，遵循 [SHGetKnownFolderPath](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath) 在成功和失败时都需释放输出的契约；空指针或失败状态不会进入 UTF-16 读取。账户查询先检查 [GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation) 的大小探测错误和最小结构长度，再分配指针对齐的存储，成功且返回长度在容量内才读取 `TOKEN_USER`；SID 转换期间保留原缓冲区，转换结果使用 `LocalFree` 释放。当前进程伪句柄只借用，进程/令牌/快照等新句柄才交给 `OwnedHandle`。
+
+无窗口后台只继承显式复制的输入、输出和错误句柄；属性列表按查询大小分配对齐存储，[继承白名单的数组](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)及其中的句柄一直存活到列表销毁，失败返回也按逆序析构。普通身份重启客户端时，令牌、UTF-16 命令行、桌面名称、启动结构及双 NUL 环境在进程创建的同步调用期间保持存活；[用户环境块](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-createenvironmentblock)先复制后释放，不继承安装程序的用户环境。这里记录服务通信、账户查询及进程创建的局部不变量；SCM 和其他 FFI 仍按各自调用约束逐步复核，不代表全仓审计完成。
 
 ## 安装包固定与校验
 

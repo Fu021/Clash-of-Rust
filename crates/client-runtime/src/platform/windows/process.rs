@@ -28,10 +28,13 @@ pub struct BackgroundChild {
 }
 impl BackgroundChild {
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        // SAFETY: A successful process creation supplied this owned process
+        // handle; the borrow keeps it open throughout both synchronous queries.
         match unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) } {
             WAIT_TIMEOUT => Ok(None),
             WAIT_OBJECT_0 => {
                 let mut code = 0;
+                // SAFETY: The process handle is still owned and code is writable.
                 if unsafe { GetExitCodeProcess(self.handle.as_raw_handle(), &mut code) } == 0 {
                     return Err(io::Error::last_os_error());
                 }
@@ -43,7 +46,10 @@ impl BackgroundChild {
 }
 fn inheritable(file: &File) -> io::Result<OwnedHandle> {
     let mut raw = std::ptr::null_mut();
+    // SAFETY: This pseudo handle identifies the current process and is not owned.
     let current = unsafe { GetCurrentProcess() };
+    // SAFETY: The borrowed file remains open, raw is writable, and both process
+    // handles identify this process. Success creates a separate inheritable handle.
     if unsafe {
         DuplicateHandle(
             current,
@@ -58,6 +64,7 @@ fn inheritable(file: &File) -> io::Result<OwnedHandle> {
     {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: DuplicateHandle succeeded; raw is the uniquely owned new handle.
     Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 fn argument(line: &mut Vec<u16>, value: &OsStr) -> Result<()> {
@@ -92,6 +99,8 @@ impl Attributes {
 }
 impl Drop for Attributes {
     fn drop(&mut self) {
+        // SAFETY: The guard exists only after successful initialization. Its
+        // allocation and the caller's inherited handle array still exist here.
         unsafe { DeleteProcThreadAttributeList(self.pointer()) };
     }
 }
@@ -99,6 +108,8 @@ impl Drop for Attributes {
 fn process_token(process: HANDLE) -> Result<OwnedHandle> {
     let mut token = std::ptr::null_mut();
     ensure!(
+        // SAFETY: Callers keep a real or current-process pseudo handle alive;
+        // token is writable and OpenProcessToken reports invalid handles.
         unsafe {
             OpenProcessToken(
                 process,
@@ -109,16 +120,22 @@ fn process_token(process: HANDLE) -> Result<OwnedHandle> {
         "无法读取桌面用户身份：{}",
         io::Error::last_os_error()
     );
+    // SAFETY: OpenProcessToken succeeded and transfers this new token handle.
     Ok(unsafe { OwnedHandle::from_raw_handle(token) })
 }
 
 fn ordinary_token() -> Result<OwnedHandle> {
+    // SAFETY: This parameterless query returns a borrowed window handle.
     let shell = unsafe { GetShellWindow() };
     let token = if shell.is_null() {
+        // SAFETY: The current-process pseudo handle is borrowed, never closed.
         let current = process_token(unsafe { GetCurrentProcess() })?;
+        // SAFETY: This FFI output struct permits all-zero initialization.
         let mut linked: TOKEN_LINKED_TOKEN = unsafe { std::mem::zeroed() };
         let mut count = 0;
         ensure!(
+            // SAFETY: The token remains open and linked/count have the exact
+            // writable types and capacity required by TokenLinkedToken.
             unsafe {
                 GetTokenInformation(
                     current.as_raw_handle(),
@@ -130,21 +147,29 @@ fn ordinary_token() -> Result<OwnedHandle> {
             } != 0,
             "无法取得普通用户身份，请从开始菜单启动客户端"
         );
+        // SAFETY: The successful linked-token query transfers a new real handle.
         unsafe { OwnedHandle::from_raw_handle(linked.LinkedToken) }
     } else {
         let mut pid = 0;
+        // SAFETY: shell came from GetShellWindow and pid is writable. The next
+        // OpenProcess call checks whether a queryable process can still be opened.
         unsafe { GetWindowThreadProcessId(shell, &mut pid) };
+        // SAFETY: This requests a noninheritable process handle for a numeric PID.
         let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         ensure!(
             !process.is_null(),
             "无法读取当前桌面用户，请从开始菜单启动客户端"
         );
+        // SAFETY: OpenProcess returned a nonnull, uniquely owned real handle.
         let process = unsafe { OwnedHandle::from_raw_handle(process) };
         process_token(process.as_raw_handle())?
     };
+    // SAFETY: TOKEN_ELEVATION is an integer-only FFI output struct.
     let mut elevation: TOKEN_ELEVATION = unsafe { std::mem::zeroed() };
     let mut count = 0;
     ensure!(
+        // SAFETY: The live token is queryable; elevation/count are writable with
+        // the exact buffer type and size required by TokenElevation.
         unsafe {
             GetTokenInformation(
                 token.as_raw_handle(),
@@ -163,6 +188,8 @@ fn ordinary_token() -> Result<OwnedHandle> {
 struct UserEnvironment(*mut std::ffi::c_void);
 impl Drop for UserEnvironment {
     fn drop(&mut self) {
+        // SAFETY: CreateEnvironmentBlock allocated this block successfully; all
+        // borrowed entry slices have been copied before this unique guard drops.
         unsafe { DestroyEnvironmentBlock(self.0) };
     }
 }
@@ -170,6 +197,8 @@ impl Drop for UserEnvironment {
 fn user_environment(token: HANDLE, data_dir: Option<&Path>) -> Result<Vec<u16>> {
     let mut environment = std::ptr::null_mut();
     ensure!(
+        // SAFETY: The caller keeps the queryable user token alive; environment
+        // is writable and no parent-process environment is inherited.
         unsafe { CreateEnvironmentBlock(&mut environment, token, 0) } != 0,
         "无法准备桌面用户环境：{}",
         io::Error::last_os_error()
@@ -178,12 +207,17 @@ fn user_environment(token: HANDLE, data_dir: Option<&Path>) -> Result<Vec<u16>> 
     let pointer = environment.0.cast::<u16>();
     let mut entries = Vec::new();
     let mut offset = 0;
+    // SAFETY: The successful API returns a UTF-16 environment block terminated
+    // by two NULs. The guard owns it throughout scanning and copying; the size
+    // limit bounds accepted data but does not replace the API's allocation contract.
     while offset < 1024 * 1024 && unsafe { *pointer.add(offset) } != 0 {
         let start = offset;
+        // SAFETY: Each API-provided entry ends inside the live block with a NUL.
         while offset < 1024 * 1024 && unsafe { *pointer.add(offset) } != 0 {
             offset += 1;
         }
         ensure!(offset < 1024 * 1024, "桌面用户环境过大");
+        // SAFETY: Both offsets were scanned inside the same live UTF-16 entry.
         let entry = unsafe { std::slice::from_raw_parts(pointer.add(start), offset - start) };
         let name = String::from_utf16_lossy(entry);
         if !(data_dir.is_some()
@@ -225,6 +259,7 @@ pub fn spawn_desktop(
     let token = if elevated {
         ordinary_token()?
     } else {
+        // SAFETY: This pseudo handle is borrowed only for the token query.
         process_token(unsafe { GetCurrentProcess() })?
     };
     let environment = user_environment(token.as_raw_handle(), data_dir)?;
@@ -238,10 +273,16 @@ pub fn spawn_desktop(
     let directory = executable.parent().context("客户端安装目录无效")?;
     let directory: Vec<_> = directory.as_os_str().encode_wide().chain([0]).collect();
     let mut desktop: Vec<_> = "winsta0\\default".encode_utf16().chain([0]).collect();
+    // SAFETY: These FFI input/output structs permit all-zero initialization.
     let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
     startup.cb = std::mem::size_of_val(&startup) as u32;
     startup.lpDesktop = desktop.as_mut_ptr();
+    // SAFETY: PROCESS_INFORMATION has only integer and pointer output fields.
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: All strings are NUL-terminated; argument validation rejected
+    // embedded NULs. The writable command line, desktop, startup/output structs,
+    // user token and double-NUL environment remain live for the synchronous call.
+    // Neither branch inherits caller handles; successful outputs are adopted below.
     let result = unsafe {
         if elevated {
             CreateProcessWithTokenW(
@@ -273,8 +314,11 @@ pub fn spawn_desktop(
     if result == 0 {
         return Err(io::Error::last_os_error()).context("无法以普通用户启动客户端");
     }
+    // SAFETY: Successful creation transfers two distinct real handles; each is
+    // adopted once, and the thread handle closes independently of the child.
     let _thread = unsafe { OwnedHandle::from_raw_handle(info.hThread) };
     Ok(BackgroundChild {
+        // SAFETY: This is the other uniquely owned successful creation output.
         handle: unsafe { OwnedHandle::from_raw_handle(info.hProcess) },
     })
 }
@@ -285,10 +329,14 @@ pub fn spawn(executable: &Path, arguments: &[OsString], stderr: &File) -> Result
     let stderr = inheritable(stderr)?;
     let mut inherited: [HANDLE; 2] = [null.as_raw_handle(), stderr.as_raw_handle()];
     let mut size = 0;
+    // SAFETY: A null list requests its byte size in writable size; the initial
+    // failure is expected by the API and creates no list to destroy.
     unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
     ensure!(size > 0, "无法计算进程句柄列表大小");
     let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
     ensure!(
+        // SAFETY: The allocation has pointer alignment and at least the queried
+        // byte capacity; neither it nor the initialized list is resized afterward.
         unsafe { InitializeProcThreadAttributeList(storage.as_mut_ptr().cast(), 1, 0, &mut size) }
             != 0,
         "无法初始化进程句柄列表：{}",
@@ -296,6 +344,9 @@ pub fn spawn(executable: &Path, arguments: &[OsString], stderr: &File) -> Result
     );
     let mut attributes = Attributes(storage);
     ensure!(
+        // SAFETY: The initialized list and two real inheritable handles are live.
+        // inherited is declared before attributes, so its storage and the handles
+        // outlive DeleteProcThreadAttributeList, including on every error return.
         unsafe {
             UpdateProcThreadAttribute(
                 attributes.pointer(),
@@ -310,6 +361,7 @@ pub fn spawn(executable: &Path, arguments: &[OsString], stderr: &File) -> Result
         "无法限制后台句柄继承：{}",
         io::Error::last_os_error()
     );
+    // SAFETY: STARTUPINFOEXW permits zero initialization before its fields are set.
     let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -324,7 +376,13 @@ pub fn spawn(executable: &Path, arguments: &[OsString], stderr: &File) -> Result
     }
     line.push(0);
     let application: Vec<_> = executable.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: PROCESS_INFORMATION is a zero-initializable FFI output struct.
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: The validated application and writable command line are terminated;
+    // STARTUPINFOEXW, its initialized attribute list and its handle whitelist stay
+    // live for the call. Inheritance is enabled only for that whitelist, with the
+    // required extended-startup flag and structure size. Null environment/current
+    // directory request the documented caller defaults.
     if unsafe {
         CreateProcessW(
             application.as_ptr(),
@@ -342,8 +400,10 @@ pub fn spawn(executable: &Path, arguments: &[OsString], stderr: &File) -> Result
     {
         return Err(io::Error::last_os_error()).context("无法启动无窗口后台");
     }
+    // SAFETY: Successful creation transfers two distinct owned real handles.
     let _thread = unsafe { OwnedHandle::from_raw_handle(info.hThread) };
     Ok(BackgroundChild {
+        // SAFETY: The process handle is adopted once and remains open in the child.
         handle: unsafe { OwnedHandle::from_raw_handle(info.hProcess) },
     })
 }
