@@ -879,6 +879,9 @@ def network_origin_handler():
             self.close_connection = False
             self.handle_one_request()
 
+        def do_HEAD(self):
+            self.do_GET()
+
         def do_GET(self):
             if '/diagnostic-probe?' in self.path:
                 time.sleep(0.04)
@@ -890,6 +893,9 @@ def network_origin_handler():
             self.send_response(200)
             self.send_header('Content-Length', str(len(body) + int(held)))
             self.end_headers()
+            if self.command == 'HEAD':
+                self.wfile.flush()
+                return
             self.wfile.write(body)
             self.wfile.flush()
             if held:

@@ -5036,6 +5036,56 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertFalse(worker.is_alive())
                 self.assertEqual(errors, [])
 
+    def test_android_diagnostic_origin_keeps_repeated_head_requests_in_one_tunnel(self):
+        for tunnel in (False, True):
+            with self.subTest(tunnel=tunnel):
+                server, client = socket.socketpair()
+                client.settimeout(1)
+                errors = []
+                def serve():
+                    try:
+                        with server:
+                            android_build.network_origin_handler()(server, ('127.0.0.1', 0), None)
+                    except Exception as error:
+                        errors.append(error)
+                worker = threading.Thread(target=serve, daemon=True)
+                worker.start()
+                reader = client.makefile('rb')
+                def headers():
+                    response = []
+                    while True:
+                        header = reader.readline()
+                        self.assertTrue(header, 'Origin closed before sending complete HTTP headers')
+                        if header == b'\r\n':
+                            return response
+                        response.append(header)
+                try:
+                    if tunnel:
+                        client.sendall(
+                            b'CONNECT 198.51.100.1:18081 HTTP/1.1\r\n'
+                            b'Host: 198.51.100.1:18081\r\n\r\n'
+                        )
+                        self.assertTrue(headers()[0].startswith(b'HTTP/1.1 200 '))
+                    for attempt in range(2):
+                        client.sendall(
+                            b'HEAD /diagnostic-probe?token=ci-only-url-secret HTTP/1.1\r\n'
+                            b'Host: test\r\n\r\n'
+                        )
+                        response = headers()
+                        self.assertTrue(response[0].startswith(b'HTTP/1.1 200 '), response[0])
+                        self.assertIn(b'Content-Length: 22\r\n', response)
+                    client.sendall(
+                        b'GET /probe HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n'
+                    )
+                    self.assertTrue(headers()[0].startswith(b'HTTP/1.1 200 '))
+                    self.assertEqual(reader.read(), b'cor-android-network-ok')
+                finally:
+                    reader.close()
+                    client.close()
+                    worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+
     def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
         network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
                        'applicationRoutingPersistsAndKeepsOtherAppsOnline',
