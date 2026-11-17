@@ -1383,6 +1383,157 @@ class BuildTests(unittest.TestCase):
                 self.assertTrue(case['attempts'][1]['original_files_unchanged'])
                 self.assertTrue(all(attempt['retry_succeeded'] for attempt in case['attempts']))
 
+    def test_windows_mixed_port_is_exclusive_before_binding_both_protocols(self):
+        reservations = [MagicMock(), MagicMock()]
+        for reservation in reservations:
+            reservation.__enter__.return_value = reservation
+        reservations[0].getsockname.return_value = ('127.0.0.1', 54048)
+        with patch.object(windows_update_tests, 'os', SimpleNamespace(name='nt')), \
+                patch.object(socket, 'SO_EXCLUSIVEADDRUSE', 0x101, create=True), \
+                patch.object(socket, 'socket', side_effect=reservations):
+            with windows_update_tests.reserve_mixed_port() as port:
+                self.assertEqual(port, 54048)
+                for reservation, address in zip(
+                        reservations, (('127.0.0.1', 0), ('127.0.0.1', 54048))):
+                    option = call.setsockopt(socket.SOL_SOCKET, 0x101, 1)
+                    self.assertLess(reservation.mock_calls.index(option),
+                                    reservation.mock_calls.index(call.bind(address)))
+        for reservation in reservations:
+            reservation.__exit__.assert_called_once()
+
+    def test_windows_independent_http_origin_is_exclusive_before_binding(self):
+        server = windows_update_tests.IndependentHTTPServer.__new__(
+            windows_update_tests.IndependentHTTPServer)
+        server.socket = MagicMock()
+
+        def bind():
+            server.socket.setsockopt.assert_called_once_with(socket.SOL_SOCKET, 0x101, 1)
+
+        with patch.object(windows_update_tests, 'os', SimpleNamespace(name='nt')), \
+                patch.object(socket, 'SO_EXCLUSIVEADDRUSE', 0x101, create=True), \
+                patch.object(windows_update_tests.ThreadingHTTPServer, 'server_bind',
+                             side_effect=bind) as parent:
+            server.server_bind()
+        parent.assert_called_once()
+        self.assertFalse(server.allow_reuse_address)
+        self.assertFalse(server.allow_reuse_port)
+
+    def test_windows_independent_proxy_rejects_wrong_payload_status_and_origin(self):
+        process = SimpleNamespace(poll=lambda: None)
+        server = SimpleNamespace(server_port=42121, fixture_id='expected-fixture',
+                                 last_path='/small')
+        for status, body, identity, passed in (
+                (200, proxy_benchmark.BLOCK, 'expected-fixture', True),
+                (200, proxy_benchmark.BLOCK, 'another-fixture', False),
+                (502, b'upstream unavailable', 'expected-fixture', False),
+                (200, b'wrong bytes', 'expected-fixture', False),
+                (200, proxy_benchmark.BLOCK+b'extra', 'expected-fixture', False)):
+            with self.subTest(status=status, length=len(body), identity=identity):
+                response = MagicMock(status=status)
+                response.read.return_value = body[:len(proxy_benchmark.BLOCK)+1]
+                response.getheader.return_value = identity
+                connection = MagicMock()
+                connection.getresponse.return_value = response
+                with patch.object(windows_update_tests, 'HTTPConnection',
+                                  return_value=connection):
+                    if passed:
+                        digest = windows_update_tests.probe_independent_core(
+                            process, 42122, server)
+                        self.assertEqual(digest, hashlib.sha256(body).hexdigest())
+                    else:
+                        with self.assertRaisesRegex(AssertionError, f'HTTP {status}') as raised:
+                            windows_update_tests.probe_independent_core(process, 42122, server)
+                        evidence = str(raised.exception)
+                        self.assertIn('sha256=', evidence)
+                        self.assertIn('proxy_port=42122', evidence)
+                        self.assertIn('origin_port=42121', evidence)
+                    connection.getresponse.assert_called_once()
+                    connection.close.assert_called_once()
+        with patch.object(windows_update_tests, 'HTTPConnection') as connect:
+            with self.assertRaisesRegex(RuntimeError, 'exited'):
+                windows_update_tests.probe_independent_core(
+                    SimpleNamespace(poll=lambda: 1), 42122, server)
+        connect.assert_not_called()
+
+    def test_windows_independent_duplicate_ports_close_origin_before_starting_core(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            resources = directory/'payload/resources'
+            resources.mkdir(parents=True)
+            for name in ('mihomo.exe', 'GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'):
+                (resources/name).write_bytes(b'fixture')
+            server = MagicMock(server_port=54048)
+            context = MagicMock()
+            context.__enter__.return_value = server
+            with patch.object(windows_update_tests, 'reserve_mixed_port',
+                              return_value=contextlib.nullcontext(54048)), \
+                    patch.object(windows_update_tests, 'IndependentHTTPServer',
+                                 return_value=context), \
+                    patch.object(windows_update_tests.subprocess, 'Popen') as launch:
+                with self.assertRaisesRegex(AssertionError, 'distinct ports'):
+                    with windows_update_tests.independent_core(directory/'payload', directory):
+                        self.fail('Overlapping fixture ports were accepted')
+            launch.assert_not_called()
+            context.__exit__.assert_called_once()
+
+    def test_windows_independent_fixture_releases_only_started_resources_on_each_exit(self):
+        for outcome in ('config-fails', 'worker-fails', 'core-fails', 'success'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                resources = directory/'payload/resources'
+                resources.mkdir(parents=True)
+                for name in ('mihomo.exe', 'GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'):
+                    (resources/name).write_bytes(b'fixture')
+                events = []
+                server = MagicMock(server_port=42121)
+                server.shutdown.side_effect = lambda: events.append('shutdown')
+                context = MagicMock()
+                context.__enter__.return_value = server
+                context.__exit__.side_effect = lambda *arguments: events.append('close')
+                worker = MagicMock()
+                worker.join.side_effect = lambda **arguments: events.append('join')
+                if outcome == 'worker-fails':
+                    worker.start.side_effect = RuntimeError('worker start failed')
+                process = MagicMock()
+                process.poll.return_value = None
+                launch = MagicMock()
+                launch.return_value.__enter__.return_value = process
+                if outcome == 'core-fails':
+                    launch.side_effect = RuntimeError('core launch failed')
+                save_config = MagicMock()
+                if outcome == 'config-fails':
+                    save_config.side_effect = RuntimeError('config save failed')
+                with patch.object(windows_update_tests, 'reserve_mixed_port',
+                                  return_value=contextlib.nullcontext(42122)), \
+                        patch.object(windows_update_tests, 'IndependentHTTPServer',
+                                     return_value=context), \
+                        patch.object(windows_update_tests, 'write_json', save_config), \
+                        patch.object(windows_update_tests.threading, 'Thread',
+                                     return_value=worker), \
+                        patch.object(windows_update_tests.subprocess, 'Popen', launch), \
+                        patch.object(windows_update_tests.subprocess, 'CREATE_NO_WINDOW',
+                                     0x08000000, create=True), \
+                        patch.object(windows_update_tests, 'probe_independent_core',
+                                     return_value='fixture digest'):
+                    if outcome == 'success':
+                        with windows_update_tests.independent_core(
+                                directory/'payload', directory) as (child, executable, config, probe):
+                            self.assertIs(child, process)
+                            self.assertTrue(executable.is_file())
+                            self.assertEqual(probe(), 'fixture digest')
+                        process.terminate.assert_called_once()
+                        process.wait.assert_called_once_with(timeout=10)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'failed'):
+                            with windows_update_tests.independent_core(
+                                    directory/'payload', directory):
+                                self.fail('Failed startup yielded a running core')
+                self.assertEqual(
+                    events, ['shutdown', 'join', 'close']
+                    if outcome in ('core-fails', 'success') else ['close'])
+                if outcome in ('config-fails', 'worker-fails'):
+                    launch.assert_not_called()
+
     def test_windows_mixed_port_retries_udp_failure_and_reserves_both_protocols(self):
         sockets = [MagicMock() for index in range(4)]
         for reservation in sockets:

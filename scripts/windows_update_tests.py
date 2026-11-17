@@ -1,5 +1,5 @@
 """Reproduce Windows installer write failures on a disposable native runner."""
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import csv
 import hashlib
 from http.client import HTTPConnection
@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import uuid
 
 from build_support import ROOT, file_version, host_arch, nsis, numeric_version, run, sha256, write_json
 
@@ -141,11 +142,24 @@ def installed_hashes(installed):
             for path in installed.rglob('*') if path.is_file()}
 
 
+class IndependentHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+    allow_reuse_port = False
+
+    def server_bind(self):
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 @contextmanager
 def reserve_mixed_port():
     for attempt in range(32):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, \
                 socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            if os.name == 'nt':
+                for reservation in (tcp, udp):
+                    reservation.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
                 tcp.bind(('127.0.0.1', 0))
                 port = tcp.getsockname()[1]
@@ -158,27 +172,68 @@ def reserve_mixed_port():
             return
 
 
+def probe_independent_core(process, proxy_port, server):
+    from proxy_benchmark import BLOCK
+    if process.poll() is not None:
+        raise RuntimeError('Independent Mihomo exited during the update test')
+    connection = HTTPConnection('127.0.0.1', proxy_port, timeout=2)
+    try:
+        connection.request(
+            'GET', f'http://127.0.0.1:{server.server_port}/small',
+            headers={'Connection': 'close'})
+        response = connection.getresponse()
+        body = response.read(len(BLOCK)+1)
+        digest = hashlib.sha256(body).hexdigest()
+        identity = response.getheader('X-Cor-Update-Fixture') == server.fixture_id
+        if response.status != 200 or body != BLOCK or not identity:
+            raise AssertionError(
+                'Independent Mihomo did not forward the fixture payload: '
+                f'HTTP {response.status}, bytes={len(body)}, sha256={digest}, '
+                f'identity={identity}, proxy_port={proxy_port}, '
+                f'origin_port={server.server_port}, origin_path={server.last_path!r}')
+        return digest
+    finally:
+        connection.close()
+
+
 @contextmanager
 def independent_core(payload, directory):
-    from proxy_benchmark import BLOCK, Payload
+    from proxy_benchmark import Payload
+
+    class FixturePayload(Payload):
+        def do_GET(self):
+            self.server.last_path = self.path[:256]
+            super().do_GET()
+
+        def end_headers(self):
+            self.send_header('X-Cor-Update-Fixture', self.server.fixture_id)
+            super().end_headers()
+
     external = directory/'独立 Mihomo with spaces'
     external.mkdir()
     executable = external/'mihomo.exe'
     shutil.copyfile(payload/'resources/mihomo.exe', executable)
     for name in ('GeoIP.dat', 'GeoSite.dat', 'Country.mmdb', 'ASN.mmdb'):
         shutil.copyfile(payload/'resources'/name, external/name)
-    with reserve_mixed_port() as proxy_port:
-        server = ThreadingHTTPServer(('127.0.0.1', 0), Payload)
-    config = external/'config.yaml'
-    write_json(config, {
-        'mixed-port': proxy_port, 'bind-address': '127.0.0.1', 'allow-lan': False,
-        'mode': 'rule', 'log-level': 'warning', 'ipv6': False,
-        'dns': {'enable': False}, 'tun': {'enable': False},
-        'proxies': [], 'rules': ['MATCH,DIRECT'],
-    })
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
+    with ExitStack() as cleanup:
+        with reserve_mixed_port() as proxy_port:
+            server = cleanup.enter_context(
+                IndependentHTTPServer(('127.0.0.1', 0), FixturePayload))
+        if server.server_port == proxy_port:
+            raise AssertionError('Independent Mihomo and origin fixture must use distinct ports')
+        server.fixture_id = uuid.uuid4().hex
+        server.last_path = None
+        config = external/'config.yaml'
+        write_json(config, {
+            'mixed-port': proxy_port, 'bind-address': '127.0.0.1', 'allow-lan': False,
+            'mode': 'rule', 'log-level': 'info', 'ipv6': False,
+            'dns': {'enable': False}, 'tun': {'enable': False},
+            'proxies': [], 'rules': ['MATCH,DIRECT'],
+        })
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        cleanup.callback(worker.join, timeout=5)
+        cleanup.callback(server.shutdown)
         with (directory/'independent-core.log').open('wb') as log:
             with subprocess.Popen(
                 [str(executable), '-d', str(external), '-f', str(config)],
@@ -186,20 +241,7 @@ def independent_core(payload, directory):
                 creationflags=subprocess.CREATE_NO_WINDOW,
             ) as process:
                 def probe():
-                    if process.poll() is not None:
-                        raise RuntimeError('Independent Mihomo exited during the update test')
-                    connection = HTTPConnection('127.0.0.1', proxy_port, timeout=2)
-                    try:
-                        connection.request(
-                            'GET', f'http://127.0.0.1:{server.server_port}/small',
-                            headers={'Connection': 'close'})
-                        response = connection.getresponse()
-                        body = response.read(len(BLOCK)+1)
-                        if response.status != 200 or body != BLOCK:
-                            raise AssertionError('Independent Mihomo did not forward the fixture payload')
-                        return hashlib.sha256(body).hexdigest()
-                    finally:
-                        connection.close()
+                    return probe_independent_core(process, proxy_port, server)
                 try:
                     deadline = time.monotonic()+20
                     while True:
@@ -219,10 +261,6 @@ def independent_core(payload, directory):
                         except subprocess.TimeoutExpired:
                             process.kill()
                             process.wait(timeout=10)
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
 def verify_independent_core(package, installed, payload, directory, execute, record):

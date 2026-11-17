@@ -98,4 +98,5 @@ Linux 的应用内自启动入口带 `--background`，普通应用菜单入口�
 - Defender 同时扫描最终安装包与已验证 CI payload 中的全部 EXE/DLL，记录引擎、平台、检测库版本及逐文件哈希；命中威胁、扫描失败或文件变化时拒绝上传。状态查询超时可有限重试，不能跳过版本证据或文件扫描；ARM64 曾在[打包 40805841630](https://github.com/Fu021/Clash-of-Rust/actions/runs/40805841630)超时。只扫描压缩安装器不足以核对用户报告的主程序告警，历史成功也不能证明当前文件为误报；排查与提交见 [Defender 告警](../workflows/release.md#windows-defender-告警)。
 - 清理只删除本次 fixture，不触碰用户已有安装或网络配置。
 - 独立 Mihomo 更新夹具的 mixed-port 同时预留本机 TCP/UDP，UDP 被占用或排除时有界换端口，释放预留后才启动真实内核；启动失败仍拒绝验收，保留内核日志。进入共存场景前清除上一故障对照的安装收据，避免启动失败被误附旧代码 68。预留不能消除交给子进程前的端口竞争，不以重跑或放宽更新、流量、进程和文件断言掩盖失败。
+- Windows 夹具预留及 HTTP 来源在 bind 前设置 [SO_EXCLUSIVEADDRUSE](https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse)，HTTP 来源禁用地址复用并拒绝与代理端口相同；来源响应带本次独有标记，状态、完整字节和标记均须匹配。失败记录 HTTP 状态、长度、摘要、两个端口、来源所见路径及内核日志，便于区分未就绪、错服务和错误响应；不重试错误正文来掩盖失败。来源配置、线程或内核启动失败均释放已取得资源，只对已启动线程执行 shutdown/join。旧轮只有“未转发夹具内容”而没有响应证据时，不据此确定端口竞争或安装失败。
 - 按 [NSIS 参数规范](https://nsis.sourceforge.io/Docs/Chapter3.html#installerusage)，安装目录 `/D=` 与卸载目录 `_?=` 放在命令行末尾，路径含空格时也不加引号；Python 列表参数的自动引号不适用于此处。用含中文及空格的自定义目录验证实际安装、登记、更新与卸载。
