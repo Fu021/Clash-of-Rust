@@ -111,6 +111,8 @@ def select(paths, extended=False):
         path.startswith(('apps/desktop/tests/support/proxy_benchmark.rs',
                          'crates/client-core/src/controller/',
                          'crates/client-runtime/src/platform/windows/mod.rs',
+                         'crates/client-runtime/src/platform/macos/cf.rs',
+                         'crates/client-runtime/src/platform/macos/native_proxy.rs',
                          'crates/client-runtime/src/platform/macos/proxy_preferences.rs',
                          'crates/client-runtime/src/platform/macos/mod.rs',
                          'crates/client-runtime/src/platform/macos/service.rs',

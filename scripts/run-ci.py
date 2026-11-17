@@ -38,8 +38,10 @@ def main():
              'application::async_state_tests::core_initialization_preserves_a_tray_failure_as_a_recoverable_warning',
              '--', '--exact', '--test-threads=1'])
     if not extended and args.system == 'macos' and proxy_benchmark():
-        run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
-             'platform::macos::service::tests::', '--', '--test-threads=1'])
+        for case in ('platform::macos::service::tests::', 'platform::macos::cf::tests::',
+                     'platform::macos::tests::'):
+            run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
+                 case, '--', '--test-threads=1'])
     if not extended and linux_user_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for package, target, case in (
                 ('clash-client-runtime', ['--lib'], 'platform::linux_tun::'),
@@ -69,7 +71,7 @@ def main():
         if args.system == 'windows':
             for case in ('platform::windows_service::', 'platform::windows_process::'):
                 run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
-                     case, '--', '--test-threads=1'])
+                     case, '--', '--test-threads=1', '--show-output'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for case in ('application::ui_tests::network_report_is_replaced_and_late_results_cannot_reappear_after_navigation',
                      'application::ui_tests::startup_install_failure_reaches_the_visible_recoverable_notice_and_close_action',

@@ -1945,7 +1945,7 @@ class BuildTests(unittest.TestCase):
             'crates/client-core/src/subscription/routes.rs'])['proxy_benchmark'])
         self.assertTrue(ci_test_policy.select([
             'crates/client-core/src/controller/mod.rs'])['proxy_benchmark'])
-        for path in ('service.rs', 'tun.rs'):
+        for path in ('service.rs', 'tun.rs', 'cf.rs', 'native_proxy.rs'):
             self.assertTrue(ci_test_policy.select([
                 'crates/client-runtime/src/platform/macos/' + path])['proxy_benchmark'])
         self.assertFalse(ci_test_policy.select(['README.md'])['proxy_benchmark'])

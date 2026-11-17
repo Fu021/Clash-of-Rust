@@ -24,6 +24,14 @@ Mihomo 路径限制仍是边界的一部分。特权启动清空继承环境，�
 
 无窗口后台只继承显式复制的输入、输出和错误句柄；属性列表按查询大小分配对齐存储，[继承白名单的数组](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)及其中的句柄一直存活到列表销毁，失败返回也按逆序析构。普通身份重启客户端时，令牌、UTF-16 命令行、桌面名称、启动结构及双 NUL 环境在进程创建的同步调用期间保持存活；[用户环境块](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-createenvironmentblock)先复制后释放，不继承安装程序的用户环境。这里记录服务通信、账户查询及进程创建的局部不变量；SCM 和其他 FFI 仍按各自调用约束逐步复核，不代表全仓审计完成。
 
+### macOS 系统属性与偏好会话
+
+CoreFoundation 桥接按 [Create/Copy 与 Get 所有权规则](https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFMemoryMgmt/Concepts/Ownership.html)区分释放责任：`Owned` 只接管非空的创建/复制结果，Get 返回的字典、数组及字符串在父对象仍存活且未修改时复制成 Rust 数据。转换入口拒绝空值和类型不符，数组/字典的计数与递归深度有界；字符串长度先确认可由 `CFIndex` 表达，UTF-8 缓冲区容量另行检查。转换结果还按 UTF-16 单元数核对原始长度，遇到嵌入式空字符时停止修改，避免 C 字符串截断后静默写回；缺失对象不进入类型查询。
+
+系统偏好由单个本地 `SCPreferences` 会话读写，路径字符串及属性列表在同步调用期间保持存活。锁失败时立即返回，读改写结束后的普通错误出口也执行解锁；若 Rust 在此前展开，`Owned` 仍释放会话。Apple 的[会话析构实现](https://github.com/apple-oss-distributions/configd/blob/main/SystemConfiguration.fproj/SCPOpen.c)清理锁状态、锁文件描述符及 helper 会话，因此不能仅因没有额外解锁 guard 就认定泄漏。现有界面和授权语义保持原有入口；局部原生转换测试不等于真实网络配置的故障注入。
+
+这两个桥接模块局部启用 `clippy::undocumented_unsafe_blocks`，由现有原生 CI 的严格 Clippy 检查覆盖；没有扩大为全工作区规则，注释存在也不能代替指针、所有权和失败清理的实际复核。
+
 ## 安装包固定与校验
 
 助手在内存中固定本次计划的 SHA256，校验失败即停止；安装程序读取时采用以下机制：

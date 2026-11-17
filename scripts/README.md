@@ -26,7 +26,7 @@
 | `windows_update_tests.py` | 隔离安装测试模块 | 由 Windows 候选包验证按需调用；使用固定提交、固定摘要的旧安装器脚本和同一份 CI payload，对照文件占用、只读与 ACL 拒绝写入的旧/新退出码；另以独占端口和带身份标记的 HTTP 来源验证安装目录外独立 Mihomo 的流量、更新替换及外部进程/文件保留，拒绝错误响应并保存有界证据。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
-| `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择，Windows 更新相关变更另执行服务与进程边界回归。 |
+| `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择，Windows 更新相关变更另执行服务与进程边界回归，macOS 代理相关变更包含 CF 转换及偏好数据回归。 |
 | `ci_test_policy.py` | CLI / 模块 | 选择基础网络、相关变更专项和手动扩展回归，并向 CI 各平台传递选择结果。 |
 | `test-cli-update.py` | 隔离安装测试 | 仅在 Actions 的已安装 Linux 环境运行，以临时普通账户验证只读查询、无桌面的 sudo 拒绝、真实 dpkg 失败恢复、成功重装后的自动启动/保留关闭状态及 systemd 服务状态/归属，保存逐项结果。 |
 | `compatibility.py` | CLI / 模块 | 共用 Android／Ubuntu 兼容矩阵、成功 CI 来源解析与发布回执；`resolve --suite android/ubuntu --run-id ID`，`record` 绑定实际成功 job 及输入 id/name/digest；发布前核验完整回执。替代 `android_previews.py`。 |
