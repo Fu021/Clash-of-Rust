@@ -14,7 +14,7 @@ use std::{
 };
 
 slint::slint! {
-    #[edition = "1.18"]
+    #[edition = "1.19"]
     import { ListView, ListHeader, MField, MDragHandle, MButton } from "../ui/mobile/shared/controls.slint";
     import { Field, PageScroll } from "../ui/components/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";

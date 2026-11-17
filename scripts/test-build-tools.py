@@ -2154,7 +2154,7 @@ class BuildTests(unittest.TestCase):
                     return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
                 preview_slint.run_viewer('viewer', arguments, {})
                 self.assertEqual(run.call_args.args[0],
-                                 ['viewer', '--edition', '1.18', *arguments])
+                                 ['viewer', '--edition', '1.19', *arguments])
 
     def test_previews_use_bundled_font_fallback_instead_of_the_hosts_preferences(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
@@ -6474,10 +6474,13 @@ runpy.run_path(str(script), run_name='__main__')
                 ('Failed to download package archive for system-images/android-35: closed',True),
                 ('Failed to download package archive for emulator: unexpected EOF',True),
                 ('Failed to download package archive for emulator: connection reset by peer',True),
+                ('Warning: An error occurred while preparing SDK package Android SDK Command-line Tools: Premature EOF.',True),
                 ('Error: Failed to write to file\nCaused by:\n    gzip decompression failed: Peer disconnected',True),
                 ('gzip decompression failed:\nconnection reset by peer',True),
                 ('gzip decompression failed: invalid gzip header',False),
                 ('Error: Failed to write to file\nCaused by:\n    No space left on device',False),
+                ('An error occurred while preparing SDK package Android SDK Command-line Tools: No space left on device.',False),
+                ('Premature EOF',False),
                 ('Package closed is not available',False)):
             with self.subTest(detail=detail), tempfile.TemporaryDirectory() as temporary:
                 with patch.object(android_build,'streamed_command',

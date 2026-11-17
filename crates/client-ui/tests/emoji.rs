@@ -8,7 +8,7 @@ use slint::{
 use std::rc::Rc;
 
 slint::slint! {
-    #[edition = "1.18"]
+    #[edition = "1.19"]
     import "../../../resources/fonts/SourceHanSansCN-Regular.otf";
     export component EmojiProbe inherits Window {
         width: 512px;

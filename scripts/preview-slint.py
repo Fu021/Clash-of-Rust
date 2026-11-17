@@ -236,7 +236,7 @@ def mobile_sheet(viewer, output, name, items, env):
 
 
 def run_viewer(viewer: str, arguments: list[str], env: dict[str, str]) -> None:
-    result = subprocess.run([viewer, '--edition', '1.18', *arguments], cwd=ROOT, env=env, text=True,
+    result = subprocess.run([viewer, '--edition', '1.19', *arguments], cwd=ROOT, env=env, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
     if result.stdout:
         print(result.stdout, end="")
@@ -434,7 +434,7 @@ def main() -> None:
                   "preview-text-scale": round(args.text_scale * 100),
                   **protection_fixture(args.protection_state)}
         fixture.write_text(json.dumps({**values, "preview-dark": themes[0] == "dark"}))
-        subprocess.run([args.viewer, "--edition", "1.18", "--auto-reload",
+        subprocess.run([args.viewer, "--edition", "1.19", "--auto-reload",
                         "--load-data", str(fixture), str(entry)],
                        cwd=ROOT, env=env, check=True)
         return
