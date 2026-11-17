@@ -16,6 +16,12 @@ Mihomo 路径限制仍是边界的一部分。特权启动清空继承环境，�
 
 终端认证代理的 `pre_exec` 只执行不分配、不持锁的进程设置和身份查询，并保留父 PID 复核以拒绝设置期间的重新托管；[父死亡信号](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)的触发对象是创建子进程的父线程，多线程程序中该线程结束时，其他线程可能仍在运行。认证子进程由一个 `Child` 持有；退出时若它尚未被回收，先发 SIGTERM，再有界等待、强制终止并回收。源码的 SAFETY 说明记录具体指针、布局和生命周期前提，不代表全仓 FFI 已完成安全审计或已复现漏洞；真实授权与网络验证仍须使用可丢弃环境。
 
+### Windows 服务通信与账户查询
+
+管道创建使用的安全描述符和 `SECURITY_ATTRIBUTES` 保持存活直到同步调用返回，句柄随后只交给一个 `OwnedHandle`。管道没有启用 overlapped I/O，读写缓冲区和结果长度只在调用期间借用，写入长度受 64 KiB 消息上限约束；非等待模式不改变同步缓冲区生命周期。客户端保留管道名称存储，在 `CreateFileW` 失败后立即保存 [GetLastError](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-getlasterror)，再判断是否重试，避免错误格式化或临时存储释放影响线程错误码。
+
+系统目录查询从调用前就用单一所有者托管返回指针，遵循 [SHGetKnownFolderPath](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath) 在成功和失败时都需释放输出的契约；空指针或失败状态不会进入 UTF-16 读取。账户查询先检查 [GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation) 的大小探测错误和最小结构长度，再分配指针对齐的存储，成功且返回长度在容量内才读取 `TOKEN_USER`；SID 转换期间保留原缓冲区，转换结果使用 `LocalFree` 释放。当前进程伪句柄只借用，进程/令牌/快照等新句柄才交给 `OwnedHandle`。这部分覆盖服务管道与安全辅助模块，进程创建、SCM 及其他平台 FFI 仍按各自调用约束逐步复核。
+
 ## 安装包固定与校验
 
 助手在内存中固定本次计划的 SHA256，校验失败即停止；安装程序读取时采用以下机制：
