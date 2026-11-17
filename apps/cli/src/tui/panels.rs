@@ -13,10 +13,18 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
         (format!("搜索：{}", state.query), Tone::Muted),
     ];
     let items = state.items();
-    lines.truncate(height.saturating_sub(1));
+    lines = lines
+        .into_iter()
+        .flat_map(|(text, tone)| {
+            super::render::wrap(&text, width)
+                .into_iter()
+                .map(move |text| (text, tone))
+        })
+        .take(height.saturating_sub(1))
+        .collect();
     let available = height.saturating_sub(lines.len()).max(1);
     let mut rows = Vec::new();
-    let mut selected_row = 0;
+    let mut selected_range = (0, 0);
     let mut category = "";
     for (index, key) in items.iter().enumerate() {
         let next_category = super::settings::category(key);
@@ -24,36 +32,36 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
             rows.push((format!("── {next_category} ──"), Tone::Accent));
             category = next_category;
         }
-        if index == state.selected {
-            selected_row = rows.len();
-        }
+        let selected = index == state.selected;
+        let start = rows.len();
         let value = state.poll.as_ref().map_or_else(
             || "后台未连接".into(),
             |poll| super::settings::display(poll, key),
         );
-        rows.push((
-            if width < 50 {
-                format!(
-                    "{} {}：{value}",
-                    if index == state.selected { "›" } else { " " },
-                    super::settings::title(key)
-                )
-            } else {
-                format!(
-                    "{} {} {}",
-                    if index == state.selected { "›" } else { " " },
-                    fit(super::settings::title(key), width.saturating_sub(26)),
-                    value
-                )
-            },
-            if index == state.selected {
-                Tone::Selected
-            } else {
-                Tone::Plain
-            },
-        ));
+        let text = format!(
+            "{} {} {value}",
+            if selected { "›" } else { " " },
+            super::settings::title(key)
+        );
+        let tone = if selected {
+            Tone::Selected
+        } else {
+            Tone::Plain
+        };
+        rows.extend(
+            super::render::wrap(&text, width)
+                .into_iter()
+                .map(|text| (text, tone)),
+        );
+        if selected {
+            selected_range = (start, rows.len());
+        }
     }
-    let offset = selected_row.saturating_sub(available - 1);
+    let offset = if selected_range.1 - selected_range.0 >= available {
+        selected_range.0
+    } else {
+        selected_range.1.saturating_sub(available)
+    };
     lines.extend(rows.into_iter().skip(offset).take(available));
     lines
 }

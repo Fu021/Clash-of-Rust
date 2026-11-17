@@ -85,6 +85,21 @@ fn applying_parameters_keeps_them_local_and_navigation_restores_defaults() {
 }
 
 #[test]
+fn confirming_a_tool_choice_keeps_the_value_without_starting_a_probe() {
+    let mut state = state(Tool::Dns);
+    state.key(Key::Down);
+    state.key(Key::Right);
+    assert_eq!(state.form.as_ref().unwrap().fields[1].value, "A");
+    assert!(matches!(state.key(Key::Enter), Action::None));
+    assert!(!state.entering_text());
+    assert_eq!(state.form.as_ref().unwrap().fields[1].value, "A");
+    assert!(state.form.is_some());
+    network::apply(&mut state).unwrap();
+    assert_eq!(state.network_options.record_type, "A");
+    assert_eq!(state.query, "example.test");
+}
+
+#[test]
 fn invalid_parameters_preserve_both_applied_values_and_the_current_draft() {
     for invalid in ["", "not-a-number", "0", "31", "-1", "18446744073709551616"] {
         let mut state = state(Tool::Http);

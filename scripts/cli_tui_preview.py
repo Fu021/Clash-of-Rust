@@ -18,8 +18,8 @@ PAGE_ACTIONS = {
     '连接': '↑↓ 选择，/ 搜索，Enter 打开详情；详情内 ↑↓ 滚动，d 补充解析，x 关闭连接，Esc 返回。',
     '网络': '[ / ] 切换工具，/ 输入目标，o 编辑适用参数，Enter 检查，↑↓ 滚动结果，'
             'e 导出既有报告，Esc 取消；包含导出失败与修正路径后的恢复。',
-    '设置': '按分类查找或用 / 搜索；Enter 打开项目，←→ / 空格选择候选值，Enter 编辑文字，'
-            'Ctrl+U 清空，Esc 撤销；保存前再次确认。',
+    '设置': '按分类查找或用 / 搜索；Enter 打开项目，←→ / 空格调整候选值，Enter 确认当前值；'
+            '文字按 Enter 编辑，Ctrl+U 清空，Esc 返回；Fake-IP 直接管理已有项，保存前再次确认。',
     '操作': '/ 搜索命令，Enter 打开表单；逐项输入参数，检查必填项，再确认执行。'
             '此处捕获校验及确认入口，系统授权和命令结果使用普通终端。',
     '订阅': '↑↓ 选择名称，/ 搜索，Enter 打开候选值；←→ 选择，向下选择保存并确认，'
@@ -273,6 +273,11 @@ def verify_desktop(console, command, report):
             terminal.resize(100, 30)
             terminal.wait(expected, rows=30)
             gallery.capture(terminal, page, page+' · 紧凑桌面', size=(100, 30))
+            for columns, rows in ((40, 24), (60, 24)):
+                terminal.resize(columns, rows)
+                terminal.wait(expected, rows=rows)
+                gallery.capture(terminal, page, page+' · 手机 SSH',
+                                size=(columns, rows))
             terminal.resize(120, 40)
             terminal.wait(expected, rows=40)
 
@@ -344,6 +349,27 @@ def verify_desktop(console, command, report):
                 break
             settings.append(row)
             terminal.send(b'\r')
+            if 'Fake-IP 排除项' in row:
+                terminal.wait('设置 · Fake-IP 排除项')
+                gallery.capture(terminal, '设置', 'Fake-IP · 已有排除项及恢复默认')
+                terminal.resize(40, 24)
+                terminal.wait('Fake-IP 排除项', rows=24)
+                gallery.capture(terminal, '设置', 'Fake-IP · 手机 SSH 管理列表',
+                                size=(40, 24))
+                terminal.resize(120, 40)
+                terminal.wait('设置 · Fake-IP 排除项', rows=40)
+                terminal.send(b'\r')
+                terminal.wait('输入中')
+                terminal.send(b'preview.example.test')
+                gallery.capture(terminal, '设置', 'Fake-IP · 新增项目输入')
+                terminal.send(b'\r')
+                terminal.wait('新增排除项：preview.example.test')
+                gallery.capture(terminal, '设置', 'Fake-IP · 新增保存确认')
+                terminal.send(ESCAPE)
+                settle(terminal)
+                terminal.send(ESCAPE+DOWN)
+                settle(terminal)
+                continue
             terminal.wait('草稿不会自动保存')
             title = next(line.strip() for line in terminal.text().splitlines()
                          if line.strip().startswith('设置 · '))

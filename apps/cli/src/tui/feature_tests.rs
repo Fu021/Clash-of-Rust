@@ -172,6 +172,11 @@ fn settings_and_operations_follow_the_shared_command_catalogue() {
         state.query = (*key).into();
         state.selected = state.items().iter().position(|item| item == key).unwrap();
         state.key(Key::Enter);
+        if *key == "fake_ip_exclusions" {
+            assert!(state.fake_ip.take().is_some());
+            assert!(state.form.is_none());
+            continue;
+        }
         let form = state.form.take().unwrap();
         assert_eq!(form.setting.as_deref(), Some(*key));
         let args = form.args(&context()).unwrap();
@@ -346,7 +351,7 @@ fn forms_reject_missing_required_values_bad_flags_and_incomplete_export_paths() 
 fn setting_edit_cancel_confirm_demo_and_input_bounds_are_independent_of_shortcuts() {
     let mut state = State::new(true);
     state.page = Page::Settings;
-    state.query = "fake_ip_exclusions".into();
+    state.query = "mixed_port".into();
     state.key(Key::Enter);
     state.key(Key::Enter);
     assert!(state.entering_text());
@@ -354,14 +359,24 @@ fn setting_edit_cancel_confirm_demo_and_input_bounds_are_independent_of_shortcut
     state.key(Key::Char('6'));
     assert!(state.page == Page::Settings);
     state.key(Key::Escape);
-    assert_eq!(state.form.as_ref().unwrap().fields[1].value, "[]");
+    assert_eq!(
+        state.form.as_ref().unwrap().fields[1].value,
+        state
+            .poll
+            .as_ref()
+            .unwrap()
+            .meta
+            .settings
+            .mixed_port
+            .to_string()
+    );
     state.key(Key::Enter);
     state.key(Key::Clear);
     assert!(state.form.as_ref().unwrap().draft.is_empty());
     state.key(Key::Paste("日".repeat(10000)));
     assert!(state.form.as_ref().unwrap().draft.len() <= 8192);
     state.key(Key::Escape);
-    state.form.as_mut().unwrap().fields[1].value = "example.test".into();
+    state.form.as_mut().unwrap().fields[1].value = "12345".into();
     state.form.as_mut().unwrap().selected = 2;
     assert!(matches!(state.key(Key::Enter), Action::ReviewForm));
     state.execution = Some(state.form.as_ref().unwrap().args(&context()).unwrap());
@@ -442,18 +457,18 @@ fn settings_secrets_and_large_rule_collections_do_not_leak_into_frames() {
 fn polling_preserves_global_setting_drafts_and_invalidates_profile_operations() {
     let mut state = State::new(true);
     state.page = Page::Settings;
-    state.query = "fake_ip_exclusions".into();
+    state.query = "mixed_port".into();
     state.key(Key::Enter);
-    state.form.as_mut().unwrap().fields[1].value = "draft.test".into();
+    state.form.as_mut().unwrap().fields[1].value = "12345".into();
     let mut poll = demo_poll();
     poll.snapshot.proxies.proxies.get_mut("AUTO").unwrap().now = "🇯🇵 日本 01".into();
     state.accept(Some(poll));
-    assert_eq!(state.form.as_ref().unwrap().fields[1].value, "draft.test");
+    assert_eq!(state.form.as_ref().unwrap().fields[1].value, "12345");
     state.execution = Some(state.form.as_ref().unwrap().args(&context()).unwrap());
     let mut changed = demo_poll();
     changed.meta.settings.active_profile = Some("another-profile".into());
     state.accept(Some(changed));
-    assert_eq!(state.form.as_ref().unwrap().fields[1].value, "draft.test");
+    assert_eq!(state.form.as_ref().unwrap().fields[1].value, "12345");
     assert!(state.execution.is_some());
     state.form = Some(Form::new(
         form::commands()

@@ -135,6 +135,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         Page::Connections if state.connection.is_some() => "连接详情",
         Page::Connections => "连接",
         Page::Network => "网络",
+        Page::Settings if state.fake_ip.is_some() => "Fake-IP 排除项",
         Page::Settings => "设置",
         Page::Tools => "操作",
         Page::Profiles => "订阅",
@@ -169,7 +170,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Tone::Muted,
         ));
     } else if height >= 3 {
-        let title = format!("【{page}】");
+        let title = format!("[{page}]");
         let padding = width.saturating_sub(title.width()) / 2;
         lines.push(line(
             format!("{}{title}", " ".repeat(padding)),
@@ -182,7 +183,9 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     let footer = footer::lines(state, width, height, lines.len(), spacious);
     let footer_height = footer.len();
     let body_height = height.saturating_sub(lines.len() + footer_height);
-    let body = if state.form.is_some() {
+    let body = if state.fake_ip.is_some() {
+        super::fake_ip::panel(state, content_width(columns, rows), body_height)
+    } else if state.form.is_some() {
         super::panels::editor(state, content_width(columns, rows), body_height)
     } else if state.searching && body_height <= 2 {
         vec![(format!("输入中：{} ▏", state.query), Tone::Selected)]
@@ -194,7 +197,9 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Page::Nodes => nodes(state, width.saturating_sub(6), body_height, spacious),
             Page::Connections => connections(state, width.saturating_sub(6), body_height),
             Page::Network => network(state, content_width(columns, rows), body_height),
-            Page::Settings => super::panels::settings(state, width.saturating_sub(6), body_height),
+            Page::Settings => {
+                super::panels::settings(state, content_width(columns, rows), body_height)
+            }
             Page::Tools => super::panels::tools(state, width.saturating_sub(6), body_height),
             Page::Profiles => super::catalog::profiles(state, width.saturating_sub(6), body_height),
             Page::Rules => super::catalog::rules(state, width.saturating_sub(6), body_height),
@@ -227,7 +232,9 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
     if footer::has_notice(state) {
         return notice(state);
     }
-    let content = if state.form.is_some() {
+    let content = if state.fake_ip.is_some() {
+        super::fake_ip::panel(state, width, 1)
+    } else if state.form.is_some() {
         super::panels::editor(state, width, 1)
     } else if state.searching {
         vec![(format!("输入中：{} ▏", state.query), Tone::Selected)]

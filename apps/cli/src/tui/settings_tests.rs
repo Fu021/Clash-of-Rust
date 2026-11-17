@@ -29,8 +29,11 @@ fn native_choices_wait_for_confirmation_and_backend_state_before_showing_saved_v
     assert_eq!(state.form.as_ref().unwrap().selected, 1);
     state.key(Key::Up);
     assert_eq!(state.form.as_ref().unwrap().selected, 1);
-    state.key(Key::Down);
     assert!(matches!(state.key(Key::Enter), Action::ReviewForm));
+    assert_eq!(
+        state.form.as_ref().unwrap().fields[1].value,
+        (!original).to_string()
+    );
     state.execution = Some(state.form.as_ref().unwrap().args(&args()).unwrap());
     assert!(
         render::frame(&state, 80, 24)
@@ -333,7 +336,7 @@ fn settings_show_effective_fake_ip_and_empty_list_counts_instead_of_blank_values
         settings::open(&poll, "fake_ip").unwrap().fields[1].value,
         "false"
     );
-    assert!(settings::open(&poll, "fake_ip_exclusions").unwrap().fields[1].value == "[]");
+    assert!(settings::open(&poll, "fake_ip_exclusions").is_err());
     for key in settings::KEYS {
         assert!(!settings::display(&poll, key).trim().is_empty(), "{key}");
     }
@@ -369,6 +372,47 @@ fn categories_and_dedicated_pages_keep_shortcuts_out_of_general_settings() {
     state.key(Key::Enter);
     assert!(state.form.is_none());
     assert!(state.message.as_deref().unwrap().contains("尚未读取"));
+}
+
+#[test]
+fn long_settings_and_choice_help_wrap_without_losing_the_selected_item() {
+    use unicode_width::UnicodeWidthStr;
+    let mut state = State::new(true);
+    state.page = Page::Settings;
+    let key = "subscription_update_interval_minutes";
+    state.selected = state.items().iter().position(|item| *item == key).unwrap();
+    for (columns, rows) in [(36, 24), (40, 24), (60, 24), (80, 24), (120, 40)] {
+        let frame = render::frame(&state, columns, rows);
+        assert!(frame.len() <= rows);
+        assert!(frame.iter().all(|line| line.text.width() < columns));
+        let selected = frame
+            .iter()
+            .filter(|line| line.tone == render::Tone::Selected)
+            .map(|line| line.text.trim())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(selected.contains(settings::title(key)));
+        assert!(!selected.contains('…'));
+    }
+    state.form = Some(settings::open(state.poll.as_ref().unwrap(), "ipv6").unwrap());
+    for columns in [36, 40, 60, 80, 120] {
+        let frame = render::frame(&state, columns, 24);
+        let text = frame
+            .iter()
+            .map(|line| line.text.trim())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for action in [
+            "↑↓ 选择",
+            "←→ 调整",
+            "Enter 确认当前值",
+            "Esc 返回",
+            "q 退出",
+        ] {
+            assert!(text.contains(action), "{columns}: {action}");
+        }
+        assert!(!text.contains('…'));
+    }
 }
 
 #[test]
@@ -417,8 +461,10 @@ fn subscription_list_selects_names_and_confirms_without_using_cli_text() {
             .as_deref(),
         Some("profile-0")
     );
-    state.key(Key::Down);
+    state.key(Key::Right);
+    state.key(Key::Left);
     assert!(matches!(state.key(Key::Enter), Action::ReviewForm));
+    assert_eq!(state.form.as_ref().unwrap().fields[0].value, "profile-1");
     state.execution = Some(state.form.as_ref().unwrap().args(&args()).unwrap());
     let Action::ApplySetting(operation) = state.key(Key::Enter) else {
         panic!("profile switching must stay inside TUI");

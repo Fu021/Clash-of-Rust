@@ -5,6 +5,8 @@ use super::{
 };
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
+#[path = "fake_ip_tests.rs"]
+mod fake_ip_features;
 #[path = "feature_tests.rs"]
 mod features;
 #[path = "network_tests.rs"]
@@ -416,10 +418,10 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
             (32, 8),
         ] {
             let frame = render::frame(&state, columns, rows);
-            let title = format!("【{title}】");
+            let title = format!("[{title}]");
             assert_eq!(frame[0].text.trim(), title);
             assert_eq!(
-                frame[0].text.find('【'),
+                frame[0].text.find('['),
                 Some((columns - 1 - title.width()) / 2)
             );
             assert!(frame[0].tone == render::Tone::Accent);
@@ -432,13 +434,13 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
     let mut state = State::new(true);
     state.page = Page::Connections;
     state.key(Key::Enter);
-    assert_eq!(render::frame(&state, 40, 12)[0].text.trim(), "【连接详情】");
+    assert_eq!(render::frame(&state, 40, 12)[0].text.trim(), "[连接详情]");
     state.key(Key::Escape);
     state.key(Key::Char('5'));
     state.query = "mixed_port".into();
     state.key(Key::Enter);
     assert!(state.form.is_some());
-    assert_eq!(render::frame(&state, 40, 12)[0].text.trim(), "【设置】");
+    assert_eq!(render::frame(&state, 40, 12)[0].text.trim(), "[设置]");
 }
 
 #[test]

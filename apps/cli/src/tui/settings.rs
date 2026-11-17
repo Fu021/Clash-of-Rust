@@ -12,7 +12,6 @@ pub(super) const KEYS: &[&str] = &[
     "dns_override",
     "fake_ip",
     "fake_ip_exclusions",
-    "fake_ip_disabled_defaults",
     "ipv6",
     "udp",
     "update_prereleases",
@@ -152,15 +151,13 @@ pub(super) fn hint(key: &str) -> &'static str {
             "选择状态后确认；系统授权在普通终端完成，返回后读取实际状态。"
         }
         "active_profile" => "选择订阅名称；新增、编辑来源、更新和删除在操作页。",
-        "fake_ip_exclusions" | "fake_ip_disabled_defaults" => {
-            "域名以逗号分隔或输入 JSON 数组；清空请填 []。"
-        }
+        "fake_ip_exclusions" => "Enter 管理已有排除项、新增项目或恢复默认。",
         "fake_ip" => "先开启 DNS 覆盖；关闭 DNS 覆盖会同时关闭 Fake-IP。",
         "tui_node_sort" => "只改变终端节点显示；节点页也可按 s 循环切换。",
         key if key.starts_with("shortcut_") => {
             "作用于当前订阅；自定义规则、顺序和订阅原规则在操作页管理。"
         }
-        _ => "Enter/Space 或 ←→ 切换选项；文字与数值按 Enter 编辑，↓ 选择保存。",
+        _ => "←→ 或 Space 调整选项，Enter 确认；文字与数值按 Enter 编辑，↓ 选择保存。",
     }
 }
 
@@ -173,7 +170,9 @@ fn choices(form: &mut Form, index: usize, values: &[(&str, &str)]) {
 
 pub(super) fn open(poll: &Poll, key: &str) -> Result<Form> {
     ensure!(
-        KEYS.contains(&key) || RULE_KEYS.contains(&key) || key == "active_profile",
+        (KEYS.contains(&key) && key != "fake_ip_exclusions")
+            || RULE_KEYS.contains(&key)
+            || key == "active_profile",
         "该设置请使用操作页的专用入口"
     );
     let value = value(poll, key);

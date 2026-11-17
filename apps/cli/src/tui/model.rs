@@ -77,6 +77,7 @@ pub(super) enum Action {
     CancelNetwork,
     Execute(crate::args::Args),
     ApplySetting(crate::args::Args),
+    SaveFakeIp(Box<clash_client_runtime::control::Command>),
     ScrollDetail(bool),
     ScrollNetwork(bool),
     ReviewForm,
@@ -99,6 +100,7 @@ pub(super) struct State {
     pub network_tool: usize,
     pub network_options: clash_client_core::network_tools::Options,
     pub form: Option<Form>,
+    pub fake_ip: Option<super::fake_ip::Editor>,
     pub execution: Option<crate::args::Args>,
     pub connection: Option<String>,
     pub detail_offset: usize,
@@ -124,6 +126,7 @@ impl State {
             network_tool: 0,
             network_options: Default::default(),
             form: None,
+            fake_ip: None,
             execution: None,
             connection: None,
             detail_offset: 0,
@@ -139,6 +142,11 @@ impl State {
             .map(|poll| &poll.meta.settings.active_profile)
             != poll.as_ref().map(|poll| &poll.meta.settings.active_profile);
         self.poll = poll;
+        if let Some(editor) = &mut self.fake_ip
+            && let Some(poll) = &self.poll
+        {
+            editor.sync(&poll.meta.settings);
+        }
         self.error = None;
         if changed {
             self.shortcuts = None;
@@ -213,6 +221,7 @@ impl State {
         self.network_report = None;
         self.network_options = Default::default();
         self.form = None;
+        self.fake_ip = None;
         self.execution = None;
         self.connection = None;
         self.detail_offset = 0;
@@ -300,7 +309,9 @@ impl State {
     }
 
     pub fn entering_text(&self) -> bool {
-        self.searching || self.form.as_ref().is_some_and(|form| form.editing)
+        self.searching
+            || self.form.as_ref().is_some_and(|form| form.editing)
+            || self.fake_ip.as_ref().is_some_and(|editor| editor.editing)
     }
 
     fn selected_node(&self) -> Option<String> {
@@ -323,6 +334,9 @@ impl State {
     }
 
     pub fn key(&mut self, key: Key) -> Action {
+        if self.fake_ip.is_some() {
+            return super::fake_ip::key(self, key);
+        }
         if let Some(form) = &mut self.form {
             if form.editing {
                 match key {
@@ -378,8 +392,17 @@ impl State {
                     self.form = None;
                 }
                 Key::Enter if form.selected < form.fields.len() => {
-                    if !form.cycle(false) {
+                    if form.fields[form.selected].choices.is_empty() {
                         form.begin_edit();
+                    } else if form.setting.is_some() {
+                        if self.error.is_some() {
+                            self.message =
+                                Some("后台状态过期，草稿保留；等待读取恢复后再保存".into());
+                        } else {
+                            return Action::ReviewForm;
+                        }
+                    } else {
+                        form.navigate(false);
                     }
                 }
                 Key::Enter if form.setting.is_some() && self.error.is_some() => {
@@ -683,6 +706,11 @@ impl State {
         } else {
             &item
         };
+        if key == "fake_ip_exclusions" {
+            self.fake_ip = Some(super::fake_ip::Editor::new(&poll.meta.settings));
+            self.message = None;
+            return;
+        }
         let form = if self.page == Page::Rules {
             super::catalog::open_shortcut(self, key)
         } else {

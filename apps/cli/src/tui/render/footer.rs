@@ -19,8 +19,28 @@ fn help(state: &State) -> &'static str {
         "输入中 · Enter 保留草稿 · Ctrl+U 清空 · Esc 撤销本项 · Ctrl+C 退出"
     } else if state.searching {
         "Enter 完成输入 · Ctrl+U 清空 · Esc 取消 · Ctrl+C 退出"
-    } else if state.form.is_some() {
-        "↑↓ 选择 · ←→ 切换 · Enter 编辑/确认 · Esc 返回 · q 退出"
+    } else if let Some(editor) = &state.fake_ip {
+        if editor.pending.is_some() {
+            "Enter 确认保存 · Esc 取消 · q 退出"
+        } else if editor.editing {
+            "输入中 · Enter 保存新增项 · Ctrl+U 清空 · Esc 保留输入 · Ctrl+C 退出"
+        } else {
+            "↑↓ 选择 · Enter 新增/停用/恢复 · Esc 返回 · q 退出"
+        }
+    } else if let Some(form) = &state.form {
+        if form
+            .fields
+            .get(form.selected)
+            .is_some_and(|field| !field.choices.is_empty())
+        {
+            if form.setting.is_some() {
+                "↑↓ 选择 · ←→ 调整 · Enter 确认当前值 · Esc 返回 · q 退出"
+            } else {
+                "↑↓ 选择 · ←→ 调整 · Enter 下一项 · Esc 返回 · q 退出"
+            }
+        } else {
+            "↑↓ 选择 · Enter 编辑/确认 · Esc 返回 · q 退出"
+        }
     } else if state.connection.is_some() {
         "↑↓ 详情 · d 解析 · x 关闭 · Esc 返回 · q 退出"
     } else if state.page == Page::Network {
@@ -68,24 +88,6 @@ pub(super) fn lines(
         tone,
     };
     let (notice, tone) = super::notice(state);
-    if spacious {
-        return vec![
-            line(&"─".repeat(width), Tone::Muted),
-            line(&notice, tone),
-            line(help(state), Tone::Muted),
-            line(
-                &if state.error.is_some() {
-                    "诊断：cor diagnose --output cor-diagnose.json".into()
-                } else {
-                    format!(
-                        "v{} · 本机后台 · 每秒采样，变化时绘制",
-                        clash_client_core::VERSION
-                    )
-                },
-                Tone::Muted,
-            ),
-        ];
-    }
     if height < 10 {
         return vec![if has_notice(state) {
             line(&notice, tone)
@@ -97,7 +99,7 @@ pub(super) fn lines(
             line("q 退出 · Esc 返回", Tone::Muted)
         }];
     }
-    let budget = height.saturating_sub(header_height + 3);
+    let budget = height.saturating_sub(header_height + 3 + if spacious { 2 } else { 0 });
     let mut help = wrap_help(help(state), width);
     help.truncate(budget.saturating_sub(1));
     let mut notice = wrap(
@@ -115,9 +117,28 @@ pub(super) fn lines(
             last.push('…');
         }
     }
-    notice
-        .iter()
-        .map(|text| line(text, tone))
-        .chain(help.iter().map(|text| line(text, Tone::Muted)))
-        .collect()
+    let mut lines = Vec::new();
+    if spacious {
+        lines.push(line(&"─".repeat(width), Tone::Muted));
+    }
+    lines.extend(
+        notice
+            .iter()
+            .map(|text| line(text, tone))
+            .chain(help.iter().map(|text| line(text, Tone::Muted))),
+    );
+    if spacious {
+        lines.push(line(
+            &if state.error.is_some() {
+                "诊断：cor diagnose --output cor-diagnose.json".into()
+            } else {
+                format!(
+                    "v{} · 本机后台 · 每秒采样，变化时绘制",
+                    clash_client_core::VERSION
+                )
+            },
+            Tone::Muted,
+        ));
+    }
+    lines
 }

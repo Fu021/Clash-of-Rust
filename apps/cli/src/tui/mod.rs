@@ -1,4 +1,5 @@
 mod catalog;
+mod fake_ip;
 mod form;
 mod input;
 mod model;
@@ -116,12 +117,16 @@ async fn set_node_sort(
 
 async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
     let command = settings::command(operation)?;
+    save_command(context, command, operation.path == "rule shortcut").await
+}
+
+async fn save_command(context: &Args, command: Command, shortcut: bool) -> Result<Reply> {
     tokio::time::timeout(Duration::from_secs(20), async {
         let remote = backend::connect(context, false)
             .await?
             .context("后台已退出，未保存设置")?;
         let _: serde_json::Value = remote.request(command).await.map_err(|error| {
-            if operation.path == "rule shortcut"
+            if shortcut
                 && error
                     .downcast_ref::<std::io::Error>()
                     .is_some_and(|cause| cause.kind() == std::io::ErrorKind::UnexpectedEof)
@@ -137,7 +142,7 @@ async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
                 header: true,
             })
             .await?;
-        let shortcuts = if operation.path == "rule shortcut" {
+        let shortcuts = if shortcut {
             catalog::read_shortcuts(&remote, &poll, None).await
         } else {
             None
@@ -268,6 +273,14 @@ pub async fn run(args: &Args) -> Result<()> {
                         save_setting(&args, &operation).await
                     })));
                 }
+                Action::SaveFakeIp(command) => {
+                    let args = args.clone();
+                    state.saving = true;
+                    state.message = None;
+                    request = Some(Request(tokio::spawn(async move {
+                        save_command(&args, *command, false).await
+                    })));
+                }
                 Action::ScrollDetail(down) => {
                     let width = render::content_width(size.0, size.1);
                     let limit = panels::connection_rows(&state, width)
@@ -335,6 +348,7 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.shortcuts = shortcuts;
                 }
                 Ok(Ok(Reply::Saved(poll, shortcuts))) => {
+                    let fake_ip = state.fake_ip.is_some();
                     let key = state.form.as_ref().and_then(|form| form.setting.clone());
                     let message = key.map(|key| {
                         format!(
@@ -347,7 +361,17 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.shortcuts = shortcuts;
                     state.form = None;
                     state.execution = None;
-                    state.message = message;
+                    if fake_ip {
+                        if let Some(editor) = &mut state.fake_ip
+                            && editor.saving_addition
+                        {
+                            editor.draft.clear();
+                            editor.saving_addition = false;
+                        }
+                        state.message = Some("已保存 Fake-IP 排除项".into());
+                    } else {
+                        state.message = message;
+                    }
                 }
                 Ok(Ok(Reply::Network(result))) => match *result {
                     Ok(report) => {
@@ -370,10 +394,11 @@ pub async fn run(args: &Args) -> Result<()> {
                 },
                 Ok(Err(error)) => {
                     if state.saving
-                        && state
-                            .form
-                            .as_ref()
-                            .is_some_and(|form| form.setting.is_some())
+                        && (state.fake_ip.is_some()
+                            || state
+                                .form
+                                .as_ref()
+                                .is_some_and(|form| form.setting.is_some()))
                     {
                         state.message = Some(format!("保存失败或结果未确认，草稿保留：{error:#}"));
                     }

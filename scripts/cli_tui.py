@@ -161,8 +161,8 @@ def verify(console, resources, report):
                     text = terminal.text()
                     title = terminal.screen.get(0, '')
                     if columns < 54 or rows < 24:
-                        navigation_ready = (title.strip() == '【节点】'
-                                            and title.find('【') == (columns-1-8)//2)
+                        navigation_ready = (title.strip() == '[节点]'
+                                            and title.find('[') == (columns-1-6)//2)
                     else:
                         header = '\n'.join(terminal.screen.get(index, '') for index in range(5))
                         navigation_ready = (
@@ -217,11 +217,11 @@ def verify(console, resources, report):
             terminal.send(b'\r')
             terminal.wait('输入中')
             terminal.send(b'q6')
-            terminal.wait('[]q6')
+            terminal.wait('新增：q6')
             if terminal.process.poll() is not None:
                 raise RuntimeError('Typing q into a setting exited TUI')
             terminal.send(b'\x1b')
-            terminal.wait('值：[]')
+            terminal.wait('新增：q6')
             terminal.send(b'\x1b6')
             terminal.wait('管理操作')
             terminal.send(b'/service status\r\r')
@@ -243,7 +243,7 @@ def verify(console, resources, report):
             terminal.send(b'\x1b[B\x1b[C')
             terminal.wait('记录类型：A')
             terminal.resize(40, 20)
-            terminal.wait('【网络】', rows=20)
+            terminal.wait('[网络]', rows=20)
             terminal.wait('记录类型：A', rows=20)
             terminal.capture(report, 'network-parameters-40x20')
             terminal.resize(100, 30)
@@ -276,7 +276,7 @@ def verify(console, resources, report):
             terminal.wait('输入中', rows=16)
             terminal.send(b'\r\r')
             terminal.wait('嗅探域名：api.github.com', rows=16)
-            terminal.wait('【连接详情】', rows=16)
+            terminal.wait('[连接详情]', rows=16)
             terminal.capture(report, 'small')
             terminal.resize(40, 2)
             terminal.wait('api.github.com', rows=2)
@@ -309,6 +309,7 @@ def verify(console, resources, report):
                    'navigation-fit-and-centered-compact-title',
                    'resize-and-tiny-detail-scroll',
                    'native-setting-save-failure-persistence-and-cross-client-refresh',
+                   'fake-ip-list-add-disable-restore-and-stale-confirmation',
                    'profile-list-selection-and-included-shortcut-state',
                    'q-restores-terminal', 'ctrl-c-restores-terminal'],
     }), encoding='utf-8')
@@ -374,6 +375,7 @@ def verify_settings(console, resources, report):
                 call('config', 'set', 'tui_node_sort', 'latency_ascending')
                 terminal.wait('延迟从低到高')
             verify_network_export(command, data, report)
+            verify_fake_ip(call, command, data, report)
             verify_profile_catalog(call, command, data, report)
             if json.loads((data/'control.json').read_text())['pid'] != owner:
                 raise RuntimeError('Opening or closing TUI replaced the existing owner')
@@ -385,6 +387,58 @@ def verify_settings(console, resources, report):
             raise
         else:
             call('stop')
+
+
+def verify_fake_ip(call, command, data, report):
+    from cli_tui_preview import Gallery
+    gallery = Gallery(report)
+    domain = 'tui.example.test'
+    with Session([*command, 'ui']) as terminal:
+        terminal.wait('内核未运行')
+        terminal.send(b'5/fake_ip_exclusions\r')
+        terminal.wait('项自定义')
+        terminal.send(b'\r')
+        terminal.wait('设置 · Fake-IP 排除项')
+        terminal.wait('localhost')
+        terminal.capture(report, 'fake-ip-existing')
+        gallery.capture(terminal, '设置', 'Fake-IP · 已有项及来源', demo=False, size=(100, 30))
+        terminal.send(b'\r'+domain.encode()+b'\r')
+        terminal.wait('新增排除项：'+domain)
+        terminal.send(b'\r')
+        terminal.wait('已保存 Fake-IP 排除项')
+        if call('config', 'get', 'fake_ip_exclusions')['fake_ip_exclusions'] != [domain]:
+            raise RuntimeError('TUI Fake-IP addition was not persisted')
+        terminal.send(b'\x1b[B'*3+b'\r')
+        terminal.wait('停用默认排除项：localhost')
+        terminal.send(b'\r')
+        terminal.wait('已保存 Fake-IP 排除项')
+        terminal.wait('已停用')
+        if 'localhost' not in call('config', 'get', 'fake_ip_disabled_defaults')['fake_ip_disabled_defaults']:
+            raise RuntimeError('TUI Fake-IP default was not disabled')
+        terminal.capture(report, 'fake-ip-disabled')
+        gallery.capture(terminal, '设置', 'Fake-IP · 停用默认项后仍可查看', demo=False, size=(100, 30))
+        terminal.send(b'\x1b[A'*100+b'\x1b[B\r')
+        terminal.wait('恢复全部默认排除项')
+        terminal.send(b'\r')
+        terminal.wait('已保存 Fake-IP 排除项')
+        saved = json.loads((data/'settings.json').read_text())
+        if saved['fake_ip_disabled_defaults'] or saved['fake_ip_exclusions'] != [domain]:
+            raise RuntimeError('TUI Fake-IP restore lost custom values or left defaults disabled')
+        gallery.capture(terminal, '设置', 'Fake-IP · 恢复默认并保留自定义项', demo=False, size=(100, 30))
+        terminal.send(b'\x1b[A\r\x15invalid/domain\r')
+        terminal.wait('排除项只能包含')
+        terminal.wait('新增：invalid/domain')
+        terminal.capture(report, 'fake-ip-invalid-input-kept')
+        terminal.send(b'\r\x15stale.example.test\r')
+        terminal.wait('新增排除项：stale.example.test')
+        original = call('config', 'get', 'ipv6')['ipv6']
+        call('config', 'set', 'ipv6', 'false' if original else 'true')
+        terminal.send(b'\r')
+        terminal.wait(r'设置已变化|设置已被另一客户端修改', regex=True)
+        if call('config', 'get', 'fake_ip_exclusions')['fake_ip_exclusions'] != [domain]:
+            raise RuntimeError('Stale Fake-IP confirmation changed settings')
+        terminal.wait('stale.example.test')
+        terminal.capture(report, 'fake-ip-stale-confirmation')
 
 
 def verify_network_export(command, data, report):
