@@ -74,7 +74,7 @@ def render(data, lang, repo, compact=False, root=''):
         f'v{escape(item["version"])}</a> · <time datetime="{item["date"]}">{item["date"]}</time></li>'
         for item in data['history'])
     earlier = ('历史正式版' if zh else 'Earlier stable releases')
-    archive = f'<section><h2>{earlier}</h2><ul class="dots">{history}</ul></section>' if history else ''
+    archive = f'<section class="release-history"><h2>{earlier}</h2><ul class="dots">{history}</ul></section>' if history else ''
     alt = '蓝猫在车站张贴新的线路告示。' if zh else 'The blue cat puts up a new railway notice at the station.'
     banner = f'<div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{root}assets/versions-small.webp"><img src="{root}assets/versions.webp" width="2172" height="724" alt="{alt}"></picture></div>'
     return '<section class="page-head"><div class="wrap"><h1>'+('版本记录' if zh else 'Release notes')+'</h1><p class="lead">'+('历次正式版更新。' if zh else 'Stable releases through the years.')+'</p></div>'+banner+'</section><section class="wrap doc versions"><p>'+('完整发行说明见 ' if zh else 'Full release notes: ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>'+('。' if zh else '.')+'</p>'+content+archive+'</section>'

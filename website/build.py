@@ -146,9 +146,12 @@ def render_tools(kind, lang, data, root):
         for key, option in data["options"].items():
             users = "、" if lang == "zh" else ", "
             used = users.join(tool[lang]["name"] for tool in data["tools"] if key in tool["options"])
-            rows += (f'<tr><th scope="row"><code>{option["flag"]}</code></th><td>{escape(option[lang])}</td>'
-                     f'<td>{option["range"]}</td><td>{option["default"]}</td><td>{escape(used)}</td></tr>')
-        return (f'<div class="table-scroll"><table class="plain"><thead><tr><th scope="col">{labels["flag"]}</th>'
+            rows += (f'<tr role="row"><th scope="row"><code>{option["flag"]}</code></th>'
+                     f'<td role="cell" data-label="{labels["meaning"]}">{escape(option[lang])}</td>'
+                     f'<td role="cell" data-label="{labels["range"]}">{option["range"]}</td>'
+                     f'<td role="cell" data-label="{labels["default"]}">{option["default"]}</td>'
+                     f'<td role="cell" data-label="{labels["used"]}">{escape(used)}</td></tr>')
+        return (f'<div class="table-scroll"><table class="plain tool-options" role="table"><thead><tr><th scope="col">{labels["flag"]}</th>'
                 f'<th scope="col">{labels["meaning"]}</th><th scope="col">{labels["range"]}</th>'
                 f'<th scope="col">{labels["default"]}</th><th scope="col">{labels["used"]}</th></tr></thead>'
                 f'<tbody>{rows}</tbody></table></div>')

@@ -136,6 +136,13 @@ async function checkPage(context, origin, route, width) {
       assert.equal(await page.locator(".manual-nav a").count(), 3);
       assert.equal(await page.locator(".manual-nav [aria-current]").count(), 1);
     }
+    for (const details of await page.locator(".benchmark-details").all()) {
+      assert.equal(await details.locator(".benchmark-body").isVisible(), false);
+      await activate(details.locator("summary"));
+      assert.equal(await details.locator(".benchmark-body").isVisible(), true);
+      await activate(details.locator("summary"));
+      assert.equal(await details.locator(".benchmark-body").isVisible(), false);
+    }
     const imageLink = page.locator("[data-enlarge]").first();
     if (await imageLink.count()) {
       await activate(imageLink);
@@ -328,16 +335,20 @@ async function checkDownloadFallbacks(origin) {
     return { tag_name: tag, draft: false, prerelease: channel === "preview",
       published_at: channel === "preview" ? new Date(Date.parse(snapshot.published) + 1000).toISOString() : snapshot.published, assets };
   }
-  for (const mode of ["valid", "offline", "missing-checksum", "unsafe-url"]) {
+  for (const mode of ["valid", "offline", "missing-checksum", "unsafe-url", "latest-offline"]) {
     const context = await browser.newContext({ viewport: { width: 360, height: 640 }, serviceWorkers: "block" });
     await context.route("**/*", route => {
       const url = new URL(route.request().url());
       if (url.origin === origin) return route.continue();
       if (url.hostname !== "api.github.com" || mode === "offline") return route.abort();
+      if (mode === "latest-offline" && url.pathname.endsWith("/releases/latest")) return route.abort();
       const stable = record("stable");
       const preview = record("preview");
       if (mode === "missing-checksum") preview.assets.pop();
       if (mode === "unsafe-url") preview.assets[0].browser_download_url = "https://example.invalid/installer";
+      if (mode === "latest-offline") {
+        preview.published_at = new Date(Date.parse(stable.published_at) - 1000).toISOString();
+      }
       const json = url.pathname.endsWith("/releases/latest") ? stable
         : url.pathname.endsWith("/releases") ? [preview, stable] : { stargazers_count: 1 };
       return route.fulfill({ status: 200, json });
@@ -358,6 +369,92 @@ async function checkDownloadFallbacks(origin) {
     }
   }
   report.download_fallbacks = "passed";
+}
+
+async function checkBenchmarkDetails(origin) {
+  for (const width of [1280, 393]) {
+    for (const reducedMotion of ["no-preference", "reduce"]) {
+      const context = await browser.newContext({
+        viewport: { width, height: 852 }, reducedMotion, serviceWorkers: "block",
+        isMobile: width === 393, hasTouch: width === 393,
+      });
+      await context.route("**/*", route => new URL(route.request().url()).origin === origin
+        ? route.continue() : route.abort());
+      await context.addInitScript(() => { localStorage.setItem("cor-site-theme", "light"); });
+      try {
+        const page = await context.newPage();
+        page.setDefaultTimeout(15000);
+        for (const route of ["/", "/en/"]) {
+          await page.goto(origin + route, { waitUntil: "load" });
+          await settleImages(page);
+          const details = page.locator(".benchmark-details");
+          const summary = details.locator("summary");
+          const body = details.locator(".benchmark-body");
+          assert.equal(await body.isVisible(), false);
+          const closed = await details.evaluate(element => element.getBoundingClientRect().height);
+          await summary.evaluate(element => {
+            element.addEventListener("click", () => {
+              window.benchmarkMotionObserved =
+                element.parentElement.getAnimations({ subtree: true }).length > 0;
+            });
+          });
+          await summary.focus();
+          await page.keyboard.press("Enter");
+          assert.equal(await page.evaluate(() => window.benchmarkMotionObserved), reducedMotion === "no-preference",
+            `Benchmark opening motion: ${route} ${width} ${reducedMotion}`);
+          await page.waitForFunction(() => !document.querySelector(".benchmark-details").getAnimations({ subtree: true }).length);
+          assert.equal(await body.isVisible(), true);
+          assert.equal(await body.locator("a").isVisible(), true);
+          assert.ok(await details.evaluate(element => element.getBoundingClientRect().height) > closed);
+          const spacing = await page.evaluate(() => {
+            const memory = document.querySelector("#memory");
+            const edge = getComputedStyle(memory, "::after");
+            return {
+              padding: memory.getBoundingClientRect().bottom -
+                memory.querySelector("details").getBoundingClientRect().bottom,
+              gap: document.querySelector("#what h2").getBoundingClientRect().top -
+                memory.getBoundingClientRect().bottom,
+              mask: edge.maskImage,
+              reference: getComputedStyle(document.querySelector("#cli"), "::after").maskImage,
+              overflow: document.documentElement.scrollWidth > innerWidth + 1,
+            };
+          });
+          assert.ok(spacing.padding >= 31 && spacing.gap >= 48 && !spacing.overflow &&
+            spacing.mask.includes("dither-out") && spacing.mask === spacing.reference,
+            `Benchmark section transition: ${route} ${width} ${JSON.stringify(spacing)}`);
+          if (route === "/" && reducedMotion === "no-preference") {
+            await page.screenshot({ path: path.join(output, `${width}-home-benchmark-open.png`), fullPage: true });
+          }
+          await page.keyboard.press("Space");
+          assert.equal(await page.evaluate(() => window.benchmarkMotionObserved),
+            reducedMotion === "no-preference", `Benchmark closing motion: ${route} ${width}`);
+          await page.waitForFunction(() => !document.querySelector(".benchmark-details").open);
+          assert.equal(await body.isVisible(), false);
+          await summary.evaluate(element => {
+            element.click();
+            element.click();
+            element.click();
+          });
+          await page.waitForFunction(() => !document.querySelector(".benchmark-details").getAnimations({ subtree: true }).length);
+          assert.equal(await body.isVisible(), true, `Rapid disclosure toggles: ${route} ${width}`);
+          if (reducedMotion === "no-preference") {
+            await page.keyboard.press("Space");
+            await page.emulateMedia({ reducedMotion: "reduce" });
+            await page.waitForFunction(() => !document.querySelector(".benchmark-details").open);
+            assert.equal(await details.evaluate(element => element.getAnimations({ subtree: true }).length), 0);
+            await page.emulateMedia({ reducedMotion });
+            await page.keyboard.press("Enter");
+          }
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector(".benchmark-details").open);
+          assert.equal(await summary.evaluate(element => element === document.activeElement), true);
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  }
+  report.benchmark_disclosure_and_spacing = "passed";
 }
 
 async function checkThemes(origin) {
@@ -472,6 +569,7 @@ async function run() {
   }
   await checkTour(origin);
   await checkDownloadFallbacks(origin);
+  await checkBenchmarkDetails(origin);
   await checkThemes(origin);
   const context = await browser.newContext({
     viewport: { width: 360, height: 640 }, javaScriptEnabled: false, colorScheme: "dark", serviceWorkers: "block",
@@ -486,6 +584,12 @@ async function run() {
     assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor), "rgb(16, 29, 35)");
     assert.ok((await page.locator(".scene img").evaluate(image => image.currentSrc)).includes("-night"));
     for (const language of ["", "/en"]) {
+      await page.goto(origin + language + "/", { waitUntil: "load", timeout: 20000 });
+      const summary = page.locator(".benchmark-details summary");
+      await summary.click();
+      assert.equal(await page.locator(".benchmark-body a").isVisible(), true);
+      await summary.press("Space");
+      assert.equal(await page.locator(".benchmark-body").isVisible(), false);
       for (const name of ["start", "guide", "tui", "cli"]) {
         await page.goto(origin + language + "/" + name, { waitUntil: "load", timeout: 20000 });
         assert.equal(await page.locator("html").getAttribute("lang"), language ? "en" : "zh-CN");

@@ -31,7 +31,7 @@ function syncTheme() {
       if (revision === artworkRevision) root.classList.remove("theme-loading");
     };
     const deadline = setTimeout(finish, 1200);
-    Promise.all($$(".scene img").map(image => image.decode().catch(() => {}))).then(() => {
+    Promise.all($$(".scene img, .brand-wordmark img").map(image => image.decode().catch(() => {}))).then(() => {
       clearTimeout(deadline);
       finish();
     });
@@ -107,38 +107,58 @@ for (const figure of $$("[data-shots]")) {
   }
 }
 
-const menu = $(".mobile-menu");
-if (menu) {
-  const summary = $("summary", menu);
+function animateDetails(details, content) {
+  const summary = $("summary", details);
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let expanded = menu.open;
+  let expanded = details.open;
   let animation;
-  function setMenu(open) {
-    expanded = open;
-    const start = menu.getBoundingClientRect().height;
+  let fade;
+  function finish() {
     animation?.cancel();
-    menu.open = true;
-    const end = open ? menu.getBoundingClientRect().height : summary.getBoundingClientRect().height + 2;
-    if (motion.matches || typeof menu.animate !== "function") {
-      menu.open = open;
+    fade?.cancel();
+    animation = fade = null;
+    details.open = expanded;
+  }
+  function setExpanded(open) {
+    expanded = open;
+    const start = details.getBoundingClientRect().height;
+    const opacity = details.open ? getComputedStyle(content).opacity : "0";
+    animation?.cancel();
+    fade?.cancel();
+    details.open = open;
+    const end = details.getBoundingClientRect().height;
+    if (motion.matches || typeof details.animate !== "function") {
+      finish();
       return;
     }
-    animation = menu.animate([{ height: `${start}px` }, { height: `${end}px` }],
-      { duration: 200, easing: "ease-out" });
-    animation.onfinish = () => { menu.open = expanded; animation = null; };
+    details.open = true;
+    animation = details.animate([{ height: `${start}px` }, { height: `${end}px` }],
+      { duration: 220, easing: "ease-out" });
+    fade = content.animate([{ opacity }, { opacity: open ? "1" : "0" }],
+      { duration: 180, easing: "ease-out", fill: "both" });
+    animation.onfinish = finish;
   }
   summary.addEventListener("click", event => {
     event.preventDefault();
-    setMenu(!expanded);
+    setExpanded(!expanded);
   });
-  menu.addEventListener("keydown", event => {
-    if (event.key === "Escape" && menu.open) {
-      setMenu(false);
+  details.addEventListener("keydown", event => {
+    if (event.key === "Escape" && expanded) {
+      setExpanded(false);
       summary.focus();
     }
   });
+  motion.addEventListener("change", () => { if (motion.matches) finish(); });
+  return setExpanded;
+}
+
+const menu = $(".mobile-menu");
+if (menu) {
+  const setMenu = animateDetails(menu, $("nav", menu));
   for (const link of $$("a", menu)) link.addEventListener("click", () => setMenu(false));
 }
+
+for (const details of $$(".benchmark-details")) animateDetails(details, $(".benchmark-body", details));
 
 for (const toc of $$("[data-toc]")) {
   const compact = window.matchMedia("(max-width: 900px)");
@@ -300,7 +320,7 @@ if (downloads) {
     if (recent.status === "fulfilled" && Array.isArray(recent.value)) {
       const newest = recent.value.filter(record => record && record.draft === false && record.prerelease === true)
         .sort((first, second) => String(second.published_at || "").localeCompare(String(first.published_at || "")))[0];
-      if (newest && (!stable || String(newest.published_at || "") > stable.published)) {
+      if (newest && String(newest.published_at || "") > releases.stable.published) {
         const preview = accept(newest, true);
         if (preview) {
           releases.preview = preview;
