@@ -87,7 +87,13 @@ impl Form {
         fields.extend(spec.options.split_whitespace().map(|key| Field {
             label: format!(
                 "--{key}{}",
-                if VALUES.split_whitespace().any(|value| value == key) {
+                if spec
+                    .required_options()
+                    .iter()
+                    .any(|(required, _)| *required == key)
+                {
+                    "（必填）"
+                } else if VALUES.split_whitespace().any(|value| value == key) {
                     "（可选）"
                 } else {
                     "（true 开启，留空关闭）"

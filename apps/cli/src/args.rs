@@ -14,6 +14,14 @@ impl Spec {
     pub fn retired(&self) -> bool {
         self.description.starts_with("已移除")
     }
+
+    pub fn required_options(&self) -> &'static [(&'static str, &'static str)] {
+        match self.path {
+            "profile import" => &[("name", "NAME")],
+            "logs export" | "update download" => &[("output", "FILE")],
+            _ => &[],
+        }
+    }
 }
 macro_rules! command {
     ($path:literal, $description:literal, $usage:literal, $min:literal, $max:literal, $options:literal) => {
@@ -726,8 +734,10 @@ fn validate(args: &Args) -> Result<()> {
     if args.get("interval").is_some() {
         args.interval()?;
     }
-    if matches!(args.path.as_str(), "logs export" | "update download") {
-        ensure!(args.get("output").is_some(), "请提供 --output FILE");
+    if let Some(spec) = COMMANDS.iter().find(|spec| spec.path == args.path) {
+        for (key, placeholder) in spec.required_options() {
+            ensure!(args.get(key).is_some(), "请提供 --{key} {placeholder}");
+        }
     }
     let enum_value = |value: &str, choices: &[&str]| -> Result<()> {
         ensure!(
@@ -770,7 +780,6 @@ fn validate(args: &Args) -> Result<()> {
                 enum_value(value, &["on", "off"])?;
             }
         }
-        "profile import" => ensure!(args.get("name").is_some(), "请提供 --name NAME"),
         "profile edit" => ensure!(
             args.get("name").is_some() || args.get("source").is_some(),
             "请提供 --name 或 --source"

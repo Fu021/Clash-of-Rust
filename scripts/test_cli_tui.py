@@ -14,6 +14,21 @@ import ci_test_policy
 
 
 class CliTuiTests(unittest.TestCase):
+    def test_desktop_capture_uses_checkout_identity_when_the_container_has_no_github_sha(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(cli_tui_preview, 'commit', return_value='a'*40), \
+                patch.dict(os.environ, {}, clear=True):
+            gallery = cli_tui_preview.Gallery(temporary)
+            terminal = cli_tui.Session.__new__(cli_tui.Session)
+            terminal.screen = {0: '首页', 1: 'q 退出'}
+            terminal.styles = {}
+            with patch.object(cli_tui_preview, 'settle'):
+                gallery.capture(terminal, '首页', '首页', size=(100, 2))
+            self.assertEqual(json.loads(gallery.path.read_text())['commit'], 'a'*40)
+            with patch.object(cli_tui_preview, 'commit', return_value='b'*40):
+                with self.assertRaisesRegex(RuntimeError, 'different source'):
+                    cli_tui_preview.Gallery(temporary)
+
     def test_desktop_catalog_uses_actual_help_and_omits_retired_or_recursive_entries(self):
         help_text = ('命令：\n  ui                        打开终端界面\n'
                      '  run                       前台运行\n'

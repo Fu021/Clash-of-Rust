@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from cli_tui import Session
+from workflow_artifacts import commit
 
 
 PAGES = ('首页', '节点', '连接', '网络', '设置', '操作', '订阅', '快捷规则')
@@ -32,7 +33,11 @@ class Gallery:
         self.directory = Path(report)/'desktop'
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory/'index.json'
-        self.frames = json.loads(self.path.read_text())['frames'] if self.path.exists() else []
+        self.commit = commit()
+        previous = json.loads(self.path.read_text()) if self.path.exists() else None
+        if previous and previous['commit'] != self.commit:
+            raise RuntimeError('Desktop capture directory belongs to a different source commit')
+        self.frames = previous['frames'] if previous else []
 
     def capture(self, terminal, page, title, *, demo=True, size=(120, 40), note=''):
         settle(terminal)
@@ -43,7 +48,7 @@ class Gallery:
         self.frames.append(dict(file=name+'.json', page=page, title=title,
                                 columns=size[0], rows=size[1], demo=demo, note=note))
         self.path.write_text(json.dumps(dict(source='actual-cor-pty',
-                                             commit=os.environ.get('GITHUB_SHA'),
+                                             commit=self.commit,
                                              run_id=os.environ.get('GITHUB_RUN_ID'),
                                              frames=self.frames), ensure_ascii=False, indent=2))
 
@@ -129,6 +134,9 @@ input{width:320px;max-width:100%}.tools{display:flex;flex-wrap:wrap;align-items:
 每页列出当前操作，表单包含后续字段和提交入口。点击条目展开终端原文。</p>
 <p>演示数据用于安全检查导航、表单与确认入口；隔离后台帧另行标注。
 系统授权、安装、真实代理切换的执行结果不能由这些画面代替。</p>
+<p>全局操作：1–8 / Tab 切页，r 刷新，q / Ctrl+C 退出。
+列表使用 ↑↓、Enter、/ 搜索与 Esc 返回；表单另有 ←→ 候选值、
+Enter 编辑、Ctrl+U 清空、保存/执行确认与取消，具体按键保留在每帧底部。</p>
 <p>来源提交：SOURCE · CI：RUN · 共 COUNT 帧</p>
 <div class="tools"><input id="search" aria-label="筛选页面或子页面" placeholder="搜索页面、命令、字段或操作">
 <button id="expand">展开当前结果</button><button id="collapse">收起全部</button>
@@ -172,6 +180,55 @@ def visit(terminal, number, expected):
 def search(terminal, query):
     terminal.send(b'/\x15'+query.encode()+b'\r')
     settle(terminal)
+
+
+def review_operation(terminal, gallery, path):
+    terminal.send(b'\r')
+    settle(terminal)
+    gallery.capture(terminal, '操作', path+' · 校验或执行确认',
+                    note='必填项为空时展示校验拒绝；本帧不代表执行成功。')
+    if '执行 cor '+path not in terminal.text():
+        examples = {
+            'profile import': {'--name': '演示订阅'},
+            'profile edit': {'--name': '演示订阅'},
+            'node test': {'NODE': '演示节点'},
+            'connection close': {'ID': 'preview-id'},
+            'logs export': {'--output': '/tmp/cor-preview-only.json'},
+            'update download': {'--output': '/tmp/cor-preview-only.json'},
+            'rule add': {"'TYPE,VALUE,POLICY'": 'DOMAIN-SUFFIX,example.test,DIRECT'},
+            'rule edit': {"'TYPE,VALUE,POLICY'": 'DOMAIN-SUFFIX,example.test,DIRECT'},
+            'rule move': {'POSITION': '1'},
+            'rule enable': {'on|off': 'on'},
+            'completion': {'SHELL': 'bash'},
+        }.get(path, {})
+        for _ in range(100):
+            previous = selected(terminal)
+            terminal.send(UP)
+            settle(terminal)
+            if selected(terminal) == previous:
+                break
+        for _ in range(100):
+            current = selected(terminal)
+            if '检查并执行 →' in current:
+                break
+            label = current.removeprefix('› ').split('：', 1)[0].split('（', 1)[0]
+            if '（必填）' in current or label in examples:
+                terminal.send(b'\r')
+                terminal.wait('输入中')
+                terminal.send(examples.get(label, 'preview-value').encode()+b'\r')
+                settle(terminal)
+            terminal.send(DOWN)
+            settle(terminal)
+        else:
+            raise RuntimeError('Operation fields did not reach the confirmation action: '+path)
+        terminal.send(b'\r')
+        terminal.wait('执行 cor '+path)
+        gallery.capture(terminal, '操作', path+' · 演示参数与执行确认',
+                        note='参数均为虚构输入；仅通过 CLI 参数校验并展示确认，未执行业务操作。')
+    terminal.send(ESCAPE)
+    settle(terminal)
+    terminal.send(ESCAPE)
+    terminal.wait('管理操作')
 
 
 def verify_desktop(console, command, report):
@@ -286,15 +343,7 @@ def verify_desktop(console, command, report):
             terminal.send(b'\r')
             terminal.wait('cor '+path+' ·')
             gallery.editor(terminal, '操作', path+' · '+description)
-            terminal.send(b'\r')
-            settle(terminal)
-            gallery.capture(terminal, '操作', path+' · 校验或执行确认',
-                            note='必填项为空时展示校验拒绝；本帧不代表执行成功。')
-            if '执行 cor '+path in terminal.text():
-                terminal.send(ESCAPE)
-                settle(terminal)
-            terminal.send(ESCAPE)
-            terminal.wait('管理操作')
+            review_operation(terminal, gallery, path)
     gallery.render()
 
 

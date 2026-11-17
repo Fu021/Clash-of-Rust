@@ -149,8 +149,12 @@ impl State {
                         .as_deref()
                         .is_some_and(|key| !key.starts_with("shortcut_"))
             });
-            if !preserve_form && (self.form.is_some() || self.confirmation.is_some()) {
-                self.message = Some("后台或当前订阅已变化，已取消旧表单，请重新选择".into());
+            if !preserve_form {
+                self.message = if self.form.is_some() || self.confirmation.is_some() {
+                    Some("后台或当前订阅已变化，已取消旧表单，请重新选择".into())
+                } else {
+                    None
+                };
             }
             self.group = None;
             self.selected = 0;

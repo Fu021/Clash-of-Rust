@@ -233,6 +233,38 @@ fn settings_and_operations_follow_the_shared_command_catalogue() {
 }
 
 #[test]
+fn command_forms_label_options_required_by_the_shared_parser() {
+    for spec in form::commands() {
+        let form = Form::new(spec);
+        for (key, _) in spec.required_options() {
+            let field = form
+                .fields
+                .iter()
+                .find(|field| field.option == Some(*key))
+                .unwrap();
+            assert!(field.label.contains("必填"), "{} --{key}", spec.path);
+            assert!(form.args(&context()).is_err(), "{} --{key}", spec.path);
+        }
+    }
+}
+
+#[test]
+fn profile_changes_release_the_previous_sources_notice_without_an_open_draft() {
+    let mut state = State::new(false);
+    state.page = Page::Rules;
+    let mut poll = demo_poll();
+    poll.meta.settings.active_profile = Some("included-profile".into());
+    state.accept(Some(poll));
+    state.message = Some("订阅已包含此规则，无需重复添加".into());
+    let mut next = demo_poll();
+    next.meta.settings.active_profile = Some("plain-profile".into());
+    state.accept(Some(next));
+    assert!(state.message.is_none());
+    assert!(state.error.is_none());
+    assert!(state.form.is_none());
+}
+
+#[test]
 fn desktop_operation_rows_keep_the_complete_command_name_visible() {
     let mut state = State::new(true);
     state.page = Page::Tools;

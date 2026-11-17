@@ -16,7 +16,7 @@ fn help(state: &State) -> &'static str {
     if state.execution.is_some() || state.confirmation.is_some() {
         "Enter 确认 · Esc 取消 · q 退出"
     } else if state.form.as_ref().is_some_and(|form| form.editing) {
-        "Enter 保留草稿 · Ctrl+U 清空 · Esc 撤销本项 · Ctrl+C 退出"
+        "输入中 · Enter 保留草稿 · Ctrl+U 清空 · Esc 撤销本项 · Ctrl+C 退出"
     } else if state.searching {
         "Enter 完成输入 · Ctrl+U 清空 · Esc 取消 · Ctrl+C 退出"
     } else if state.form.is_some() {
