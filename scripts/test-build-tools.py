@@ -1476,6 +1476,62 @@ class BuildTests(unittest.TestCase):
             launch.assert_not_called()
             context.__exit__.assert_called_once()
 
+    def test_windows_independent_only_unmarked_empty_502_without_origin_is_not_ready(self):
+        process = SimpleNamespace(poll=lambda: None)
+        for status, body, identity, last_path, expected in (
+                (502, b'', None, None, windows_update_tests.IndependentCoreNotReady),
+                (502, b'', 'expected-fixture', None, AssertionError),
+                (502, b'upstream error', None, None, AssertionError),
+                (503, b'', None, None, AssertionError),
+                (200, b'', None, None, AssertionError),
+                (502, b'', None, '/small', AssertionError)):
+            with self.subTest(status=status, body=body, identity=identity, last_path=last_path):
+                server = SimpleNamespace(server_port=42121, fixture_id='expected-fixture',
+                                         last_path=last_path)
+                response = MagicMock(status=status)
+                response.read.return_value = body
+                response.getheader.return_value = identity
+                connection = MagicMock()
+                connection.getresponse.return_value = response
+                with patch.object(windows_update_tests, 'HTTPConnection', return_value=connection):
+                    with self.assertRaises(expected):
+                        windows_update_tests.probe_independent_core(process, 42122, server)
+                connection.close.assert_called_once()
+
+    def test_windows_independent_readiness_waits_for_verified_traffic_and_keeps_first_error(self):
+        process = SimpleNamespace(poll=lambda: None)
+        probe = MagicMock(side_effect=[
+            windows_update_tests.IndependentCoreNotReady('HTTP 502 before routing'),
+            ConnectionRefusedError('not listening'),
+            'verified fixture digest',
+        ])
+        record = {}
+        with patch.object(windows_update_tests.time, 'sleep') as sleep:
+            windows_update_tests.wait_independent_core(process, probe, record)
+        self.assertTrue(record['completed'])
+        self.assertEqual(record['attempts'], 3)
+        self.assertEqual(record['probe_sha256'], 'verified fixture digest')
+        self.assertEqual(record['transient_errors'],
+                         ['HTTP 502 before routing', 'not listening'])
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_windows_independent_readiness_rejects_wrong_payload_timeout_and_process_exit(self):
+        for outcome in ('wrong-payload', 'timeout', 'core-exit'):
+            with self.subTest(outcome=outcome):
+                process = SimpleNamespace(poll=lambda: 1 if outcome == 'core-exit' else None)
+                failure = AssertionError('wrong payload') if outcome == 'wrong-payload' else \
+                    windows_update_tests.IndependentCoreNotReady('HTTP 502 before routing')
+                probe = MagicMock(side_effect=failure)
+                record = {}
+                with patch.object(windows_update_tests.time, 'sleep') as sleep, \
+                        patch.object(windows_update_tests.time, 'monotonic',
+                                     side_effect=[0, 0, 21]):
+                    with self.assertRaises(type(failure)):
+                        windows_update_tests.wait_independent_core(process, probe, record)
+                self.assertFalse(record['completed'])
+                self.assertEqual(probe.call_count, 2 if outcome == 'timeout' else 1)
+                self.assertEqual(sleep.call_count, 1 if outcome == 'timeout' else 0)
+
     def test_windows_independent_fixture_releases_only_started_resources_on_each_exit(self):
         for outcome in ('config-fails', 'worker-fails', 'core-fails', 'success'):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
@@ -1607,7 +1663,8 @@ class BuildTests(unittest.TestCase):
             self.assertFalse(failure.exists())
 
     def test_windows_independent_core_update_checks_traffic_and_preserves_external_files(self):
-        for outcome in ('success', 'installer-fails', 'core-exits', 'core-modified'):
+        for outcome in ('success', 'installer-fails', 'core-exits', 'core-modified',
+                        'proxy-fails-after-update'):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 payload = directory/'payload'
@@ -1633,6 +1690,8 @@ class BuildTests(unittest.TestCase):
 
                 def probe():
                     probes.append(True)
+                    if outcome == 'proxy-fails-after-update' and len(probes) == 2:
+                        raise windows_update_tests.IndependentCoreNotReady('HTTP 502 after update')
                     return 'fixture payload digest'
 
                 def execute(installer, arguments, expected_code):
@@ -1662,6 +1721,13 @@ class BuildTests(unittest.TestCase):
                                 package, installed, payload, directory, execute, record)
                         self.assertFalse(record['completed'])
                         self.assertEqual(record['failure']['exit_code'], 68)
+                    elif outcome == 'proxy-fails-after-update':
+                        with self.assertRaisesRegex(windows_update_tests.IndependentCoreNotReady,
+                                                    'after update'):
+                            windows_update_tests.verify_independent_core(
+                                package, installed, payload, directory, execute, record)
+                        self.assertFalse(record['completed'])
+                        self.assertEqual(len(probes), 2)
                     elif outcome in ('core-exits', 'core-modified'):
                         with self.assertRaises(AssertionError):
                             windows_update_tests.verify_independent_core(

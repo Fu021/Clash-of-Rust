@@ -172,6 +172,10 @@ def reserve_mixed_port():
             return
 
 
+class IndependentCoreNotReady(OSError):
+    pass
+
+
 def probe_independent_core(process, proxy_port, server):
     from proxy_benchmark import BLOCK
     if process.poll() is not None:
@@ -186,18 +190,41 @@ def probe_independent_core(process, proxy_port, server):
         digest = hashlib.sha256(body).hexdigest()
         identity = response.getheader('X-Cor-Update-Fixture') == server.fixture_id
         if response.status != 200 or body != BLOCK or not identity:
-            raise AssertionError(
+            failure = (
                 'Independent Mihomo did not forward the fixture payload: '
                 f'HTTP {response.status}, bytes={len(body)}, sha256={digest}, '
                 f'identity={identity}, proxy_port={proxy_port}, '
                 f'origin_port={server.server_port}, origin_path={server.last_path!r}')
+            if response.status == 502 and not body and not identity and server.last_path is None:
+                raise IndependentCoreNotReady(failure)
+            raise AssertionError(failure)
         return digest
     finally:
         connection.close()
 
 
+def wait_independent_core(process, probe, record):
+    started = time.monotonic()
+    record.update({'completed': False, 'attempts': 0, 'transient_errors': []})
+    while True:
+        record['attempts'] += 1
+        try:
+            digest = probe()
+        except OSError as failure:
+            record['last_error'] = str(failure)[:2048]
+            if len(record['transient_errors']) < 8:
+                record['transient_errors'].append(record['last_error'])
+            if process.poll() is not None or time.monotonic()-started >= 20:
+                raise
+            time.sleep(.1)
+        else:
+            record.update({'completed': True, 'probe_sha256': digest,
+                           'elapsed_ms': round((time.monotonic()-started)*1000)})
+            return
+
+
 @contextmanager
-def independent_core(payload, directory):
+def independent_core(payload, directory, readiness=None):
     from proxy_benchmark import Payload
 
     class FixturePayload(Payload):
@@ -243,15 +270,7 @@ def independent_core(payload, directory):
                 def probe():
                     return probe_independent_core(process, proxy_port, server)
                 try:
-                    deadline = time.monotonic()+20
-                    while True:
-                        try:
-                            probe()
-                            break
-                        except OSError:
-                            if process.poll() is not None or time.monotonic() >= deadline:
-                                raise
-                            time.sleep(.1)
+                    wait_independent_core(process, probe, readiness if readiness is not None else {})
                     yield process, executable, config, probe
                 finally:
                     if process.poll() is None:
@@ -267,7 +286,8 @@ def verify_independent_core(package, installed, payload, directory, execute, rec
     record.update({'completed': False, 'expected_exit_code': 0})
     try:
         (package.parent/'installer-failure.json').unlink(missing_ok=True)
-        with independent_core(payload, directory) as (process, executable, config, probe):
+        with independent_core(payload, directory, readiness=record.setdefault('readiness', {})) \
+                as (process, executable, config, probe):
             if executable.resolve().is_relative_to(installed.resolve()):
                 raise AssertionError('Independent Mihomo must live outside the installation')
             original = {path: sha256(path) for path in (executable, config)}

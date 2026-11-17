@@ -12,6 +12,21 @@ from workflow_artifacts import commit
 
 
 PAGES = ('首页', '节点', '连接', '网络', '设置', '操作', '订阅', '快捷规则')
+PAGE_ACTIONS = {
+    '首页': '查看内核、后台、订阅与流量；r 刷新，1–8 / Tab 切页，q / Ctrl+C 退出。',
+    '节点': '↑↓ 选择，/ 搜索，Enter 打开策略组或确认切换；s 循环三种排序，Esc 返回。自动组只读。',
+    '连接': '↑↓ 选择，/ 搜索，Enter 打开详情；详情内 ↑↓ 滚动，d 补充解析，x 关闭连接，Esc 返回。',
+    '网络': '[ / ] 切换工具，/ 输入目标，o 编辑适用参数，Enter 检查，↑↓ 滚动结果，'
+            'e 导出既有报告，Esc 取消；包含导出失败与修正路径后的恢复。',
+    '设置': '按分类查找或用 / 搜索；Enter 打开项目，←→ / 空格选择候选值，Enter 编辑文字，'
+            'Ctrl+U 清空，Esc 撤销；保存前再次确认。',
+    '操作': '/ 搜索命令，Enter 打开表单；逐项输入参数，检查必填项，再确认执行。'
+            '此处捕获校验及确认入口，系统授权和命令结果使用普通终端。',
+    '订阅': '↑↓ 选择名称，/ 搜索，Enter 打开候选值；←→ 选择，向下选择保存并确认，'
+            'Esc 取消；展示当前项与来源类型。',
+    '快捷规则': '查看五项规则及订阅包含状态，/ 搜索，Enter 打开，←→ / 空格切换，'
+                '向下保存并确认；订阅已包含的规则禁止重复添加。',
+}
 DOWN = b'\x1b[B'
 UP = b'\x1b[A'
 ESCAPE = b'\x1b'
@@ -123,7 +138,8 @@ class Gallery:
                              f'<pre aria-label="{title}">{lines}</pre>'
                              f'<a href="{frame["file"][:-5]}.txt">原始终端文本</a></details>')
             sections.append(f'<section id="page-{PAGES.index(page)+1}"><h2>{page}'
-                            f' <small>{len(cards)} 帧</small></h2>{"".join(cards)}</section>')
+                            f' <small>{len(cards)} 帧</small></h2>'
+                            f'<p>{html.escape(PAGE_ACTIONS[page])}</p>{"".join(cards)}</section>')
         manifest = json.loads(self.path.read_text())
         links = ''.join(f'<a href="#page-{index}">{index} {page}</a>'
                         for index, page in enumerate(PAGES, 1))
@@ -147,9 +163,10 @@ input{width:320px;max-width:100%}.tools{display:flex;flex-wrap:wrap;align-items:
 每页列出当前操作，表单包含后续字段和提交入口。点击条目展开终端原文。</p>
 <p>演示数据用于安全检查导航、表单与确认入口；隔离后台帧另行标注。
 系统授权、安装、真实代理切换的执行结果不能由这些画面代替。</p>
-<p>全局操作：1–8 / Tab 切页，r 刷新，q / Ctrl+C 退出。
+<p>主页面：1–8 / Tab 切页，r 刷新，q / Ctrl+C 退出。
 列表使用 ↑↓、Enter、/ 搜索与 Esc 返回；表单另有 ←→ 候选值、
-Enter 编辑、Ctrl+U 清空、保存/执行确认与取消，具体按键保留在每帧底部。</p>
+Enter 编辑、Ctrl+U 清空、保存/执行确认与取消；输入时页面快捷键按普通文字处理，
+具体按键保留在每帧底部。</p>
 <p>来源提交：SOURCE · CI：RUN · 共 COUNT 帧</p>
 <div class="tools"><input id="search" aria-label="筛选页面或子页面" placeholder="搜索页面、命令、字段或操作">
 <button id="expand">展开当前结果</button><button id="collapse">收起全部</button>

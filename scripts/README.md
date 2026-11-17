@@ -23,7 +23,7 @@
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
 | `android.py` | CLI | Android 编译、模拟器、产物导出与 APK 打包；普通 CI 按变更选择专项。`application-preview --arch x64 --api LEVEL --build DIRECTORY --compatibility` 复用 CI APK 验证基础代理/TUN；可加 `--screenshots`、`--verify-diagnostics`，见[兼容验证](../docs/workflows/android-compatibility.md)。不带 `--compatibility` 的本地入口仍只截图或诊断。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
-| `windows_update_tests.py` | 隔离安装测试模块 | 由 Windows 候选包验证按需调用；使用固定提交、固定摘要的旧安装器脚本和同一份 CI payload，对照文件占用、只读与 ACL 拒绝写入的旧/新退出码；另以独占端口和带身份标记的 HTTP 来源验证安装目录外独立 Mihomo 的流量、更新替换及外部进程/文件保留，拒绝错误响应并保存有界证据。 |
+| `windows_update_tests.py` | 隔离安装测试模块 | 由 Windows 候选包验证按需调用；使用固定提交、固定摘要的旧安装器脚本和同一份 CI payload，对照文件占用、只读与 ACL 拒绝写入的旧/新退出码；另以独占端口和带身份标记的 HTTP 来源验证安装目录外独立 Mihomo 的流量、更新替换及外部进程/文件保留。首次启动等待有界的转发就绪并保留错误，正式更新前后拒绝错误响应，不重试掩盖失败。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择，Windows 更新相关变更另执行服务与进程边界回归，macOS 代理相关变更包含 CF 转换及偏好数据回归。 |
@@ -46,7 +46,7 @@
 | `test-release-package.py` | CLI | 统一调度安装包结构、安装后验证和 Linux 兼容性检查。 |
 | `run-memory-benchmark.py` | CLI | 隔离运行 API、GUI、托盘和 CLI 内存基准。 |
 | `cli_tui.py` | 测试夹具模块 | 真实 PTY 验证终端恢复、排序、手机宽度换行、小窗口、连接详情、网络参数及结果逐行滚动/缩放，并以独立后台核对报告原样导出及失败恢复、设置保存/拒绝、订阅选择、快捷规则包含状态、磁盘持久化和跨客户端刷新；共用 TUI 内存场景驱动，不接管宿主网络，由 CI 与内存基准调用。 |
-| `cli_tui_preview.py` | 测试夹具模块 | 复用 PTY 驱动捕获桌面八页、子页面、字段输入态、候选值和全部有效管理命令表单，生成带来源与尺寸索引的完整验收 HTML；由既有 TUI 验证调用，不增加工作流或执行宿主授权/安装。 |
+| `cli_tui_preview.py` | 测试夹具模块 | 复用 PTY 驱动捕获桌面八页、子页面、字段输入态、候选值和全部有效管理命令表单，生成带逐页操作说明、来源与尺寸索引的完整验收 HTML；由既有 TUI 验证调用，不增加工作流或执行宿主授权/安装。 |
 | `memory_desktop.py` | 模块 / 子进程 | 托盘宿主与窗口夹具；测量进程外运行，不能并入基准入口。 |
 | `preview-slint.py` | CLI | 使用依赖版本一致的 Viewer 检查语法，主线 Viewer 配合随包字体渲染正式组件；拒绝旧工具输出缺字截图，不调用 Cargo。 |
 | `test-build-tools.py` | 离线测试 | 构建输入、缓存、打包、Windows/macOS 辅助逻辑的单元测试。 |
