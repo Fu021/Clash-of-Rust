@@ -91,6 +91,32 @@ pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+fn navigation(page: Page) -> [String; 2] {
+    let items = [
+        (Page::Home, "1 首页"),
+        (Page::Nodes, "2 节点"),
+        (Page::Connections, "3 连接"),
+        (Page::Network, "4 网络"),
+        (Page::Settings, "5 设置"),
+        (Page::Tools, "6 操作"),
+        (Page::Profiles, "7 订阅"),
+        (Page::Rules, "8 快捷规则"),
+    ];
+    let mut rows = [String::new(), String::new()];
+    for (row, items) in rows.iter_mut().zip(items.chunks(4)) {
+        row.push_str("  ");
+        for (index, (target, label)) in items.iter().enumerate() {
+            if index > 0 {
+                row.push_str("     ");
+            }
+            row.push(if page == *target { '[' } else { ' ' });
+            row.push_str(label);
+            row.push(if page == *target { ']' } else { ' ' });
+        }
+    }
+    rows
+}
+
 pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     if columns == 0 || rows == 0 {
         return Vec::new();
@@ -122,7 +148,9 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         }
         return lines;
     }
-    if spacious {
+    let navigation = navigation(state.page);
+    let expanded_navigation = rows >= 24 && navigation.iter().all(|row| row.width() <= width);
+    if expanded_navigation {
         lines.push(line(
             format!(
                 "  CLASH OF RUST   /   TERMINAL   {}",
@@ -135,64 +163,18 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Tone::Accent,
         ));
         lines.push(line(String::new(), Tone::Plain));
-        lines.push(line(
-            format!(
-                "  {}     {}     {}     {}",
-                if state.page == Page::Home {
-                    "[1 首页]"
-                } else {
-                    " 1 首页 "
-                },
-                if state.page == Page::Nodes {
-                    "[2 节点]"
-                } else {
-                    " 2 节点 "
-                },
-                if state.page == Page::Connections {
-                    "[3 连接]"
-                } else {
-                    " 3 连接 "
-                },
-                if state.page == Page::Network {
-                    "[4 网络]"
-                } else {
-                    " 4 网络 "
-                }
-            ),
-            Tone::Accent,
-        ));
-        lines.push(line(
-            format!(
-                "  {}     {}     {}     {}",
-                if state.page == Page::Settings {
-                    "[5 设置]"
-                } else {
-                    " 5 设置 "
-                },
-                if state.page == Page::Tools {
-                    "[6 操作]"
-                } else {
-                    " 6 操作 "
-                },
-                if state.page == Page::Profiles {
-                    "[7 订阅]"
-                } else {
-                    " 7 订阅 "
-                },
-                if state.page == Page::Rules {
-                    "[8 快捷规则]"
-                } else {
-                    " 8 快捷规则 "
-                },
-            ),
-            Tone::Accent,
-        ));
+        lines.extend(navigation.into_iter().map(|text| line(text, Tone::Accent)));
         lines.push(line(
             format!("  {}", "─".repeat(width.saturating_sub(4))),
             Tone::Muted,
         ));
     } else if height >= 3 {
-        lines.push(line(format!("【{page}】"), Tone::Accent));
+        let title = format!("【{page}】");
+        let padding = width.saturating_sub(title.width()) / 2;
+        lines.push(line(
+            format!("{}{title}", " ".repeat(padding)),
+            Tone::Accent,
+        ));
         if height >= 10 {
             lines.push(line("1–8 切页 · Tab 下一页".into(), Tone::Muted));
         }

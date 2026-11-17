@@ -406,9 +406,22 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
     ] {
         let mut state = State::new(true);
         state.page = page;
-        for (columns, rows) in [(36, 16), (40, 12), (48, 24), (60, 18), (32, 8)] {
+        for (columns, rows) in [
+            (36, 16),
+            (40, 12),
+            (48, 24),
+            (53, 30),
+            (60, 18),
+            (79, 23),
+            (32, 8),
+        ] {
             let frame = render::frame(&state, columns, rows);
-            assert_eq!(frame[0].text.trim_end(), format!("【{title}】"));
+            let title = format!("【{title}】");
+            assert_eq!(frame[0].text.trim(), title);
+            assert_eq!(
+                frame[0].text.find('【'),
+                Some((columns - 1 - title.width()) / 2)
+            );
             assert!(frame[0].tone == render::Tone::Accent);
             if rows >= 10 {
                 assert!(frame[1].text.contains("1–8 切页"));
@@ -419,14 +432,57 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
     let mut state = State::new(true);
     state.page = Page::Connections;
     state.key(Key::Enter);
-    assert_eq!(
-        render::frame(&state, 40, 12)[0].text.trim_end(),
-        "【连接详情】"
-    );
+    assert_eq!(render::frame(&state, 40, 12)[0].text.trim(), "【连接详情】");
     state.key(Key::Escape);
     state.key(Key::Char('5'));
     state.query = "mixed_port".into();
     state.key(Key::Enter);
     assert!(state.form.is_some());
-    assert_eq!(render::frame(&state, 40, 12)[0].text.trim_end(), "【设置】");
+    assert_eq!(render::frame(&state, 40, 12)[0].text.trim(), "【设置】");
+}
+
+#[test]
+fn navigation_keeps_all_pages_below_eighty_columns_when_the_labels_fit() {
+    let pages = [
+        (Page::Home, "1 首页"),
+        (Page::Nodes, "2 节点"),
+        (Page::Connections, "3 连接"),
+        (Page::Network, "4 网络"),
+        (Page::Settings, "5 设置"),
+        (Page::Tools, "6 操作"),
+        (Page::Profiles, "7 订阅"),
+        (Page::Rules, "8 快捷规则"),
+    ];
+    for (page, selected) in pages {
+        let mut state = State::new(true);
+        state.page = page;
+        for columns in [54, 60, 64, 72, 79, 80, 120] {
+            let frame = render::frame(&state, columns, 30);
+            let header = frame[..5]
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(header.contains("CLASH OF RUST"), "{columns}:\n{header}");
+            for (_, label) in pages {
+                assert!(header.contains(label), "{columns}: {label}\n{header}");
+            }
+            assert!(header.contains(&format!("[{selected}]")));
+            assert!(!header.contains('…'), "{columns}:\n{header}");
+            assert!(frame.iter().all(|line| line.text.width() < columns));
+        }
+    }
+    let mut state = State::new(true);
+    state.page = Page::Nodes;
+    state.key(Key::Enter);
+    for columns in [54, 60, 79] {
+        let text = render::frame(&state, columns, 30)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for action in ["s 排序", "/ 搜索", "Esc 返回", "q 退出"] {
+            assert!(text.contains(action), "{columns}: {action}\n{text}");
+        }
+    }
 }

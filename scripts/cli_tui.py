@@ -151,24 +151,34 @@ def verify(console, resources, report):
                 terminal.send(b's')
                 terminal.wait(mode)
             terminal.capture(report, 'nodes')
-            for columns, rows in [(40, 12), (36, 16), (48, 24), (60, 18), (100, 30)]:
+            for columns, rows in [(40, 12), (36, 16), (48, 24), (53, 30), (54, 30),
+                                  (60, 30), (79, 30), (79, 23), (60, 18), (100, 30)]:
                 terminal.resize(columns, rows)
                 deadline = time.monotonic()+5
                 actions = ['↑↓ 选择', 'Enter 打开', 's 排序', '/ 搜索', 'Esc 返回', 'q 退出']
                 while True:
                     terminal.pump(.05)
                     text = terminal.text()
+                    title = terminal.screen.get(0, '')
+                    if columns < 54 or rows < 24:
+                        navigation_ready = (title.strip() == '【节点】'
+                                            and title.find('【') == (columns-1-8)//2)
+                    else:
+                        header = '\n'.join(terminal.screen.get(index, '') for index in range(5))
+                        navigation_ready = (
+                            all(label in header for label in ('CLASH OF RUST', '[2 节点]',
+                                '1 首页', '3 连接', '4 网络', '5 设置', '6 操作', '7 订阅', '8 快捷规则'))
+                            and terminal.screen.get(4) == '  '+'─'*(columns-5)
+                            and '…' not in header)
                     if max(terminal.screen, default=0) == rows-1 and all(
-                            action in text for action in actions):
+                            action in text for action in actions) and navigation_ready:
                         break
                     if terminal.process.poll() is not None or time.monotonic() >= deadline:
-                        raise RuntimeError(f'Phone {columns}x{rows} hid node actions: {text}')
+                        raise RuntimeError(f'Resized {columns}x{rows} hid navigation or node actions: {text}')
                 if text.count('q 退出') != 1 or text.count('Esc 返回') != 1:
                     raise RuntimeError('Phone footer repeated exit or back actions')
                 if any('…' in line for line in text.splitlines()[-3:]):
                     raise RuntimeError('Phone footer truncated actions instead of wrapping')
-                if columns < 80 and terminal.screen.get(0) != '【节点】':
-                    raise RuntimeError('Phone node page lost its separate title')
                 terminal.capture(report, f'nodes-{columns}x{rows}')
             terminal.send('/日本'.encode())
             terminal.wait('🇯🇵 日本 01')
@@ -296,6 +306,7 @@ def verify(console, resources, report):
                    'network-tools-and-cancel', 'network-inline-parameters',
                    'network-result-wrap-scroll-and-resize', 'network-export-and-recovery',
                    'node-sort-cycle', 'phone-footer-wraps-actions',
+                   'navigation-fit-and-centered-compact-title',
                    'resize-and-tiny-detail-scroll',
                    'native-setting-save-failure-persistence-and-cross-client-refresh',
                    'profile-list-selection-and-included-shortcut-state',
