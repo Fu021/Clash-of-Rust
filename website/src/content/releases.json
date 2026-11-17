@@ -1,213 +1,123 @@
 {
-  "checked": "2026-11-16",
+  "checked": "2026-11-17",
   "series": "0.7",
   "downloads": {
     "stable": {
-      "tag": "v0.7.1",
-      "published": "2026-11-12T21:05:55Z",
+      "tag": "v0.7.2",
+      "published": "2026-11-17T15:03:58Z",
       "sizes": {
-        "windows-x64-setup.exe": 53308782,
-        "windows-arm64-setup.exe": 49366378,
-        "linux-amd64.deb": 58775100,
-        "linux-arm64.deb": 54854572,
-        "macos-arm64.dmg": 81209958,
-        "macos-x64.dmg": 85978001,
-        "android-arm64.apk": 68315801,
-        "android-armv7.apk": 67173021,
-        "android-x64.apk": 71002771
-      }
-    },
-    "preview": {
-      "tag": "v0.7.2-fix.5.tui-update-feedback",
-      "published": "2026-11-16T20:34:08Z",
-      "sizes": {
-        "windows-x64-setup.exe": 51312305,
-        "windows-arm64-setup.exe": 47708984,
-        "linux-amd64.deb": 52958344,
-        "linux-arm64.deb": 49166452,
-        "macos-arm64.dmg": 56747932,
-        "macos-x64.dmg": 61691087,
-        "android-arm64.apk": 68303513,
-        "android-armv7.apk": 66923165,
-        "android-x64.apk": 71088787
+        "windows-x64-setup.exe": 51372214,
+        "windows-arm64-setup.exe": 47740092,
+        "linux-amd64.deb": 53001616,
+        "linux-arm64.deb": 49183712,
+        "macos-arm64.dmg": 56782571,
+        "macos-x64.dmg": 61670771,
+        "android-arm64.apk": 68299417,
+        "android-armv7.apk": 66919069,
+        "android-x64.apk": 71084691
       }
     }
   },
   "releases": [
     {
-      "version": "0.7.2-fix.5.tui-update-feedback",
-      "channel": "preview",
-      "date": "2026-11-16",
+      "version": "0.7.2", "channel": "stable", "date": "2026-11-17",
       "en": {
-        "title": "A more usable TUI, visible update failures",
+        "title": "A more capable terminal, focused network tools",
         "highlights": [
-          "One TUI control cycles through name and both latency orders. Adaptive layouts keep small SSH terminals usable.",
-          "Common settings have direct switches and editors. Connection details and search cover original and sniffed domains.",
-          "The network toolbox focuses on twelve checks. Route trace explains unanswered hops; runtime information belongs in connection and node details.",
-          "Desktop installation failures survive startup and reopening until confirmed. Android waits for foreground presentation before acknowledging service warnings."
+          "The TUI adapts to desktop and phone SSH terminals, with persistent node sorting and direct settings.",
+          "Profiles and shortcut rules have dedicated pages, and connection details distinguish original and sniffed domains.",
+          "Twelve network checks explain their limits; TUI can edit options and export the current report.",
+          "Recoverable installation errors remain visible with access to diagnostics."
         ],
-        "known": "TUI detail presentation and settings interaction still need refinement. System authorization uses the normal terminal where required. The short Linux memory benchmark does not show the backend returning fully to its initial usage after TUI exits. Device-specific installation failures remain subject to the system installer.",
-        "summary": "Direct TUI settings and small-terminal layouts, with update warnings that remain visible."
+        "known": "Phone SSH devices, long-term memory behavior and the reported Windows code 68 incident remain unverified.",
+        "summary": "Adaptive terminal controls, twelve network checks and visible update errors."
       },
       "zh": {
-        "title": "终端更好用，更新失败看得见",
+        "title": "终端操作更灵活，网络工具更聚焦",
         "highlights": [
-          "TUI 用一个入口循环切换名称和两种延迟排序，自适应布局让小尺寸 SSH 终端仍能操作。",
-          "常用设置提供直接开关与编辑，连接详情和搜索同时覆盖原始域名与嗅探域名。",
-          "网络工具箱收敛为十二项，路由追踪解释无响应跳点，运行信息归连接与节点详情。",
-          "桌面安装失败提示在启动和重开后保留到确认，Android 服务警告等前台实际呈现后再确认。"
+          "TUI 适配桌面和手机 SSH 终端，支持持久节点排序与直接修改设置。",
+          "订阅和快捷规则拥有独立页面，连接详情区分原始域名与嗅探域名。",
+          "十二项网络检查说明测量边界，TUI 可直接编辑参数和导出当前报告。",
+          "可恢复的安装错误持续显示，并提供诊断入口。"
         ],
-        "known": "TUI 详情展示与设置交互仍需完善。需要系统授权的操作仍经普通终端完成。短时 Linux 内存基准中，退出 TUI 后后台未完全回到初始占用。设备特定的安装失败仍受系统安装器影响。",
-        "summary": "TUI 直接设置与小终端布局更完整，更新失败提示持续可见。"
+        "known": "手机 SSH 真机、长期内存表现及用户反馈的 Windows 代码 68 原因仍未完成验证。",
+        "summary": "自适应终端、十二项网络检查，以及可见的更新错误。"
       }
     },
     {
-      "version": "0.7.2-fix.4.network-inspection",
-      "channel": "preview",
-      "date": "2026-11-15",
-      "en": {
-        "title": "More ways to inspect a connection",
-        "highlights": [
-          "Seven more network tools: TCP ports, HTTP details, rule prediction, configuration diff, traffic breakdown, core runtime and node details. DNS supports record types.",
-          "CLI queries stay read-only; node selection is interactive, and terminal updates restore the backend and service state.",
-          "TUI has dedicated Settings and Actions pages, with the same validation and authorization as CLI."
-        ],
-        "known": "Rule prediction marks dynamic conditions as unknown. System probes depend on platform support and are restricted during Claude protection.",
-        "summary": "Eighteen network tools, plus clearer CLI and TUI management."
-      },
-      "zh": {
-        "title": "连接细节，看得更清楚",
-        "highlights": [
-          "新增 TCP 端口、HTTP 详情、规则预判、配置差异、流量分解、内核运行与节点详情七项工具；DNS 可选记录类型。",
-          "CLI 查询保持只读，支持交互选节点，终端更新后恢复后台和服务状态。",
-          "TUI 提供独立的设置与操作页，沿用 CLI 校验与系统授权。"
-        ],
-        "known": "规则预判对动态条件返回未知；系统探针依赖平台能力，Claude 保护期间受限。",
-        "summary": "十八项网络工具，CLI 与 TUI 管理入口更完整。"
-      }
-    },
-    {
-      "version": "0.7.2-fix.3.network-toolbox",
-      "channel": "preview",
-      "date": "2026-11-15",
-      "en": {
-        "title": "Network toolbox",
-        "highlights": [
-          "Ten new checks join the website check: DNS comparison, connection timing, IPv4/IPv6, rule and exit, TLS, stability, UDP, ping, route trace and capped download.",
-          "The same tools on desktop, phone and tablet, with cancel, adjustable options and export. No history is kept.",
-          "The terminal interface and cor network offer the same tools.",
-          "Fixed: pages could not be switched in the terminal interface after cancelling quickly."
-        ],
-        "known": "Ping and route trace depend on what the system provides, and are unavailable during Claude protection.",
-        "summary": "Eleven network checks, from DNS and timing to the route a request takes."
-      },
-      "zh": {
-        "title": "网络工具箱",
-        "highlights": [
-          "网络诊断新增十项工具：DNS 对照、连接耗时、IPv4/IPv6、规则与出口、TLS、稳定性、UDP、Ping、路由追踪、限量下载。",
-          "桌面、手机、平板共用同一套工具，可取消、可调参数、可导出，不留历史。",
-          "终端界面与 cor network 同步提供。",
-          "修复终端界面快速取消后无法切页的问题。"
-        ],
-        "known": "Ping 与路由追踪依赖系统能力，Claude 保护期间不可用。",
-        "summary": "十一项网络检查，从解析、耗时到出口，逐步排查。"
-      }
-    },
-    {
-      "version": "0.7.2-fix.2.update-memory",
-      "channel": "preview",
-      "date": "2026-11-14",
-      "en": {
-        "title": "Update recovery, lighter installers",
-        "highlights": [
-          "A failed Windows update now says why, and can be retried once the cause is cleared.",
-          "Downloads recover better from drops and sustained low speed. TUN start-up on macOS is checked for readiness.",
-          "Claude protection covers more of the official inbound addresses.",
-          "The desktop node list uses less memory, and installers are smaller again."
-        ]
-      },
-      "zh": {
-        "title": "更新更稳，安装包更小",
-        "highlights": [
-          "Windows 更新失败时给出具体原因，排除后可直接重试。",
-          "下载断连或持续低速时恢复更稳；完善 macOS 上 TUN 的启动就绪检查。",
-          "Claude 保护补充覆盖官方入站地址。",
-          "桌面节点列表占用内存更少，安装包进一步缩小。"
-        ]
-      }
-    },
-    {
-      "version": "0.7.2-fix.1.rust100-cache",
-      "channel": "preview",
-      "date": "2026-11-13",
-      "en": {
-        "title": "Protection and per-app fixes",
-        "highlights": [
-          "Fixed a brief false TUN-bypass warning as Claude protection starts, and a core that would not start again after quitting with protection on.",
-          "Android per-app routing no longer mistakes nodes with emoji in their names for missing ones, and respects your UDP switch again.",
-          "If rebuilding the VPN fails after repeated per-app changes, the existing connection is kept.",
-          "Smaller installers."
-        ]
-      },
-      "zh": {
-        "title": "保护与分流修复",
-        "highlights": [
-          "修复 Claude 保护开启瞬间误报 TUN 绕行，以及带着保护退出后内核无法再次启动的问题。",
-          "Android 应用分流不再把名称含 Emoji 的节点误判为失效，并重新遵守 UDP 开关。",
-          "连续修改应用分流时，VPN 重建失败会保留原有连接。",
-          "安装包体积更小。"
-        ]
-      }
-    },
-    {
-      "version": "0.7.1",
-      "channel": "stable",
-      "date": "2026-11-12",
+      "version": "0.7.1", "channel": "stable", "date": "2026-11-12",
       "en": {
         "title": "Per-app exits on Android, a steadier Linux",
         "highlights": [
-          "Android per-app routing gains named rule groups, app search, and a chosen exit for each app: a node, a policy group, direct or reject. Choosing an exit needs Android 10 or later.",
-          "On Linux, the core starts on networks without IPv6, the old autostart entry no longer opens a window, and fast window resizing no longer stretches the picture.",
-          "Clearer errors and fallbacks for node tests, updates and Geo downloads.",
-          "During Claude protection, appearance settings and read-only pages stay usable while network changes remain locked."
+          "Android per-app routing supports named rule groups, app search and chosen exits; app-specific exits need Android 10 or later.",
+          "Linux handles networks without IPv6, old autostart entries and rapid window resizing more reliably.",
+          "Node tests, updates and Geo downloads provide clearer errors and fallbacks.",
+          "Appearance settings and read-only pages stay usable during Claude protection."
         ],
-        "known": "Intermittent TLS failures and slow long-lived downloads are still being investigated.",
-        "summary": "Refined app routing, updates, and everyday connection management."
+        "known": "Intermittent TLS failures and slow long-lived downloads were still being investigated.",
+        "summary": "Refined app routing, updates and everyday connection management."
       },
       "zh": {
         "title": "应用可指定出口，Linux 更稳",
         "highlights": [
-          "Android 应用分流支持命名规则组、搜索应用，并可为应用指定节点、策略组、直连或拦截；指定出口需 Android 10 及以上。",
-          "Linux：无 IPv6 的网络下内核正常启动，旧自启动入口不再弹出窗口，快速缩放窗口不再拉伸画面。",
+          "Android 应用分流支持命名规则组、搜索应用与指定出口；指定出口需 Android 10 及以上。",
+          "Linux 改进无 IPv6 网络启动、旧自启动入口与快速缩放窗口。",
           "节点测速、更新与 Geo 下载的报错和回退更清晰。",
-          "Claude 保护期间，外观设置与只读操作照常可用，网络修改继续锁定。"
+          "Claude 保护期间，外观设置与只读页面继续可用。"
         ],
-        "known": "间歇性 TLS 失败与部分长连接下载慢速仍在排查。",
-        "summary": "日常连接更稳，应用分流与更新体验进一步完善。"
+        "known": "当时仍在排查间歇性 TLS 失败与部分长连接下载慢速。",
+        "summary": "应用分流、更新与日常连接管理进一步完善。"
       }
     },
     {
-      "version": "0.7.0",
-      "channel": "stable",
-      "date": "2026-11-11",
+      "version": "0.7.0", "channel": "stable", "date": "2026-11-11",
       "en": {
         "title": "A refreshed interface",
         "highlights": [
-          "Refreshed interfaces on desktop, phone and tablet: a collapsible sidebar, grid or list views for proxies and subscriptions, and one consistent rule list.",
-          "Android per-app routing rebuilt around three modes: all apps, only selected, or exclude selected, with icons, search and reconnect on save.",
-          "Subscription, Geo and client updates try a separate direct route when the proxy is down, and keep the existing configuration if they fail.",
-          "Errors are shown by severity, with shortcuts to export diagnostics and open an issue."
+          "Refreshed interfaces on desktop, phone and tablet with a collapsible sidebar and consistent rule list.",
+          "Android per-app routing supports all, selected or excluded apps.",
+          "Subscription, Geo and client updates can try a separate direct route when the proxy is down.",
+          "Errors are shown by severity, with diagnostic export and issue shortcuts."
         ]
       },
       "zh": {
         "title": "界面焕新",
         "highlights": [
-          "桌面、手机与平板界面更新：侧栏可折叠，代理与订阅可在宫格、列表间切换，规则列表样式统一。",
-          "重做 Android 应用分流：全部应用、仅选中、排除选中三种模式，支持图标、搜索和保存后重连。",
-          "订阅、Geo 与客户端更新在代理不可用时尝试独立直连，失败则保留原有配置。",
+          "桌面、手机与平板界面更新，侧栏可折叠，规则列表样式统一。",
+          "Android 应用分流支持全部应用、仅选中与排除选中。",
+          "订阅、Geo 与客户端更新在代理不可用时可尝试独立直连。",
           "错误按影响程度展示，并提供导出诊断与新建 Issue 的入口。"
         ]
       }
     }
+  ],
+  "history": [
+    {"version": "0.6.6", "date": "2026-11-03"},
+    {"version": "0.6.5", "date": "2026-10-28"},
+    {"version": "0.6.4", "date": "2026-10-24"},
+    {"version": "0.6.2", "date": "2026-10-22"},
+    {"version": "0.6.1", "date": "2026-10-21"},
+    {"version": "0.6.0", "date": "2026-10-17"},
+    {"version": "0.5.11", "date": "2026-10-16"},
+    {"version": "0.5.10", "date": "2026-10-15"},
+    {"version": "0.5.9", "date": "2026-10-15"},
+    {"version": "0.5.8", "date": "2026-10-14"},
+    {"version": "0.5.7", "date": "2026-10-14"},
+    {"version": "0.5.6", "date": "2026-10-13"},
+    {"version": "0.5.5", "date": "2026-10-13"},
+    {"version": "0.5.4", "date": "2026-10-12"},
+    {"version": "0.5.3", "date": "2026-10-11"},
+    {"version": "0.5.2", "date": "2026-10-11"},
+    {"version": "0.5.1", "date": "2026-10-10"},
+    {"version": "0.4.12", "date": "2026-10-09"},
+    {"version": "0.4.11", "date": "2026-10-08"},
+    {"version": "0.4.10", "date": "2026-10-08"},
+    {"version": "0.4.9", "date": "2026-10-08"},
+    {"version": "0.4.8", "date": "2026-10-08"},
+    {"version": "0.4.7", "date": "2026-10-08"},
+    {"version": "0.4.6", "date": "2026-10-08"},
+    {"version": "0.4.5", "date": "2026-10-07"},
+    {"version": "0.4.3", "date": "2026-10-07"},
+    {"version": "0.4.2", "date": "2026-10-06"}
   ]
 }

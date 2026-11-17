@@ -2,8 +2,8 @@
 <!-- description: What the network checks in Clash of Rust do, when to use them, and their commands, options, limits and report format. -->
 <section class="page-head">
   <div class="wrap">
-    <h1>From DNS to the exit, find the cause.<span class="preview">fix.5 preview</span></h1>
-    <p class="lead">0.7.2-fix.5 provides twelve focused checks shared by GUI, TUI and CLI. Version fix.4 has eighteen tools. Images retain their actual earlier-version captions.</p>
+    <h1>From DNS to the exit, find the cause.</h1>
+    <p class="lead">Version 0.7.2 provides twelve focused checks shared by GUI, TUI and CLI. Images show their actual capture versions.</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -50,7 +50,7 @@
 
   <section id="limits">
     <h2>Options and limits</h2>
-    <p>Defaults: 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB cap and 8 hops. The GUI shows relevant options. Direct TUI checks use defaults; customize through Actions or CLI.</p>
+    <p>Defaults: 5 attempts, 1,000 ms apart, 10 seconds each, an 8 MiB cap and 8 hops. The GUI shows relevant options. In TUI, press <kbd>o</kbd> to edit the current tool's applicable options and apply them before running; CLI uses the flags below.</p>
     {{tools:options}}
     <p style="margin-top:1.2rem">Stability checks stop at 120 seconds. System output is capped at 8 KiB per stream; reports at 48 entries of 2,048 characters.</p>
   </section>
@@ -71,6 +71,8 @@
     </div>
     <h3>From the window</h3>
     <p>Use the export button under the result. The export carries the tool, its result and any error code.</p>
+    <h3>From the terminal interface</h3>
+    <p>After a real check, press <kbd>e</kbd>, enter a path and confirm the JSON export. If writing fails, change the path and retry; demo mode does not write files.</p>
     <h3>From the command line</h3>
     <p>Add <code>--json</code> to print the report, or <code>--output FILE</code> to save it.</p>
 <pre class="term" aria-label="Saving a report"><span class="p">$ </span>cor network phase example.com --seconds 5
@@ -90,7 +92,7 @@
         <tr><th scope="row">Terminal interface</th><td>Run <code>cor ui</code> and press <kbd>4</kbd>. <kbd>[</kbd> and <kbd>]</kbd> change tool, <kbd>/</kbd> enters the target, <kbd>Enter</kbd> runs it and <kbd>Esc</kbd> cancels.</td></tr>
       </tbody>
     </table>
-    <p style="margin-top:1.4rem">The toolbox arrived in the 0.7.2 preview; stable 0.7.1 has only the website check. <a class="more" href="download.html#preview">Get the preview</a></p>
+    <p style="margin-top:1.4rem">All twelve checks are included in stable 0.7.2. <a class="more" href="download.html">Download stable</a></p>
     <p class="fine" style="margin-top:1rem">Source of record: <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> in the repository (in Chinese).</p>
   </section>
   </div>

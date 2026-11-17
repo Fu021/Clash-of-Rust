@@ -1,6 +1,6 @@
 # 本地权限与更新信任边界
 
-本页说明实现与验证范围。静态风险不等于已复现漏洞；订阅约束见[订阅说明](subscriptions.md)，安装验收见[候选包验证](workflows/install-validation.md)。
+本页说明实现与验证范围；后续相关改动遵守开发指南的[FFI 与特权边界维护](development.md#ffi-与特权边界维护)。静态风险不等于已复现漏洞；订阅约束见[订阅说明](subscriptions.md)，安装验收见[候选包验证](workflows/install-validation.md)。
 
 ## 运行配置与特权会话
 

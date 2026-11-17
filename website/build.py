@@ -24,7 +24,7 @@ SPACING = ("0.9", "1", "1.1", "1.2", "1.3", "1.4", "1.6")
 TEXT = {
     "en": {
         "html_lang": "en", "skip": "Skip to content", "home": "Clash of Rust home",
-        "nav_label": "Site", "menu": "Menu", "nav": {"start": "Get started", "guide": "Manual", "tools": "Network tools", "download": "Download"},
+        "nav_label": "Site", "menu": "Menu", "nav": {"start": "Get started", "guide": "Manual", "tools": "Network tools", "download": "Download", "releases": "Versions"},
         "other_lang": "中文", "other_label": "切换到中文", "star": "Star",
         "foot_note": "Free software under GPL-3.0. Runs on the mihomo core.",
         "foot_links": {"releases": "All releases", "issues": "Report a problem", "docs": "Developer docs"},
@@ -34,7 +34,7 @@ TEXT = {
     },
     "zh": {
         "html_lang": "zh-CN", "skip": "跳到正文", "home": "Clash of Rust 首页",
-        "nav_label": "站内导航", "menu": "导航", "nav": {"start": "快速上手", "guide": "功能手册", "tools": "网络工具", "download": "下载"},
+        "nav_label": "站内导航", "menu": "导航", "nav": {"start": "快速上手", "guide": "功能手册", "tools": "网络工具", "download": "下载", "releases": "版本记录"},
         "other_lang": "English", "other_label": "Switch to English", "star": "Star",
         "foot_note": "开源 mihomo 客户端 · GPL-3.0",
         "foot_links": {"releases": "全部版本", "issues": "反馈问题", "docs": "开发文档"},
@@ -100,6 +100,7 @@ def tool_command(tool):
 def render_downloads(body, release_data):
     stable = release_data["downloads"]["stable"]
     version = stable["tag"].removeprefix("v")
+    body = body.replace("{{stable_version}}", escape(version)).replace("{{stable_tag}}", escape(stable["tag"]))
     for system in ("windows", "linux", "macos", "android"):
         rows = []
         for suffix in SUFFIXES:
@@ -161,13 +162,31 @@ def render_tools(kind, lang, data, root):
                 options = "".join(
                     f'<li><code>{data["options"][key]["flag"]}</code> {data["options"][key]["range"]}</li>'
                     for key in tool["options"]) or f'<li class="none">{labels["none"]}</li>'
+                target = {"URL": "https://example.com", "HOST": "example.com",
+                          "HOST[:PORT]": "example.com:443", "SERVER[:PORT]": "example.com:53"}[tool["arg"]]
+                name = escape(copy["name"])
+                example = escape(target)
+                command = escape(f'cor network {tool["id"]} {target}')
+                if lang == "zh":
+                    usage_label = "操作示例"
+                    usage = (f'<summary>GUI、TUI 与 CLI 示例</summary>'
+                             f'<p><b>GUI：</b>在“工具 → 网络诊断”选择“{name}”，输入 <code>{example}</code> 后运行。</p>'
+                             f'<p><b>TUI：</b>运行 <code>cor ui</code>，按 <kbd>4</kbd> 并用 <kbd>[</kbd> / <kbd>]</kbd> 选择“{name}”；按 <kbd>/</kbd> 输入 <code>{example}</code>，回车结束输入，再按回车运行。</p>'
+                             f'<p><b>CLI：</b><code>{command}</code></p>')
+                else:
+                    usage_label = "Usage examples"
+                    usage = (f'<summary>GUI, TUI and CLI examples</summary>'
+                             f'<p><b>GUI:</b> Under Tools → Network diagnostics, select {name}, enter <code>{example}</code> and run the check.</p>'
+                             f'<p><b>TUI:</b> Run <code>cor ui</code>, press <kbd>4</kbd> and use <kbd>[</kbd> / <kbd>]</kbd> to select {name}; press <kbd>/</kbd>, enter <code>{example}</code>, press Enter to finish input, then Enter again to run.</p>'
+                             f'<p><b>CLI:</b> <code>{command}</code></p>')
                 parts.append(
                     f'<article class="tool" id="{tool["id"]}"><div class="tool-side"><h3>{escape(copy["name"])}</h3>'
                     f'<code class="command">{escape(tool_command(tool))}</code>'
                     f'<p class="label">{labels["options"]}</p><ul class="options">{options}</ul></div>'
                     f'<dl class="tool-body"><div><dt>{labels["checks"]}</dt><dd>{escape(copy["checks"])}</dd></div>'
                     f'<div><dt>{labels["when"]}</dt><dd>{escape(copy["when"])}</dd></div>'
-                    f'<div><dt>{labels["note"]}</dt><dd>{escape(copy["note"])}</dd></div></dl></article>')
+                    f'<div><dt>{labels["note"]}</dt><dd>{escape(copy["note"])}</dd></div>'
+                    f'<div><dt>{usage_label}</dt><dd><details>{usage}</details></dd></div></dl></article>')
         return "".join(parts)
     raise ValueError(f"unknown tools block: {kind}")
 
@@ -196,7 +215,6 @@ def layout(lang, page, title, description, body, release_data):
     nav = "".join(
         f'<a href="{name}.html"{current if name == page or name == "guide" and page in ("tui", "cli") else ""}>{label}</a>'
         for name, label in text["nav"].items())
-    versions = f'<a href="releases.html"{current if page == "releases" else ""}>{"版本记录" if lang == "zh" else "Versions"}</a>'
     wordmark = (f'<picture class="brand-wordmark"><source data-night media="(prefers-color-scheme: dark)" '
                 f'srcset="{root}assets/wordmark-dark.svg"><img class="wordmark" src="{root}assets/wordmark.svg" '
                 'width="116" height="19" alt=""></picture>')
@@ -219,6 +237,8 @@ def layout(lang, page, title, description, body, release_data):
 <link rel="alternate" hreflang="x-default" href="{SITE_URL}/{page_path}">
 <link rel="icon" href="{root}assets/cat.png">
 <link rel="preload" href="{root}assets/fonts/national-park.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/departure-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/noto-sans-sc-display.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}site.css">
 <script type="application/json" id="release-data">{release_json}</script><script src="{root}site.js" defer></script>
 </head>
@@ -233,7 +253,7 @@ def layout(lang, page, title, description, body, release_data):
       <a class="btn small ghost" href="{REPO_URL}" target="_blank" rel="noopener">{STAR}{text['star']}<span data-stars></span></a>
       <button class="theme-toggle js-only" type="button" data-theme-toggle aria-label="{'主题：自动' if lang == 'zh' else 'Theme: automatic'}">{THEME_ICON}</button>
     </div>
-    <details class="mobile-menu"><summary>{text['menu']}</summary><nav aria-label="{text['nav_label']}">{nav}{versions}<a href="{REPO_URL}" target="_blank" rel="noopener">GitHub ↗</a></nav></details>
+    <details class="mobile-menu"><summary>{text['menu']}</summary><nav aria-label="{text['nav_label']}">{nav}<a href="{REPO_URL}" target="_blank" rel="noopener">GitHub ↗</a></nav></details>
   </div>
 </header>
 <main id="main">
@@ -248,7 +268,7 @@ def layout(lang, page, title, description, body, release_data):
   <div class="wrap">
     <div><a class="brand" href="index.html" aria-label="{text['home']}">{wordmark}</a><p>{text['foot_note']}</p></div>
     <nav aria-label="{text['nav_label']}">{nav}</nav>
-    <nav>{versions}<a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
+    <nav><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
   </div>
 </footer>
 </body>

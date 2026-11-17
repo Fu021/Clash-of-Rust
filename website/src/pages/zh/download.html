@@ -20,7 +20,7 @@
         <button type="button" data-channel="stable" aria-pressed="true">正式版</button>
         <button type="button" data-channel="preview" aria-pressed="false">预发布版</button>
       </div>
-      <p class="release-meta" aria-live="polite"><b data-version>0.7.1</b><span data-channel-note>日常使用选这个。</span><a data-notes href="{{repo}}/releases/tag/v0.7.1" target="_blank" rel="noopener">更新内容</a><span data-fetch-state></span></p>
+      <p class="release-meta" aria-live="polite"><b data-version>{{stable_version}}</b><span data-channel-note>日常使用选这个。</span><a data-notes href="{{repo}}/releases/tag/{{stable_tag}}" target="_blank" rel="noopener">更新内容</a><span data-fetch-state></span></p>
     </div>
     <noscript><p>浏览器没有启用 JavaScript，显示的是保存的正式版列表，可能已过期；最新版本请查看 <a href="{{repo}}/releases">GitHub Releases</a>。</p></noscript>
 
@@ -85,7 +85,7 @@ shasum -a 256 安装包文件名.dmg</pre>
   <section id="questions">
     <h2>常见问题</h2>
     <div class="qa">
-      <details><summary>正式版和预发布版，选哪个？</summary><p>日常使用选正式版。预发布版先带上新功能，目前是网络工具箱和终端界面，验证范围比正式版小。试用之前请备份配置；桌面端可以在应用里切回正式版。</p></details>
+      <details><summary>正式版和预发布版，选哪个？</summary><p>日常使用选正式版。预发布版可能提前提供新功能，验证范围比正式版小。试用之前请备份配置；桌面端可以在应用里切回正式版。</p></details>
       <details><summary>有 iOS 版吗？</summary><p>没有。仓库里只有 iOS 的界面原型，不提供可以安装的包。</p></details>
       <details><summary>其他 Linux 发行版能用吗？</summary><p>目前只发布 DEB 包，验证范围是 Debian 和 Ubuntu 20.04 及以上。其他发行版需要自己从源码构建，见仓库里的开发文档。</p></details>
       <details><summary>没有桌面环境的 Linux 能用吗？</summary><p>能。DEB 包里带有 <code>cor</code>，它不需要显示器。运行 <code>cor start</code>，服务器上建议用 TUN。</p></details>

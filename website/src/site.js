@@ -15,10 +15,26 @@ const themeNames = {
   light: say("Day", "日间"),
   dark: say("Night", "夜间"),
 };
+let renderedTheme;
+let artworkRevision = 0;
 function syncTheme() {
   const { theme, themeMode } = document.documentElement.dataset;
-  for (const source of $$("source[data-night]")) {
-    source.media = theme === "dark" ? source.hasAttribute("data-small") ? "(max-width: 640px)" : "all" : "not all";
+  if (renderedTheme !== theme) {
+    renderedTheme = theme;
+    const revision = ++artworkRevision;
+    const root = document.documentElement;
+    root.classList.add("theme-loading");
+    for (const source of $$("source[data-night]")) {
+      source.media = theme === "dark" ? source.hasAttribute("data-small") ? "(max-width: 640px)" : "all" : "not all";
+    }
+    const finish = () => {
+      if (revision === artworkRevision) root.classList.remove("theme-loading");
+    };
+    const deadline = setTimeout(finish, 1200);
+    Promise.all($$(".scene img").map(image => image.decode().catch(() => {}))).then(() => {
+      clearTimeout(deadline);
+      finish();
+    });
   }
   if (!themeButton) return;
   const next = themeModes[(themeModes.indexOf(themeMode) + 1) % themeModes.length];
@@ -93,13 +109,35 @@ for (const figure of $$("[data-shots]")) {
 
 const menu = $(".mobile-menu");
 if (menu) {
+  const summary = $("summary", menu);
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let expanded = menu.open;
+  let animation;
+  function setMenu(open) {
+    expanded = open;
+    const start = menu.getBoundingClientRect().height;
+    animation?.cancel();
+    menu.open = true;
+    const end = open ? menu.getBoundingClientRect().height : summary.getBoundingClientRect().height + 2;
+    if (motion.matches || typeof menu.animate !== "function") {
+      menu.open = open;
+      return;
+    }
+    animation = menu.animate([{ height: `${start}px` }, { height: `${end}px` }],
+      { duration: 200, easing: "ease-out" });
+    animation.onfinish = () => { menu.open = expanded; animation = null; };
+  }
+  summary.addEventListener("click", event => {
+    event.preventDefault();
+    setMenu(!expanded);
+  });
   menu.addEventListener("keydown", event => {
     if (event.key === "Escape" && menu.open) {
-      menu.open = false;
-      $("summary", menu).focus();
+      setMenu(false);
+      summary.focus();
     }
   });
-  for (const link of $$("a", menu)) link.addEventListener("click", () => { menu.open = false; });
+  for (const link of $$("a", menu)) link.addEventListener("click", () => setMenu(false));
 }
 
 for (const toc of $$("[data-toc]")) {
@@ -169,9 +207,10 @@ if (downloads) {
   const snapshot = JSON.parse(document.getElementById("release-data").textContent);
   const releases = Object.fromEntries(Object.entries(snapshot.downloads).map(([channel,record]) =>
     [channel, {tag:record.tag, published:record.published, sizes:PACKAGES.map(item => record.sizes[item.suffix])}]));
+  releases.preview = releases.stable;
   let channel = location.hash === "#preview" ? "preview" : "stable";
   let state = "loading";
-  let previewIsStable = false;
+  let previewIsStable = true;
 
   const mine = platform && $(`[data-os="${platform}"]`);
   if (mine) {
@@ -252,14 +291,21 @@ if (downloads) {
 
   Promise.allSettled([github("/releases/latest"), github("/releases?per_page=15")]).then(([latest, recent]) => {
     const stable = latest.status === "fulfilled" && accept(latest.value, false);
-    if (stable) releases.stable = stable;
+    if (stable) {
+      releases.stable = stable;
+      releases.preview = stable;
+      previewIsStable = true;
+    }
     let confirmed = Boolean(stable);
     if (recent.status === "fulfilled" && Array.isArray(recent.value)) {
       const newest = recent.value.filter(record => record && record.draft === false && record.prerelease === true)
         .sort((first, second) => String(second.published_at || "").localeCompare(String(first.published_at || "")))[0];
       if (newest && (!stable || String(newest.published_at || "") > stable.published)) {
         const preview = accept(newest, true);
-        if (preview) releases.preview = preview; else confirmed = false;
+        if (preview) {
+          releases.preview = preview;
+          previewIsStable = false;
+        } else confirmed = false;
       } else if (stable) {
         /* A preview older than stable is no longer worth offering. */
         releases.preview = stable;
@@ -280,7 +326,6 @@ for (const tour of $$("[data-demo]")) {
   let timer = null;
   let inView = !("IntersectionObserver" in window);
   let pausedByUser = false;
-  let hovering = false;
   function show(index, announce = true) {
     current = index;
     frames.forEach((frame,i) => { frame.hidden = i !== current; });
@@ -296,7 +341,7 @@ for (const tour of $$("[data-demo]")) {
       : pausedByUser ? say("Resume automatic switching", "继续自动切换") : say("Pause automatic switching", "暂停自动切换"));
   }
   function canAdvance() {
-    return inView && !motion.matches && !pausedByUser && !hovering && !document.hidden
+    return inView && !motion.matches && !pausedByUser && !document.hidden
       && !imageView?.open && !tour.contains(document.activeElement);
   }
   function schedule() {
@@ -306,20 +351,19 @@ for (const tour of $$("[data-demo]")) {
     timer = setTimeout(() => {
       if (canAdvance()) show((current+1)%frames.length, false);
       schedule();
-    }, 3500);
+    }, 2600);
   }
   steps.forEach((button,index) => button.addEventListener("click", () => {
     pausedByUser = true;
     show(index);
     schedule();
   }));
-  toggle.addEventListener("click", () => {
+  toggle.addEventListener("click", event => {
     pausedByUser = !pausedByUser;
+    if (!pausedByUser && event.detail > 0) toggle.blur();
     show(current, false);
     schedule();
   });
-  tour.addEventListener("mouseenter", () => { hovering = true; schedule(); });
-  tour.addEventListener("mouseleave", () => { hovering = false; schedule(); });
   tour.addEventListener("focusin", schedule);
   tour.addEventListener("focusout", event => {
     if (!tour.contains(event.relatedTarget)) queueMicrotask(schedule);

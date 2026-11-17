@@ -2,8 +2,8 @@
 <!-- description: Clash of Rust 网络检查分别查什么、什么时候用，以及对应的命令、参数、限制和报告格式。 -->
 <section class="page-head">
   <div class="wrap">
-    <h1>从解析到出口，逐步排查。<span class="preview">fix.5 预发布版</span></h1>
-    <p class="lead">0.7.2-fix.5 收敛为十二项按需检查，GUI、TUI 与 CLI 共用逻辑。fix.4 仍为十八项；配图保留其真实旧版标注。</p>
+    <h1>从解析到出口，逐步排查。</h1>
+    <p class="lead">0.7.2 提供十二项按需检查，GUI、TUI 与 CLI 共用逻辑；配图标明其真实版本。</p>
   </div>
   <div class="banner scene">
     <picture>
@@ -50,7 +50,7 @@
 
   <section id="limits">
     <h2>参数与上限</h2>
-    <p>默认 5 次、间隔 1000 毫秒、单次 10 秒、下载上限 8 MiB、最多 8 跳。GUI 按工具显示参数；TUI 直接检查使用默认值，自定义参数可在“操作”页或 CLI 填写。</p>
+    <p>默认 5 次、间隔 1000 毫秒、单次 10 秒、下载上限 8 MiB、最多 8 跳。GUI 按工具显示参数；TUI 按 <kbd>o</kbd> 在当前工具中编辑适用参数，应用后运行；CLI 使用以下选项。</p>
     {{tools:options}}
     <p style="margin-top:1.2rem">稳定性检查最多 120 秒。系统输出每路最多 8 KiB，报告最多 48 项，每项最多 2048 字符。</p>
   </section>
@@ -71,6 +71,8 @@
     </div>
     <h3>在窗口里</h3>
     <p>点结果下方的“导出诊断”。导出内容包含当前工具、结果和错误码。</p>
+    <h3>在终端界面里</h3>
+    <p>真实检查结束后按 <kbd>e</kbd>，填写路径并确认导出 JSON。写入失败可修改路径重试；演示模式不写文件。</p>
     <h3>在命令行里</h3>
     <p>加 <code>--json</code> 直接输出报告，或者用 <code>--output FILE</code> 保存到文件。</p>
 <pre class="term" aria-label="保存报告的命令"><span class="p">$ </span>cor network phase example.com --seconds 5
@@ -90,7 +92,7 @@
         <tr><th scope="row">终端界面</th><td>运行 <code>cor ui</code>，按 <kbd>4</kbd> 进入。<kbd>[</kbd> 和 <kbd>]</kbd> 切换工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行，<kbd>Esc</kbd> 取消。</td></tr>
       </tbody>
     </table>
-    <p style="margin-top:1.4rem">工具箱随 0.7.2 预发布版加入，0.7.1 正式版里只有网站检查。<a class="more" href="download.html#preview">下载预发布版</a></p>
+    <p style="margin-top:1.4rem">十二项检查包含在 0.7.2 正式版中。<a class="more" href="download.html">下载正式版</a></p>
     <p class="fine" style="margin-top:1rem">权威说明以仓库里的 <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">network-tools.md</a> 为准。</p>
   </section>
   </div>

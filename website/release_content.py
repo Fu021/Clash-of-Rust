@@ -15,12 +15,12 @@ def validate(data):
     seen = set()
     for release in data['releases']:
         version = release['version']
-        if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version) or version in seen:
+        if not re.fullmatch(r'\d+\.\d+\.\d+', version) or version in seen:
             raise ValueError('Invalid or duplicate version: ' + version)
         seen.add(version)
         if not version.startswith(series + '.'):
             raise ValueError('Version outside the current release series: ' + version)
-        if release['channel'] not in ('stable', 'preview') or (('-' in version) != (release['channel'] == 'preview')):
+        if release['channel'] != 'stable':
             raise ValueError('Version/channel mismatch: ' + version)
         date.fromisoformat(release['date'])
         for lang in ('en','zh'):
@@ -32,22 +32,27 @@ def validate(data):
         for field in ('summary', 'known'):
             if bool(release['en'].get(field)) != bool(release['zh'].get(field)):
                 raise ValueError('Missing translated release field: ' + field)
-    for channel in ('stable','preview'):
-        snapshot = data['downloads'][channel]
-        release = next((r for r in data['releases'] if 'v'+r['version'] == snapshot['tag'] and r['channel'] == channel), None)
-        if release is None:
-            raise ValueError('Download has no matching release: ' + channel)
-        if datetime.fromisoformat(snapshot['published'].replace('Z','+00:00')).date().isoformat() != release['date']:
-            raise ValueError('Release date mismatch: ' + channel)
-        if set(snapshot['sizes']) != set(SUFFIXES) or not all(type(n) is int and n > 0 for n in snapshot['sizes'].values()):
-            raise ValueError('Expected nine positive package sizes: ' + channel)
+    for release in data['history']:
+        version = release['version']
+        if not re.fullmatch(r'\d+\.\d+\.\d+', version) or version in seen:
+            raise ValueError('Invalid or duplicate historical version: ' + version)
+        seen.add(version)
+        date.fromisoformat(release['date'])
+    snapshot = data['downloads']['stable']
+    release = next((r for r in data['releases'] if 'v'+r['version'] == snapshot['tag']), None)
+    if release is None:
+        raise ValueError('Download has no matching stable release')
+    if datetime.fromisoformat(snapshot['published'].replace('Z','+00:00')).date().isoformat() != release['date']:
+        raise ValueError('Release date mismatch: stable')
+    if set(snapshot['sizes']) != set(SUFFIXES) or not all(type(n) is int and n > 0 for n in snapshot['sizes'].values()):
+        raise ValueError('Expected nine positive package sizes: stable')
 
 def render(data, lang, repo, compact=False, root=''):
     zh = lang == 'zh'
-    labels = {'stable':'正式版' if zh else 'Stable', 'preview':'预发布版' if zh else 'Preview'}
+    labels = {'stable':'正式版' if zh else 'Stable'}
     rows = data['releases']
     if compact:
-        rows = [next(r for r in rows if 'v'+r['version'] == data['downloads'][c]['tag']) for c in ('stable','preview')]
+        rows = sorted(rows, key=lambda r: r['date'], reverse=True)[:2]
     else:
         rows = sorted(rows,key=lambda r:r['date'],reverse=True)
     parts = []
@@ -64,7 +69,12 @@ def render(data, lang, repo, compact=False, root=''):
     content = '<div class="version-grid">'+''.join(parts)+'</div>'
     if compact:
         return '<section class="part versions"><div class="wrap"><div class="version-heading"><h2>'+('一路更新' if zh else 'Along the way')+'</h2><a href="releases.html">'+('查看版本记录 →' if zh else 'All version notes →')+'</a></div>'+content+'</div></section>'
-    series = escape(data['series'])
+    history = ''.join(
+        f'<li id="v{escape(item["version"])}"><a href="{repo}/releases/tag/v{escape(item["version"])}">'
+        f'v{escape(item["version"])}</a> · <time datetime="{item["date"]}">{item["date"]}</time></li>'
+        for item in data['history'])
+    earlier = ('历史正式版' if zh else 'Earlier stable releases')
+    archive = f'<section><h2>{earlier}</h2><ul class="dots">{history}</ul></section>' if history else ''
     alt = '蓝猫在车站张贴新的线路告示。' if zh else 'The blue cat puts up a new railway notice at the station.'
     banner = f'<div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{root}assets/versions-small.webp"><img src="{root}assets/versions.webp" width="2172" height="724" alt="{alt}"></picture></div>'
-    return '<section class="page-head"><div class="wrap"><h1>'+('版本记录' if zh else 'Release notes')+'</h1><p class="lead">'+(f'{series}.x 的主要更新。' if zh else f'Highlights from {series}.x.')+'</p></div>'+banner+'</section><section class="wrap doc versions"><p>'+('完整历史见 ' if zh else 'Full history: ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>'+('。' if zh else '.')+'</p>'+content+'</section>'
+    return '<section class="page-head"><div class="wrap"><h1>'+('版本记录' if zh else 'Release notes')+'</h1><p class="lead">'+('历次正式版更新。' if zh else 'Stable releases through the years.')+'</p></div>'+banner+'</section><section class="wrap doc versions"><p>'+('完整发行说明见 ' if zh else 'Full release notes: ')+f'<a href="{repo}/releases">GitHub Releases ↗</a>'+('。' if zh else '.')+'</p>'+content+archive+'</section>'

@@ -19,15 +19,15 @@ python3 -B website/export_preview.py
 
 结果为 `website/preview.html`，无需相邻资源；GitHub 实时核对仍需要联网，断网使用明确标注日期的版本快照。单文件支持双语与站内导航，是预览产物，不提交。
 
-右上角主题按钮按“自动 → 日间 → 夜间”循环。自动模式使用设备所在时区的当地时间，07:00～18:59 为日间，其余为夜间，恢复前台、到达边界或当地时间变化后重新判断；不请求定位。手动选择保存在本地并跨页面和标签页同步，禁用存储时仍可在当前页切换。`theme.js` 在样式之前初始化配色，`site.js` 同步按钮与昼夜插画；没有 JavaScript 时沿用系统配色，导航和正文继续可用。
+右上角主题按钮按“自动 → 日间 → 夜间”循环。自动模式使用设备所在时区的当地时间，07:00～18:59 为日间，其余为夜间，恢复前台、到达边界或当地时间变化后重新判断；不请求定位。手动选择保存在本地并跨页面和标签页同步，禁用存储时仍可在当前页切换。`theme.js` 在样式之前初始化配色，`site.js` 同步按钮与昼夜插画；插画解码后短暂淡入，等待上限为 1.2 秒，不遮挡正文。三份字体预加载，慢网下允许保留系统字体，避免加载后再次换字重排。没有 JavaScript 时沿用系统配色，导航和正文继续可用。
 
 ## 每次发布都同步
 
-每次公开正式版或预发布版后执行独立 [loop-website](../docs/loop-website.md)，对照实际发行和权威文档循环修正内容、三类操作入口、双语及手机布局。客户端发布前准备对应说明，公开后再核对实际日期和附件；不重复客户端构建或发布验收。
+每次公开正式版后执行独立 [loop-website](../docs/loop-website.md)，对照实际发行和权威文档循环修正内容、三类操作入口、双语及手机布局。客户端发布前准备对应说明，公开后再核对实际日期和附件；不重复客户端构建或发布验收。预发布不单独更新网站内容或版本记录；下载页可实时查询新的完整预发布安装包。
 
-正式版与预发布版均须更新 `src/content/releases.json`。`series` 指定当前主次版本系列（如 `0.7`），只整理 `0.7.x`；进入新系列时精简旧系列，完整历史始终链接 GitHub。`releases` 提供版本、通道、公开发布日期、双语标题、亮点与必要限制；`downloads` 提供两个通道的标签、发布时间和九种安装包的真实字节数；`checked` 为核对日期。与实际 Release 和 `docs/releases/` 核对，不把构建日期当发布日期，不将预发布或未发布源码能力写成正式版功能。
+正式版更新 `src/content/releases.json`。`series` 指定当前主次版本系列（如 `0.7`），`releases` 提供该系列正式版的版本、公开发布日期、双语标题、亮点与必要限制，`history` 保留更早正式版的版本、日期和 GitHub 入口；进入新系列时将旧系列移入历史，不能丢失旧正式版。`downloads.stable` 提供正式版标签、发布时间和九种安装包的真实字节数；`checked` 为核对日期。与实际 Release 和 `docs/releases/` 核对，不把构建日期当发布日期，不将预发布或未发布源码能力写成正式版功能。
 
-首页仅显示两个当前通道的简短亮点，完整记录在 `releases.html`。版本记录与离线下载快照共用此文件；浏览器仍会核对 GitHub 的最新完整发行。禁止在 JS 或页面中另外维护一份版本快照。历史只覆盖已整理的版本，完整历史链接 GitHub。
+首页显示最近两个正式版的简短亮点，完整记录在 `releases.html`。版本记录与离线下载快照共用此文件；浏览器仍会核对 GitHub 的最新完整发行。未联网核对时，两个下载通道均使用正式版快照并说明核对状态；没有比正式版更新的预发布时同样回到正式版。禁止在 JS 或页面中另外维护一份版本快照。
 
 发布门槛见[发布工作流](../docs/workflows/release.md#publish-release)。执行 `python3 -B website/test_build.py`、`node --check website/src/site.js` 和 `node --check website/src/theme.js`，检查双语版本页、通道、九种包与 SHA256、离线状态和站内导航。静态测试在临时目录构建和导出，不覆盖已有 `dist/` 或 `preview.html`；手动构建仍使用开头的命令。
 
@@ -42,9 +42,9 @@ python3 -B website/export_preview.py
 - 中英文同步修改入口、章节、命令、参数、默认值、平台限制、版本亮点和配图。静态检查核对章节、教程命令及版本字段，不能代替人工语义审阅。每轮 loop 对照 `docs/` 的权威行为，发现不同步先修复再提交。
 - `src/content/tools.json` 是网络工具的中英介绍、命令、参数及限制来源，须与 `docs/network-tools.md` 和实际 CLI 核对。新增工具注明最低可用版本；HTTP 检查使用已有代理，系统 Ping 与路由追踪不能笼统称为走代理。
 - 插画使用乡间铁路、道岔和蓝猫主题；原图在 `src/art/raw/`，网页图在 `src/assets/`，新增来源见[插画说明](src/art/README.md)。每个内容页均有插画，图片外框、按钮与卡片采用统一圆角。动效使用短时透明度、位移和颜色过渡，无常驻逐帧任务。
-- 首页导览可见时每 3.5 秒切换软件画面，选择画面后暂停，也可手动暂停/继续；悬停、焦点位于导览内、图片放大、切到其他标签页、导览离屏或系统减少动态效果时停用计时。切换预留共同高度，避免桌面与手机画面交替引发整页跳动；无脚本保留第一帧。
+- 首页导览可见时每 2.6 秒切换桌面软件画面，选择画面后暂停，也可手动暂停/继续；焦点位于导览内、图片放大、切到其他标签页、导览离屏或系统减少动态效果时停用计时，悬停不暂停。切换预留共同高度，首页不混入手机竖屏图；无脚本保留第一帧。CLI 与 TUI 展示紧接导览所在区块，后接功能列表；终端内容按宽度换行，不要求横向拖拉。
 - 字标在构建时直接复制 README 的 `resources/icons/wordmark-light.svg`；深色背景使用对应 `wordmark-dark.svg`，不以近似字体替换。首页桌面和手机使用同一张完整插画与比例，不另换手机裁图；代理、直连、拦截三种出口标签均保留，手机紧凑排列在画面上方，渐隐遮罩只作用于插画，不裁切标签。其余横幅使用同源缩略图。手机导航及章节目录可折叠，图片可放大，命令和表格在局部滚动。
-- `src/content/screenshots.json` 记录 GUI 截图的真实版本、来源提交、尺寸及平台；`terminal.json` 保留 CI 实际 PTY 帧。每类画面跨页复用，图注显示其真实版本，不随下载快照改标签。目前七张 GUI 画面已按 `0.7.2-fix.4.network-inspection` 源码重新生成，TUI 来自同提交 Memory Benchmark `43735184801`。GUI 使用正式 Slint 组件的演示数据，仅验证外观，不能代替工具实际联网或设备验收；TUI 不手写屏幕内容冒充实测。
+- `src/content/screenshots.json` 记录 GUI 截图的真实版本、来源提交、尺寸及平台；`terminal.json` 保留实际 PTY 帧。每类画面跨页复用，图注显示其真实版本，不随下载快照改标签。当前 GUI 和 TUI 画面以正式版 `0.7.2`、提交 `141e1cb` 为来源；GUI 使用正式 Slint 组件的演示数据，TUI 使用实际 `cor ui --demo` 捕获。两者只验证展示，不代替联网或设备验收；不手写屏幕内容冒充实测。
 - 字体使用 National Park、Departure Mono 和 Noto Sans SC，许可证随 `src/assets/fonts/` 保留。来源分别为 https://github.com/benhoepner/National-Park 、https://departuremono.com/ 、https://github.com/notofonts/noto-cjk 。中文正文使用系统字体，标题使用真实 Medium 子集，避免伪加粗。
 - 修改中文标题、按钮或版本内容后检查展示字体的字形覆盖；有新增字形时执行 `python3 website/prepare_assets.py fonts` 更新子集。源字体放 `.cache/fonts/`，路径见脚本；首次准备需要 Pillow、fontTools 和 brotli，普通静态构建只需 Python 标准库。已有字形充分覆盖时保留字体文件，不为文案调整重复下载工具。
 
@@ -57,5 +57,7 @@ python3 -B website/export_preview.py
 ## 部署
 
 [Cloudflare Workers 网站](https://clash-of-rust.fu021.shop/)从仓库构建；沿用仓库根目录、`python3 -B website/build.py` 和 `npx wrangler deploy --name clash-of-rust --assets ./website/dist --compatibility-date 2026-11-13`。推送来源分支可能触发现有自动部署；部署结果以 Cloudflare 为准。
+
+为避免无关客户端提交触发网站构建，在 Workers 项目的 **Settings → Build → Build watch paths** 配置 Include paths：`website/*`、`resources/icons/wordmark-light.svg`、`resources/icons/wordmark-dark.svg`，Exclude paths 留空。这覆盖网站源码、构建脚本、部署元数据和仓库外的实际字标输入；新增构建输入时同步调整。该配置在 Cloudflare 账户中保存，提交仓库不能代替账户设置；不使用跳过客户端 CI 的提交标记。保存后分别用网站输入变化和无关文件变化验证。按 [Cloudflare 官方说明](https://developers.cloudflare.com/workers/ci-cd/builds/build-watch-paths/)，空 push、至少 20 个提交或至少 3000 个文件变化仍会直接构建。
 
 构建复制 `_headers`、`_redirects`、`robots.txt` 和 `sitemap.xml`，canonical 与双语 alternate 均使用正式域名。旧 `/features` 跳至中文指南，`/zh/*` 跳至对应中文根路径，`/download` 继续有效。间距样式转换为外部规则以兼容 CSP；搜索引擎收录不作保证。

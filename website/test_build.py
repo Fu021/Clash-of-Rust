@@ -56,6 +56,7 @@ class SiteTests(unittest.TestCase):
         identifier_body = core.split("pub fn id(self)")[1].split("pub fn title(self)")[0]
         identifiers = re.findall(r'Self::\w+ => "([^"]+)"', identifier_body)
         self.assertEqual([tool['id'] for tool in catalog['tools']], identifiers)
+        self.assertEqual({tool for row in catalog['symptoms'] for tool in row['tools']}, set(identifiers))
         for tool in catalog['tools']:
             self.assertIn('"network '+tool['id']+'"', commands)
             for lang in ('zh', 'en'):
@@ -66,7 +67,7 @@ class SiteTests(unittest.TestCase):
             if not tool['arg']:
                 self.assertFalse(build.tool_command(tool).endswith(' '))
     def test_inconsistent_release_data_rejected(self):
-        for field in ('channel','translation','package','date','duplicate','series','highlight','known'):
+        for field in ('channel','translation','package','date','duplicate','series','highlight','known','prerelease','history-duplicate'):
             bad=copy.deepcopy(self.data)
             if field=='channel': bad['releases'][0]['channel']='invalid'
             if field=='translation': bad['releases'][0]['zh']['highlights']=[]
@@ -76,6 +77,8 @@ class SiteTests(unittest.TestCase):
             if field=='series': bad['series']='0.6'
             if field=='highlight': bad['releases'][0]['en']['highlights'].pop()
             if field=='known': bad['releases'][0]['en'].pop('known')
+            if field=='prerelease': bad['releases'][0]['version'] += '-test.1'
+            if field=='history-duplicate': bad['history'].append(bad['history'][0])
             with self.subTest(field=field), self.assertRaises(ValueError): validate(bad)
     def test_navigation_and_assets(self):
         docs={}
@@ -152,6 +155,9 @@ class SiteTests(unittest.TestCase):
                 name = 'Clash-of-Rust-' + tag[1:] + '-' + suffix
                 self.assertTrue(any(ref.endswith('/' + name) for ref in downloads))
                 self.assertTrue(any(ref.endswith('/' + name + '.sha256') for ref in downloads))
+            source = (build.DIST/language/'download.html').read_text(encoding='utf-8')
+            self.assertIn('<b data-version>' + tag[1:] + '</b>', source)
+            self.assertIn(build.REPO_URL + '/releases/tag/' + tag, parser.refs)
     def test_chinese_default_and_explicit_english_routes(self):
         for language, html_language in (('', 'zh-CN'), ('en', 'en')):
             for name in build.PAGES:

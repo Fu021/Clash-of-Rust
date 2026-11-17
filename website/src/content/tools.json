@@ -35,14 +35,14 @@
         "short": "The system resolver and the core, side by side.",
         "checks": "Resolves one host name with the system resolver and with the core, and shows both answers next to each other.",
         "when": "A site opens in one app but not in another, or you suspect a wrong or hijacked answer.",
-        "note": "Different answers are not a fault on their own. The controller query returns real upstream addresses even with Fake-IP. Version 0.7.2-fix.4 adds record types, TTL and available AA/RA flags; TXT/SOA bodies are hidden."
+        "note": "Different answers are not a fault on their own. The controller query returns real upstream addresses even with Fake-IP. Version 0.7.2 adds record types, TTL and available AA/RA flags; TXT/SOA bodies are hidden."
       },
       "zh": {
         "name": "DNS 查询",
         "short": "系统解析和内核解析，并排比较。",
         "checks": "同一个域名分别交给系统解析器和内核解析，把两边的结果并排列出。",
         "when": "同一个网站在这个应用能开、另一个应用打不开，或者怀疑解析结果被污染、被劫持时。",
-        "note": "两边结果不同，本身不算故障。内核控制查询在 Fake-IP 下仍返回真实上游地址。0.7.2-fix.4 起可选记录类型，查看 TTL 和返回的 AA/RA 标志；TXT/SOA 正文隐藏。"
+        "note": "两边结果不同，本身不算故障。内核控制查询在 Fake-IP 下仍返回真实上游地址。0.7.2 起可选记录类型，查看 TTL 和返回的 AA/RA 标志；TXT/SOA 正文隐藏。"
       }
     },
     {
@@ -183,8 +183,8 @@
     },
     {
       "id":"tcp","group":"protocol","arg":"HOST[:PORT]","options":["seconds"],
-      "en":{"name":"TCP port","short":"Connect without sending application data.","checks":"Times the local SOCKS5 hop and the target handshake.","when":"A service port appears unreachable.","note":"Requires 0.7.2-fix.4. Uses the current proxy; default port 443. A handshake does not prove TLS or service health."},
-      "zh":{"name":"TCP 端口","short":"只握手，不发送应用数据。","checks":"计时本机 SOCKS5 和目标端口连接。","when":"怀疑服务端口无法访问时。","note":"0.7.2-fix.4 起提供。沿用当前代理，默认端口 443；握手成功不代表 TLS 或服务正常。"}
+      "en":{"name":"TCP port","short":"Connect without sending application data.","checks":"Times the local SOCKS5 hop and the target handshake.","when":"A service port appears unreachable.","note":"Requires 0.7.2. Uses the current proxy; default port 443. A handshake does not prove TLS or service health."},
+      "zh":{"name":"TCP 端口","short":"只握手，不发送应用数据。","checks":"计时本机 SOCKS5 和目标端口连接。","when":"怀疑服务端口无法访问时。","note":"0.7.2 起提供。沿用当前代理，默认端口 443；握手成功不代表 TLS 或服务正常。"}
     },
     {
       "id":"http","group":"protocol","arg":"URL","options":["method","seconds"],
@@ -216,6 +216,8 @@
     {"en": "A certificate warning appears", "zh": "提示证书有问题", "tools": ["tls"]},
     {"en": "Calls, games or QUIC fail", "zh": "通话、游戏或 QUIC 不通", "tools": ["udp"]},
     {"en": "Trouble only on IPv6, or only on IPv4", "zh": "只有 IPv6 或只有 IPv4 出问题", "tools": ["family"]},
-    {"en": "Not sure the host answers at all", "zh": "不确定对方有没有回应", "tools": ["ping", "trace"]}
+    {"en": "Not sure the host answers at all", "zh": "不确定对方有没有回应", "tools": ["ping", "trace"]},
+    {"en": "A particular port will not connect", "zh": "某个端口无法连接", "tools": ["tcp"]},
+    {"en": "A service responds with an unexpected HTTP status", "zh": "服务返回异常 HTTP 状态", "tools": ["http"]}
   ]
 }

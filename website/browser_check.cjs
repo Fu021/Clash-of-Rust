@@ -65,6 +65,7 @@ async function settleImages(page) {
     for (const image of images) image.loading = "eager";
     await Promise.all(images.map(image => image.decode()));
   });
+  await page.waitForFunction(() => !document.documentElement.classList.contains("theme-loading"));
 }
 
 async function checkPage(context, origin, route, width) {
@@ -109,6 +110,7 @@ async function checkPage(context, origin, route, width) {
         assert.equal(await current.count(), 0);
       }
       await page.keyboard.press("Escape");
+      await page.waitForFunction(() => !document.querySelector(".mobile-menu").open);
       assert.equal(await menu.locator("nav").isVisible(), false);
     }
     const toc = page.locator("[data-toc]");
@@ -127,7 +129,7 @@ async function checkPage(context, origin, route, width) {
         await activate(page.locator(`[data-channel="${channel}"]`));
         assert.equal(await page.locator("[data-pkgs] a").count(), 18, `${channel} downloads`);
         assert.equal((await page.locator("[data-version]").textContent()).trim(),
-          releases.downloads[channel].tag.slice(1));
+          releases.downloads.stable.tag.slice(1));
       }
     }
     if (["guide", "tui", "cli"].some(name => route.endsWith("/" + name))) {
@@ -148,6 +150,8 @@ async function checkPage(context, origin, route, width) {
       assert.equal(await page.locator("[data-image-view]").isVisible(), false);
     }
     if (route === "/" || route === "/en/") {
+      assert.equal(await page.locator("#what + #cli + #features").count(), 1,
+        "Terminal examples must immediately follow the desktop tour");
       const shots = page.locator("[data-demo-frame]");
       const height = await page.locator(".demo-view").evaluate(view => view.getBoundingClientRect().height);
       for (let index = 0; index < await shots.count(); index++) {
@@ -159,6 +163,9 @@ async function checkPage(context, origin, route, width) {
       }
       await activate(page.locator('[data-demo-step="0"]'));
     }
+    const overflowedTerminals = await page.locator(".term, .terminal-capture").evaluateAll(terminals =>
+      terminals.filter(terminal => terminal.scrollWidth > terminal.clientWidth + 1).length);
+    assert.equal(overflowedTerminals, 0, `Horizontally scrolling terminal: ${width} ${route}`);
     if (width !== 800 || !route.startsWith("/en/")) {
       const name = route === "/" ? "home" : route === "/en/" ? "en-home" : route.slice(1).replaceAll("/", "-");
       for (const theme of width === 800 ? ["light"] : ["light", "dark"]) {
@@ -272,8 +279,8 @@ async function checkTour(origin) {
       focused, { timeout: 7000 });
     await page.locator("[data-demo]").hover();
     const hovering = await active();
-    await page.waitForTimeout(3900);
-    assert.equal(await active(), hovering, "Tour moved while hovered");
+    await page.waitForFunction(previous => document.querySelector('[data-demo-step][aria-pressed="true"]').dataset.demoStep !== previous,
+      hovering, { timeout: 5000 });
     await page.mouse.move(1, 1);
     await page.locator('[data-demo-step="2"]').click();
     assert.equal(await page.locator("[data-demo-toggle]").getAttribute("aria-label"), "继续自动切换");
@@ -310,14 +317,16 @@ async function checkTour(origin) {
 
 async function checkDownloadFallbacks(origin) {
   function record(channel) {
-    const snapshot = releases.downloads[channel];
+    const snapshot = releases.downloads.stable;
+    const tag = channel === "preview" ? snapshot.tag.replace(/^v(\d+)\.(\d+)\.(\d+)$/, (_, major, minor, patch) =>
+      `v${major}.${minor}.${Number(patch) + 1}-test.1`) : snapshot.tag;
     const assets = Object.entries(snapshot.sizes).flatMap(([suffix, size]) => {
-      const name = `Clash-of-Rust-${snapshot.tag.slice(1)}-${suffix}`;
+      const name = `Clash-of-Rust-${tag.slice(1)}-${suffix}`;
       return [name, name + ".sha256"].map(file => ({ name: file, state: "uploaded", size: file === name ? size : 65,
-        browser_download_url: `https://github.com/Fu021/Clash-of-Rust/releases/download/${snapshot.tag}/${file}` }));
+        browser_download_url: `https://github.com/Fu021/Clash-of-Rust/releases/download/${tag}/${file}` }));
     });
-    return { tag_name: snapshot.tag, draft: false, prerelease: channel === "preview",
-      published_at: snapshot.published, assets };
+    return { tag_name: tag, draft: false, prerelease: channel === "preview",
+      published_at: channel === "preview" ? new Date(Date.parse(snapshot.published) + 1000).toISOString() : snapshot.published, assets };
   }
   for (const mode of ["valid", "offline", "missing-checksum", "unsafe-url"]) {
     const context = await browser.newContext({ viewport: { width: 360, height: 640 }, serviceWorkers: "block" });
@@ -342,7 +351,8 @@ async function checkDownloadFallbacks(origin) {
       await page.locator('[data-channel="preview"]').click();
       assert.equal(await page.locator("[data-pkgs] a").count(), 18);
       assert.equal(await page.locator('[data-pkgs] a[href*="example.invalid"]').count(), 0);
-      assert.equal((await page.locator("[data-version]").textContent()).trim(), releases.downloads.preview.tag.slice(1));
+      const expectedTag = mode === "valid" ? record("preview").tag_name : releases.downloads.stable.tag;
+      assert.equal((await page.locator("[data-version]").textContent()).trim(), expectedTag.slice(1));
     } finally {
       await context.close();
     }

@@ -3,7 +3,7 @@
     "source": "actual-cor-pty",
     "lines": [
       {
-        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
+        "text": "  CLASH OF RUST   /   TERMINAL   演示 · 不连接后台",
         "tone": "accent"
       },
       {
@@ -15,7 +15,7 @@
         "tone": "accent"
       },
       {
-        "text": "   5 设置       6 操作",
+        "text": "   5 设置       6 操作       7 订阅       8 快捷规则",
         "tone": "accent"
       },
       {
@@ -23,7 +23,7 @@
         "tone": "muted"
       },
       {
-        "text": "  ● 内核运行中   ·   CLI 后台   ·   0.7.2-fix.4.network-inspection",
+        "text": "  ● 内核运行中   ·   CLI 后台   ·   0.7.2",
         "tone": "accent"
       },
       {
@@ -31,15 +31,15 @@
         "tone": "plain"
       },
       {
-        "text": "  代理方式      关闭 · 规则模式",
+        "text": "  代理方式      TUN · 规则模式",
         "tone": "plain"
       },
       {
-        "text": "  当前订阅      Memory workload",
+        "text": "  当前订阅      演示订阅",
         "tone": "plain"
       },
       {
-        "text": "  参考线路      DIRECT",
+        "text": "  参考线路      PROXY → AUTO → 🇺🇸 美国 02",
         "tone": "accent"
       },
       {
@@ -51,7 +51,7 @@
         "tone": "plain"
       },
       {
-        "text": "  ↓ 下载  0.0 KiB/s     ↑ 上传  0.0 KiB/s     连接  0",
+        "text": "  ↓ 下载  22.2 KiB/s     ↑ 上传  137.7 KiB/s     连接  6",
         "tone": "plain"
       },
       {
@@ -99,38 +99,38 @@
         "tone": "plain"
       },
       {
-        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
-        "tone": "muted"
-      },
-      {
-        "text": "  退出界面保留后台和代理；按 1–6 或 Tab 切换页面",
-        "tone": "muted"
-      },
-      {
-        "text": "  ↑↓ 选择   Enter 打开/选择   / 搜索   Esc 返回   r 刷新   q 退出",
-        "tone": "muted"
-      },
-      {
-        "text": "  v0.7.2-fix.4.network-inspection   ·   本机后台   ·   每秒采样，变化时绘制",
-        "tone": "muted"
-      },
-      {
         "text": "",
         "tone": "plain"
       },
       {
         "text": "",
         "tone": "plain"
+      },
+      {
+        "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
+        "tone": "muted"
+      },
+      {
+        "text": "退出界面保留后台和代理；按 1–8 或 Tab 切换页面",
+        "tone": "muted"
+      },
+      {
+        "text": "r 刷新 · q 退出",
+        "tone": "muted"
+      },
+      {
+        "text": "v0.7.2 · 本机后台 · 每秒采样，变化时绘制",
+        "tone": "muted"
       }
     ],
-    "version": "0.7.2-fix.4.network-inspection",
-    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514"
+    "version": "0.7.2",
+    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa"
   },
   "network": {
     "source": "actual-cor-pty",
     "lines": [
       {
-        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
+        "text": "  CLASH OF RUST   /   TERMINAL   演示 · 不连接后台",
         "tone": "accent"
       },
       {
@@ -142,7 +142,7 @@
         "tone": "accent"
       },
       {
-        "text": "   5 设置       6 操作",
+        "text": "   5 设置       6 操作       7 订阅       8 快捷规则",
         "tone": "accent"
       },
       {
@@ -150,7 +150,7 @@
         "tone": "muted"
       },
       {
-        "text": "  网站检查  1/18",
+        "text": "  网站检查  1/12",
         "tone": "accent"
       },
       {
@@ -158,7 +158,11 @@
         "tone": "plain"
       },
       {
-        "text": "  DNS、双协议响应与本次实际线路",
+        "text": "  参数：默认检查",
+        "tone": "muted"
+      },
+      {
+        "text": "  快速定位解析、响应和实际命中规则；详细分析使用专项工具",
         "tone": "muted"
       },
       {
@@ -226,31 +230,27 @@
         "tone": "plain"
       },
       {
-        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
-        "tone": "muted"
-      },
-      {
-        "text": "  退出界面保留后台和代理；按 1–6 或 Tab 切换页面",
-        "tone": "muted"
-      },
-      {
-        "text": "  [ ] 工具   / 输入   Enter 检查   Esc 取消   1–6 切页   q 退出",
-        "tone": "muted"
-      },
-      {
-        "text": "  v0.7.2-fix.4.network-inspection   ·   本机后台   ·   每秒采样，变化时绘制",
-        "tone": "muted"
-      },
-      {
         "text": "",
         "tone": "plain"
       },
       {
-        "text": "",
-        "tone": "plain"
+        "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
+        "tone": "muted"
+      },
+      {
+        "text": "退出界面保留后台和代理；按 1–8 或 Tab 切换页面",
+        "tone": "muted"
+      },
+      {
+        "text": "[ ] 工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出",
+        "tone": "muted"
+      },
+      {
+        "text": "v0.7.2 · 本机后台 · 每秒采样，变化时绘制",
+        "tone": "muted"
       }
     ],
-    "version": "0.7.2-fix.4.network-inspection",
-    "commit": "e0f0b99d2e930ad31698e7a2ce1428157a661514"
+    "version": "0.7.2",
+    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa"
   }
 }

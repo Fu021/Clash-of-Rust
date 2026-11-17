@@ -1,6 +1,9 @@
 "use strict";
 
 (() => {
+  const root = document.documentElement;
+  root.classList.add("theme-loading");
+  setTimeout(() => root.classList.remove("theme-loading"), 1200);
   const key = "cor-site-theme";
   const modes = ["auto", "light", "dark"];
   let mode = "auto";

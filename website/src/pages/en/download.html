@@ -20,7 +20,7 @@
         <button type="button" data-channel="stable" aria-pressed="true">Stable</button>
         <button type="button" data-channel="preview" aria-pressed="false">Preview</button>
       </div>
-      <p class="release-meta" aria-live="polite"><b data-version>0.7.1</b><span data-channel-note>For everyday use.</span><a data-notes href="{{repo}}/releases/tag/v0.7.1" target="_blank" rel="noopener">Release notes</a><span data-fetch-state></span></p>
+      <p class="release-meta" aria-live="polite"><b data-version>{{stable_version}}</b><span data-channel-note>For everyday use.</span><a data-notes href="{{repo}}/releases/tag/{{stable_tag}}" target="_blank" rel="noopener">Release notes</a><span data-fetch-state></span></p>
     </div>
     <noscript><p>JavaScript is off. This saved stable list may be out of date; check <a href="{{repo}}/releases">GitHub Releases</a> for the latest version.</p></noscript>
 
@@ -85,7 +85,7 @@ shasum -a 256 the-file-name.dmg</pre>
   <section id="questions">
     <h2>Questions people ask</h2>
     <div class="qa">
-      <details><summary>Stable or preview?</summary><p>Stable is for everyday use. Preview carries newer features first, at the moment the network toolbox and the terminal interface, and has been through a narrower round of validation. Back up your configuration before you try it. The desktop app can switch back to stable from inside the app.</p></details>
+      <details><summary>Stable or preview?</summary><p>Stable is for everyday use. Preview may carry newer features first and has been through a narrower round of validation. Back up your configuration before you try it. The desktop app can switch back to stable from inside the app.</p></details>
       <details><summary>Is there an iOS version?</summary><p>No. The repository has an interface prototype for iOS and nothing you can install.</p></details>
       <details><summary>What about other Linux distributions?</summary><p>Only DEB packages are published, and they are validated on Debian and on Ubuntu 20.04 and later. On other distributions you would need to build from source; see the developer docs in the repository.</p></details>
       <details><summary>Does the Linux package work without a desktop?</summary><p>Yes. The DEB includes <code>cor</code>, which needs no display. Run <code>cor start</code>, and use TUN on a server.</p></details>
