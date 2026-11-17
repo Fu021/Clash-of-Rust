@@ -51,9 +51,9 @@ zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] 
 
 [target.'cfg(target_os = "macos")'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
-# Share Slint's muda 0.19: two versions register incompatible MudaMenuItem
+# Share Slint's muda 0.21: two versions register incompatible MudaMenuItem
 # Objective-C classes and can overwrite native menu objects during startup.
-tray-icon = { version = "=0.24.2", default-features = false }
+tray-icon = { version = "=0.26.1", default-features = false }
 block2 = "0.6"
 # Reuse the bindings already used by tray-icon; keep AppKit on the GUI thread.
 objc2 = "0.6"

@@ -100,4 +100,4 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 - [依赖核对表](dependency-audit.csv)仅为 2026-10-24 历史快照。当前版本以源码、锁文件和[工具基线](../.github/build-versions.json)为准；升级同步声明及兼容说明，取得同提交的[审计附件](workflows/ci.md#ci)和验证，历史日期不保证当前安全。
 - YAML 使用维护中的 `yaml_serde` / `libyaml-rs`，替换已停止维护的 `serde_yaml` / `unsafe-libyaml`；保留原订阅、别名、标签和引号标量语义。桌面私有管道使用 `postcard`，协议号以 [`PROTOCOL`](../crates/desktop-protocol/src/lib.rs) 为准，收发端须一起更新，保留帧长度、截断和尾随数据检查。报告国旗使用 UTF-8 文本，与普通标签共用 `Text`，不传递图像代号。
 - HTTP 客户端统一使用 `clash_client_core::network::client_builder`，保留内置公共根证书；`reqwest` 0.13 的平台证书校验默认值不能直接用于未接入 Java verifier 的 Android 宿主。JNI 0.22 原生入口先经 `EnvUnowned::with_env`，工作线程经 VM 回调获取 `Env`，全局引用和异常处理遵循其生命周期。
-- macOS `tray-icon` 仍固定在与 Slint 共用原生菜单类的版本。Slint/ksni 的 zbus 5、字体栈的 `ttf-parser` 及 `typed-index-collections` 的可选 bincode 尚受上游约束；不以强制替换不兼容主版本掩盖这些链路。
+- macOS `tray-icon` 固定为与 Slint 1.19 共用 `muda` 0.21 原生菜单类的 0.26.1；升级时同时复核桌面宿主与 shell 的声明、锁文件和原生启动，不能保留两份菜单类实现。Slint/ksni 的 zbus 5、字体栈的 `ttf-parser` 及 `typed-index-collections` 的可选 bincode 尚受上游约束；不以强制替换不兼容主版本掩盖这些链路。

@@ -324,7 +324,7 @@ def package_tests(package, manifest, build):
 
 
 def installed_package_tests(package, manifest, build):
-    from ci_test_policy import extended_tests, proxy_benchmark
+    from ci_test_policy import desktop_ui_tests, extended_tests, proxy_benchmark
     from macos_package import APP_NAME, BUNDLE_ID, UI_APP, UI_BUNDLE_ID
     with mounted(package) as volume:
         app = volume/APP_NAME
@@ -343,7 +343,7 @@ def installed_package_tests(package, manifest, build):
         with tempfile.TemporaryDirectory(prefix='clash-install-') as temporary:
             installed = Path(temporary)/APP_NAME
             run(['/usr/bin/ditto', app, installed])
-            if extended_tests():
+            if extended_tests() or desktop_ui_tests():
                 suite('Installed GUI, window and bundled core', lambda: gui_smoke(installed, 'installed'))
             suite('Installed system proxy and TUN', lambda: logged('installed-proxy-modes',
                 [sys.executable, ROOT/'scripts/test-proxy-modes.py',

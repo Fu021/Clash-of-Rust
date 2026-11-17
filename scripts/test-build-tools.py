@@ -1910,7 +1910,13 @@ class BuildTests(unittest.TestCase):
                          'apps/android/native/src/android.rs',
                          'crates/client-core/src/application_rules/groups.rs',
                          'apps/android/core/application_rules.go',
+                         'Cargo.toml',
+                         'Cargo.lock',
+                         'apps/desktop/Cargo.toml',
+                         'apps/desktop-ui/Cargo.toml',
+                         'crates/desktop-shell/Cargo.toml',
                          'scripts/run-ci.py',
+                         'scripts/macos_ci.py',
                          'scripts/ci_test_policy.py'):
                 self.assertTrue(ci_test_policy.select([path])['desktop_ui_tests'], path)
             for path in ('crates/client-core/src/config/mod.rs',
@@ -2542,6 +2548,39 @@ class BuildTests(unittest.TestCase):
                 report = json.loads((Path(temporary)/'installed-cleanup-error.json').read_text())
                 self.assertEqual(report, {'error': 'cleanup failed',
                                          'primary_error': str(primary) if primary else None})
+
+    def test_macos_installed_gui_checks_follow_ui_scope_without_requiring_extended_tests(self):
+        from macos_package import APP_NAME, BUNDLE_ID, UI_APP, UI_BUNDLE_ID
+        for extended, ui, expected in [(False, False, False), (False, True, True),
+                                       (True, False, True)]:
+            with self.subTest(extended=extended, ui=ui), \
+                 tempfile.TemporaryDirectory() as temporary, \
+                 patch.object(ci_test_policy, 'extended_tests', return_value=extended), \
+                 patch.object(ci_test_policy, 'desktop_ui_tests', return_value=ui), \
+                 patch.object(macos, 'mounted') as mounted, \
+                 patch.object(macos, 'validate_binary_arch'), \
+                 patch.object(macos, 'validate_resources'), \
+                 patch.object(macos, 'run'), \
+                 patch.object(macos, 'logged'), \
+                 patch.object(macos, 'gui_smoke') as gui, \
+                 patch.object(macos, 'suite', side_effect=lambda name, operation: operation()):
+                root = Path(temporary)
+                app = root/APP_NAME
+                for path, metadata in [
+                    (app/'Contents/Info.plist', {
+                        'CFBundleIdentifier': BUNDLE_ID, 'ClashOfRustVersion': '0.7.2',
+                        'LSMinimumSystemVersion': '14.0'}),
+                    (app/UI_APP/'Contents/Info.plist', {
+                        'CFBundleIdentifier': UI_BUNDLE_ID, 'LSUIElement': True}),
+                ]:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(macos.plistlib.dumps(metadata))
+                mounted.return_value.__enter__.return_value = root
+                macos.installed_package_tests(root/'app.dmg', {
+                    'version': '0.7.2', 'arch': 'arm64',
+                    'tests': {'core_integration': 'core_integration'},
+                }, root/'build')
+                self.assertEqual(gui.called, expected)
 
     def test_linux_guest_package_preparation_skips_documentation_indexes(self):
         with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \

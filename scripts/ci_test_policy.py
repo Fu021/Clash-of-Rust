@@ -104,7 +104,9 @@ def select(paths, extended=False):
                          'crates/client-core/src/application_rules.rs',
                          'crates/client-core/src/application_rules/',
                          'apps/android/core/application_rules'))
-        or path in ('scripts/run-ci.py', 'scripts/ci_test_policy.py')
+        or path in ('Cargo.toml', 'Cargo.lock', 'apps/desktop/Cargo.toml',
+                    'apps/desktop-ui/Cargo.toml', 'crates/desktop-shell/Cargo.toml',
+                    'scripts/run-ci.py', 'scripts/macos_ci.py', 'scripts/ci_test_policy.py')
         for path in paths
     )
     benchmark = any(
