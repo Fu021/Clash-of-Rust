@@ -11,12 +11,12 @@ from cli_tui import Session
 from workflow_artifacts import commit
 
 
-PAGES = ('首页', '节点', '连接', '网络', '设置', '操作', '订阅', '快捷规则')
+PAGES = ('首页', '节点', '连接', '工具', '设置', '操作', '订阅', '快捷规则')
 PAGE_ACTIONS = {
     '首页': '查看内核、后台、订阅与流量；r 刷新，1–8 / Tab 切页，q / Ctrl+C 退出。',
     '节点': '↑↓ 选择，/ 搜索，Enter 打开策略组或确认切换；s 循环三种排序，Esc 返回。自动组只读。',
     '连接': '↑↓ 选择，/ 搜索，Enter 打开详情；详情内 ↑↓ 滚动，d 补充解析，x 关闭连接，Esc 返回。',
-    '网络': '[ / ] 切换工具，/ 输入目标，o 编辑适用参数，Enter 检查，↑↓ 滚动结果，'
+    '工具': '←→ 切换工具，/ 输入目标，o 编辑适用参数，Enter 检查，↑↓ 滚动结果，'
             'e 导出既有报告，Esc 取消；包含导出失败与修正路径后的恢复。',
     '设置': '按分类查找或用 / 搜索；Enter 打开项目，←→ / 空格调整候选值，Enter 确认当前值；'
             '文字按 Enter 编辑，Ctrl+U 清空，Esc 返回；Fake-IP 直接管理已有项，保存前再次确认。',
@@ -266,7 +266,7 @@ def verify_desktop(console, command, report):
     gallery = Gallery(report)
     with Session([*command, '--demo'], columns=120, rows=40) as terminal:
         for number, (page, expected) in enumerate(zip(PAGES, (
-                '参考线路', '策略组', '活跃连接', '网站检查', '混合代理端口',
+                '参考线路', '策略组', '活跃连接', '网站检查', '混合端口',
                 '管理操作', '订阅 · Enter', '快捷规则 · 当前订阅')), 1):
             visit(terminal, number, expected)
             gallery.capture(terminal, page, page+' · 主页面')
@@ -325,23 +325,23 @@ def verify_desktop(console, command, report):
                  if path.startswith('network ')]
         for index, tool in enumerate(tools):
             if index:
-                terminal.send(b']')
+                terminal.send(b'\x1b[C')
                 settle(terminal)
-            gallery.capture(terminal, '网络', tool+' · 工具说明和当前参数')
+            gallery.capture(terminal, '工具', tool+' · 工具说明和当前参数')
             terminal.send(b'o')
             terminal.wait(' · 参数')
-            gallery.editor(terminal, '网络', tool+' · 参数编辑')
+            gallery.editor(terminal, '工具', tool+' · 参数编辑')
             terminal.send(b'\r')
             terminal.wait('参数仅本页生效')
             terminal.send(b'\r')
             terminal.wait('实际线路' if index == 0 else '未运行网络或系统探针')
-            gallery.capture(terminal, '网络', tool+' · 演示结果')
+            gallery.capture(terminal, '工具', tool+' · 演示结果')
         terminal.send(b'e')
         terminal.wait('演示模式：未导出文件')
-        gallery.capture(terminal, '网络', '演示结果 · 禁止导出虚构报告')
+        gallery.capture(terminal, '工具', '演示结果 · 禁止导出虚构报告')
         terminal.send(ESCAPE)
 
-        visit(terminal, 5, '混合代理端口')
+        visit(terminal, 5, '混合端口')
         settings = []
         for _ in range(100):
             row = selected(terminal)

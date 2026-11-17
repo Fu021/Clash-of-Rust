@@ -220,13 +220,13 @@ fn network_tool_selection_wraps_cancels_and_keeps_input_literal() {
     state.key(Key::Char('4'));
     state.release_page();
     state.network_results = vec!["旧结果".into()];
-    assert!(matches!(state.key(Key::Char('[')), Action::CancelNetwork));
+    assert!(matches!(state.key(Key::Left), Action::CancelNetwork));
     assert_eq!(
         state.network_tool,
         clash_client_core::network_tools::Tool::ALL.len() - 1
     );
     assert!(state.network_results.is_empty());
-    assert!(matches!(state.key(Key::Char(']')), Action::CancelNetwork));
+    assert!(matches!(state.key(Key::Right), Action::CancelNetwork));
     assert_eq!(state.network_tool, 0);
     state.key(Key::Char('/'));
     state.key(Key::Paste("example.test/a[1]".into()));
@@ -400,7 +400,7 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
         (Page::Home, "首页"),
         (Page::Nodes, "节点"),
         (Page::Connections, "连接"),
-        (Page::Network, "网络"),
+        (Page::Network, "工具"),
         (Page::Settings, "设置"),
         (Page::Tools, "操作"),
         (Page::Profiles, "订阅"),
@@ -449,7 +449,7 @@ fn navigation_keeps_all_pages_below_eighty_columns_when_the_labels_fit() {
         (Page::Home, "1 首页"),
         (Page::Nodes, "2 节点"),
         (Page::Connections, "3 连接"),
-        (Page::Network, "4 网络"),
+        (Page::Network, "4 工具"),
         (Page::Settings, "5 设置"),
         (Page::Tools, "6 操作"),
         (Page::Profiles, "7 订阅"),

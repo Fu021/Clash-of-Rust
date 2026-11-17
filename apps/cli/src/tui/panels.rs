@@ -106,7 +106,7 @@ pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String,
     let form = state.form.as_ref().unwrap();
     let mut lines = if form.network == Some(super::network::Editor::Export) {
         vec![
-            ("网络 · 导出本次结果".into(), Tone::Accent),
+            ("工具 · 导出本次结果".into(), Tone::Accent),
             (
                 "保存现有证据，不重新运行检查；Esc 返回。".into(),
                 Tone::Muted,

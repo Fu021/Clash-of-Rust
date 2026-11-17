@@ -30,19 +30,31 @@ pub(super) const RULE_KEYS: &[&str] = &[
 
 pub(super) fn category(key: &str) -> &'static str {
     match key {
-        "run_mode" | "proxy_mode" | "claude_protection" | "tui_node_sort" => "常规与连接",
+        "run_mode" | "proxy_mode" | "claude_protection" | "tui_node_sort" => "常规",
         "mixed_port"
         | "dns_override"
         | "fake_ip"
         | "fake_ip_exclusions"
         | "fake_ip_disabled_defaults"
         | "ipv6"
-        | "udp" => "网络与 DNS",
-        "update_prereleases" | "update_check_interval_minutes" => "软件更新",
+        | "udp" => "网络",
+        "update_prereleases" => "更新",
         "active_profile" => "订阅",
         key if key.starts_with("shortcut_") => "快捷规则",
         _ => "计划任务",
     }
+}
+
+pub(super) fn matches_query(key: &str, query: &str) -> bool {
+    let category = category(key);
+    [
+        key,
+        title(key),
+        category,
+        if category == "网络" { "DNS" } else { "" },
+    ]
+    .iter()
+    .any(|value| value.to_lowercase().contains(query))
 }
 
 const SHORTCUTS: &[(&str, &str, &str)] = &[

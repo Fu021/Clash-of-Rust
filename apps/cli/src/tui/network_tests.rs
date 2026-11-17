@@ -74,7 +74,7 @@ fn applying_parameters_keeps_them_local_and_navigation_restores_defaults() {
     assert_eq!(state.form.as_ref().unwrap().fields[1].value, "GET");
     state.key(Key::Escape);
     assert_eq!(state.network_options.method, "GET");
-    state.key(Key::Char('['));
+    state.key(Key::Left);
     assert_eq!(state.network_options.method, "HEAD");
     assert_eq!(state.network_options.seconds, 10);
     state.network_options.seconds = 2;
@@ -90,6 +90,7 @@ fn confirming_a_tool_choice_keeps_the_value_without_starting_a_probe() {
     state.key(Key::Down);
     state.key(Key::Right);
     assert_eq!(state.form.as_ref().unwrap().fields[1].value, "A");
+    assert_eq!(state.network_tool, Tool::Dns.index() as usize);
     assert!(matches!(state.key(Key::Enter), Action::None));
     assert!(!state.entering_text());
     assert_eq!(state.form.as_ref().unwrap().fields[1].value, "A");
@@ -184,7 +185,7 @@ fn wrapped_results_reach_the_last_line_on_phone_and_tiny_screens() {
                 .any(|line| line.text.trim() == rows.last().unwrap().text.trim())
         );
         if height >= 3 {
-            assert!(frame.iter().any(|line| line.text.contains("网络")));
+            assert!(frame.iter().any(|line| line.text.contains("工具")));
         }
         for _ in 0..rows.len() + 3 {
             network::scroll(&mut state, width, false);
@@ -337,7 +338,7 @@ fn phone_parameter_fields_wrap_and_keep_the_input_tail_visible_after_resize() {
             })
             .collect::<String>();
         assert!(selected.contains("TARGET_END▏"));
-        assert!(frame.iter().any(|line| line.text.contains("网络")));
+        assert!(frame.iter().any(|line| line.text.contains("工具")));
     }
 }
 

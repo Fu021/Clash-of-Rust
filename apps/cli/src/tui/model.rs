@@ -234,13 +234,7 @@ impl State {
             return super::settings::KEYS
                 .iter()
                 .copied()
-                .filter(|key| {
-                    key.contains(&query)
-                        || super::settings::title(key).to_lowercase().contains(&query)
-                        || super::settings::category(key)
-                            .to_lowercase()
-                            .contains(&query)
-                })
+                .filter(|key| super::settings::matches_query(key, &query))
                 .collect();
         }
         if self.page == Page::Rules {
@@ -527,9 +521,9 @@ impl State {
                     return Action::SetNodeSort(mode);
                 }
             }
-            Key::Char('[' | ']') if self.page == Page::Network => {
+            Key::Left | Key::Right | Key::Char('[' | ']') if self.page == Page::Network => {
                 let count = clash_client_core::network_tools::Tool::ALL.len();
-                self.network_tool = if key == Key::Char(']') {
+                self.network_tool = if matches!(key, Key::Right | Key::Char(']')) {
                     (self.network_tool + 1) % count
                 } else {
                     (self.network_tool + count - 1) % count

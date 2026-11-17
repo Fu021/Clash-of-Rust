@@ -489,13 +489,13 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
                              ('network', b'4', '网站检查')]
                     if native_settings:
                         pages += [('settings', b'5', '设置 · Enter'),
-                                  ('setting-editor', b'/ipv6\r\r', '设置 · IPv6')]
+                                  ('setting-editor', b'/ipv6\r\r', r'设置 · (?:启用 )?IPv6')]
                     if tui_catalog:
                         pages += [('profiles', b'\x1b7', '订阅 · Enter'),
                                   ('shortcuts', b'8', '快捷规则 · 当前订阅')]
                     for page, key, ready in pages:
                         terminal.send(key)
-                        terminal.wait(ready)
+                        terminal.wait(ready, regex=page == 'setting-editor')
                         if tui_catalog and page == 'shortcuts':
                             terminal.wait('广告拦截：')
                         name = prefix+'tui-'+page

@@ -192,7 +192,11 @@ pub async fn run(args: &Args) -> Result<()> {
                     && state.form.is_none()
                     && matches!(
                         key,
-                        Key::Tab | Key::Escape | Key::Char('1'..='8' | '[' | ']' | 'o')
+                        Key::Tab
+                            | Key::Escape
+                            | Key::Left
+                            | Key::Right
+                            | Key::Char('1'..='8' | '[' | ']' | 'o')
                     ))
             {
                 continue;

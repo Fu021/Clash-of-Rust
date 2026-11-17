@@ -35,11 +35,10 @@ fn native_choices_wait_for_confirmation_and_backend_state_before_showing_saved_v
         (!original).to_string()
     );
     state.execution = Some(state.form.as_ref().unwrap().args(&args()).unwrap());
-    assert!(
-        render::frame(&state, 80, 24)
-            .iter()
-            .any(|line| line.text.contains("保存IPv6为"))
-    );
+    assert!(render::frame(&state, 80, 24).iter().any(|line| {
+        line.text
+            .contains(&format!("保存{}为", settings::title("ipv6")))
+    }));
     let Action::ApplySetting(operation) = state.key(Key::Enter) else {
         panic!("native setting must remain inside TUI");
     };
@@ -349,9 +348,13 @@ fn categories_and_dedicated_pages_keep_shortcuts_out_of_general_settings() {
     assert!(!state.items().iter().any(|key| key.starts_with("shortcut_")));
     assert!(!state.items().contains(&"active_profile"));
     let frame = render::frame(&state, 100, 40);
-    assert!(frame.iter().any(|line| line.text.contains("常规与连接")));
-    assert!(frame.iter().any(|line| line.text.contains("网络与 DNS")));
-    for query in ["网络与 DNS", "网络与 dns", "DNS", "dNs"] {
+    assert!(frame.iter().any(|line| line.text.contains("── 常规 ──")));
+    assert!(frame.iter().any(|line| line.text.contains("── 网络 ──")));
+    assert_eq!(
+        settings::category("update_check_interval_minutes"),
+        "计划任务"
+    );
+    for query in ["网络", "dns", "DNS", "dNs"] {
         state.query = query.into();
         assert!(state.items().contains(&"fake_ip"), "{query}");
         assert!(!state.items().contains(&"update_prereleases"), "{query}");
