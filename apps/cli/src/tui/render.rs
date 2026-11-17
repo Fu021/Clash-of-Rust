@@ -181,7 +181,7 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         super::panels::connection(state, content_width(columns, rows), body_height)
     } else {
         match state.page {
-            Page::Home => home(state),
+            Page::Home => super::home::panel(state, content_width(columns, rows), body_height),
             Page::Nodes => nodes(state, width.saturating_sub(6), body_height, spacious),
             Page::Connections => connections(state, width.saturating_sub(6), body_height),
             Page::Network => network(state, content_width(columns, rows), body_height),
@@ -233,7 +233,7 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
         super::panels::connection(state, width, 1)
     } else {
         match state.page {
-            Page::Home => home(state),
+            Page::Home => super::home::panel(state, width, 1),
             Page::Nodes => nodes(state, width, 1, false),
             Page::Connections => connections(state, width, 1),
             Page::Settings => super::panels::settings(state, width, 1),
@@ -307,6 +307,24 @@ fn notice(state: &State) -> (String, Tone) {
     {
         (
             format!("{description}？Enter 确认 · Esc 取消"),
+            Tone::Warning,
+        )
+    } else if let Some(available) = &state.updates.pending {
+        (
+            format!(
+                "{}安装{} {}？继续后在普通终端确认与授权。",
+                if available.preview {
+                    clash_client_core::update::channel::PRERELEASE_WARNING
+                } else {
+                    ""
+                },
+                if available.preview {
+                    "预发布版"
+                } else {
+                    "正式版"
+                },
+                available.version,
+            ),
             Tone::Warning,
         )
     } else if let Some(target) = &state.confirmation {
@@ -393,114 +411,14 @@ fn network(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     lines
 }
 
-fn home(state: &State) -> Vec<(String, Tone)> {
-    let Some(poll) = &state.poll else {
-        return vec![
-            ("尚未连接后台".into(), Tone::Warning),
-            (
-                "按 8 进入「操作」，选择 start 启动；浏览界面不会自动启动内核。".into(),
-                Tone::Muted,
-            ),
-        ];
-    };
-    let snapshot = &poll.snapshot;
-    let settings = &poll.meta.settings;
-    let owner = match poll.meta.owner {
-        clash_client_runtime::control::Owner::Gui => "桌面后台",
-        clash_client_runtime::control::Owner::Daemon => "CLI 后台",
-    };
-    let proxy = match snapshot.proxy_mode() {
-        clash_client_runtime::engine::ProxyMode::Tun => "TUN",
-        clash_client_runtime::engine::ProxyMode::System => "系统代理",
-        clash_client_runtime::engine::ProxyMode::Off => "关闭",
-    };
-    let mode = match snapshot.mode.as_str() {
-        "rule" => "规则",
-        "global" => "全局",
-        "direct" => "直连",
-        _ => "待确认",
-    };
-    let profile = poll
-        .meta
-        .profiles
-        .iter()
-        .find(|profile| Some(&profile.id) == settings.active_profile.as_ref())
-        .map(|profile| profile.name.as_str())
-        .unwrap_or(if state.demo { "演示订阅" } else { "—" });
-    let route = if snapshot.running {
-        snapshot
-            .active_route
-            .as_ref()
-            .map(|route| route.join(" → "))
-            .or_else(|| snapshot.active_node.clone())
-            .unwrap_or_else(|| "待确认".into())
-    } else {
-        "内核未运行".into()
-    };
-    vec![
-        (
-            format!(
-                "{}   ·   {owner}   ·   {}",
-                if snapshot.running {
-                    "● 内核运行中"
-                } else {
-                    "○ 内核未运行"
-                },
-                poll.meta.version
-            ),
-            Tone::Accent,
-        ),
-        (String::new(), Tone::Plain),
-        (format!("代理方式      {proxy} · {mode}模式"), Tone::Plain),
-        (format!("当前订阅      {profile}"), Tone::Plain),
-        (
-            format!(
-                "{}  {route}",
-                if settings.claude_protection.is_some() {
-                    "保护节点    "
-                } else {
-                    "参考线路    "
-                }
-            ),
-            Tone::Accent,
-        ),
-        (
-            format!(
-                "Claude 保护   {}",
-                if settings.claude_protection.is_some() {
-                    "已开启 · 网络修改锁定"
-                } else {
-                    "已关闭"
-                }
-            ),
-            Tone::Plain,
-        ),
-        (String::new(), Tone::Plain),
-        (
-            if snapshot.running {
-                format!(
-                    "↓ 下载  {}/s     ↑ 上传  {}/s     连接  {}",
-                    rate(snapshot.download_rate),
-                    rate(snapshot.upload_rate),
-                    snapshot.connection_count
-                )
-            } else {
-                "流量          内核未运行，暂无采样".into()
-            },
-            Tone::Plain,
-        ),
-        (String::new(), Tone::Plain),
-        (
-            "规则模式可有多个出口；连接页展示逐连接的实际规则与线路。".into(),
-            Tone::Muted,
-        ),
-    ]
-}
-
 fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(String, Tone)> {
     let items = state.items();
     let Some(poll) = &state.poll else {
-        return home(state);
+        return wrap("尚未连接后台；按 1 回首页启动后台与内核。", width)
+            .into_iter()
+            .take(height)
+            .map(|text| (text, Tone::Warning))
+            .collect();
     };
     let proxies = &poll.snapshot.proxies.proxies;
     let mut rows = vec![

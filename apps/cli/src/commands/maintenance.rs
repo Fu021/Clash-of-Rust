@@ -193,53 +193,12 @@ async fn update(args: &Args) -> Result<()> {
             (None, None, settings.update_prereleases)
         };
     if args.path == "update install" {
-        let terminal = cfg!(target_os = "linux")
-            && clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none();
-        ensure!(
-            !args.flag("no-start") || terminal,
-            "--no-start 仅支持 Linux 纯终端安装"
-        );
+        terminal_install_mode(args)?;
         let available =
             clash_client_runtime::update::check_with_prereleases(port, include_prereleases)
                 .await?
                 .context("当前更新通道没有可安装的版本")?;
-        let mut prompt = update_install_prompt(&available);
-        if terminal && !args.flag("no-start") {
-            prompt.push_str("\n安装成功后自动启动后台和内核；失败恢复原状态。");
-        }
-        output::confirm(args, &prompt).await?;
-        if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
-            eprintln!("正在下载安装包并校验 SHA256…");
-        }
-        let operation = Command::UpdateSelected {
-            version: available.version,
-            preview: available.preview,
-            terminal,
-            start_after_install: terminal && !args.flag("no-start"),
-        };
-        #[cfg(target_os = "linux")]
-        if terminal {
-            let prepared: Value = backend::request(args, operation)
-                .await
-                .context("终端安装准备失败；旧版后台请先退出后重试")?;
-            let directory = std::path::PathBuf::from(
-                prepared["installer"]
-                    .as_str()
-                    .context("后台没有返回终端安装目录")?,
-            );
-            let result = tokio::task::spawn_blocking(move || {
-                clash_client_runtime::update::run_terminal_install(&directory)
-            })
-            .await??;
-            if result.error {
-                bail!("{}", result.message);
-            }
-            return output::emit(
-                args,
-                json!({"state":result.state,"version":result.version,"message":result.message,"error":false}),
-            );
-        }
-        return output::emit(args, backend::request(args, operation).await?);
+        return install_selected_update(args, available).await;
     }
     let available =
         clash_client_runtime::update::check_with_prereleases(port, include_prereleases).await?;
@@ -289,6 +248,71 @@ async fn update(args: &Args) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn terminal_install_mode(args: &Args) -> Result<bool> {
+    let terminal = cfg!(target_os = "linux")
+        && clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none();
+    ensure!(
+        !args.flag("no-start") || terminal,
+        "--no-start 仅支持 Linux 纯终端安装"
+    );
+    Ok(terminal)
+}
+
+pub(crate) async fn install_selected_update(
+    args: &Args,
+    available: clash_client_runtime::update::Available,
+) -> Result<()> {
+    let settings = if let Some(remote) = backend::connect(args, false).await? {
+        let meta: clash_client_runtime::control::Meta = remote.request(Command::Meta).await?;
+        meta.settings
+    } else {
+        backend::store(args)?.load_settings()?
+    };
+    settings.require_mutable()?;
+    ensure!(
+        !available.preview || settings.update_prereleases,
+        "更新通道已变化，请重新检查并选择版本"
+    );
+    let terminal = terminal_install_mode(args)?;
+    let mut prompt = update_install_prompt(&available);
+    if terminal && !args.flag("no-start") {
+        prompt.push_str("\n安装成功后自动启动后台和内核；失败恢复原状态。");
+    }
+    output::confirm(args, &prompt).await?;
+    if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
+        eprintln!("正在下载安装包并校验 SHA256…");
+    }
+    let operation = Command::UpdateSelected {
+        version: available.version,
+        preview: available.preview,
+        terminal,
+        start_after_install: terminal && !args.flag("no-start"),
+    };
+    #[cfg(target_os = "linux")]
+    if terminal {
+        let prepared: Value = backend::request(args, operation)
+            .await
+            .context("终端安装准备失败；旧版后台请先退出后重试")?;
+        let directory = std::path::PathBuf::from(
+            prepared["installer"]
+                .as_str()
+                .context("后台没有返回终端安装目录")?,
+        );
+        let result = tokio::task::spawn_blocking(move || {
+            clash_client_runtime::update::run_terminal_install(&directory)
+        })
+        .await??;
+        if result.error {
+            bail!("{}", result.message);
+        }
+        return output::emit(
+            args,
+            json!({"state":result.state,"version":result.version,"message":result.message,"error":false}),
+        );
+    }
+    output::emit(args, backend::request(args, operation).await?)
 }
 
 fn update_install_prompt(available: &clash_client_runtime::update::Available) -> String {

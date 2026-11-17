@@ -10,6 +10,7 @@ pub(super) fn has_notice(state: &State) -> bool {
         || state.error.is_some()
         || state.message.is_some()
         || state.saving
+        || state.updates.pending.is_some()
         || state
             .rules
             .as_ref()
@@ -17,7 +18,8 @@ pub(super) fn has_notice(state: &State) -> bool {
 }
 
 fn help(state: &State) -> &'static str {
-    if state.execution.is_some() || state.confirmation.is_some() {
+    if state.execution.is_some() || state.confirmation.is_some() || state.updates.pending.is_some()
+    {
         "Enter 确认 · Esc 取消 · q 退出"
     } else if state.form.as_ref().is_some_and(|form| form.editing) {
         "输入中 · Enter 保留草稿 · Ctrl+U 清空 · Esc 撤销本项 · Ctrl+C 退出"
@@ -67,7 +69,7 @@ fn help(state: &State) -> &'static str {
     } else if state.page == Page::Nodes {
         "↑↓ 选择 · Enter 打开 · s 排序 · / 搜索 · Esc 返回 · q 退出"
     } else if state.page == Page::Home {
-        "r 刷新 · q 退出"
+        "↑↓ 选择 · Enter 操作 · r 刷新 · q 退出"
     } else {
         "↑↓ 选择 · Enter 打开 · / 搜索 · Esc 返回 · q 退出"
     }
@@ -110,8 +112,6 @@ pub(super) fn lines(
     if height < 10 {
         return vec![if has_notice(state) {
             line(&notice, tone)
-        } else if state.page == Page::Home {
-            line(help(state), Tone::Muted)
         } else if state.entering_text() {
             line("Ctrl+C 退出 · Esc 返回", Tone::Muted)
         } else {

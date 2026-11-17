@@ -103,6 +103,8 @@ pub(super) enum Action {
     ApplySetting(crate::args::Args),
     SaveFakeIp(Box<clash_client_runtime::control::Command>),
     SaveRules(Box<clash_client_runtime::control::Command>),
+    CheckUpdate,
+    InstallUpdate(Box<clash_client_runtime::update::Available>),
     ScrollDetail(bool),
     ScrollNetwork(bool),
     ReviewForm,
@@ -132,6 +134,7 @@ pub(super) struct State {
     pub shortcuts: Option<super::catalog::Shortcuts>,
     pub rules: Option<super::rules::Browser>,
     pub shortcuts_open: bool,
+    pub updates: super::home::Updates,
 }
 
 impl State {
@@ -160,6 +163,7 @@ impl State {
             shortcuts: None,
             rules: None,
             shortcuts_open: false,
+            updates: Default::default(),
         }
     }
 
@@ -263,6 +267,9 @@ impl State {
     }
 
     pub fn items(&self) -> Vec<&str> {
+        if self.page == Page::Home {
+            return super::home::items(self);
+        }
         let query = self.query.to_lowercase();
         if self.page == Page::Settings {
             return super::settings::KEYS
@@ -297,7 +304,8 @@ impl State {
             return Vec::new();
         };
         match self.page {
-            Page::Home | Page::Network => Vec::new(),
+            Page::Network => Vec::new(),
+            Page::Home => unreachable!(),
             Page::Settings | Page::Tools | Page::Rules => unreachable!(),
             Page::Profiles => poll
                 .meta
@@ -486,6 +494,9 @@ impl State {
         {
             return super::rules::key(self, key).unwrap_or(Action::None);
         }
+        if self.updates.pending.is_some() {
+            return super::home::confirm(self, key);
+        }
         if self.confirmation.is_some() {
             return match key {
                 Key::Enter => {
@@ -631,6 +642,7 @@ impl State {
                 self.selected = 0;
             }
             Key::Enter if self.page == Page::Nodes => self.enter_node(),
+            Key::Enter if self.page == Page::Home => return super::home::open(self),
             Key::Enter if self.page == Page::Connections => {
                 self.connection = self.items().get(self.selected).map(|id| (*id).to_owned());
                 self.detail_offset = 0;

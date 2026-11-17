@@ -172,7 +172,7 @@ def verify(console, resources, report):
                 terminal.send(b's')
                 terminal.wait(mode)
             terminal.capture(report, 'nodes')
-            for columns, rows in [(40, 12), (36, 16), (48, 24), (53, 30), (54, 30),
+            for columns, rows in [(40, 12), (36, 16), (48, 24), (49, 30), (50, 30), (53, 30), (54, 30),
                                   (60, 30), (79, 30), (79, 23), (60, 18), (100, 30)]:
                 terminal.resize(columns, rows)
                 deadline = time.monotonic()+5
@@ -181,7 +181,7 @@ def verify(console, resources, report):
                     terminal.pump(.05)
                     text = terminal.text()
                     title = terminal.screen.get(0, '')
-                    if columns < 54 or rows < 24:
+                    if columns < 50 or rows < 24:
                         navigation_ready = (title.strip() == '[节点]'
                                             and title.find('[') == (columns-1-6)//2)
                     else:
@@ -350,9 +350,11 @@ def verify_settings(console, resources, report):
 
         try:
             call('config', 'set', 'delay_interval_minutes', '17')
+            call('config', 'set', 'update_check_interval_minutes', '0')
             call('config', 'set', 'tui_node_sort', 'latency_descending')
             owner = json.loads((data/'control.json').read_text())['pid']
             original_port = call('config', 'get', 'mixed_port')['mixed_port']
+            verify_home(call, command, data, report)
             with Session([*command, 'ui']) as terminal:
                 terminal.wait('内核未运行')
                 terminal.send(b'7/delay_interval_minutes\r')
@@ -410,6 +412,42 @@ def verify_settings(console, resources, report):
             raise
         else:
             call('stop')
+
+
+def verify_home(call, command, data, report):
+    original = call('config', 'get', 'run_mode')['run_mode']
+    with Session([*command, 'ui']) as terminal:
+        terminal.wait('启动后台与内核')
+        terminal.wait('自动检查已关闭')
+        terminal.send(b'\r\r')
+        terminal.wait('执行 cor start')
+        terminal.capture(report, 'home-start-confirmation')
+        terminal.send(b'\x1b')
+        terminal.wait('cor start')
+        terminal.send(b'\x1b')
+        terminal.wait('首页 · Enter 操作')
+        terminal.send(b'\x1b[B\x1b[B\r\x1b[C\r')
+        terminal.wait('保存运行模式为')
+        terminal.send(b'\r')
+        terminal.wait('已保存')
+        expected = 'global' if original == 'rule' else 'direct' if original == 'global' else 'rule'
+        if call('config', 'get', 'run_mode')['run_mode'] != expected:
+            raise RuntimeError('Home mode selection did not use the existing owner')
+        if json.loads((data/'settings.json').read_text())['run_mode'] != expected:
+            raise RuntimeError('Home mode selection did not persist')
+        terminal.capture(report, 'home-mode-saved')
+        call('mode', original)
+        terminal.wait('运行模式 · '+{'rule': '规则', 'global': '全局', 'direct': '直连'}[original])
+        terminal.send(b'\x1b[B\x1b[B\x1b[B')
+        terminal.wait('› 检查更新')
+        for columns, rows in ((40, 24), (60, 24), (100, 30)):
+            terminal.resize(columns, rows)
+            terminal.wait('› 检查更新', rows=rows)
+            if '首页' not in terminal.text() or 'Enter 操作' not in terminal.text():
+                raise RuntimeError('Resized home hid its title or operation help')
+            terminal.capture(report, f'home-update-disabled-{columns}x{rows}')
+    if call('status')['running']:
+        raise RuntimeError('Home preview started a core before explicit confirmation')
 
 
 def verify_fake_ip(call, command, data, report):

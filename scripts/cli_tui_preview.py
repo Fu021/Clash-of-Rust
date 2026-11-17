@@ -13,7 +13,8 @@ from workflow_artifacts import commit
 
 PAGES = ('首页', '节点', '订阅', '连接', '规则', '工具', '设置', '操作')
 PAGE_ACTIONS = {
-    '首页': '查看内核、后台、订阅与流量；r 刷新，1–8 / Tab 切页，q / Ctrl+C 退出。',
+    '首页': '↑↓ 选择，Enter 启停内核、修改代理/模式/订阅/保护或检查更新；修改前确认。'
+            '有安装包时显示安装入口，交接后退出 TUI；r 刷新，1–8 / Tab 切页，q / Ctrl+C 退出。',
     '节点': '↑↓ 选择，/ 搜索，Enter 打开策略组或确认切换；s 循环三种排序，Esc 返回。自动组只读。',
     '连接': '↑↓ 选择，/ 搜索，Enter 打开详情；详情内 ↑↓ 滚动，d 补充解析，x 关闭连接，Esc 返回。',
     '工具': '←→ 切换工具，/ 输入目标，o 编辑适用参数，Enter 检查，↑↓ 滚动结果，'
@@ -280,6 +281,29 @@ def verify_desktop(console, command, report):
                                 size=(columns, rows))
             terminal.resize(120, 40)
             terminal.wait(expected, rows=40)
+
+        visit(terminal, 1, '首页 · Enter 操作')
+        for index, (label, path) in enumerate((('停止内核', 'stop'), ('代理方式', 'proxy'),
+                                               ('运行模式', 'mode'), ('当前订阅', None),
+                                               ('Claude 保护', 'claude protect'), ('检查更新', None))):
+            terminal.send(ESCAPE)
+            settle(terminal)
+            terminal.send(DOWN*index)
+            settle(terminal)
+            terminal.send(b'\r')
+            settle(terminal)
+            if path is not None:
+                terminal.wait('cor '+path if path == 'stop' else '设置 · '+label)
+                gallery.editor(terminal, '首页', label+' · 直接操作')
+                terminal.send(b'\r')
+                terminal.wait('执行 cor '+path if path == 'stop' else '保存'+label+'为')
+                gallery.capture(terminal, '首页', label+' · 确认与取消')
+                terminal.send(ESCAPE)
+                settle(terminal)
+                terminal.send(ESCAPE)
+                settle(terminal)
+            else:
+                gallery.capture(terminal, '首页', label+' · 当前状态')
 
         visit(terminal, 2, '策略组')
         search(terminal, 'PROXY')

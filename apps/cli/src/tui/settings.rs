@@ -167,7 +167,7 @@ pub(super) fn hint(key: &str) -> &'static str {
         "fake_ip" => "先开启 DNS 覆盖；关闭 DNS 覆盖会同时关闭 Fake-IP。",
         "tui_node_sort" => "只改变终端节点显示；节点页也可按 s 循环切换。",
         key if key.starts_with("shortcut_") => {
-            "作用于当前订阅；自定义规则、顺序和订阅原规则在操作页管理。"
+            "作用于当前订阅；自定义规则、顺序和订阅原规则在规则页管理。"
         }
         _ => "←→ 或 Space 调整选项，Enter 确认；文字与数值按 Enter 编辑，↓ 选择保存。",
     }

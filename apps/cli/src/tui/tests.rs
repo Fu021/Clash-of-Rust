@@ -9,6 +9,8 @@ use unicode_width::UnicodeWidthStr;
 mod fake_ip_features;
 #[path = "feature_tests.rs"]
 mod features;
+#[path = "home_tests.rs"]
+mod home_features;
 #[path = "network_tests.rs"]
 mod network_features;
 #[path = "rules_tests.rs"]
@@ -306,7 +308,7 @@ fn terminal_frames_fit_small_large_and_unicode_content_without_control_injection
 }
 
 #[test]
-fn home_footer_lists_refresh_and_exit_without_unavailable_actions() {
+fn home_footer_lists_available_actions_and_keeps_tiny_terminals_usable() {
     let state = State::new(true);
     for (columns, rows) in [(120, 40), (100, 30), (40, 20), (32, 8)] {
         let text = render::frame(&state, columns, rows)
@@ -314,9 +316,13 @@ fn home_footer_lists_refresh_and_exit_without_unavailable_actions() {
             .map(|line| line.text.trim_end())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("r 刷新"), "{columns}×{rows}:\n{text}");
         assert!(text.contains("q 退出"), "{columns}×{rows}:\n{text}");
-        for action in ["Enter 打开", "/ 搜索", "Esc 返回", "↑↓ 选择"] {
+        if rows >= 10 {
+            for action in ["r 刷新", "↑↓ 选择", "Enter 操作"] {
+                assert!(text.contains(action), "{columns}×{rows}: {action}\n{text}");
+            }
+        }
+        for action in ["Enter 打开", "/ 搜索", "Esc 返回"] {
             assert!(!text.contains(action), "{columns}×{rows}: {action}\n{text}");
         }
     }
@@ -414,7 +420,7 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
             (36, 16),
             (40, 12),
             (48, 24),
-            (53, 30),
+            (49, 30),
             (60, 18),
             (79, 23),
             (32, 8),
@@ -461,7 +467,7 @@ fn navigation_keeps_all_pages_below_eighty_columns_when_the_labels_fit() {
         let mut state = State::new(true);
         state.key(Key::Char(char::from(b'1' + index as u8)));
         assert!(state.page == page);
-        for columns in [54, 60, 64, 72, 79, 80, 120] {
+        for columns in [50, 53, 54, 60, 64, 72, 79, 80, 120] {
             let frame = render::frame(&state, columns, 30);
             let header = frame[..5]
                 .iter()

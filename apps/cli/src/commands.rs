@@ -8,6 +8,7 @@ use clash_client_runtime::{
     control::{Command, Meta, Poll},
     engine::{ProxyMode, Scope},
 };
+pub(crate) use maintenance::install_selected_update;
 use serde_json::{Value, json};
 
 pub async fn execute(args: &Args) -> Result<()> {

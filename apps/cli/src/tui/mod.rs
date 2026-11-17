@@ -1,6 +1,7 @@
 mod catalog;
 mod fake_ip;
 mod form;
+mod home;
 mod input;
 mod model;
 mod network;
@@ -30,12 +31,21 @@ enum Reply {
     Exported(Result<String, String>),
 }
 
-struct Request(JoinHandle<Result<Reply>>);
+struct Request<T = Reply>(JoinHandle<Result<T>>);
 
-impl Drop for Request {
+impl<T> Drop for Request<T> {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+fn check_update(
+    state: &mut State,
+) -> Result<Request<Option<clash_client_runtime::update::Available>>> {
+    let (ports, channel) = home::begin_check(state, std::time::Instant::now())?;
+    Ok(Request(tokio::spawn(async move {
+        clash_client_runtime::update::check_with_prereleases(ports, channel).await
+    })))
 }
 
 async fn read(
@@ -173,6 +183,7 @@ pub async fn run(args: &Args) -> Result<()> {
     let mut state = State::new(args.flag("demo"));
     let mut input = input::Decoder::default();
     let mut request: Option<Request> = None;
+    let mut update_request: Option<Request<Option<clash_client_runtime::update::Available>>> = None;
     let mut last_refresh = tokio::time::Instant::now() - Duration::from_secs(5);
     let mut dirty = true;
     let mut previous_size = (0, 0);
@@ -253,6 +264,8 @@ pub async fn run(args: &Args) -> Result<()> {
                 }
                 Action::Execute(operation) => {
                     request = None;
+                    update_request = None;
+                    state.updates.checking = false;
                     state.saving = false;
                     drop(terminal.take());
                     eprintln!("\ncor {} · 使用相同账户和数据目录\n", operation.path);
@@ -352,6 +365,26 @@ pub async fn run(args: &Args) -> Result<()> {
                             .map_err(|error| format!("{error:#}")),
                         )))
                     })));
+                }
+                Action::CheckUpdate => match check_update(&mut state) {
+                    Ok(job) => update_request = Some(job),
+                    Err(error) => state.message = Some(format!("{error:#}")),
+                },
+                Action::InstallUpdate(available) => {
+                    drop(request.take());
+                    drop(update_request.take());
+                    drop(terminal.take());
+                    drop(state);
+                    let operation = form::Form::new(
+                        form::commands()
+                            .find(|spec| spec.path == "update install")
+                            .unwrap(),
+                    )
+                    .args(args)?;
+                    let result =
+                        crate::commands::install_selected_update(&operation, *available).await;
+                    eprintln!("\n已退出 TUI；安装结果请用 cor update status 查看");
+                    return result;
                 }
             }
             if state.page != page {
@@ -470,6 +503,29 @@ pub async fn run(args: &Args) -> Result<()> {
             }
             state.saving = false;
             last_refresh = tokio::time::Instant::now();
+            dirty = true;
+        }
+        if home::sync(&mut state) {
+            update_request = None;
+            dirty = true;
+        }
+        if update_request
+            .as_ref()
+            .is_some_and(|job| job.0.is_finished())
+        {
+            let mut completed = update_request.take().unwrap();
+            let result = match (&mut completed.0).await {
+                Ok(result) => result.map_err(|error| format!("{error:#}")),
+                Err(error) => Err(format!("更新检查任务失败：{error}")),
+            };
+            home::accept(&mut state, result);
+            dirty = true;
+        }
+        if update_request.is_none() && home::due(&mut state, std::time::Instant::now()) {
+            match check_update(&mut state) {
+                Ok(job) => update_request = Some(job),
+                Err(error) => state.updates.result = Some(Err(format!("{error:#}"))),
+            }
             dirty = true;
         }
         if !state.demo && request.is_none() && last_refresh.elapsed() >= Duration::from_secs(1) {

@@ -113,6 +113,7 @@ def client_fixture(data, workload, rule_overrides=None):
         controller_port, mixed_port = controller.getsockname()[1], mixed.getsockname()[1]
     settings = {'controller_port': controller_port, 'mixed_port': mixed_port,
                 'secret': 'memory-benchmark', 'dark': True, 'delay_interval_minutes': 0,
+                'update_check_interval_minutes': 0,
                 'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'}
     if rule_overrides is not None:
         settings['rule_overrides'] = rule_overrides
