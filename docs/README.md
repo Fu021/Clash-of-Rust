@@ -23,7 +23,7 @@
 | 找代码、理解模块与数据流 | [开发与验证](development.md)，含平台边界、占用锁与验证要求；[全仓职责树](structure-review.md#目录与职责) |
 | 校正文档冲突、拆分大文件或规划目录重构 | [文档与代码结构复查](structure-review.md) |
 | 贡献代码或文档 | [贡献者须知](../.github/CONTRIBUTING.md)；agent 另读[开发约束](../AGENTS.md) |
-| 添加待办、持续跟进、换 agent 接手或汇报进度 | [本地待办与持续跟进](agent-todo.md)，实际任务留在被忽略的 `.todo/` |
+| 添加待办、持续跟进、换 agent 接手或汇报进度 | [本地待办与持续跟进](agent-todo.md)，实际任务留在被忽略的 `todo/` |
 | 修改桌面或移动界面、预览正式组件 | [界面设计与审阅](ui-design.md)；[Slint 界面说明](../crates/client-ui/README.md)；[预览与本地工具](workflows/local-development.md) |
 | 修改产品网站、图文功能介绍或下载入口 | [网站源码与预览](../website/README.md)；发布后执行独立 [loop-website](loop-website.md)；[访问网站](https://clash-of-rust.fu021.shop/) |
 | 修改 Android 宿主、VPN 或输入法 | [Android 开发说明](../apps/android/README.md)；[输入法兼容性复盘](agent-failures/android-ime.md) |

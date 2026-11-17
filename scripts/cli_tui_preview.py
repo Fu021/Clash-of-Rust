@@ -158,11 +158,12 @@ font:14px/1.5 "Noto Sans Mono CJK SC","Sarasa Mono SC","DejaVu Sans Mono",monosp
 pre span{display:inline}.accent{color:#79dfac}.selected{color:#10151c;background:#79dfac}
 .muted{color:#94a3b5}.warning{color:#ffb46b}button,input{font:inherit;padding:7px 12px;margin:5px}
 input{width:320px;max-width:100%}.tools{display:flex;flex-wrap:wrap;align-items:center}
-</style><header><h1>桌面终端 · 完整验收</h1>
+</style><header><h1>桌面终端 · 完整预览</h1>
 <p>主尺寸 120 × 40，另含 100 × 30 主页面。所有画面由实际 cor 程序经 PTY 捕获，
 每页列出当前操作，表单包含后续字段和提交入口。点击条目展开终端原文。</p>
 <p>演示数据用于安全检查导航、表单与确认入口；隔离后台帧另行标注。
 系统授权、安装、真实代理切换的执行结果不能由这些画面代替。</p>
+<p>本预览作为辅助材料；最终验收由维护者安装候选版本并自行使用测试完成。</p>
 <p>主页面：1–8 / Tab 切页，r 刷新，q / Ctrl+C 退出。
 列表使用 ↑↓、Enter、/ 搜索与 Esc 返回；表单另有 ←→ 候选值、
 Enter 编辑、Ctrl+U 清空、保存/执行确认与取消；输入时页面快捷键按普通文字处理，

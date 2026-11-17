@@ -188,14 +188,15 @@ def probe_independent_core(process, proxy_port, server):
         response = connection.getresponse()
         body = response.read(len(BLOCK)+1)
         digest = hashlib.sha256(body).hexdigest()
-        identity = response.getheader('X-Cor-Update-Fixture') == server.fixture_id
+        marker = response.getheader('X-Cor-Update-Fixture')
+        identity = marker == server.fixture_id
         if response.status != 200 or body != BLOCK or not identity:
             failure = (
                 'Independent Mihomo did not forward the fixture payload: '
                 f'HTTP {response.status}, bytes={len(body)}, sha256={digest}, '
                 f'identity={identity}, proxy_port={proxy_port}, '
                 f'origin_port={server.server_port}, origin_path={server.last_path!r}')
-            if response.status == 502 and not body and not identity and server.last_path is None:
+            if response.status == 502 and not body and marker is None and server.last_path is None:
                 raise IndependentCoreNotReady(failure)
             raise AssertionError(failure)
         return digest

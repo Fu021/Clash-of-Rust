@@ -1481,6 +1481,8 @@ class BuildTests(unittest.TestCase):
         for status, body, identity, last_path, expected in (
                 (502, b'', None, None, windows_update_tests.IndependentCoreNotReady),
                 (502, b'', 'expected-fixture', None, AssertionError),
+                (502, b'', 'another-fixture', None, AssertionError),
+                (502, b'', '', None, AssertionError),
                 (502, b'upstream error', None, None, AssertionError),
                 (503, b'', None, None, AssertionError),
                 (200, b'', None, None, AssertionError),
