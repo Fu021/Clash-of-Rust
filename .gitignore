@@ -7,7 +7,6 @@
 /dependency-snapshot/
 /tools/
 /.local-tools/
-/todo/
 
 # Temporary downloads and local diagnostics
 *.partial
