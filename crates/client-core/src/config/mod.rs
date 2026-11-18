@@ -252,7 +252,7 @@ impl Default for Settings {
             proxy_mode: crate::model::ProxyMode::Off,
             node_sort: crate::proxy_order::NodeSort::default(),
             proxy_groups_paginated: false,
-            profiles_paginated: true,
+            profiles_paginated: false,
             tui_node_sort: crate::proxy_order::NodeSort::LatencyAscending,
             rule_overrides: RuleOverrides::default(),
             rule_profiles: Default::default(),
@@ -1005,7 +1005,7 @@ mod tests {
         appearance.tray_speed = true;
         appearance.node_sort = crate::proxy_order::NodeSort::LatencyAscending;
         appearance.proxy_groups_paginated = true;
-        appearance.profiles_paginated = false;
+        appearance.profiles_paginated = true;
         appearance.tui_node_sort = crate::proxy_order::NodeSort::Name;
         assert!(before.require_settings_change(&appearance).is_ok());
         assert_eq!(appearance.claude_protection, before.claude_protection);

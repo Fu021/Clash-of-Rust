@@ -235,9 +235,28 @@ struct Request {
     operation: Command,
 }
 #[derive(Serialize, Deserialize)]
-struct Reply {
-    result: Value,
+struct Reply<T = Value> {
+    result: T,
     error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum Payload {
+    Json(Value),
+    Snapshot(Box<Poll>),
+}
+
+impl From<Value> for Payload {
+    fn from(value: Value) -> Self {
+        Self::Json(value)
+    }
+}
+
+impl Payload {
+    fn shutdown_requested(&self) -> bool {
+        matches!(self, Self::Json(value) if value.get("shutdown").and_then(Value::as_bool) == Some(true))
+    }
 }
 
 #[cfg(test)]
@@ -531,6 +550,7 @@ mod tests {
         let meta = dispatch::execute(&shared, Command::Meta, Owner::Daemon, None)
             .await
             .unwrap();
+        let meta = serde_json::to_value(meta).unwrap();
         assert_eq!(
             meta["settings"]["active_profile"].as_str(),
             Some(first.as_str())
@@ -543,6 +563,7 @@ mod tests {
         )
         .await
         .unwrap();
+        let document = serde_json::to_value(document).unwrap();
         assert_eq!(document["included"][0].as_bool(), Some(false));
 
         {

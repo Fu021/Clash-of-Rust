@@ -3809,16 +3809,20 @@ mod dev2_tests {
         json.as_object_mut()
             .unwrap()
             .remove("proxy_groups_paginated");
+        json.as_object_mut().unwrap().remove("profiles_paginated");
         let settings: Settings = serde_json::from_value(json).unwrap();
         assert_eq!(settings.node_sort, NodeSort::Name);
         assert!(!settings.proxy_groups_paginated);
+        assert!(!settings.profiles_paginated);
         let paginated = Settings {
             proxy_groups_paginated: true,
+            profiles_paginated: true,
             ..Settings::default()
         };
         let decoded: Settings =
             serde_json::from_slice(&serde_json::to_vec(&paginated).unwrap()).unwrap();
         assert!(decoded.proxy_groups_paginated);
+        assert!(decoded.profiles_paginated);
         for mode in NodeSort::ALL {
             let settings = Settings {
                 node_sort: mode,

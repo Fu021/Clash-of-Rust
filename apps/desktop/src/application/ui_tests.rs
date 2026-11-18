@@ -3577,6 +3577,17 @@ fn subscription_pagination_preserves_access_to_the_last_profile_in_both_views() 
     window.show().unwrap();
     app.present_slint(&data, &mut models);
     motion_frame(&window, 0);
+    assert_eq!(data.get_profiles().row_count(), 240);
+    assert!(!data.get_next());
+    click_target(&window, "profiles-pagination");
+    assert_eq!(
+        events.borrow_mut().pop(),
+        Some((Intent::ProfilePagination, "true".into(), "".into()))
+    );
+
+    app.settings.profiles_paginated = true;
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 0);
     assert_eq!(data.get_profiles().row_count(), PAGE_SIZE);
     assert!(data.get_next());
     click_target(&window, "profiles-pagination");

@@ -96,12 +96,10 @@ pub(super) async fn execute(
     operation: Command,
     owner: Owner,
     disconnected: Option<watch::Receiver<bool>>,
-) -> Result<Value> {
+) -> Result<Payload> {
     operation.check_protection(&shared.lock().await.settings)?;
     if matches!(&operation, Command::RecoverUnreachable) {
-        return Ok(serde_json::to_value(
-            Engine::recover_unreachable_cancellable(shared, disconnected).await?,
-        )?);
+        return json_payload(Engine::recover_unreachable_cancellable(shared, disconnected).await?);
     }
     if let Command::Delay { name, group } = &operation {
         let api = {
@@ -124,17 +122,21 @@ pub(super) async fn execute(
                 .await
                 .record_failure(&format!("节点状态复测未完成，已保留网络设置：{error:#}"));
         }
-        return Ok(serde_json::to_value(result)?);
+        return json_payload(result);
     }
     if matches!(&operation, Command::GeoUpdate) {
         Engine::update_geo_cancellable(shared, disconnected).await?;
-        return Ok(Value::Null);
+        return Ok(Value::Null.into());
     }
     if matches!(&operation, Command::UpdateInstall) {
-        return install_update(shared, disconnected, false, false, None).await;
+        return install_update(shared, disconnected, false, false, None)
+            .await
+            .map(Payload::from);
     }
     if matches!(&operation, Command::UpdatePrepareTerminal) {
-        return install_update(shared, disconnected, true, false, None).await;
+        return install_update(shared, disconnected, true, false, None)
+            .await
+            .map(Payload::from);
     }
     if let Command::UpdateSelected {
         version,
@@ -150,7 +152,8 @@ pub(super) async fn execute(
             *start_after_install,
             Some((version.clone(), *preview)),
         )
-        .await;
+        .await
+        .map(Payload::from);
     }
     if let Command::Import {
         name,
@@ -168,7 +171,7 @@ pub(super) async fn execute(
             disconnected,
         )
         .await?;
-        return Ok(Value::Null);
+        return Ok(Value::Null.into());
     }
     // GUI actions already return their fresh models. Console mutations also
     // invalidate attached views, without copying full lists on every tick.
@@ -202,16 +205,16 @@ pub(super) async fn execute(
         engine.invalidate_views();
     }
     match operation {
-        Command::Meta => return Ok(serde_json::to_value(meta(&engine, owner)?)?),
+        Command::Meta => return json_payload(meta(&engine, owner)?),
         Command::Snapshot { scope, header } => {
             if scope == Scope::Logs {
                 engine.retain_external_logs();
             }
             let snapshot = engine.poll_with_header(scope, header).await?;
-            return Ok(serde_json::to_value(Poll {
+            return Ok(Payload::Snapshot(Box::new(Poll {
                 meta: meta(&engine, owner)?,
                 snapshot,
-            })?);
+            })));
         }
         Command::Start => {
             if !engine.running() {
@@ -227,13 +230,12 @@ pub(super) async fn execute(
         Command::RecoverUnreachable => unreachable!("handled before locking the owner"),
         Command::Shutdown => {
             engine.stop().await?;
-            return Ok(
-                json!({"shutdown": owner == Owner::Daemon && super::gui_pid(&engine.store)?.is_none()}),
-            );
+            let shutdown = owner == Owner::Daemon && super::gui_pid(&engine.store)?.is_none();
+            return Ok(json!({"shutdown": shutdown}).into());
         }
         Command::Quit => {
             engine.stop().await?;
-            return Ok(json!({"shutdown":owner==Owner::Daemon}));
+            return Ok(json!({"shutdown":owner==Owner::Daemon}).into());
         }
         Command::Settings { settings, expected } => {
             anyhow::ensure!(
@@ -286,7 +288,7 @@ pub(super) async fn execute(
         Command::Activate { id } => engine.activate(id).await?,
         Command::DeleteProfile { id } => engine.delete_profile(&id).await?,
         Command::RuleDocument { id } => {
-            return Ok(serde_json::to_value(engine.rule_document(&id)?)?);
+            return json_payload(engine.rule_document(&id)?);
         }
         Command::SaveRules {
             id,
@@ -335,7 +337,7 @@ pub(super) async fn execute(
             }
             engine.claude_protection(enabled).await?;
         }
-        Command::TrayNodes => return Ok(serde_json::to_value(engine.tray_nodes().await?)?),
+        Command::TrayNodes => return json_payload(engine.tray_nodes().await?),
         Command::Delay { .. } => unreachable!("handled before locking the owner"),
         Command::Close { id } => {
             if let Some(id) = id {
@@ -350,17 +352,17 @@ pub(super) async fn execute(
             }
             engine.retain_external_logs();
             let snapshot = engine.poll(Scope::Logs).await?;
-            return Ok(serde_json::to_value(snapshot.logs)?);
+            return json_payload(snapshot.logs);
         }
-        Command::ExportLogs => return Ok(serde_json::to_value(engine.export_logs()?)?),
+        Command::ExportLogs => return json_payload(engine.export_logs()?),
         Command::RecordFailure { message } => engine.record_failure(&message),
         Command::GeoUpdate => unreachable!("handled before locking the owner"),
         Command::GeoInstall { path } => engine.install_geo(&path).await?,
         Command::CheckConfig => {
             engine.check_effective_config().await?;
-            return Ok(json!({"valid":true}));
+            return Ok(json!({"valid":true}).into());
         }
-        Command::EffectiveConfig => return Ok(json!({"yaml":engine.effective_config()?})),
+        Command::EffectiveConfig => return Ok(json!({"yaml":engine.effective_config()?}).into()),
         Command::Notify { title, message } => {
             crate::platform::notification::show(&title, &message).await?
         }
@@ -368,7 +370,7 @@ pub(super) async fn execute(
             if let Some(enabled) = enabled {
                 crate::platform::set_autostart(enabled)?;
             }
-            return Ok(json!({"enabled":crate::platform::autostart_enabled()?}));
+            return Ok(json!({"enabled":crate::platform::autostart_enabled()?}).into());
         }
         Command::UpdateInstall => unreachable!("handled before locking the owner"),
         Command::UpdatePrepareTerminal => unreachable!("handled before locking the owner"),
@@ -377,7 +379,7 @@ pub(super) async fn execute(
             #[cfg(target_os = "linux")]
             {
                 crate::update::commit_terminal_install(&directory, &mut engine).await?;
-                return Ok(json!({"shutdown":true}));
+                return Ok(json!({"shutdown":true}).into());
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -386,7 +388,11 @@ pub(super) async fn execute(
             }
         }
     }
-    Ok(Value::Null)
+    Ok(Value::Null.into())
+}
+
+fn json_payload(value: impl Serialize) -> Result<Payload> {
+    Ok(serde_json::to_value(value)?.into())
 }
 
 async fn install_update(

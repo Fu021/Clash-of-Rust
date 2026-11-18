@@ -306,7 +306,9 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         false,
                     )
                 };
-                let shutting_down = matches!(&result, Ok(value) if value.get("shutdown").and_then(Value::as_bool)==Some(true));
+                let shutting_down = result
+                    .as_ref()
+                    .is_ok_and(|value| value.shutdown_requested());
                 if disconnected {
                     if shutting_down {
                         let _ = shutdown.send(true);
@@ -321,12 +323,14 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                     Err(error) => {
                         let secret = engine.lock().await.settings.secret.clone();
                         Reply {
-                            result: Value::Null,
+                            result: Value::Null.into(),
                             error: Some(format!("{error:#}").replace(&secret, "[密钥]")),
                         }
                     }
                 };
-                if let Ok(mut bytes) = serde_json::to_vec(&reply) {
+                let bytes = serde_json::to_vec(&reply);
+                drop(reply);
+                if let Ok(mut bytes) = bytes {
                     if bytes.len() > RESPONSE_LIMIT {
                         bytes = serde_json::to_vec(&Reply {
                             result: Value::Null,
@@ -358,6 +362,39 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn typed_snapshot_reply_keeps_the_existing_wire_format() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into()).unwrap();
+        let engine = Arc::new(Mutex::new(crate::engine::test_support::fixture(store)));
+        let result = dispatch::execute(
+            &engine,
+            Command::Snapshot {
+                scope: Scope::Home,
+                header: true,
+            },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap();
+        let Payload::Snapshot(poll) = &result else {
+            panic!("snapshot must reach the encoder without a JSON value tree");
+        };
+        let expected = serde_json::to_value(poll).unwrap();
+        let bytes = serde_json::to_vec(&Reply {
+            result,
+            error: None,
+        })
+        .unwrap();
+        let legacy: Reply = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(legacy.result, expected);
+        assert!(legacy.error.is_none());
+        let decoded: Poll = serde_json::from_value(legacy.result).unwrap();
+        assert_eq!(decoded.meta.owner, Owner::Daemon);
+        assert!(!decoded.snapshot.running);
+    }
 
     #[test]
     fn older_import_requests_keep_their_original_semantics() {
