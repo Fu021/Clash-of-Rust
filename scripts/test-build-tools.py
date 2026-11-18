@@ -310,6 +310,30 @@ class UbuntuVmTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'expected Casper boot menu'):
             linux_mint_install.automatic_grub('linux /boot/vmlinuz boot=live --')
 
+    def test_mint_installer_derives_new_config_from_read_only_grub(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            original = directory/'signed.iso'
+            source = 'linux /casper/vmlinuz boot=casper quiet splash --\n'
+
+            def xorriso(arguments, **kwargs):
+                if '-extract' in arguments:
+                    extracted = arguments[-1]
+                    extracted.write_text(source)
+                    extracted.chmod(0o444)
+                else:
+                    replacement = arguments[arguments.index('-map') + 1]
+                    self.assertIn('automatic-ubiquity', replacement.read_text())
+                    arguments[arguments.index('-outdev') + 1].write_bytes(b'installer')
+
+            with patch.object(linux_mint_install, 'run', side_effect=xorriso), \
+                    patch.object(linux_mint_install.subprocess, 'check_output', return_value='hashed\n'):
+                media = linux_mint_install.installation_media(original, directory, 'public key')
+            extracted = directory/'source-grub.cfg'
+            self.assertEqual(extracted.read_text(), source)
+            self.assertEqual(extracted.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(media.read_bytes(), b'installer')
+
     def test_mint_installer_requires_completion_and_only_reboots_the_installed_disk(self):
         cases = [
             ('', 'did not finish'),

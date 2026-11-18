@@ -123,10 +123,11 @@ def automatic_grub(source):
 
 
 def installation_media(iso, directory, public_key):
+    source_grub = directory/'source-grub.cfg'
     grub = directory/'grub.cfg'
-    run(['xorriso', '-osirrox', 'on', '-indev', iso, '-extract', '/boot/grub/grub.cfg', grub],
-        timeout=120)
-    grub.write_text(automatic_grub(grub.read_text()))
+    run(['xorriso', '-osirrox', 'on', '-indev', iso, '-extract', '/boot/grub/grub.cfg',
+         source_grub], timeout=120)
+    grub.write_text(automatic_grub(source_grub.read_text()))
     seed = directory/'preseed'
     seed.mkdir()
     password = subprocess.check_output(['openssl', 'passwd', '-6', '-stdin'],
