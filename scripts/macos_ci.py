@@ -352,9 +352,8 @@ def installed_package_tests(package, manifest, build):
 
 
 def copy_runner_network_report():
-    from macos_runner_network import SNAPSHOT, REPORT as network_report
     from macos_test_network import SNAPSHOT as test_snapshot, REPORT as test_report
-    for source in (SNAPSHOT, network_report, test_snapshot, test_report):
+    for source in (test_snapshot, test_report):
         if source.is_file():
             shutil.copy2(source, REPORT/source.name)
 

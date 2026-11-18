@@ -1,4 +1,4 @@
-"""Ubuntu 20.04 build environment and native-kernel package verification.
+"""Ubuntu 20.04 builds and native-kernel Linux package verification.
 
 The host owns Actions credentials/caches. Only the source, Rust directories and
 explicit build inputs enter the disposable container; guests receive no tokens.
@@ -26,8 +26,9 @@ import uuid
 
 from build_support import ROOT, download as download_original, host_arch, opener, read_json, run, sha256, write_json
 from linux_apt import OPTIONS as APT_OPTIONS
+from linux_compatibility_targets import TARGETS, UBUNTU_BASELINE, target_for
 
-BASELINE = '20.04'
+BASELINE = UBUNTU_BASELINE
 CACHE_ID = 'ubuntu20-v1'
 PYTHON_REPO = 'astral-sh/python-build-standalone'
 CLOUD_ROOT = 'https://cloud-images.ubuntu.com/focal/'
@@ -123,9 +124,11 @@ def image_identity(value, arch):
 
 
 def download(record, path):
-    if not re.fullmatch('[0-9a-f]{64}', record.get('sha256', '')):
-        raise ValueError('Download requires an upstream SHA256')
-    download_original(record['url'], path, digest=record['sha256'])
+    algorithm = 'sha512' if 'sha512' in record else 'sha256'
+    length = 128 if algorithm == 'sha512' else 64
+    if not re.fullmatch(rf'[0-9a-f]{{{length}}}', record.get(algorithm, '')):
+        raise ValueError(f'Download requires an upstream {algorithm.upper()}')
+    download_original(record['url'], path, digest=record[algorithm], digest_algorithm=algorithm)
     print(f'Linux download: verified {path.name} ({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
     return path
 
@@ -165,8 +168,7 @@ def guest_deb_downloads(ssh, remote, environment, staging, records=None):
     if records is None:
         guest_python(remote, environment, script, timeout=180)
         records = json.loads(subprocess.check_output([*ssh, 'cat ~/cor-apt-plan.json'], timeout=60))
-    from linux_apt import matches, source_url
-    from upstream_cache import valid_source
+    from linux_apt import matches, source_url, valid_source
     if not isinstance(records, dict) or len(records) > 4096:
         raise ValueError('Guest APT download plan is invalid')
     for name, record in records.items():
@@ -193,36 +195,8 @@ def guest_deb_downloads(ssh, remote, environment, staging, records=None):
             tar.add(path, arcname=path.name, recursive=False)
     with archive.open('rb') as stream:
         remote('mkdir -p ~/cor-apt && tar xf - -C ~/cor-apt', stdin=stream, timeout=600)
-    print(f'Guest APT inputs: staged {len(archives)} verified originals through host official/private fallback',
+    print(f'Guest APT inputs: staged {len(archives)} verified archives from the official Ubuntu repositories',
           flush=True)
-
-
-def guest_receipts(ssh):
-    from upstream_cache import directory, valid_source
-    script = ("import json,pathlib; root=pathlib.Path('/home/ubuntu/cor-runner-temp/cor-upstream-downloads'); "
-              "files=sorted(root.glob('*.json')); "
-              "assert len(files)<=4096; "
-              "print(json.dumps([json.loads(path.read_text()) for path in files]))")
-    try:
-        payload = subprocess.check_output(
-            [*ssh, '/opt/cor-test-python/bin/python3 -c '+shlex.quote(script)], timeout=60)
-        if len(payload) > 1024*1024:
-            raise ValueError('Guest original receipt exceeds 1 MiB')
-        records = json.loads(payload)
-        if not isinstance(records, list) or any(
-                not isinstance(record, dict) or set(record) != {'url', 'size', 'sha256'}
-                or not valid_source(record['url'], record['sha256'], record['size'])
-                for record in records):
-            raise ValueError('Guest original receipt has invalid metadata')
-        write_json(REPORT/'focal-upstream-receipts.json', records)
-        for record in records:
-            identity = hashlib.sha256((record['url']+'\n'+record['sha256']).encode()).hexdigest()
-            write_json(directory()/(identity+'.json'), record)
-        print(f'Guest DEB inventory: imported {len(records)} verified original receipts; no archives copied',
-              flush=True)
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        print('::warning::Guest original download receipts unavailable: '
-              + type(error).__name__, flush=True)
 
 
 def system_ca_bundle():
@@ -378,10 +352,10 @@ def wait_vm_ssh(process, command, timeout=600):
     deadline = time.monotonic() + timeout
     while True:
         if process.poll() is not None:
-            raise RuntimeError('Ubuntu 20.04 VM exited during boot')
+            raise RuntimeError('Linux VM exited during boot')
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError('Ubuntu 20.04 VM did not become SSH-ready')
+            raise TimeoutError('Linux VM did not become SSH-ready')
         try:
             ready = subprocess.run([*command, 'true'], stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, timeout=min(15, remaining))
@@ -393,7 +367,8 @@ def wait_vm_ssh(process, command, timeout=600):
 
 
 class VmGuest:
-    def __init__(self, base, directory, label):
+    def __init__(self, base, directory, label, target):
+        self.target = target
         self.directory = Path(directory) / label
         self.directory.mkdir()
         self.process = None
@@ -408,12 +383,11 @@ class VmGuest:
         user_data = {'ssh_genkeytypes': ['ed25519'],
                      'users': [{'name': 'ubuntu', 'groups': 'adm,sudo',
                                'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'shell': '/bin/bash',
-                               'lock_passwd': False, 'ssh_authorized_keys': [public]}],
-                     'ssh_pwauth': False, 'package_update': False, 'package_upgrade': False,
-                     'chpasswd': {'list': 'ubuntu:cor-ci-only', 'expire': False}}
+                               'ssh_authorized_keys': [public]}],
+                     'ssh_pwauth': False, 'package_update': False, 'package_upgrade': False}
         (directory/'user-data').write_text('#cloud-config\n'+json.dumps(user_data))
         (directory/'meta-data').write_text(
-            'instance-id: cor-focal-' + uuid.uuid4().hex + '\nlocal-hostname: cor-focal-test\n')
+            'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
         seed = directory/'seed.img'
         self.disk = directory/'disk.qcow2'
         run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
@@ -422,8 +396,8 @@ class VmGuest:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
         architecture, kvm = self.architecture, self.kvm
-        print(f'Ubuntu {BASELINE} VM: {label}, {architecture}, acceleration={"kvm" if kvm else "tcg"}',
-              flush=True)
+        print(f'{target.distribution} {target.release} VM: {label}, {architecture}, '
+              f'acceleration={"kvm" if kvm else "tcg"}', flush=True)
         machine = 'q35' if architecture == 'x86_64' else 'virt'
         cpu = 'host' if kvm else ('max' if architecture == 'x86_64' else 'cortex-a72')
         command = ['qemu-system-'+architecture, '-machine', machine+',accel='+('kvm' if kvm else 'tcg'),
@@ -435,6 +409,13 @@ class VmGuest:
                    '-device', 'virtio-net-pci,netdev=net0']
         if architecture == 'aarch64':
             command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
+        elif target.uefi:
+            firmware = Path('/usr/share/OVMF')
+            code = firmware/'OVMF_CODE_4M.fd'
+            variables = directory/'OVMF_VARS.fd'
+            shutil.copyfile(firmware/'OVMF_VARS_4M.fd', variables)
+            command.extend(['-drive', f'if=pflash,unit=0,format=raw,readonly=on,file={code}',
+                            '-drive', f'if=pflash,unit=1,format=raw,file={variables}'])
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                     '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
@@ -450,14 +431,21 @@ class VmGuest:
             f'COR_CI_EXTENDED_TESTS={str(extended_tests()).lower()} '
             f'COR_CI_LINUX_USER_TESTS={str(linux_user_tests()).lower()} ')
         try:
-            self.console = (REPORT / ('focal-console-' + label + '.log')).open('w')
+            self.console = (REPORT / ('vm-console-' + label + '.log')).open('w')
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT)
             wait_vm_ssh(self.process, self.ssh)
             self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
                         timeout=360)
+            actual = self.output('uname -m').strip()
+            if actual != architecture:
+                raise RuntimeError(f'Linux VM returned {actual} instead of {architecture}')
+            identity = self.output('. /etc/os-release && printf "%s\\n" "$ID" "$VERSION_ID"').splitlines()
+            if identity != [target.family, target.release]:
+                raise RuntimeError(f'Linux VM returned {identity!r} instead of {target.family} {target.release}')
             self.kernel = self.output('uname -r').strip()
-            if not self.kernel.startswith('5.4.'):
-                raise RuntimeError('Minimum-kernel test requires Ubuntu 20.04 GA 5.4')
+            if target.kernel_series and not self.kernel.startswith(target.kernel_series + '.'):
+                raise RuntimeError(f'{target.distribution} {target.release} requires kernel '
+                                   f'{target.kernel_series}, booted {self.kernel}')
             self.boot_seconds = round(time.monotonic() - boot_started, 3)
         except BaseException:
             self.close()
@@ -472,28 +460,18 @@ class VmGuest:
     def python(self, script, timeout=120):
         return guest_python(self.remote, self.environment, script, timeout)
 
-    def stage(self, archive, python=None):
+    def stage(self, archive, python):
         started = time.monotonic()
         try:
             with archive.open('rb') as stream:
                 self.remote('mkdir -p ~/cor-source ~/cor-apt && tar xzf - -C ~/cor-source',
                             stdin=stream, timeout=300)
-            if python:
-                with python.open('rb') as stream:
-                    self.remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - '
-                                '-C /opt/cor-test-python --strip-components=1', stdin=stream, timeout=120)
+            with python.open('rb') as stream:
+                self.remote('sudo mkdir -p /opt/cor-test-python && sudo tar xzf - '
+                            '-C /opt/cor-test-python --strip-components=1', stdin=stream, timeout=120)
         finally:
             self.stage_seconds = round(time.monotonic() - started, 3)
 
-    def inspect(self):
-        script = ('import json,prepared_vm_environment; '
-                  'print(json.dumps(prepared_vm_environment.inspect_environment()))')
-        started = time.monotonic()
-        try:
-            return json.loads(self.output(self.environment + '/opt/cor-test-python/bin/python3 -c '
-                                          + shlex.quote("import sys; sys.path.insert(0,'scripts'); " + script)))
-        finally:
-            self.inspect_seconds = round(time.monotonic() - started, 3)
 
     def preserve(self):
         for name, command in (('cloud-init', 'cloud-init analyze show'),
@@ -516,20 +494,13 @@ class VmGuest:
                     state = 'transfer_failed'
                     print(f'::warning::Guest diagnostic transfer failed (exit {result.returncode})', flush=True)
                 elif archive.stat().st_size:
-                    archive.replace(REPORT/'focal-guest-report.tar.gz')
+                    archive.replace(REPORT/'vm-guest-report.tar.gz')
                     state = 'saved'
         except (OSError, subprocess.SubprocessError) as error:
             state = 'transfer_failed'
             print(f'::warning::Guest diagnostic transfer failed ({type(error).__name__})', flush=True)
-        write_json(REPORT/'focal-guest-report-status.json', {'schema': 1, 'state': state})
-        guest_receipts(self.ssh)
+        write_json(REPORT/'vm-guest-report-status.json', {'schema': 1, 'state': state})
 
-    def shutdown(self):
-        with contextlib.suppress(subprocess.CalledProcessError):
-            self.remote('sudo shutdown -h now', timeout=30)
-        if self.process.wait(timeout=180) != 0:
-            raise RuntimeError('Template guest did not shut down cleanly')
-        self.close()
 
     def close(self):
         with contextlib.suppress(OSError, subprocess.SubprocessError):
@@ -546,7 +517,7 @@ class VmGuest:
             self.console.close()
 
 
-def vm_source_archive(directory):
+def vm_source_archive(directory, include_frozen_apt=True):
     archive = directory / 'source.tar.gz'
     from build_inputs import FILES
     from workflow_artifacts import commit
@@ -560,7 +531,7 @@ def vm_source_archive(directory):
             tar.add(ROOT / relative, arcname=relative, recursive=False)
         tar.add(snapshot / 'inputs.json', arcname='dependency-snapshot/inputs.json')
         environment = snapshot / 'vm-environment' / host_arch()
-        if environment.exists():
+        if include_frozen_apt and environment.exists():
             tar.add(environment, arcname='dependency-snapshot/vm-environment/' + host_arch())
         data = (commit() + '\n').encode('ascii')
         identity = tarfile.TarInfo('source-commit.txt')
@@ -570,51 +541,22 @@ def vm_source_archive(directory):
     return archive
 
 
-def verify_vm_image(path, virtual_size):
-    import prepared_vm as protocol
-    protocol.qcow2_header(path, virtual_size)
-    information = json.loads(subprocess.check_output(
-        ['qemu-img', 'info', '--output=json', '-f', 'qcow2', path], timeout=60))
-    specific = information.get('format-specific', {}).get('data', {})
-    protocol.require(information.get('format') == 'qcow2'
-                     and information.get('virtual-size') == virtual_size
-                     and not information.get('backing-filename')
-                     and not information.get('full-backing-filename')
-                     and not information.get('encrypted') and not information.get('snapshots')
-                     and not information.get('dirty-flag')
-                     and not specific.get('data-file') and not specific.get('corrupt')
-                     and not specific.get('dirty-flag'), 'unsupported_image')
-    result = json.loads(subprocess.check_output(
-        ['qemu-img', 'check', '--output=json', '-f', 'qcow2', path], timeout=180))
-    protocol.require(type(result.get('check-errors')) is int and result['check-errors'] == 0
-                     and result.get('format') == 'qcow2'
-                     and all(result.get(name, 0) == 0 for name in ('corruptions', 'leaks')),
-                     'unsupported_image')
-
-
 def prepare_vm_guest(guest, directory, frozen=None):
     if frozen:
         guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs',
                             frozen['lock']['downloads'])
         guest.python("from build_inputs import manifest; "
-                     "from prepared_vm_environment import install_frozen, frozen_environments; "
+                     "from ubuntu_vm_environment import install_frozen, frozen_environments; "
                      "from build_support import host_arch; "
                      "value=manifest(); install_frozen('dependency-snapshot',"
                      "frozen_environments(value)[host_arch()],"
                      "value['upstream']['linux'])", timeout=2100)
     else:
         guest.remote('sudo timeout --signal=TERM --kill-after=30s 300s '
-                     + shlex.join([*APT_OPTIONS, 'update']), timeout=360)
-        guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs')
-        guest.python("import runpy; runpy.run_path('scripts/test-release-package.py')"
-                     "['prepare_compatibility_environment']()", timeout=2100)
-    guest_receipts(guest.ssh)
-    try:
-        run([sys.executable, ROOT/'scripts/upstream_cache.py', 'submit',
-             '--budget-seconds', '20', '--poll-seconds', '0', '--no-summary'], timeout=30)
-    except (OSError, subprocess.SubprocessError) as error:
-        print('::warning::Early guest download manifest submission unavailable: '
-              + type(error).__name__, flush=True)
+                     + shlex.join([*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update']),
+                     timeout=360)
+        if (guest.target.family, guest.target.release) == ('ubuntu', BASELINE):
+            guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs')
 
 
 def fetch_vm_package(directory, package_run_id, timings):
@@ -635,7 +577,7 @@ def fetch_vm_package(directory, package_run_id, timings):
         timings['package_download_and_archive'] = round(time.monotonic() - started, 3)
 
 
-def verify_vm_package(guest, directory, package_run_id, prepared=False, timings=None,
+def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=None,
                       package_future=None):
     timings = timings if timings is not None else {}
     started = time.monotonic()
@@ -650,158 +592,97 @@ def verify_vm_package(guest, directory, package_run_id, prepared=False, timings=
             guest.remote('tar xzf - -C ~/cor-source', stdin=stream, timeout=300)
     finally:
         timings['package_transfer'] = round(time.monotonic() - started, 3)
-    extra = 'COR_PREPARED_VM_VERIFIED=true ' if prepared else ''
+    extra = 'COR_UBUNTU_VM_FROZEN=true ' if frozen else ''
+    target = guest.target
+    command = shlex.join(['/opt/cor-test-python/bin/python3', 'scripts/test-release-package.py',
+                          '--linux-compat', '--expect-linux', target.family, target.release,
+                          '--expect-arch', target.arch])
     started = time.monotonic()
     try:
-        guest.remote(guest.environment + extra + '/opt/cor-test-python/bin/python3 '
-                     'scripts/test-release-package.py --linux-compat --expect-ubuntu 20.04',
+        guest.remote(guest.environment + extra + command,
                      timeout=2400 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
 
-def vm_test(package_run_id=None):
+def vm_test(package_run_id=None, suite='ubuntu', release=BASELINE):
     overall_started = time.monotonic()
     timings = {}
     require_actions()
-    import prepared_vm as protocol
-    import prepared_vm_environment as environment
     from build_inputs import manifest
+    from ubuntu_vm_environment import PREPARATION_ERRORS, frozen_environments, verify_frozen
+
     REPORT.mkdir(parents=True, exist_ok=True)
+    architecture = host_arch()
+    target = target_for(suite, release, architecture)
     linux = inputs()
-    value = linux['architectures'][host_arch()]
-    client = protocol.client(REPORT / 'prepared-vm.json')
-    snapshot = manifest() or {}
-    frozen = environment.frozen_environments(snapshot).get(host_arch())
-    enabled = False
-    if frozen:
-        try:
-            enabled = environment.verify_frozen(
-                Path(os.environ.get('BUILD_INPUTS_DIR', 'dependency-snapshot')), frozen, linux)
-            enabled = enabled and client.available(host_arch())
-        except protocol.ERRORS as error:
-            client.event('inputs', 'invalid_frozen_inputs', time.monotonic(),
-                         error_code=getattr(error, 'code', type(error).__name__))
+    value = linux['architectures'][architecture]
+    frozen = None
+    if target.image_url:
+        cloud = {'url': target.image_url, target.digest_algorithm: target.image_digest}
+    else:
+        cloud = value['cloud']
+        frozen = frozen_environments(manifest() or {}).get(architecture)
+    if frozen and not verify_frozen(
+            Path(os.environ.get('BUILD_INPUTS_DIR', 'dependency-snapshot')), frozen, linux):
+        frozen = None
     temporary_root = Path(os.environ.get('RUNNER_TEMP', tempfile.gettempdir())).resolve()
-    protocol.require(not temporary_root.is_relative_to(ROOT), 'unsafe_image_directory')
-    with tempfile.TemporaryDirectory(prefix='cor-focal-vm-', dir=temporary_root) as temporary:
+    if temporary_root.is_relative_to(ROOT):
+        raise ValueError('VM files must stay outside the checkout')
+    with tempfile.TemporaryDirectory(prefix='cor-linux-vm-', dir=temporary_root) as temporary:
         directory = Path(temporary)
         phase_started = time.monotonic()
-        archive = vm_source_archive(directory)
+        archive = vm_source_archive(directory, include_frozen_apt=bool(frozen))
         timings['source_archive'] = round(time.monotonic() - phase_started, 3)
-        candidate = directory / 'prepared.qcow2'
         guest = None
-        upload = None
-        result = {'distribution': BASELINE, 'arch': host_arch(), 'success': False,
-                  'source_archive_bytes': archive.stat().st_size}
-        cache_path = 'cold'
-        workers = ThreadPoolExecutor(max_workers=2)
-        started = time.monotonic()
-        try:
-            package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings)
-            phase_started = time.monotonic()
-            saved = client.restore(frozen['descriptor'], candidate, verify_vm_image) if enabled else None
-            timings['private_lookup_download_verify'] = round(time.monotonic() - phase_started, 3)
-            if saved:
-                try:
-                    protocol.require(saved['image']['virtual_size'] == 24 * 1024**3,
-                                     'environment_mismatch')
-                    environment.check_sources(saved['environment'], frozen)
-                    guest = VmGuest(candidate, directory, 'warm')
-                    guest.stage(archive)
-                    environment.check_environment(guest.inspect(), saved['environment'], frozen['lock'])
-                    client.event('boot', 'warm_verified', started)
-                    cache_path = 'warm'
-                except protocol.ERRORS as error:
-                    if guest:
-                        guest.close()
-                    guest = None
-                    enabled = False
-                    cache_path = 'cold_after_restore_failure'
-                    client.event('boot', 'cold_fallback', started,
-                                 error_code=getattr(error, 'code', type(error).__name__))
-            if guest is None:
+        result = {'distribution': target.family, 'version_id': target.release,
+                  'arch': architecture, 'success': False,
+                  'source_archive_bytes': archive.stat().st_size,
+                  'cloud_url': cloud['url'],
+                  'cloud_' + target.digest_algorithm: cloud[target.digest_algorithm]}
+        with ThreadPoolExecutor(max_workers=1) as workers:
+            try:
+                package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings)
                 phase_started = time.monotonic()
-                base = download(value['cloud'], tools_directory()/'focal.img')
+                filename = f'{target.family}-{target.release}-{architecture}.qcow2' if target.image_url else 'focal.img'
+                base = download(cloud, tools_directory()/filename)
                 python = download(value['python'], tools_directory()/'python.tar.gz')
                 timings['original_downloads'] = round(time.monotonic() - phase_started, 3)
-                guest = VmGuest(base, directory, 'cold')
+                guest = VmGuest(base, directory, 'official-image', target)
                 guest.stage(archive, python)
-                try:
-                    phase_started = time.monotonic()
-                    prepare_vm_guest(guest, directory, frozen if enabled else None)
-                    timings['dependency_preparation'] = round(time.monotonic() - phase_started, 3)
-                    if enabled and client.available(host_arch()):
-                        phase_started = time.monotonic()
-                        actual = guest.inspect()
-                        environment.check_environment(actual, None, frozen['lock'])
-                        sources = {record['sha256']: record for record in frozen['lock']['downloads'].values()}
-                        for name, path in (('cloud', base), ('python', python)):
-                            sources[value[name]['sha256']] = {**value[name], 'size': path.stat().st_size}
-                        actual['sources'] = [sources[checksum] for checksum in sorted(sources)]
-                        guest.python('from prepared_vm_environment import clean_template; clean_template()')
-                        guest.shutdown()
-                        run(['qemu-img', 'convert', '-f', 'qcow2', '-O', 'qcow2', '-c',
-                             '-o', 'compat=1.1', guest.disk, candidate], timeout=600)
-                        run(['qemu-img', 'compare', '-f', 'qcow2', '-F', 'qcow2',
-                             guest.disk, candidate], timeout=300)
-                        verify_vm_image(candidate, 24 * 1024**3)
-                        candidate.chmod(0o400)
-                        record = {'schema': 1, 'group': protocol.GROUP,
-                                  'env_key': protocol.identity(frozen['descriptor']),
-                                  'descriptor': frozen['descriptor'],
-                                  'image': {'format': 'qcow2', 'size': candidate.stat().st_size,
-                                            'virtual_size': 24 * 1024**3, 'sha256': sha256(candidate)},
-                                  'environment': actual, 'producer': protocol.producer()}
-                        protocol.validate(record)
-                        write_json(REPORT / 'prepared-vm-manifest.json', record)
-                        guest = VmGuest(candidate, directory, 'template-check')
-                        guest.stage(archive)
-                        environment.check_environment(guest.inspect(), actual, frozen['lock'])
-                        client.event('template', 'second_boot_verified', started)
-                        cache_path = 'cold_template'
-                        timings['template_and_second_boot'] = round(time.monotonic() - phase_started, 3)
-                        if client.available(host_arch()):
-                            upload = workers.submit(client.upload, record, candidate)
-                except protocol.ERRORS as error:
-                    if not enabled:
-                        raise
-                    client.event('template', 'cold_fallback', started,
-                                 error_code=getattr(error, 'code', type(error).__name__))
-                    guest.close()
-                    guest = VmGuest(base, directory, 'cold-fallback')
-                    guest.stage(archive, python)
-                    phase_started = time.monotonic()
-                    prepare_vm_guest(guest, directory)
-                    timings['fallback_dependency_preparation'] = round(time.monotonic() - phase_started, 3)
-                    enabled = False
-            timings['final_guest_boot'] = guest.boot_seconds
-            timings['source_transfer'] = guest.stage_seconds
-            if enabled:
-                timings['environment_inspection'] = guest.inspect_seconds
-            verify_vm_package(guest, directory, package_run_id, prepared=enabled, timings=timings,
-                              package_future=package_future)
-            result.update(kernel=guest.kernel, acceleration='kvm' if guest.kvm else 'tcg',
-                          cloud_sha256=value['cloud']['sha256'], success=True)
-        finally:
-            try:
-                if guest:
-                    try:
-                        guest.preserve()
-                    finally:
-                        guest.close()
-            finally:
                 phase_started = time.monotonic()
                 try:
-                    workers.shutdown(wait=True)
-                    if upload is not None:
-                        result['template_saved'] = upload.result() is not None
+                    prepare_vm_guest(guest, directory, frozen)
+                except PREPARATION_ERRORS as error:
+                    if frozen is None:
+                        raise
+                    timings['frozen_preparation'] = round(time.monotonic() - phase_started, 3)
+                    print('::warning::Frozen Ubuntu APT inputs unavailable; retrying on the same '
+                          'official image with current signed indexes: ' + type(error).__name__, flush=True)
+                    guest.close()
+                    guest = VmGuest(base, directory, 'official-image-fresh-apt', target)
+                    guest.stage(archive, python)
+                    frozen = None
+                    phase_started = time.monotonic()
+                    prepare_vm_guest(guest, directory)
+                timings['dependency_preparation'] = round(time.monotonic() - phase_started, 3)
+                timings['final_guest_boot'] = guest.boot_seconds
+                timings['source_transfer'] = guest.stage_seconds
+                verify_vm_package(guest, directory, package_run_id, frozen=bool(frozen), timings=timings,
+                                  package_future=package_future)
+                result.update(kernel=guest.kernel, acceleration='kvm' if guest.kvm else 'tcg', success=True)
+            finally:
+                try:
+                    if guest:
+                        try:
+                            guest.preserve()
+                        finally:
+                            guest.close()
                 finally:
-                    timings['upload_tail_wait'] = round(time.monotonic() - phase_started, 3)
-                    result.update(prepared=enabled, cache_path=cache_path,
+                    result.update(apt_inputs='frozen' if frozen else 'current',
                                   seconds=round(time.monotonic() - overall_started, 3),
                                   timings_seconds=timings)
-                    write_json(REPORT/'focal-vm.json', result)
+                    write_json(REPORT/'linux-vm.json', result)
 
 
 def main():
@@ -809,9 +690,13 @@ def main():
     parser.add_argument('operation', choices=('ci', 'package', 'vm', 'cache-keys', 'cache-downloads', 'cache-image'))
     parser.add_argument('--vm', action='store_true', help='Include cloud image downloads')
     parser.add_argument('--package-run-id', type=int, help='Prepare the VM before waiting for this run’s Linux package')
+    parser.add_argument('--suite', choices=tuple(TARGETS))
+    parser.add_argument('--release')
     args, extra = parser.parse_known_args()
     if args.package_run_id is not None and (args.operation != 'vm' or args.package_run_id <= 0):
         parser.error('--package-run-id requires vm and a positive Actions run id')
+    if (args.suite is None) != (args.release is None) or (args.suite and args.operation != 'vm'):
+        parser.error('--suite and --release must be used together with vm')
     if args.operation in ('cache-keys', 'cache-downloads'):
         if extra or (args.vm and args.operation != 'cache-downloads'):
             parser.error('Unexpected cache arguments')
@@ -834,7 +719,7 @@ def main():
     elif args.operation == 'vm':
         if extra:
             parser.error('vm takes no additional arguments')
-        vm_test(args.package_run_id)
+        vm_test(args.package_run_id, args.suite or 'ubuntu', args.release or BASELINE)
     elif args.operation == 'ci':
         require_actions()
         run([sys.executable, ROOT/'scripts/prepare-resources.py',

@@ -1,4 +1,4 @@
-"""On-demand official Pop!_OS live VM; no private cache or guest credentials."""
+"""Diagnose COSMIC startup in a disposable VM using an official Pop!_OS image."""
 import argparse
 import base64
 import hashlib

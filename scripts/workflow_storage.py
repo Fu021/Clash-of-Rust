@@ -45,8 +45,6 @@ def lineage(key):
         return 'gradle-linux'
     if key.startswith('tools-nsis-'):
         return 'tools-nsis'
-    if key.startswith('action-setup-tailscale/'):
-        return 'tailscale/' + key.rsplit('/', 1)[-1]
     if key.startswith(('native-', 'android-', 'memory-release-', 'memory-dev-')):
         return re.sub(r'-[0-9a-f]{8,}-[0-9a-f]{8,}$', '', key)
     if key.startswith('macos-compiler-'):
@@ -63,12 +61,11 @@ def lineage(key):
 
 
 def retired(key):
-    if key.startswith('action-setup-tailscale/'):
-        return re.fullmatch(r'action-setup-tailscale/[^/]+/macOS-(?:amd64|arm64)', key) is None
     if key.startswith('android-go-build-v1-'):
         return False
     return key.startswith((
-        'branch-delta-', 'macos-compiler-', 'android-go-', 'runtime-v1-', 'resources-', 'source-',
+        'action-setup-tailscale/', 'branch-delta-', 'macos-compiler-', 'android-go-',
+        'runtime-v1-', 'resources-', 'source-',
         'gradle-', 'tools-nsis-', 'skia-source-', 'linux-python-ubuntu20-',
         'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-',
     ))

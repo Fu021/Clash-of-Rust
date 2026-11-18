@@ -3468,9 +3468,13 @@ fn proxy_groups_default_to_all_and_keep_independent_node_pagination() {
     let _ = app.ui_intent(Intent::GroupPage, "Group 8", "true");
     assert!(app.proxy_rows().1[0].0.previous);
     app.settings.proxy_groups_paginated = true;
+    let (_, first_page) = app.proxy_rows();
+    assert_eq!(first_page.len(), 8);
+    assert_eq!(first_page.last().unwrap().0.id, "Group 6");
     app.list_offset = GROUP_PAGE_SIZE;
-    assert_eq!(app.proxy_rows().1.len(), GROUP_PAGE_SIZE);
-    assert_eq!(app.proxy_rows().1[0].0.id, "Group 3");
+    let (_, last_page) = app.proxy_rows();
+    assert_eq!(last_page.len(), 1);
+    assert_eq!(last_page[0].0.id, "Group 7");
     app.settings.proxy_groups_paginated = false;
     assert_eq!(app.proxy_rows().1.len(), 9);
     app.query = "Group 7".into();
@@ -3497,6 +3501,9 @@ fn group_pagination_button_dispatches_while_protected_and_tracks_saved_state() {
     let mut app = fixture(Page::Proxies);
     app.busy = true;
     app.claude.protection_pending = Some(true);
+    data.set_page_offset(GROUP_PAGE_SIZE as i32);
+    data.set_previous(true);
+    data.set_next(true);
     for (saved, requested) in [(false, "true"), (true, "false")] {
         data.set_groups_paginated(saved);
         let _ = window.window().take_snapshot().unwrap();
@@ -3510,6 +3517,16 @@ fn group_pagination_button_dispatches_while_protected_and_tracks_saved_state() {
             app.queued_actions.pop_back(),
             Some(Action::GroupPagination(value)) if value != saved
         ));
+    }
+    for (target, expected) in [
+        ("group-pagination-previous", "0"),
+        ("group-pagination-next", "16"),
+    ] {
+        click_target(&window, target);
+        assert_eq!(
+            events.borrow_mut().pop(),
+            Some((Intent::ListPage, expected.into(), "".into()))
+        );
     }
     window.hide().unwrap();
 }

@@ -145,7 +145,7 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 
 ## 参与贡献
 
-欢迎 AI 辅助的 PR；请尽量先在本地完成相关验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解资源受限环境、CI、缓存服务器与工作流变更约定。
+欢迎 AI 辅助的 PR。请先完成适用的本地验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解资源受限环境、CI、缓存与工作流变更约定。
 
 ## License
 

@@ -1,4 +1,4 @@
-"""Preserve and verify hosted macOS runner DNS around private cache login."""
+"""Collect native DNS observations for disposable macOS installation tests."""
 from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import json
@@ -12,10 +12,7 @@ import time
 
 HOSTS = ('github.com', 'api.github.com', 'static.rust-lang.org', 'pypi.org')
 STATE = Path(os.environ.get('RUNNER_TEMP', 'target'))/'cor-runner-network'
-SNAPSHOT = STATE/'cache-network.json'
-REPORT = STATE/'cache-network-report.json'
 PROBE_SECONDS = 4
-RESTORE_SECONDS = 30
 
 
 def write_report(path, value):
@@ -72,10 +69,6 @@ def native_probes():
         return list(workers.map(native_lookup, HOSTS))
 
 
-def ready(probes):
-    return len(probes) == len(HOSTS) and all(probe.get('addresses') for probe in probes)
-
-
 def observation(probe=True):
     value = {
         'observed_at': time.time(),
@@ -116,77 +109,3 @@ def direct_probes(resolver, failed):
 
     with ThreadPoolExecutor(max_workers=4) as workers:
         return list(workers.map(probe, arguments))
-
-
-def preserve(restore=False):
-    if sys.platform != 'darwin':
-        return
-    if os.environ.get('GITHUB_ACTIONS') != 'true':
-        raise RuntimeError('Runner DNS preservation is restricted to disposable GitHub Actions runners')
-    if not restore:
-        baseline = observation()
-        write_report(REPORT, {'schema': 1, 'baseline': baseline})
-        if 'settings' not in baseline:
-            raise RuntimeError('Unable to save original macOS runner DNS settings')
-        write_report(SNAPSHOT, baseline['settings'])
-        print('Saved original runner DNS; native baseline:',
-              'ready' if ready(baseline['probes']) else 'unavailable before private cache login')
-        return
-    original = json.loads(SNAPSHOT.read_text())
-    report = json.loads(REPORT.read_text())
-    report['before_restore'] = observation(probe=False)
-    report['restoration'] = 'running'
-    report['attempts'] = []
-    write_report(REPORT, report)
-    try:
-        for kind in ('dnsservers', 'searchdomains'):
-            subprocess.run(['/usr/bin/sudo', '-n', '/usr/sbin/networksetup',
-                            '-set' + kind, 'Ethernet', *(original[kind] or ['Empty'])],
-                           check=True, timeout=5)
-        actual = service_settings()
-        report['restored_settings'] = actual
-        if actual != original:
-            raise RuntimeError('macOS runner DNS settings did not match the saved baseline')
-        report['cache_refresh'] = [
-            command(['/usr/bin/sudo', '-n', '/usr/bin/dscacheutil', '-flushcache']),
-            command(['/usr/bin/sudo', '-n', '/usr/bin/killall', '-HUP', 'mDNSResponder']),
-        ]
-        deadline = time.monotonic() + RESTORE_SECONDS
-        expected = resolver_servers(report['baseline']['resolver'])
-        while True:
-            probes = native_probes()
-            resolver = command(['/usr/sbin/scutil', '--dns'], timeout=2)
-            matches = resolver.get('returncode') == 0 and (
-                not expected or set(resolver_servers(resolver)) == set(expected))
-            report['attempts'].append({
-                'observed_at': time.time(), 'probes': probes,
-                'resolver': resolver, 'resolver_matches_baseline': matches,
-            })
-            write_report(REPORT, report)
-            if ready(probes) and matches:
-                report['restoration'] = 'ready'
-                print('Restored runner DNS and verified native resolution for build services.')
-                break
-            if time.monotonic() >= deadline:
-                failed = [probe['host'] for probe in probes if not probe.get('addresses')]
-                report['failed_hosts'] = failed
-                report['resolver_after_failure'] = command(['/usr/sbin/scutil', '--dns'])
-                report['direct_probes'] = direct_probes(report['baseline']['resolver'], failed)
-                phase = ('before private cache login' if not ready(report['baseline']['probes'])
-                         else 'after private cache login')
-                raise RuntimeError('macOS runner native DNS unavailable ' + phase + ': ' +
-                                   (', '.join(failed) if failed else 'active resolver mismatch') +
-                                   '; see ' + str(REPORT))
-            time.sleep(min(2, max(0, deadline - time.monotonic())))
-    except Exception as error:
-        report['restoration'] = 'failed'
-        report['error'] = str(error)
-        print('macOS runner DNS recovery failed:', json.dumps({
-            'baseline_ready': ready(report['baseline']['probes']),
-            'failed_hosts': report.get('failed_hosts', []),
-            'cache_refresh': report.get('cache_refresh', []),
-            'direct_probes': report.get('direct_probes', []),
-        }), flush=True)
-        raise
-    finally:
-        write_report(REPORT, report)

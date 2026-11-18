@@ -2,18 +2,19 @@
 
 | 工作流 | 触发与职责 | 产物 |
 | --- | --- | --- |
-| [CI](workflows/ci.md) | main push、PR；源码检查、编译、九组候选包、安装及 Ubuntu latest，真实集成聚焦代理/TUN | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
+| [CI](workflows/ci.md) | main push、PR；源码检查、编译及九组候选包的安装回归 | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
 | [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 及两套兼容性回执；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 | [Android Compatibility](workflows/android-compatibility.md) | 手动；复用成功 CI 的 x64 APK，Android 8.0～16 基础代理/TUN，截图与诊断可选 | 状态和日志保留 7 天，发布回执保留 3 天 |
-| [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；复用成功 CI 的 Linux 包，Ubuntu 20.04 x64／ARM64 的 5.4 内核安装及代理/TUN | 小型报告及发布回执保留 3 天，VM 镜像仅存私网 |
+| [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；固定 Ubuntu 版本的 x64／ARM64 原生内核 VM，验收同提交 DEB 的安装与代理/TUN | 小型报告及发布回执保留 3 天 |
+| [Debian Compatibility](workflows/debian-compatibility.md) | 手动；Debian 12 和 13 x64 的原生内核 VM，验收同提交 DEB 的安装与代理/TUN | 小型报告及兼容回执保留 3 天 |
 | [COSMIC Startup Investigation](workflows/cosmic-startup.md) | 手动诊断；官方 Pop!_OS live VM，核对旧自启动入口迁移、后台登录和手动打开 | JSON、原始截图与 VM 日志，保留 3 天 |
 
-普通 CI 共 13 个必需 job：共享输入 1、桌面 6、Android 3、Ubuntu latest 1、网站验证 1、缓存预算 1。网站未变化时，网站任务只验证本轮范围。Android Compatibility 共 13 个 job（解析、11 版本、回执），Ubuntu Compatibility 共 4 个 job（解析、两架构、回执）。发布前必须分别完成两套同提交、同源 CI 的兼容验证；Publish Release 自动核验，不能只凭普通 CI 发布。其 `check_only` 仍只执行解析与最终核验两个 job，三个 Android 签名 job 跳过；公开发布执行五个 job。Memory Benchmark 执行采样与缓存预算两个 job，不生成安装包。依赖维护模式不作为发布来源。
+普通 CI 共 12 个必需 job（共享输入 1、桌面 6、Android 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布需要同提交、同源 CI 的 Android 和 Ubuntu 兼容回执。Debian 是独立的平台验收。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 执行采样与缓存预算两个 job。依赖维护模式不作为发布来源。
 
 COSMIC 诊断按需手动执行一个 VM job，保留供后续桌面启动排障复用，不加入常规 CI 或发布必需门禁。
 
-桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。自 0.6.6 起 Ubuntu 构建基线为 20.04，安装验证覆盖 20.04、22.04 和最新版，架构与旧内核边界见[打包验证](workflows/release.md#publish-release)。iOS 仅有宿主占位与 UI 原型，不参与构建。
+桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。Linux 构建基线为 Ubuntu 20.04，安装目标见各发行版工作流。iOS 仅有宿主占位与 UI 原型，不参与构建。
 
 新工作流和 `.github/` 变更按[贡献要求](../.github/CONTRIBUTING.md)审核；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。
 
@@ -39,7 +40,7 @@ COSMIC 诊断按需手动执行一个 VM job，保留供后续桌面启动排障
 
 ## CI
 
-依赖快照、缓存预算、各平台测试与日志位置见 [CI 与依赖缓存](workflows/ci.md)；换机交接与客户端协议见[缓存服务](workflows/cache-server.md)。真实网络验证仅在可丢弃环境执行。
+依赖快照、各平台测试与日志位置见 [CI](workflows/ci.md)，缓存来源与保留规则见 [GitHub Actions 缓存](workflows/cache-coverage.md)。真实网络验证仅在可丢弃环境执行。
 
 ## Publish Release
 

@@ -26,7 +26,7 @@ CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
 }
 CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64', 'Actions cache budget', 'Resolve build inputs'}
-CI_JOBS |= {'Ubuntu latest-x64 proxy and TUN', 'Website validation'}
+CI_JOBS.add('Website validation')
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',
@@ -449,7 +449,7 @@ def main():
     client = GitHub(repo, credential(repo), args.proxy)
     commit = git('rev-parse', 'HEAD')
     run = verified_run(client, commit, args.run_id, check_only=args.check, prerelease=args.prerelease)
-    for suite in compatibility.WORKFLOWS:
+    for suite in compatibility.RELEASE_SUITES:
         compatibility.verified_suite(client, run, suite)
     version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check, prerelease=args.prerelease)
     if args.resolve:

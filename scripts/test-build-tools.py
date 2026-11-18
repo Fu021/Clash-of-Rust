@@ -28,12 +28,9 @@ from test_cli_tui import CliTuiTests
 import workflow_storage as storage
 import workflow_artifacts
 import action_cache as local_cache
-import upstream_cache
-import cache_shards
 import linux_apt
 import linux_ci
-import prepared_vm
-import prepared_vm_environment
+import ubuntu_vm_environment
 import tun_dns_fixture
 import tun_ipv6_lifecycle
 import build_inputs
@@ -218,185 +215,13 @@ class TunIpv6LifecycleTests(unittest.TestCase):
                 {'uid': 0, 'ipv6': {'state': 'unknown', 'reason': 'tcp_route_unavailable'}})
 
 
-class PreparedVmTests(unittest.TestCase):
-    def fixture(self):
-        return json.loads((build.ROOT/'docs/workflows/fixtures/prepared-vm-v1.json').read_text())
-
-    def health(self):
-        return json.loads((build.ROOT/'docs/workflows/fixtures/prepared-vm-health-v1.json').read_text())
-
-    def manifest(self, payload=b'prepared-system-disk'):
-        record = self.fixture()['base_request']
-        record['image']['size'] = len(payload)
-        record['image']['sha256'] = hashlib.sha256(payload).hexdigest()
-        return record
-
-    def receipt(self, record):
-        return {**copy.deepcopy(record), 'status': 'ready', 'object_id': 'object_one',
-                'size': record['image']['size'], 'sha256': record['image']['sha256'],
-                'created_at': 1794143576.125}
-
-    @contextmanager
-    def replies(self, responses):
-        calls = []
-
-        @contextmanager
-        def response(config, path, **kwargs):
-            calls.append((config, path, kwargs))
-            status, body = responses.pop(0)
-            payload = body if isinstance(body, bytes) else json.dumps(body).encode()
-            stream = io.BytesIO(payload)
-            reply = MagicMock(status=status)
-            reply.read = stream.read
-            reply.read1 = stream.read1
-            reply.getheader.side_effect = lambda name: str(len(payload)) if name == 'Content-Length' else None
-            yield reply
-
-        with patch.object(local_cache, 'response', side_effect=response):
-            yield calls
-
-    def test_shared_contract_vectors(self):
-        fixture = self.fixture()
-        self.assertEqual(fixture['revision'], '2026-11-08-x64')
-        self.assertEqual(len(fixture['cases']), 46)
-        for case in fixture['cases']:
-            with self.subTest(case=case['id']):
-                record = copy.deepcopy(fixture['base_request'])
-                for operation in case['operations']:
-                    container = record
-                    for component in operation['path'][:-1]:
-                        container = container[component]
-                    name = operation['path'][-1]
-                    if operation['op'] == 'set':
-                        container[name] = copy.deepcopy(operation['value'])
-                    else:
-                        del container[name]
-                payload = json.dumps(record)
-                wire = case.get('wire', {})
-                if name := wire.get('duplicate_top_key'):
-                    payload = '{' + json.dumps(name) + ':' + json.dumps(record[name]) + ',' + payload[1:]
-                payload += wire.get('append', '')
-                if case['expected']['valid']:
-                    value = prepared_vm.validate(prepared_vm.decode(payload.encode()))
-                    self.assertEqual(value['env_key'], case['expected']['env_key'])
-                    self.assertEqual(value['environment']['packages_sha256'],
-                                     case['expected']['packages_sha256'])
-                else:
-                    with self.assertRaises(prepared_vm.ProtocolError) as failure:
-                        prepared_vm.validate(prepared_vm.decode(payload.encode()))
-                    self.assertEqual(failure.exception.code, case['expected']['error'])
-
-    def test_parser_rejects_nested_duplicates_nonfinite_invalid_utf8_and_oversize(self):
-        for payload in (b'{"nested":{"key":1,"key":2}}', b'{"key":NaN}', b'{"key":Infinity}',
-                        b'\xff', b' ' * (prepared_vm.MAX_JSON + 1)):
-            with self.subTest(payload=payload[:30]), self.assertRaises(prepared_vm.ProtocolError):
-                prepared_vm.decode(payload)
-
-    def test_disabled_capability_never_probes_a_vm_endpoint(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
-                                        Path(temporary)/'report.json')
-            with self.replies([(200, {'capabilities': []})]) as calls:
-                self.assertFalse(client.available())
-            self.assertEqual([call[1] for call in calls], ['/health'])
-            self.assertNotIn('private', (Path(temporary)/'report.json').read_text())
-
-    def test_capability_requires_exact_supported_limits(self):
-        limits = self.health()['vm_limits']
-        with tempfile.TemporaryDirectory() as temporary:
-            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
-                                        Path(temporary)/'report.json')
-            invalid = [{**limits, name: value} for name, value in (
-                ('group', 'upstream/files'), ('architectures', ['arm64', 'arm64']),
-                ('architectures', ['arm64', 1]), ('architectures', 'arm64'),
-                ('max_image_bytes', True), ('max_image_bytes', 0),
-                ('max_image_bytes', prepared_vm.MAX_IMAGE + 1),
-                ('max_virtual_bytes', 24 * 1024**3 - 1),
-                ('max_virtual_bytes', prepared_vm.MAX_VIRTUAL + 1),
-                ('range_supported', True), ('range_supported', 0),
-                ('resume_supported', True), ('resume_supported', 0))]
-            invalid.extend({name: value for name, value in limits.items() if name != missing}
-                           for missing in ('group', 'architectures', 'max_image_bytes',
-                                           'max_virtual_bytes', 'range_supported', 'resume_supported'))
-            for advertised, expected in [(limits, True), *((value, False) for value in invalid)]:
-                with self.subTest(limits=advertised), self.replies([
-                    (200, {**self.health(), 'vm_limits': advertised, 'prepared_vm': advertised})
-                ]):
-                    self.assertEqual(client.available(), expected)
-                    if not expected:
-                        self.assertEqual(client.limits, {})
-
-    def test_legacy_health_names_do_not_enable_vm_uploads(self):
-        health = self.health()
-        limits = health.pop('vm_limits')
-        for advertised in ({**health, 'prepared_vm': limits},
-                           {**health, 'vm_limits': {
-                               name: value for name, value in limits.items() if name != 'range_supported'
-                           } | {'range': False}}):
-            with tempfile.TemporaryDirectory() as temporary:
-                client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
-                                            Path(temporary)/'report.json')
-                with self.subTest(health=advertised), self.replies([(200, advertised)]) as calls:
-                    self.assertFalse(client.available())
-                self.assertEqual([call[1] for call in calls], ['/health'])
-
-    def test_lost_capability_clears_previous_limits(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
-                                        Path(temporary)/'report.json')
-            with self.replies([(200, self.health()), (200, {'capabilities': []})]):
-                self.assertTrue(client.available())
-                self.assertFalse(client.available())
-            self.assertEqual(client.limits, {})
-
-    def test_conflicting_health_aliases_never_enable_vm_operations(self):
-        for key, value in (('max_environments', True), ('architectures', ['arm64']),
-                           ('range', True), ('resume', True)):
-            advertised = self.health()
-            advertised['prepared_vm'][key] = value
-            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
-                client = prepared_vm.Client({'url': 'http://127.0.0.1', 'token': 'private'},
-                                            Path(temporary)/'report.json')
-                with self.replies([(200, advertised)]) as calls:
-                    self.assertFalse(client.available())
-                self.assertEqual([call[1] for call in calls], ['/health'])
-                self.assertEqual(client.limits, {})
-
-    def test_ready_receipt_checks_identity_copies_and_fractional_times(self):
-        record = self.manifest()
-        valid = self.receipt(record)
-        valid.update(upload_id='upload_one', terminal_at=1794143576.25,
-                     receipt_expires_at=1794748376.25)
-        self.assertEqual(prepared_vm.receipt(valid, record['descriptor'])['upload_id'], 'upload_one')
-        for name, value in (('size', True), ('size', record['image']['size'] + 1),
-                            ('sha256', 'f' * 64), ('created_at', '1794143576'),
-                            ('terminal_at', True), ('receipt_expires_at', 1)):
-            with self.subTest(name=name), self.assertRaises(prepared_vm.ProtocolError):
-                prepared_vm.receipt({**valid, name: value}, record['descriptor'])
-        for value in (True, None, 0, -1, '123', float('nan'), float('inf')):
-            with self.subTest(timestamp=value), self.assertRaises(prepared_vm.ProtocolError):
-                prepared_vm.timestamp(value)
-
-    def test_capability_selects_only_an_advertised_native_architecture(self):
-        limits = {**self.health()['vm_limits'], 'architectures': ['arm64', 'x64']}
-        with tempfile.TemporaryDirectory() as temporary:
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            client.config = {'url': 'http://127.0.0.1', 'token': 'private'}
-            for arch in prepared_vm.ARCHITECTURES:
-                for advertised, expected in ((limits, True),
-                                             ({**limits, 'architectures': ['arm64']}, arch == 'arm64')):
-                    with self.subTest(arch=arch, limits=advertised), self.replies([
-                        (200, {**self.health(), 'vm_limits': advertised, 'prepared_vm': advertised})
-                    ]) as calls:
-                        self.assertEqual(client.available(arch), expected)
-                    self.assertEqual([call[1] for call in calls], ['/health'])
-
+class UbuntuVmTests(unittest.TestCase):
     def test_apt_sources_use_native_official_suites(self):
         for arch, native, base in (
                 ('arm64', 'arm64', 'https://ports.ubuntu.com/ubuntu-ports'),
                 ('x64', 'amd64', 'https://archive.ubuntu.com/ubuntu')):
             with self.subTest(arch=arch):
-                sources = prepared_vm_environment.sources(arch).splitlines()
+                sources = ubuntu_vm_environment.sources(arch).splitlines()
                 self.assertEqual(len(sources), 3)
                 for source, suite in zip(sources, ('focal', 'focal-updates', 'focal-security')):
                     origin = 'https://security.ubuntu.com/ubuntu' if arch == 'x64' and suite == 'focal-security' else base
@@ -467,279 +292,28 @@ class PreparedVmTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, result, stderr=b'fixture failure')
 
                 with patch.object(linux_ci, 'REPORT', report), \
-                        patch.object(linux_ci, 'guest_receipts') as receipts, \
                         patch.object(guest, 'output', return_value='boot analysis\n'), \
                         patch.object(linux_ci.subprocess, 'run', side_effect=transfer):
                     guest.preserve()
-                self.assertEqual(json.loads((report/'focal-guest-report-status.json').read_text()),
+                self.assertEqual(json.loads((report/'vm-guest-report-status.json').read_text()),
                                  {'schema': 1, 'state': state})
-                archive = report/'focal-guest-report.tar.gz'
+                archive = report/'vm-guest-report.tar.gz'
                 self.assertEqual(archive.exists(), state == 'saved')
                 if state == 'saved':
                     self.assertEqual(archive.read_bytes(), body)
-                receipts.assert_called_once_with(guest.ssh)
                 self.assertEqual((report / 'warm-cloud-init.txt').read_text(), 'boot analysis\n')
                 self.assertFalse(list(report.glob('guest-report-*')))
 
-    def test_private_restore_is_atomic_and_preserves_existing_file_on_bad_bytes(self):
-        record = self.manifest()
-        for body, result in ((b'prepared-system-disk', True), (b'damaged-system-disk!', False)):
-            with self.subTest(result=result), tempfile.TemporaryDirectory() as temporary:
-                target = Path(temporary)/'image.qcow2'
-                target.write_bytes(b'existing')
-                client = prepared_vm.Client({}, Path(temporary)/'report.json')
-                replies = [(200, self.receipt(record)), (200, body)]
-                if not result:
-                    replies.append((200, body))
-                with self.replies(replies) as calls:
-                    restored = client.restore(record['descriptor'], target, lambda path, size: None)
-                self.assertEqual(restored is not None, result)
-                self.assertEqual(target.read_bytes(), body if result else b'existing')
-                self.assertTrue(all('Range' not in call[2].get('headers', {}) for call in calls))
-                self.assertFalse(list(Path(temporary).glob('vm-download-*')))
-
-    def test_http_failure_bodies_are_not_exported_and_404_is_a_miss(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            with self.replies([(404, b'not-json private-service-address')]):
-                self.assertIsNone(client.lookup(self.manifest()['descriptor']))
-            with self.replies([(507, {'error_code': 'capacity_unavailable', 'detail': 'private'})]):
-                with self.assertRaises(prepared_vm.ProtocolError) as failure:
-                    client.request('/v1/vm-images/uploads', 'POST', self.manifest())
-            self.assertEqual(failure.exception.status, 507)
-            self.assertEqual(str(failure.exception), 'capacity_unavailable')
-
-    def test_upload_streams_a_file_and_recovers_a_lost_content_response(self):
-        record = self.manifest()
-        for lost in (False, True):
-            with self.subTest(lost=lost), tempfile.TemporaryDirectory() as temporary:
-                image = Path(temporary)/'image.qcow2'
-                image.write_bytes(b'prepared-system-disk')
-                client = prepared_vm.Client({}, Path(temporary)/'report.json')
-                reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
-                               'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800.125}
-                responses = [(201, reservation),
-                             (502, b'private error') if lost else (200, self.receipt(record))]
-                if lost:
-                    responses.append((200, self.receipt(record)))
-                with self.replies(responses) as calls:
-                    self.assertIsNotNone(client.upload(record, image))
-                self.assertEqual(calls[1][2]['headers']['Content-Length'], str(image.stat().st_size))
-                self.assertIsInstance(calls[1][2]['file'], prepared_vm.DeadlineReader)
-                self.assertEqual(calls[1][1], '/v1/vm-images/uploads/upload_one/content')
-                if lost:
-                    self.assertEqual(calls[2][1], '/v1/vm-images/uploads/upload_one')
-                self.assertNotIn('private', (Path(temporary)/'report.json').read_text())
-
-    def test_existing_immutable_image_keeps_original_producer_and_different_file_identity(self):
-        record = self.manifest()
-        existing = self.receipt(record)
-        existing['producer']['run_id'] = 9
-        existing['image']['sha256'] = 'f' * 64
-        existing['sha256'] = 'f' * 64
-        with tempfile.TemporaryDirectory() as temporary:
-            image = Path(temporary)/'image.qcow2'
-            image.write_bytes(b'prepared-system-disk')
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            with self.replies([(200, existing)]) as calls:
-                result = client.upload(record, image)
-            self.assertEqual(result['producer']['run_id'], 9)
-            self.assertEqual(result['image']['sha256'], 'f' * 64)
-            self.assertEqual(len(calls), 1)
-
-    def test_existing_environment_cannot_change_sources_under_the_same_key(self):
-        record = self.manifest()
-        existing = self.receipt(record)
-        existing['environment']['sources'][0]['url'] = 'https://cloud-images.ubuntu.com/synthetic-alias.img'
-        with tempfile.TemporaryDirectory() as temporary:
-            image = Path(temporary)/'image.qcow2'
-            image.write_bytes(b'prepared-system-disk')
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            with self.replies([(200, existing)]):
-                self.assertIsNone(client.upload(record, image))
-            self.assertEqual(client.events[-1]['result'], 'identity_conflict')
-
-    def test_expired_upload_receipt_recovers_ready_image_by_exact_environment(self):
-        record = self.manifest()
-        with tempfile.TemporaryDirectory() as temporary:
-            image = Path(temporary)/'image.qcow2'
-            image.write_bytes(b'prepared-system-disk')
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
-                           'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800.25}
-            with self.replies([(201, reservation), (502, {}), (404, {'error_code': 'upload_not_found'}),
-                               (200, self.receipt(record))]) as calls:
-                saved = client.upload(record, image)
-            self.assertEqual(saved['env_key'], record['env_key'])
-            self.assertEqual(calls[-1][1], '/v1/vm-images?key=' + record['env_key'])
-            self.assertEqual(client.events[-1]['result'], 'ready_after_lookup')
-
-    def test_interrupted_upload_keeps_terminal_error_without_retransmitting(self):
-        record = self.manifest()
-        with tempfile.TemporaryDirectory() as temporary:
-            image = Path(temporary)/'image.qcow2'
-            image.write_bytes(b'prepared-system-disk')
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            reservation = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
-                           'status': 'uploading', 'upload_id': 'upload_one', 'expires_at': 4102444800}
-            failed = {**reservation, 'status': 'failed', 'error_code': 'upload_interrupted'}
-            with self.replies([(201, reservation), (502, {}), (200, failed)]) as calls:
-                self.assertIsNone(client.upload(record, image))
-            self.assertEqual(client.events[-1]['result'], 'upload_interrupted')
-            self.assertEqual(len(calls), 3)
-
-    def test_busy_upload_is_pending_and_does_not_send_content(self):
-        record = self.manifest()
-        busy = {'schema': 1, 'group': prepared_vm.GROUP, 'env_key': record['env_key'],
-                'status': 'busy', 'upload_id': 'upload_one'}
-        with tempfile.TemporaryDirectory() as temporary:
-            image = Path(temporary)/'image.qcow2'
-            image.write_bytes(b'prepared-system-disk')
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            with self.replies([(202, busy)]) as calls:
-                self.assertIsNone(client.upload(record, image))
-            self.assertEqual(len(calls), 1)
-            self.assertEqual(client.events[-1]['result'], 'pending')
-
-    def test_expired_upload_and_capacity_failure_never_send_file_or_delete(self):
-        record = self.manifest()
-        for status, value in ((507, {'error_code': 'capacity_unavailable'}),
-                              (201, {'schema': 1, 'group': prepared_vm.GROUP,
-                                     'env_key': record['env_key'], 'status': 'uploading',
-                                     'upload_id': 'upload_one', 'expires_at': 1})):
-            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
-                image = Path(temporary)/'image.qcow2'
-                image.write_bytes(b'prepared-system-disk')
-                client = prepared_vm.Client({}, Path(temporary)/'report.json')
-                responses = [(status, value)]
-                if status == 201:
-                    responses.extend([(404, {}), (404, {})])
-                with self.replies(responses) as calls:
-                    self.assertIsNone(client.upload(record, image))
-                self.assertTrue(all(call[2].get('stream') is None for call in calls))
-                self.assertTrue(all(call[2].get('method', 'GET') != 'DELETE' for call in calls))
-
-    def test_stream_reader_enforces_wall_clock(self):
-        with self.assertRaises(local_cache.RestoreBudgetExceeded):
-            prepared_vm.DeadlineReader(io.BytesIO(b'file'), {'restore_deadline': 0}).read(4)
-
-    def test_metadata_reader_rechecks_wall_clock_between_chunks(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            with self.replies([(200, {'status': 'ready'})]), \
-                    patch.object(local_cache, 'restore_remaining',
-                                 side_effect=[1, local_cache.RestoreBudgetExceeded()]):
-                with self.assertRaises(local_cache.RestoreBudgetExceeded):
-                    client.request('/health')
-
-    def test_limits_reject_oversize_virtual_disk_before_transfer(self):
-        record = self.manifest()
-        record['image']['virtual_size'] = 32 * 1024**3
-        with tempfile.TemporaryDirectory() as temporary:
-            image = Path(temporary)/'image.qcow2'
-            image.write_bytes(b'prepared-system-disk')
-            client = prepared_vm.Client({}, Path(temporary)/'report.json')
-            client.limits = {'max_image_bytes': prepared_vm.MAX_IMAGE,
-                             'max_virtual_bytes': 24 * 1024**3}
-            with self.replies([(200, self.receipt(record))]) as calls:
-                self.assertIsNone(client.restore(record['descriptor'], image, MagicMock()))
-            self.assertEqual(len(calls), 1)
-            with self.replies([]) as calls:
-                self.assertIsNone(client.upload(record, image))
-            self.assertEqual(calls, [])
-
     def test_environment_resolution_is_opt_in_and_requires_linux_inputs(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {}, clear=True), \
-                patch.object(prepared_vm_environment, 'run') as execute:
-            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
+                patch.object(ubuntu_vm_environment, 'run') as execute:
+            self.assertEqual(ubuntu_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
             execute.assert_not_called()
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
-                'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
-                patch.object(prepared_vm, 'client', side_effect=AssertionError('No private access during freeze')), \
-                patch.object(prepared_vm_environment, 'run') as execute:
-            self.assertEqual(prepared_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
+                'GITHUB_ACTIONS': 'true', 'COR_UBUNTU_VM_INPUTS': 'true'}, clear=True), \
+                patch.object(ubuntu_vm_environment, 'run') as execute:
+            self.assertEqual(ubuntu_vm_environment.freeze(Path(temporary), {})['status'], 'disabled')
             execute.assert_not_called()
-
-    def test_environment_key_ignores_application_and_run_identity(self):
-        descriptor = self.manifest()['descriptor']
-        expected = prepared_vm.identity(descriptor)
-        with patch.dict(os.environ, {'GITHUB_RUN_ID': '999', 'GITHUB_SHA': 'f' * 40}):
-            self.assertEqual(prepared_vm.identity(descriptor), expected)
-        changed = {**descriptor, 'environment_lock_sha256': 'f' * 64}
-        self.assertNotEqual(prepared_vm.identity(changed), expected)
-
-    @contextmanager
-    def vm_context(self, temporary, arch='arm64'):
-        record = self.manifest()
-        record['descriptor']['arch'] = arch
-        for package in record['environment']['packages']:
-            if package['architecture'] != 'all':
-                package['architecture'] = prepared_vm.ARCHITECTURES[arch]
-        record['environment']['packages_sha256'] = prepared_vm.checksum(record['environment']['packages'])
-        record['env_key'] = prepared_vm.identity(record['descriptor'])
-        frozen = {'descriptor': record['descriptor'],
-                  'lock': {'packages': record['environment']['packages'], 'downloads': {}}}
-        linux = {'architectures': {arch: {'cloud': {
-            'url': record['environment']['sources'][0]['url'], 'sha256': 'a' * 64},
-            'python': {'url': record['environment']['sources'][1]['url'], 'sha256': 'b' * 64}}}}
-        client = MagicMock()
-        client.available.return_value = True
-        client.restore.return_value = self.receipt(record)
-        guest = MagicMock(kernel='5.4.0-216-generic',
-                          architecture='aarch64' if arch == 'arm64' else 'x86_64',
-                          kvm=arch == 'x64', boot_seconds=0.1,
-                          stage_seconds=0.1, inspect_seconds=0.1)
-        guest.inspect.return_value = record['environment']
-        (Path(temporary) / 'source.tar.gz').touch()
-        with patch.dict(os.environ, {'RUNNER_TEMP': temporary}, clear=False), \
-                patch.object(linux_ci, 'require_actions'), \
-                patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
-                patch.object(linux_ci, 'inputs', return_value=linux), \
-                patch.object(linux_ci, 'host_arch', return_value=arch), \
-                patch.object(build_inputs, 'manifest', return_value={'prepared_vms': {
-                    name: frozen if name == arch else {'schema': 1, 'status': 'disabled'}
-                    for name in prepared_vm.ARCHITECTURES}}), \
-                patch.object(prepared_vm, 'client', return_value=client), \
-                patch.object(prepared_vm_environment, 'verify_frozen', return_value=True), \
-                patch.object(linux_ci, 'vm_source_archive', return_value=Path(temporary)/'source.tar.gz'), \
-                patch.object(linux_ci, 'VmGuest', return_value=guest), \
-                patch.object(linux_ci, 'download') as download, \
-                patch.object(linux_ci, 'prepare_vm_guest') as prepare, \
-                patch.object(linux_ci, 'fetch_vm_package',
-                             return_value=Path(temporary)/'package.tar.gz'), \
-                patch.object(linux_ci, 'verify_vm_package') as application:
-            yield client, guest, download, prepare, application
-
-    def test_warm_vm_skips_all_cold_downloads_but_runs_application_tests(self):
-        for arch in prepared_vm.ARCHITECTURES:
-            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temporary, \
-                    self.vm_context(temporary, arch) as context:
-                client, guest, download, prepare, application = context
-                linux_ci.vm_test(123)
-                client.available.assert_called_once_with(arch)
-                download.assert_not_called()
-                prepare.assert_not_called()
-                client.upload.assert_not_called()
-                self.assertEqual(application.call_args.kwargs['prepared'], True)
-                self.assertEqual(application.call_args.args[2], 123)
-                guest.preserve.assert_called_once()
-                guest.close.assert_called_once()
-
-    def test_vm_starts_candidate_download_before_private_lookup_and_boot(self):
-        from concurrent.futures import Future
-        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
-            client, _, _, _, application = context
-            downloaded = threading.Event()
-            def fetch(*args):
-                downloaded.set()
-                return Path(temporary) / 'package.tar.gz'
-            def restore(*args):
-                self.assertTrue(downloaded.wait(5), 'Package download did not overlap VM lookup')
-                return self.receipt(self.manifest())
-            client.restore.side_effect = restore
-            with patch.object(linux_ci, 'fetch_vm_package', side_effect=fetch):
-                linux_ci.vm_test(123)
-            self.assertIsInstance(application.call_args.kwargs['package_future'], Future)
 
     def test_vm_candidate_download_failure_prevents_guest_tests(self):
         from concurrent.futures import Future
@@ -752,6 +326,50 @@ class PreparedVmTests(unittest.TestCase):
                                        package_future=failed, timings=timings)
         guest.remote.assert_not_called()
         self.assertIn('package_remaining_wait', timings)
+
+    def test_vm_retries_frozen_apt_on_the_same_verified_public_image(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root/'source.tar.gz'
+            archive.touch()
+            base = root/'focal.img'
+            python = root/'python.tar.gz'
+            public_image = {'url': 'https://cloud-images.ubuntu.com/focal/image.img', 'sha256': 'a'*64}
+            linux = {'architectures': {'arm64': {'cloud': public_image, 'python': {'sha256': 'b'*64}}}}
+            frozen = {'status': 'frozen'}
+            snapshot = {'ubuntu_vm_environments': {'arm64': frozen, 'x64': {'status': 'disabled'}}}
+            original = MagicMock()
+            retry = MagicMock(kernel='5.4.0-216-generic', kvm=False, boot_seconds=1, stage_seconds=1)
+            with patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
+                    patch.object(build_inputs, 'manifest', return_value=snapshot), \
+                    patch.object(ubuntu_vm_environment, 'verify_frozen', return_value=True), \
+                    patch.object(linux_ci, 'require_actions'), \
+                    patch.object(linux_ci, 'REPORT', root/'report'), \
+                    patch.object(linux_ci, 'inputs', return_value=linux), \
+                    patch.object(linux_ci, 'host_arch', return_value='arm64'), \
+                    patch.object(linux_ci, 'tools_directory', return_value=root), \
+                    patch.object(linux_ci, 'vm_source_archive', return_value=archive), \
+                    patch.object(linux_ci, 'download', side_effect=[base, python]) as download, \
+                    patch.object(linux_ci, 'VmGuest', side_effect=[original, retry]) as boot, \
+                    patch.object(linux_ci, 'prepare_vm_guest',
+                                 side_effect=[subprocess.CalledProcessError(1, 'apt'), None]) as prepare, \
+                    patch.object(linux_ci, 'fetch_vm_package', return_value=root/'package.tar.gz') as package, \
+                    patch.object(linux_ci, 'verify_vm_package') as application:
+                linux_ci.vm_test(123)
+            self.assertEqual(download.call_args_list[0], call(public_image, base))
+            self.assertEqual(download.call_count, 2)
+            self.assertEqual([attempt.args[0] for attempt in boot.call_args_list], [base, base])
+            self.assertEqual(prepare.call_args_list[0].args[2], frozen)
+            self.assertEqual(prepare.call_args_list[1].args[:1], (retry,))
+            original.close.assert_called_once()
+            retry.close.assert_called_once()
+            package.assert_called_once()
+            self.assertIs(application.call_args.args[0], retry)
+            self.assertFalse(application.call_args.kwargs['frozen'])
+            report = json.loads((root/'report/linux-vm.json').read_text())
+            self.assertEqual(report['apt_inputs'], 'current')
+            self.assertEqual(report['cloud_sha256'], public_image['sha256'])
+            self.assertTrue(report['success'])
 
     def test_vm_archive_omits_git_history_builds_and_other_architecture_indexes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -786,108 +404,14 @@ class PreparedVmTests(unittest.TestCase):
                 cwd=extracted, env=environment, text=True).strip()
             self.assertEqual(actual, source)
 
-    def test_missing_service_capability_keeps_frozen_inputs_on_the_cold_path(self):
-        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
-            client, guest, download, prepare, application = context
-            client.available.return_value = False
-            linux_ci.vm_test(123)
-            client.restore.assert_not_called()
-            client.upload.assert_not_called()
-            self.assertEqual(download.call_count, 2)
-            prepare.assert_called_once()
-            self.assertIsNone(prepare.call_args.args[2])
-            self.assertFalse(application.call_args.kwargs['prepared'])
-
-    def test_application_failure_on_warm_vm_is_not_hidden_by_cold_retry(self):
-        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
-            client, guest, download, prepare, application = context
-            application.side_effect = subprocess.CalledProcessError(1, ['application-test'])
-            with self.assertRaises(subprocess.CalledProcessError):
-                linux_ci.vm_test(123)
-            download.assert_not_called()
-            prepare.assert_not_called()
-            guest.close.assert_called_once()
-            report = json.loads((Path(temporary)/'report/focal-vm.json').read_text())
-            self.assertFalse(report['success'])
-            self.assertEqual(report['cache_path'], 'warm')
-
-    def test_invalid_warm_environment_falls_back_without_republishing_same_identity(self):
-        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
-            client, guest, download, prepare, application = context
-            guest.inspect.side_effect = prepared_vm.ProtocolError('environment_mismatch')
-            source = Path(temporary)/'original'
-            source.write_bytes(b'original')
-            download.return_value = source
-            linux_ci.vm_test(123)
-            self.assertEqual(download.call_count, 2)
-            self.assertEqual(prepare.call_count, 1)
-            self.assertIsNone(prepare.call_args.args[2])
-            self.assertFalse(application.call_args.kwargs['prepared'])
-            events = [call.args[1] for call in client.event.call_args_list]
-            self.assertIn('cold_fallback', events)
-            client.upload.assert_not_called()
-
-    def test_cold_preparation_failure_keeps_failure_report(self):
-        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
-            client, guest, download, prepare, application = context
-            client.restore.return_value = None
-            client.available.return_value = False
-            prepare.side_effect = RuntimeError('isolated preparation failure')
-            with self.assertRaises(RuntimeError):
-                linux_ci.vm_test(123)
-            application.assert_not_called()
-            client.upload.assert_not_called()
-            report = json.loads((Path(temporary)/'report/focal-vm.json').read_text())
-            self.assertFalse(report['success'])
-            self.assertIn('upload_tail_wait', report['timings_seconds'])
-
-    def test_restored_sources_must_cover_the_exact_frozen_downloads(self):
-        record = self.manifest()
-        download = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/test.deb',
-                    'size': 100, 'sha256': 'c' * 64}
-        frozen = {'descriptor': record['descriptor'], 'lock': {'downloads': {'test.deb': download}}}
-        with self.assertRaises(prepared_vm.ProtocolError):
-            prepared_vm_environment.check_sources(record['environment'], frozen)
-        record['environment']['sources'].append(download)
-        prepared_vm_environment.check_sources(record['environment'], frozen)
-        record['environment']['sources'][-1] = {**download, 'size': 101}
-        with self.assertRaises(prepared_vm.ProtocolError):
-            prepared_vm_environment.check_sources(record['environment'], frozen)
-
-    def test_new_template_is_shut_down_and_second_boot_checked_before_upload(self):
-        with tempfile.TemporaryDirectory() as temporary, self.vm_context(temporary) as context:
-            client, guest, download, prepare, application = context
-            client.restore.return_value = None
-            source = Path(temporary)/'original'
-            source.write_bytes(b'original')
-            download.return_value = source
-            guest.disk = source
-
-            def qemu(command, **kwargs):
-                if command[:2] == ['qemu-img', 'convert']:
-                    self.assertTrue(guest.shutdown.called)
-                    Path(command[-1]).write_bytes(b'prepared-system-disk')
-
-            with patch.object(linux_ci, 'run', side_effect=qemu), \
-                    patch.object(linux_ci, 'verify_vm_image'), \
-                    patch.object(prepared_vm, 'producer', return_value=self.manifest()['producer']):
-                linux_ci.vm_test(123)
-            guest.shutdown.assert_called_once()
-            self.assertEqual(guest.inspect.call_count, 2)
-            client.upload.assert_called_once()
-            uploaded = client.upload.call_args.args[0]
-            self.assertEqual(uploaded['image']['sha256'], hashlib.sha256(b'prepared-system-disk').hexdigest())
-            prepared_vm.validate(uploaded)
-            self.assertTrue(application.call_args.kwargs['prepared'])
-
     def test_signed_apt_resolution_freezes_versions_without_touching_host_apt(self):
-        for arch in prepared_vm.ARCHITECTURES:
+        for arch in ubuntu_vm_environment.ARCHITECTURES:
             with self.subTest(arch=arch):
                 self.check_signed_apt_resolution(arch)
 
     def check_signed_apt_resolution(self, arch):
         changes = {'version': '1', 'index': 0}
-        native = prepared_vm.ARCHITECTURES[arch]
+        native = ubuntu_vm_environment.ARCHITECTURES[arch]
         base = ('https://ports.ubuntu.com/ubuntu-ports' if arch == 'arm64'
                 else 'https://archive.ubuntu.com/ubuntu')
 
@@ -913,80 +437,78 @@ class PreparedVmTests(unittest.TestCase):
         linux = {'architectures': {arch: {'cloud': {'sha256': 'a' * 64},
                                             'python': {'sha256': 'b' * 64}}}}
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
-                'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_INPUTS': 'true'}, clear=True), \
-                patch.object(prepared_vm, 'client', side_effect=AssertionError('No private access during freeze')), \
-                patch.object(prepared_vm_environment, 'run', side_effect=execute):
+                'GITHUB_ACTIONS': 'true', 'COR_UBUNTU_VM_INPUTS': 'true'}, clear=True), \
+                patch.object(ubuntu_vm_environment, 'run', side_effect=execute):
             root = Path(temporary)
-            first = prepared_vm_environment.freeze(root/'first', linux, arch)
-            second = prepared_vm_environment.freeze(root/'second', linux, arch)
+            first = ubuntu_vm_environment.freeze(root/'first', linux, arch)
+            second = ubuntu_vm_environment.freeze(root/'second', linux, arch)
             self.assertEqual(first['status'], 'frozen')
             self.assertEqual(first['descriptor'], second['descriptor'])
             self.assertNotEqual(first['files'], second['files'])
-            self.assertTrue(prepared_vm_environment.verify_frozen(root/'first', first, linux))
+            self.assertTrue(ubuntu_vm_environment.verify_frozen(root/'first', first, linux))
             for change in ('invalid_name', 'missing_download'):
                 malformed = copy.deepcopy(first)
                 if change == 'invalid_name':
                     malformed['lock']['packages'][0]['name'] = '--option'
                 else:
                     malformed['lock']['downloads'].clear()
-                malformed['descriptor']['environment_lock_sha256'] = prepared_vm.checksum(malformed['lock'])
-                with self.subTest(change=change), self.assertRaises(prepared_vm.ProtocolError):
-                    prepared_vm_environment.verify_frozen(root/'first', malformed, linux)
+                malformed['descriptor']['environment_lock_sha256'] = ubuntu_vm_environment.checksum(malformed['lock'])
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    ubuntu_vm_environment.verify_frozen(root/'first', malformed, linux)
             changes['version'] = '2'
-            changed = prepared_vm_environment.freeze(root/'third', linux, arch)
+            changed = ubuntu_vm_environment.freeze(root/'third', linux, arch)
             self.assertNotEqual(first['descriptor']['environment_lock_sha256'],
                                 changed['descriptor']['environment_lock_sha256'])
             damaged = root/'first'/next(iter(first['files']))
             damaged.write_text('tampered')
-            with self.assertRaises(prepared_vm.ProtocolError):
-                prepared_vm_environment.verify_frozen(root/'first', first, linux)
+            with self.assertRaises(ValueError):
+                ubuntu_vm_environment.verify_frozen(root/'first', first, linux)
 
     def test_package_plan_decodes_epochs_and_rejects_duplicate_architecture(self):
-        result = prepared_vm_environment.packages_from_plan({
+        result = ubuntu_vm_environment.packages_from_plan({
             'example_1%3a2.0-1_arm64.deb': {}, 'second_3_all.deb': {}})
         self.assertEqual(result[0]['version'], '1:2.0-1')
-        with self.assertRaises(prepared_vm.ProtocolError):
-            prepared_vm_environment.packages_from_plan({
+        with self.assertRaises(ValueError):
+            ubuntu_vm_environment.packages_from_plan({
                 'example_1_arm64.deb': {}, 'example_2_arm64.deb': {}})
 
     def test_snapshot_keeps_native_environment_locks_separate(self):
-        environments = {arch: {'schema': 1, 'status': 'disabled'} for arch in prepared_vm.ARCHITECTURES}
-        self.assertEqual(prepared_vm_environment.frozen_environments({'prepared_vms': environments}),
+        environments = {arch: {'schema': 1, 'status': 'disabled'} for arch in ubuntu_vm_environment.ARCHITECTURES}
+        self.assertEqual(ubuntu_vm_environment.frozen_environments({'ubuntu_vm_environments': environments}),
                          environments)
         legacy = {'schema': 1, 'status': 'disabled'}
-        self.assertEqual(prepared_vm_environment.frozen_environments({'prepared_vm': legacy}),
-                         {'arm64': legacy})
-        with self.assertRaises(prepared_vm.ProtocolError):
-            prepared_vm_environment.frozen_environments({'prepared_vms': {'arm64': legacy}})
-        with self.assertRaises(prepared_vm.ProtocolError):
-            prepared_vm_environment.packages_from_plan({'example_1_arm64.deb': {}}, 'x64')
-        result = prepared_vm_environment.packages_from_plan({'example_1_amd64.deb': {}}, 'x64')
+        self.assertEqual(ubuntu_vm_environment.frozen_environments({}), {})
+        with self.assertRaises(ValueError):
+            ubuntu_vm_environment.frozen_environments({'ubuntu_vm_environments': {'arm64': legacy}})
+        with self.assertRaises(ValueError):
+            ubuntu_vm_environment.packages_from_plan({'example_1_arm64.deb': {}}, 'x64')
+        result = ubuntu_vm_environment.packages_from_plan({'example_1_amd64.deb': {}}, 'x64')
         self.assertEqual(result[0]['architecture'], 'amd64')
 
     def test_verified_guest_checks_its_native_frozen_environment(self):
         environments = {
             arch: {'status': 'frozen', 'lock': {'arch': arch}}
-            for arch in prepared_vm.ARCHITECTURES
+            for arch in ubuntu_vm_environment.ARCHITECTURES
         }
         linux = {'architectures': {}}
-        snapshot = {'prepared_vms': environments, 'upstream': {'linux': linux}}
+        snapshot = {'ubuntu_vm_environments': environments, 'upstream': {'linux': linux}}
         actual = {'packages': []}
-        for arch in prepared_vm.ARCHITECTURES:
+        for arch in ubuntu_vm_environment.ARCHITECTURES:
             with self.subTest(arch=arch), patch.dict(os.environ, {
-                    'GITHUB_ACTIONS': 'true', 'COR_PREPARED_VM_VERIFIED': 'true',
+                    'GITHUB_ACTIONS': 'true', 'COR_UBUNTU_VM_FROZEN': 'true',
                     'BUILD_INPUTS_DIR': 'dependency-snapshot'}), \
                     patch.object(build_inputs, 'manifest', return_value=snapshot), \
                     patch.object(release_package, 'host_arch', return_value=arch), \
-                    patch.object(prepared_vm_environment, 'verify_frozen') as verify, \
-                    patch.object(prepared_vm_environment, 'inspect_environment', return_value=actual), \
-                    patch.object(prepared_vm_environment, 'check_environment') as check, \
+                    patch.object(ubuntu_vm_environment, 'verify_frozen') as verify, \
+                    patch.object(ubuntu_vm_environment, 'inspect_environment', return_value=actual), \
+                    patch.object(ubuntu_vm_environment, 'check_environment') as check, \
                     patch.object(release_package, 'install_packages') as install:
                 release_package.prepare_compatibility_environment()
                 verify.assert_called_once_with(Path('dependency-snapshot'), environments[arch], linux)
-                check.assert_called_once_with(actual, None, environments[arch]['lock'])
+                check.assert_called_once_with(actual, environments[arch]['lock'])
                 install.assert_not_called()
-                verify.side_effect = prepared_vm.ProtocolError('environment_mismatch')
-                with self.assertRaises(prepared_vm.ProtocolError):
+                verify.side_effect = ValueError('environment_mismatch')
+                with self.assertRaises(ValueError):
                     release_package.prepare_compatibility_environment()
                 self.assertEqual(check.call_count, 1)
                 verify.side_effect = None
@@ -994,94 +516,6 @@ class PreparedVmTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'frozen CI environment'):
                     release_package.prepare_compatibility_environment()
                 environments[arch]['status'] = 'frozen'
-
-    def test_warm_guest_must_match_full_package_manifest_and_frozen_versions(self):
-        actual = self.manifest()['environment']
-        lock = {'packages': actual['packages']}
-        prepared_vm_environment.check_environment(actual, actual, lock)
-        changed = copy.deepcopy(actual)
-        changed['packages'][0]['version'] = '999'
-        changed['packages_sha256'] = prepared_vm.checksum(changed['packages'])
-        with self.assertRaises(prepared_vm.ProtocolError):
-            prepared_vm_environment.check_environment(changed, actual, lock)
-        with self.assertRaises(prepared_vm.ProtocolError):
-            prepared_vm_environment.check_environment(changed, None, lock)
-
-    def test_guest_template_operations_cannot_run_on_the_host(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(prepared_vm_environment, 'run') as execute:
-            for function in (prepared_vm_environment.clean_template, prepared_vm_environment.inspect_environment):
-                with self.assertRaises(RuntimeError):
-                    function()
-            execute.assert_not_called()
-
-    def test_template_cleanup_finishes_before_its_working_directory_disappears(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / 'cor-source'
-            source.mkdir()
-            original_exists = Path.exists
-
-            def exists(path):
-                return path != Path('/opt/clash-of-rust') and original_exists(path)
-
-            def execute(command, **kwargs):
-                if not source.exists():
-                    raise FileNotFoundError('The source working directory has been deleted')
-                if '/home/ubuntu/cor-source' in command[-1]:
-                    source.rmdir()
-
-            with patch.object(prepared_vm_environment, 'guest_only'), \
-                    patch.object(Path, 'exists', exists), \
-                    patch.object(prepared_vm_environment, 'run', side_effect=execute) as commands:
-                prepared_vm_environment.clean_template()
-            self.assertFalse(source.exists())
-            self.assertIn('fstrim /', commands.call_args.args[0][-1])
-
-    def test_image_checks_reject_external_dependencies_dirty_images_and_leaks(self):
-        information = {'format': 'qcow2', 'virtual-size': 24 * 1024**3}
-        invalid = [
-            {**information, 'backing-filename': 'external'},
-            {**information, 'snapshots': [{'id': 'snapshot'}]},
-            {**information, 'encrypted': True},
-            {**information, 'dirty-flag': True},
-            {**information, 'format-specific': {'data': {'data-file': 'external'}}},
-            {**information, 'format-specific': {'data': {'dirty-flag': True}}},
-        ]
-        for value in invalid:
-            with self.subTest(value=value), patch.object(prepared_vm, 'qcow2_header'), \
-                    patch.object(linux_ci.subprocess, 'check_output', return_value=json.dumps(value)):
-                with self.assertRaises(prepared_vm.ProtocolError):
-                    linux_ci.verify_vm_image(Path('/synthetic/image.qcow2'), 24 * 1024**3)
-        for checked in ({}, {'format': 'qcow2', 'check-errors': 0, 'leaks': 1},
-                        {'format': 'qcow2', 'check-errors': 1}):
-            with self.subTest(checked=checked), patch.object(prepared_vm, 'qcow2_header'), \
-                    patch.object(linux_ci.subprocess, 'check_output', side_effect=[
-                        json.dumps(information), json.dumps(checked)]):
-                with self.assertRaises(prepared_vm.ProtocolError):
-                    linux_ci.verify_vm_image(Path('/fake/image.qcow2'), 24 * 1024**3)
-        with patch.object(prepared_vm, 'qcow2_header'), patch.object(linux_ci.subprocess, 'check_output', side_effect=[
-                json.dumps(information), json.dumps({'format': 'qcow2', 'check-errors': 0})]):
-            linux_ci.verify_vm_image(Path('/fake/image.qcow2'), 24 * 1024**3)
-
-    def test_qcow_header_rejects_external_storage_before_invoking_qemu(self):
-        header = bytearray(512)
-        struct.pack_into('>4sI', header, 0, b'QFI\xfb', 3)
-        struct.pack_into('>I', header, 20, 9)
-        struct.pack_into('>Q', header, 24, 24 * 1024**3)
-        struct.pack_into('>I', header, 100, 104)
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary)/'image.qcow2'
-            path.write_bytes(header)
-            prepared_vm.qcow2_header(path, 24 * 1024**3)
-            for offset, value, format in ((8, 512, '>Q'), (32, 1, '>I'), (60, 1, '>I'),
-                                           (72, 4, '>Q'), (88, 1, '>Q'),
-                                           (104, 0x44415441, '>I')):
-                changed = bytearray(header)
-                struct.pack_into(format, changed, offset, value)
-                path.write_bytes(changed)
-                with self.subTest(offset=offset), patch.object(linux_ci.subprocess, 'check_output') as execute:
-                    with self.assertRaises(prepared_vm.ProtocolError):
-                        linux_ci.verify_vm_image(path, 24 * 1024**3)
-                    execute.assert_not_called()
 
 
 class BuildTests(unittest.TestCase):
@@ -2744,28 +2178,28 @@ class BuildTests(unittest.TestCase):
 
     def test_linux_download_revalidates_cached_bytes_and_uses_frozen_digest(self):
         data = b'verified upstream archive'
-        record = {'url': 'https://example.invalid/archive',
-                  'sha256': hashlib.sha256(data).hexdigest()}
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary)/'archive'
-            path.write_bytes(data)
-            with patch.object(build, 'opener') as http:
-                self.assertEqual(linux_ci.download(record, path), path)
-                http.assert_not_called()
-            path.write_bytes(b'x'*len(data))
-            with patch.object(build, 'opener') as http:
-                http.return_value.open.return_value = io.BytesIO(data)
-                linux_ci.download(record, path)
-            self.assertEqual(path.read_bytes(), data)
-            path.unlink()
-            with patch.object(build, 'opener') as http, \
-                    patch.object(build.time, 'sleep'), patch.object(upstream_cache, 'restore', return_value=False):
-                http.return_value.open.return_value = io.BytesIO(b'bad')
-                http.return_value.open.side_effect = lambda *args, **kwargs: io.BytesIO(b'bad')
-                with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
+        for algorithm in ('sha256', 'sha512'):
+            record = {'url': 'https://example.invalid/archive',
+                      algorithm: hashlib.new(algorithm, data).hexdigest()}
+            with self.subTest(algorithm=algorithm), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary)/'archive'
+                path.write_bytes(data)
+                with patch.object(build, 'opener') as http:
+                    self.assertEqual(linux_ci.download(record, path), path)
+                    http.assert_not_called()
+                path.write_bytes(b'x'*len(data))
+                with patch.object(build, 'opener') as http:
+                    http.return_value.open.return_value = io.BytesIO(data)
                     linux_ci.download(record, path)
-            self.assertFalse(path.exists())
-            self.assertFalse(path.with_suffix('.partial').exists())
+                self.assertEqual(path.read_bytes(), data)
+                path.unlink()
+                with patch.object(build, 'opener') as http, \
+                        patch.object(build.time, 'sleep'):
+                    http.return_value.open.side_effect = lambda *args, **kwargs: io.BytesIO(b'bad')
+                    with self.assertRaisesRegex(ValueError, algorithm.upper() + ' mismatch'):
+                        linux_ci.download(record, path)
+                self.assertFalse(path.exists())
+                self.assertFalse(path.with_suffix('.partial').exists())
 
     def test_linux_gui_supports_gnome_336_and_newer_compositors(self):
         import linux_gui
@@ -2789,30 +2223,6 @@ class BuildTests(unittest.TestCase):
                 linux_gui.dbus('org.gnome.Shell', '/org/gnome/Shell', 'org.gnome.Shell.Eval', 'true')
             self.assertIn('service is starting', (Path(temporary)/'dbus-probes.log').read_text())
 
-    def test_only_macos_tailscale_bootstrap_binaries_survive_retirement(self):
-        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-amd64'))
-        self.assertFalse(storage.retired('action-setup-tailscale/1.104.5/macOS-arm64'))
-        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Linux-amd64'))
-        self.assertTrue(storage.retired('action-setup-tailscale/1.104.5/Windows-arm64'))
-        self.assertEqual(storage.lineage('action-setup-tailscale/1.104.5/macOS-arm64'),
-                         storage.lineage('action-setup-tailscale/1.104.1/macOS-arm64'))
-
-    def test_guest_original_receipts_replace_slow_archive_exports_and_reject_bad_sources(self):
-        record = {'url': 'https://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
-                  'sha256': 'a'*64, 'size': 123}
-        for valid in (True, False):
-            value = record if valid else dict(record, url='https://untrusted.invalid/a.deb')
-            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as temporary, \
-                    patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
-                    patch.object(linux_ci, 'REPORT', Path(temporary)/'report'), \
-                    patch.object(linux_ci.subprocess, 'check_output',
-                                 return_value=json.dumps([value]).encode()):
-                linux_ci.guest_receipts(['ssh', 'isolated-guest'])
-                receipts = list((Path(temporary)/'cor-upstream-downloads').glob('*.json'))
-                self.assertEqual(len(receipts), int(valid))
-                if valid:
-                    self.assertEqual(json.loads(receipts[0].read_text()), record)
-
     def test_guest_python_loads_the_real_package_entry_from_the_checkout_root(self):
         calls = []
         linux_ci.guest_python(
@@ -2831,7 +2241,7 @@ class BuildTests(unittest.TestCase):
             capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_guest_debs_use_host_fallback_and_verify_bytes_before_transferring(self):
+    def test_guest_debs_use_official_sources_and_verify_bytes_before_transferring(self):
         payload = b'verified-signed-deb'
         record = {'url': 'http://ports.ubuntu.com/ubuntu-ports/pool/main/a/a.deb',
                   'sha256': hashlib.sha256(payload).hexdigest(), 'size': len(payload)}
@@ -2844,7 +2254,7 @@ class BuildTests(unittest.TestCase):
                 self.assertTrue(url.startswith('https://ports.ubuntu.com/'))
                 self.assertEqual(digest, record['sha256'])
                 if scenario == 'unavailable':
-                    raise OSError('Both official and private downloads failed')
+                    raise OSError('Official Ubuntu download failed')
                 destination.write_bytes(payload if scenario != 'changed-bytes' else b'changed')
 
             def remote(command, **kwargs):
@@ -2871,14 +2281,21 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn(package_font, release_package.compatibility_dependencies())
 
     def test_basic_hosted_network_checks_do_not_install_an_unused_desktop_session(self):
-        for extended, guest in (('false', ''), ('true', ''), ('false', 'true')):
-            with self.subTest(extended=extended, guest=guest), patch.dict(os.environ, {
-                    'COR_CI_EXTENDED_TESTS': extended, 'COR_LINUX_GUEST': guest}):
+        for extended, guest, family, version in (
+                ('false', '', 'ubuntu', '22.04'),
+                ('true', '', 'ubuntu', '22.04'),
+                ('false', 'true', 'ubuntu', '20.04'),
+                ('false', 'true', 'ubuntu', '26.10'),
+                ('false', 'true', 'debian', '13')):
+            with self.subTest(extended=extended, guest=guest, family=family, version=version), \
+                    patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': extended, 'COR_LINUX_GUEST': guest}), \
+                    patch.object(release_package.platform, 'freedesktop_os_release',
+                                 return_value={'ID': family, 'VERSION_ID': version}):
                 packages = release_package.compatibility_dependencies()
                 self.assertTrue({'git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin'}
                                 .issubset(packages))
-                if extended == 'true' or guest:
-                    self.assertEqual(packages, list(prepared_vm_environment.TEST_PACKAGES))
+                if extended == 'true' or version == '20.04':
+                    self.assertEqual(packages, list(ubuntu_vm_environment.TEST_PACKAGES))
                 else:
                     self.assertTrue({'gnome-shell', 'openbox', 'xwayland', 'policykit-1-gnome'}
                                     .isdisjoint(packages))
@@ -3284,7 +2701,6 @@ Private_Clean: 2 kB
         override = patch.dict(os.environ, {
             'BUILD_INPUTS_DIR': directory.name,
             'RUNNER_TEMP': directory.name,
-            'COR_UPSTREAM_CACHE_CONFIG': '',
             **{name: str(Path(directory.name) / name.lower()) for name in (
                 'GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY')},
         })
@@ -3503,7 +2919,7 @@ Private_Clean: 2 kB
             versions = root/'.github/build-versions.json'
             versions.parent.mkdir()
             baseline = {'tools': {'rust': '1', 'python': '3', 'python_macos': '3',
-                                   'tailscale': '1', 'gradle': '1'},
+                                   'gradle': '1'},
                         'upstream': {'android': {'ndk': '1', 'system_image': 'one'},
                                      'linux': {'image': 'ubuntu@sha256:first'}}}
             versions.write_text(json.dumps(baseline))
@@ -3517,7 +2933,6 @@ Private_Clean: 2 kB
             expected = local_cache.rust_environment_key(b'rustc', {}) + hashlib.sha256(
                 (legacy+hashlib.sha256(versions.read_bytes()).hexdigest()).encode()).hexdigest()
             self.assertEqual(macos['legacy_prefix'], 'native-main-v3-macos-x64--'+expected)
-            baseline['tools']['tailscale'] = '2'
             baseline['tools']['gradle'] = '2'
             baseline['upstream']['android']['system_image'] = 'two'
             versions.write_text(json.dumps(baseline))
@@ -3612,8 +3027,6 @@ Private_Clean: 2 kB
             tracked = b'crates/ui/Cargo.toml\0crates/ui/lib.rs\0crates/layout/shared.slint\0'
             with patch.object(local_cache.subprocess, 'check_output', return_value=tracked):
                 local_cache.workspace_sources(root, save=True)
-                self.assertTrue(local_cache.github_restored(
-                    {'kind': 'rust', 'source': str(root), 'github_hit': 'false'}))
                 watched.write_text('changed layout')
                 local_cache.workspace_sources(root)
             self.assertFalse(marker.exists())
@@ -3808,274 +3221,7 @@ Private_Clean: 2 kB
                 local_cache.workspace_sources(root)
                 self.assertFalse(marker.exists())
 
-    def test_rust_shards_only_upload_changed_buckets_and_verify_before_extracting(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            source=root/'target/release/deps';source.mkdir(parents=True)
-            for number in range(80): (source/f'dep{number}.rlib').write_bytes(f'dependency-{number}'.encode())
-            config={'group':'rust/linux-x64','key':'generation-source-one','prefix':['generation-','compiler-'],
-                    'resolved_paths':[str(root/'target')],'kind':'rust'}
-            store=local_cache.Store(root/'server',budget=10*1024**2,min_free=0)
-            uploads=[]
-            def request(_config,path,method='GET',file=None,headers=None):
-                url=urllib.parse.urlsplit(path);query=urllib.parse.parse_qs(url.query)
-                if url.path == '/health':
-                    reply = io.BytesIO(json.dumps({
-                        'schema': local_cache.SCHEMA, 'status': 'ready',
-                        'capabilities': ['validated-cache-commit-v1', 'rust-index-references-v1',
-                                         'complete-cache-retention-v1'],
-                    }).encode())
-                    reply.status = 200
-                    return nullcontext(reply)
-                group=query['group'][0]
-                if url.path=='/v1/lookup':
-                    value=store.lookup(group,query['key'][0],query.get('prefix',[''])[0].splitlines())
-                    reply=io.BytesIO(json.dumps(value).encode());reply.status=200 if value else 404
-                elif method=='PUT':
-                    payload=file.read();uploads.append((group,len(payload)))
-                    saved=store.put(group,query['key'][0],len(payload),headers['X-Content-SHA256'],io.BytesIO(payload),
-                                    int(headers['X-Cache-Sequence']))
-                    reply=io.BytesIO();reply.status=201 if saved else 409
-                else:
-                    blob=store.path(group,query['id'][0])
-                    reply=io.BytesIO(blob.read_bytes() if blob.exists() else b'');reply.status=200 if blob.exists() else 404
-                return nullcontext(reply)
-            with patch.object(local_cache,'response',side_effect=request),patch.object(local_cache,'cache_report'), \
-                    patch.dict(os.environ,{'GITHUB_RUN_ID':'1','GITHUB_RUN_ATTEMPT':'1'}):
-                cache_shards.save(config,[root/'target'])
-                self.assertGreater(len(uploads),2)
-                initial_bytes=sum(size for _,size in uploads)
-                target=root/'restored'
-                restored={**config,'resolved_paths':[str(target)]}
-                self.assertTrue(cache_shards.restore(restored,False))
-                self.assertEqual((target/'release/deps/dep5.rlib').read_bytes(),b'dependency-5')
-                # Updating one dependency sends one bucket and the small index,
-                # rather than another complete target archive.
-                (source/'dep5.rlib').write_bytes(b'updated-dependency')
-                uploads.clear()
-                config.update(key='generation-source-two',shard_index=restored['shard_index'])
-                with patch.dict(os.environ,{'GITHUB_RUN_ID':'2'}): cache_shards.save(config,[root/'target'])
-                self.assertEqual(len(uploads),2)
-                self.assertLess(sum(size for _,size in uploads),initial_bytes)
-                restored.update(key=config['key'])
-                self.assertTrue(cache_shards.restore(restored,False))
-                self.assertEqual((target/'release/deps/dep5.rlib').read_bytes(),b'updated-dependency')
-                # LRU eviction can remove any shard while the index and a
-                # build-script success marker still exist. Cargo does not
-                # validate arbitrary generated OUT_DIR files on its own.
-                marker=target/'release/.fingerprint/serde_core-hash/run-build-script-build-script-build'
-                marker.parent.mkdir(parents=True)
-                marker.write_bytes(b'cached success')
-                shard=next(s for s in restored['shard_index']['shards'] if s)
-                blob=store.path(shard['group'],shard['id'])
-                blob.unlink()
-                self.assertTrue(cache_shards.restore(restored,False))
-                self.assertFalse(restored['hit'])
-                self.assertTrue(restored['mirror_required'])
-                self.assertFalse(marker.parent.exists())
-                github_config = {**restored, 'hit': True, 'restored': True}
-                with patch.object(local_cache, 'unpack') as unpack:
-                    self.assertTrue(cache_shards.restore(github_config, True))
-                    unpack.assert_not_called()
-                self.assertTrue(github_config['mirror_required'])
-                self.assertTrue(github_config['hit'])
-                uploads.clear()
-                github_config.update(save=True, source=str(root), mirror_required=False)
-                with patch.object(local_cache, 'cache_paths', return_value=[root/'target']), \
-                        patch.dict(os.environ, {'GITHUB_RUN_ID': '3'}):
-                    local_cache.save(github_config)
-                self.assertCountEqual([group for group, _ in uploads],
-                                      [shard['group'], config['group'] + '/index'])
-                self.assertTrue(cache_shards.restore(github_config, True))
-                self.assertFalse(github_config['mirror_required'])
-                self.assertTrue(cache_shards.index_available(github_config, github_config['shard_index']))
-                shard=next(s for s in restored['shard_index']['shards'] if s)
-                store.path(shard['group'],shard['id']).write_bytes(b'corrupt')
-                with self.assertRaisesRegex(ValueError,'Incomplete|checksum'):
-                    cache_shards.restore(restored,False)
 
-    def test_shard_save_uses_the_configured_budget_and_keeps_the_index_when_incomplete(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary)/'dependency.rlib'
-            source.write_bytes(b'dependency')
-            info = tarfile.TarInfo('0/release/deps/dependency.rlib')
-            info.size = source.stat().st_size
-            groups = [[(source, info, local_cache.digest(source))] for _ in range(3)]
-            groups.extend([[] for _ in range(cache_shards.COUNT - len(groups))])
-            for budget, committed in ((900, True), (120, False)):
-                clock = [100]
-                def lookup(config, group, key):
-                    clock[0] += 250
-                    return {'group': group, 'key': key}
-                with self.subTest(budget=budget), \
-                        patch.object(cache_shards.time, 'monotonic', side_effect=lambda: clock[0]), \
-                        patch.object(local_cache, 'phase', return_value=nullcontext()), \
-                        patch.object(local_cache, 'uploads_supported', return_value=True), \
-                        patch.object(cache_shards, 'partition', return_value=groups), \
-                        patch.object(cache_shards, 'lookup', side_effect=lookup), \
-                        patch.object(cache_shards, 'upload', return_value={'saved': True}) as upload, \
-                        patch.object(local_cache, 'cache_report') as report:
-                    cache_shards.save({'group': 'rust/linux-x64', 'key': 'current',
-                                       'prefix': ['compiler-'], 'save_seconds': budget}, [source.parent])
-                    self.assertEqual(upload.call_count, int(committed))
-                    if committed:
-                        self.assertEqual(upload.call_args.args[1], 'rust/linux-x64/index')
-                    self.assertIn('committed' if committed else 'previous index retained',
-                                  report.call_args.args[2])
-
-    def test_restore_budget_keeps_verified_shards_and_invalidates_partial_build_scripts(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);source=root/'source';target=root/'target'
-            library=source/'release/deps/verified.rlib'
-            library.parent.mkdir(parents=True);library.write_bytes(b'complete dependency')
-            archive=root/'fixture.tar.gz';local_cache.pack([source],archive)
-            marker=target/'release/.fingerprint/generated-hash/run-build-script-cached'
-            marker.parent.mkdir(parents=True);marker.write_bytes(b'old success')
-            group='rust/macos-x64'
-            shards=[{'schema':local_cache.SCHEMA,'group':f'{group}/p{i:02d}',
-                     'key':'generation','id':f'{i+1:064x}','sha256':'b'*64,'size':archive.stat().st_size}
-                    if i<2 else None for i in range(cache_shards.COUNT)]
-            record={'key':'generation','size':1000}
-            config={'group':group,'key':'generation','prefix':['generation'],
-                    'resolved_paths':[str(target)],'kind':'rust'}
-            def download(_config,item,destination):
-                if item is record:
-                    destination.write_text(json.dumps({'format':'rust-shards-v1','shards':shards}));return
-                if item['group'].endswith('p00'):
-                    shutil.copyfile(archive,destination);return
-                self.assertEqual((target/'release/deps/verified.rlib').read_bytes(),b'complete dependency')
-                config['restore_deadline']=local_cache.time.monotonic()-1
-                raise local_cache.RestoreBudgetExceeded('test deadline')
-            with patch.object(cache_shards,'lookup',return_value=record), \
-                    patch.object(cache_shards,'download',side_effect=download), \
-                    patch.object(local_cache,'cache_report'):
-                self.assertTrue(cache_shards.restore(config,False))
-            self.assertEqual((target/'release/deps/verified.rlib').read_bytes(),b'complete dependency')
-            self.assertFalse(marker.parent.exists())
-            self.assertTrue(config['restored'])
-            self.assertTrue(config['mirror_required'])
-            self.assertFalse(config['hit'])
-
-    def test_continuously_trickling_cache_data_cannot_extend_restore_budget(self):
-        clock=[0.0]
-        def tick():
-            clock[0]+=0.25;return clock[0]
-        reply=io.BytesIO(b'x'*100)
-        # read1 returns immediately available data; a blocking read(size) would
-        # permit a peer to extend the restore indefinitely by trickling bytes.
-        class Trickle:
-            def read1(self,_size):return reply.read(1)
-        output=io.BytesIO()
-        with patch.object(local_cache.time,'monotonic',side_effect=tick):
-            with self.assertRaises(local_cache.RestoreBudgetExceeded):
-                local_cache.download_body({'restore_deadline':2},Trickle(),output,100)
-        self.assertGreater(len(output.getvalue()),0)
-        self.assertLess(len(output.getvalue()),100)
-        config={'restore_seconds':300}
-        with patch.object(local_cache,'restore_snapshot',side_effect=local_cache.RestoreBudgetExceeded):
-            with self.assertRaises(local_cache.RestoreBudgetExceeded):local_cache.restore(config)
-        self.assertNotIn('restore_deadline',config,'post-job saves must have an independent deadline')
-
-
-    def test_blob_requests_use_remaining_restore_budget_without_short_metadata_limit(self):
-        config = {'url': 'http://100.64.0.1:8080', 'token': 'test', 'restore_deadline': 1000}
-        for path, budget, expected in (('/v1/blob?id=test', 180, 180),
-                                        ('/v1/blob?id=test', 800, 600),
-                                        ('/v1/lookup', 180, 30)):
-            with self.subTest(path=path, budget=budget), \
-                    patch.object(local_cache, 'restore_remaining', return_value=budget), \
-                    patch.object(local_cache.http.client, 'HTTPConnection') as connection:
-                local_cache.request(config, path)
-                self.assertEqual(connection.call_args.kwargs['timeout'], expected)
-
-
-    def test_partial_rust_cache_invalidates_only_native_and_cross_build_script_runs(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            profiles=[root/'target/release',root/'target/aarch64-linux-android/release',
-                      root/'target/debug',root/'target/aarch64-linux-android/debug']
-            markers=[]
-            for profile in profiles:
-                for layout in ['serde_core-hash', 'serde_core/another-hash']:
-                    marker=profile/'.fingerprint'/layout/'run-build-script-build-script-build.json'
-                    marker.parent.mkdir(parents=True)
-                    marker.write_text('{"cached":"success"}')
-                    markers.append(marker)
-                for name in ['.fingerprint/library-hash/lib-library',
-                             'build/serde_core-hash/build-script-build',
-                             'deps/library.rlib']:
-                    path=profile/name;path.parent.mkdir(parents=True,exist_ok=True)
-                    path.write_bytes(b'reusable compilation')
-            cache_shards.invalidate_build_scripts([root/'target'])
-            for marker in markers:
-                self.assertFalse(marker.parent.exists())
-            for profile in profiles:
-                for name in ['.fingerprint/library-hash/lib-library',
-                             'build/serde_core-hash/build-script-build',
-                             'deps/library.rlib']:
-                    self.assertEqual((profile/name).read_bytes(),b'reusable compilation')
-
-    def test_rust_shards_reject_indexes_pointing_outside_their_cache_group(self):
-        record={'schema':local_cache.SCHEMA,'group':'rust/linux-x64/p00','key':'compiler-object',
-                'id':'a'*64,'sha256':'b'*64,'size':1024}
-        cache_shards.validate(record,'rust/linux-x64/p00')
-        with self.assertRaises(ValueError): cache_shards.validate(record,'rust/windows-x64/p00')
-        for field,value in (('id','../escape'),('size',-1),('sha256','bad')):
-            with self.subTest(field=field),self.assertRaises(ValueError):
-                cache_shards.validate({**record,field:value},record['group'])
-
-    def test_rust_shard_index_requires_matching_remote_metadata(self):
-        shard = {'schema': local_cache.SCHEMA, 'group': 'rust/linux-x64/p00',
-                 'key': 'generation', 'id': 'a'*64, 'sha256': 'b'*64, 'size': 32}
-        index = {'shards': [shard, *([None] * (cache_shards.COUNT - 1))]}
-        for current in (None, {**shard, 'id': 'c'*64},
-                        {**shard, 'sha256': 'd'*64}, {**shard, 'size': 31}, shard):
-            with self.subTest(current=current), patch.object(cache_shards, 'lookup', return_value=current):
-                self.assertEqual(cache_shards.index_available({}, index), current == shard)
-
-    def test_cache_writes_require_explicit_safe_commit_capabilities(self):
-        for kind in ('archives', 'rust'):
-            for capabilities in (None, [], ['validated-cache-commit-v1'],
-                                 ['rust-index-references-v1'],
-                                 ['validated-cache-commit-v1', 'rust-index-references-v1'],
-                                 ['validated-cache-commit-v1', 'complete-cache-retention-v1'],
-                                 ['validated-cache-commit-v1', 'rust-index-references-v1',
-                                  'complete-cache-retention-v1'], [{}]):
-                with self.subTest(kind=kind, capabilities=capabilities):
-                    reply = io.BytesIO(json.dumps({
-                        'schema': local_cache.SCHEMA, 'status': 'ready',
-                        'capabilities': capabilities,
-                    }).encode())
-                    reply.status = 200
-                    expected = (isinstance(capabilities, list)
-                                and 'validated-cache-commit-v1' in capabilities
-                                and 'complete-cache-retention-v1' in capabilities
-                                and (kind != 'rust' or 'rust-index-references-v1' in capabilities))
-                    with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
-                        self.assertEqual(local_cache.uploads_supported({'kind': kind}), expected)
-        reply = io.BytesIO()
-        reply.status = 404
-        with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
-            self.assertFalse(local_cache.uploads_supported({'kind': 'rust'}))
-
-    def test_unsafe_cache_server_never_receives_archives_or_shards(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for kind in ('archives', 'rust'):
-                config = {'kind': kind, 'group': 'dependencies/source' if kind == 'archives' else 'rust/linux-x64',
-                          'key': 'generation', 'save': True, 'available': True}
-                with self.subTest(kind=kind), \
-                        patch.object(local_cache, 'cache_paths', return_value=[root]), \
-                        patch.object(local_cache, 'uploads_supported', return_value=False), \
-                        patch.object(local_cache, 'cache_report') as report, \
-                        patch.object(local_cache, 'pack') as pack, \
-                        patch.object(cache_shards, 'partition') as partition, \
-                        patch.object(local_cache, 'response') as request:
-                    local_cache.save(config)
-                    pack.assert_not_called()
-                    partition.assert_not_called()
-                    request.assert_not_called()
-                    self.assertIn('server upgrade required', report.call_args.args[2])
 
     def test_shared_android_sources_require_the_current_lockfiles_and_archive_digest(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4092,15 +3238,6 @@ Private_Clean: 2 kB
                     patch.object(android_build,'ensure_binding_tool'),patch.object(build_inputs.subprocess,'run'), \
                     patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}):
                 build_inputs.shared_go(out)
-                reports = list(upstream_cache.directory().glob('*.json'))
-                self.assertEqual(len(reports), 1)
-                self.assertTrue(upstream_cache.directory().is_relative_to(
-                    Path(os.environ['BUILD_INPUTS_DIR'])))
-                self.assertEqual(json.loads(reports[0].read_text()), {
-                    'url': 'https://proxy.golang.org/example/@v/v1.0.0.zip',
-                    'size': len(b'verified source zip'),
-                    'sha256': build.sha256(module),
-                })
                 module.unlink()
                 build_inputs.shared_go(out,restore=True)
                 self.assertEqual(module.read_bytes(),b'verified source zip')
@@ -4123,25 +3260,6 @@ Private_Clean: 2 kB
             pack.assert_not_called()
             self.assertFalse((directory/'receipt.json').exists())
 
-    def test_cache_timing_report_never_copies_credentials_or_private_action_state(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            config={'group':'rust/linux-x64','key':'verified','token':'never-publish-this-token',
-                    'url':'http://100.64.3.1:19081','started':10,
-                    'timings':{'download':1.25,'token':'never-publish-this-token'}}
-            with patch.dict(os.environ,{'GITHUB_WORKSPACE':str(root),'GITHUB_STEP_SUMMARY':str(root/'summary.txt')}), \
-                    patch.object(local_cache.time,'monotonic',return_value=12), \
-                    patch('sys.stdout',new_callable=io.StringIO) as logged:
-                local_cache.cache_report(config,'restore','exact',1024)
-            self.assertNotIn(config['token'],logged.getvalue())
-            self.assertNotIn(config['url'],logged.getvalue())
-            self.assertIn('restore: exact',logged.getvalue())
-            report=next((root/'target/cache-report').glob('*.json'))
-            self.assertEqual(json.loads(report.read_text())['timings_seconds'],{'download':1.25,'total':2})
-            for path in (report,root/'summary.txt'):
-                self.assertNotIn(config['token'],path.read_text())
-                self.assertNotIn(config['url'],path.read_text())
-
     def test_interrupted_extraction_keeps_existing_files_and_compiler_cleanup_preserves_reports(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);source=root/'source';source.mkdir()
@@ -4162,7 +3280,7 @@ Private_Clean: 2 kB
             unpacked.parent.mkdir(parents=True);unpacked.write_bytes(b'incomplete restored source')
             with patch.dict(os.environ,{'GITHUB_ACTIONS':'true','CARGO_HOME':str(root/'cargo'),
                                        'WORKSPACE_SOURCE_CACHE':str(root/'external/source.json')}):
-                local_cache.discard_restore({'kind':'rust','source':str(root)})
+                local_cache.discard_restore(root)
             self.assertFalse((target/'release').exists())
             self.assertFalse((target/'aarch64-linux-android/release').exists())
             self.assertFalse((target/'debug').exists())
@@ -4170,222 +3288,6 @@ Private_Clean: 2 kB
             self.assertTrue((target/'dependency-snapshot/inputs.json').exists())
             self.assertTrue((target/'android-report/logcat.txt').exists())
             self.assertFalse(unpacked.exists())
-
-    def test_github_hit_only_checks_private_metadata_and_reuses_current_mirror(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            (root/'module.zip').write_bytes(b'GitHub restored source')
-            config={'group':'dependencies/source','key':'current','base_key':'current',
-                    'kind':'archives','paths':str(root),'prefix':['compatible-'],
-                    'url':'http://127.0.0.1:19081','token':'test-only','save':True,'github_hit':'true'}
-            generation='v'+str(local_cache.SCHEMA)+'-'+hashlib.sha256(str(root).encode()).hexdigest()[:16]+'-'
-            record={'schema':local_cache.SCHEMA,'group':config['group'],'key':generation+'current','id':'a'*64}
-            reply=io.BytesIO(json.dumps(record).encode()); reply.status=200
-            with patch.object(local_cache,'response',return_value=nullcontext(reply)) as request, \
-                    patch.object(local_cache,'cache_report'),patch.object(local_cache,'pack') as pack:
-                local_cache.restore(config)
-                self.assertTrue(config['restored'])
-                self.assertFalse(config['mirror_required'])
-                request.assert_called_once()
-                self.assertTrue(request.call_args.args[1].startswith('/v1/lookup?'))
-                local_cache.save(config)
-                pack.assert_not_called()
-
-    def test_github_hit_with_no_private_copy_registers_a_required_mirror(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            (root/'module.zip').write_bytes(b'GitHub restored source')
-            config={'group':'dependencies/source','key':'current','base_key':'current',
-                    'kind':'archives','paths':str(root),'prefix':[],
-                    'url':'http://127.0.0.1:19081','token':'test-only','save':True,'github_hit':'true'}
-            reply=io.BytesIO(); reply.status=404
-            with patch.object(local_cache,'response',return_value=nullcontext(reply)) as request, \
-                    patch.object(local_cache,'cache_report'):
-                local_cache.restore(config)
-                self.assertTrue(config['restored'])
-                self.assertTrue(config['available'])
-                self.assertTrue(config['mirror_required'])
-                request.assert_called_once()
-
-            uploaded=[]
-            def upload(_config,path,**kwargs):
-                self.assertEqual(kwargs['method'],'PUT')
-                self.assertTrue(path.startswith('/v1/blob?'))
-                uploaded.append(kwargs['file'].read())
-                result=io.BytesIO(); result.status=201
-                return nullcontext(result)
-            with patch.object(local_cache,'response',side_effect=upload),patch.object(local_cache,'cache_report'), \
-                    patch.object(local_cache, 'uploads_supported', return_value=True):
-                local_cache.save(config)
-                local_cache.save(config)
-            self.assertEqual(len(uploaded),1)
-            self.assertTrue(uploaded[0])
-
-    def test_rust_compatible_github_hit_avoids_a_second_download_but_empty_miss_does_not(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            config={'kind':'rust','source':str(root),'github_hit':'false'}
-            self.assertFalse(local_cache.github_restored(config))
-            deps=root/'target/release/deps'; deps.mkdir(parents=True)
-            (deps/'not-an-object.d').write_text('build metadata')
-            (deps/'empty.rlib').touch()
-            self.assertFalse(local_cache.github_restored(config))
-            (deps/'dependency.rlib').write_bytes(b'restored dependency')
-            self.assertTrue(local_cache.github_restored(config))
-            config['github_hit']=''
-            self.assertFalse(local_cache.github_restored(config))
-
-    def test_rust_private_mirror_reuses_sources_but_invalidates_changed_dependencies_and_compiler(self):
-        config={'kind':'rust','key':'compiler-dependencies-new-source',
-                'prefix':['compiler-dependencies-','compiler-']}
-        self.assertTrue(local_cache.private_current(config,{'key':'compiler-dependencies-old-source'}))
-        self.assertFalse(local_cache.private_current(config,{'key':'compiler-old-dependencies-old-source'}))
-        self.assertFalse(local_cache.private_current(config,{'key':'old-compiler-dependencies-old-source'}))
-        self.assertFalse(local_cache.private_current(config,None))
-
-    def test_source_only_changes_use_shards_but_exact_private_snapshots_are_not_uploaded(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary); (root/'target').mkdir()
-            config={'kind':'rust','source':str(root),'group':'rust/linux-x64','key':'new-source',
-                    'available':True,'save':True,'hit':False,'mirror_required':False,
-                    'shard_index': {'shards': [None] * cache_shards.COUNT}}
-            with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'cache_report'), \
-                    patch.object(cache_shards,'save') as sharded:
-                local_cache.save(config)
-                pack.assert_not_called()
-                sharded.assert_called_once()
-                config['private_exact']=True
-                local_cache.save(config)
-                sharded.assert_called_once()
-
-    def test_immutable_downloads_do_not_reupload_build_script_mutations(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);(root/'source').write_bytes(b'pinned source')
-            config={'kind':'archives','paths':str(root),'group':'dependencies/skia-armv7','key':'crate-checksum',
-                    'available':True,'save':True,'hit':True,'immutable':True}
-            with patch.object(local_cache,'pack') as pack,patch.object(local_cache,'fingerprint') as fingerprint, \
-                    patch.object(local_cache,'cache_report'):
-                local_cache.save(config)
-                pack.assert_not_called()
-                fingerprint.assert_not_called()
-
-    def test_github_miss_restores_a_verified_private_archive(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary); source=root/'source'; source.mkdir()
-            (source/'module.zip').write_bytes(b'private dependency')
-            archive=root/'cache.tar.gz'; local_cache.pack([source],archive)
-            destination=root/'restored'
-            config={'group':'dependencies/source','key':'current','base_key':'current',
-                    'kind':'archives','paths':str(destination),'prefix':[],
-                    'url':'http://127.0.0.1:19081','token':'test-only','save':True,'github_hit':''}
-            generation='v'+str(local_cache.SCHEMA)+'-'+hashlib.sha256(str(destination).encode()).hexdigest()[:16]+'-'
-            record={'schema':local_cache.SCHEMA,'group':config['group'],'key':generation+'current',
-                    'id':'a'*64,'size':archive.stat().st_size,'sha256':local_cache.digest(archive)}
-            def reply(_config,path):
-                result=io.BytesIO(json.dumps(record).encode() if path.startswith('/v1/lookup?') else archive.read_bytes())
-                result.status=200
-                return nullcontext(result)
-            with patch.object(local_cache,'response',side_effect=reply) as request,patch.object(local_cache,'cache_report'):
-                local_cache.restore(config)
-                self.assertTrue(config['restored'])
-                self.assertEqual((destination/'module.zip').read_bytes(),b'private dependency')
-                self.assertEqual(request.call_count,2)
-
-    def test_local_cache_uploads_are_atomic_checked_and_immutable(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            store = local_cache.Store(temporary, budget=1000, min_free=0)
-            payload = b'verified-cache'
-            checksum = hashlib.sha256(payload).hexdigest()
-            with self.assertRaises(ValueError): store.put('rust/linux-x64', 'generation-one', len(payload), checksum, io.BytesIO(b'short'))
-            with self.assertRaises(ValueError): store.put('rust/linux-x64', 'generation-one', len(payload), '0'*64, io.BytesIO(payload))
-            self.assertIsNone(store.lookup('rust/linux-x64', 'generation-one', []))
-            self.assertEqual(list(store.incoming.iterdir()), [])
-            store.put('rust/linux-x64', 'generation-one', len(payload), checksum, io.BytesIO(payload))
-            record = store.lookup('rust/linux-x64', 'generation-one', [])
-            with patch.object(local_cache.time,'time',return_value=9_999_999_999):
-                self.assertEqual(store.fetch(record['group'],record['id']).read_bytes(),payload)
-            with store.database() as database:
-                self.assertEqual(database.execute('SELECT accessed FROM entries').fetchone()[0],9_999_999_999)
-            other = b'another-cache'
-            store.put('rust/linux-x64', 'generation-one', len(other), hashlib.sha256(other).hexdigest(), io.BytesIO(other))
-            self.assertEqual(store.path(record['group'], record['id']).read_bytes(), payload)
-            self.assertEqual(store.lookup('rust/linux-x64', 'generation-two', ['generation-'])['key'], 'generation-one')
-            with self.assertRaises(ValueError): store.path('../../escape', record['id'])
-
-    def test_cache_readme_rejects_bad_and_stale_uploads_without_replacing_content(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            store = local_cache.Store(root, budget=1000, min_free=0)
-
-            def put(data, sequence, checksum=None, length=None):
-                return store.put_readme(length if length is not None else len(data),
-                                        checksum or hashlib.sha256(data).hexdigest(),
-                                        sequence, io.BytesIO(data))
-
-            current = b'Action-Sequence: 2001\nSource-Commit: current\n\nCurrent README\n'
-            self.assertEqual(put(current, 2001), 'updated')
-            self.assertEqual((root/'state/README.txt').read_bytes(), current)
-            self.assertFalse((root/'README.txt').exists())
-            self.assertEqual(put(current, 2001), 'unchanged')
-            older = b'Action-Sequence: 1001\n\nOld README\n'
-            self.assertEqual(put(older, 1001), 'superseded')
-            self.assertEqual(put(b'Action-Sequence: 2001\n\nDifferent\n', 2001), 'superseded')
-            with self.assertRaises(ValueError):
-                put(current, 2001, checksum='0'*64)
-            with self.assertRaises(ValueError):
-                put(current, 3001, length=len(current)+1)
-            with self.assertRaises(ValueError):
-                put(b'x'*(local_cache.README_LIMIT+1), 3001)
-            with self.assertRaises(ValueError):
-                put(b'Action-Sequence: 3001\n\xff', 3001)
-            self.assertEqual((root/'state/README.txt').read_bytes(), current)
-            self.assertEqual(list((root/'state').glob('.readme-*')), [])
-
-    def test_cache_readme_rejects_symlink_in_writable_state(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            store = local_cache.Store(root/'server', budget=1000, min_free=0)
-            protected = root/'protected.txt'
-            protected.write_text('keep', encoding='utf-8')
-            (root/'server/state/README.txt').symlink_to(protected)
-            body = b'Action-Sequence: 1001\n\nNew README\n'
-            with self.assertRaises(ValueError):
-                store.put_readme(len(body), hashlib.sha256(body).hexdigest(), 1001, io.BytesIO(body))
-            self.assertEqual(protected.read_text(encoding='utf-8'), 'keep')
-
-    def test_local_cache_pruning_keeps_recent_generations_and_respects_budget(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            store = local_cache.Store(temporary, budget=100, min_free=0, versions=2)
-            with patch.object(local_cache.time, 'time', return_value=100):
-                for key in ('old', 'current', 'new'):
-                    store.put('compiler/macos-arm64', key, 20, hashlib.sha256(b'a'*20).hexdigest(), io.BytesIO(b'a'*20))
-            self.assertEqual(store.status()['groups'][0]['count'], 2)
-            with self.assertRaises(OSError):
-                store.put('rust/linux-x64', 'too-large', 101, hashlib.sha256(b'x'*101).hexdigest(), io.BytesIO(b'x'*101))
-            self.assertEqual(store.status()['groups'][0]['count'], 2)
-
-    def test_local_cache_plain_http_is_limited_to_private_tailnet_transport(self):
-        for address in ('http://100.64.3.1:19081', 'http://127.0.0.1:19081', 'https://cache.example.com'):
-            local_cache.endpoint({'url':address})
-        for address in ('http://1.1.1.1', 'http://10.0.0.1', 'https://user:password@example.com', 'file:///tmp/cache'):
-            with self.assertRaises(ValueError): local_cache.endpoint({'url':address})
-
-    def test_cache_replacement_rejects_stale_jobs_and_keeps_old_data_on_failed_upload(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            store = local_cache.Store(temporary, budget=1000, min_free=0)
-            def put(key, data, sequence):
-                return store.put('dependencies/source', key, len(data), hashlib.sha256(data).hexdigest(), io.BytesIO(data), sequence)
-            self.assertTrue(put('snapshot-one', b'old', 100))
-            with self.assertRaises(ValueError):
-                store.put('dependencies/source', 'snapshot-two', 10, '0'*64, io.BytesIO(b'short'), 200)
-            self.assertIsNotNone(store.lookup('dependencies/source', 'snapshot-one', []))
-            self.assertTrue(put('snapshot-two', b'new', 200))
-            self.assertFalse(put('snapshot-one', b'stale', 100))
-            self.assertIsNone(store.lookup('dependencies/source', 'snapshot-one', []))
-            self.assertTrue(put('snapshot-two', b'newer content', 300))
-            record = store.lookup('dependencies/source', 'snapshot-two', [])
-            self.assertEqual(store.path(record['group'], record['id']).read_bytes(), b'newer content')
-            self.assertEqual(len(store.status()['entries']), 1)
 
     def test_dependency_snapshot_archives_keep_lockfiles(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4396,42 +3298,6 @@ Private_Clean: 2 kB
             local_cache.pack([source], archive)
             local_cache.unpack(archive, [root/'restored'])
             self.assertEqual((root/'restored/Cargo.lock').read_bytes(), b'locked source versions')
-
-    def test_unchanged_archives_ignore_temporary_locks_and_need_no_reupload(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root/'module.zip').write_bytes(b'cached source')
-            fingerprint = local_cache.fingerprint([root])
-            (root/'download.lock').write_bytes(b'temporary lock')
-            self.assertEqual(local_cache.fingerprint([root]), fingerprint)
-            config = {'group':'dependencies/source', 'key':'verified',
-                      'kind':'archives', 'available':True, 'save':True, 'hit':False,
-                      'fingerprint':fingerprint}
-            with patch.object(local_cache, 'cache_paths', return_value=[root]), \
-                 patch.object(local_cache, 'cache_report') as report, patch.object(local_cache, 'pack') as pack:
-                local_cache.save(config)
-                pack.assert_not_called()
-                self.assertIn('unchanged', report.call_args.args[2])
-
-    def test_rust_cache_keeps_build_scripts_without_archiving_application_or_test_binaries(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root/'target'
-            names = ('release/build/tool/build-script-build.exe', 'release/deps/dep.rlib',
-                     'release/clash-of-rust.exe', 'release/clash-of-rust', 'release/deps/unit-test',
-                     'debug/deps/dep.rlib', 'debug/build/tool/build-script-build',
-                     'debug/deps/unit-test', 'debug/clash-of-rust', 'debug/clash-desktop-ui', 'release/cor',
-                     'aarch64-linux-android/debug/deps/dep.rlib',
-                     'dependency-snapshot/inputs.json', 'cache-network.json', 'android-report/logcat.txt')
-            for name in names:
-                path = source/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'binary')
-            archive = root/'cache.tar.gz'
-            local_cache.pack([source], archive, rust=True)
-            local_cache.unpack(archive, [root/'restored'])
-            files = sorted(p.relative_to(root/'restored').as_posix() for p in (root/'restored').rglob('*') if p.is_file())
-            self.assertEqual(files, ['aarch64-linux-android/debug/deps/dep.rlib',
-                                     'debug/build/tool/build-script-build', 'debug/deps/dep.rlib',
-                                     'release/build/tool/build-script-build.exe', 'release/deps/dep.rlib'])
 
     def test_dependency_refresh_rejects_normal_ci_before_running_commands(self):
         for variables in ({}, {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'push'}):
@@ -4523,7 +3389,7 @@ Private_Clean: 2 kB
                     with self.assertRaisesRegex(ValueError, 'Active Gradle'):
                         build_inputs.check_tools(('gradle',))
 
-    def test_gradle_official_failure_restores_the_verified_private_original(self):
+    def test_gradle_retries_and_verifies_the_official_distribution(self):
         version = build_inputs.tool_versions()['gradle']
         prefix = 'gradle-' + version
         content = io.BytesIO()
@@ -4535,9 +3401,6 @@ Private_Clean: 2 kB
                     'url': f'https://services.gradle.org/distributions/gradle-{version}-bin.zip',
                     'sha256': hashlib.sha256(payload).hexdigest()}
 
-        def restore(url, target, checksum):
-            target.write_bytes(payload)
-            return True
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -4545,13 +3408,11 @@ Private_Clean: 2 kB
             with patch.object(build_inputs, 'component', return_value=selected), \
                     patch.dict(os.environ, {'GITHUB_PATH': str(path_output)}), \
                     patch.object(build, 'opener') as http, \
-                    patch.object(build.time, 'sleep'), \
-                    patch.object(upstream_cache, 'restore', side_effect=restore) as mirror:
-                http.return_value.open.side_effect = OSError('HTTP 504')
+                    patch.object(build.time, 'sleep'):
+                http.return_value.open.side_effect = [OSError('HTTP 504'), OSError('HTTP 502'),
+                                                       io.BytesIO(payload)]
                 result = build_inputs.prepare_gradle(root / 'tools')
             self.assertEqual(http.return_value.open.call_count, 3)
-            mirror.assert_called_once_with(selected['url'], root / 'tools' / (prefix + '-bin.zip'),
-                                           selected['sha256'])
             self.assertEqual(path_output.read_text().splitlines(), [str(result / 'bin')])
             self.assertTrue(os.access(result / 'bin/gradle', os.X_OK))
             self.assertEqual((result / 'bin/gradle.bat').read_text(), 'fixture bin/gradle.bat')
@@ -4832,8 +3693,6 @@ runpy.run_path(str(script), run_name='__main__')
         with patch.object(dependency_audit, 'metadata', return_value=releases):
             self.assertEqual(dependency_audit.tool_candidate('python_windows', '3.11.9')[0], '3.11.9')
             self.assertEqual(dependency_audit.tool_candidate('python', '3.11.18')[0], '3.15.2')
-        with patch.dict(os.environ, {'COR_USE_BOOTSTRAP_TAILNET': 'true'}):
-            self.assertEqual(build_inputs.tool_versions()['tailscale'], build_inputs.approved()['tools']['tailscale_bootstrap'])
 
     def test_java_audit_follows_the_latest_supported_lts(self):
         import dependency_audit
@@ -6302,161 +5161,6 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertGreater(build_inputs.go_version('v1.0.0'),build_inputs.go_version('v1.0.0-rc.1'))
         self.assertGreater(build_inputs.go_version('v1.0.0-rc.10'),build_inputs.go_version('v1.0.0-rc.2'))
 
-    def test_macos_python_mirror_uses_the_installed_framework_instead_of_its_external_aliases(self):
-        import runtime_cache
-
-        with patch.object(runtime_cache, 'host_system', return_value='macos'), \
-                patch.object(runtime_cache, 'host_arch', return_value='arm64'), \
-                patch.object(runtime_cache, 'tool_versions', return_value={'python': '3.11.9', 'tailscale': '1.104.5'}), \
-                patch.dict(os.environ, {'RUNNER_TOOL_CACHE': '/runner/toolcache'}):
-            self.assertEqual(runtime_cache.roots('bootstrap'), [
-                Path('/Library/Frameworks/Python.framework/Versions/3.11'),
-                Path('/runner/toolcache/tailscale/1.104.5')])
-
-    def test_runtime_snapshot_preserves_internal_links_and_rejects_parent_escapes(self):
-        import runtime_cache
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            tool = root / 'tool'
-            tool.mkdir()
-            (tool / 'compiler').write_bytes(b'compiler')
-            try:
-                (tool / 'alias').symlink_to('compiler')
-            except OSError:
-                self.skipTest('Symbolic links are unavailable')
-            cache = root / 'cache'
-            runtime_cache.capture('rust', cache, [tool])
-            tool.rename(root / 'original')
-            runtime_cache.hydrate('rust', cache, [tool])
-            self.assertTrue((tool / 'alias').is_symlink())
-            self.assertEqual((tool / 'alias').read_bytes(), b'compiler')
-            (tool / 'escape').symlink_to('../outside')
-            with self.assertRaisesRegex(ValueError, 'escapes'):
-                runtime_cache.capture('rust', cache, [tool])
-
-    def test_runtime_restore_rejects_an_inner_link_outside_payload_before_publish(self):
-        import runtime_cache
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            cache = root / 'cache'
-            cache.mkdir()
-            destination = root / 'tool'
-            archive = cache / '0.tar'
-            with tarfile.open(archive, 'w') as output:
-                link = tarfile.TarInfo('payload/escape')
-                link.type = tarfile.SYMTYPE
-                link.linkname = '../outside'
-                output.addfile(link)
-            (cache / 'manifest.json').write_text(json.dumps({'schema': 1, 'kind': 'rust', 'roots': [
-                {'index': 0, 'root': str(destination), 'size': archive.stat().st_size,
-                 'sha256': build.sha256(archive)}]}))
-            with self.assertRaisesRegex(ValueError, 'escapes'):
-                runtime_cache.hydrate('rust', cache, [destination])
-            self.assertFalse(destination.exists())
-
-    def test_java_cache_restores_the_official_archive_to_a_complete_tool_directory(self):
-        import runtime_cache
-
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            archive = directory / 'jdk.tar.gz'
-            with tarfile.open(archive, 'w:gz') as output:
-                executable = tarfile.TarInfo('jdk-17/bin/java')
-                executable.size = len(b'approved runtime')
-                executable.mode = 0o755
-                output.addfile(executable, io.BytesIO(b'approved runtime'))
-            destination = directory / 'toolcache/version'
-            record = {'url': 'https://github.com/adoptium/example.tar.gz', 'sha256': build.sha256(archive)}
-            with patch.object(runtime_cache, 'java_archive', return_value=record), \
-                    patch.object(runtime_cache, 'host_arch', return_value='x64'):
-                runtime_cache.hydrate('java', directory, [destination])
-            self.assertEqual((destination / 'x64/bin/java').read_bytes(), b'approved runtime')
-            self.assertTrue((destination / 'x64.complete').is_file())
-            config = {'kind': 'archives', 'runtime': 'java', 'paths': str(directory)}
-            self.assertEqual(local_cache.cache_paths(config), [archive])
-            with patch.object(runtime_cache, 'java_archive', return_value=record), \
-                    patch.object(runtime_cache, 'download') as download:
-                runtime_cache.capture('java', directory, [destination])
-            download.assert_called_once_with(record['url'], archive, digest=record['sha256'])
-
-    def test_java_cache_rejects_invalid_archive_checksums_before_publishing(self):
-        import runtime_cache
-
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            (directory / 'jdk.tar.gz').write_bytes(b'invalid archive')
-            destination = directory / 'toolcache/version'
-            with patch.object(runtime_cache, 'java_archive', return_value={'sha256': '0' * 64}):
-                with self.assertRaisesRegex(ValueError, 'checksum'):
-                    runtime_cache.hydrate('java', directory, [destination])
-            self.assertFalse(destination.exists())
-
-    def test_cache_upload_preserves_early_http_rejections(self):
-        config = {'url': 'http://100.64.0.1:9080', 'token': ''}
-        for status in (409, 413, 507):
-            for failure in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                with self.subTest(status=status, failure=failure.__name__):
-                    connection = MagicMock()
-                    connection.request.side_effect = failure('body upload interrupted')
-                    connection.getresponse.return_value.status = status
-                    with patch.object(local_cache.http.client, 'HTTPConnection', return_value=connection):
-                        with local_cache.response(config, '/v1/blob', method='PUT', file=io.BytesIO(b'archive')) as reply:
-                            self.assertEqual(reply.status, status)
-                    connection.close.assert_called_once()
-                    connection.getresponse.return_value.close.assert_called_once()
-
-    def test_cache_upload_closes_connection_when_no_rejection_can_be_read(self):
-        config = {'url': 'http://100.64.0.1:9080', 'token': ''}
-        for failure_type in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            with self.subTest(failure=failure_type.__name__):
-                connection = MagicMock()
-                failure = failure_type('body upload interrupted')
-                connection.request.side_effect = failure
-                connection.getresponse.side_effect = local_cache.http.client.RemoteDisconnected('no response')
-                with patch.object(local_cache.http.client, 'HTTPConnection', return_value=connection):
-                    with self.assertRaises(failure_type) as raised:
-                        local_cache.request(config, '/v1/blob', method='PUT', file=io.BytesIO(b'archive'))
-                self.assertIs(raised.exception, failure)
-                connection.close.assert_called_once()
-
-    def test_upstream_manifest_survives_removal_of_the_original_file_and_sends_only_urls(self):
-        with tempfile.TemporaryDirectory() as temporary, \
-                patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'GITHUB_ACTIONS': 'true'}):
-            source = Path(temporary) / 'python.tar.gz'
-            source.write_bytes(b'verified upstream')
-            build.record_download('https://github.com/example/tool/releases/download/v1/tool.tar.gz',
-                                  source, build.sha256(source))
-            checksum = build.sha256(source)
-            config = {'url': 'http://100.64.0.1:9080', 'token': 'never-publish-this'}
-            sequence = int(os.environ.get('GITHUB_RUN_ID', '0')) * 1000 + min(int(os.environ.get('GITHUB_RUN_ATTEMPT', '0')), 999)
-            reply = io.BytesIO(json.dumps({'schema': 1, 'group': upstream_cache.GROUP, 'key': 'sha256-' + checksum,
-                                           'sequence': sequence, 'status': 'queued'}).encode())
-            reply.status = 202
-            source.unlink()
-            with patch.object(upstream_cache, 'configuration', return_value=config), \
-                    patch.object(local_cache, 'server_capabilities', return_value={
-                        'validated-cache-commit-v1', 'complete-cache-retention-v1', 'upstream-fetch-v1'}), \
-                    patch.object(upstream_cache, 'lookup', return_value=None), \
-                    patch.object(local_cache, 'response', return_value=nullcontext(reply)) as request:
-                report = upstream_cache.submit(Path(temporary) / 'report.json')
-            payload = json.loads(request.call_args.kwargs['file'])
-            self.assertEqual(request.call_args.args[1], '/v1/import')
-            self.assertEqual(request.call_args.kwargs['method'], 'POST')
-            self.assertEqual(payload['files'][0]['path'], '0')
-            self.assertEqual(payload['files'][0]['sha256'], checksum)
-            self.assertNotIn(temporary, json.dumps(payload))
-            self.assertNotIn('never-publish-this', json.dumps(report))
-            self.assertEqual(report['files'][0]['status'], 'queued')
-            with patch.object(upstream_cache, 'configuration', return_value=config), \
-                    patch.object(local_cache, 'server_capabilities', return_value=set()), \
-                    patch.object(local_cache, 'response') as request:
-                report = upstream_cache.submit(Path(temporary) / 'report.json')
-                self.assertEqual(report['files'][0]['status'], 'queued')
-                self.assertEqual(report['protocol'], 'disabled')
-                request.assert_not_called()
-
     def test_release_metadata_network_fallback_respects_explicit_version(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)/'core.json'
@@ -6678,7 +5382,7 @@ runpy.run_path(str(script), run_name='__main__')
                 ('skia-source-Linux-X64-0.153.3-'+'a'*64,'skia-source-Linux-X64-0.154.0-'+'b'*64),
                 ('resources-macos-x64-'+'a'*64+'-2026-10-16','resources-macos-x64-'+'b'*64+'-'+'c'*64),
                 ('tools-nsis-'+'a'*64,'tools-nsis-'+'b'*64),
-                ('action-setup-tailscale/1.94.2/Linux-amd64','action-setup-tailscale/1.104.1/Linux-amd64')):
+        ):
             self.assertEqual(storage.lineage(older),storage.lineage(newer))
         with self.assertRaises(ValueError): storage.eviction_plan([], 0)
 
@@ -6717,8 +5421,6 @@ runpy.run_path(str(script), run_name='__main__')
             'native-main-v1-windows-11-arm-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb',
             'memory-main-v1-release-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
             'memory-main-v1-dev-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
-            'action-setup-tailscale/1.104.5/macOS-arm64',
-            'action-setup-tailscale/1.104.5/macOS-amd64',
             'future-tool-one',
             'future-tool-two',
         ]
@@ -6758,9 +5460,9 @@ runpy.run_path(str(script), run_name='__main__')
         workspace = 'native-release-v2-windows-arm64-build-workspace-'
         previous = entry(1, workspace + 'a'*64 + '-aaaaaaaa-bbbbbbbb', 'refs/heads/main')
         latest = entry(2, workspace + 'b'*64 + '-cccccccc-dddddddd', 'refs/pull/34/merge')
-        tools_previous = dict(entry(3, 'action-setup-tailscale/1.104.5/macOS-arm64', 'refs/heads/main'), version='same')
-        tools_latest = dict(entry(4, 'action-setup-tailscale/1.104.5/macOS-arm64', 'refs/pull/34/merge'), version='same')
-        tools_other_arch = entry(5, 'action-setup-tailscale/1.104.5/macOS-amd64', 'refs/heads/main')
+        tools_previous = dict(entry(3, 'linux-build-linux-image-ubuntu20-v1-x64-'+'a'*64, 'refs/heads/main'), version='same')
+        tools_latest = dict(entry(4, 'linux-build-linux-image-ubuntu20-v1-x64-'+'a'*64, 'refs/pull/34/merge'), version='same')
+        tools_other_arch = entry(5, 'linux-build-linux-image-ubuntu20-v1-arm64-'+'b'*64, 'refs/heads/main')
         self.assertEqual(storage.eviction_plan(
             [previous, latest, tools_previous, tools_latest, tools_other_arch], 100),
             [tools_latest, latest])
@@ -6904,13 +5606,9 @@ runpy.run_path(str(script), run_name='__main__')
 
     def test_release_job_protocol_matches_workflow_display_names(self):
         workflow = (build.ROOT/'.github/workflows/ci.yml').read_text()
-        for name in release.CI_JOBS:
-            if name.startswith('Ubuntu 20.04-'):
-                self.assertIn('    name: Ubuntu 20.04-${{ matrix.arch }} installed proxy and TUN\n', workflow)
-                arch = name.removeprefix('Ubuntu 20.04-').split(' ', 1)[0]
-                self.assertIn('            arch: '+arch+'\n', workflow)
-            elif name.startswith('Ubuntu latest-'):
-                self.assertIn('    name: '+name+'\n', workflow)
+        self.assertNotIn('  ubuntu_latest:', workflow)
+        self.assertNotIn('runs-on: ubuntu-latest', workflow)
+        self.assertNotIn('Ubuntu latest-x64 proxy and TUN', release.CI_JOBS)
         publishing = (build.ROOT/'.github/workflows/release.yml').read_text()
         self.assertIn('    name: package-android-${{ matrix.arch }}\n', publishing)
         self.assertNotIn('  ubuntu_20:', publishing)
@@ -7602,18 +6300,29 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.record(client, suite, 123, output)
                 self.assertEqual(json.loads(output.read_text()), receipt)
 
-    def test_workflow_jobs_and_inputs_cover_all_android_versions_and_both_ubuntu_architectures(self):
+    def test_workflow_jobs_and_inputs_cover_all_fixed_linux_targets(self):
         self.assertEqual(len(compatibility.required_jobs('android')), 12)
-        self.assertEqual(len(compatibility.required_jobs('ubuntu')), 3)
-        for suite in compatibility.WORKFLOWS:
-            workflow = (build.ROOT / '.github/workflows' / compatibility.WORKFLOWS[suite]).read_text()
-            self.assertIn('name: ' + compatibility.REPORT_JOBS[suite], workflow)
-            self.assertIn(f'name: {suite}-compatibility-attempt-', workflow)
-            self.assertIn('COR_CI_EXTENDED_TESTS:', workflow)
-            self.assertNotIn('pull_request_target:', workflow)
-        workflow = (build.ROOT / '.github/workflows/ci.yml').read_text()
-        self.assertNotIn('  ubuntu_20:', workflow)
-        self.assertEqual(len(release.CI_JOBS), 13)
+        self.assertEqual(compatibility.RELEASE_SUITES, ('android', 'ubuntu'))
+        workflows = build.ROOT / '.github/workflows'
+        shared = (workflows / 'linux-compatibility.yml').read_text()
+        for suite, pairs in (
+                ('ubuntu', {(version, arch) for version in ('20.04', '22.04', '24.04', '26.04', '26.10')
+                            for arch in ('x64', 'arm64')}),
+                ('debian', {('12', 'x64'), ('13', 'x64')})):
+            wrapper = (workflows / compatibility.WORKFLOWS[suite]).read_text()
+            matrix = compatibility.suite_matrix(suite)['include']
+            self.assertEqual({(entry['release'], entry['arch']) for entry in matrix}, pairs)
+            self.assertEqual(len(matrix), len(pairs))
+            self.assertEqual(len(compatibility.required_jobs(suite)), len(pairs) + 1)
+            self.assertTrue(all('latest' not in entry['os'] for entry in matrix))
+            self.assertIn('workflow_dispatch:', wrapper)
+            self.assertIn('name: Linux\n', wrapper)
+            self.assertIn('uses: ./.github/workflows/linux-compatibility.yml', wrapper)
+            self.assertIn(f'suite: {suite}\n', wrapper)
+            self.assertIn('name: ' + compatibility.REPORT_JOBS[suite].removeprefix('Linux / '), shared)
+        self.assertEqual(compatibility.input_names('debian'),
+                         ('package-linux-x64', 'linux-tun-test-x64', 'dependency-snapshot'))
+        self.assertEqual(len(release.CI_JOBS), 12)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -8237,409 +6946,7 @@ class ReleaseTests(unittest.TestCase):
                 self.assertFalse(any(isinstance(data,dict) and data.get('draft') is False for _,_,data in client.writes))
 
 
-class OriginalDownloadTests(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix='cor-original-download-tests-')
-        self.addCleanup(temporary.cleanup)
-        environment = patch.dict(os.environ, {
-            'GITHUB_ACTIONS': 'true',
-            'BUILD_INPUTS_DIR': temporary.name,
-            'RUNNER_TEMP': temporary.name,
-            'COR_UPSTREAM_CACHE_CONFIG': '',
-            **{name: str(Path(temporary.name) / name.lower()) for name in (
-                'GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY')},
-        })
-        environment.start()
-        self.addCleanup(environment.stop)
-
-    def originals(self, count=1):
-        folder = upstream_cache.directory()
-        folder.mkdir(parents=True, exist_ok=True)
-        files = []
-        for index in range(count):
-            checksum = hashlib.sha256(str(index).encode()).hexdigest()
-            item = {'url': f'https://github.com/example/tool/releases/download/v1/file-{index}',
-                    'size': 100 + index, 'sha256': checksum}
-            (folder / (checksum + '.json')).write_text(json.dumps(item))
-            files.append(item)
-        return sorted(files, key=lambda item: item['sha256'])
-
-    def queue_page(self, payload, offset=0, state='queued', complete=False):
-        items = payload['files'][offset:offset + 100]
-        identifier = hashlib.sha256(upstream_cache.encoded(payload)).hexdigest()
-        return {
-            'schema': 1, 'group': upstream_cache.GROUP, 'sequence': payload['sequence'],
-            'manifest_id': identifier, 'status': 'ready' if state == 'ready' else 'pending',
-            'total': len(payload['files']), 'counts': {state: len(payload['files'])},
-            'complete': complete, 'next_offset': offset + len(items) if offset + len(items) < len(payload['files']) else None,
-            'files': [{'key': 'sha256-' + item['sha256'], 'sequence': payload['sequence'],
-                       'job_id': item['sha256'], 'status': state,
-                       'error_code': 'upstream_rejected' if state == 'failed' else None}
-                      for item in items],
-        }
-
-    def queue_submit(self, handler, **kwargs):
-        def reply(config, path, **options):
-            status, value = handler(path, options)
-            response = io.BytesIO(json.dumps(value).encode())
-            response.status = status
-            return nullcontext(response)
-        with patch.object(upstream_cache, 'configuration', return_value={
-                'url': 'http://100.64.0.1:9080', 'token': 'never-publish-this'}), \
-                patch.object(local_cache, 'server_capabilities', return_value={
-                    *upstream_cache.IMPORT_CAPABILITIES, upstream_cache.QUEUE_CAPABILITY}), \
-                patch.object(local_cache, 'response', side_effect=reply):
-            return upstream_cache.submit(Path(os.environ['RUNNER_TEMP']) / 'report.json', **kwargs)
-
-    def test_queue_submits_every_batch_before_polling_and_verifies_all_pages(self):
-        self.originals(1025)
-        requests = []
-        batches = {}
-        def server(path, options):
-            requests.append((path, options))
-            if options:
-                payload = json.loads(options['file'])
-                self.assertFalse(payload['retry_failed'])
-                self.assertLessEqual(len(payload['files']), 1024)
-                self.assertLessEqual(len(options['file']), 1024 * 1024)
-                page = self.queue_page(payload)
-                batches[page['manifest_id']] = payload
-                return 202, page
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
-            self.assertEqual(len(batches), 2)
-            return 200, self.queue_page(batches[query['id'][0]], int(query['offset'][0]), 'ready', True)
-        report = self.queue_submit(server)
-        self.assertEqual([len(item['request']['files']) for item in report['manifests']], [1024, 1])
-        self.assertEqual(len(requests), 14)
-        self.assertTrue(all(item['status'] == 'ready' and item['receipt_verified'] for item in report['manifests']))
-        self.assertTrue(all(item['status'] == 'ready' for item in report['files']))
-        self.assertNotIn('never-publish-this', json.dumps(report))
-        self.assertNotIn(os.environ['RUNNER_TEMP'], json.dumps(report))
-
-    def test_manifest_batches_also_enforce_the_encoded_byte_limit(self):
-        files = self.originals(3)
-        for item in files:
-            item['url'] += 'a' * 400_000
-        batches = list(upstream_cache.manifest_batches(files, 123))
-        self.assertEqual([len(item['files']) for item in batches], [2, 1])
-        self.assertTrue(all(len(upstream_cache.encoded(item)) <= 1024 * 1024 for item in batches))
-
-    def test_lost_post_response_reuses_identical_identity_and_later_checkpoint_does_not_resubmit(self):
-        self.originals(1)
-        bodies = []
-        payload = None
-        def server(path, options):
-            nonlocal payload
-            if options:
-                bodies.append(options['file'])
-                payload = json.loads(options['file'])
-                if len(bodies) == 1:
-                    raise ConnectionResetError('server committed but response was lost')
-                return 202, self.queue_page(payload)
-            return 200, self.queue_page(payload, state='ready')
-        first = self.queue_submit(server, poll_seconds=0)
-        self.assertEqual(bodies[0], bodies[1])
-        self.assertEqual(first['files'][0]['status'], 'pending')
-        final = self.queue_submit(server)
-        self.assertEqual(len(bodies), 2)
-        self.assertEqual(final['files'][0]['status'], 'ready')
-        self.assertEqual(first['manifests'][0]['manifest_id'], final['manifests'][0]['manifest_id'])
-
-    def test_complete_failed_or_superseded_is_never_a_success_or_automatic_retry(self):
-        self.originals()
-        for state in ('queued', 'retry_wait', 'failed', 'superseded'):
-            with self.subTest(state=state):
-                (Path(os.environ['RUNNER_TEMP']) / 'report.json').unlink(missing_ok=True)
-                payload = None
-                def server(path, options):
-                    nonlocal payload
-                    if options:
-                        payload = json.loads(options['file'])
-                        self.assertFalse(payload['retry_failed'])
-                    return 200, self.queue_page(payload, state=state, complete=True)
-                report = self.queue_submit(server)
-                self.assertEqual(report['files'][0]['status'], state if state in ('failed', 'superseded') else 'pending')
-                self.assertNotEqual(report['manifests'][0]['status'], 'ready')
-                if state == 'failed':
-                    self.assertEqual(report['files'][0]['error_code'], 'upstream_rejected')
-
-    def test_rejected_batch_is_preserved_as_not_received_and_later_batches_are_still_submitted(self):
-        self.originals(1025)
-        calls = []
-        def server(path, options):
-            calls.append(options['file'])
-            if len(calls) == 1:
-                return 503, {'error': 'queue_full'}
-            return 202, self.queue_page(json.loads(options['file']))
-        report = self.queue_submit(server, poll_seconds=0)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(sum(item['status'] == 'not_submitted' for item in report['files']), 1024)
-        self.assertEqual(report['manifests'][0]['error'], 'queue_full')
-        self.assertEqual(report['manifests'][0]['http_status'], 503)
-        self.assertEqual(report['files'][-1]['status'], 'pending')
-
-    def test_wrong_receipt_identity_or_ready_counts_do_not_confirm_acceptance(self):
-        self.originals()
-        for changed in ({'sequence': -1}, {'group': 'rust/linux-x64'},
-                        {'total': 2}, {'status': 'ready'}, {'manifest_id': '../private'}):
-            with self.subTest(changed=changed):
-                (Path(os.environ['RUNNER_TEMP']) / 'report.json').unlink(missing_ok=True)
-                def server(path, options):
-                    return 202, {**self.queue_page(json.loads(options['file'])), **changed}
-                report = self.queue_submit(server, poll_seconds=0)
-                self.assertEqual(report['files'][0]['status'], 'not_submitted')
-                self.assertFalse(report['files'][0]['accepted'])
-
-    def test_wrong_item_or_repeated_page_cannot_mark_the_manifest_verified(self):
-        self.originals(201)
-        for kind in ('item', 'pagination'):
-            with self.subTest(kind=kind):
-                (Path(os.environ['RUNNER_TEMP']) / 'report.json').unlink(missing_ok=True)
-                payload = None
-                def server(path, options):
-                    nonlocal payload
-                    if options:
-                        payload = json.loads(options['file'])
-                        return 202, self.queue_page(payload)
-                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
-                    page = self.queue_page(payload, int(query['offset'][0]), 'ready')
-                    if kind == 'item':
-                        page['files'][0]['sequence'] = -1
-                    elif int(query['offset'][0]) == 100:
-                        page['files'] = self.queue_page(payload, 0, 'ready')['files']
-                    return 200, page
-                report = self.queue_submit(server)
-                self.assertFalse(report['manifests'][0]['receipt_verified'])
-                self.assertNotEqual(report['manifests'][0]['status'], 'ready')
-                self.assertTrue(all(item['accepted'] for item in report['files']))
-
-    def test_expired_budget_preserves_the_complete_unsent_manifest(self):
-        self.originals(205)
-        with patch.object(upstream_cache.time, 'monotonic', side_effect=[0, 0, 61, 61, 61]), \
-                patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
-                patch.object(local_cache, 'server_capabilities', return_value={
-                    *upstream_cache.IMPORT_CAPABILITIES, upstream_cache.QUEUE_CAPABILITY}), \
-                patch.object(local_cache, 'response') as request:
-            report = upstream_cache.submit(Path(os.environ['RUNNER_TEMP']) / 'report.json')
-        request.assert_not_called()
-        self.assertEqual(len(report['manifests'][0]['request']['files']), 205)
-        self.assertTrue(all(item['status'] == 'not_submitted' for item in report['files']))
-
-    def test_action_configures_without_network_and_bounds_post_submission(self):
-        node = shutil.which('node')
-        if not node:
-            self.skipTest('Node is required for the Actions wrapper test')
-        script = build.ROOT / '.github/actions/upstream-cache/index.cjs'
-        harness = r'''
-const assert=require('node:assert/strict'),vm=require('node:vm'),realfs=require('node:fs');
-const script=process.argv[1],mode=process.argv[2],calls=[],writes=[];
-const fs={writeFileSync(path,value,options){writes.push({path,value,options})},
-  appendFileSync(path,value){writes.push({path,value})},existsSync(){return mode==='reported'},
-  rmSync(path){calls.push({remove:path})}};
-const env={RUNNER_TEMP:'/runner/temp',GITHUB_STATE:'state',GITHUB_ENV:'env',INPUT_TOKEN:'private-token'};
-if(mode!=='main')env.STATE_original_download_config='/runner/temp/config.json';
-if(mode==='reported')env.COR_UPSTREAM_REPORT_ATTEMPTED='true';
-const context={__dirname:require('node:path').dirname(script),console:{log(){}},
-  process:{env,platform:'linux'},require(name){
-    if(name==='node:fs')return fs;
-    if(name==='node:child_process')return {spawnSync(command,args,options){
-      calls.push({command,args,options});return {status:null,error:{code:'ETIMEDOUT'}}}};
-    return require(name)}};
-vm.runInNewContext(realfs.readFileSync(script,'utf8'),context,{filename:script});
-if(mode==='main'){
-  assert.equal(calls.length,0);assert.equal(writes[0].options.mode,0o600);
-  assert.equal(JSON.parse(writes[0].value).token,'private-token');
-  assert.ok(writes.slice(1).every(record=>!record.value.includes('private-token')));
-}else{
-  assert.equal(calls.at(-1).remove,'/runner/temp/config.json');
-  assert.equal(calls.length,mode==='reported'?1:2);
-  if(mode!=='reported'){assert.equal(calls[0].args[1],'submit');assert.equal(calls[0].options.timeout,90000);}
-}
-'''
-        for mode in ('main', 'post', 'reported'):
-            with self.subTest(mode=mode):
-                result = subprocess.run([node, '-e', harness, str(script), mode], capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-    def test_sources_require_public_https_and_strong_content_identity(self):
-        checksum = 'a' * 64
-        self.assertTrue(upstream_cache.valid_source('https://github.com/owner/tool/file.zip', checksum, 123))
-        for url in ('http://github.com/file', 'https://100.64.0.1/file',
-                    'https://user:password@github.com/file', 'https://github.com:444/file',
-                    'https://github.com/file?token=secret', 'https://github.com/file#fragment',
-                    'https://github.com/file\ninjection', 'https://example.com/file'):
-            self.assertFalse(upstream_cache.valid_source(url, checksum, 123), url)
-        for checksum, size in (('a' * 63, 123), ('g' * 64, 123), ('a' * 64, 0),
-                               ('a' * 64, True), ('a' * 64, 5 * 1024**3)):
-            self.assertFalse(upstream_cache.valid_source('https://github.com/file', checksum, size))
-
-    def test_official_success_never_looks_up_the_private_mirror(self):
-        payload = b'official original'
-        with tempfile.TemporaryDirectory() as temporary:
-            target = Path(temporary) / 'original'
-            with patch.object(build, 'opener') as http, \
-                    patch.object(upstream_cache, 'restore') as private:
-                http.return_value.open.return_value = io.BytesIO(payload)
-                build.download('https://github.com/owner/tool/file', target,
-                               digest=hashlib.sha256(payload).hexdigest())
-                private.assert_not_called()
-            self.assertEqual(target.read_bytes(), payload)
-
-    def test_official_retries_precede_the_private_fallback(self):
-        checksum = hashlib.sha256(b'original').hexdigest()
-        with tempfile.TemporaryDirectory() as temporary:
-            target = Path(temporary) / 'original'
-            with patch.object(build, 'opener') as http, \
-                    patch.object(build.time, 'sleep'), \
-                    patch.object(upstream_cache, 'restore', return_value=True) as private:
-                http.return_value.open.side_effect = OSError('offline')
-                build.download('https://github.com/tool/original', target, digest=checksum)
-                self.assertEqual(http.return_value.open.call_count, 3)
-                private.assert_called_once_with('https://github.com/tool/original', target, checksum)
-
-    def test_private_envelope_and_original_are_both_verified_before_replacement(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            original = root / 'source'
-            original.write_bytes(b'verified original')
-            archive = root / 'blob'
-            local_cache.pack([original], archive)
-            metadata = {'id': '1' * 64, 'size': archive.stat().st_size, 'sha256': build.sha256(archive)}
-            target = root / 'target'
-            target.write_bytes(b'existing good data')
-            for corrupt_envelope, checksum, expected in (
-                    (True, build.sha256(original), False),
-                    (False, '0' * 64, False),
-                    (False, build.sha256(original), True)):
-                with self.subTest(corrupt_envelope=corrupt_envelope, expected=expected):
-                    reply = io.BytesIO(archive.read_bytes())
-                    reply.status = 200
-                    value = {**metadata, 'sha256': '0' * 64} if corrupt_envelope else metadata
-                    with patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
-                            patch.object(upstream_cache, 'lookup', return_value=value), \
-                            patch.object(local_cache, 'response', return_value=nullcontext(reply)):
-                        self.assertEqual(upstream_cache.restore(
-                            'https://github.com/tool/original', target, checksum), expected)
-                    self.assertEqual(target.read_bytes(), original.read_bytes() if expected else b'existing good data')
-
-    def test_private_original_is_staged_in_destination_directory(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            original = root / 'source'
-            original.write_bytes(b'verified original')
-            archive = root / 'blob'
-            local_cache.pack([original], archive)
-            metadata = {'id': '1' * 64, 'size': archive.stat().st_size, 'sha256': build.sha256(archive)}
-            reply = io.BytesIO(archive.read_bytes())
-            reply.status = 200
-            target = root / 'target'
-            with patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
-                    patch.object(upstream_cache, 'lookup', return_value=metadata), \
-                    patch.object(local_cache, 'response', return_value=nullcontext(reply)), \
-                    patch.object(tempfile, 'mkstemp', wraps=tempfile.mkstemp) as staged:
-                self.assertTrue(upstream_cache.restore(
-                    'https://github.com/tool/original', target, build.sha256(original)))
-            self.assertEqual(staged.call_args.kwargs['dir'], target.parent)
-            self.assertEqual(target.read_bytes(), original.read_bytes())
-            self.assertEqual(list(root.glob('.target-*.partial')), [])
-
-    def test_private_envelope_rejects_directories_links_and_extra_payloads(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root / 'blob'
-            for kind in ('directory', 'symlink', 'extra'):
-                with self.subTest(kind=kind):
-                    with tarfile.open(archive, 'w:gz') as output:
-                        entry = tarfile.TarInfo('0')
-                        entry.type = {'directory': tarfile.DIRTYPE, 'symlink': tarfile.SYMTYPE,
-                                      'extra': tarfile.REGTYPE}[kind]
-                        entry.linkname = '/etc/passwd'
-                        output.addfile(entry)
-                        if kind == 'extra':
-                            output.addfile(tarfile.TarInfo('1'))
-                    reply = io.BytesIO(archive.read_bytes())
-                    reply.status = 200
-                    metadata = {'id': '1' * 64, 'size': archive.stat().st_size, 'sha256': build.sha256(archive)}
-                    with patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
-                            patch.object(upstream_cache, 'lookup', return_value=metadata), \
-                            patch.object(local_cache, 'response', return_value=nullcontext(reply)):
-                        self.assertFalse(upstream_cache.restore(
-                            'https://github.com/tool/original', root / 'target', 'a' * 64))
-                    self.assertFalse((root / 'target').exists())
-
-    def test_import_failure_never_uploads_an_archive_or_deletes_cache_entries(self):
-        with tempfile.TemporaryDirectory() as temporary, \
-                patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'GITHUB_ACTIONS': 'true'}):
-            source = Path(temporary) / 'original'
-            source.write_bytes(b'original')
-            build.record_download('https://github.com/tool/original', source, build.sha256(source))
-            source.unlink()
-            for reply_value in (None, {'schema': 1, 'group': 'wrong', 'status': 'ready'}):
-                with self.subTest(reply_value=reply_value):
-                    reply = io.BytesIO(json.dumps(reply_value).encode())
-                    reply.status = 502 if reply_value is None else 200
-                    with patch.object(upstream_cache, 'configuration', return_value={'token': 'secret'}), \
-                            patch.object(local_cache, 'server_capabilities', return_value={
-                                'validated-cache-commit-v1', 'complete-cache-retention-v1', 'upstream-fetch-v1'}), \
-                            patch.object(upstream_cache, 'lookup', return_value=None), \
-                            patch.object(local_cache, 'response', return_value=nullcontext(reply)) as request:
-                        result = upstream_cache.submit(Path(temporary) / 'report.json')
-                    self.assertEqual(result['files'][0]['status'], 'unavailable')
-                    self.assertEqual(request.call_count, 1)
-                    self.assertEqual(request.call_args.args[1], '/v1/import')
-                    self.assertEqual(request.call_args.kwargs['method'], 'POST')
-                    self.assertNotIn(temporary, json.dumps(result))
-
-    def test_receipts_deduplicate_content_and_do_not_export_runner_paths(self):
-        with tempfile.TemporaryDirectory() as temporary, \
-                patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'GITHUB_ACTIONS': 'true'}):
-            source = Path(temporary) / 'original'
-            source.write_bytes(b'original')
-            for name in ('one', 'two'):
-                build.record_download('https://github.com/tool/' + name, source, build.sha256(source))
-            with patch.object(upstream_cache, 'configuration', return_value={}):
-                report = upstream_cache.submit(Path(temporary) / 'report.json')
-            self.assertEqual(len(report['files']), 1)
-            self.assertNotIn(temporary, json.dumps(report))
-            self.assertEqual(report['files'][0]['status'], 'not_submitted')
-
-    def test_lookup_rejects_a_compatible_or_unrelated_record(self):
-        for changed in ({'group': 'rust/linux-x64'}, {'key': 'sha256-' + 'b' * 64},
-                        {'id': '../escape'}, {'size': -1}):
-            reply = io.BytesIO(json.dumps({'schema': 1, 'group': upstream_cache.GROUP,
-                                           'key': 'sha256-' + 'a' * 64, 'id': 'c' * 64,
-                                           'sha256': 'd' * 64, 'size': 100, **changed}).encode())
-            reply.status = 200
-            with self.subTest(changed=changed), \
-                    patch.object(local_cache, 'response', return_value=nullcontext(reply)):
-                with self.assertRaises(ValueError):
-                    upstream_cache.lookup({}, 'a' * 64)
-
-    def test_lookup_reports_only_rejected_field_names(self):
-        value = {'schema': True, 'group': 'private-value', 'key': 'wrong-value',
-                 'id': None, 'sha256': ['private-value'], 'size': True}
-        reply = io.BytesIO(json.dumps(value).encode())
-        reply.status = 200
-        with patch.object(local_cache, 'response', return_value=nullcontext(reply)):
-            with self.assertRaises(upstream_cache.LookupMetadataError) as raised:
-                upstream_cache.lookup({}, 'a' * 64)
-        self.assertEqual(str(raised.exception),
-                         'Invalid original download metadata: schema, group, key, id, sha256, size')
-
-    def test_restore_failure_reports_its_stage_without_private_error_contents(self):
-        for error, expected in (
-                (OSError('private-address secret-token'), 'lookup: OSError'),
-                (upstream_cache.LookupMetadataError(('schema',)), 'lookup: Invalid original download metadata: schema')):
-            with self.subTest(error=type(error).__name__), \
-                    patch.object(upstream_cache, 'configuration', return_value={'token': 'test'}), \
-                    patch.object(upstream_cache, 'lookup', side_effect=error), \
-                    patch('sys.stdout', new_callable=io.StringIO) as output:
-                self.assertFalse(upstream_cache.restore(
-                    'https://github.com/tool/original', Path('unused'), 'a' * 64))
-            self.assertIn(expected, output.getvalue())
-            self.assertNotIn('private-address', output.getvalue())
-            self.assertNotIn('secret-token', output.getvalue())
-
+class CacheRetentionTests(unittest.TestCase):
     def test_main_rust_platforms_survive_budget_pressure(self):
         def entry(number, key):
             return {'id': number, 'key': key, 'ref': 'refs/heads/main', 'size_in_bytes': 100,
@@ -8652,10 +6959,9 @@ if(mode==='main'){
         removed = storage.eviction_plan([slow, desktop, linux, memory, tool], 200)
         self.assertEqual(removed, [tool])
 
-    def test_main_targets_and_bootstrap_survive_even_when_budget_is_too_small(self):
+    def test_main_targets_survive_even_when_budget_is_too_small(self):
         native_prefix = 'native-release-'+'v2-'
         keys = [
-            'action-setup-tailscale/1.104.5/macOS-arm64',
             native_prefix+'macos-latest',
             native_prefix+'macos-15-intel',
             'android-v2-arm64',
@@ -8667,7 +6973,7 @@ if(mode==='main'){
             'native-release-ubuntu20-v1-ubuntu-22.04-arm',
             'memory-ubuntu22-v2-release',
         ]
-        entries = [{'id':index,'key':key if key.startswith('action-setup-tailscale/') else key+'-13131313-11223344','ref':'refs/heads/main',
+        entries = [{'id':index,'key':key+'-13131313-11223344','ref':'refs/heads/main',
                     'size_in_bytes':100,'last_accessed_at':f'{index:02d}','created_at':f'{index:02d}'}
                    for index,key in enumerate(keys)]
         self.assertEqual(storage.eviction_plan(entries, 100), [])
@@ -8764,8 +7070,8 @@ class AptCacheTests(unittest.TestCase):
 class CosmicStartupInvestigationTests(unittest.TestCase):
     def test_diagnostic_workflow_cannot_restore_or_save_build_caches(self):
         workflow = (build.ROOT/'.github/workflows/cosmic-startup-investigation.yml').read_text()
-        self.assertNotRegex(workflow, r'uses:\s*(?:actions/cache|Swatinem/rust-cache|tailscale/github-action)')
-        self.assertNotRegex(workflow, r'uses:\s*\./\.github/actions/(?:linux-build-cache|upstream-cache)')
+        self.assertNotRegex(workflow, r'uses:\s*(?:actions/cache|Swatinem/rust-cache)')
+        self.assertNotRegex(workflow, r'uses:\s*\./\.github/actions/linux-build-cache')
         self.assertNotRegex(workflow, r'\b(?:gh cache|saveCache|restoreCache)\b')
 
     def test_monitor_negotiates_before_using_the_short_command_timeout(self):

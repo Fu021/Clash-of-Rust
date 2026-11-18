@@ -2,13 +2,7 @@
 
 ## Runner DNS 恢复
 
-当前固定的官方 Tailscale Action 在 macOS 且启用 MagicDNS 时，会[单独执行 DNS 设置](https://github.com/tailscale/github-action/blob/064b10558093f38325e838ddea35486bdc6b1d5c/src/main.ts)，即使传入 `--accept-dns=false`，仍将 Ethernet DNS 改为 `100.100.100.100`。不能只依赖 daemon 参数避免这项副作用。此处仅讨论 CI 私网接入，不等同于下方应用的 Claude 保护 DNS 接管。
-
-CI `43567907725` 的 Intel Mac 在恢复命令返回成功后，Rust 工具链查询 `static.rust-lang.org` 失败，后续附件上传也出现 `ENOTFOUND`；应用尚未编译或运行，不能归因为应用 TUN。历史 CI `43506898037` 的 PyPI 解析失败发生在 Tailscale 登录前，说明不能把所有 runner DNS 故障都归为接入副作用。另一次 TUN 子会话 socket 未就绪属于独立问题，见[生命周期](macos-lifecycle.md#内核退出后的端口复用)。
-
-`macos_runner_network.py` 通过既有 `action_cache.py network-save/network-restore` 入口工作：接入前保存显式 DNS、搜索域、实际 resolver、默认路由及 GitHub/API/Rust/PyPI 的原生解析基线；接入后恢复原值并读回核对，仅在 Actions 的 Mac runner 刷新一次系统解析缓存，再用独立有超时的 `getaddrinfo` 进程确认解析恢复，同时核对实际默认解析器，避免缓存答案掩盖配置尚未生效。恢复窗口为 30 秒，单轮最多增加 6 秒在途检查时间；失败不继续工具链安装，不替换公共 DNS，也不改变 Tailscale 路由或系统代理。
-
-报告 `$RUNNER_TEMP/cor-runner-network/cache-network-report.json` 区分接入前已故障和接入后未恢复，并记录恢复前 resolver、命令结果、逐次原生解析及失败时向原默认服务器发出的直接 DNS 对照。证据不放在编译 `target` 中，避免缓存恢复失败后的清理把本轮现场一起删除。DNS 设置写入成功不代表原生解析成功，直接 DNS 回答也不代替原生就绪。缓存刷新失败保留实际返回值，最终仍以原生探测为准。报告复制进现有 `macos-ci-report-*` 附件，失败摘要同时写入 job 日志，避免上传故障时丢失全部依据。Mac 后续步骤失败时再收一份只读解析现场。离线回归覆盖自动/显式配置、延迟恢复、持续失败、恢复命令失败及非 runner 拒绝；原始间歇故障的首次触发仍需同环境证据，不能以重试成功宣称根因已经排除。
+`macos_runner_network.py` 供安装测试采集实际 resolver、默认路由及有超时的原生解析。配置恢复后，读取默认解析器并执行实际解析来确认就绪。报告保存在 runner 临时目录，以便编译缓存清理后仍能上传。
 
 ### 安装测试后的网络与附件
 

@@ -42,8 +42,6 @@ def tool_versions():
         selected['python'] = selected['python_macos']
     elif system == 'windows':
         selected['python'] = selected['python_windows_arm64' if arch == 'arm64' else 'python_windows']
-    if os.environ.get('COR_USE_BOOTSTRAP_TAILNET') == 'true':
-        selected['tailscale'] = selected['tailscale_bootstrap']
     return selected
 
 
@@ -97,7 +95,7 @@ def constraints():
     paths = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'apps/**/Cargo.toml',
                                      'crates/**/Cargo.toml', 'vendor/**/Cargo.toml', '.cargo/*', 'apps/android/gradle.properties',
                                      'resources/linux/ubuntu20.Dockerfile', 'scripts/linux_ci.py',
-                                     'scripts/prepared_vm.py', 'scripts/prepared_vm_environment.py',
+                                     'scripts/ubuntu_vm_environment.py',
                                      '.github/build-versions.json'],
                                     cwd=ROOT, text=True).splitlines()
     return {path: hashlib.sha256(original(path)).hexdigest() for path in paths}
@@ -119,7 +117,7 @@ def verified_manifest():
         if not path.is_file() or sha256(path) != checksum:
             raise ValueError('Build dependencies changed after resolution: ' + relative)
     verify_geo_snapshot(value, Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)))
-    from prepared_vm_environment import frozen_environments, verify_frozen
+    from ubuntu_vm_environment import frozen_environments, verify_frozen
     for frozen in frozen_environments(value).values():
         verify_frozen(Path(os.environ.get('BUILD_INPUTS_DIR', SNAPSHOT)),
                       frozen, value['upstream']['linux'])
@@ -326,20 +324,14 @@ def resolve(directory):
              'go_modules': go_modules,
              'policy': 'Repository lockfiles and approved build versions; latest Geo is verified once and reused for this run.'}
     if 'linux' in upstream:
-        from prepared_vm_environment import freeze
-        from prepared_vm import ARCHITECTURES
-        value['prepared_vms'] = {arch: freeze(directory, upstream['linux'], arch)
-                                for arch in ARCHITECTURES}
+        from ubuntu_vm_environment import ARCHITECTURES, freeze
+        value['ubuntu_vm_environments'] = {arch: freeze(directory, upstream['linux'], arch)
+                                            for arch in ARCHITECTURES}
     write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write('resources=' + resource_key(upstream) + '\n')
-            for name, fallback in (('tailscale', '1.104.5'),):
-                version = upstream.get(name, {}).get('version', fallback)
-                if not re.fullmatch(r'v?[0-9.]+', version):
-                    raise ValueError('Invalid resolved tool version')
-                stream.write(name + '=' + version + '\n')
             stream.write('nsis=' + upstream.get('nsis', {}).get('sha256', 'repository-default') + '\n')
 
 
@@ -378,7 +370,6 @@ def packaging(directory):
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write('nsis=' + value['upstream'].get('nsis', {}).get('sha256', 'verified-cache') + '\n')
-            stream.write('tailscale=' + value['upstream'].get('tailscale', {}).get('version', '1.104.5') + '\n')
 
 
 def apply(directory, require_commit=True):
@@ -396,7 +387,7 @@ def apply(directory, require_commit=True):
         if path.is_symlink() or sha256(path) != checksum:
             raise ValueError('Dependency snapshot checksum mismatch: ' + relative)
     assets = verify_geo_snapshot(value, directory)
-    from prepared_vm_environment import frozen_environments, verify_frozen
+    from ubuntu_vm_environment import frozen_environments, verify_frozen
     for frozen in frozen_environments(value).values():
         verify_frozen(directory, frozen, value['upstream']['linux'])
     for relative in FILES:
@@ -473,13 +464,6 @@ def shared_go(directory, restore=False):
     ensure_binding_tool('gomobile')
     ensure_binding_tool('gobind')
     subprocess.run(['go', '-C', str(ROOT / 'apps/android/core'), 'mod', 'verify'], check=True)
-    from build_support import record_download
-    downloads = paths[0]
-    for pattern in ('**/*.zip', '**/*.mod'):
-        for path in downloads.glob(pattern):
-            if path.is_file() and not path.is_symlink():
-                record_download('https://proxy.golang.org/' + path.relative_to(downloads).as_posix(),
-                                path, sha256(path))
     action_cache.pack(paths, archive)
     write_json(receipt, {'schema': 1, 'commit': current_commit(), 'go_files': hashes,
                          'size': archive.stat().st_size, 'sha256': sha256(archive)})

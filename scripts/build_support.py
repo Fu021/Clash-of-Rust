@@ -207,11 +207,16 @@ def write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
 
 
-def download(url, destination, proxy='', digest=None):
+def download(url, destination, proxy='', digest=None, *, digest_algorithm='sha256'):
+    def matches(path):
+        if digest_algorithm == 'sha256':
+            return sha256(path) == digest
+        with path.open('rb') as stream:
+            return hashlib.file_digest(stream, digest_algorithm).hexdigest() == digest
+
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if digest and destination.is_file() and sha256(destination) == digest:
-        record_download(url, destination, digest)
+    if digest and destination.is_file() and matches(destination):
         return
     partial = destination.with_name(destination.name+'.partial')
     for attempt in range(3):
@@ -224,29 +229,15 @@ def download(url, destination, proxy='', digest=None):
             request = urllib.request.Request(url, headers=headers)
             with opener(proxy).open(request, timeout=90) as response, partial.open('wb') as stream:
                 shutil.copyfileobj(response, stream, length=1024*1024)
-            if digest and sha256(partial) != digest:
-                raise ValueError('SHA256 mismatch: '+destination.name)
+            if digest and not matches(partial):
+                raise ValueError(digest_algorithm.upper() + ' mismatch: ' + destination.name)
             partial.replace(destination)
-            if digest:
-                record_download(url, destination, digest)
             return
         except Exception:
             partial.unlink(missing_ok=True)
             if attempt == 2:
-                if digest:
-                    from upstream_cache import restore
-                    if restore(url, destination, digest):
-                        return
                 raise
             time.sleep(attempt+1)
-
-
-def record_download(url, destination, checksum):
-    from upstream_cache import record
-    try:
-        record(url, destination, checksum)
-    except (OSError, ValueError):
-        print('Original download receipt unavailable; the verified file remains usable.', flush=True)
 
 
 def download_asset(asset, destination, proxy=''):

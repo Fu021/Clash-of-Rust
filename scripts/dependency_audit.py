@@ -206,9 +206,6 @@ def tool_candidate(name, current):
         url = f'https://api.adoptium.net/v3/assets/latest/{release}/hotspot?architecture=x64&image_type=jdk&os=linux'
         version = metadata(url)[0]['version']
         return version['semver'].split('+')[0] + '+' + str(version['build']), '', url
-    if name.startswith('tailscale'):
-        url = 'https://pkgs.tailscale.com/stable/?mode=json'
-        return metadata(url)['Version'], '', url
     if name == 'gradle':
         url = 'https://services.gradle.org/versions/current'
         return metadata(url)['version'], '', url

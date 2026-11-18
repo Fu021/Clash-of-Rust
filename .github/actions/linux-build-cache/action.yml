@@ -1,5 +1,5 @@
 name: Ubuntu build environment
-description: Reuse the frozen compiler container; prepared VM system disks stay in the private cache
+description: Reuse the frozen compiler container through GitHub Actions cache
 runs:
   using: composite
   steps:

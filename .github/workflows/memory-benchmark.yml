@@ -42,11 +42,9 @@ jobs:
       shards: ${{ steps.prepare.outputs.shards }}
     permissions:
       contents: read
-      id-token: write
     timeout-minutes: 60
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      COR_USE_BOOTSTRAP_TAILNET: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -78,49 +76,6 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ env.COR_PYTHON }}
-      - name: Remember original macOS DNS before cache login
-        if: runner.os == 'macOS'
-        id: original_dns
-        shell: python
-        run: |
-          import subprocess, sys
-          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-save'], check=True)
-      - name: Connect to private cache network
-        id: tailnet
-        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
-        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        timeout-minutes: ${{ runner.os == 'macOS' && 10 || 3 }}
-        continue-on-error: true
-        with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:github-action-cache
-          version: ${{ env.COR_TAILSCALE }}
-          use-cache: ${{ runner.os == 'macOS' && 'true' || 'false' }}
-          retry: '1'
-          timeout: 45s
-          args: --accept-dns=false
-          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
-      - name: Restore macOS DNS after cache login
-        if: always() && runner.os == 'macOS' && steps.original_dns.outcome == 'success'
-        shell: python
-        run: |
-          import subprocess, sys
-          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-restore'], check=True)
-      - name: Preserve host routing after private cache login
-        if: steps.tailnet.outcome == 'success'
-        shell: python
-        run: |
-          import os, shutil, subprocess
-          # The official action supplies --accept-routes itself. Passing it a
-          # second time is rejected; turn it off after login, before any tests.
-          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
-          if os.name != 'nt': command = ['sudo', '-n', *command]
-          subprocess.run(command, check=True)
-      - uses: ./.github/actions/upstream-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           toolchain: ${{ env.COR_RUST }}
@@ -142,7 +97,7 @@ jobs:
           import sys
           sys.path.insert(0, 'scripts')
           from action_cache import discard_restore
-          discard_restore({'kind': 'rust', 'source': 'source'})
+          discard_restore('source')
       - name: Install benchmark dependencies
         shell: python
         run: |
@@ -151,11 +106,6 @@ jobs:
           from linux_apt import OPTIONS, privileged, install
           privileged([*OPTIONS, 'update'], 300)
           install(['libglib2.0-dev', 'libfontconfig1-dev', 'libfreetype6-dev', 'libxkbcommon-dev', 'libwayland-dev', 'libx11-dev', 'libx11-xcb-dev', 'libxkbcommon-x11-0', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1', 'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool', 'python3-gi'])
-      - name: Enqueue verified original downloads before benchmarking
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          checkpoint: 'true'
       - name: Prepare immutable inputs and measure API
         id: prepare
         shell: python
@@ -202,12 +152,6 @@ jobs:
           path: dist/seed
           if-no-files-found: ignore
           retention-days: 3
-      - name: Preserve original download inventory
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   measure:
     name: Measure ${{ matrix.shard }}
     needs: prepare

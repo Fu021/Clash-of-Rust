@@ -10,10 +10,13 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from build_inputs import android_versions
+from linux_compatibility_targets import TARGETS
 from workflow_artifacts import commit, current_ci_artifacts, release_module
 
-WORKFLOWS = {'android': 'android-compatibility.yml', 'ubuntu': 'ubuntu-compatibility.yml'}
-REPORT_JOBS = {'android': 'Record Android compatibility', 'ubuntu': 'Record Ubuntu compatibility'}
+RELEASE_SUITES = ('android', 'ubuntu')
+WORKFLOWS = {suite: f'{suite}-compatibility.yml' for suite in ('android', *TARGETS)}
+REPORT_JOBS = {suite: 'Linux / Record compatibility' for suite in TARGETS}
+REPORT_JOBS['android'] = 'Record Android compatibility'
 
 
 def matrix():
@@ -26,23 +29,26 @@ def matrix():
     return {'include': [{'api': api, 'android': names[api]} for api in sorted(apis)]}
 
 
+def suite_matrix(suite):
+    return matrix() if suite == 'android' else {
+        'include': [target.matrix_entry() for target in TARGETS[suite]]}
+
+
 def required_jobs(suite):
     if suite == 'android':
         return {'Resolve verified Android inputs'} | {
             f'Android {entry["android"]} proxy and TUN' for entry in matrix()['include']}
-    if suite == 'ubuntu':
-        return {'Resolve verified Ubuntu inputs'} | {
-            f'Ubuntu 20.04-{arch} installed proxy and TUN' for arch in ('x64', 'arm64')}
-    raise ValueError('Unknown compatibility suite')
+    return {'Linux / Resolve verified CI inputs'} | {
+        f'Linux / {target.distribution} {target.release}-{target.arch} installed proxy and TUN'
+        for target in TARGETS[suite]}
 
 
 def input_names(suite):
     if suite == 'android':
         return ('build-android-x64', 'dependency-snapshot')
-    if suite == 'ubuntu':
-        return ('package-linux-x64', 'package-linux-arm64', 'linux-tun-test-x64',
-                'linux-tun-test-arm64', 'dependency-snapshot')
-    raise ValueError('Unknown compatibility suite')
+    architectures = dict.fromkeys(target.arch for target in TARGETS[suite])
+    return (*('package-linux-' + arch for arch in architectures),
+            *('linux-tun-test-' + arch for arch in architectures), 'dependency-snapshot')
 
 
 def validate_run(run, repository, expected_commit):
@@ -100,11 +106,7 @@ def resolve(client, repository, expected_commit, run_id=None, suite='android'):
             raise ValueError('Compatibility artifact identity is invalid: ' + name)
         inputs.append({key: found[0][key] for key in ('id', 'name', 'digest')})
     return {'commit': expected_commit, 'ci_run_id': run_id,
-            'matrix': matrix() if suite == 'android' else {'include': [
-                {'os': 'ubuntu-latest', 'arch': 'x64', 'qemu': 'qemu-system-x86'},
-                {'os': 'ubuntu-22.04-arm', 'arch': 'arm64',
-                 'qemu': 'qemu-system-arm qemu-efi-aarch64'}]},
-            'inputs': inputs}
+            'matrix': suite_matrix(suite), 'inputs': inputs}
 
 
 def check_jobs(client, run, suite, include_report):

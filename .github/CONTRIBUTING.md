@@ -17,18 +17,18 @@
 - 为外部贡献者或非维护者运行 AI 时，明确限定任务范围：本地编辑与验证不代表获准推送、触发工作流、连接维护者服务器、合并或发布。维护者直接委派、且按 [Agent 开发指南](../AGENTS.md#actions提交与发布)执行的任务，按其中规定的最终合并与推送流程收尾。
 - 不要编造测试结果、性能数据、引用和平台支持情况。发现无法验证的假设，请在 PR 中说明。
 
-## Actions 与缓存服务器
+## Actions 与缓存
 
-部分受控工作流会连接维护者自建的缓存服务器，构建与缓存传输会消耗服务器带宽、存储及 Actions 资源。请优先复用本地结果，准备好改动后再请求 CI 验证。
+跨运行依赖缓存通过 [GitHub Actions Cache](../docs/workflows/cache-coverage.md) 提供。构建输入和镜像从官方公开上游下载。请先准备好改动，再请求 CI 验证。
 
 - 所有外部贡献者的 fork PR 工作流每次触发均需维护者批准，不因贡献次数或曾被合并而豁免。批准工作流运行不等于批准代码或允许合并。
-- 贡献者本地构建不需要维护者的私网、服务器账号、缓存令牌或签名密钥；请使用自己的工具链和缓存，不直接连接或读写维护者的缓存服务，也不要索取这些凭据。
+- 贡献者本地构建使用公开依赖源、自有工具链和本机缓存。GitHub Actions 的发行签名凭据仅用于经授权的发布。
 - 不得绕过 fork 隔离、审核或凭据限制；不得为了取得 Secrets 而更换触发事件、扩大令牌权限或调整网络访问范围。确需调整时先与维护者讨论。
 - 不批量重跑无关任务，不擅自取消他人的运行或删除 Actions 历史、附件及缓存。
 
 ## 工作流、测试与发布
 
-- 常驻工作流为 **CI、Publish Release、Memory Benchmark**；另经维护者授权保留手动 [Android Compatibility](../docs/workflows/android-compatibility.md) 和 [Ubuntu Compatibility](../docs/workflows/ubuntu-compatibility.md)，发布前均须完成同提交基础代理/TUN 验证。[COSMIC Startup Investigation](../docs/workflows/cosmic-startup.md)长期保留，仅按需手动诊断，不作为发布门禁。未经维护者事先同意，不新增或复制其他工作流，包括临时测试工作流。
+- 常驻工作流为 **CI、Publish Release、Memory Benchmark**。按[工作流索引](../docs/workflows.md)运行已获授权的独立平台兼容与诊断工作流。发布必需的回执见[发布门禁](../docs/workflows/release.md#兼容性发布门禁)。新增或复制其他工作流须事先取得维护者同意。
 - 新增测试优先接入现有流程。CI 验证源码、候选安装包及安装后行为，真实系统集成聚焦系统代理与 TUN；Publish Release 复用这些结果，保留发行签名后的必要验证与公开发布。避免堆积一次性排障脚本、重复包装脚本和无价值测试。
 - 本地 UI 截图使用 `scripts/preview-slint.py` 预览正式 Slint 组件；Android 真实多版本截图在兼容工作流中显式选 `capture_screenshots`，诊断选 `verify_diagnostics`，默认仅基础代理/TUN。不重复编译，截图不代替网络证据。涉及外观时关注深浅色、系统字号、窗口尺寸，以及手机横竖屏和平板布局。
 - `.github/` 中的工作流、复合操作和审核配置由 **@Fu021** 审核；追加可审阅提交会撤销旧的 PR 批准，需要重新审核。弃用工作流应删除文件，并由维护者在 GitHub 上禁用。

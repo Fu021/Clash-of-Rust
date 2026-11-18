@@ -24,9 +24,7 @@
 
 复盘和其他文档随功能改动纳入最终提交，再启动验证；完成后的运行编号、来源提交和附件结果写入最终汇报，不为补写成功记录再次推送。后续纯文档补充按[收尾规则](../../AGENTS.md#actions提交与发布)保留本地；确需修复代码时，以新提交重新完成 CI 与不发布打包。
 
-流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台、三种 Android ABI、Ubuntu latest 和两套独立兼容性结果，不重新编译或下载应用资源。候选包、源码产物及回执保留 3 天；过期或旧格式证据需要重新运行当前代码。完整测试职责见[安装验收](install-validation.md)。
-
-Ubuntu 20.04 ARM64 和 x64 的模板准备、恢复及安装验证归独立 [Ubuntu Compatibility](ubuntu-compatibility.md)，按线上 `vm_limits` 明确声明的架构启用[私网预装环境镜像](prepared-vm-images.md)，不满足条件时冷回退。SSH 短时超时在总预算内重试，不由缓存命中代替就绪检查。Publish Release 只核对兼容结果，不重启 VM；预装镜像、基础盘及写入层均不进入 GitHub Cache、artifact 或 Release。
+流程固定到所选 CI 的提交与依赖快照，核对六种桌面平台、三种 Android ABI 和两套独立兼容性结果，复用已经构建的应用及资源。候选包、源码产物及回执保留 3 天，过期或旧格式证据需要重新运行当前代码。完整测试职责见[安装验收](install-validation.md)。
 
 从启动到最终核验完成，来源分支必须仍指向该 CI 的提交；`publish-release.py` 在前置解析和最终核验时都会检查分支头。即使只是文档改动，也应等本轮打包结束后再推送，避免 `Source branch has changed`。测试包以本次工作流固定的提交为准，后续提交需另做验证。
 
@@ -37,7 +35,7 @@ Ubuntu 20.04 ARM64 和 x64 的模板准备、恢复及安装验证归独立 [Ubu
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
-打包与安装验证所需原包遵循[工作流缓存分工](cache-coverage.md)，不向私网保存安装目录或构建对象。原包准备后尽早交持久清单，下载 job 在末尾保存清单和分页回执附件；pending 与整批 ready 分别报告。Ubuntu 环境准备与安装矩阵见[独立兼容验证](ubuntu-compatibility.md)与[安装验收](install-validation.md)。
+打包和安装验证使用冻结的公开下载输入及 CI 附件。各类文件的存放范围见 [GitHub Actions 缓存](cache-coverage.md)，安装矩阵见[安装验收](install-validation.md)。
 
 只有最终发布 job 有 `contents: write`。桌面 CI 向 `scripts/build-installer.py --prebuilt` 传入已验证的本地构建产物；本地打包沿用相同入口。打包器只校验与组装，不隐式调用 Cargo。
 
@@ -45,13 +43,13 @@ Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果
 
 ### 候选包验收前移
 
-安装包生成、平台安装后检查和 Ubuntu latest 在 CI 内执行，Ubuntu 20.04 和多版本 Android 则在独立兼容性工作流中复用候选包。CI 成功不等于两套兼容验证已通过。平台范围、环境隔离、权限和收据约定见[安装验收](install-validation.md)；新接线尚未取得同提交 Actions 结果时不能写成验收通过。未来桌面引入发行签名时仍须验证实际字节。
+安装包生成和各平台安装回归在 CI 内执行。Ubuntu 与 Android 多版本矩阵在独立工作流中复用候选包。平台范围、环境隔离、权限和收据约定见[安装验收](install-validation.md)。
 
 此调整会增加 CI 时长和候选包存储，目标是更早发现安装问题并减少 CI→发布失败→修改→再 CI 的重复，不承诺单次 CI 更快。发布阶段的网络或 runner 故障且没有代码改动时，可以复用同提交成功 CI，仅重试失败发布 job；实际代码或构建输入变化仍需新提交验证。
 
 ### 兼容性发布门禁
 
-普通 CI 成功后，以同一 `ci_run_id` 分别运行 [Android Compatibility](android-compatibility.md) 和 [Ubuntu Compatibility](ubuntu-compatibility.md)，两者可并行。Android 8.0～16 共 11 版本与 Ubuntu 20.04 两架构的基础系统代理/TUN 均成功，且各自最终回执 job 成功后，才可运行 Publish Release。截图和诊断专项可选，不代替基础网络检查。
+普通 CI 成功后，以同一 `ci_run_id` 并行运行 [Android Compatibility](android-compatibility.md) 和 [Ubuntu Compatibility](ubuntu-compatibility.md)。Android 8.0～16 的 11 个版本、Ubuntu 固定版本矩阵的所有架构及各自最终回执 job 均须成功。Debian 首轮平台验收由独立的 [Debian Compatibility](debian-compatibility.md) 提供。
 
 `scripts/compatibility.py` 自动查找同提交最新的兼容运行，并核对 workflow 路径、同仓库、成功终态、所有必需 job、attempt 及回执 ZIP 的 digest。回执必须精确绑定所选 CI 的输入 artifact id/name/digest；只检查分支名、工作流绿色、旧运行成功或过期附件均不够。最新兼容运行尚未完成或失败时阻止发布，不静默退回旧结果。前置解析和最终核验都执行门禁，`check_only`、正式版与预发布一视同仁。
 

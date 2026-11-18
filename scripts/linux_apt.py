@@ -7,13 +7,14 @@ import shutil
 import stat
 import subprocess
 import tempfile
-import time
+from urllib.parse import urlsplit, urlunsplit
 
-from build_support import record_download, run, sha256
+from build_support import run, sha256
 
 OPTIONS = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
            'Acquire::Languages=none', '-o', 'Dpkg::Use-Pty=0']
+UBUNTU_ARCHIVES = {'archive.ubuntu.com', 'security.ubuntu.com', 'ports.ubuntu.com'}
 
 
 def privileged(command, timeout, **kwargs):
@@ -104,21 +105,7 @@ def install(packages, timeout=900, no_recommends=False):
                       flush=True)
         print(f'APT download cache: {restored}/{len(records)} packages verified; '
               f'{reused_bytes / 1024**2:.1f} MiB reused', flush=True)
-        try:
-            return privileged([*command, *arguments], timeout)
-        except subprocess.CalledProcessError:
-            from upstream_cache import restore
-            restored = 0
-            deadline = time.monotonic() + 120
-            for name, record in records.items():
-                if time.monotonic() >= deadline:
-                    break
-                if not matches(directory/name, record) and restore(
-                        source_url(record['url']), directory/name, record['sha256'], deadline=deadline):
-                    restored += 1
-            if not restored:
-                raise
-            return privileged([*command, *arguments], timeout)
+        return privileged([*command, *arguments], timeout)
     finally:
         # Never cache the application DEB or anything lacking a repository hash.
         # Failures in optional cache export must not hide installation results.
@@ -126,7 +113,6 @@ def install(packages, timeout=900, no_recommends=False):
             for name, record in records.items():
                 source = directory/name
                 if matches(source, record):
-                    record_download(source_url(record['url']), source, record['sha256'])
                     temporary = cache/(name+'.partial')
                     shutil.copyfile(source, temporary)
                     temporary.replace(cache/name)
@@ -140,11 +126,23 @@ def install(packages, timeout=900, no_recommends=False):
 
 
 def source_url(url):
-    from urllib.parse import urlsplit, urlunsplit
     parsed = urlsplit(url)
-    official = {'archive.ubuntu.com', 'security.ubuntu.com', 'ports.ubuntu.com',
-                'azure.archive.ubuntu.com'}
-    if parsed.scheme == 'http' and parsed.hostname in official:
-        host = 'archive.ubuntu.com' if parsed.hostname == 'azure.archive.ubuntu.com' else parsed.hostname
-        return urlunsplit(('https', host, parsed.path, parsed.query, parsed.fragment))
+    official = UBUNTU_ARCHIVES | {'azure.archive.ubuntu.com'}
+    if (parsed.scheme in ('http', 'https') and parsed.hostname in official
+            and parsed.netloc == parsed.hostname):
+        hostname = 'archive.ubuntu.com' if parsed.hostname == 'azure.archive.ubuntu.com' else parsed.hostname
+        return urlunsplit(('https', hostname, parsed.path, parsed.query, parsed.fragment))
     return url
+
+
+def valid_source(url, checksum, size):
+    try:
+        parsed = urlsplit(url)
+        return (parsed.scheme == 'https' and parsed.hostname in UBUNTU_ARCHIVES
+                and not parsed.username and not parsed.password
+                and not parsed.query and not parsed.fragment and parsed.port in (None, 443)
+                and parsed.path.startswith('/') and not re.search(r'[\s\\|]', url)
+                and re.fullmatch(r'[0-9a-f]{64}', checksum) is not None
+                and type(size) is int and 0 < size <= 4 * 1024**3)
+    except (AttributeError, TypeError, ValueError):
+        return False

@@ -31,7 +31,7 @@ jobs:
   website:
     if: ${{ !inputs.refresh_dependencies }}
     name: Website validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
       PYTHONDONTWRITEBYTECODE: '1'
@@ -81,18 +81,14 @@ jobs:
           if-no-files-found: warn
   inputs:
     name: Resolve build inputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
-    env:
-      COR_USE_BOOTSTRAP_TAILNET: 'true'
     permissions:
       contents: read
-      id-token: write
     outputs:
       go: ${{ steps.go.outputs.go-version }}
       java: ${{ steps.versions.outputs.java }}
       resources: ${{ steps.resolve.outputs.resources }}
-      tailscale: ${{ steps.resolve.outputs.tailscale }}
       nsis: ${{ steps.resolve.outputs.nsis }}
       extended_tests: ${{ steps.test_policy.outputs.extended_tests }}
       android_routing_tests: ${{ steps.test_policy.outputs.android_routing_tests }}
@@ -123,32 +119,8 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          node --check .github/actions/upstream-cache/index.cjs
           python3 scripts/test-build-tools.py --buffer
           python3 scripts/test-workflow-artifacts.py --buffer
-      - name: Connect for original download fallback and URL imports
-        id: tailnet
-        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        continue-on-error: true
-        timeout-minutes: 3
-        with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:github-action-cache
-          version: ${{ env.COR_TAILSCALE }}
-          use-cache: ${{ runner.os == 'macOS' && 'true' || 'false' }}
-          retry: '1'
-          timeout: 45s
-          args: --accept-dns=false
-          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
-      - name: Keep runner routing unchanged
-        if: steps.tailnet.outcome == 'success'
-        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
-      - uses: ./.github/actions/upstream-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         id: go
         with:
@@ -174,17 +146,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: '1'
-          COR_PREPARED_VM_INPUTS: 'true'
+          COR_UBUNTU_VM_INPUTS: 'true'
         run: python3 scripts/build_inputs.py resolve
       - name: Prepare shared Android source downloads
         if: ${{ !inputs.refresh_dependencies }}
         run: python3 scripts/build_inputs.py share-go --directory target/shared-go
-      - name: Enqueue verified source downloads before matrix builds
-        if: ${{ !inputs.refresh_dependencies }}
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          checkpoint: 'true'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: ${{ !inputs.refresh_dependencies }}
         with:
@@ -200,20 +166,13 @@ jobs:
           path: ${{ env.BUILD_INPUTS_DIR }}
           retention-days: 3
           if-no-files-found: error
-      - name: Preserve original download inventory
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   android:
     if: ${{ !inputs.refresh_dependencies }}
     name: android-${{ matrix.arch }}
     needs: inputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -256,36 +215,6 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
-      - name: Connect to private cache network
-        id: tailnet
-        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        timeout-minutes: 3
-        continue-on-error: true
-        with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:github-action-cache
-          version: ${{ needs.inputs.outputs.tailscale }}
-          use-cache: 'false'
-          retry: '1'
-          timeout: 45s
-          args: --accept-dns=false
-          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
-      - name: Preserve host routing after private cache login
-        if: steps.tailnet.outcome == 'success'
-        shell: python
-        run: |
-          import os, shutil, subprocess
-          # The official action supplies --accept-routes itself. Passing it a
-          # second time is rejected; turn it off after login, before any tests.
-          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
-          if os.name != 'nt': command = ['sudo', '-n', *command]
-          subprocess.run(command, check=True)
-      - uses: ./.github/actions/upstream-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           toolchain: ${{ env.COR_RUST }}
@@ -334,7 +263,7 @@ jobs:
           import sys
           sys.path.insert(0, 'scripts')
           from action_cache import discard_restore
-          discard_restore({'kind': 'rust', 'source': '.'})
+          discard_restore('.')
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: android-shared-dependencies
@@ -350,7 +279,7 @@ jobs:
           path: ${{ env.GOCACHE }}
           key: android-go-build-v1-${{ matrix.arch }}-${{ hashFiles('.github/build-versions.json', 'apps/android/core/go.mod', 'apps/android/core/go.sum', 'apps/android/core/**/*.go') }}
           restore-keys: android-go-build-v1-${{ matrix.arch }}-
-      - name: Prepare verified Gradle with private original fallback
+      - name: Prepare Gradle from a verified distribution
         run: python3 scripts/build_inputs.py prepare-gradle --directory '${{ runner.temp }}/cor-gradle'
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
         with:
@@ -390,11 +319,6 @@ jobs:
           sys.path.insert(0, 'scripts')
           from android import prepare_sdk
           prepare_sdk()
-      - name: Enqueue verified Android tools before compilation
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          checkpoint: 'true'
       - name: Compile Android application and embedded core
         env:
           GH_TOKEN: ${{ github.token }}
@@ -465,12 +389,6 @@ jobs:
             apps/android/core/go.sum
           if-no-files-found: warn
           retention-days: 3
-      - name: Preserve original download inventory
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   check:
     if: ${{ !inputs.refresh_dependencies }}
     name: ${{ matrix.system }}-${{ matrix.arch }}
@@ -478,7 +396,6 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -549,59 +466,6 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/build_inputs.py', 'apply'], check=True)
-      - name: Remember original macOS DNS before cache login
-        if: runner.os == 'macOS'
-        id: original_dns
-        shell: python
-        run: |
-          import subprocess, sys
-          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-save'], check=True)
-      - name: Check for a reusable macOS Tailscale cache
-        id: tailscale_cache
-        if: runner.os == 'macOS' && github.ref != 'refs/heads/main' && vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        continue-on-error: true
-        timeout-minutes: 1
-        with:
-          path: ${{ runner.tool_cache }}/tailscale/${{ needs.inputs.outputs.tailscale }}/macOS-${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
-          key: action-setup-tailscale/${{ needs.inputs.outputs.tailscale }}/macOS-${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
-          lookup-only: true
-      - name: Connect to private cache network
-        id: tailnet
-        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        timeout-minutes: ${{ runner.os == 'macOS' && 8 || 3 }}
-        continue-on-error: true
-        with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:github-action-cache
-          version: ${{ needs.inputs.outputs.tailscale }}
-          use-cache: ${{ runner.os == 'macOS' && (github.ref == 'refs/heads/main' || steps.tailscale_cache.outputs.cache-hit == 'true') && 'true' || 'false' }}
-          retry: '1'
-          timeout: 45s
-          args: --accept-dns=false
-          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
-      - name: Restore macOS DNS after cache login
-        if: always() && runner.os == 'macOS' && steps.original_dns.outcome == 'success'
-        shell: python
-        run: |
-          import subprocess, sys
-          subprocess.run([sys.executable, 'scripts/action_cache.py', 'network-restore'], check=True)
-      - name: Preserve host routing after private cache login
-        if: steps.tailnet.outcome == 'success'
-        shell: python
-        run: |
-          import os, shutil, subprocess
-          # The official action supplies --accept-routes itself. Passing it a
-          # second time is rejected; turn it off after login, before any tests.
-          command = [shutil.which('tailscale') or 'tailscale', 'set', '--accept-routes=false', '--accept-dns=false']
-          if os.name != 'nt': command = ['sudo', '-n', *command]
-          subprocess.run(command, check=True)
-      - uses: ./.github/actions/upstream-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           toolchain: ${{ env.COR_RUST }}-${{ matrix.target }}
@@ -649,7 +513,7 @@ jobs:
           import sys
           sys.path.insert(0, 'scripts')
           from action_cache import discard_restore
-          discard_restore({'kind': 'rust', 'source': '.'})
+          discard_restore('.')
       - name: Configure verified workspace source receipts
         run: |
           import os, pathlib
@@ -662,7 +526,7 @@ jobs:
           from build_support import host_arch
           assert host_arch() == '${{ matrix.arch }}'
           assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)
-      - name: Cache Ubuntu baseline downloads
+      - name: Prepare Ubuntu baseline download paths
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-download-cache
         timeout-minutes: 30
@@ -677,11 +541,6 @@ jobs:
         run: |
           import subprocess, sys
           subprocess.run([sys.executable, 'scripts/prepare-resources.py', '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}'], check=True)
-      - name: Enqueue verified original downloads before compilation
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          checkpoint: 'true'
       - name: Compile, test and export native binaries
         env:
           GH_TOKEN: ${{ github.token }}
@@ -730,7 +589,8 @@ jobs:
               subprocess.run([sys.executable, 'scripts/linux_ci.py', 'package',
                   '--build', 'ci-build', '--ci-run-id', '${{ github.run_id }}'], check=True)
               subprocess.run([sys.executable, 'scripts/test-release-package.py',
-                  '--linux-compat', '--expect-ubuntu', '22.04'], check=True)
+                  '--linux-compat', '--expect-linux', 'ubuntu', '22.04',
+                  '--expect-arch', '${{ matrix.arch }}'], check=True)
           else:
               subprocess.run([sys.executable, 'scripts/test-release-package.py',
                   '--system', '${{ matrix.system }}', '--arch', '${{ matrix.arch }}',
@@ -799,95 +659,15 @@ jobs:
           path: target/linux-report
           if-no-files-found: warn
           retention-days: 3
-      - name: Preserve original download inventory
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
-  ubuntu_latest:
-    name: Ubuntu latest-x64 proxy and TUN
-    if: ${{ !inputs.refresh_dependencies }}
-    needs: inputs
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-    env:
-      COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
-      COR_CI_LINUX_USER_TESTS: ${{ needs.inputs.outputs.linux_user_tests }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - name: Load approved tool versions
-        run: python3 scripts/build_inputs.py versions
-      - name: Connect to private system package cache
-        id: tailnet
-        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        continue-on-error: true
-        timeout-minutes: 3
-        with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:github-action-cache
-          version: ${{ needs.inputs.outputs.tailscale }}
-          use-cache: 'false'
-          retry: '1'
-          timeout: 45s
-          args: --accept-dns=false
-          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
-      - name: Preserve host routing
-        if: steps.tailnet.outcome == 'success'
-        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
-      - uses: ./.github/actions/upstream-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
-      - name: Wait for this CI run's verified Linux package
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/workflow_artifacts.py wait --system linux --arch x64 --run-id '${{ github.run_id }}' --timeout 3600
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: package-linux-x64
-          path: dist
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: linux-tun-test-x64
-          path: target
-      - name: Verify the candidate on Ubuntu latest
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/test-release-package.py --linux-compat
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always() && hashFiles('target/linux-report/**') != ''
-        with:
-          name: linux-package-report-latest
-          path: target/linux-report
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Preserve original download inventory
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   cache_budget:
     name: Actions cache budget
-    needs: [inputs, android, check, ubuntu_latest]
+    needs: [inputs, android, check]
     if: ${{ !cancelled() && !inputs.refresh_dependencies }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
       actions: write
-      id-token: write
     concurrency:
       group: actions-cache-budget
       cancel-in-progress: false
@@ -926,36 +706,3 @@ jobs:
           command = [sys.executable, os.environ['CACHE_POLICY_SCRIPT']]
           if os.environ['CACHE_READ_ONLY'] == 'true': command.append('--read-only')
           subprocess.run(command, check=True)
-      - name: Connect for final private cache inventory
-        id: tailnet
-        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        continue-on-error: true
-        with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:github-action-cache
-          version: ${{ needs.inputs.outputs.tailscale || '1.104.5' }}
-          use-cache: 'false'
-          retry: '1'
-          timeout: 45s
-          args: --accept-dns=false
-          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
-      - name: Report the cache after all successful uploads
-        if: steps.tailnet.outcome == 'success'
-        continue-on-error: true
-        env:
-          CACHE_URL: ${{ vars.LOCAL_CACHE_URL }}
-          CACHE_TOKEN: ${{ secrets.LOCAL_CACHE_TOKEN }}
-          CACHE_PROXY: http://127.0.0.1:19082
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: |
-          sudo -n tailscale set --accept-routes=false --accept-dns=false
-          python3 scripts/action_cache.py inventory
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: steps.tailnet.outcome == 'success'
-        with:
-          name: private-cache-inventory
-          path: target/cache-inventory.json
-          retention-days: 3
-          if-no-files-found: warn

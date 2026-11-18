@@ -138,11 +138,11 @@ export component ProxiesPage inherits PageSurface {
                     geometry-key: "group-pagination";
                     text: UiData.groups-paginated ? "显示全部" : "分页显示";
                     compact: true; quiet: true;
-                    accessible-label: UiData.groups-paginated ? "当前分页显示，切换为显示全部代理组" : "当前显示全部代理组，切换为每页四组";
+                    accessible-label: UiData.groups-paginated ? "当前分页显示，切换为显示全部代理组" : "当前显示全部代理组，切换为每页八组";
                     clicked => { UiActions.dispatch(Intent.group-pagination, UiData.groups-paginated ? "false" : "true", ""); }
                 }
-                if UiData.groups-paginated: ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 4), ""); } }
-                if UiData.groups-paginated: ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 4), ""); } }
+                if UiData.groups-paginated: ActionButton { text: "上一页"; geometry-key: "group-pagination-previous"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 8), ""); } }
+                if UiData.groups-paginated: ActionButton { text: "下一页"; geometry-key: "group-pagination-next"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 8), ""); } }
             }
         }
 }

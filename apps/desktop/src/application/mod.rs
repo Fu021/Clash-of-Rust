@@ -71,7 +71,8 @@ fn startup_store() -> anyhow::Result<Store> {
 }
 
 const PAGE_SIZE: usize = 60;
-const GROUP_PAGE_SIZE: usize = 4;
+const GROUP_PAGE_SIZE: usize = 8;
+const GROUP_SEARCH_EXPANSION_LIMIT: usize = 4;
 
 fn last_page_offset(total: usize) -> usize {
     total.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE
@@ -3785,7 +3786,7 @@ mod dev2_tests {
             serde_json::from_value(serde_json::json!({"proxies":proxies})).unwrap();
         app.query = "node".into();
         drop(app.proxy_rows());
-        assert_eq!(app.proxy_order.borrow().len(), GROUP_PAGE_SIZE);
+        assert_eq!(app.proxy_order.borrow().len(), GROUP_SEARCH_EXPANSION_LIMIT);
         let old_pointer = app.proxy_order.borrow().values().next().unwrap().as_ptr();
         drop(app.proxy_rows());
         assert_eq!(
@@ -3797,7 +3798,7 @@ mod dev2_tests {
         assert!(app.group_offsets.is_empty());
         assert!(app.proxy_order.borrow().is_empty());
         drop(app.proxy_rows());
-        assert_eq!(app.proxy_order.borrow().len(), GROUP_PAGE_SIZE);
+        assert_eq!(app.proxy_order.borrow().len(), GROUP_SEARCH_EXPANSION_LIMIT);
         let _ = app.update(Message::Navigate(Page::Home));
         assert!(app.proxy_order.borrow().is_empty());
     }

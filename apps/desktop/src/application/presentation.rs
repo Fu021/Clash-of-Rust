@@ -91,7 +91,7 @@ impl App {
             visible.iter().enumerate().any(|(index, (group, _))| {
                 *group == name
                     && (self.expanded.contains(name.as_str())
-                        || (!query.is_empty() && index < GROUP_PAGE_SIZE))
+                        || (!query.is_empty() && index < GROUP_SEARCH_EXPANSION_LIMIT))
             })
         });
         let mut rows = Vec::with_capacity(visible.len());
@@ -100,7 +100,7 @@ impl App {
         for (index, &(group, proxy)) in visible.iter().enumerate() {
             let group_name = SharedString::from(group.shared());
             let expanded = self.expanded.contains(group.as_str())
-                || (!query.is_empty() && index < GROUP_PAGE_SIZE);
+                || (!query.is_empty() && index < GROUP_SEARCH_EXPANSION_LIMIT);
             let mut pairs = Vec::new();
             let mut count = 0;
             let mut start = 0;

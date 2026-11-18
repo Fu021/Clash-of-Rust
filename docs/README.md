@@ -49,8 +49,8 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 | 对比各平台更新、Geo、测速和跨用户 TUN 路径 | [网络链路与取证边界](network-paths.md) |
 | 理解特权运行数据、多用户授权和更新信任 | [本地权限与更新信任边界](security-boundaries.md) |
 | 排查无 IPv6、双栈与 TUN 地址族变化 | [IPv6 判定、保护与网络切换](ipv6-tun.md) |
-| 理解 GitHub 与私网的缓存分工 | [缓存覆盖](workflows/cache-coverage.md)、[保留白名单](workflows/cache-retention.md)、[服务边界与协议](workflows/cache-server.md) |
-| 对接 Ubuntu 20.04 预装测试环境镜像 | [镜像复用与测速及验收证据](workflows/prepared-vm-images.md)、[v1 对接约定及共用向量](workflows/prepared-vm-protocol.md) |
+| 理解构建缓存与附件的用途 | [GitHub Actions 缓存](workflows/cache-coverage.md) |
+| 查看固定发行版矩阵、官方云镜像及 DEB 验收 | [Ubuntu 兼容性验证](workflows/ubuntu-compatibility.md)；[Debian 兼容性验证](workflows/debian-compatibility.md) |
 
 资源受限的机器只做静态检查与必要预览，具体限制见[开发约束](../AGENTS.md#资源受限环境)。`dependency-audit.csv` 是历史核对快照；当前依赖与工具以源码声明、锁文件和[构建工具基线](../.github/build-versions.json)为准。
 

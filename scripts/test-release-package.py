@@ -18,6 +18,7 @@ from build_support import host_system, ROOT, bundle_directory, host_arch, run, s
 from workflow_artifacts import commit, verify_build
 from linux_apt import OPTIONS as APT_OPTIONS, install as install_packages
 from linux_apt import privileged as run_privileged_with_timeout
+from linux_compatibility_targets import UBUNTU_BASELINE
 
 
 GUEST_PACKAGE_CONFIG = """\
@@ -162,9 +163,13 @@ def linux_package_tests(package, tun_test, structure=True):
 
 def compatibility_dependencies():
     from ci_test_policy import extended_tests
-    from prepared_vm_environment import TEST_PACKAGES
-    if extended_tests() or os.environ.get('COR_LINUX_GUEST') == 'true':
+    from ubuntu_vm_environment import TEST_PACKAGES
+    if extended_tests():
         return list(TEST_PACKAGES)
+    if os.environ.get('COR_LINUX_GUEST') == 'true':
+        release = platform.freedesktop_os_release()
+        if (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', UBUNTU_BASELINE):
+            return list(TEST_PACKAGES)
     return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']
 
 
@@ -179,17 +184,17 @@ def compatibility_download_dependencies():
 def prepare_compatibility_environment():
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Compatibility preparation requires a disposable GitHub Actions runner')
-    if os.environ.get('COR_PREPARED_VM_VERIFIED') == 'true':
+    if os.environ.get('COR_UBUNTU_VM_FROZEN') == 'true':
         from build_inputs import manifest
-        from prepared_vm_environment import (
+        from ubuntu_vm_environment import (
             check_environment, frozen_environments, inspect_environment, verify_frozen,
         )
         value = manifest()
         frozen = frozen_environments(value or {}).get(host_arch())
         if not frozen or frozen.get('status') != 'frozen':
-            raise ValueError('Prepared VM lacks the frozen CI environment')
+            raise ValueError('Ubuntu guest lacks the frozen CI environment')
         verify_frozen(Path(os.environ['BUILD_INPUTS_DIR']), frozen, value['upstream']['linux'])
-        check_environment(inspect_environment(), None, frozen['lock'])
+        check_environment(inspect_environment(), frozen['lock'])
         return
     # The hosted image's Azure mirror can stall on package indices even after
     # falling back for InRelease. Use the official HTTPS mirrors consistently.
@@ -206,21 +211,22 @@ def prepare_compatibility_environment():
     install_packages(compatibility_dependencies(), package_timeout, no_recommends=True)
 
 
-def run_compatibility(expected=None):
+def run_compatibility(distribution, version, arch):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Compatibility tests require a disposable GitHub Actions runner')
+    release = platform.freedesktop_os_release()
+    actual = (release.get('ID'), release.get('VERSION_ID'), host_arch())
+    if actual != (distribution, version, arch):
+        raise ValueError(f'Compatibility test expected {(distribution, version, arch)}, got {actual}')
     packages = list((ROOT/'dist').glob('*.deb'))
     if len(packages) != 1:
         raise ValueError('Expected exactly one native Linux package')
-    if expected:
-        actual = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
-        if actual.get('ID', '').strip('"') != 'ubuntu' or actual.get('VERSION_ID', '').strip('"') != expected:
-            raise ValueError('Compatibility test distribution does not match '+expected)
     receipt = json.loads((ROOT/'dist/package-receipt.json').read_text())
     binary = ROOT/'target/linux-tun-test'
     if not binary.is_file():
         binary = ROOT/'dist/linux-tun-test'
-    if (receipt['commit'] != commit() or receipt['package'] != packages[0].name
+    if (receipt['commit'] != commit() or receipt['system'] != 'linux' or receipt['arch'] != arch
+        or receipt['tests_passed'] is not True or receipt['package'] != packages[0].name
         or receipt['sha256'] != sha256(packages[0])
         or receipt['linux_tun_test_sha256'] != sha256(binary)):
         raise ValueError('Compatibility inputs differ from the verified package/test binaries')
@@ -233,20 +239,25 @@ def run_compatibility(expected=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--linux-compat', '--ubuntu-latest', dest='linux_compat', action='store_true',
-                        help='Test a verified Linux package on the current Ubuntu installation')
+    parser.add_argument('--linux-compat', action='store_true',
+                        help='Test a verified Linux package on a specified distribution and architecture')
     parser.add_argument('--system', choices=('windows', 'linux', 'macos'))
     parser.add_argument('--arch', choices=('x64', 'arm64'))
     parser.add_argument('--build', type=Path)
     parser.add_argument('--ci-run-id', type=int)
-    parser.add_argument('--expect-ubuntu')
+    parser.add_argument('--expect-linux', nargs=2, metavar=('DISTRIBUTION', 'VERSION'))
+    parser.add_argument('--expect-arch', choices=('x64', 'arm64'))
     args = parser.parse_args()
     inputs = (args.system, args.arch, args.build, args.ci_run_id)
     if args.linux_compat:
         if any(value is not None for value in inputs):
             parser.error('--linux-compat does not accept packaging arguments')
-        run_compatibility(args.expect_ubuntu)
+        if args.expect_linux is None or args.expect_arch is None:
+            parser.error('--linux-compat requires --expect-linux and --expect-arch')
+        run_compatibility(*args.expect_linux, args.expect_arch)
         return
+    if args.expect_linux is not None or args.expect_arch is not None:
+        parser.error('--expect-linux and --expect-arch require --linux-compat')
     if any(value is None for value in inputs):
         parser.error('--system, --arch, --build and --ci-run-id are required for packaging')
     if (args.system, args.arch) != (host_system(), host_arch()):

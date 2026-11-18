@@ -73,7 +73,6 @@ Clash-of-Rust/
 ├── .github/
 │   ├── workflows/                 CI、发布、内存及 Android/Ubuntu 兼容验证
 │   ├── actions/                   工作流共用的下载与缓存操作
-│   ├── cache-server/              缓存服务运行配置；服务实现由另一仓库维护
 │   └── build-versions.json         工作流工具与资源版本基线
 ├── Cargo.toml / Cargo.lock        Rust workspace、包版本与已解析依赖
 ├── README.md                      项目概览、安装与使用入口

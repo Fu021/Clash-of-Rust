@@ -35,7 +35,6 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
       ci_run_id: ${{ steps.source.outputs.ci_run_id }}
       version: ${{ steps.source.outputs.version }}
-      tailscale: ${{ steps.tools.outputs.tailscale }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -72,7 +71,6 @@ jobs:
           run-id: ${{ steps.source.outputs.ci_run_id }}
           github-token: ${{ github.token }}
       - name: Reuse CI dependencies and tools unchanged
-        id: tools
         run: |
           python3 scripts/build_inputs.py apply
           python3 scripts/build_inputs.py packaging
@@ -85,7 +83,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -110,29 +107,6 @@ jobs:
           github-token: ${{ github.token }}
       - name: Apply the verified CI dependency snapshot
         run: python3 scripts/build_inputs.py apply
-      - name: Connect to private Android tool cache
-        id: tailnet
-        if: vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != ''
-        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
-        continue-on-error: true
-        timeout-minutes: 3
-        with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
-          tags: tag:github-action-cache
-          version: ${{ needs.resolve.outputs.tailscale }}
-          use-cache: 'false'
-          retry: '1'
-          timeout: 45s
-          args: --accept-dns=false
-          tailscaled-args: --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:19082
-      - name: Preserve host routing
-        if: steps.tailnet.outcome == 'success'
-        run: sudo -n tailscale set --accept-routes=false --accept-dns=false
-      - uses: ./.github/actions/upstream-cache
-        with:
-          url: ${{ steps.tailnet.outcome == 'success' && vars.LOCAL_CACHE_URL || '' }}
-          token: ${{ secrets.LOCAL_CACHE_TOKEN }}
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
         with:
           distribution: temurin
@@ -190,12 +164,6 @@ jobs:
           path: target/android-report
           if-no-files-found: warn
           retention-days: 3
-      - name: Preserve original download inventory
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: ./.github/actions/upstream-report
-        with:
-          name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
   publish:
     name: Publish verified release
     needs: [resolve, android]

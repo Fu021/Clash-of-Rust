@@ -1,12 +1,5 @@
 name: Ubuntu 20.04 original downloads
-description: Verify official archives and use the private original-file fallback on download failure
-inputs:
-  vm:
-    description: Also download the original cloud image
-    default: 'false'
-  download-originals:
-    description: Defer originals when the VM may restore a prepared private image
-    default: 'true'
+description: Set per-run download paths and verify official archives
 runs:
   using: composite
   steps:
@@ -14,18 +7,9 @@ runs:
       shell: bash
       env:
         COR_LINUX_TOOLS_DIR: ${{ runner.temp }}/cor-linux-tools
-        CACHE_VM: ${{ inputs.vm }}
       run: |
         echo "COR_LINUX_TOOLS_DIR=$COR_LINUX_TOOLS_DIR" >> "$GITHUB_ENV"
-        if [ "$CACHE_VM" = true ]; then
-          echo "COR_LINUX_APT_CACHE=$COR_LINUX_TOOLS_DIR/apt" >> "$GITHUB_ENV"
-        fi
+        echo "COR_LINUX_APT_CACHE=$RUNNER_TEMP/cor-host-apt" >> "$GITHUB_ENV"
     - name: Verify or download frozen original archives
-      if: inputs.download-originals == 'true'
       shell: bash
-      env:
-        CACHE_VM: ${{ inputs.vm }}
-      run: |
-        arguments=(cache-downloads)
-        if [ "$CACHE_VM" = true ]; then arguments+=(--vm); fi
-        timeout 900 python3 scripts/linux_ci.py "${arguments[@]}"
+      run: timeout 900 python3 scripts/linux_ci.py cache-downloads
