@@ -17,6 +17,8 @@ RELEASE_SUITES = ('android', 'ubuntu')
 WORKFLOWS = {suite: f'{suite}-compatibility.yml' for suite in ('android', *TARGETS)}
 REPORT_JOBS = {suite: 'Linux / Record compatibility' for suite in TARGETS}
 REPORT_JOBS['android'] = 'Record Android compatibility'
+CHECKS = {suite: ['system_proxy', 'tun'] for suite in WORKFLOWS}
+CHECKS['debian'] += ['desktop_gui', 'tui', 'cli', 'desktop_login', 'package_lifecycle']
 
 
 def matrix():
@@ -147,13 +149,13 @@ def record(client, suite, ci_run_id, output):
     check_jobs(client, run, suite, include_report=False)
     value = {'schema': 1, 'suite': suite, 'commit': source['commit'],
              'ci_run_id': ci_run_id, 'run_id': run_id, 'run_attempt': attempt,
-             'checks': ['system_proxy', 'tun'], 'inputs': source['inputs']}
+             'checks': CHECKS[suite], 'inputs': source['inputs']}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(value, indent=2) + '\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(summary).open('a') as stream:
-            stream.write(f'\n{suite}: basic proxy/TUN compatibility passed for CI {ci_run_id}, '
-                         f'commit `{source["commit"]}`. Screenshots do not replace these checks.\n')
+            stream.write(f'\n{suite}: {", ".join(value["checks"])} passed for CI {ci_run_id}, '
+                         f'commit `{source["commit"]}`.\n')
 
 
 def verified_suite(client, source_ci, suite, run_id=None):
@@ -207,7 +209,7 @@ def verified_suite(client, source_ci, suite, run_id=None):
     expected = {'schema': 1, 'suite': suite, 'commit': expected_commit,
                 'ci_run_id': source_ci['id'], 'run_id': run_id,
                 'run_attempt': run.get('run_attempt', 1),
-                'checks': ['system_proxy', 'tun'], 'inputs': source['inputs']}
+                'checks': CHECKS[suite], 'inputs': source['inputs']}
     if (not isinstance(receipt, dict)
             or any(type(receipt.get(key)) is not int
                    for key in ('schema', 'ci_run_id', 'run_id', 'run_attempt'))

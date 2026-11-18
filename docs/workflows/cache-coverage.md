@@ -11,7 +11,7 @@ CI 与 Memory Benchmark 使用 GitHub Actions Cache。`main` 每个用途及目�
 | CI | 桌面六平台与 Android 三 ABI 的 Rust 对象、Android 分 ABI 的 Go 对象、Ubuntu 20.04 两架构编译容器 | 分发依赖快照、已校验的 Go 源码、候选包及报告 |
 | Memory Benchmark | 各 profile 的 Linux x64 Rust 对象 | 复用冻结输入，保存本次基准的分片和报告 |
 | Android Compatibility | 无 | 复用 CI APK，SDK、模拟器及系统镜像来自 Google 官方源 |
-| Ubuntu Compatibility | 无 | 复用同提交候选 DEB，启动固定版本的 Canonical 官方镜像，20.04 复用冻结 APT 索引 |
+| Ubuntu Compatibility | 无 | 复用同提交候选 DEB，[须启动 VM 的目标](ubuntu-compatibility.md)使用 Canonical 官方镜像，20.04 复用冻结 APT 索引 |
 | Debian Compatibility | 无 | 复用同提交候选 DEB，启动固定版本的 Debian 官方镜像 |
 | Publish Release | 无 | 校验同提交候选包和两套兼容回执，公开模式增加 Android 签名和签名包复验 |
 | COSMIC Startup Investigation | 无 | 使用同提交候选 DEB 和 System76 官方镜像，保存诊断附件 |

@@ -28,10 +28,11 @@
 | `test-cli-update.py` | 隔离安装测试 | 仅在 Actions 的已安装 Linux 环境运行，以临时普通账户验证只读查询、无桌面的 sudo 拒绝、真实 dpkg 失败恢复、成功重装后的自动启动/保留关闭状态及 systemd 服务状态/归属，保存逐项结果。 |
 | `compatibility.py` | CLI / 模块 | 生成 Android 和 Linux 兼容矩阵，解析同提交成功 CI。`resolve --suite SUITE --run-id ID` 解析候选，`record` 绑定成功 job 及输入 id/name/digest。 |
 | `linux_compatibility_targets.py` | 模块 | 固定 Linux 发行版版本、架构和官方镜像摘要。矩阵与实际 VM 共享同一目标定义。 |
-| `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和原生内核兼容 VM。容器及 VM 运行在可丢弃 Actions 环境。 |
+| `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和 `verify` 兼容入口。兼容目标直接使用可丢弃的 Actions runner 或同架构 VM。 |
 | `ubuntu_vm_environment.py` | 共享模块 | 冻结 Ubuntu 双架构的官方 APT 计划与签名索引，在隔离 VM 中校验及安装。 |
 | `linux_apt.py` | 模块 | 限时安装系统依赖，按签名索引校验同次运行中已下载的 DEB。 |
 | `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证。 |
+| `linux_desktop_login.py` | 兼容 VM 内 CLI | Debian GDM/GNOME 实际登录、旧自启动迁移、托盘注册及窗口恢复。 |
 | `windows_ci.py` | 模块 | Windows 普通用户、服务、含空格和中文的自定义目录安装与更新，以及安装包/未压缩 EXE/DLL 的 Defender 验证；扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `macos_runner_network.py` | 共享模块 | 供 macOS 安装验收采集 runner 原生 DNS、路由与解析探针。 |

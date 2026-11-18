@@ -1,4 +1,4 @@
-"""Ubuntu 20.04 builds and native-kernel Linux package verification.
+"""Ubuntu 20.04 builds and Linux package verification.
 
 The host owns Actions credentials/caches. Only the source, Rust directories and
 explicit build inputs enter the disposable container; guests receive no tokens.
@@ -348,7 +348,7 @@ def baseline_report():
             'packages': subprocess.check_output(['dpkg-query', '-W', '-f=${Package}=${Version}\\n'], text=True).splitlines()}
 
 
-def wait_vm_ssh(process, command, timeout=600):
+def wait_vm_ssh(process, command, timeout=600, ready_command='true'):
     deadline = time.monotonic() + timeout
     while True:
         if process.poll() is not None:
@@ -357,7 +357,7 @@ def wait_vm_ssh(process, command, timeout=600):
         if remaining <= 0:
             raise TimeoutError('Linux VM did not become SSH-ready')
         try:
-            ready = subprocess.run([*command, 'true'], stdout=subprocess.DEVNULL,
+            ready = subprocess.run([*command, ready_command], stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, timeout=min(15, remaining))
         except subprocess.TimeoutExpired:
             ready = None
@@ -409,13 +409,6 @@ class VmGuest:
                    '-device', 'virtio-net-pci,netdev=net0']
         if architecture == 'aarch64':
             command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
-        elif target.uefi:
-            firmware = Path('/usr/share/OVMF')
-            code = firmware/'OVMF_CODE_4M.fd'
-            variables = directory/'OVMF_VARS.fd'
-            shutil.copyfile(firmware/'OVMF_VARS_4M.fd', variables)
-            command.extend(['-drive', f'if=pflash,unit=0,format=raw,readonly=on,file={code}',
-                            '-drive', f'if=pflash,unit=1,format=raw,file={variables}'])
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                     '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
@@ -428,7 +421,7 @@ class VmGuest:
                             'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
         from ci_test_policy import extended_tests, linux_user_tests
         self.environment += (
-            f'COR_CI_EXTENDED_TESTS={str(extended_tests()).lower()} '
+            f'COR_CI_EXTENDED_TESTS={str(extended_tests() or target.family == "debian").lower()} '
             f'COR_CI_LINUX_USER_TESTS={str(linux_user_tests()).lower()} ')
         try:
             self.console = (REPORT / ('vm-console-' + label + '.log')).open('w')
@@ -459,6 +452,17 @@ class VmGuest:
 
     def python(self, script, timeout=120):
         return guest_python(self.remote, self.environment, script, timeout)
+
+    def reboot(self):
+        previous_boot = self.output('cat /proc/sys/kernel/random/boot_id').strip()
+        self.remote('sudo systemd-run --on-active=2s /usr/bin/systemctl reboot', timeout=15)
+        self.close_ssh()
+        ready = ('boot_id=$(cat /proc/sys/kernel/random/boot_id) && '
+                 'test -n "$boot_id" && test "$boot_id" != ' + shlex.quote(previous_boot))
+        fresh_ssh = [self.ssh[0], '-o', 'ControlPath=none', *self.ssh[1:]]
+        wait_vm_ssh(self.process, fresh_ssh, ready_command=ready)
+        self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
+                    timeout=360)
 
     def stage(self, archive, python):
         started = time.monotonic()
@@ -502,10 +506,13 @@ class VmGuest:
         write_json(REPORT/'vm-guest-report-status.json', {'schema': 1, 'state': state})
 
 
-    def close(self):
+    def close_ssh(self):
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             subprocess.run([self.ssh[0], '-O', 'exit', *self.ssh[1:]], timeout=10,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def close(self):
+        self.close_ssh()
         if self.process and self.process.poll() is None:
             self.process.terminate()
             try:
@@ -559,16 +566,42 @@ def prepare_vm_guest(guest, directory, frozen=None):
             guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs')
 
 
+def fetch_compatibility_package(package_run_id, arch):
+    from workflow_artifacts import commit, fetch_package_inputs, release_module
+    module = release_module()
+    repo = module.repository()
+    client = module.GitHub(repo, module.credential(repo))
+    fetch_package_inputs(client, package_run_id, arch, ROOT, commit(), package_run_id)
+
+
+def compatibility_command(target, python):
+    return [python, 'scripts/test-release-package.py', '--linux-compat',
+            '--expect-linux', target.family, target.release, '--expect-arch', target.arch]
+
+
+def hosted_test(package_run_id, target):
+    started = time.monotonic()
+    result = {'distribution': target.family, 'version_id': target.release, 'arch': target.arch,
+              'execution': 'hosted', 'kernel': os.uname().release,
+              'runner': target.matrix_entry()['os'], 'runner_image': os.environ.get('ImageVersion'),
+              'success': False}
+    print(f'{target.distribution} {target.release} GitHub-hosted runner: {result["kernel"]}', flush=True)
+    try:
+        fetch_compatibility_package(package_run_id, target.arch)
+        environment = dict(os.environ)
+        environment.pop('GH_TOKEN', None)
+        environment.pop('GITHUB_TOKEN', None)
+        run(compatibility_command(target, sys.executable), env=environment, timeout=1500)
+        result['success'] = True
+    finally:
+        result['seconds'] = round(time.monotonic() - started, 3)
+        write_json(REPORT/'linux-runner.json', result)
+
+
 def fetch_vm_package(directory, package_run_id, timings):
     started = time.monotonic()
     try:
-        if package_run_id:
-            from workflow_artifacts import commit, fetch_package_inputs, release_module
-            module = release_module()
-            repo = module.repository()
-            client = module.GitHub(repo, module.credential(repo))
-            fetch_package_inputs(client, package_run_id, host_arch(), ROOT, commit(),
-                                 int(os.environ['CI_RUN_ID']))
+        fetch_compatibility_package(package_run_id, host_arch())
         with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
             for relative in ('dist', 'target/linux-tun-test'):
                 tar.add(ROOT/relative, arcname=relative)
@@ -593,28 +626,32 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
     finally:
         timings['package_transfer'] = round(time.monotonic() - started, 3)
     extra = 'COR_UBUNTU_VM_FROZEN=true ' if frozen else ''
-    target = guest.target
-    command = shlex.join(['/opt/cor-test-python/bin/python3', 'scripts/test-release-package.py',
-                          '--linux-compat', '--expect-linux', target.family, target.release,
-                          '--expect-arch', target.arch])
+    command = shlex.join(compatibility_command(guest.target, '/opt/cor-test-python/bin/python3'))
     started = time.monotonic()
     try:
         guest.remote(guest.environment + extra + command,
                      timeout=2400 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
+        if guest.target.family == 'debian':
+            for phase in ('prepare', 'first-login', 'background-login'):
+                if phase != 'prepare':
+                    guest.reboot()
+                guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
+                             'scripts/linux_desktop_login.py ' + phase, timeout=800)
+            guest.python("from pathlib import Path; import runpy; "
+                         "runpy.run_path('scripts/test-release-package.py')['debian_upgrade_and_uninstall']"
+                         "(next(Path('dist').glob('*.deb')).resolve())", timeout=900)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
 
-def vm_test(package_run_id=None, suite='ubuntu', release=BASELINE):
+def vm_test(package_run_id, target):
     overall_started = time.monotonic()
     timings = {}
-    require_actions()
     from build_inputs import manifest
     from ubuntu_vm_environment import PREPARATION_ERRORS, frozen_environments, verify_frozen
 
     REPORT.mkdir(parents=True, exist_ok=True)
-    architecture = host_arch()
-    target = target_for(suite, release, architecture)
+    architecture = target.arch
     linux = inputs()
     value = linux['architectures'][architecture]
     frozen = None
@@ -636,7 +673,7 @@ def vm_test(package_run_id=None, suite='ubuntu', release=BASELINE):
         timings['source_archive'] = round(time.monotonic() - phase_started, 3)
         guest = None
         result = {'distribution': target.family, 'version_id': target.release,
-                  'arch': architecture, 'success': False,
+                  'arch': architecture, 'execution': 'vm', 'success': False,
                   'source_archive_bytes': archive.stat().st_size,
                   'cloud_url': cloud['url'],
                   'cloud_' + target.digest_algorithm: cloud[target.digest_algorithm]}
@@ -687,16 +724,19 @@ def vm_test(package_run_id=None, suite='ubuntu', release=BASELINE):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('ci', 'package', 'vm', 'cache-keys', 'cache-downloads', 'cache-image'))
+    parser.add_argument('operation', choices=('ci', 'package', 'verify', 'cache-keys', 'cache-downloads', 'cache-image'))
     parser.add_argument('--vm', action='store_true', help='Include cloud image downloads')
-    parser.add_argument('--package-run-id', type=int, help='Prepare the VM before waiting for this run’s Linux package')
+    parser.add_argument('--package-run-id', type=int, help='Successful CI run that produced the candidate package')
     parser.add_argument('--suite', choices=tuple(TARGETS))
     parser.add_argument('--release')
+    parser.add_argument('--expect-arch', choices=('x64', 'arm64'))
     args, extra = parser.parse_known_args()
-    if args.package_run_id is not None and (args.operation != 'vm' or args.package_run_id <= 0):
-        parser.error('--package-run-id requires vm and a positive Actions run id')
-    if (args.suite is None) != (args.release is None) or (args.suite and args.operation != 'vm'):
-        parser.error('--suite and --release must be used together with vm')
+    verify_arguments = (args.package_run_id, args.suite, args.release, args.expect_arch)
+    if args.operation == 'verify':
+        if not all(verify_arguments) or args.package_run_id < 1 or extra:
+            parser.error('verify requires a positive --package-run-id, --suite, --release and --expect-arch')
+    elif any(value is not None for value in verify_arguments):
+        parser.error('--package-run-id, --suite, --release and --expect-arch require verify')
     if args.operation in ('cache-keys', 'cache-downloads'):
         if extra or (args.vm and args.operation != 'cache-downloads'):
             parser.error('Unexpected cache arguments')
@@ -716,10 +756,13 @@ def main():
         if (cache := os.environ.get('COR_LINUX_BUILD_CACHE')) and (output := os.environ.get('GITHUB_OUTPUT')):
             with Path(output).open('a') as stream:
                 stream.write('ready=' + str((Path(cache)/'image.json').is_file()).lower() + '\n')
-    elif args.operation == 'vm':
-        if extra:
-            parser.error('vm takes no additional arguments')
-        vm_test(args.package_run_id, args.suite or 'ubuntu', args.release or BASELINE)
+    elif args.operation == 'verify':
+        require_actions()
+        if host_arch() != args.expect_arch:
+            raise RuntimeError('Linux compatibility runner architecture mismatch')
+        target = target_for(args.suite, args.release, args.expect_arch)
+        verify = hosted_test if target.hosted else vm_test
+        verify(args.package_run_id, target)
     elif args.operation == 'ci':
         require_actions()
         run([sys.executable, ROOT/'scripts/prepare-resources.py',

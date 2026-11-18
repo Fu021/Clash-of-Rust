@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 
-from build_support import host_system, ROOT, bundle_directory, host_arch, run, sha256, write_json
+from build_support import download, host_system, ROOT, bundle_directory, host_arch, run, sha256, write_json
 from workflow_artifacts import commit, verify_build
 from linux_apt import OPTIONS as APT_OPTIONS, install as install_packages
 from linux_apt import privileged as run_privileged_with_timeout
@@ -30,6 +30,9 @@ path-exclude=/usr/share/info/*
 path-exclude=/usr/share/lintian/*
 """
 GUEST_MAN_DB_MARKER = '/var/lib/man-db/auto-update'
+PREVIOUS_DEB = 'Clash-of-Rust-0.7.2-linux-amd64.deb'
+PREVIOUS_DEB_URL = 'https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/' + PREVIOUS_DEB
+PREVIOUS_DEB_SHA256 = 'fac1162628914400446299d3bb22621cbc10a2c3b3aded03eec310458737c223'
 
 
 def prepare_guest_package_environment():
@@ -165,6 +168,9 @@ def compatibility_dependencies():
     from ci_test_policy import extended_tests
     from ubuntu_vm_environment import TEST_PACKAGES
     if extended_tests():
+        if platform.freedesktop_os_release().get('ID') == 'debian':
+            return ['mate-polkit' if package == 'policykit-1-gnome' else package
+                    for package in TEST_PACKAGES]
         return list(TEST_PACKAGES)
     if os.environ.get('COR_LINUX_GUEST') == 'true':
         release = platform.freedesktop_os_release()
@@ -198,17 +204,111 @@ def prepare_compatibility_environment():
         return
     # The hosted image's Azure mirror can stall on package indices even after
     # falling back for InRelease. Use the official HTTPS mirrors consistently.
-    for name, mirror in (('apt-mirrors.txt', 'https://archive.ubuntu.com/ubuntu/'),
-                         ('apt-mirrors-security.txt', 'https://security.ubuntu.com/ubuntu/')):
-        path = Path('/etc/apt')/name
-        if path.is_file():
-            run(['sudo', 'tee', path], input=mirror+'\n', text=True)
+    release = platform.freedesktop_os_release()
+    if release.get('ID') == 'ubuntu':
+        archive = 'https://archive.ubuntu.com/ubuntu/'
+        security = 'https://security.ubuntu.com/ubuntu/'
+        if host_arch() == 'arm64' and release.get('VERSION_ID') in ('20.04', '22.04', '24.04'):
+            archive = security = 'https://ports.ubuntu.com/ubuntu-ports/'
+        for name, mirror in (('apt-mirrors.txt', archive), ('apt-mirrors-security.txt', security)):
+            path = Path('/etc/apt')/name
+            if path.is_file():
+                run(['sudo', 'tee', path], input=mirror+'\n', text=True)
     prepare_guest_package_environment()
     if not os.environ.get('COR_LINUX_GUEST'):
         run_privileged_with_timeout(
             [*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
     package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
     install_packages(compatibility_dependencies(), package_timeout, no_recommends=True)
+
+
+def run_upgrade_cli(data, report, phase, *commands):
+    from linux_gui import process, wait_for
+
+    command = ['/usr/bin/cor', '--data-dir', data]
+    with (report/(phase+'-daemon.log')).open('w') as log:
+        with process([*command, 'run', '--no-core', '--quiet'], log) as daemon:
+            def ready():
+                if daemon.poll() is not None:
+                    raise RuntimeError('Upgrade fixture control daemon exited early')
+                try:
+                    endpoint = json.loads((data/'control.json').read_text())
+                except (FileNotFoundError, ValueError):
+                    return False
+                return endpoint.get('pid') == daemon.pid
+
+            wait_for('Upgrade fixture control endpoint did not start', ready)
+            results = []
+            for arguments in commands:
+                response = subprocess.check_output(
+                    [*command, '--json', *arguments], text=True, timeout=30)
+                results.append(json.loads(response)['data'])
+            return results
+
+
+def debian_upgrade_and_uninstall(package):
+    if os.geteuid() == 0 or os.environ.get('COR_LINUX_GUEST') != 'true':
+        raise RuntimeError('Debian installation lifecycle requires an ordinary user in a disposable VM')
+    report = ROOT/'target/linux-report/debian-lifecycle'
+    report.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='cor-debian-lifecycle-') as temporary:
+        directory = Path(temporary)
+        directory.chmod(0o755)
+        previous = directory/PREVIOUS_DEB
+        download(PREVIOUS_DEB_URL, previous, digest=PREVIOUS_DEB_SHA256)
+        candidate_version = subprocess.check_output(
+            ['dpkg-deb', '--field', package, 'Version'], text=True).strip()
+        run(['dpkg', '--compare-versions', '0.7.2', 'lt', candidate_version])
+        installed_version = ['dpkg-query', '--show', '--showformat=${Version}', 'clash-of-rust']
+        if subprocess.check_output(installed_version, text=True) != candidate_version:
+            raise RuntimeError('The clean installation did not install the candidate version')
+        purge = [*APT_OPTIONS, 'purge', '-y', 'clash-of-rust']
+        run_privileged_with_timeout(purge, 300)
+        install_packages([previous])
+        if subprocess.check_output(installed_version, text=True) != '0.7.2':
+            raise RuntimeError('Upgrade fixture is missing the previous installed version')
+        data = directory/'profile'
+        fixture = directory/'fixture.yaml'
+        fixture.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
+        profile_name = 'DEB upgrade fixture'
+        list_profile = ('profile', 'list', '--filter', profile_name)
+        _, _, profiles_before = run_upgrade_cli(
+            data, report, 'before', ('config', 'set', 'update_prereleases', 'true'),
+            ('profile', 'add', profile_name, fixture), list_profile)
+        if len(profiles_before) != 1:
+            raise RuntimeError('The previous installation could not save the upgrade fixture')
+        profile_file = data/'profiles'/f'{profiles_before[0]["id"]}.yaml'
+        profile_content = profile_file.read_bytes()
+
+        install_packages([package])
+        if subprocess.check_output(installed_version, text=True) != candidate_version:
+            raise RuntimeError('Debian upgrade did not install the candidate version')
+        settings, profiles_after = run_upgrade_cli(
+            data, report, 'after', ('config', 'get', 'update_prereleases'), list_profile)
+        if settings != {'update_prereleases': True}:
+            raise RuntimeError('Debian upgrade lost the saved update channel')
+        if [(profile['id'], profile['name']) for profile in profiles_after] != [
+            (profiles_before[0]['id'], profile_name),
+        ]:
+            raise RuntimeError('Debian upgrade lost the saved profile')
+        if profile_file.read_bytes() != profile_content:
+            raise RuntimeError('Debian upgrade changed the saved profile content')
+        user_files = [data/'settings.json', data/'profiles.json', profile_file]
+        contents = [path.read_bytes() for path in user_files]
+        run_privileged_with_timeout(purge, 300)
+        artifacts = ('/opt/clash-of-rust', '/usr/bin/cor', '/usr/bin/clash-of-rust',
+                     '/usr/share/applications/clash-of-rust.desktop',
+                     '/usr/share/polkit-1/actions/org.clashofrust.tun.policy')
+        if any(os.path.lexists(path) for path in artifacts):
+            raise RuntimeError('Debian uninstall left installed application files')
+        if [path.read_bytes() for path in user_files] != contents:
+            raise RuntimeError('Debian uninstall changed user data')
+        write_json(report/'result.json', {'previous_version': '0.7.2',
+                                         'previous_sha256': PREVIOUS_DEB_SHA256,
+                                         'installed_version': candidate_version,
+                                         'candidate_sha256': sha256(package),
+                                         'upgrade_preserved_settings_and_profile': True,
+                                         'uninstall_preserved_user_data': True})
 
 
 def run_compatibility(distribution, version, arch):
@@ -232,9 +332,11 @@ def run_compatibility(distribution, version, arch):
         raise ValueError('Compatibility inputs differ from the verified package/test binaries')
     binary.chmod(0o755)
     prepare_compatibility_environment()
-    # Package structure was tested in the native packaging job. This job tests
-    # its GUI, proxy and routing against this distribution, without repackaging.
     linux_package_tests(packages[0], binary, structure=False)
+    if distribution == 'debian':
+        from cli_tui import verify
+        installed = Path('/opt/clash-of-rust')
+        verify(installed/'cor', installed/'resources', ROOT/'target/linux-report/tui')
 
 
 def main():

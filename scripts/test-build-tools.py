@@ -274,6 +274,22 @@ class UbuntuVmTests(unittest.TestCase):
                 linux_ci.wait_vm_ssh(process, ['ssh', 'guest'])
             self.assertEqual(commands.call_count, 1)
 
+    def test_vm_reboot_checks_a_fresh_ssh_connection_and_rejects_the_previous_boot(self):
+        guest = object.__new__(linux_ci.VmGuest)
+        guest.ssh = ['ssh', '-o', 'ControlPath=existing', 'guest']
+        guest.process = MagicMock()
+        with patch.object(guest, 'output', return_value='previous-boot\n'), \
+                patch.object(guest, 'remote') as remote, \
+                patch.object(guest, 'close_ssh') as close, \
+                patch.object(linux_ci, 'wait_vm_ssh') as ready:
+            guest.reboot()
+        close.assert_called_once_with()
+        self.assertEqual(ready.call_args.args, (
+            guest.process, ['ssh', '-o', 'ControlPath=none', '-o', 'ControlPath=existing', 'guest']))
+        self.assertIn('test "$boot_id" != previous-boot', ready.call_args.kwargs['ready_command'])
+        self.assertIn('systemctl reboot', remote.call_args_list[0].args[0])
+        self.assertIn('cloud-init status --wait', remote.call_args_list[1].args[0])
+
     def test_guest_report_preserves_only_complete_generated_archives(self):
         for result, body, state in ((0, b'', 'not_generated'),
                                     (0, b'complete report', 'saved'),
@@ -327,6 +343,31 @@ class UbuntuVmTests(unittest.TestCase):
         guest.remote.assert_not_called()
         self.assertIn('package_remaining_wait', timings)
 
+    def test_debian_package_runs_boot_checks_before_upgrade_and_stops_on_login_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory/'package.tar.gz'
+            archive.touch()
+            for failed in (False, True):
+                with self.subTest(failed=failed), \
+                        patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                    guest = MagicMock(target=linux_ci.target_for('debian', '13', 'x64'),
+                                      environment='guest ', architecture='x86_64', kvm=True)
+                    if failed:
+                        guest.remote.side_effect = [None, None, None, RuntimeError('GDM did not open')]
+                        with self.assertRaisesRegex(RuntimeError, 'GDM did not open'):
+                            linux_ci.verify_vm_package(guest, directory, 123)
+                    else:
+                        linux_ci.verify_vm_package(guest, directory, 123)
+                    commands = [(method, args[0].split()[-1] if method == 'remote' else None)
+                                for method, args, _ in guest.method_calls]
+                    expected = [('remote', '~/cor-source'), ('remote', 'x64'),
+                                ('remote', 'prepare'), ('reboot', None), ('remote', 'first-login')]
+                    if not failed:
+                        expected.extend([('reboot', None), ('remote', 'background-login'), ('python', None)])
+                    self.assertEqual(commands, expected)
+                    self.assertEqual(guest.python.called, not failed)
+
     def test_vm_retries_frozen_apt_on_the_same_verified_public_image(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -343,7 +384,6 @@ class UbuntuVmTests(unittest.TestCase):
             with patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
                     patch.object(build_inputs, 'manifest', return_value=snapshot), \
                     patch.object(ubuntu_vm_environment, 'verify_frozen', return_value=True), \
-                    patch.object(linux_ci, 'require_actions'), \
                     patch.object(linux_ci, 'REPORT', root/'report'), \
                     patch.object(linux_ci, 'inputs', return_value=linux), \
                     patch.object(linux_ci, 'host_arch', return_value='arm64'), \
@@ -355,7 +395,7 @@ class UbuntuVmTests(unittest.TestCase):
                                  side_effect=[subprocess.CalledProcessError(1, 'apt'), None]) as prepare, \
                     patch.object(linux_ci, 'fetch_vm_package', return_value=root/'package.tar.gz') as package, \
                     patch.object(linux_ci, 'verify_vm_package') as application:
-                linux_ci.vm_test(123)
+                linux_ci.vm_test(123, linux_ci.target_for('ubuntu', '20.04', 'arm64'))
             self.assertEqual(download.call_args_list[0], call(public_image, base))
             self.assertEqual(download.call_count, 2)
             self.assertEqual([attempt.args[0] for attempt in boot.call_args_list], [base, base])
@@ -516,6 +556,28 @@ class UbuntuVmTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'frozen CI environment'):
                     release_package.prepare_compatibility_environment()
                 environments[arch]['status'] = 'frozen'
+
+    def test_runner_apt_mirrors_follow_the_target_ubuntu_archive(self):
+        archive = 'https://archive.ubuntu.com/ubuntu/\n'
+        security = 'https://security.ubuntu.com/ubuntu/\n'
+        ports = 'https://ports.ubuntu.com/ubuntu-ports/\n'
+        for distribution, version, arch, mirrors in (
+                ('ubuntu', '22.04', 'arm64', (ports, ports)),
+                ('ubuntu', '24.04', 'arm64', (ports, ports)),
+                ('ubuntu', '26.04', 'arm64', (archive, security)),
+                ('ubuntu', '24.04', 'x64', (archive, security)),
+                ('debian', '13', 'x64', ())):
+            release = {'ID': distribution, 'VERSION_ID': version}
+            with self.subTest(release=release, arch=arch), \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}, clear=True), \
+                    patch.object(release_package.platform, 'freedesktop_os_release', return_value=release), \
+                    patch.object(release_package, 'host_arch', return_value=arch), \
+                    patch.object(release_package.Path, 'is_file', return_value=True), \
+                    patch.object(release_package, 'run') as execute, \
+                    patch.object(release_package, 'run_privileged_with_timeout'), \
+                    patch.object(release_package, 'install_packages'):
+                release_package.prepare_compatibility_environment()
+                self.assertEqual(tuple(record.kwargs['input'] for record in execute.call_args_list), mirrors)
 
 
 class BuildTests(unittest.TestCase):
@@ -2285,8 +2347,10 @@ class BuildTests(unittest.TestCase):
                 ('false', '', 'ubuntu', '22.04'),
                 ('true', '', 'ubuntu', '22.04'),
                 ('false', 'true', 'ubuntu', '20.04'),
-                ('false', 'true', 'ubuntu', '26.10'),
-                ('false', 'true', 'debian', '13')):
+                ('false', '', 'ubuntu', '26.04'),
+                ('false', 'true', 'debian', '13'),
+                ('true', 'true', 'debian', '12'),
+                ('true', 'true', 'debian', '13')):
             with self.subTest(extended=extended, guest=guest, family=family, version=version), \
                     patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': extended, 'COR_LINUX_GUEST': guest}), \
                     patch.object(release_package.platform, 'freedesktop_os_release',
@@ -2295,7 +2359,10 @@ class BuildTests(unittest.TestCase):
                 self.assertTrue({'git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin'}
                                 .issubset(packages))
                 if extended == 'true' or version == '20.04':
-                    self.assertEqual(packages, list(ubuntu_vm_environment.TEST_PACKAGES))
+                    expected = list(ubuntu_vm_environment.TEST_PACKAGES)
+                    if family == 'debian':
+                        expected[expected.index('policykit-1-gnome')] = 'mate-polkit'
+                    self.assertEqual(packages, expected)
                 else:
                     self.assertTrue({'gnome-shell', 'openbox', 'xwayland', 'policykit-1-gnome'}
                                     .isdisjoint(packages))
@@ -6215,7 +6282,7 @@ class CompatibilityTests(unittest.TestCase):
                   for number, name in enumerate(compatibility.input_names(suite), 1)]
         receipt = {'schema': 1, 'suite': suite, 'commit': self.source_commit,
                    'ci_run_id': 123, 'run_id': 456, 'run_attempt': 2,
-                   'checks': ['system_proxy', 'tun'],
+                   'checks': compatibility.CHECKS[suite],
                    'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs]}
         receipt.update(receipt_changes or {})
         stream = io.BytesIO()
@@ -6285,6 +6352,11 @@ class CompatibilityTests(unittest.TestCase):
                     client, source, _ = self.client(suite, jobs=selected)
                     compatibility.verified_suite(client, source, suite)
 
+    def test_debian_completion_requires_the_full_suite_in_its_receipt(self):
+        client, source, _ = self.client('debian', receipt_changes={'checks': ['system_proxy', 'tun']})
+        with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
+            compatibility.verified_suite(client, source, 'debian')
+
     def test_record_accepts_its_own_running_job_and_binds_exact_ci_inputs(self):
         for suite in compatibility.WORKFLOWS:
             jobs = [{'name': name, 'status': 'completed', 'conclusion': 'success'}
@@ -6306,7 +6378,7 @@ class CompatibilityTests(unittest.TestCase):
         workflows = build.ROOT / '.github/workflows'
         shared = (workflows / 'linux-compatibility.yml').read_text()
         for suite, pairs in (
-                ('ubuntu', {(version, arch) for version in ('20.04', '22.04', '24.04', '26.04', '26.10')
+                ('ubuntu', {(version, arch) for version in ('20.04', '22.04', '24.04', '26.04')
                             for arch in ('x64', 'arm64')}),
                 ('debian', {('12', 'x64'), ('13', 'x64')})):
             wrapper = (workflows / compatibility.WORKFLOWS[suite]).read_text()
@@ -6315,6 +6387,12 @@ class CompatibilityTests(unittest.TestCase):
             self.assertEqual(len(matrix), len(pairs))
             self.assertEqual(len(compatibility.required_jobs(suite)), len(pairs) + 1)
             self.assertTrue(all('latest' not in entry['os'] for entry in matrix))
+            for entry in matrix:
+                direct = suite == 'ubuntu' and entry['release'] != '20.04'
+                runner_release = entry['release'] if direct else '24.04'
+                suffix = '-arm' if entry['arch'] == 'arm64' else ''
+                self.assertEqual(entry['os'], f'ubuntu-{runner_release}{suffix}')
+                self.assertEqual(bool(entry['qemu']), not direct)
             self.assertIn('workflow_dispatch:', wrapper)
             self.assertIn('name: Linux\n', wrapper)
             self.assertIn('uses: ./.github/workflows/linux-compatibility.yml', wrapper)
@@ -6323,6 +6401,33 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(compatibility.input_names('debian'),
                          ('package-linux-x64', 'linux-tun-test-x64', 'dependency-snapshot'))
         self.assertEqual(len(release.CI_JOBS), 12)
+
+    def test_hosted_compatibility_uses_verified_ci_package_and_no_guest(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GH_TOKEN': 'fixture-token',
+                                        'ImageVersion': 'fixture-image'}, clear=True), \
+                patch.object(sys, 'argv', ['linux_ci.py', 'verify', '--package-run-id', '123',
+                                          '--suite', 'ubuntu', '--release', '26.04',
+                                          '--expect-arch', 'arm64']), \
+                patch.object(linux_ci, 'require_actions'), \
+                patch.object(linux_ci, 'host_arch', return_value='arm64'), \
+                patch.object(linux_ci, 'REPORT', Path(temporary)), \
+                patch.object(linux_ci, 'fetch_compatibility_package') as fetch, \
+                patch.object(linux_ci, 'vm_test') as guest, \
+                patch.object(linux_ci.subprocess, 'run') as execute:
+            linux_ci.main()
+            report = json.loads((Path(temporary)/'linux-runner.json').read_text())
+        fetch.assert_called_once_with(123, 'arm64')
+        guest.assert_not_called()
+        execute.assert_called_once()
+        self.assertEqual(execute.call_args.args[0], [sys.executable, 'scripts/test-release-package.py',
+                                                    '--linux-compat', '--expect-linux', 'ubuntu', '26.04',
+                                                    '--expect-arch', 'arm64'])
+        self.assertNotIn('GH_TOKEN', execute.call_args.kwargs['env'])
+        self.assertEqual(report['kernel'], os.uname().release)
+        self.assertEqual(report['runner'], 'ubuntu-26.04-arm')
+        self.assertEqual(report['runner_image'], 'fixture-image')
+        self.assertTrue(report['success'])
 
 
 class ReleaseTests(unittest.TestCase):

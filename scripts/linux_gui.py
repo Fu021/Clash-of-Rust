@@ -9,6 +9,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import platform
 import secrets
 import shutil
 import signal
@@ -18,6 +19,7 @@ import tempfile
 import time
 
 from build_support import ROOT, run, write_json
+from cli_tui import Session
 
 APP = Path('/opt/clash-of-rust')
 REPORT = ROOT/'target/linux-report'
@@ -100,6 +102,8 @@ def authentication():
     dns_helper = APP/'libexec/resolvectl'
     before = (output(['getcap', launcher]), dns_helper.stat().st_mode & 0o7777)
     agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
+    if platform.freedesktop_os_release().get('ID') == 'debian':
+        agent = '/usr/libexec/polkit-mate-authentication-agent-1'
     with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log:
         with process([agent], log) as registered:
             for allow in (False, True):
@@ -145,15 +149,30 @@ def authentication():
             'production_action': ACTION, 'graphical_agent': True}
 
 
-def notifier():
+def notifier(session_output=output):
     try:
-        value = json.loads(output(['busctl', '--user', '--json=short', 'get-property',
-                                  'org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
-                                  'org.kde.StatusNotifierWatcher', 'RegisteredStatusNotifierItems']))
+        value = json.loads(session_output(['busctl', '--user', '--json=short', 'get-property',
+                                           'org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
+                                           'org.kde.StatusNotifierWatcher', 'RegisteredStatusNotifierItems']))
         entries = value['data']
         return entries[0] if len(entries) == 1 and isinstance(entries[0], list) else entries
     except (subprocess.SubprocessError, ValueError, KeyError):
         return []
+
+
+def owner_tray(pid, session_output=output):
+    for entry in notifier(session_output):
+        service, separator, suffix = entry.partition('/')
+        try:
+            response = session_output(['gdbus', 'call', '--session', '--dest', 'org.freedesktop.DBus',
+                                       '--object-path', '/org/freedesktop/DBus', '--method',
+                                       'org.freedesktop.DBus.GetConnectionUnixProcessID', service])
+            owner = ast.literal_eval(response.replace('uint32 ', ''))[0]
+        except subprocess.SubprocessError:
+            continue
+        if owner == pid:
+            return service, '/'+suffix if separator else '/StatusNotifierItem'
+    return None
 
 
 def window_script():
@@ -310,19 +329,13 @@ def gui(backend, report):
         if (len(processes) != 1 or next(iter(processes.values())) != owner.pid
                 or before.get('owner') != 'gui' or not before.get('running')):
             raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core')
-        def owner_tray():
-            for entry in notifier():
-                service, separator, suffix = entry.partition('/')
-                try:
-                    pid = ast.literal_eval(dbus('org.freedesktop.DBus', '/org/freedesktop/DBus',
-                                               'org.freedesktop.DBus.GetConnectionUnixProcessID', service)
-                                           .replace('uint32 ', ''))[0]
-                except subprocess.SubprocessError:
-                    continue
-                if pid == owner.pid:
-                    return service, '/'+suffix if separator else '/StatusNotifierItem'
-            return None
-        item = wait_for('GNOME did not register the GUI owner tray', owner_tray)
+        with Session([APP/'cor', 'ui'], env=env) as terminal:
+            terminal.wait('CLASH OF RUST')
+            terminal.send(terminal.page_key('订阅'))
+            terminal.wait('GUI fixture')
+            if core_processes() != processes:
+                raise RuntimeError('TUI did not share the existing GUI-owned core')
+        item = wait_for('GNOME did not register the GUI owner tray', lambda: owner_tray(owner.pid))
         # One graceful close and one renderer loss exercise different lifecycle
         # paths without repeating the proxy/TUN traffic suite.
         for crash in (False, True):
@@ -351,7 +364,8 @@ def gui(backend, report):
                 raise RuntimeError('Window reconstruction changed the core or CLI mode')
         cli('stop')
         return {'windows': windows, 'tray': True, 'graceful_close': True, 'renderer_crash': True,
-                'core_pid_preserved': True, 'cli_state_preserved': True}
+                'core_pid_preserved': True, 'cli_state_preserved': True,
+                'tui_reads_gui_profiles': True}
 
 
 def _renderer(path, owner):
@@ -447,7 +461,7 @@ def stage_session(directory):
     scripts = directory/'scripts'
     scripts.mkdir(mode=0o755)
     scripts.chmod(0o755)
-    for name in ('linux_gui.py', 'build_support.py'):
+    for name in ('linux_gui.py', 'build_support.py', 'cli_tui.py'):
         target = scripts/name
         shutil.copyfile(Path(__file__).resolve().parent/name, target)
         target.chmod(0o644)

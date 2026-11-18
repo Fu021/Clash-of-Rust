@@ -27,7 +27,7 @@ Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压
 | Windows x64 / ARM64 | 生成并扫描 EXE；使用含中文与空格的自定义目录验证实际安装、登记位置、服务注册、普通用户代理/TUN、卸载及用户文件保留。更新改动按需检查安装闸门及写入失败回滚；GUI 和服务异常退出归扩展测试。PE 图标、扫描版本和逐文件 SHA256 进入收据。 |
 | macOS Intel / Apple Silicon | 生成 DMG；核对版本、架构、资源及 ad-hoc 签名，并验证安装后代理/TUN；窗口和界面重建归扩展测试。界面辅助包使用独立身份及 `LSUIElement`；没有 Developer ID 与 Apple 公证。 |
 | Linux x64 / ARM64 | 同一份 DEB 先在 Ubuntu 20.04 构建容器安装，再在 Ubuntu 22.04 原生 runner 验证安装后的代理/TUN及授权；GUI 归扩展测试。 |
-| Ubuntu 固定版本 x64 / ARM64 | 独立 [Ubuntu Compatibility](ubuntu-compatibility.md) 复用成功 CI，在各版本真实内核 VM 安装并验证基础代理/TUN。20.04 仍校验 5.4 GA 内核。 |
+| Ubuntu 固定版本 x64 / ARM64 | 独立 [Ubuntu Compatibility](ubuntu-compatibility.md) 复用成功 CI，在对应版本的托管 runner 或 VM 上安装并验证基础代理/TUN。20.04 校验 5.4 GA 内核。 |
 | Debian 12 / 13 x64 | 独立 [Debian Compatibility](debian-compatibility.md) 复用成功 CI，在各版本官方镜像 VM 验证 DEB 安装与基础代理/TUN。 |
 | Android ARM64 / ARMv7 / x64 | 三种 ABI 候选 APK 核对签名、架构和 16 KiB 对齐；x64 在 Android 16 模拟器执行真实代理/TUN。ARM 实机、键盘与截图专项不因此冒充已验收。 |
 | Android 8.0～16 | 独立 [Android Compatibility](android-compatibility.md) 复用成功 CI 的 x64 APK，11 版本各验证基础代理/TUN；截图及诊断显式按需选择。 |
@@ -47,6 +47,19 @@ NSIS 的磁盘路径使用反斜杠，诊断中的相对文件名使用正斜杠
 Linux 发行版工作流均在成功 CI 后独立运行。候选包与测试程序必须属于所选 CI、完整提交及正确架构，重复、过期、摘要不符或生产 job 失败均终止。候选包通过 CI 原生安装验证后才上传 `package-linux-*`。发布时另核对 [兼容门禁](release.md#兼容性发布门禁)。
 
 Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 guest 只跳过无关文档索引，GUI 依赖仍随环境安装；窗口断言在扩展模式执行，见[测试环境边界](../agent-failures/test-environments.md#11-测试稳定性与外部环境假设)。
+
+## 新平台完整验收
+
+新增平台工作流首轮以各目标版本和架构的同提交候选包完成整套验收。桌面会话按平台实际支持的桌面、显示协议和托盘宿主选取代表组合，并在报告写明覆盖范围。
+
+| 范围 | 实际验收 |
+| --- | --- |
+| GUI 与普通用户授权 | 从已安装的菜单入口启动，验证窗口可用、关闭与重开、托盘注册、渲染进程异常后的恢复，以及授权取消和通过。 |
+| TUI、CLI、纯终端 | 在 PTY 验证 TUI 操作与退出，用 CLI 检查状态、设置和订阅。GUI、TUI 与 CLI 同时打开时检查后台、内核 PID 和持久化的一致性，再独立验证无桌面运行。 |
+| 登录自启动 | 在可丢弃系统启动后进入新的真实桌面会话，确认由会话自动执行已安装入口。核对旧入口迁移、注册到实际托盘宿主、后台窗口保持隐藏，并验证从托盘或应用菜单重开都复用原后台。报告保存启动前后会话、进程和托盘证据。 |
+| 系统网络及更新 | 测试代理/TUN、DNS 与退出恢复，验证干净安装、旧版升级、安装失败回退和卸载，逐项核对设置与订阅的保留。 |
+
+首轮目标报告记录失败或未执行项，所有目标通过后生成同提交回执。各平台的基础代理/TUN 验收可继续供日常检查，正式支持范围以完成整套验收的环境为准。
 
 ## 附件与证据
 

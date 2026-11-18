@@ -36,11 +36,11 @@ jobs:
           SOURCE_RUN: ${{ inputs.run_id }}
           SUITE: ${{ inputs.suite }}
         run: python3 scripts/compatibility.py resolve --suite "$SUITE" --run-id "$SOURCE_RUN"
-  guest:
+  installed:
     name: ${{ matrix.distribution }} ${{ matrix.release }}-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ matrix.qemu != '' && 120 || 30 }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -64,6 +64,7 @@ jobs:
       - name: Apply frozen inputs
         run: python3 scripts/build_inputs.py apply
       - name: Install virtual machine tools
+        if: matrix.qemu != ''
         shell: python
         env:
           QEMU_PACKAGES: ${{ matrix.qemu }}
@@ -79,26 +80,17 @@ jobs:
               subprocess.run(['sudo', 'chmod', 'a+rw', '/dev/kvm'], check=True)
           else:
               print('KVM is unavailable; keeping TCG software emulation.')
-      - name: Verify the installed CI candidate in a native-kernel VM
-        shell: python
+      - name: Verify the installed CI candidate on the target distribution
         env:
           GH_TOKEN: ${{ github.token }}
-          CI_RUN_ID: ${{ needs.resolve.outputs.ci_run_id }}
           SOURCE_RUN: ${{ needs.resolve.outputs.ci_run_id }}
           SUITE: ${{ inputs.suite }}
           RELEASE: ${{ matrix.release }}
           EXPECTED_ARCH: ${{ matrix.arch }}
           COR_LINUX_TOOLS_DIR: ${{ runner.temp }}/cor-linux-tools
-        run: |
-          import os, subprocess, sys
-          sys.path.insert(0, 'scripts')
-          from build_support import host_arch
-          if host_arch() != os.environ['EXPECTED_ARCH']:
-              raise RuntimeError('Linux compatibility runner architecture mismatch')
-          subprocess.run([sys.executable, 'scripts/linux_ci.py', 'vm',
-                          '--package-run-id', os.environ['SOURCE_RUN'],
-                          '--suite', os.environ['SUITE'], '--release', os.environ['RELEASE']],
-                         check=True)
+        run: >
+          python3 scripts/linux_ci.py verify --package-run-id "$SOURCE_RUN"
+          --suite "$SUITE" --release "$RELEASE" --expect-arch "$EXPECTED_ARCH"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always() && hashFiles('target/linux-report/**') != ''
         with:
@@ -108,7 +100,7 @@ jobs:
           retention-days: 3
   record:
     name: Record compatibility
-    needs: [resolve, guest]
+    needs: [resolve, installed]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

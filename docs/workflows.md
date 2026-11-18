@@ -6,8 +6,8 @@
 | [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 及两套兼容性回执；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 | [Android Compatibility](workflows/android-compatibility.md) | 手动；复用成功 CI 的 x64 APK，Android 8.0～16 基础代理/TUN，截图与诊断可选 | 状态和日志保留 7 天，发布回执保留 3 天 |
-| [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；固定 Ubuntu 版本的 x64／ARM64 原生内核 VM，验收同提交 DEB 的安装与代理/TUN | 小型报告及发布回执保留 3 天 |
-| [Debian Compatibility](workflows/debian-compatibility.md) | 手动；Debian 12 和 13 x64 的原生内核 VM，验收同提交 DEB 的安装与代理/TUN | 小型报告及兼容回执保留 3 天 |
+| [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；在固定版本的 x64／ARM64 托管 runner 或 Canonical 云镜像上验收同提交 DEB 的安装与代理/TUN | 小型报告及发布回执保留 3 天 |
+| [Debian Compatibility](workflows/debian-compatibility.md) | 手动；Debian 12 和 13 x64 的原生内核 VM，验收同提交 DEB 的安装生命周期、GUI/TUI/CLI、登录自启动与代理/TUN | 小型报告及兼容回执保留 3 天 |
 | [COSMIC Startup Investigation](workflows/cosmic-startup.md) | 手动诊断；官方 Pop!_OS live VM，核对旧自启动入口迁移、后台登录和手动打开 | JSON、原始截图与 VM 日志，保留 3 天 |
 
 普通 CI 共 12 个必需 job（共享输入 1、桌面 6、Android 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布需要同提交、同源 CI 的 Android 和 Ubuntu 兼容回执。Debian 是独立的平台验收。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 执行采样与缓存预算两个 job。依赖维护模式不作为发布来源。
