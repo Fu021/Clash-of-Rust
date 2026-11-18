@@ -55,15 +55,9 @@ async fn read(
     include_rules: bool,
 ) -> Result<Reply> {
     tokio::time::timeout(Duration::from_secs(4), async {
-        let Some(remote) = backend::connect(args, false).await? else {
+        let Some((remote, poll)) = backend::observed_snapshot(args, page.scope()).await? else {
             return Ok(Reply::Snapshot(None, None));
         };
-        let poll: Poll = remote
-            .request(Command::Snapshot {
-                scope: page.scope(),
-                header: true,
-            })
-            .await?;
         let shortcuts = if page == Page::Rules {
             catalog::read_shortcuts(&remote, &poll, cached, include_rules).await
         } else {

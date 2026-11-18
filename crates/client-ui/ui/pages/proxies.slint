@@ -1,4 +1,4 @@
-import { ListView as SlintListView } from "std-widgets.slint";
+import { VirtualPageList } from "../components/page-list.slint";
 import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
@@ -6,21 +6,6 @@ import { CardGrid } from "../components/card-grid.slint";
 import { PageViews, ViewToggle } from "../components/view-toggle.slint";
 import { GeometryTarget, UiGeometry } from "../components/geometry.slint";
 import { Label, Caption, Heading, Chevron, ContentPanel, ActionButton, Field, Select } from "../components/controls.slint";
-
-component ListView inherits SlintListView {
-    in property <string> content-key;
-    min-width: 0px; min-height: 0px; vertical-stretch: 1;
-    content-width: self.visible-width;
-    horizontal-scrollbar-policy: always-off;
-    property <length> bottom: min(0px, self.visible-height - self.content-height);
-    changed content-key => { self.content-y = 0px; }
-    changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
-    changed content-y => {
-        if self.content-y < self.bottom || self.content-y > 0px {
-            self.content-y = clamp(self.content-y, self.bottom, 0px);
-        }
-    }
-}
 
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
@@ -75,7 +60,7 @@ export component ProxiesPage inherits PageSurface {
                 Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
                 Select { geometry-key: "node-sort"; width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
             }
-            ListView {
+            VirtualPageList {
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.node-sort + "/" + (UiData.groups-paginated ? "paged" : "all");
                 content-y <=> UiData.scroll-proxies;
                 for group in UiData.groups: VerticalLayout {

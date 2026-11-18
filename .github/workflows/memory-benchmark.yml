@@ -34,9 +34,12 @@ env:
 permissions:
   contents: read
 jobs:
-  benchmark:
-    name: Linux x64 memory benchmark
+  prepare:
+    name: Prepare Linux x64 benchmark and measure API
     runs-on: ubuntu-22.04
+    outputs:
+      digest: ${{ steps.prepare.outputs.digest }}
+      shards: ${{ steps.prepare.outputs.shards }}
     permissions:
       contents: read
       id-token: write
@@ -153,7 +156,8 @@ jobs:
         uses: ./.github/actions/upstream-report
         with:
           checkpoint: 'true'
-      - name: Benchmark the selected source
+      - name: Prepare immutable inputs and measure API
+        id: prepare
         shell: python
         env:
           GH_TOKEN: ${{ github.token }}
@@ -164,9 +168,10 @@ jobs:
           SAMPLE_SECONDS: ${{ inputs.sample_seconds }}
         run: |
           import os, subprocess, sys
-          # The disposable renderer can be the only X client. Keep Xvfb alive
-          # across its exit rather than resetting the server during reopening.
-          command = ['dbus-run-session', '--', 'xvfb-run', '-a', '--server-args=-screen 0 1280x900x24 -noreset', sys.executable, 'scripts/run-memory-benchmark.py', '--source', 'source', '--profile', os.environ['BUILD_PROFILE'], '--workload', os.environ['BENCH_WORKLOAD'], '--repetitions', os.environ['BENCH_REPETITIONS'], '--seconds', os.environ['SAMPLE_SECONDS'], '--output', 'dist/memory']
+          command = [sys.executable, 'scripts/run-memory-benchmark.py', '--stage', 'prepare',
+                     '--source', 'source', '--profile', os.environ['BUILD_PROFILE'],
+                     '--workload', os.environ['BENCH_WORKLOAD'], '--repetitions', os.environ['BENCH_REPETITIONS'],
+                     '--seconds', os.environ['SAMPLE_SECONDS'], '--inputs', 'dist/inputs', '--output', 'dist/seed']
           if os.environ['BENCH_ROWS'].strip():
               command += ['--rows', os.environ['BENCH_ROWS']]
           subprocess.run(command, check=True)
@@ -179,11 +184,23 @@ jobs:
           from action_cache import allow_completed_compiler_cache
           allow_completed_compiler_cache('source')
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
         with:
-          name: memory-results-${{ github.run_id }}
-          path: dist/memory
-          if-no-files-found: warn
+          name: memory-inputs-${{ steps.prepare.outputs.digest }}
+          path: dist/inputs
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: memory-seed-${{ steps.prepare.outputs.digest }}
+          path: dist/seed
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: failure()
+        with:
+          name: memory-prepare-diagnostics-${{ github.run_attempt }}
+          path: dist/seed
+          if-no-files-found: ignore
           retention-days: 3
       - name: Preserve original download inventory
         if: ${{ !cancelled() }}
@@ -191,9 +208,92 @@ jobs:
         uses: ./.github/actions/upstream-report
         with:
           name: upstream-downloads-${{ github.job }}-${{ strategy.job-index || '0' }}
+  measure:
+    name: Measure ${{ matrix.shard }}
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ env.COR_PYTHON }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: memory-inputs-${{ needs.prepare.outputs.digest }}
+          path: dist/inputs
+      - name: Install measurement runtime
+        shell: python
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from linux_apt import OPTIONS, privileged, install
+          privileged([*OPTIONS, 'update'], 300)
+          install(['libfontconfig1', 'libfreetype6', 'libxkbcommon-x11-0', 'libwayland-client0',
+                   'libx11-xcb1', 'libxcursor1', 'libxrandr2', 'libxi6', 'libxinerama1', 'libegl1',
+                   'gsettings-desktop-schemas', 'dbus', 'xvfb', 'xauth', 'xdotool', 'python3-gi'])
+      - name: Sample isolated process lifecycles
+        env:
+          SHARD: ${{ matrix.shard }}
+          INPUT_DIGEST: ${{ needs.prepare.outputs.digest }}
+        run: >-
+          dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x900x24 -noreset"
+          python3 scripts/run-memory-benchmark.py --stage measure --inputs dist/inputs
+          --shard "$SHARD" --digest "$INPUT_DIGEST" --output dist/scene
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: memory-scene-${{ needs.prepare.outputs.digest }}-${{ matrix.shard }}
+          path: dist/scene
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: failure()
+        with:
+          name: memory-measure-diagnostics-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: dist/scene
+          if-no-files-found: ignore
+          retention-days: 3
+  report:
+    name: Verify and combine memory reports
+    needs: [prepare, measure]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ env.COR_PYTHON }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: memory-seed-${{ needs.prepare.outputs.digest }}
+          path: dist/memory
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: memory-scene-${{ needs.prepare.outputs.digest }}-*
+          path: dist/shards
+      - name: Verify source, inputs, identities and completeness
+        env:
+          INPUT_DIGEST: ${{ needs.prepare.outputs.digest }}
+        run: python3 scripts/run-memory-benchmark.py --stage merge --digest "$INPUT_DIGEST" --shards dist/shards --output dist/memory
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: memory-results-${{ github.run_id }}${{ github.run_attempt != '1' && format('-attempt-{0}', github.run_attempt) || '' }}
+          path: dist/memory
+          if-no-files-found: error
+          retention-days: 3
   cache_budget:
     name: Actions cache budget
-    needs: [benchmark]
+    needs: [prepare, measure, report]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

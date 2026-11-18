@@ -193,7 +193,7 @@ impl Editor {
 #[derive(Debug, Default)]
 pub struct State {
     pub document: Option<Arc<Document>>,
-    pub draft: ProfileRules,
+    pub draft: Arc<ProfileRules>,
     pub(super) saved: Arc<ProfileRules>,
     pub(super) rows: Vec<Row>,
     pub(super) warnings: Vec<String>,
@@ -212,7 +212,7 @@ impl State {
         self.editor.is_some()
     }
     pub fn dirty(&self) -> bool {
-        &self.draft != self.saved.as_ref()
+        !Arc::ptr_eq(&self.draft, &self.saved) && self.draft != self.saved
     }
     pub fn editor_modified(&self) -> bool {
         self.editor.as_ref().is_some_and(Editor::modified)
@@ -222,7 +222,7 @@ impl State {
     }
     pub fn load(&mut self, document: Arc<Document>, rules: Arc<ProfileRules>) {
         self.document = Some(document);
-        self.draft = rules.as_ref().clone();
+        self.draft = rules.clone();
         self.saved = rules;
         self.selected = None;
         self.editor = None;
@@ -241,6 +241,9 @@ impl State {
         }
     }
     pub fn release_document(&mut self) {
+        if !self.dirty() {
+            self.draft = self.saved.clone();
+        }
         self.document = None;
         self.rows = Vec::new();
         self.warnings = Vec::new();
@@ -275,7 +278,8 @@ impl State {
             if at != target {
                 let row = self.rows.remove(at);
                 self.rows.insert(target, row);
-                self.draft.order = self.rows.iter().map(|r| r.id.clone()).collect();
+                Arc::make_mut(&mut self.draft).order =
+                    self.rows.iter().map(|r| r.id.clone()).collect();
                 self.rebuild();
             }
         }
@@ -304,7 +308,7 @@ impl State {
         if enabled {
             rule_manager::ensure_unique_enabled(&self.rows, &rule.rule, Some(&key))?;
         }
-        self.draft
+        Arc::make_mut(&mut self.draft)
             .custom
             .iter_mut()
             .find(|rule| rule.id == id)
@@ -343,13 +347,13 @@ impl State {
             rule: raw,
             enabled: editor.enabled,
         };
-        if let Some(previous) = self.draft.custom.iter_mut().find(|r| r.id == id) {
-            *previous = custom;
+        if let Some(index) = self.draft.custom.iter().position(|rule| rule.id == id) {
+            Arc::make_mut(&mut self.draft).custom[index] = custom;
         } else {
             if self.draft.custom.len() >= 1000 {
                 anyhow::bail!("自定义规则不能超过 1000 条");
             }
-            self.draft.custom.push(custom);
+            Arc::make_mut(&mut self.draft).custom.push(custom);
         }
         self.selected = Some(format!("c:{id}"));
         self.rebuild();
@@ -401,7 +405,9 @@ impl App {
                     .as_ref()
                     .is_some_and(|d| !d.builtin && !d.included[index])
                 {
-                    state.draft.enabled[index] = enabled;
+                    if state.draft.enabled[index] != enabled {
+                        Arc::make_mut(&mut state.draft).enabled[index] = enabled;
+                    }
                     state.rebuild();
                 }
             }
@@ -422,8 +428,9 @@ impl App {
             }
             Event::Delete => {
                 if let Some(id) = state.selected_custom().map(|r| r.id.clone()) {
-                    state.draft.custom.retain(|r| r.id != id);
-                    state.draft.order.retain(|key| key != &format!("c:{id}"));
+                    let draft = Arc::make_mut(&mut state.draft);
+                    draft.custom.retain(|r| r.id != id);
+                    draft.order.retain(|key| key != &format!("c:{id}"));
                     state.rebuild();
                 }
             }
@@ -462,7 +469,9 @@ impl App {
                 state.move_open = false;
             }
             Event::Restore => {
-                state.draft.order.clear();
+                if !state.draft.order.is_empty() {
+                    Arc::make_mut(&mut state.draft).order.clear();
+                }
                 state.rebuild();
             }
             Event::Discard => {
@@ -476,7 +485,7 @@ impl App {
                 }
             }
             Event::DiscardConfirmed => {
-                state.draft = state.saved.as_ref().clone();
+                state.draft = state.saved.clone();
                 state.editor = None;
                 state.move_open = false;
                 state.rebuild();
@@ -488,7 +497,7 @@ impl App {
                 {
                     let action = Action::SaveRules(
                         doc.profile_id.clone(),
-                        state.draft.clone(),
+                        state.draft.as_ref().clone(),
                         state.saved.clone(),
                     );
                     return self.dispatch_scope(action, Scope::Rules);
@@ -596,16 +605,18 @@ mod tests {
     #[test]
     fn editing_is_a_draft_and_reordering_uses_full_list() {
         let mut state = state();
+        assert!(Arc::ptr_eq(&state.draft, &state.saved));
         state.editor = Some(Editor::new(None, 1));
         let e = state.editor.as_mut().unwrap();
         e.payload = "b.test".into();
         state.save_editor().unwrap();
         assert!(state.dirty());
+        assert!(!Arc::ptr_eq(&state.draft, &state.saved));
         assert_eq!(state.saved.custom.len(), 0);
         assert_eq!(state.rows[0].source, Source::Custom);
         state.move_selected(1);
         assert_eq!(state.rows[1].source, Source::Custom);
-        state.draft = state.saved.as_ref().clone();
+        state.draft = state.saved.clone();
         state.rebuild();
         assert!(!state.dirty());
         assert_eq!(state.rows.len(), 2);

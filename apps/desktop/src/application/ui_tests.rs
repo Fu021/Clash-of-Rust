@@ -3556,6 +3556,53 @@ fn all_proxy_groups_are_scrollable_without_mounting_every_group() {
 }
 
 #[test]
+fn subscription_pagination_preserves_access_to_the_last_profile_in_both_views() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let views = window.global::<clash_client_ui::PageViews>();
+    let mut app = fixture(Page::Profiles);
+    let template = app.profiles[0].clone();
+    app.profiles = (0..240)
+        .map(|index| {
+            let mut profile = template.clone();
+            profile.id = format!("profile-{index}");
+            profile.name = format!("Profile {index}");
+            profile
+        })
+        .collect();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 0);
+    assert_eq!(data.get_profiles().row_count(), PAGE_SIZE);
+    assert!(data.get_next());
+    click_target(&window, "profiles-pagination");
+    assert_eq!(
+        events.borrow_mut().pop(),
+        Some((Intent::ProfilePagination, "false".into(), "".into()))
+    );
+
+    app.settings.profiles_paginated = false;
+    app.list_offset = PAGE_SIZE;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_page_offset(), 0);
+    assert_eq!(data.get_profiles().row_count(), 240);
+    assert!(!data.get_next());
+    for list_view in [false, true] {
+        views.set_profiles_list(list_view);
+        motion_frame(&window, 0);
+        data.set_scroll_profiles(-100_000.);
+        motion_frame(&window, 0);
+        let bounds = target_bounds("profile:profile-239");
+        assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= 700.);
+    }
+    window.hide().unwrap();
+}
+
+#[test]
 fn console_rule_changes_update_clean_views_without_discarding_an_open_editor() {
     let mut app = fixture(Page::Rules);
     let mut reply = synchronized_reply(&app);

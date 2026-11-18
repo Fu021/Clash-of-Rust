@@ -27,6 +27,7 @@ pub(super) enum Action {
     UpdateInterval(u32),
     NodeSort(NodeSort),
     GroupPagination(bool),
+    ProfilePagination(bool),
     Import(String, String),
     EditProfile(String, String, String),
     RefreshTray,
@@ -56,6 +57,7 @@ impl Action {
                 | Self::TraySpeed(_)
                 | Self::NodeSort(_)
                 | Self::GroupPagination(_)
+                | Self::ProfilePagination(_)
                 | Self::LoadRules(_)
                 | Self::RefreshTray
                 | Self::OpenProfiles
@@ -403,6 +405,14 @@ pub(super) async fn execute(
                 };
                 engine.save_settings(settings).await?;
                 Ok("代理组显示方式已保存".into())
+            }
+            Action::ProfilePagination(profiles_paginated) => {
+                let settings = Settings {
+                    profiles_paginated,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("订阅显示方式已保存".into())
             }
             Action::DeleteProfile(id) => {
                 engine.delete_profile(&id).await?;

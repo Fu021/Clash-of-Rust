@@ -598,13 +598,23 @@ impl App {
                     contains_query(&profile.name, &query) || contains_query(&profile.source, &query)
                 })
                 .collect();
-            self.pager(data, profiles.len(), PAGE_SIZE);
+            let step = if self.settings.profiles_paginated {
+                PAGE_SIZE
+            } else {
+                profiles.len().max(1)
+            };
+            set!(
+                get_profiles_paginated,
+                set_profiles_paginated,
+                self.settings.profiles_paginated
+            );
+            self.pager(data, profiles.len(), step);
             reconcile(
                 &models.profiles,
                 profiles
                     .into_iter()
                     .skip(data.get_page_offset() as usize)
-                    .take(PAGE_SIZE)
+                    .take(step)
                     .map(|profile| ProfileItem {
                         id: profile.id.as_str().into(),
                         name: profile.name.as_str().into(),

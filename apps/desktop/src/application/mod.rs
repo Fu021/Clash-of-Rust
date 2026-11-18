@@ -196,6 +196,7 @@ enum Message {
     Query(String),
     NodeSort(NodeSort),
     GroupPagination(bool),
+    ProfilePagination(bool),
     ConnectionSort(ConnectionField),
     SiteCategory(CategoryFilter),
     SiteStatus(StatusFilter),
@@ -1349,6 +1350,10 @@ impl App {
                 self.list_offset = 0;
                 self.proxy_order.get_mut().clear();
                 return self.dispatch(Action::GroupPagination(paginated));
+            }
+            Message::ProfilePagination(paginated) => {
+                self.list_offset = 0;
+                return self.dispatch(Action::ProfilePagination(paginated));
             }
             Message::SiteCategory(category) => {
                 self.site_category = category;

@@ -13,6 +13,7 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
             | Intent::TraySpeed
             | Intent::NodeSort
             | Intent::GroupPagination
+            | Intent::ProfilePagination
             | Intent::WindowWidth
             | Intent::WindowHeight
             | Intent::ResetWindow
@@ -186,6 +187,7 @@ impl App {
             ),
             Intent::ToggleGroup => Message::ToggleGroup(a.into()),
             Intent::GroupPagination => Message::GroupPagination(boolean(a)),
+            Intent::ProfilePagination => Message::ProfilePagination(boolean(a)),
             Intent::GroupDelay => Message::GroupDelay(a.into()),
             Intent::GroupPage => Message::GroupPage(a.into(), boolean(b)),
             Intent::SelectNode => Message::Action(Action::Select(a.into(), b.into())),

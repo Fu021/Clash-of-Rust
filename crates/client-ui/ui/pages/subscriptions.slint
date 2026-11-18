@@ -1,8 +1,8 @@
 import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, ProfileItem } from "../state.slint";
-import { PageScroll, Label, Caption, ContentPanel, Panel, ActionButton, Badge, Field, Divider } from "../components/controls.slint";
-import { CardGrid } from "../components/card-grid.slint";
+import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Field } from "../components/controls.slint";
+import { VirtualPageList } from "../components/page-list.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 import { PageViews, ViewToggle } from "../components/view-toggle.slint";
 
@@ -88,9 +88,6 @@ export component SubscriptionsPage inherits PageSurface {
     motion-revision: PageViews.profiles-list ? 1 : 0;
     motion-enabled: Motion.layout-active;
     property <string> expanded-id;
-    PageScroll {
-        content-key: UiData.page-offset + "/" + UiData.query;
-        content-y <=> UiData.scroll-profiles;
         VerticalLayout {
             alignment: start; padding-right: 8px; spacing: 16px;
             Panel {
@@ -109,12 +106,13 @@ export component SubscriptionsPage inherits PageSurface {
             HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
                 Field { placeholder: "搜索名称或来源"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
             }
-            grid := CardGrid {
-                list-view: PageViews.profiles-list;
-                minimum-card-width: 288px;
-                available-width: root.width - Theme.content-gap;
+            grid := VirtualPageList {
+                content-key: UiData.page-offset + "/" + UiData.query + "/" + (UiData.profiles-paginated ? "paged" : "all");
+                content-y <=> UiData.scroll-profiles;
+                property <int> columns: PageViews.profiles-list ? 1 : max(1, floor((self.visible-width + Theme.page-gap) / (288px * Theme.text-scale + Theme.page-gap)));
                 for row in ceil(UiData.profiles.length / grid.columns): HorizontalLayout {
                     spacing: Theme.page-gap; cross-axis-alignment: start;
+                    padding-bottom: Theme.page-gap;
                     for column in grid.columns: VerticalLayout {
                         min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; alignment: start;
                         if row * grid.columns + column < UiData.profiles.length: ProfileCard {
@@ -129,9 +127,13 @@ export component SubscriptionsPage inherits PageSurface {
             if UiData.profiles.length == 0: ContentPanel { Caption { text: UiData.query != "" ? "没有匹配的订阅" : "导入订阅链接或本地 YAML 配置开始使用"; wrap: word-wrap; } }
             HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
                 Caption { text: UiData.page-status; }
-                ActionButton { text: "上一页"; quiet: true; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-                ActionButton { text: "下一页"; quiet: true; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+                ActionButton {
+                    geometry-key: "profiles-pagination"; quiet: true; compact: true;
+                    text: UiData.profiles-paginated ? "显示全部" : "分页显示";
+                    clicked => { UiActions.dispatch(Intent.profile-pagination, UiData.profiles-paginated ? "false" : "true", ""); }
+                }
+                if UiData.profiles-paginated: ActionButton { text: "上一页"; quiet: true; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                if UiData.profiles-paginated: ActionButton { text: "下一页"; quiet: true; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
             }
         }
-    }
 }

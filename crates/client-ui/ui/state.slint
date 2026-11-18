@@ -25,7 +25,7 @@ export enum Intent {
     update-interval-input, save-update-interval,
     check-update, install-update, cancel-update, open-release, update-prereleases,
     confirm, cancel-confirm, close-detail, copy, escape, focus-search, quit, rule-drop,
-    overview-refresh, overview-privacy, group-pagination,
+    overview-refresh, overview-privacy, group-pagination, profile-pagination,
 }
 export struct Choice { id: string, label: string }
 export struct DetailItem { label: string, value: string }
@@ -46,6 +46,7 @@ export struct CategoryPair { left: CategoryItem, right: CategoryItem }
 export global UiActions { callback dispatch(Intent, string, string); }
 export global UiData {
     in-out property <bool> groups-paginated;
+    in-out property <bool> profiles-paginated: true;
     in-out property <length> scroll-home;
     in-out property <length> scroll-proxies;
     in-out property <length> scroll-profiles;

@@ -19,13 +19,15 @@ import time
 import urllib.request
 import uuid
 
-from build_support import ROOT, write_json, core_directory, desktop_directory, package_version, desktop_cargo_scope
+from build_support import ROOT, write_json, core_directory, desktop_directory, package_version, desktop_cargo_scope, validate_resources
 from memory_desktop import TrayHost, close_window, wait_until
+from memory_lifecycle import comparisons, owner_pair, pagination_comparison
+import memory_shards
 
 
 WORKLOADS = {
-    'light': {'nodes': 100, 'groups': 5, 'rules': 1000, 'api_rows': 1000},
-    'stress': {'nodes': 2000, 'groups': 40, 'rules': 20000, 'api_rows': 50000},
+    'light': {'nodes': 100, 'groups': 5, 'rules': 1000, 'api_rows': 1000, 'profiles': 16},
+    'stress': {'nodes': 2000, 'groups': 40, 'rules': 20000, 'api_rows': 50000, 'profiles': 240},
 }
 
 
@@ -102,7 +104,7 @@ def search_center(window, env):
     return 380, sum(runs[0])//2
 
 
-def client_fixture(data, workload, rule_overrides=None):
+def client_fixture(data, workload, rule_overrides=None, pagination=None):
     env = dict(os.environ, GSETTINGS_BACKEND='memory', WINIT_UNIX_BACKEND='x11', WINIT_X11_SCALE_FACTOR='1')
     env.pop('WAYLAND_DISPLAY', None)
     (data/'profiles').mkdir()
@@ -117,10 +119,22 @@ def client_fixture(data, workload, rule_overrides=None):
                 'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'}
     if rule_overrides is not None:
         settings['rule_overrides'] = rule_overrides
+    if pagination is not None:
+        key, paginated, profiles_list = pagination
+        settings.update({key: paginated, 'subscription_update_interval_minutes': 0})
+        write_json(data/'window-state.json', {'width': 950, 'height': 700, 'profiles_list': profiles_list})
     write_json(data/'settings.json', settings)
     (data/'profiles'/f'{profile_id}.yaml').write_text(fixture(workload), encoding='utf-8')
-    write_json(data/'profiles.json', [{'id': profile_id, 'name': 'Memory workload', 'updated': 0,
-               'source': str(data/'profiles'/f'{profile_id}.yaml')}])
+    profiles = [{'id': profile_id, 'name': 'Memory workload', 'updated': 0,
+                 'source': str(data/'profiles'/f'{profile_id}.yaml')}]
+    if pagination is not None and key == 'profiles_paginated':
+        for index in range(1, WORKLOADS[workload]['profiles']):
+            identifier = str(uuid.UUID(int=index))
+            local = data/'profiles'/f'{identifier}.yaml'
+            local.write_text('rules:\n  - MATCH,DIRECT\n', encoding='utf-8')
+            profiles.append({'id': identifier, 'name': f'Memory profile {index:03}', 'updated': index,
+                             'source': str(local)})
+    write_json(data/'profiles.json', profiles)
     env['CLASH_OF_RUST_DATA_DIR'] = str(data)
     return env, controller_port
 
@@ -248,8 +262,9 @@ def mapping_private_peaks(snapshots):
     return peaks
 
 
-def measure_process(benchmark, pid, name, output, seconds, env, mode='app', frontend=None, on_tick=None):
-    time.sleep(3)
+def measure_process(benchmark, pid, name, output, seconds, env, mode='app', frontend=None, on_tick=None, settle_seconds=3):
+    if settle_seconds:
+        time.sleep(settle_seconds)
     samples_path = output/(name+'.jsonl')
     snapshots = []
     with (output/(name+'.txt')).open('x') as text:
@@ -308,6 +323,12 @@ def measure_process(benchmark, pid, name, output, seconds, env, mode='app', fron
     return rows
 
 
+def measure_closed(benchmark, pid, name, output, seconds, env, identity, mode='app'):
+    rows = measure_process(benchmark, pid, name, output, memory_shards.scene_seconds(name, seconds),
+                           env, mode=mode, settle_seconds=0)
+    owner_pair(rows, 'gui' if mode == 'app' else 'daemon', identity, closed=True)
+
+
 def owned_window(window, root_pid, env):
     try:
         pid = int(subprocess.check_output(['xdotool','getwindowpid',window],env=env,text=True).strip())
@@ -322,10 +343,42 @@ def owned_window(window, root_pid, env):
     return False
 
 
-def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False, rule_overrides=None, prefix='', workload='light', tray=None, expect_destroy=False):
+def renderer_running(pid):
+    for task in Path(f'/proc/{pid}/task').iterdir():
+        try:
+            children = (task/'children').read_text().split()
+        except FileNotFoundError:
+            continue
+        for child in children:
+            try:
+                if Path(os.readlink(f'/proc/{child}/exe')).name == 'clash-desktop-ui':
+                    return True
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+    return False
+
+
+def pagination_navigation(window, env, click, proxies):
+    row = 156 if proxies else 194
+    click(70, row)
+    subprocess.run(['xdotool', 'mousemove', '--window', window, '590', '500'], env=env, check=True)
+
+    def selected():
+        width, height, pixels = window_pixels(window, env)
+        if (width, height) != (950, 700):
+            raise RuntimeError('Unexpected pagination fixture window size')
+        offset = (row * width + 195) * 3
+        return pixels[offset:offset+3] == bytes((30, 30, 29))
+
+    wait_until(selected, 'pagination fixture navigation selection')
+
+
+def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False,
+               rule_overrides=None, prefix='', workload='light', tray=None, expect_destroy=False,
+               pagination=None):
     with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
         data = Path(directory)
-        env, controller_port = client_fixture(data, workload, rule_overrides)
+        env, controller_port = client_fixture(data, workload, rule_overrides, pagination)
         app = subprocess.Popen([str(executable)], env=env, stdout=log, stderr=log, start_new_session=True)
         try:
             for _ in range(90):
@@ -361,7 +414,7 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 return measure_process(benchmark, app.pid, prefix+name, output, seconds, env)
             if tray:
                 wait_until(lambda: tray.registered(app.pid), 'measured application tray registration')
-                before = measure('tray-open')
+
                 def visible_windows():
                     if app.poll() is not None:
                         raise RuntimeError('Close exited the GUI instead of retaining the tray')
@@ -384,6 +437,8 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                                               capture_output=True).returncode != 0
                     if expect_destroy:
                         wait_until(gone, 'native window destruction')
+                    if (executable.parent/'clash-desktop-ui').is_file():
+                        wait_until(lambda: not renderer_running(app.pid), 'renderer exit')
                     destroyed.append(gone())
 
                 reopen_times = []
@@ -396,37 +451,74 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                     window = visible_windows()[0]
                     reopen_times.append(round((time.monotonic()-started)*1000, 1))
 
+                if pagination is not None:
+                    key, paginated, profiles_list = pagination
+
+                    def visit():
+                        pagination_navigation(window, env, click, key == 'proxy_groups_paginated')
+
+                    def scroll(button='5'):
+                        subprocess.run(['xdotool', 'click', '--repeat', '480', '--delay', '1', button],
+                                       env=env, check=True)
+
+                    visit()
+                    identity = owner_pair(measure('visible'), 'gui')
+                    scroll()
+                    owner_pair(measure('scrolled'), 'gui', identity)
+                    close()
+                    measure_closed(benchmark, app.pid, prefix+'hidden', output, seconds, env, identity)
+                    for _ in range(20):
+                        reopen()
+                        visit()
+                        scroll('4')
+                        scroll()
+                        close()
+                    measure_closed(benchmark, app.pid, prefix+'cycles-hidden', output, seconds, env, identity)
+                    if not hidden() or not tray.registered(app.pid):
+                        raise RuntimeError('Tray or core unavailable after the pagination comparison')
+                    if json.loads((data/'settings.json').read_text()).get(key) is not paginated:
+                        raise RuntimeError('Pagination fixture setting changed during the measurement')
+                    if json.loads((data/'window-state.json').read_text()).get('profiles_list') is not profiles_list:
+                        raise RuntimeError('Subscription fixture view changed during the measurement')
+                    write_json(output/(prefix+'proof.json'), {
+                        'setting': key, 'paginated': paginated, 'profiles_list': profiles_list,
+                        'owner_and_core': identity, 'repeat_cycles': 20, 'native_window_destroyed': destroyed,
+                        'relaunch_to_visible_ms': reopen_times,
+                    })
+                    return
+
+                before = measure('tray-open')
+                identity = owner_pair(before, 'gui')
                 close()
-                after = measure('tray-hidden')
-                if any(p['role'] == 'renderer' for row in after for p in row['processes']):
-                    raise RuntimeError('Renderer is still alive after closing the window')
+                measure_closed(benchmark, app.pid, prefix+'tray-hidden', output, seconds, env, identity)
                 if not hidden():
                     raise RuntimeError('Client/core did not remain in the background during sampling')
                 reopen()
-                measure('tray-reopened')
+                owner_pair(measure('tray-reopened'), 'gui', identity)
                 click(70, 156)
                 subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', '--clearmodifiers', 'ctrl+f'], env=env, check=True)
                 time.sleep(.5)
                 subprocess.run(['xdotool', 'type', '--delay', '100', '--clearmodifiers', 'node-'], env=env, check=True)
-                measure('tray-search')
+                owner_pair(measure('tray-search'), 'gui', identity)
                 close()
-                measure('tray-search-hidden')
+                measure_closed(benchmark, app.pid, prefix+'tray-search-hidden', output, seconds, env, identity)
                 reopen()
-                measure('tray-search-reopened')
+                owner_pair(measure('tray-search-reopened'), 'gui', identity)
                 for _ in range(20):
                     close()
                     reopen()
                 final = measure('tray-after-cycles')
-                core_pids = lambda rows: {p['pid'] for row in rows for p in row['processes']
-                                          if p['role'] == 'core'}
-                if not (core_pids(before) == core_pids(after) == core_pids(final)):
-                    raise RuntimeError('Core restarted while closing/reopening the window')
+                owner_pair(final, 'gui', identity)
+                close()
+                measure_closed(benchmark, app.pid, prefix+'tray-after-cycles-hidden', output, seconds, env, identity)
+                if not hidden() or not tray.registered(app.pid):
+                    raise RuntimeError('Tray or core unavailable after the final close')
                 write_json(output/(prefix+'proof.json'), {
-                    'gui_pid': app.pid, 'core_pids': sorted(core_pids(final)),
+                    'gui_pid': app.pid, 'core_pids': [identity[1][0]], 'owner_and_core': identity,
                     'tray_registered': True, 'close_request': 'WM_DELETE_WINDOW',
                     'hidden_during_measurement': True, 'reopened': True,
                     'repeat_cycles': 20, 'native_window_destroyed': destroyed,
-                    'renderer_exit_verified': not any(p['role'] == 'renderer' for row in after for p in row['processes']),
+                    'renderer_exit_verified': True,
                     'relaunch_to_visible_ms': reopen_times,
                 })
                 return
@@ -479,8 +571,7 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
             identity = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
             wait_until(lambda: core_running(port), 'headless core readiness')
             baseline = measure_process(benchmark, pid, prefix+'headless', output, seconds, env, mode='daemon')
-            core_identity = {(process['pid'], process['start_time']) for process in baseline[-1]['processes']
-                             if process['role'] == 'core'}
+            pair = owner_pair(baseline, 'daemon', closed=True)
             if tui:
                 from cli_tui import Session
                 with Session([console, '--data-dir', data, '--resources', resources, 'ui'], env=env) as terminal:
@@ -508,18 +599,13 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
                         measured = measure_process(benchmark, pid, name, output, seconds, env,
                                                    mode='daemon', frontend=terminal.process.pid,
                                                    on_tick=lambda: terminal.pump(0))
-                        if any({(process['pid'], process['start_time']) for process in row['processes']
-                                if process['role'] == 'core'} != core_identity for row in measured):
-                            raise RuntimeError('TUI measurement restarted or replaced the core')
+                        owner_pair(measured, 'daemon', pair)
                         terminal_scenes.append(name)
                 current = json.loads((data/'control.json').read_text())
                 if current['pid'] != pid or not core_running(port):
                     raise RuntimeError('Closing TUI changed the daemon or stopped the core')
                 name = prefix+'tui-closed'
-                closed = measure_process(benchmark, pid, name, output, seconds, env, mode='daemon')
-                if any({(process['pid'], process['start_time']) for process in row['processes']
-                        if process['role'] == 'core'} != core_identity for row in closed):
-                    raise RuntimeError('Closing TUI restarted or replaced the core')
+                measure_closed(benchmark, pid, name, output, seconds, env, pair, mode='daemon')
                 terminal_scenes.append(name)
                 if tui_catalog:
                     with Session([console, '--data-dir', data, '--resources', resources, 'ui'], env=env) as terminal:
@@ -532,21 +618,35 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
                         reopened = measure_process(benchmark, pid, name, output, seconds, env,
                                                    mode='daemon', frontend=terminal.process.pid,
                                                    on_tick=lambda: terminal.pump(0))
+                        owner_pair(reopened, 'daemon', pair)
                         terminal_scenes.append(name)
                     name = prefix+'tui-reclosed'
-                    reclosed = measure_process(benchmark, pid, name, output, seconds, env, mode='daemon')
+                    measure_closed(benchmark, pid, name, output, seconds, env, pair, mode='daemon')
                     terminal_scenes.append(name)
                     if json.loads((data/'control.json').read_text())['pid'] != pid:
                         raise RuntimeError('Reopening TUI replaced the daemon')
-                    if any({(process['pid'], process['start_time']) for process in row['processes']
-                            if process['role'] == 'core'} != core_identity for row in reopened+reclosed):
-                        raise RuntimeError('Reopening TUI restarted or replaced the core')
+                for cycle in range(20):
+                    with Session([console, '--data-dir', data, '--resources', resources, 'ui'], env=env) as terminal:
+                        terminal.wait('参考线路')
+                        terminal.send(terminal.page_key('节点'))
+                        terminal.wait('group-0')
+                        if cycle == 19:
+                            name = prefix+'tui-after-cycles'
+                            measured = measure_process(benchmark, pid, name, output, seconds, env,
+                                                       mode='daemon', frontend=terminal.process.pid,
+                                                       on_tick=lambda: terminal.pump(0))
+                            owner_pair(measured, 'daemon', pair)
+                            terminal_scenes.append(name)
+                name = prefix+'tui-after-cycles-closed'
+                measure_closed(benchmark, pid, name, output, seconds, env, pair, mode='daemon')
+                terminal_scenes.append(name)
             if not core_running(port) or (data/'gui-session.json').exists():
                 raise RuntimeError('Headless measurement unexpectedly stopped or created a GUI')
             write_json(output/(prefix+'headless-proof.json'), {
                 'daemon_pid': pid, 'owner': endpoint['owner'], 'display': False,
                 'gui_session': False, 'core_running': True,
                 'tui_scenes': terminal_scenes, 'tui_closed_keeps_daemon': bool(tui),
+                'owner_and_core': pair,
             })
             return terminal_scenes
         finally:
@@ -638,6 +738,47 @@ def summarize(output, metadata):
                         if final is not None else 'unknown')
             lines.append(f"| {path.name.removesuffix('-mapping-peaks.json')} | {role} | {peak/1048576:.2f} | {retained} | {mapping['unavailable_samples']} |")
     lines += ['', 'Client GUI values include both the native host and all renderer processes when present. GUI peaks are observed at 250 ms intervals, not exact allocator peaks. RSS can count shared pages twice. Compare separate runs only with the same toolchain, build profile, inputs and environment. Core memory also varies independently of the Rust GUI.', '']
+    if metadata.get('shards') and metadata.get('capabilities', {}).get('cli') and metadata['capabilities']['slint']:
+        prefixes = ['background-'] + (['rules-background-'] if metadata.get('additional_gui_rules') else [])
+        deltas = comparisons(output, prefixes, read_scene)
+        write_json(output/'closed-residency.json', deltas)
+        lines += ['## Closed residency', '',
+                  '| Scene | Client PSS change on close (MiB) | Client PSS gap to pure CLI (MiB) | Core PSS gap (MiB) |',
+                  '| --- | ---: | ---: | ---: |']
+        for prefix, variant in deltas.items():
+            for name, pair in variant['pairs'].items():
+                change = pair['change_on_close']['client']['pss_bytes']['bytes'] / 1048576
+                client_gap = pair['gap_to_cli']['client']['pss_bytes']['bytes'] / 1048576
+                core_gap = pair['gap_to_cli']['core']['pss_bytes']['bytes'] / 1048576
+                lines.append(f'| {prefix}{name} | {change:+.2f} | {client_gap:+.2f} | {core_gap:+.2f} |')
+        lines += ['', 'Full RSS, PSS and USS differences and percentages are in `closed-residency.json`. '
+                  'The JSON records samples near 0, 10, 30 and 60 seconds from the start of closed sampling '
+                  'and includes final anonymous/heap and executable mappings. GUI and pure CLI run on separate shards.', '']
+    pages = memory_shards.pagination_cases(metadata.get('capabilities', {}))
+    if pages:
+        pagination = {page: pagination_comparison(output, 'pagination-' + page,
+                                                  memory_shards.PAGINATION_PHASES, read_scene)
+                      for page in pages}
+        write_json(output/'pagination-comparison.json', pagination)
+        lines += ['## Pagination comparison', '',
+                  '| Page | Phase | Paged client PSS (MiB) | All client PSS (MiB) | All minus paged (MiB) |',
+                  '| --- | --- | ---: | ---: | ---: |']
+        for page, phases in pagination.items():
+            for phase, metrics in phases.items():
+                paged = metrics['paged']['final']['client']['pss_bytes'] / 1048576
+                full = metrics['all']['final']['client']['pss_bytes'] / 1048576
+                lines.append(f'| {page} | {phase} | {paged:.2f} | {full:.2f} | {full-paged:+.2f} |')
+        lines += ['', 'Each pair uses freshly started clients with identical inputs on the same runner. '
+                  'Scrolling uses wheel events on the active page. Group pagination changes the outer group list. '
+                  'See `pagination-comparison.json` for final and peak RSS, PSS and USS, mapping deltas and percentages.', '']
+    if metadata.get('shards'):
+        lines += ['## Measurement durations', '', '| Step | Seconds |', '| --- | ---: |',
+                  f"| Prepare and API | {metadata['prepare_seconds']:.1f} |"]
+        for shard, receipt in metadata['shards'].items():
+            elapsed = datetime.datetime.fromisoformat(receipt['finished_at']) - datetime.datetime.fromisoformat(receipt['started_at'])
+            lines.append(f'| {shard} | {elapsed.total_seconds():.1f} |')
+        lines += [f"| Verify and combine | {metadata['combine_seconds']:.1f} |", '',
+                  'These timings cover the scripts. Use the Actions run and job timestamps for queue and workflow elapsed time.', '']
     report = '\n'.join(lines)
     (output/'README.md').write_text(report, encoding='utf-8')
     if os.environ.get('GITHUB_STEP_SUMMARY'):
@@ -645,23 +786,16 @@ def summarize(output, metadata):
             summary.write(report)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, required=True)
-    parser.add_argument('--profile', choices=('dev', 'release'), default='release')
-    parser.add_argument('--workload', choices=WORKLOADS, default='light',
-                        help='light: small subscription (default); stress: the original large fixture')
-    parser.add_argument('--rows', type=int, help='Override the selected workload\'s API row count')
-    parser.add_argument('--repetitions', type=int, default=3)
-    parser.add_argument('--seconds', type=int, default=10)
-    parser.add_argument('--output', type=Path, required=True)
-    args = parser.parse_args()
+def prepare(args, directory, output):
+    started = time.monotonic()
     counts = WORKLOADS[args.workload]
     if args.rows is None:
         args.rows = counts['api_rows']
     if not (1 <= args.rows <= 50000 and 1 <= args.repetitions <= 10 and 1 <= args.seconds <= 120):
         raise ValueError('Bounds: rows 1..50000, repetitions 1..10, GUI seconds 1..120')
-    source, output = args.source.resolve(strict=True), args.output.resolve()
+    source = args.source.resolve(strict=True)
+    bundle = directory / 'payload'
+    bundle.mkdir(parents=True, exist_ok=False)
     output.mkdir(parents=True, exist_ok=False)
     benchmark_source = core_directory()/'examples/memory_benchmark.rs'
     destination = core_directory(source)/'examples/memory_benchmark.rs'
@@ -699,59 +833,133 @@ def main():
     compiler_cache_checkpoint(source)
     subprocess.run([sys.executable, source/'scripts/prepare-resources.py', '--system', 'linux', '--arch', 'x64'], cwd=source, check=True)
     resources = source/'bundle/linux-x64/resources'
+    validate_resources(resources, 'linux')
     for name in ('core.json', 'geodata.json'):
         shutil.copy2(resources/name, output/name)
     metadata['resources'] = {name: json.loads((resources/name).read_text()) for name in ('core.json', 'geodata.json')}
     write_json(output/'metadata.json', metadata)
     target = source/'target'/('release' if args.profile == 'release' else 'debug')
-    bundle = source/'bundle/linux-x64'
+    shutil.copytree(resources, bundle/'resources')
     for name in ('clash-of-rust', 'clash-tun-launcher', *(['clash-desktop-ui'] if (source/'apps/desktop-ui/Cargo.toml').is_file() else [])):
         shutil.copy2(target/name, bundle/name)
-    benchmark = target/'examples/memory_benchmark'
+    benchmark = bundle/'memory_benchmark'
+    shutil.copy2(target/'examples/memory_benchmark', benchmark)
     with (output/'api.txt').open('x') as text:
         subprocess.run([str(benchmark), 'suite', str(args.rows), str(args.repetitions), str(output/'api.jsonl')],
                        cwd=source, stdout=text, check=True)
-    gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, slint_layout=slint_layout, workload=args.workload)
     settings_source = (core_directory(source)/'src/config/mod.rs' if desktop != source else source/'src/config.rs')
-    if 'pub rule_overrides:' in settings_source.read_text(encoding='utf-8'):
-        overrides = {'enabled': [True]*5}
-        gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds, modern_layout, slint_layout=slint_layout,
-                   rule_overrides=overrides, prefix='rules-', workload=args.workload)
-        metadata['additional_gui_rules'] = overrides
-        write_json(output/'metadata.json', metadata)
-    if slint_layout:
-        # Preserve the original visible-window scenarios without a tray host,
-        # so old baselines remain comparable. Measure normal tray use separately.
-        metadata['background_scenes'] = []
-        metadata['terminal_scenes'] = []
-        console = target/'cor'
-        has_cli = (source/'apps/cli/Cargo.toml').is_file()
-        if has_cli:
-            version = subprocess.check_output([str(console), '--json', 'version'], text=True)
-            if json.loads(version)['data']['version'] != metadata['version']:
-                raise ValueError('Headless executable differs from the selected source version')
-            shutil.copy2(console, bundle/'cor')
-        with TrayHost(output) as tray:
-            variants = [('background-', None)]
-            if metadata.get('additional_gui_rules'):
-                variants.append(('rules-background-', metadata['additional_gui_rules']))
-            for prefix, overrides in variants:
-                gui_scenes(bundle/'clash-of-rust', benchmark, output, args.seconds,
-                           modern_layout, slint_layout=True, rule_overrides=overrides,
-                           prefix=prefix, workload=args.workload, tray=tray,
-                           expect_destroy=any(marker in (desktop/'src/application/bindings.rs').read_text() for marker in ('fn retire_window(', 'struct Renderer')))
-                metadata['background_scenes'] += [prefix+name for name in ('tray-open', 'tray-hidden',
-                    'tray-reopened', 'tray-search', 'tray-search-hidden', 'tray-search-reopened', 'tray-after-cycles')]
-                if has_cli:
-                    metadata['terminal_scenes'] += headless_scene(
-                        bundle/'cor', resources, benchmark, output, args.seconds,
-                        args.workload, overrides, prefix,
-                        tui=(source/'apps/cli/src/tui/mod.rs').is_file(),
-                        native_settings=(source/'apps/cli/src/tui/settings.rs').is_file(),
-                        tui_catalog=(source/'apps/cli/src/tui/catalog.rs').is_file())
-                    metadata['background_scenes'].append(prefix+'headless')
-        write_json(output/'metadata.json', metadata)
+    tui_root = source/'apps/cli/src/tui'
+    capabilities = dict(modern=modern_layout, slint=slint_layout,
+                        cli=(source/'apps/cli/Cargo.toml').is_file(), tui=(tui_root/'mod.rs').is_file(),
+                        settings=(tui_root/'settings.rs').is_file(), catalog=(tui_root/'catalog.rs').is_file(),
+                        overrides='pub rule_overrides:' in settings_source.read_text(encoding='utf-8'),
+                        destroy=slint_layout and any(marker in (desktop/'src/application/bindings.rs').read_text()
+                                                     for marker in ('fn retire_window(', 'struct Renderer')))
+    pages = source/'crates/client-ui/ui/pages'
+    for kind, file, marker in (('group_pagination', 'proxies.slint', 'Intent.group-pagination'),
+                               ('profile_pagination', 'subscriptions.slint', 'Intent.profile-pagination')):
+        page = pages/file
+        capabilities[kind] = slint_layout and page.is_file() and marker in page.read_text()
+    if capabilities['cli']:
+        shutil.copy2(target/'cor', bundle/'cor')
+        version = subprocess.check_output([str(bundle/'cor'), '--json', 'version'], text=True)
+        if json.loads(version)['data']['version'] != metadata['version']:
+            raise ValueError('Headless executable differs from the selected source version')
+    metadata['capabilities'] = capabilities
+    if capabilities['overrides']:
+        metadata['additional_gui_rules'] = {'enabled': [True]*5}
+    if capabilities['profile_pagination']:
+        metadata['pagination_profiles'] = counts['profiles']
+    metadata['prepare_seconds'] = time.monotonic() - started
+    digest = memory_shards.freeze(directory, metadata, capabilities)
+    shutil.copy2(directory/'manifest.json', output/'manifest.json')
+    return digest
+
+
+def measure_shard(directory, output, shard, digest):
+    manifest = memory_shards.manifest_for(directory, digest)
+    capabilities, metadata = manifest['capabilities'], manifest['metadata']
+    if shard not in manifest['shards']:
+        raise ValueError('Unscheduled memory shard')
+    memory_shards.check_payload(directory, manifest)
+    output.mkdir(parents=True, exist_ok=False)
+    bundle = directory/'payload'
+    benchmark = bundle/'memory_benchmark'
+    prefix = 'rules-' if shard.startswith('rules-') else ''
+    overrides = metadata['additional_gui_rules'] if prefix else None
+    background = prefix+'background-'
+    seconds, workload = metadata['gui_sample_seconds'], metadata['workload']
+    started = datetime.datetime.now(datetime.timezone.utc)
+    if shard.startswith('pagination-'):
+        page = shard.removeprefix('pagination-')
+        setting, profiles_list = memory_shards.pagination_cases(capabilities)[page]
+        tray_output = output/'tray-hosts'/shard
+        tray_output.mkdir(parents=True)
+        with TrayHost(tray_output) as tray:
+            for mode in ('paged', 'all'):
+                gui_scenes(bundle/'clash-of-rust', benchmark, output, seconds, True, True,
+                           prefix=f'{shard}-{mode}-', workload=workload, tray=tray,
+                           expect_destroy=capabilities['destroy'], pagination=(setting, mode == 'paged', profiles_list))
+    elif shard.endswith('-cli'):
+        headless_scene(bundle/'cor', bundle/'resources', benchmark, output, seconds, workload, overrides,
+                       background, capabilities['tui'], capabilities['settings'], capabilities['catalog'])
+    else:
+        gui_scenes(bundle/'clash-of-rust', benchmark, output, seconds, capabilities['modern'],
+                   capabilities['slint'], overrides, prefix, workload)
+        if capabilities['slint']:
+            tray_output = output/'tray-hosts'/shard
+            tray_output.mkdir(parents=True)
+            with TrayHost(tray_output) as tray:
+                gui_scenes(bundle/'clash-of-rust', benchmark, output, seconds, capabilities['modern'],
+                           True, overrides, background, workload, tray, capabilities['destroy'])
+    write_json(output/'receipt.json', dict(shard=shard, digest=digest, scenes=manifest['shards'][shard],
+                                           runner=memory_shards.runner(), started_at=started.isoformat(),
+                                           finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat()))
+
+
+def merge(output, shards, digest):
+    started = time.monotonic()
+    manifest = memory_shards.manifest_for(output, digest)
+    metadata = memory_shards.combine(manifest, digest, shards, output, read_scene)
+    metadata['combine_seconds'] = time.monotonic() - started
+    write_json(output/'metadata.json', metadata)
     summarize(output, metadata)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--stage', choices=('all', 'prepare', 'measure', 'merge'), default='all')
+    parser.add_argument('--source', type=Path)
+    parser.add_argument('--inputs', type=Path)
+    parser.add_argument('--digest')
+    parser.add_argument('--shard')
+    parser.add_argument('--shards', type=Path)
+    parser.add_argument('--profile', choices=('dev', 'release'), default='release')
+    parser.add_argument('--workload', choices=WORKLOADS, default='light')
+    parser.add_argument('--rows', type=int)
+    parser.add_argument('--repetitions', type=int, default=3)
+    parser.add_argument('--seconds', type=int, default=10)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    output = args.output.resolve()
+    if args.stage in ('all', 'prepare') and not args.source:
+        parser.error('--source is required to prepare a benchmark')
+    if args.stage == 'all':
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            digest = prepare(args, directory/'inputs', output)
+            manifest = memory_shards.manifest_for(output, digest)
+            for shard in manifest['shards']:
+                measure_shard(directory/'inputs', directory/'shards'/f'memory-scene-{digest}-{shard}', shard, digest)
+            merge(output, directory/'shards', digest)
+    elif args.stage == 'prepare' and args.inputs:
+        prepare(args, args.inputs.resolve(), output)
+    elif args.stage == 'measure' and args.inputs and args.digest and args.shard:
+        measure_shard(args.inputs.resolve(), output, args.shard, args.digest)
+    elif args.stage == 'merge' and args.shards and args.digest:
+        merge(output, args.shards, args.digest)
+    else:
+        parser.error('Stage requires its input directory, digest and shard selection')
 
 
 if __name__ == '__main__':

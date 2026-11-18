@@ -2,7 +2,7 @@ use crate::args::Args;
 use anyhow::{Context, Result, bail, ensure};
 use clash_client_runtime::{
     config::Store,
-    control::{self, Command, Meta, Owner, Remote},
+    control::{self, Command, Meta, Owner, Poll, Remote},
     engine::{Engine, Scope},
 };
 use serde::de::DeserializeOwned;
@@ -43,6 +43,41 @@ pub fn timeout(args: &Args) -> Result<Duration> {
     Ok(Duration::from_secs(value as u64))
 }
 
+async fn reachable(store: &Store, remote: &Remote) -> Result<bool> {
+    match remote.request::<Meta>(Command::Meta).await {
+        Ok(_) => Ok(true),
+        Err(error) if owner_locked(store)? => {
+            Err(error.context(Unavailable("存活的后台暂时不可达，请先保留排障现场".into())))
+        }
+        Err(_) => Ok(false),
+    }
+}
+
+pub async fn observed_snapshot(args: &Args, scope: Scope) -> Result<Option<(Remote, Poll)>> {
+    let store = Store {
+        root: data_root(args)?,
+    };
+    let Some(remote) = Remote::discover(&store, timeout(args)?)? else {
+        return Ok(None);
+    };
+    match remote
+        .request(Command::Snapshot {
+            scope,
+            header: true,
+        })
+        .await
+    {
+        Ok(snapshot) => Ok(Some((remote, snapshot))),
+        Err(error) => {
+            if reachable(&store, &remote).await? {
+                Err(error)
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
 pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
     let store = if spawn {
         store(args)?
@@ -51,17 +86,10 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
             root: data_root(args)?,
         }
     };
-    if let Some(remote) = Remote::discover(&store, timeout(args)?)? {
-        match remote.request::<Meta>(Command::Meta).await {
-            Ok(_) => return Ok(Some(remote)),
-            Err(error) => {
-                if owner_locked(&store)? {
-                    return Err(
-                        error.context(Unavailable("存活的后台暂时不可达，请先保留排障现场".into()))
-                    );
-                }
-            }
-        }
+    if let Some(remote) = Remote::discover(&store, timeout(args)?)?
+        && reachable(&store, &remote).await?
+    {
+        return Ok(Some(remote));
     }
     if !spawn {
         return Ok(None);
@@ -326,6 +354,12 @@ mod tests {
         ])
         .unwrap();
         assert!(connect(&args, false).await.unwrap().is_none());
+        assert!(
+            observed_snapshot(&args, Scope::Other)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(!root.exists());
     }
 

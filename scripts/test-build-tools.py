@@ -3166,6 +3166,78 @@ Private_Clean: 2 kB
             sample(('daemon', 'core'))
             self.assertEqual(len(memory_benchmark.read_scene(path, seconds=10, role='daemon')), 1)
 
+    def test_memory_shard_accepts_pinned_action_single_artifact_layout(self):
+        shards = memory_benchmark.memory_shards
+        capabilities = dict(slint=False, cli=False, overrides=False)
+        prepared = dict(system='Linux', machine='x86_64', cpus=4, image='ubuntu22', image_version='one')
+        measured = dict(prepared, image_version='two')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = root/'inputs'
+            payload = inputs/'payload'
+            payload.mkdir(parents=True)
+            binary = payload/'binary'
+            binary.write_bytes(b'fixture')
+            binary.chmod(0o755)
+            with patch.object(shards, 'runner', return_value=prepared):
+                digest = shards.freeze(inputs, {'gui_sample_seconds': 1}, capabilities)
+            manifest = shards.manifest_for(inputs, digest)
+            binary.chmod(0o644)
+            with patch.object(shards, 'runner', return_value=measured):
+                shards.check_payload(inputs, manifest)
+            self.assertTrue(binary.stat().st_mode & 0o111)
+            with patch.object(shards, 'runner', return_value=dict(measured, cpus=2)):
+                with self.assertRaisesRegex(ValueError, 'CPU count'):
+                    shards.check_payload(inputs, manifest)
+            binary.write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'digest differs'):
+                shards.check_payload(inputs, manifest)
+
+            scenes = root/'single'
+            scenes.mkdir()
+            scene_names = manifest['shards']['plain-gui']
+            build.write_json(scenes/'receipt.json', {'shard': 'plain-gui', 'scenes': scene_names,
+                                                    'digest': digest, 'runner': measured})
+            owner = {'pid': 33, 'role': 'gui', 'start_time': 1}
+            kernel = {'pid': 34, 'role': 'core', 'start_time': 2}
+            rows = [{'elapsed_ms': elapsed, 'processes': [owner, kernel]} for elapsed in (1, 750)]
+            for name in scene_names:
+                (scenes/(name+'.jsonl')).write_text('\n'.join(map(json.dumps, rows)))
+                mapping = {'elapsed_ms': 750, 'roles': {'gui': {}, 'core': {}}, 'unavailable_processes': 0}
+                (scenes/(name+'-mapping-samples.jsonl')).write_text(json.dumps(mapping))
+                build.write_json(scenes/(name+'-mapping-peaks.json'), {'samples': 1, 'unavailable_samples': 0})
+                build.write_json(scenes/(name+'-mappings.json'), [owner, kernel])
+            output = root/'report'
+            metadata = shards.combine(manifest, digest, scenes, output, memory_benchmark.read_scene)
+            self.assertEqual(metadata['shards']['plain-gui']['runner']['image_version'], 'two')
+            self.assertTrue((output/'home.jsonl').is_file())
+            (scenes/'home.jsonl').unlink()
+            with self.assertRaisesRegex(ValueError, 'Incomplete or duplicate'):
+                shards.combine(manifest, digest, scenes, root/'incomplete', memory_benchmark.read_scene)
+
+    def test_memory_closed_samples_preserve_owner_core_and_exclude_frontend(self):
+        lifecycle = sys.modules['memory_lifecycle']
+        daemon = {'pid': 43, 'role': 'daemon', 'start_time': 1}
+        core = {'pid': 44, 'role': 'core', 'start_time': 2}
+        tui = {'pid': 45, 'role': 'tui', 'start_time': 3}
+        metrics = dict.fromkeys(lifecycle.METRICS, 1024)
+        baseline = {'processes': [daemon, core], 'daemon': metrics, 'core': metrics,
+                    'total': dict.fromkeys(lifecycle.METRICS, 2048)}
+        rows = [dict(baseline, elapsed_ms=value) for value in (3, 10_100, 29_800, 60_150)]
+        owner = lifecycle.owner_pair(rows, 'daemon', closed=True)
+        self.assertEqual(owner, [(43, 1), (44, 2)])
+        with self.assertRaisesRegex(ValueError, 'Frontend survived'):
+            lifecycle.owner_pair([dict(baseline, processes=[daemon, core, tui])], 'daemon', owner, True)
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            lifecycle.owner_pair([dict(baseline, processes=[daemon, dict(core, start_time=9)])],
+                                 'daemon', owner, True)
+        pure_cli = lifecycle.readings(baseline, 'daemon')
+        checkpoints = lifecycle.checkpoints(rows, 'daemon', pure_cli)
+        self.assertEqual(checkpoints['60']['elapsed_ms'], 60_150)
+        self.assertEqual(checkpoints['60']['gap_to_cli']['client']['pss_bytes']['bytes'], 0)
+        with self.assertRaisesRegex(ValueError, '60 seconds'):
+            lifecycle.checkpoints(rows[:-1], 'daemon', pure_cli)
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
