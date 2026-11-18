@@ -21,8 +21,8 @@ use tokio::{
 };
 
 const CONTROL_SLOTS: u32 = 4;
-const LARGE_SNAPSHOT_BYTES: usize = 128 * 1024;
-const SNAPSHOT_IDLE_DELAY: Duration = Duration::from_secs(3);
+const LARGE_VIEW_BYTES: usize = 128 * 1024;
+const VIEW_IDLE_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Endpoint {
@@ -263,7 +263,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
         let reclaim = (cfg!(all(target_os = "linux", target_env = "gnu"))
             && owner == Owner::Daemon)
             .then(|| Arc::new(Notify::new()));
-        let idle_timer = tokio::time::sleep(SNAPSHOT_IDLE_DELAY);
+        let idle_timer = tokio::time::sleep(VIEW_IDLE_DELAY);
         tokio::pin!(idle_timer);
         let mut reclaim_pending = false;
         loop {
@@ -277,7 +277,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                     }
                 } => {
                     reclaim_pending = true;
-                    idle_timer.as_mut().reset(Instant::now() + SNAPSHOT_IDLE_DELAY);
+                    idle_timer.as_mut().reset(Instant::now() + VIEW_IDLE_DELAY);
                     continue;
                 }
                 _ = &mut idle_timer, if reclaim_pending => {
@@ -285,7 +285,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         crate::platform::memory::release_unused_heap();
                         reclaim_pending = false;
                     } else {
-                        idle_timer.as_mut().reset(Instant::now() + SNAPSHOT_IDLE_DELAY);
+                        idle_timer.as_mut().reset(Instant::now() + VIEW_IDLE_DELAY);
                     }
                     continue;
                 }
@@ -321,6 +321,10 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                 let Some(engine) = weak.upgrade() else {
                     return;
                 };
+                let view_request = matches!(
+                    &operation,
+                    Command::Snapshot { .. } | Command::RuleDocument { .. }
+                );
                 let (result, disconnected) = if matches!(
                     &operation,
                     Command::GeoUpdate
@@ -364,11 +368,10 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         }
                     }
                 };
-                let snapshot = matches!(&reply.result, Payload::Snapshot(_));
                 let bytes = serde_json::to_vec(&reply);
                 drop(reply);
                 if let Ok(mut bytes) = bytes {
-                    let large_snapshot = snapshot && bytes.len() >= LARGE_SNAPSHOT_BYTES;
+                    let large_view = view_request && bytes.len() >= LARGE_VIEW_BYTES;
                     if bytes.len() > RESPONSE_LIMIT {
                         bytes = serde_json::to_vec(&Reply {
                             result: Value::Null,
@@ -380,7 +383,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                     let _ = stream.write_all(&bytes).await;
                     let _ = stream.shutdown().await;
                     drop(bytes);
-                    if large_snapshot && let Some(reclaim) = &reclaim {
+                    if large_view && let Some(reclaim) = &reclaim {
                         reclaim.notify_one();
                     }
                 }

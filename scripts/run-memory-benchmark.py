@@ -358,6 +358,20 @@ def renderer_running(pid):
     return False
 
 
+def subscription_rows_visible(width, pixels):
+    for top in (280, 380):
+        bright = 0
+        for vertical in range(top, top + 64):
+            line = pixels[(vertical * width + 260) * 3:(vertical * width + 650) * 3]
+            bright += sum(min(red, green, blue) >= 140
+                          for red, green, blue in zip(line[0::3], line[1::3], line[2::3]))
+            if bright >= 32:
+                break
+        else:
+            return False
+    return True
+
+
 def pagination_navigation(window, env, click, proxies):
     row = 156 if proxies else 194
     click(70, row)
@@ -368,9 +382,10 @@ def pagination_navigation(window, env, click, proxies):
         if (width, height) != (950, 700):
             raise RuntimeError('Unexpected pagination fixture window size')
         offset = (row * width + 195) * 3
-        return pixels[offset:offset+3] == bytes((30, 30, 29))
+        return (pixels[offset:offset+3] == bytes((30, 30, 29))
+                and (proxies or subscription_rows_visible(width, pixels)))
 
-    wait_until(selected, 'pagination fixture navigation selection')
+    wait_until(selected, 'pagination fixture navigation and visible list content')
 
 
 def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False,

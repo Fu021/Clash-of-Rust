@@ -3607,7 +3607,16 @@ fn subscription_pagination_preserves_access_to_the_last_profile_in_both_views() 
         let geometry = window.global::<UiGeometry>();
         geometry.set_revision(geometry.get_revision().wrapping_add(1));
         views.set_profiles_list(list_view);
+        data.set_scroll_profiles(0.);
         motion_frame(&window, 0);
+        let first = target_bounds("profile:profile-0");
+        let footer = target_bounds("profiles-pagination");
+        assert!(first[1] + first[3] <= footer[1], "{first:?}, {footer:?}");
+        click_target(&window, "profile-use:profile-0");
+        assert_eq!(
+            events.borrow_mut().pop(),
+            Some((Intent::ActivateProfile, "profile-0".into(), "".into()))
+        );
         let mounted = TARGETS.with(|targets| {
             targets
                 .borrow()
@@ -3619,7 +3628,7 @@ fn subscription_pagination_preserves_access_to_the_last_profile_in_both_views() 
         data.set_scroll_profiles(-100_000.);
         motion_frame(&window, 0);
         let bounds = target_bounds("profile:profile-239");
-        assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= 700.);
+        assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= footer[1]);
     }
     window.hide().unwrap();
 }

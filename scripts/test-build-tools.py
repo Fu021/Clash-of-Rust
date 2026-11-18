@@ -2278,6 +2278,7 @@ class BuildTests(unittest.TestCase):
         clippy = next(command for command in commands if command[1] == 'clippy')
         self.assertIn('--all-targets', clippy)
         ui_checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        self.assertTrue(any('control::transport::tests::' in command for command in ui_checks))
         self.assertTrue(any('application::ui_tests::resizing_a_node_grid_preserves_odd_tail_nodes_and_their_own_actions'
                             in command for command in ui_checks))
         self.assertTrue(any('application::ui_tests::shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release'
@@ -2324,6 +2325,7 @@ class BuildTests(unittest.TestCase):
                 'application::ui_tests::proxy_groups_default_to_all_and_keep_independent_node_pagination',
                 'application::ui_tests::group_pagination_button_dispatches_while_protected_and_tracks_saved_state',
                 'application::ui_tests::all_proxy_groups_are_scrollable_without_mounting_every_group',
+                'application::ui_tests::subscription_pagination_preserves_access_to_the_last_profile_in_both_views',
                 'application::dev2_tests::old_settings_receive_default_sort_and_new_preferences_round_trip',
                 'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             self.assertTrue(any(case in command for command in focused), case)
@@ -3165,6 +3167,17 @@ Private_Clean: 2 kB
                 memory_benchmark.read_scene(path, seconds=10, role='daemon')
             sample(('daemon', 'core'))
             self.assertEqual(len(memory_benchmark.read_scene(path, seconds=10, role='daemon')), 1)
+
+    def test_memory_subscription_fixture_rejects_blank_or_single_band(self):
+        width = 950
+        pixels = bytearray(width * 700 * 3)
+        start = (194 * width + 195) * 3
+        pixels[start:start+3] = bytes((30, 30, 29))
+        self.assertFalse(memory_benchmark.subscription_rows_visible(width, pixels))
+        for vertical in (310, 410):
+            start = (vertical * width + 330) * 3
+            pixels[start:start+96] = bytes([180]) * 96
+            self.assertEqual(memory_benchmark.subscription_rows_visible(width, pixels), vertical == 410)
 
     def test_memory_shard_accepts_pinned_action_single_artifact_layout(self):
         shards = memory_benchmark.memory_shards

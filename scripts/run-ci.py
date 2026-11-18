@@ -89,6 +89,7 @@ def main():
                      'application::ui_tests::proxy_groups_default_to_all_and_keep_independent_node_pagination',
                      'application::ui_tests::group_pagination_button_dispatches_while_protected_and_tracks_saved_state',
                      'application::ui_tests::all_proxy_groups_are_scrollable_without_mounting_every_group',
+                     'application::ui_tests::subscription_pagination_preserves_access_to_the_last_profile_in_both_views',
                      'application::dev2_tests::old_settings_receive_default_sort_and_new_preferences_round_trip',
                      'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
@@ -123,7 +124,7 @@ def main():
                 ('clash-client-core', ['--lib'], ['']),
                 ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::']),
                 ('clash-client-runtime', ['--lib'],
-                 ['control::dispatch::tests::']
+                 ['control::dispatch::tests::', 'control::transport::tests::']
                  + ([] if linux_user_tests() else ['control::tests::']))):
             for case in cases:
                 run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
