@@ -1,6 +1,6 @@
-import { ListView } from "std-widgets.slint";
+import { ListView as SlintListView } from "std-widgets.slint";
 
-export component VirtualPageList inherits ListView {
+export component ListView inherits SlintListView {
     in property <string> content-key;
     min-width: 0px; min-height: 0px; vertical-stretch: 1;
     content-width: self.visible-width;

@@ -3592,8 +3592,19 @@ fn subscription_pagination_preserves_access_to_the_last_profile_in_both_views() 
     assert_eq!(data.get_profiles().row_count(), 240);
     assert!(!data.get_next());
     for list_view in [false, true] {
+        TARGETS.with(|targets| targets.borrow_mut().clear());
+        let geometry = window.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
         views.set_profiles_list(list_view);
         motion_frame(&window, 0);
+        let mounted = TARGETS.with(|targets| {
+            targets
+                .borrow()
+                .keys()
+                .filter(|key| key.starts_with("profile:"))
+                .count()
+        });
+        assert!((1..100).contains(&mounted), "{mounted} mounted profiles");
         data.set_scroll_profiles(-100_000.);
         motion_frame(&window, 0);
         let bounds = target_bounds("profile:profile-239");

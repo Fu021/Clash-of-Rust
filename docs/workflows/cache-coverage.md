@@ -28,7 +28,7 @@ CI 的 main 构建保存各平台完整 Rust 基线，开发分支与 PR 只读�
 
 2026-11-10 按六轮完整成功 CI 核对，恢复与编译分别取中位数，策略不随每轮数据自动变化。采样来源、Tailscale 冷暖对照及测量边界见[耗时依据](cache-capacity.md#近期-ci-耗时依据)。
 
-`workflow_storage.py` 对 main 按平台、架构和用途分组，只保留创建时间最新的一代；旧命名空间与新命名空间视为同一目标，源码、工具链或依赖摘要变化不会留下第二份完整归档。Memory 的 release/dev、两种 macOS Tailscale 架构、各 Android ABI 的 Go 对象和两种 Linux 编译容器分别计组；未识别的 main 类型仅按完全相同的 key 去重，不猜测其用途。已退役类型也清除。只在替代缓存已保存后删除旧代，不因本轮未保存就删除唯一基线。
+`workflow_storage.py` 对 main 按平台、架构和用途分组，只保留创建时间最新的一代。Memory 的旧 `benchmark` job 和新 `prepare` job 在同一 profile 下归为一组，release 与 dev 分别保留。两种 macOS Tailscale 架构、各 Android ABI 的 Go 对象和两种 Linux 编译容器分别计组。未识别的 main 类型按完全相同的 key 去重，已退役类型清除。替代缓存成功保存后才删除旧代。
 
 其他 ref 不保留缓存，包括完整编译归档、差异包、工具副本和未知条目。CI/Memory 的 Rust、Go 与 Linux 编译容器只由 main 保存；分支未命中时正常生成，不上传。macOS 分支先只读查询同版本、同架构的 Tailscale 缓存，命中才允许上游 Action 复用；未命中关闭该 Action 的缓存，避免新建分支副本。收尾清除历史分支缓存。
 

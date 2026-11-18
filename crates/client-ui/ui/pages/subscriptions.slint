@@ -2,7 +2,7 @@ import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, ProfileItem } from "../state.slint";
 import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Field } from "../components/controls.slint";
-import { VirtualPageList } from "../components/page-list.slint";
+import { ListView } from "../components/page-list.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 import { PageViews, ViewToggle } from "../components/view-toggle.slint";
 
@@ -106,7 +106,7 @@ export component SubscriptionsPage inherits PageSurface {
             HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
                 Field { placeholder: "搜索名称或来源"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
             }
-            grid := VirtualPageList {
+            grid := ListView {
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + (UiData.profiles-paginated ? "paged" : "all");
                 content-y <=> UiData.scroll-profiles;
                 property <int> columns: PageViews.profiles-list ? 1 : max(1, floor((self.visible-width + Theme.page-gap) / (288px * Theme.text-scale + Theme.page-gap)));

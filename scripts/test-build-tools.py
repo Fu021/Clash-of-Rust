@@ -6656,6 +6656,8 @@ runpy.run_path(str(script), run_name='__main__')
         for profile in ('release', 'dev'):
             pairs.append(('memory-ubuntu22-v2-'+profile+'-aaaaaaaa-bbbbbbbb',
                           'memory-main-v1-'+profile+'-benchmark-Linux-x64-cccccccc-dddddddd'))
+            pairs.append(('memory-main-v2-'+profile+'-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
+                          'memory-main-v2-'+profile+'-prepare-Linux-x64-aaaaaaaa-bbbbbbbb'))
         for previous_key, latest_key in pairs:
             with self.subTest(key=latest_key):
                 previous = {'id': 1, 'key': previous_key, 'ref': 'refs/heads/main',

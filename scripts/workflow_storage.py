@@ -28,7 +28,7 @@ def lineage(key):
     key = re.sub(r'-local-deps-v\d+', '', key)
     key = re.sub(r'^native-(?:main-v\d+|release-(?:ubuntu20-)?v\d+)-', 'native-', key)
     key = re.sub(r'^android-(?:main-v\d+|v\d+)-', 'android-', key)
-    key = re.sub(r'^memory-(?:main-v\d+|ubuntu22-v\d+)-(release|dev)(?:-benchmark-Linux-x64)?',
+    key = re.sub(r'^memory-(?:main-v\d+|ubuntu22-v\d+)-(release|dev)(?:-(?:benchmark|prepare)-Linux-x64)?',
                  r'memory-\1', key)
     if key.startswith('linux-build-linux-image-ubuntu20-'):
         return re.sub(r'-[0-9a-f]{64}$', '', key)
