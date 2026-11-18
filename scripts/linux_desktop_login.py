@@ -26,7 +26,7 @@ def as_user(*arguments):
 
 
 def prepare(report):
-    packages = ['gdm3', 'gnome-session', 'xserver-xorg', 'libgtk-3-bin']
+    packages = ['dbus-user-session', 'gdm3', 'gnome-session', 'xserver-xorg', 'libgtk-3-bin']
     if platform.freedesktop_os_release().get('VERSION_ID') == '13':
         packages.append('gnome-session-xsession')
     install(packages, timeout=600, no_recommends=True)
@@ -121,6 +121,11 @@ def verify(stage, report):
         uid, prior_session, background, not background), timeout=90)
     report['startup'] = trace
     pid = trace['pid']
+    try:
+        desktop_call(environment, 'busctl', '--user', 'call', 'org.freedesktop.DBus',
+                     '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'GetId')
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError('Could not connect to the GNOME user session bus') from error
     report['tray_item'] = wait_for('GNOME AppIndicator did not register the candidate PID',
                                    lambda: owner_tray(pid, lambda command: desktop_call(environment, *command)))
     menu_sha256 = sha256(MENU)

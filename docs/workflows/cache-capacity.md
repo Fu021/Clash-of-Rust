@@ -4,9 +4,11 @@
 
 ## 当前上限与保留预算
 
-本仓库授权预算为每月 **1 美元**；2026-11-10 仓库 `max_cache_size_gb` 从 15 调整为 **24 GB**，设置 API 已读回确认。GitHub 此处的 GB 按 2³⁰ 字节计算，即 GiB。10 GiB 免费，超出部分每 GiB 月 0.07 美元；本仓库满额整月约 0.98 美元，账户其他仓库和已产生费用须一并计入预算。账户预算不自动提高仓库上限，两个设置均需配置，见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
+维护者于 2026-11-18 将 GitHub Actions 月预算设为 **2 美元**。Linux 兼容扩展期间，仓库 `max_cache_size_gb` 由 24 临时提高到 **34**，已通过设置 API 读回。GitHub 的缓存容量按 GiB 计算，每仓库含 10 GiB，超额每 GiB 月 0.07 美元，34 GiB 满额整月约 1.68 美元。账户预算需计入适用的其他 Actions 用量。容量上限和预算分别配置。见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
 
 缓存按每小时占用峰值累计，不按配置上限包月。以 30 天、720 小时计算，费用为 `Σ max(每小时峰值 GiB − 10, 0) × 0.07 ÷ 720`。24 GiB 只出现一个计费小时约 0.00136 美元；每天一个小时、其余时间不超过 10 GiB，整月约 0.041 美元。若常驻 10.91 GiB、每天一个小时升到 24 GiB，约 0.102 美元。短于一小时也按该小时峰值计，跨两个计费小时可能同时计入；这些是假设估算，实际以账单为准。
+
+Linux 兼容扩展完成后，按当前 `main` 保留的缓存、旧与新一代并存时的实测峰值及 CI 恢复耗时重新定上限。月预算根据实际存储账单以及适用的其他 Actions 用量估算。
 
 ## 近期 CI 耗时依据
 
