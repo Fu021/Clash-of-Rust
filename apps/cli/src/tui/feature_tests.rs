@@ -510,3 +510,122 @@ fn every_management_form_fits_supported_terminal_sizes_and_keeps_execution_visib
         }
     }
 }
+
+#[test]
+fn wrapped_operation_rows_preserve_descriptions_commands_and_keyboard_selection() {
+    let compact = |text: &str| {
+        text.chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+    };
+    let mut state = State::new(true);
+    state.page = Page::Tools;
+    let count = state.items().len();
+    for index in [0, count / 2, count - 1] {
+        state.selected = index;
+        let path = state.items()[index].to_owned();
+        let spec = form::commands().find(|spec| spec.path == path).unwrap();
+        for columns in [36, 40, 60, 120] {
+            let frame = render::frame(&state, columns, 24);
+            let selected = frame
+                .iter()
+                .filter(|line| line.tone == render::Tone::Selected)
+                .map(|line| line.text.as_str())
+                .collect::<String>();
+            let selected = compact(&selected);
+            assert!(
+                selected.contains(&compact(spec.description)),
+                "{columns}: {selected}"
+            );
+            assert!(selected.contains(&compact(&path)), "{columns}: {selected}");
+            assert!(!selected.contains('…'), "{columns}: {selected}");
+        }
+        state.key(Key::Enter);
+        assert_eq!(state.form.as_ref().unwrap().spec.path, path);
+        state.key(Key::Escape);
+    }
+}
+
+#[test]
+fn long_profile_node_and_connection_names_wrap_and_keep_the_original_target() {
+    use unicode_width::UnicodeWidthStr;
+    let compact = |text: &str| {
+        text.chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+    };
+    let name = "跨地域远程线路与完整节点名称".repeat(4);
+    for page in [Page::Profiles, Page::Nodes, Page::Connections] {
+        let mut state = State::new(true);
+        state.page = page;
+        let poll = state.poll.as_mut().unwrap();
+        match page {
+            Page::Profiles => {
+                poll.meta.profiles = (0..50)
+                    .map(|index| clash_client_core::config::Profile {
+                        id: format!("profile-{index}"),
+                        name: format!("{index:03} {name}"),
+                        source: "/tmp/example.yaml".into(),
+                        updated: 0,
+                        usage: None,
+                        builtin: false,
+                    })
+                    .collect();
+                state.selected = 49;
+            }
+            Page::Nodes => {
+                state.group = Some("PROXY".into());
+                poll.snapshot.proxies.proxies.get_mut("PROXY").unwrap().all =
+                    vec![name.as_str().into()];
+            }
+            Page::Connections => {
+                poll.snapshot.connections.connections[0].metadata.sniff_host = name.as_str().into();
+            }
+            _ => unreachable!(),
+        }
+        for (columns, rows) in [(36, 24), (40, 24), (60, 24), (120, 40), (40, 24)] {
+            let frame = render::frame(&state, columns, rows);
+            let selected = frame
+                .iter()
+                .filter(|line| line.tone == render::Tone::Selected)
+                .map(|line| line.text.as_str())
+                .collect::<String>();
+            assert!(
+                compact(&selected).contains(&compact(&name)),
+                "{columns}: {selected}"
+            );
+            assert!(!selected.contains('…'), "{columns}: {selected}");
+            assert_eq!(frame.len(), rows);
+            assert!(frame.iter().all(|line| line.text.width() < columns));
+        }
+        state.key(Key::Enter);
+        match page {
+            Page::Profiles => {
+                assert_eq!(state.form.as_ref().unwrap().fields[0].value, "profile-49")
+            }
+            Page::Nodes => assert_eq!(state.confirmation.as_ref().unwrap().node, name),
+            Page::Connections => assert_eq!(state.connection.as_deref(), Some("demo-1")),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn empty_profile_and_shortcut_guidance_wraps_in_phone_frames() {
+    for (page, expected) in [
+        (Page::Profiles, "没有匹配的订阅；清除搜索或在操作页添加。"),
+        (Page::Rules, "尚未选择订阅；按 3 打开订阅页"),
+    ] {
+        let mut state = State::new(true);
+        state.page = page;
+        state.shortcuts_open = page == Page::Rules;
+        for columns in [36, 40, 60] {
+            let text = render::frame(&state, columns, 24)
+                .iter()
+                .map(|line| line.text.trim())
+                .collect::<String>();
+            assert!(text.contains(expected), "{columns}: {text}");
+            assert!(!text.contains('…'), "{columns}: {text}");
+        }
+    }
+}

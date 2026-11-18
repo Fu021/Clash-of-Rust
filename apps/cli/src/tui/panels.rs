@@ -1,8 +1,4 @@
-use super::{
-    form,
-    model::State,
-    render::{Tone, fit},
-};
+use super::{form, model::State, render::Tone};
 
 pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let mut lines = vec![
@@ -67,29 +63,21 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
 }
 
 pub(super) fn tools(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
-    let mut lines = vec![
+    let header = vec![
         (
             "管理操作 · 与 CLI 共用命令、授权和保护校验".into(),
             Tone::Accent,
         ),
         (format!("搜索命令或说明：{}", state.query), Tone::Muted),
     ];
-    lines.truncate(height.saturating_sub(1));
-    let available = height.saturating_sub(lines.len()).max(1);
-    let offset = state.selected.saturating_sub(available - 1);
-    for (index, path) in state
-        .items()
-        .iter()
-        .enumerate()
-        .skip(offset)
-        .take(available)
-    {
+    let items = state.items();
+    let rows = items.iter().enumerate().map(|(index, path)| {
         let spec = form::commands().find(|spec| spec.path == *path).unwrap();
-        lines.push((
+        (
             format!(
                 "{} {}  · {}",
                 if index == state.selected { "›" } else { " " },
-                fit(spec.description, width.saturating_sub(spec.path.len() + 6)),
+                spec.description,
                 spec.path
             ),
             if index == state.selected {
@@ -97,9 +85,9 @@ pub(super) fn tools(state: &State, width: usize, height: usize) -> Vec<(String, 
             } else {
                 Tone::Plain
             },
-        ));
-    }
-    lines
+        )
+    });
+    super::render::list(header, rows, state.selected, width, height)
 }
 
 pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {

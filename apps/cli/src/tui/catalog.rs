@@ -87,25 +87,33 @@ pub(super) fn open_shortcut(state: &State, key: &str) -> Result<Form> {
 }
 
 pub(super) fn profiles(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
-    let mut lines = vec![
+    let header = vec![
         ("订阅 · Enter 选择并确认切换 · / 搜索".into(), Tone::Accent),
         ("新增、编辑来源和更新可在操作页管理。".into(), Tone::Muted),
     ];
-    lines.truncate(height.saturating_sub(1));
-    let available = height.saturating_sub(lines.len()).max(1);
     let Some(poll) = &state.poll else {
-        lines.push(("后台未连接；未读取订阅".into(), Tone::Warning));
-        return lines;
+        return super::render::list(
+            header,
+            std::iter::once(("后台未连接；未读取订阅".into(), Tone::Warning)),
+            0,
+            width,
+            height,
+        );
     };
     let items = state.items();
     if items.is_empty() {
-        lines.push((
-            "没有匹配的订阅；清除搜索或在操作页添加。".into(),
-            Tone::Muted,
-        ));
+        return super::render::list(
+            header,
+            std::iter::once((
+                "没有匹配的订阅；清除搜索或在操作页添加。".into(),
+                Tone::Muted,
+            )),
+            0,
+            width,
+            height,
+        );
     }
-    let offset = state.selected.saturating_sub(available - 1);
-    for (index, id) in items.iter().enumerate().skip(offset).take(available) {
+    let rows = items.iter().enumerate().map(|(index, id)| {
         let profile = poll
             .meta
             .profiles
@@ -126,16 +134,16 @@ pub(super) fn profiles(state: &State, width: usize, height: usize) -> Vec<(Strin
                 "远程"
             },
         );
-        lines.push((
-            super::render::fit(&text, width),
+        (
+            text,
             if index == state.selected {
                 Tone::Selected
             } else {
                 Tone::Plain
             },
-        ));
-    }
-    lines
+        )
+    });
+    super::render::list(header, rows, state.selected, width, height)
 }
 
 pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
@@ -150,7 +158,7 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
         })
         .map(|profile| profile.name.as_str())
         .unwrap_or("未选择");
-    let mut lines = vec![
+    let header = vec![
         (
             "快捷规则 · 当前订阅 · Enter 编辑 · / 搜索".into(),
             Tone::Accent,
@@ -160,8 +168,6 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
             Tone::Muted,
         ),
     ];
-    lines.truncate(height.saturating_sub(1));
-    let available = height.saturating_sub(lines.len()).max(1);
     let problem = match &state.poll {
         None => Some("后台未连接；未读取快捷规则".into()),
         Some(poll) => match poll
@@ -190,15 +196,25 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
         },
     };
     if let Some(problem) = problem {
-        lines.push((super::render::fit(&problem, width), Tone::Warning));
-        return lines;
+        return super::render::list(
+            header,
+            std::iter::once((problem, Tone::Warning)),
+            0,
+            width,
+            height,
+        );
     }
-    let offset = state.selected.saturating_sub(available - 1);
     let items = state.items();
     if items.is_empty() {
-        lines.push(("没有匹配的快捷规则".into(), Tone::Muted));
+        return super::render::list(
+            header,
+            std::iter::once(("没有匹配的快捷规则".into(), Tone::Muted)),
+            0,
+            width,
+            height,
+        );
     }
-    for (index, key) in items.iter().enumerate().skip(offset).take(available) {
+    let rows = items.iter().enumerate().map(|(index, key)| {
         let (value, warning) = match included(state, key) {
             Ok(true) => ("订阅已包含".into(), false),
             Ok(false) => (settings::display(state.poll.as_ref().unwrap(), key), false),
@@ -209,8 +225,8 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
             if index == state.selected { "›" } else { " " },
             settings::title(key)
         );
-        lines.push((
-            super::render::fit(&text, width),
+        (
+            text,
             if index == state.selected {
                 Tone::Selected
             } else if warning {
@@ -218,7 +234,7 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
             } else {
                 Tone::Plain
             },
-        ));
-    }
-    lines
+        )
+    });
+    super::render::list(header, rows, state.selected, width, height)
 }

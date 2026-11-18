@@ -40,8 +40,8 @@ def settle(terminal):
 
 
 def selected(terminal):
-    return '\n'.join(line.strip() for line in terminal.text().splitlines()
-                     if line.lstrip().startswith('›'))
+    return '\n'.join(line.strip() for index, line in sorted(terminal.screen.items())
+                     if terminal.styles.get(index) == 'selected')
 
 
 class Gallery:
@@ -277,6 +277,8 @@ def verify_desktop(console, command, report):
             for columns, rows in ((40, 24), (60, 24)):
                 terminal.resize(columns, rows)
                 terminal.wait(expected, rows=rows)
+                if '…' in terminal.text():
+                    raise RuntimeError(f'Phone {page} truncated content instead of wrapping')
                 gallery.capture(terminal, page, page+' · 手机 SSH',
                                 size=(columns, rows))
             terminal.resize(120, 40)

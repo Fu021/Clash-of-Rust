@@ -91,6 +91,44 @@ pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+pub(super) fn list(
+    header: Vec<(String, Tone)>,
+    items: impl Iterator<Item = (String, Tone)>,
+    selected: usize,
+    width: usize,
+    height: usize,
+) -> Vec<(String, Tone)> {
+    if height == 0 {
+        return Vec::new();
+    }
+    let mut lines: Vec<_> = header
+        .into_iter()
+        .flat_map(|(text, tone)| wrap(&text, width).into_iter().map(move |text| (text, tone)))
+        .take(height - 1)
+        .collect();
+    let available = height - lines.len();
+    let mut rows = Vec::new();
+    let mut selected_range = (0, 0);
+    for (index, (text, tone)) in items
+        .enumerate()
+        .skip(selected.saturating_sub(available - 1))
+        .take(available)
+    {
+        let start = rows.len();
+        rows.extend(wrap(&text, width).into_iter().map(|text| (text, tone)));
+        if index == selected {
+            selected_range = (start, rows.len());
+        }
+    }
+    let offset = if selected_range.1 - selected_range.0 >= available {
+        selected_range.0
+    } else {
+        selected_range.1.saturating_sub(available)
+    };
+    lines.extend(rows.into_iter().skip(offset).take(available));
+    lines
+}
+
 fn navigation(page: Page) -> [String; 2] {
     let items = Page::ALL.map(|target| {
         let number = Page::ALL.iter().position(|page| *page == target).unwrap() + 1;
@@ -185,14 +223,16 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     } else {
         match state.page {
             Page::Home => super::home::panel(state, content_width(columns, rows), body_height),
-            Page::Nodes => nodes(state, width.saturating_sub(6), body_height, spacious),
-            Page::Connections => connections(state, width.saturating_sub(6), body_height),
+            Page::Nodes => nodes(state, content_width(columns, rows), body_height, spacious),
+            Page::Connections => connections(state, content_width(columns, rows), body_height),
             Page::Network => network(state, content_width(columns, rows), body_height),
             Page::Settings => {
                 super::panels::settings(state, content_width(columns, rows), body_height)
             }
-            Page::Tools => super::panels::tools(state, width.saturating_sub(6), body_height),
-            Page::Profiles => super::catalog::profiles(state, width.saturating_sub(6), body_height),
+            Page::Tools => super::panels::tools(state, content_width(columns, rows), body_height),
+            Page::Profiles => {
+                super::catalog::profiles(state, content_width(columns, rows), body_height)
+            }
             Page::Rules if state.shortcuts_open => {
                 super::catalog::rules(state, content_width(columns, rows), body_height)
             }
@@ -469,11 +509,17 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
     if !spacious {
         rows.retain(|(text, _)| !text.is_empty());
     }
-    rows.truncate(height.saturating_sub(1));
-    let available = height.saturating_sub(rows.len()).max(1);
-    let offset = state.selected.saturating_sub(available - 1);
+    if items.is_empty() {
+        return list(
+            rows,
+            std::iter::once(("没有匹配项".into(), Tone::Muted)),
+            0,
+            width,
+            height,
+        );
+    }
     let name_width = width.saturating_sub(24);
-    for (index, name) in items.iter().enumerate().skip(offset).take(available) {
+    let entries = items.iter().enumerate().map(|(index, name)| {
         let proxy = proxies.get(*name);
         let info = proxy
             .map(|proxy| {
@@ -499,8 +545,8 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
             .and_then(|group| proxies.get(group))
             .is_some_and(|group| group.now.as_str() == *name);
         let selected = index == state.selected;
-        rows.push((
-            if width < 50 {
+        (
+            if width < 50 || name.width() > name_width || info.width() > 8 {
                 format!(
                     "{} {name} · {info}{}",
                     if selected { "›" } else { " " },
@@ -522,12 +568,9 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
             } else {
                 Tone::Plain
             },
-        ));
-    }
-    if items.is_empty() {
-        rows.push(("没有匹配项".into(), Tone::Muted));
-    }
-    rows
+        )
+    });
+    list(rows, entries, state.selected, width, height)
 }
 
 fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
@@ -535,7 +578,7 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
         return disconnected(width, height);
     };
     let items = state.items();
-    let mut rows = vec![
+    let header = vec![
         (
             format!(
                 "活跃连接 {}   ·   匹配 {} 项",
@@ -557,10 +600,7 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
             Tone::Muted,
         ),
     ];
-    rows.truncate(height.saturating_sub(1));
-    let available = height.saturating_sub(rows.len()).max(1);
-    let offset = state.selected.saturating_sub(available - 1);
-    for (index, id) in items.iter().enumerate().skip(offset).take(available) {
+    let entries = items.iter().enumerate().map(|(index, id)| {
         let connection = poll
             .snapshot
             .connections
@@ -570,14 +610,14 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
             .unwrap();
         let name = clash_client_core::connection::name(connection);
         let name = if name.is_empty() { "未提供" } else { name };
-        rows.push((
+        (
             if width < 50 {
                 format!("{} {name}", if index == state.selected { "›" } else { " " })
             } else {
                 format!(
                     "{} {}  ↓ {}  ↑ {}",
                     if index == state.selected { "›" } else { " " },
-                    fit(name, width.saturating_sub(32)),
+                    name,
                     rate(connection.download),
                     rate(connection.upload)
                 )
@@ -587,8 +627,9 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
             } else {
                 Tone::Plain
             },
-        ));
-    }
+        )
+    });
+    let mut rows = list(header, entries, state.selected, width, height);
     if let Some(id) = items.get(state.selected)
         && let Some(connection) = poll
             .snapshot
@@ -597,28 +638,38 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
             .iter()
             .find(|connection| connection.id.as_ref() == *id)
     {
-        rows.push((String::new(), Tone::Plain));
-        rows.push((
-            format!(
-                "规则  {}  {}",
-                connection.rule.as_str(),
-                connection.rule_payload.as_str()
+        let detail = [
+            (String::new(), Tone::Plain),
+            (
+                format!(
+                    "规则  {}  {}",
+                    connection.rule.as_str(),
+                    connection.rule_payload.as_str()
+                ),
+                Tone::Muted,
             ),
-            Tone::Muted,
-        ));
-        rows.push((
-            format!(
-                "线路  {}",
-                connection
-                    .chains
-                    .iter()
-                    .rev()
-                    .map(|name| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" → ")
+            (
+                format!(
+                    "线路  {}",
+                    connection
+                        .chains
+                        .iter()
+                        .rev()
+                        .map(|name| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                ),
+                Tone::Accent,
             ),
-            Tone::Accent,
-        ));
+        ];
+        rows.extend(
+            detail
+                .into_iter()
+                .flat_map(|(text, tone)| {
+                    wrap(&text, width).into_iter().map(move |text| (text, tone))
+                })
+                .take(height.saturating_sub(rows.len())),
+        );
     }
     rows
 }

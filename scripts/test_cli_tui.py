@@ -14,6 +14,17 @@ import ci_test_policy
 
 
 class CliTuiTests(unittest.TestCase):
+    def test_desktop_selection_includes_wrapped_command_continuations(self):
+        terminal = cli_tui.Session.__new__(cli_tui.Session)
+        terminal.screen = {
+            0: '[操作]', 1: '› 显示完整说明并保留命令',
+            2: '  · profile directory', 3: '  其他命令',
+        }
+        terminal.styles = {0: 'accent', 1: 'selected', 2: 'selected', 3: 'plain'}
+        selected = cli_tui_preview.selected(terminal)
+        self.assertEqual(selected, '› 显示完整说明并保留命令\n· profile directory')
+        self.assertRegex(selected, r'(?:^|\s)profile directory$')
+
     def test_navigation_keys_follow_current_and_historical_visible_headers(self):
         terminal = cli_tui.Session.__new__(cli_tui.Session)
         layouts = (
