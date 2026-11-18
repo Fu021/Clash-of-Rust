@@ -250,6 +250,11 @@ impl DesktopHost {
             }
         }
         let tick = matches!(message, Message::Tick);
+        let finished_page = matches!(
+            &message,
+            Message::Finished(reply)
+                if matches!(reply.scope, Scope::Home | Scope::Proxies | Scope::Connections | Scope::Rules | Scope::Logs)
+        );
         let page = self.app.page;
         let overview_busy = self.app.overview.busy();
         let task = self.app.update(message);
@@ -260,6 +265,9 @@ impl DesktopHost {
         }
         self.spawn(task);
         self.finish_retirement();
+        if finished_page && !self.app.visible && self.window.is_none() {
+            platform::memory::release_unused_heap();
+        }
         self.sync();
         if self.app.tray.is_some() && !self.tray_listening {
             self.tray_listening = true;

@@ -46,18 +46,19 @@ async fn protected_measurement_cannot_start_a_stopped_core() {
         assert!(!engine.store.runtime().join("config.yaml").exists());
         assert_eq!(engine.view_revision(), 0);
     }
-    assert!(
+    assert!(matches!(
         execute(&shared, Command::RecoverUnreachable, Owner::Daemon, None)
             .await
-            .unwrap()
-            .is_null()
-    );
-    assert!(
-        execute(&shared, Command::Meta, Owner::Daemon, None)
-            .await
-            .unwrap()["settings"]["claude_protection"]
-            .is_object()
-    );
+            .unwrap(),
+        Payload::Json(Value::Null)
+    ));
+    let Payload::Json(meta) = execute(&shared, Command::Meta, Owner::Daemon, None)
+        .await
+        .unwrap()
+    else {
+        panic!("metadata command must return a JSON payload");
+    };
+    assert!(meta["settings"]["claude_protection"].is_object());
 }
 
 #[tokio::test]

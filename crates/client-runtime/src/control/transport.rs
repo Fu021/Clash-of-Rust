@@ -15,9 +15,14 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
-    sync::{Mutex, Semaphore, watch},
+    sync::{Mutex, Notify, Semaphore, watch},
     task::JoinHandle,
+    time::Instant,
 };
+
+const CONTROL_SLOTS: u32 = 4;
+const LARGE_SNAPSHOT_BYTES: usize = 128 * 1024;
+const SNAPSHOT_IDLE_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Endpoint {
@@ -254,9 +259,39 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
     let captured = endpoint.clone();
     let (shutdown_tx, shutdown) = watch::channel(false);
     let task = tokio::spawn(async move {
-        let permits = Arc::new(Semaphore::new(4));
+        let permits = Arc::new(Semaphore::new(CONTROL_SLOTS as usize));
+        let reclaim = (cfg!(all(target_os = "linux", target_env = "gnu"))
+            && owner == Owner::Daemon)
+            .then(|| Arc::new(Notify::new()));
+        let idle_timer = tokio::time::sleep(SNAPSHOT_IDLE_DELAY);
+        tokio::pin!(idle_timer);
+        let mut reclaim_pending = false;
         loop {
-            let Ok((mut stream, address)) = listener.accept().await else {
+            let connection = tokio::select! {
+                biased;
+                _ = async {
+                    if let Some(reclaim) = &reclaim {
+                        reclaim.notified().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    reclaim_pending = true;
+                    idle_timer.as_mut().reset(Instant::now() + SNAPSHOT_IDLE_DELAY);
+                    continue;
+                }
+                _ = &mut idle_timer, if reclaim_pending => {
+                    if let Ok(_idle) = permits.try_acquire_many(CONTROL_SLOTS) {
+                        crate::platform::memory::release_unused_heap();
+                        reclaim_pending = false;
+                    } else {
+                        idle_timer.as_mut().reset(Instant::now() + SNAPSHOT_IDLE_DELAY);
+                    }
+                    continue;
+                }
+                connection = listener.accept() => connection,
+            };
+            let Ok((mut stream, address)) = connection else {
                 break;
             };
             if !address.ip().is_loopback() {
@@ -268,6 +303,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
             let weak = weak.clone();
             let endpoint = captured.clone();
             let shutdown = shutdown_tx.clone();
+            let reclaim = reclaim.clone();
             tokio::spawn(async move {
                 let _permit = permit;
                 let incoming = async {
@@ -328,9 +364,11 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         }
                     }
                 };
+                let snapshot = matches!(&reply.result, Payload::Snapshot(_));
                 let bytes = serde_json::to_vec(&reply);
                 drop(reply);
                 if let Ok(mut bytes) = bytes {
+                    let large_snapshot = snapshot && bytes.len() >= LARGE_SNAPSHOT_BYTES;
                     if bytes.len() > RESPONSE_LIMIT {
                         bytes = serde_json::to_vec(&Reply {
                             result: Value::Null,
@@ -341,6 +379,10 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                     let _ = stream.write_u32(bytes.len() as u32).await;
                     let _ = stream.write_all(&bytes).await;
                     let _ = stream.shutdown().await;
+                    drop(bytes);
+                    if large_snapshot && let Some(reclaim) = &reclaim {
+                        reclaim.notify_one();
+                    }
                 }
                 if shutting_down {
                     let _ = shutdown.send(true);
