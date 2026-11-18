@@ -133,22 +133,25 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         let (text, tone) = focus_line(state, width);
         lines.push(line(text, tone));
         if height == 2 {
-            lines.push(line("q 退出 · Esc 返回 · 1–8 切页".into(), Tone::Muted));
+            lines.push(line(footer::compact_help(state).into(), Tone::Muted));
         }
         return lines;
     }
     let navigation = navigation(state.page);
     let expanded_navigation = rows >= 24 && navigation.iter().all(|row| row.width() <= width);
     if expanded_navigation {
+        let status = if state.demo {
+            "演示 · 不连接后台"
+        } else {
+            "本机控制台"
+        };
+        let title = format!("  CLASH OF RUST   /   TERMINAL   {status}");
         lines.push(line(
-            format!(
-                "  CLASH OF RUST   /   TERMINAL   {}",
-                if state.demo {
-                    "演示 · 不连接后台"
-                } else {
-                    "本机控制台"
-                }
-            ),
+            if title.width() > width {
+                format!("  CLASH OF RUST · {status}")
+            } else {
+                title
+            },
             Tone::Accent,
         ));
         lines.push(line(String::new(), Tone::Plain));

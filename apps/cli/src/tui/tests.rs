@@ -333,7 +333,7 @@ fn disconnected_lists_keep_a_visible_route_to_home_without_starting_the_backend(
 #[test]
 fn home_footer_lists_available_actions_and_keeps_tiny_terminals_usable() {
     let state = State::new(true);
-    for (columns, rows) in [(120, 40), (100, 30), (40, 20), (32, 8)] {
+    for (columns, rows) in [(120, 40), (100, 30), (40, 20), (32, 8), (32, 3), (32, 2)] {
         let text = render::frame(&state, columns, rows)
             .iter()
             .map(|line| line.text.trim_end())
@@ -348,6 +348,18 @@ fn home_footer_lists_available_actions_and_keeps_tiny_terminals_usable() {
         for action in ["Enter 打开", "/ 搜索", "Esc 返回"] {
             assert!(!text.contains(action), "{columns}×{rows}: {action}\n{text}");
         }
+    }
+    let mut state = state;
+    state.key(Key::Enter);
+    assert!(state.form.is_some());
+    for rows in [2, 3, 8] {
+        let text = render::frame(&state, 32, rows)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Esc 返回"), "32×{rows}: {text}");
+        assert!(text.contains("q 退出"), "32×{rows}: {text}");
     }
 }
 

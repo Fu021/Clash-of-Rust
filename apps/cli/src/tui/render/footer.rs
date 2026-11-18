@@ -17,6 +17,16 @@ pub(super) fn has_notice(state: &State) -> bool {
             .is_some_and(|rules| rules.pending.is_some())
 }
 
+pub(super) fn compact_help(state: &State) -> &'static str {
+    if state.entering_text() {
+        "Ctrl+C 退出 · Esc 返回"
+    } else if state.page == Page::Home && state.form.is_none() && state.updates.pending.is_none() {
+        "Enter 操作 · q 退出"
+    } else {
+        "q 退出 · Esc 返回"
+    }
+}
+
 fn help(state: &State) -> &'static str {
     if state.execution.is_some() || state.confirmation.is_some() || state.updates.pending.is_some()
     {
@@ -112,10 +122,8 @@ pub(super) fn lines(
     if height < 10 {
         return vec![if has_notice(state) {
             line(&notice, tone)
-        } else if state.entering_text() {
-            line("Ctrl+C 退出 · Esc 返回", Tone::Muted)
         } else {
-            line("q 退出 · Esc 返回", Tone::Muted)
+            line(compact_help(state), Tone::Muted)
         }];
     }
     let budget = height.saturating_sub(header_height + 3 + if spacious { 2 } else { 0 });
