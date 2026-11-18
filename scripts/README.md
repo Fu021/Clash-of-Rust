@@ -32,7 +32,9 @@
 | `ubuntu_vm_environment.py` | 共享模块 | 冻结 Ubuntu 双架构的官方 APT 计划与签名索引，在隔离 VM 中校验及安装。 |
 | `linux_apt.py` | 模块 | 限时安装系统依赖，按签名索引校验同次运行中已下载的 DEB。 |
 | `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证。 |
-| `linux_desktop_login.py` | 兼容 VM 内 CLI | Debian GDM/GNOME 实际登录、旧自启动迁移、托盘注册及窗口恢复。 |
+| `linux_desktop_login.py` | 兼容 VM 内 CLI | Debian GDM/GNOME 与 Linux Mint LightDM/Cinnamon 的实际登录、旧自启动迁移、托盘注册及窗口恢复。Mint 的已安装 GUI 生命周期在 Cinnamon X11 和 Wayland 会话中运行。 |
+| `linux_mint_desktop.py` | Mint 兼容 VM 内 CLI / 模块 | 在 Cinnamon X11 登录内驱动图形授权，核验取消和允许后的安装文件权限。为原生会话复用已安装 GUI、托盘和共享后台回归。 |
+| `linux_mint_install.py` | Linux 兼容模块 | 用固定的 Cinnamon ISO 和 Ubiquity 准备一次性 VM 磁盘。串口区分交互提示、安装失败和 SSH 预置失败，安装完成后从硬盘启动验收。 |
 | `windows_ci.py` | 模块 | Windows 普通用户、服务、含空格和中文的自定义目录安装与更新，以及安装包/未压缩 EXE/DLL 的 Defender 验证；扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `macos_runner_network.py` | 共享模块 | 供 macOS 安装验收采集 runner 原生 DNS、路由与解析探针。 |

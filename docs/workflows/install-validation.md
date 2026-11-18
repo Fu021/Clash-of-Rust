@@ -28,7 +28,8 @@ Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压
 | macOS Intel / Apple Silicon | 生成 DMG；核对版本、架构、资源及 ad-hoc 签名，并验证安装后代理/TUN；窗口和界面重建归扩展测试。界面辅助包使用独立身份及 `LSUIElement`；没有 Developer ID 与 Apple 公证。 |
 | Linux x64 / ARM64 | 同一份 DEB 先在 Ubuntu 20.04 构建容器安装，再在 Ubuntu 22.04 原生 runner 验证安装后的代理/TUN及授权；GUI 归扩展测试。 |
 | Ubuntu 固定版本 x64 / ARM64 | 独立 [Ubuntu Compatibility](ubuntu-compatibility.md) 复用成功 CI，在对应版本的托管 runner 或 VM 上安装并验证基础代理/TUN。20.04 校验 5.4 GA 内核。 |
-| Debian 12 / 13 x64 | 独立 [Debian Compatibility](debian-compatibility.md) 复用成功 CI，在各版本官方镜像 VM 验证 DEB 安装与基础代理/TUN。 |
+| Debian 12 / 13 x64 | 独立 [Debian Compatibility](debian-compatibility.md) 复用成功 CI，在各版本官方镜像 VM 执行新平台完整验收。 |
+| Linux Mint 21.3 / 22.3 Cinnamon x64 | 独立 [Linux Mint Compatibility](linuxmint-compatibility.md) 复用成功 CI，在各版官方 ISO 安装的 VM 执行新平台完整验收。 |
 | Android ARM64 / ARMv7 / x64 | 三种 ABI 候选 APK 核对签名、架构和 16 KiB 对齐；x64 在 Android 16 模拟器执行真实代理/TUN。ARM 实机、键盘与截图专项不因此冒充已验收。 |
 | Android 8.0～16 | 独立 [Android Compatibility](android-compatibility.md) 复用成功 CI 的 x64 APK，11 版本各验证基础代理/TUN；截图及诊断显式按需选择。 |
 
@@ -60,6 +61,8 @@ Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 gues
 | 系统网络及更新 | 测试代理/TUN、DNS 与退出恢复，验证干净安装、旧版升级、安装失败回退和卸载，逐项核对设置与订阅的保留。 |
 
 首轮目标报告记录失败或未执行项，所有目标通过后生成同提交回执。各平台的基础代理/TUN 验收可继续供日常检查，正式支持范围以完成整套验收的环境为准。
+
+固定 ISO 的目标在一次性虚拟磁盘上安装，核对安装完成标记、磁盘根文件系统和发行版身份后进入验证。Linux Mint 的测试脚本使用 LightDM 登录 Cinnamon，在 X11 会话检查自启动和图形授权，在 X11 与 Wayland 会话分别检查窗口、托盘、GUI/TUI/CLI 共享后台及系统代理恢复。测试设置和数据写入来宾，原始 ISO 与来宾磁盘只在当前 runner 上使用。
 
 ## 附件与证据
 

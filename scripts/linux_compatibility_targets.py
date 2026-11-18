@@ -14,10 +14,15 @@ class Target:
     digest_algorithm: str = 'sha256'
     kernel_series: str = ''
     hosted: bool = False
+    image_format: str = 'qcow2'
 
     @property
     def distribution(self):
-        return self.family.capitalize()
+        return 'Linux Mint' if self.family == 'linuxmint' else self.family.capitalize()
+
+    @property
+    def full_desktop(self):
+        return self.family in ('debian', 'linuxmint')
 
     def matrix_entry(self):
         runner_release = self.release if self.hosted else '24.04'
@@ -25,6 +30,8 @@ class Target:
         qemu = ''
         if not self.hosted:
             qemu = {'x64': 'qemu-system-x86', 'arm64': 'qemu-system-arm qemu-efi-aarch64'}[self.arch]
+        if self.image_format == 'iso':
+            qemu += ' ovmf xorriso'
         return {'distribution': self.distribution, 'release': self.release, 'arch': self.arch,
                 'os': runner, 'qemu': qemu}
 
@@ -33,6 +40,11 @@ def debian_target(release, series, build, digest):
     root = f'https://cdimage.debian.org/cdimage/cloud/{series}/{build}'
     return Target('debian', release, 'x64', f'{root}/debian-{release}-generic-amd64-{build}.qcow2',
                   digest, 'sha512')
+
+
+def mint_target(release, digest):
+    url = f'https://pub.linuxmint.io/stable/{release}/linuxmint-{release}-cinnamon-64bit.iso'
+    return Target('linuxmint', release, 'x64', url, digest, image_format='iso')
 
 
 TARGETS = {
@@ -49,6 +61,10 @@ TARGETS = {
         debian_target('13', 'trixie', '20261116-2664',
                       'e53a93ef33f828ceed0e7278c2cc2753bdc7d5098fbfae15bd64b6d878db350ea37'
                       '44247763a1c8ecb6b4019a0f623c38caf6038ad6f9c357fb4e01493ddf1a3'),
+    ),
+    'linuxmint': (
+        mint_target('21.3', '5aa24abbc616807ab754a6a3b586f24460b0c213b6cacb0bf8b9a80b65013ecc'),
+        mint_target('22.3', 'a081ab202cfda17f6924128dbd2de8b63518ac0531bcfe3f1a1b88097c459bd4'),
     ),
 }
 

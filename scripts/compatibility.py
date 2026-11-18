@@ -18,7 +18,16 @@ WORKFLOWS = {suite: f'{suite}-compatibility.yml' for suite in ('android', *TARGE
 REPORT_JOBS = {suite: 'Linux / Record compatibility' for suite in TARGETS}
 REPORT_JOBS['android'] = 'Record Android compatibility'
 CHECKS = {suite: ['system_proxy', 'tun'] for suite in WORKFLOWS}
-CHECKS['debian'] += ['desktop_gui', 'tui', 'cli', 'desktop_login', 'package_lifecycle']
+for suite, targets in TARGETS.items():
+    if all(target.full_desktop for target in targets):
+        CHECKS[suite] += ['desktop_gui', 'tui', 'cli', 'desktop_login', 'package_lifecycle']
+CHECKS['linuxmint'] += ['native_cinnamon_authorization', 'native_cinnamon_wayland']
+
+
+def iso_targets(suite):
+    return {'iso_targets': [{'release': target.release, 'arch': target.arch,
+                             'url': target.image_url, 'sha256': target.image_digest}
+                            for target in TARGETS[suite]]} if suite == 'linuxmint' else {}
 
 
 def matrix():
@@ -149,7 +158,7 @@ def record(client, suite, ci_run_id, output):
     check_jobs(client, run, suite, include_report=False)
     value = {'schema': 1, 'suite': suite, 'commit': source['commit'],
              'ci_run_id': ci_run_id, 'run_id': run_id, 'run_attempt': attempt,
-             'checks': CHECKS[suite], 'inputs': source['inputs']}
+             'checks': CHECKS[suite], 'inputs': source['inputs'], **iso_targets(suite)}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(value, indent=2) + '\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
@@ -209,7 +218,7 @@ def verified_suite(client, source_ci, suite, run_id=None):
     expected = {'schema': 1, 'suite': suite, 'commit': expected_commit,
                 'ci_run_id': source_ci['id'], 'run_id': run_id,
                 'run_attempt': run.get('run_attempt', 1),
-                'checks': CHECKS[suite], 'inputs': source['inputs']}
+                'checks': CHECKS[suite], 'inputs': source['inputs'], **iso_targets(suite)}
     if (not isinstance(receipt, dict)
             or any(type(receipt.get(key)) is not int
                    for key in ('schema', 'ci_run_id', 'run_id', 'run_attempt'))

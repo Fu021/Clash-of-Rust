@@ -30,6 +30,10 @@ import workflow_artifacts
 import action_cache as local_cache
 import linux_apt
 import linux_ci
+import linux_desktop_login
+import linux_gui
+import linux_mint_desktop
+import linux_mint_install
 import ubuntu_vm_environment
 import tun_dns_fixture
 import tun_ipv6_lifecycle
@@ -41,6 +45,7 @@ import os
 import copy
 import importlib.util
 import io
+import platform
 import sys
 import urllib.error
 import urllib.parse
@@ -276,6 +281,7 @@ class UbuntuVmTests(unittest.TestCase):
 
     def test_vm_reboot_checks_a_fresh_ssh_connection_and_rejects_the_previous_boot(self):
         guest = object.__new__(linux_ci.VmGuest)
+        guest.target = linux_ci.target_for('debian', '13', 'x64')
         guest.ssh = ['ssh', '-o', 'ControlPath=existing', 'guest']
         guest.process = MagicMock()
         with patch.object(guest, 'output', return_value='previous-boot\n'), \
@@ -289,6 +295,161 @@ class UbuntuVmTests(unittest.TestCase):
         self.assertIn('test "$boot_id" != previous-boot', ready.call_args.kwargs['ready_command'])
         self.assertIn('systemctl reboot', remote.call_args_list[0].args[0])
         self.assertIn('cloud-init status --wait', remote.call_args_list[1].args[0])
+
+    def test_mint_automatic_boot_preserves_the_image_uuid_and_rejects_non_casper_media(self):
+        source = ('menuentry "Start Linux Mint" {\n'
+                  '  linux /casper/vmlinuz boot=casper uuid=fixture username=mint '
+                  'iso-scan/filename=${iso_path} quiet splash --\n'
+                  '  initrd /casper/initrd.lz\n}\n')
+        config = linux_mint_install.automatic_grub(source)
+        self.assertIn('boot=casper uuid=fixture username=mint automatic-ubiquity', config)
+        self.assertIn('file=/cdrom/preseed/cor.cfg', config)
+        self.assertIn('initrd /casper/initrd.lz', config)
+        self.assertNotIn('iso-scan/filename', config)
+        self.assertNotIn('quiet splash', config)
+        with self.assertRaisesRegex(ValueError, 'expected Casper boot menu'):
+            linux_mint_install.automatic_grub('linux /boot/vmlinuz boot=live --')
+
+    def test_mint_installer_requires_completion_and_only_reboots_the_installed_disk(self):
+        cases = [
+            ('', 'did not finish'),
+            ('cor-mint-installer-prompt', 'required manual input'),
+            ('cor-mint-installer-failure', 'unrecoverable error'),
+            (linux_mint_install.INSTALL_MARKER+'\ncor-mint-finish-failure', 'could not provision'),
+            (linux_mint_install.INSTALL_MARKER, None),
+        ]
+        for serial_lines, failure in cases:
+            with self.subTest(serial_lines=serial_lines), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                original = directory/'signed.iso'
+                derived = directory/'installer.iso'
+                original.touch()
+                derived.touch()
+                console = directory/'installer.log'
+
+                def boot(arguments, **kwargs):
+                    self.assertEqual(arguments[:2], ['qemu-system-x86_64', '-serial'])
+                    self.assertIn('-no-reboot', arguments)
+                    self.assertIn(derived, arguments)
+                    self.assertFalse(original.exists())
+                    kwargs['stdout'].write(serial_lines+'\n')
+
+                with patch.object(linux_mint_install, 'installation_media', return_value=derived), \
+                        patch.object(linux_mint_install, 'run', side_effect=boot):
+                    args = (original, directory, 'public key',
+                            ['qemu-system-x86_64', '-serial', 'stdio'], console)
+                    if failure is None:
+                        linux_mint_install.install(*args)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, failure):
+                            linux_mint_install.install(*args)
+                self.assertEqual(derived.exists(), failure is not None)
+        guest = object.__new__(linux_ci.VmGuest)
+        guest.target = linux_ci.target_for('linuxmint', '22.3', 'x64')
+        with patch.object(guest, 'remote') as command:
+            guest.wait_cloud_init()
+        command.assert_not_called()
+
+    def test_mint_login_requires_lightdm_x11_and_the_matching_cinnamon_session(self):
+        for pam, shell_session, found in (('lightdm-autologin', 'c2', True),
+                                          ('lightdm', 'c2', False),
+                                          ('lightdm-autologin', 'c1', False)):
+            with self.subTest(pam=pam, shell_session=shell_session):
+                with patch.object(linux_desktop_login, 'output', side_effect=[
+                    'c2 1001 cor-desktop-login seat0',
+                    f'Type=x11\nClass=user\nState=active\nService={pam}\nDesktop=cinnamon',
+                    f'DISPLAY=:0\0XAUTHORITY=/tmp/auth\0XDG_SESSION_ID={shell_session}\0',
+                ]), patch.object(linux_desktop_login.subprocess, 'run',
+                                 return_value=SimpleNamespace(stdout='307\n')) as shell:
+                    observation = linux_desktop_login.active_desktop(1001, linux_desktop_login.CINNAMON)
+                if found:
+                    self.assertEqual(observation[0]['shell_pid'], 307)
+                    self.assertEqual(observation[1]['DBUS_SESSION_BUS_ADDRESS'], 'unix:path=/run/user/1001/bus')
+                    self.assertEqual(shell.call_args.args[0][-1], 'cinnamon')
+                else:
+                    self.assertIsNone(observation)
+
+    def test_mint_cinnamon_prompt_uses_the_session_and_types_the_password_through_stdin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            password = Path(temporary)/'test-password'
+            password.write_text('test123')
+            requests = [MagicMock(), MagicMock()]
+            for request, code in zip(requests, (126, 0)):
+                request.poll.return_value = None
+                request.wait.return_value = code
+
+            @contextmanager
+            def process(command, log):
+                self.assertEqual(command[:2], ['pkexec', '--disable-internal-agent'])
+                yield requests.pop(0)
+
+            keys = []
+
+            def run(command, **kwargs):
+                keys.append(command)
+                if command[1] == '-':
+                    self.assertEqual(kwargs['input'], 'type --clearmodifiers --delay 10 test123\n')
+
+            with patch.object(linux_gui, 'process', side_effect=process), \
+                    patch.object(linux_gui, 'tun_permissions',
+                                 side_effect=[('', 0o755), ('', 0o755),
+                                              ('cap_net_admin,cap_net_raw=ep', 0o4755)]), \
+                    patch.object(linux_gui, 'run', side_effect=run):
+                result = linux_gui.verify_authorization(io.StringIO(), password, lambda: '')
+            self.assertTrue(result['cancel_preserved_permissions'])
+            self.assertTrue(result['accept_granted_helper'])
+            self.assertEqual(len(keys), 3)
+            self.assertEqual([command[-1] for command in keys], ['Escape', '-', 'Return'])
+
+    def test_mint_native_authorization_rejects_a_report_from_another_login(self):
+        value = json.dumps({'session': 'c3', 'production_action': linux_gui.ACTION,
+                            'cancel_preserved_permissions': True, 'accept_granted_helper': True})
+        with patch.object(linux_mint_desktop, 'output', return_value=value):
+            result = linux_mint_desktop.authorization_result(Path('/guest'), 'fixture', 'c3')
+            self.assertEqual(result['session'], 'c3')
+            with self.assertRaisesRegex(RuntimeError, 'different desktop session'):
+                linux_mint_desktop.authorization_result(Path('/guest'), 'fixture', 'c2')
+
+    def test_mint_desktop_dependencies_use_the_installed_shell_and_agent(self):
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
+                patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'linuxmint'}):
+            dependencies = release_package.compatibility_dependencies()
+        self.assertIn('xdotool', dependencies)
+        self.assertIn('wmctrl', dependencies)
+        self.assertNotIn('gnome-shell', dependencies)
+        self.assertNotIn('policykit-1-gnome', dependencies)
+
+    def test_mint_desktop_system_proxy_checks_the_session_and_restores_settings(self):
+        for after, restored in (('original', True), ('changed', False)):
+            with self.subTest(restored=restored), \
+                    patch.object(linux_mint_desktop, 'output', side_effect=[
+                        *(['original'] * 4), "'manual'", "'127.0.0.1'", *([after] * 4),
+                    ]), patch.object(linux_mint_desktop, 'cli') as cli:
+                if restored:
+                    linux_mint_desktop.verify_system_proxy()
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'restore'):
+                        linux_mint_desktop.verify_system_proxy()
+                self.assertEqual(cli.call_args_list, [call('proxy', 'system'), call('proxy', 'off')])
+
+    def test_mint_wayland_checks_use_the_real_session_and_its_socket(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory/'background-login.json').write_text('{"boot_id":"previous"}')
+            with patch.object(linux_desktop_login, 'REPORT', directory), \
+                    patch.object(linux_desktop_login, 'boot_id', return_value='current'), \
+                    patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
+                    patch.object(linux_desktop_login, 'active_desktop', return_value=(
+                        {'session': 'c2'}, {'XDG_RUNTIME_DIR': '/run/user/1001'})) as active, \
+                    patch.object(linux_desktop_login, 'wayland_sockets', return_value={'wayland-0'}), \
+                    patch.object(linux_desktop_login, 'verify_cinnamon_gui', return_value={'tray': True}) as gui, \
+                    patch.object(linux_desktop_login, 'run'):
+                report = {}
+                linux_desktop_login.verify_wayland(report)
+            active.assert_called_once_with(1001, linux_desktop_login.CINNAMON, 'wayland')
+            gui.assert_called_once_with(
+                {'XDG_RUNTIME_DIR': '/run/user/1001', 'WAYLAND_DISPLAY': 'wayland-0'}, 'wayland')
+            self.assertEqual(report['gui'], {'tray': True})
 
     def test_guest_report_preserves_only_complete_generated_archives(self):
         for result, body, state in ((0, b'', 'not_generated'),
@@ -367,6 +528,21 @@ class UbuntuVmTests(unittest.TestCase):
                         expected.extend([('reboot', None), ('remote', 'background-login'), ('python', None)])
                     self.assertEqual(commands, expected)
                     self.assertEqual(guest.python.called, not failed)
+
+    def test_mint_package_runs_native_wayland_before_upgrade_and_uninstall(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory/'package.tar.gz'
+            archive.touch()
+            with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                guest = MagicMock(target=linux_ci.target_for('linuxmint', '22.3', 'x64'),
+                                  environment='guest ', architecture='x86_64', kvm=True)
+                linux_ci.verify_vm_package(guest, directory, 123)
+            self.assertEqual(guest.reboot.call_count, 3)
+            commands = [(method, args[0].split()[-1] if method == 'remote' else None)
+                        for method, args, _ in guest.method_calls]
+            self.assertEqual(commands[-4:], [('remote', 'prepare-wayland'), ('reboot', None),
+                                             ('remote', 'wayland'), ('python', None)])
 
     def test_vm_retries_frozen_apt_on_the_same_verified_public_image(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -2421,18 +2597,19 @@ class BuildTests(unittest.TestCase):
         import linux_gui
 
         request = MagicMock()
-        agent = MagicMock()
-        agent.poll.return_value = None
+        locate = MagicMock(return_value='42')
         request.poll.return_value = 1
         self.assertEqual(
-            linux_gui.authorization_dialog(request, agent, io.StringIO(
-                'Error executing command as another user: No authentication agent found.\n')),
+            linux_gui.authorization_dialog(request, io.StringIO(
+                'Error executing command as another user: No authentication agent found.\n'), locate),
             ('retry', None))
         with self.assertRaisesRegex(RuntimeError, 'denied'):
-            linux_gui.authorization_dialog(request, agent, io.StringIO('authorization denied'))
-        agent.poll.return_value = 1
+            linux_gui.authorization_dialog(request, io.StringIO('authorization denied'), locate)
+        request.poll.return_value = None
+        self.assertEqual(linux_gui.authorization_dialog(request, io.StringIO(), locate), ('dialog', '42'))
+        locate.side_effect = RuntimeError('agent exited')
         with self.assertRaisesRegex(RuntimeError, 'agent exited'):
-            linux_gui.authorization_dialog(request, agent, io.StringIO(''))
+            linux_gui.authorization_dialog(request, io.StringIO(), locate)
 
     def test_linux_gui_finds_authorized_core_without_reading_exe_link(self):
         import linux_gui
@@ -6284,6 +6461,10 @@ class CompatibilityTests(unittest.TestCase):
                    'ci_run_id': 123, 'run_id': 456, 'run_attempt': 2,
                    'checks': compatibility.CHECKS[suite],
                    'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs]}
+        if suite == 'linuxmint':
+            receipt['iso_targets'] = [
+                {'release': target.release, 'arch': 'x64', 'url': target.image_url,
+                 'sha256': target.image_digest} for target in linux_ci.TARGETS[suite]]
         receipt.update(receipt_changes or {})
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, 'w') as archive:
@@ -6356,6 +6537,21 @@ class CompatibilityTests(unittest.TestCase):
         client, source, _ = self.client('debian', receipt_changes={'checks': ['system_proxy', 'tun']})
         with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
             compatibility.verified_suite(client, source, 'debian')
+
+    def test_mint_receipt_requires_both_pinned_iso_digests(self):
+        _, _, receipt = self.client('linuxmint')
+        targets = receipt['iso_targets']
+        self.assertEqual({target['release'] for target in targets}, {'21.3', '22.3'})
+        self.assertIn('desktop_login', receipt['checks'])
+        self.assertIn('native_cinnamon_authorization', receipt['checks'])
+        self.assertIn('native_cinnamon_wayland', receipt['checks'])
+        self.assertEqual(compatibility.input_names('linuxmint'),
+                         ('package-linux-x64', 'linux-tun-test-x64', 'dependency-snapshot'))
+        for changed in ([targets[0]], [targets[0], targets[1] | {'sha256': 'f' * 64}]):
+            with self.subTest(changed=changed):
+                client, source, _ = self.client('linuxmint', receipt_changes={'iso_targets': changed})
+                with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
+                    compatibility.verified_suite(client, source, 'linuxmint')
 
     def test_record_accepts_its_own_running_job_and_binds_exact_ci_inputs(self):
         for suite in compatibility.WORKFLOWS:

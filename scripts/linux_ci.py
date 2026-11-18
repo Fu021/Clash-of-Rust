@@ -380,18 +380,7 @@ class VmGuest:
         key = directory / 'id_ed25519'
         run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', key], stdout=subprocess.DEVNULL)
         public = key.with_suffix('.pub').read_text().strip()
-        user_data = {'ssh_genkeytypes': ['ed25519'],
-                     'users': [{'name': 'ubuntu', 'groups': 'adm,sudo',
-                               'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'shell': '/bin/bash',
-                               'ssh_authorized_keys': [public]}],
-                     'ssh_pwauth': False, 'package_update': False, 'package_upgrade': False}
-        (directory/'user-data').write_text('#cloud-config\n'+json.dumps(user_data))
-        (directory/'meta-data').write_text(
-            'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
-        seed = directory/'seed.img'
         self.disk = directory/'disk.qcow2'
-        run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
-        run(['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk, '24G'])
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
@@ -403,10 +392,7 @@ class VmGuest:
         command = ['qemu-system-'+architecture, '-machine', machine+',accel='+('kvm' if kvm else 'tcg'),
                    '-cpu', cpu, '-smp', '2', '-m', '4096', '-display', 'none',
                    '-serial', 'stdio', '-monitor', 'none',
-                   '-drive', f'file={self.disk},if=virtio,format=qcow2,discard=unmap',
-                   '-drive', f'file={seed},if=virtio,format=raw,readonly=on',
-                   '-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
-                   '-device', 'virtio-net-pci,netdev=net0']
+                   '-drive', f'file={self.disk},if=virtio,format=qcow2,discard=unmap']
         if architecture == 'aarch64':
             command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
@@ -421,14 +407,29 @@ class VmGuest:
                             'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
         from ci_test_policy import extended_tests, linux_user_tests
         self.environment += (
-            f'COR_CI_EXTENDED_TESTS={str(extended_tests() or target.family == "debian").lower()} '
+            f'COR_CI_EXTENDED_TESTS={str(extended_tests() or target.full_desktop).lower()} '
             f'COR_CI_LINUX_USER_TESTS={str(linux_user_tests()).lower()} ')
         try:
+            ready_command = 'true'
+            if target.image_format == 'iso':
+                from linux_mint_install import FIRMWARE, FIRMWARE_VARS, INSTALLED_READY, install
+                variables = directory/'ovmf-vars.fd'
+                shutil.copyfile(FIRMWARE_VARS, variables)
+                command.extend(['-vga', 'virtio', '-drive', f'if=pflash,format=raw,readonly=on,file={FIRMWARE}',
+                                '-drive', f'if=pflash,format=raw,file={variables}'])
+                run(['qemu-img', 'create', '-f', 'qcow2', self.disk, '24G'])
+                install(base, directory, public, command, REPORT/'vm-console-installer.log')
+                ready_command = INSTALLED_READY
+            else:
+                seed = self.cloud_disk(base, public)
+                command.extend(['-drive', f'file={seed},if=virtio,format=raw,readonly=on'])
+            command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
+                            '-device', 'virtio-net-pci,netdev=net0'])
             self.console = (REPORT / ('vm-console-' + label + '.log')).open('w')
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT)
-            wait_vm_ssh(self.process, self.ssh)
-            self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
-                        timeout=360)
+            wait_vm_ssh(self.process, self.ssh, ready_command=ready_command,
+                        timeout=900 if target.image_format == 'iso' else 600)
+            self.wait_cloud_init()
             actual = self.output('uname -m').strip()
             if actual != architecture:
                 raise RuntimeError(f'Linux VM returned {actual} instead of {architecture}')
@@ -443,6 +444,26 @@ class VmGuest:
         except BaseException:
             self.close()
             raise
+
+    def cloud_disk(self, base, public):
+        directory = self.directory
+        user_data = {'ssh_genkeytypes': ['ed25519'],
+                     'users': [{'name': 'ubuntu', 'groups': 'adm,sudo',
+                               'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'shell': '/bin/bash',
+                               'ssh_authorized_keys': [public]}],
+                     'ssh_pwauth': False, 'package_update': False, 'package_upgrade': False}
+        (directory/'user-data').write_text('#cloud-config\n'+json.dumps(user_data))
+        (directory/'meta-data').write_text(
+            'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
+        seed = directory/'seed.img'
+        run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
+        run(['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk, '24G'])
+        return seed
+
+    def wait_cloud_init(self):
+        if self.target.image_format != 'iso':
+            self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
+                        timeout=360)
 
     def remote(self, script, **kwargs):
         return subprocess.run([*self.ssh, script], check=True, **kwargs)
@@ -461,8 +482,7 @@ class VmGuest:
                  'test -n "$boot_id" && test "$boot_id" != ' + shlex.quote(previous_boot))
         fresh_ssh = [self.ssh[0], '-o', 'ControlPath=none', *self.ssh[1:]]
         wait_vm_ssh(self.process, fresh_ssh, ready_command=ready)
-        self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
-                    timeout=360)
+        self.wait_cloud_init()
 
     def stage(self, archive, python):
         started = time.monotonic()
@@ -631,14 +651,22 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
     try:
         guest.remote(guest.environment + extra + command,
                      timeout=2400 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
-        if guest.target.family == 'debian':
-            for phase in ('prepare', 'first-login', 'background-login'):
-                if phase != 'prepare':
-                    guest.reboot()
-                guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
-                             'scripts/linux_desktop_login.py ' + phase, timeout=800)
+        if guest.target.full_desktop:
+            phases = ('prepare', 'first-login', 'background-login')
+            if guest.target.family == 'linuxmint':
+                phases += ('prepare-wayland', 'wayland')
+            for phase in phases:
+                phase_started = time.monotonic()
+                try:
+                    if not phase.startswith('prepare'):
+                        guest.reboot()
+                    guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
+                                 'scripts/linux_desktop_login.py ' + phase, timeout=800)
+                finally:
+                    timings['desktop_' + phase.replace('-', '_')] = round(
+                        time.monotonic() - phase_started, 3)
             guest.python("from pathlib import Path; import runpy; "
-                         "runpy.run_path('scripts/test-release-package.py')['debian_upgrade_and_uninstall']"
+                         "runpy.run_path('scripts/test-release-package.py')['deb_upgrade_and_uninstall']"
                          "(next(Path('dist').glob('*.deb')).resolve())", timeout=900)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
@@ -656,9 +684,9 @@ def vm_test(package_run_id, target):
     value = linux['architectures'][architecture]
     frozen = None
     if target.image_url:
-        cloud = {'url': target.image_url, target.digest_algorithm: target.image_digest}
+        image = {'url': target.image_url, target.digest_algorithm: target.image_digest}
     else:
-        cloud = value['cloud']
+        image = value['cloud']
         frozen = frozen_environments(manifest() or {}).get(architecture)
     if frozen and not verify_frozen(
             Path(os.environ.get('BUILD_INPUTS_DIR', 'dependency-snapshot')), frozen, linux):
@@ -672,17 +700,19 @@ def vm_test(package_run_id, target):
         archive = vm_source_archive(directory, include_frozen_apt=bool(frozen))
         timings['source_archive'] = round(time.monotonic() - phase_started, 3)
         guest = None
+        report_image = 'iso' if target.image_format == 'iso' else 'cloud'
         result = {'distribution': target.family, 'version_id': target.release,
                   'arch': architecture, 'execution': 'vm', 'success': False,
                   'source_archive_bytes': archive.stat().st_size,
-                  'cloud_url': cloud['url'],
-                  'cloud_' + target.digest_algorithm: cloud[target.digest_algorithm]}
+                  report_image + '_url': image['url'],
+                  report_image + '_' + target.digest_algorithm: image[target.digest_algorithm]}
         with ThreadPoolExecutor(max_workers=1) as workers:
             try:
                 package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings)
                 phase_started = time.monotonic()
-                filename = f'{target.family}-{target.release}-{architecture}.qcow2' if target.image_url else 'focal.img'
-                base = download(cloud, tools_directory()/filename)
+                filename = (f'{target.family}-{target.release}-{architecture}.{target.image_format}'
+                            if target.image_url else 'focal.img')
+                base = download(image, (directory if target.image_format == 'iso' else tools_directory())/filename)
                 python = download(value['python'], tools_directory()/'python.tar.gz')
                 timings['original_downloads'] = round(time.monotonic() - phase_started, 3)
                 guest = VmGuest(base, directory, 'official-image', target)

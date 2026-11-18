@@ -1,5 +1,6 @@
-"""Verify candidate autostart through real Debian GNOME logins in a disposable VM."""
+"""Verify candidate autostart through real desktop logins in a disposable VM."""
 import argparse
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ import subprocess
 
 from build_support import ROOT, run, sha256, write_json
 from linux_apt import install
-from linux_gui import output, owner_tray, wait_for
+from linux_gui import output, owner_tray, wait_for, wayland_sockets
 
 USER = 'cor-desktop-login'
 HOME = Path('/home') / USER
@@ -18,31 +19,62 @@ MENU = Path('/usr/share/applications/clash-of-rust.desktop')
 AUTOSTART = HOME / '.config/autostart/clash-of-rust.desktop'
 REPORT = ROOT / 'target/linux-report/desktop-login'
 EXTENSION = 'ubuntu-appindicators@ubuntu.com'
-DISPLAY_MANAGER = 'gdm.service'
+LIGHTDM_CONFIG = Path('/etc/lightdm/lightdm.conf.d/99-cor-compatibility.conf')
+
+
+@dataclass(frozen=True)
+class DesktopLogin:
+    name: str
+    shell: str
+    service: str
+    pam_auto_login: str
+    environment_name: str
+
+
+GNOME = DesktopLogin('GNOME', 'gnome-shell', 'gdm.service', 'gdm-autologin', 'GNOME')
+CINNAMON = DesktopLogin('Cinnamon', 'cinnamon', 'lightdm.service', 'lightdm-autologin', 'X-Cinnamon')
 
 
 def as_user(*arguments):
     return ['sudo', '-H', '-u', USER, '--', *arguments]
 
 
-def prepare(report):
-    packages = ['dbus-user-session', 'gdm3', 'gnome-session', 'xserver-xorg', 'libgtk-3-bin']
-    if platform.freedesktop_os_release().get('VERSION_ID') == '13':
-        packages.append('gnome-session-xsession')
+def configure_lightdm(session):
+    run(['sudo', 'install', '-d', '-m', '0755', LIGHTDM_CONFIG.parent])
+    config = (f'[Seat:*]\nuser-session={session}\nautologin-session={session}\n'
+              f'autologin-user={USER}\nautologin-user-timeout=0\n')
+    run(['sudo', 'tee', LIGHTDM_CONFIG], input=config, text=True, stdout=subprocess.DEVNULL)
+
+
+def prepare(report, desktop, version):
+    packages = ['dbus-user-session', 'libgtk-3-bin', 'wmctrl']
+    if desktop == GNOME:
+        packages.extend(['gdm3', 'gnome-session', 'xserver-xorg'])
+        if version == '13':
+            packages.append('gnome-session-xsession')
+    elif not Path('/usr/share/xsessions/cinnamon.desktop').is_file():
+        raise RuntimeError('The installed Mint guest lacks the Cinnamon X11 session')
     install(packages, timeout=600, no_recommends=True)
-    run(['sudo', 'systemctl', 'stop', DISPLAY_MANAGER])
-    run(['sudo', 'useradd', '--create-home', '--shell', '/bin/bash', USER])
-    run(['sudo', 'chpasswd'], input=f'{USER}:{secrets.token_hex(24)}\n', text=True)
+    run(['sudo', 'systemctl', 'stop', desktop.service])
+    groups = ['--groups', 'sudo'] if desktop == CINNAMON else []
+    run(['sudo', 'useradd', '--create-home', '--shell', '/bin/bash', *groups, USER])
+    password = secrets.token_hex(24)
+    run(['sudo', 'chpasswd'], input=f'{USER}:{password}\n', text=True)
     run(as_user('mkdir', '-p', AUTOSTART.parent))
     run(as_user('ln', '-s', MENU, AUTOSTART))
-    run(as_user('dbus-run-session', '--', 'gsettings', 'set', 'org.gnome.shell',
-                'enabled-extensions', f"['{EXTENSION}']"))
-    config = ('[daemon]\nWaylandEnable=false\nAutomaticLoginEnable=true\n'
-              f'AutomaticLogin={USER}\n')
-    run(['sudo', 'tee', '/etc/gdm3/daemon.conf'], input=config, text=True,
-        stdout=subprocess.DEVNULL)
+    if desktop == GNOME:
+        run(as_user('dbus-run-session', '--', 'gsettings', 'set', 'org.gnome.shell',
+                    'enabled-extensions', f"['{EXTENSION}']"))
+        config = ('[daemon]\nWaylandEnable=false\nAutomaticLoginEnable=true\n'
+                  f'AutomaticLogin={USER}\n')
+        run(['sudo', 'tee', '/etc/gdm3/daemon.conf'], input=config, text=True,
+            stdout=subprocess.DEVNULL)
+    else:
+        from linux_mint_desktop import stage_authorization
+        configure_lightdm('cinnamon')
+        stage_authorization(HOME, USER, password)
     run(['sudo', 'systemctl', 'set-default', 'graphical.target'])
-    run(['sudo', 'systemctl', 'add-wants', 'graphical.target', DISPLAY_MANAGER])
+    run(['sudo', 'systemctl', 'add-wants', 'graphical.target', desktop.service])
     if '--background' in MENU.read_text():
         raise RuntimeError('The installed menu must launch in the foreground')
     report.update(menu_sha256=sha256(MENU), boot_id=boot_id())
@@ -52,7 +84,7 @@ def boot_id():
     return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
 
 
-def desktop(uid):
+def active_desktop(uid, desktop, session_type='x11'):
     sessions = output(['loginctl', 'list-sessions', '--no-legend']).splitlines()
     for line in sessions:
         session, owner, *_ = line.split()
@@ -62,22 +94,24 @@ def desktop(uid):
             ['loginctl', 'show-session', session, '-p', 'Type', '-p', 'Class', '-p', 'State',
              '-p', 'Desktop', '-p', 'Service']).splitlines())
         if (info.get('Type'), info.get('Class'), info.get('State'), info.get('Service')) != (
-                'x11', 'user', 'active', 'gdm-autologin'):
+                session_type, 'user', 'active', desktop.pam_auto_login):
             continue
-        shell = subprocess.run(['pgrep', '-u', str(uid), '-x', 'gnome-shell'],
+        shell = subprocess.run(['pgrep', '-u', str(uid), '-x', desktop.shell],
                                capture_output=True, text=True, timeout=15)
         for pid in shell.stdout.split():
             try:
                 data = output(['sudo', 'cat', f'/proc/{pid}/environ'])
                 values = dict(item.split('=', 1) for item in data.split('\0') if '=' in item)
                 display = {name: values[name] for name in ('DISPLAY', 'XAUTHORITY') if values.get(name)}
-                if 'DISPLAY' not in display:
+                if session_type == 'x11' and 'DISPLAY' not in display:
+                    continue
+                if values.get('XDG_SESSION_ID', session) != session:
                     continue
             except subprocess.CalledProcessError:
                 continue
             environment = dict(display, XDG_RUNTIME_DIR=f'/run/user/{uid}',
                                DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{uid}/bus',
-                               XDG_CURRENT_DESKTOP=values.get('XDG_CURRENT_DESKTOP', 'GNOME'))
+                               XDG_CURRENT_DESKTOP=values.get('XDG_CURRENT_DESKTOP', desktop.environment_name))
             return {'session': session, 'shell_pid': int(pid), 'logind': info}, environment
     return None
 
@@ -99,7 +133,8 @@ def startup(uid, previous, background, visible, current=None):
         if (value['kind'] == 'desktop_startup' and value['schema'] == 1 and session
                 and session != previous and (current is None or session == current)
                 and value['background_requested'] is background
-                and status.get('tray_state') == 'created' and status.get('window_visible') is visible
+                and status.get('tray_state') == 'created'
+                and status.get('window_visible') is visible
                 and Path('/proc', str(value['pid'])).stat().st_uid == uid):
             return value
     except (OSError, ValueError, TypeError, KeyError, subprocess.CalledProcessError):
@@ -107,17 +142,18 @@ def startup(uid, previous, background, visible, current=None):
     return None
 
 
-def verify(stage, report):
+def verify(stage, report, desktop):
     background = stage == 'background-login'
     previous = json.loads((REPORT/('first-login.json' if background else 'prepare.json')).read_text())
     report['boot_id'] = boot_id()
     if report['boot_id'] == previous['boot_id']:
-        raise RuntimeError('GNOME verification requires a new system boot')
+        raise RuntimeError(f'{desktop.name} verification requires a new system boot')
     uid = pwd.getpwnam(USER).pw_uid
-    login, environment = wait_for('GDM did not open a real GNOME X11 session', lambda: desktop(uid), timeout=180)
+    login, environment = wait_for(f'{desktop.service} did not open a real {desktop.name} X11 session',
+                                  lambda: active_desktop(uid, desktop), timeout=180)
     report['login'] = login
     prior_session = previous.get('startup', {}).get('session_id')
-    trace = wait_for('GNOME did not autostart the candidate', lambda: startup(
+    trace = wait_for(f'{desktop.name} did not autostart the candidate', lambda: startup(
         uid, prior_session, background, not background), timeout=90)
     report['startup'] = trace
     pid = trace['pid']
@@ -125,8 +161,8 @@ def verify(stage, report):
         desktop_call(environment, 'busctl', '--user', 'call', 'org.freedesktop.DBus',
                      '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'GetId')
     except subprocess.CalledProcessError as error:
-        raise RuntimeError('Could not connect to the GNOME user session bus') from error
-    report['tray_item'] = wait_for('GNOME AppIndicator did not register the candidate PID',
+        raise RuntimeError(f'Could not connect to the {desktop.name} user session bus') from error
+    report['tray_item'] = wait_for(f'{desktop.name} did not register the candidate tray PID',
                                    lambda: owner_tray(pid, lambda command: desktop_call(environment, *command)))
     menu_sha256 = sha256(MENU)
     entry = output(as_user('cat', AUTOSTART))
@@ -160,34 +196,99 @@ def verify(stage, report):
             desktop_call(environment, 'wmctrl', '-ic', window)
         report['closed_window'] = wait_for('Closing the window did not return the owner to the tray',
                                            lambda: window_state(False))
+        if desktop == CINNAMON:
+            report['gui'] = verify_cinnamon_gui(environment, 'x11')
         desktop_call(environment, 'gtk-launch', MENU.stem)
         report['menu_reopen'] = wait_for('The application menu did not reopen the existing owner',
                                          lambda: window_state(True))
-        run(['sudo', 'systemctl', 'stop', DISPLAY_MANAGER])
+        run(['sudo', 'systemctl', 'stop', desktop.service])
         run(['sudo', 'systemctl', 'stop', f'user@{uid}.service'])
     else:
         report['foreground_windows'] = wait_for('The foreground window was not mapped', windows)
+        if desktop == CINNAMON:
+            from linux_mint_desktop import authorization_result
+            report['authorization'] = wait_for('Cinnamon authorization probe did not return',
+                                               lambda: authorization_result(HOME, USER, login['session']),
+                                               timeout=250)
+
+
+def prepare_wayland():
+    if not Path('/usr/share/wayland-sessions/cinnamon-wayland.desktop').is_file():
+        raise RuntimeError('The installed Mint guest lacks the Cinnamon Wayland session')
+    configure_lightdm('cinnamon-wayland')
+    run(as_user('unlink', AUTOSTART))
+
+
+def verify_cinnamon_gui(environment, backend):
+    from linux_mint_desktop import PROBE_DIR
+    environment = dict(environment, COR_LINUX_GUEST='true', LC_ALL='C.UTF-8')
+    command = as_user('env', *(f'{key}={value}' for key, value in environment.items()),
+                      '/opt/cor-test-python/bin/python3', '-B',
+                      HOME/PROBE_DIR/'linux_mint_desktop.py', backend)
+    source = HOME/f'gui-{backend}'
+    try:
+        run(command, timeout=420)
+    finally:
+        for name in (f'{backend}.log', 'dbus-probes.log'):
+            try:
+                log = output(as_user('cat', source/name), stderr=subprocess.DEVNULL)
+            except subprocess.CalledProcessError:
+                continue
+            REPORT.mkdir(parents=True, exist_ok=True)
+            (REPORT/f'cinnamon-{backend}-{name}').write_text(log+'\n')
+    return json.loads(output(as_user('cat', source/'gui.json')))
+
+
+def verify_wayland(report):
+    previous = json.loads((REPORT/'background-login.json').read_text())
+    report['boot_id'] = boot_id()
+    if report['boot_id'] == previous['boot_id']:
+        raise RuntimeError('Cinnamon Wayland verification requires a new system boot')
+    uid = pwd.getpwnam(USER).pw_uid
+    login, environment = wait_for('LightDM did not open a real Cinnamon Wayland session',
+                                  lambda: active_desktop(uid, CINNAMON, 'wayland'), timeout=180)
+    report['login'] = login
+
+    def socket():
+        sockets = wayland_sockets(Path(environment['XDG_RUNTIME_DIR']))
+        if len(sockets) > 1:
+            raise RuntimeError(f'Cinnamon created multiple Wayland sockets: {sorted(sockets)}')
+        return next(iter(sockets), None)
+
+    environment['WAYLAND_DISPLAY'] = wait_for('Cinnamon did not create a Wayland socket', socket)
+    report['gui'] = verify_cinnamon_gui(environment, 'wayland')
+    run(['sudo', 'systemctl', 'stop', CINNAMON.service])
+    run(['sudo', 'systemctl', 'stop', f'user@{uid}.service'])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('stage', choices=('prepare', 'first-login', 'background-login'))
+    parser.add_argument('stage', choices=('prepare', 'first-login', 'background-login',
+                                         'prepare-wayland', 'wayland'))
     stage = parser.parse_args().stage
+    release = platform.freedesktop_os_release()
+    desktop = {'debian': GNOME, 'linuxmint': CINNAMON}.get(release.get('ID'))
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('COR_LINUX_GUEST') != 'true'
-            or platform.freedesktop_os_release().get('ID') != 'debian' or os.geteuid() == 0):
-        raise RuntimeError('This check requires a disposable Debian compatibility VM')
+            or desktop is None or os.geteuid() == 0):
+        raise RuntimeError('This check requires a disposable Debian or Linux Mint compatibility VM')
+    if stage in ('prepare-wayland', 'wayland') and desktop != CINNAMON:
+        raise RuntimeError('The native Wayland stages require the Cinnamon guest')
     report = {'stage': stage, 'success': False}
     try:
         if stage == 'prepare':
-            prepare(report)
+            prepare(report, desktop, release.get('VERSION_ID'))
+        elif stage == 'prepare-wayland':
+            prepare_wayland()
+        elif stage == 'wayland':
+            verify_wayland(report)
         else:
-            verify(stage, report)
+            verify(stage, report, desktop)
         report['success'] = True
     except Exception as error:
         report['error'] = str(error)
         try:
-            report['gdm_journal'] = output(
-                ['sudo', 'journalctl', '-b', '-u', DISPLAY_MANAGER, '-n', '80', '--no-pager'])
+            report[desktop.service.removesuffix('.service') + '_journal'] = output(
+                ['sudo', 'journalctl', '-b', '-u', desktop.service, '-n', '80', '--no-pager'])
         except (OSError, subprocess.SubprocessError):
             pass
         raise

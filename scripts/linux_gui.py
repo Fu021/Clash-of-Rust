@@ -77,9 +77,7 @@ def process(command, log, env=None):
             child.wait(timeout=5)
 
 
-def authorization_dialog(request, agent, request_log):
-    if agent.poll() is not None:
-        raise RuntimeError('Graphical polkit agent exited before authorization')
+def authorization_dialog(request, request_log, locate):
     code = request.poll()
     if code is not None:
         request_log.flush()
@@ -88,65 +86,81 @@ def authorization_dialog(request, agent, request_log):
         if 'No authentication agent found' in text:
             return 'retry', None
         raise RuntimeError(f'Authorization request exited before the dialog: {code}: {text.strip()}')
-    found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name',
-                            'Authentication|Authenticate'],
-                           capture_output=True, text=True)
+    window = locate()
+    return ('dialog', window) if window is not None else None
+
+
+def gtk_authorization_window():
+    found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', 'Authentication|Authenticate'],
+                           capture_output=True, text=True, timeout=10)
     if found.returncode == 0 and found.stdout.strip():
-        return 'dialog', found.stdout.splitlines()[0]
+        return found.stdout.splitlines()[0]
     return None
 
 
-def authentication():
+def tun_permissions():
+    return (output(['getcap', APP/'clash-tun-launcher']), (APP/'libexec/resolvectl').stat().st_mode & 0o7777)
+
+
+def verify_authorization(log, password_file, locate):
     helper = APP/'clash-of-rust'
-    launcher = APP/'clash-tun-launcher'
-    dns_helper = APP/'libexec/resolvectl'
-    before = (output(['getcap', launcher]), dns_helper.stat().st_mode & 0o7777)
+    before = tun_permissions()
+    for allow in (False, True):
+        deadline = time.monotonic()+90
+        while True:
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Production authorization did not show a graphical dialog')
+            with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as request_log:
+                try:
+                    with process(['pkexec', '--disable-internal-agent', helper, '--authorize-tun'],
+                                 request_log) as request:
+                        state, window = wait_for(
+                            'Production authorization did not show a graphical dialog',
+                            lambda: authorization_dialog(request, request_log, locate), timeout=remaining)
+                        if state == 'retry':
+                            time.sleep(1)
+                            continue
+                        if window:
+                            run(['xdotool', 'windowactivate', '--sync', window], timeout=15)
+                        if allow:
+                            password = password_file.read_text()
+                            if not password.isascii() or not password.isalnum():
+                                raise ValueError('Invalid disposable account password')
+                            run(['xdotool', '-'], text=True, timeout=15,
+                                input=f'type --clearmodifiers --delay 10 {password}\n',
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            run(['xdotool', 'key', 'Return'], timeout=15)
+                        else:
+                            run(['xdotool', 'key', 'Escape'], timeout=15)
+                        code = request.wait(timeout=30)
+                        capabilities, mode = tun_permissions()
+                        if allow:
+                            if code or 'cap_net_admin,cap_net_raw' not in capabilities or mode != 0o4755:
+                                raise RuntimeError('Accepted graphical authorization did not grant the installed helper')
+                        elif code == 0 or (capabilities, mode) != before:
+                            raise RuntimeError('Cancelled graphical authorization changed network permissions')
+                        break
+                finally:
+                    request_log.seek(0)
+                    log.write(request_log.read())
+                    log.flush()
+    return {'cancel_preserved_permissions': True, 'accept_granted_helper': True,
+            'production_action': ACTION, 'graphical_agent': True}
+
+
+def authentication():
     agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
     if platform.freedesktop_os_release().get('ID') == 'debian':
         agent = '/usr/libexec/polkit-mate-authentication-agent-1'
     with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log:
         with process([agent], log) as registered:
-            for allow in (False, True):
-                deadline = time.monotonic()+90
-                while True:
-                    remaining = deadline-time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError('Production authorization did not show a graphical dialog')
-                    with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as request_log:
-                        try:
-                            with process(['pkexec', '--disable-internal-agent', helper, '--authorize-tun'],
-                                         request_log) as request:
-                                state, window = wait_for(
-                                    'Production authorization did not show a graphical dialog',
-                                    lambda: authorization_dialog(request, registered, request_log),
-                                    timeout=remaining)
-                                if state == 'retry':
-                                    time.sleep(1)
-                                    continue
-                                run(['xdotool', 'windowactivate', '--sync', window])
-                                if allow:
-                                    password = Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']).read_text()
-                                    typed = subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '10',
-                                                            '--', password], stdout=subprocess.DEVNULL, stderr=log)
-                                    if typed.returncode:
-                                        raise RuntimeError('Could not enter the disposable account password')
-                                    run(['xdotool', 'key', 'Return'])
-                                else:
-                                    run(['xdotool', 'key', 'Escape'])
-                                code = request.wait(timeout=30)
-                                if allow:
-                                    if (code or 'cap_net_admin,cap_net_raw' not in output(['getcap', launcher])
-                                            or dns_helper.stat().st_mode & 0o7777 != 0o4755):
-                                        raise RuntimeError('Accepted graphical authorization did not grant the installed helper')
-                                elif code == 0 or (output(['getcap', launcher]), dns_helper.stat().st_mode & 0o7777) != before:
-                                    raise RuntimeError('Cancelled graphical authorization changed network permissions')
-                                break
-                        finally:
-                            request_log.seek(0)
-                            log.write(request_log.read())
-                            log.flush()
-    return {'cancel_preserved_permissions': True, 'accept_granted_helper': True,
-            'production_action': ACTION, 'graphical_agent': True}
+            def locate():
+                if registered.poll() is not None:
+                    raise RuntimeError('Graphical polkit agent exited before authorization')
+                return gtk_authorization_window()
+
+            return verify_authorization(log, Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']), locate)
 
 
 def notifier(session_output=output):
@@ -197,9 +211,9 @@ def select_wayland_windows(windows, renderers):
     return []
 
 
-def inspect(backend):
+def inspect(backend, evaluate_window=evaluate):
     if backend == 'wayland':
-        return evaluate(window_script())
+        return evaluate_window(window_script())
     tree = output(['xwininfo', '-root', '-tree'])
     import re
     windows = re.findall(r'^\s*(0x[0-9a-fA-F]+)\s+"(Clash of Rust[^"]*)"', tree, re.M)
@@ -277,13 +291,16 @@ def core_processes(proc=Path('/proc'), uid=None):
     return result
 
 
-def gui(backend, report):
+def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verify_proxy=None):
     data = report/('profile-'+backend)
     data.mkdir()
     env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(data), SLINT_BACKEND='winit-software')
     if backend == 'x11':
         env.pop('WAYLAND_DISPLAY', None)
         env.pop('WAYLAND_SOCKET', None)
+    elif force_wayland:
+        env.pop('DISPLAY', None)
+        env.pop('XAUTHORITY', None)
     os.environ['CLASH_OF_RUST_DATA_DIR'] = str(data)
     fixture = report/'local.yaml'
     fixture.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
@@ -295,7 +312,7 @@ def gui(backend, report):
             nonlocal observed, renderer_pids
             if owner.poll() is not None:
                 raise RuntimeError(f'Installed {backend} GUI owner exited: {owner.returncode}')
-            windows = inspect(backend)
+            windows = inspect(backend, evaluate_window)
             if backend == 'wayland':
                 observed = windows
                 renderer_pids = [int(path.name) for path in Path('/proc').glob('[0-9]*')
@@ -329,13 +346,15 @@ def gui(backend, report):
         if (len(processes) != 1 or next(iter(processes.values())) != owner.pid
                 or before.get('owner') != 'gui' or not before.get('running')):
             raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core')
+        if verify_proxy:
+            verify_proxy()
         with Session([APP/'cor', 'ui'], env=env) as terminal:
             terminal.wait('CLASH OF RUST')
             terminal.send(terminal.page_key('订阅'))
             terminal.wait('GUI fixture')
             if core_processes() != processes:
                 raise RuntimeError('TUI did not share the existing GUI-owned core')
-        item = wait_for('GNOME did not register the GUI owner tray', lambda: owner_tray(owner.pid))
+        item = wait_for('Desktop did not register the GUI owner tray', lambda: owner_tray(owner.pid))
         # One graceful close and one renderer loss exercise different lifecycle
         # paths without repeating the proxy/TUN traffic suite.
         for crash in (False, True):
@@ -346,10 +365,10 @@ def gui(backend, report):
             if crash:
                 os.kill(renderers[0], signal.SIGKILL)
             elif backend == 'wayland':
-                evaluate('global.get_window_actors().map(a=>a.meta_window)'
-                         f'.filter(w=>w && w.get_stable_sequence()==={windows[0]["sequence"]}'
-                         ' && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
-                         '.forEach(w=>w.delete(global.get_current_time())); ""')
+                evaluate_window('global.get_window_actors().map(a=>a.meta_window)'
+                                f'.filter(w=>w && w.get_stable_sequence()==={windows[0]["sequence"]}'
+                                ' && (w.get_title()||"").indexOf("Clash of Rust")>=0)'
+                                '.forEach(w=>w.delete(global.get_current_time())); ""')
             else:
                 run(['wmctrl', '-ic', windows[0]['id']])
             wait_for('Closed renderer survived', lambda: not Path('/proc/'+str(renderers[0])).exists())
@@ -365,7 +384,8 @@ def gui(backend, report):
         cli('stop')
         return {'windows': windows, 'tray': True, 'graceful_close': True, 'renderer_crash': True,
                 'core_pid_preserved': True, 'cli_state_preserved': True,
-                'tui_reads_gui_profiles': True}
+                'tui_reads_gui_profiles': True,
+                **({'desktop_system_proxy_restored': True} if verify_proxy else {})}
 
 
 def _renderer(path, owner):
@@ -377,19 +397,24 @@ def _renderer(path, owner):
         return False
 
 
+def require_logind_session():
+    session_id = os.environ.get('XDG_SESSION_ID')
+    manager = ['busctl', '--system', 'call', 'org.freedesktop.login1', '/org/freedesktop/login1',
+               'org.freedesktop.login1.Manager']
+    if (not session_id or not os.environ.get('XDG_RUNTIME_DIR')
+            or output([*manager, 'GetSessionByPID', 'u', str(os.getpid())])
+            != output([*manager, 'GetSession', 's', session_id])):
+        raise RuntimeError('GUI user does not belong to the expected logind session')
+    return session_id
+
+
 def session():
     if os.geteuid() == 0:
         raise RuntimeError('GUI must run as an ordinary user')
     report = Path(os.environ['COR_GUI_REPORT'])
     result = {'status': 'running', 'checks': {}}
     try:
-        session_id = os.environ.get('XDG_SESSION_ID')
-        manager = ['busctl', '--system', 'call', 'org.freedesktop.login1', '/org/freedesktop/login1',
-                   'org.freedesktop.login1.Manager']
-        if (not session_id or not os.environ.get('XDG_RUNTIME_DIR')
-                or output([*manager, 'GetSessionByPID', 'u', str(os.getpid())])
-                != output([*manager, 'GetSession', 's', session_id])):
-            raise RuntimeError('GUI user does not belong to the expected logind session')
+        require_logind_session()
         result['checks']['login_session'] = True
         with (report/'desktop.log').open('w') as log, contextlib.ExitStack() as stack:
             display = stack.enter_context(process(['Xvfb', ':91', '-screen', '0', '1280x900x24',

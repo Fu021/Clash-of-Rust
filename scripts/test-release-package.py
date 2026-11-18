@@ -154,7 +154,7 @@ def linux_package_tests(package, tun_test, structure=True):
         # This checks old user-space libraries; its host kernel is recorded
         # separately and never presented as minimum-kernel evidence.
         linux_gui_smoke()
-    elif extended_tests():
+    elif extended_tests() and platform.freedesktop_os_release().get('ID') != 'linuxmint':
         from linux_gui import installed_tests
         installed_tests()
     if not os.environ.get('COR_LINUX_BASELINE'):
@@ -168,9 +168,13 @@ def compatibility_dependencies():
     from ci_test_policy import extended_tests
     from ubuntu_vm_environment import TEST_PACKAGES
     if extended_tests():
-        if platform.freedesktop_os_release().get('ID') == 'debian':
+        distribution = platform.freedesktop_os_release().get('ID')
+        if distribution == 'debian':
             return ['mate-polkit' if package == 'policykit-1-gnome' else package
                     for package in TEST_PACKAGES]
+        if distribution == 'linuxmint':
+            return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
+                    'x11-utils', 'xdotool', 'wmctrl']
         return list(TEST_PACKAGES)
     if os.environ.get('COR_LINUX_GUEST') == 'true':
         release = platform.freedesktop_os_release()
@@ -246,12 +250,14 @@ def run_upgrade_cli(data, report, phase, *commands):
             return results
 
 
-def debian_upgrade_and_uninstall(package):
-    if os.geteuid() == 0 or os.environ.get('COR_LINUX_GUEST') != 'true':
-        raise RuntimeError('Debian installation lifecycle requires an ordinary user in a disposable VM')
-    report = ROOT/'target/linux-report/debian-lifecycle'
+def deb_upgrade_and_uninstall(package):
+    distribution = platform.freedesktop_os_release().get('ID')
+    if (os.geteuid() == 0 or os.environ.get('COR_LINUX_GUEST') != 'true'
+            or distribution not in ('debian', 'linuxmint')):
+        raise RuntimeError('DEB installation lifecycle requires an ordinary user in a disposable compatibility VM')
+    report = ROOT/'target/linux-report'/f'{distribution}-lifecycle'
     report.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='cor-debian-lifecycle-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='cor-deb-lifecycle-') as temporary:
         directory = Path(temporary)
         directory.chmod(0o755)
         previous = directory/PREVIOUS_DEB
@@ -282,17 +288,17 @@ def debian_upgrade_and_uninstall(package):
 
         install_packages([package])
         if subprocess.check_output(installed_version, text=True) != candidate_version:
-            raise RuntimeError('Debian upgrade did not install the candidate version')
+            raise RuntimeError('DEB upgrade did not install the candidate version')
         settings, profiles_after = run_upgrade_cli(
             data, report, 'after', ('config', 'get', 'update_prereleases'), list_profile)
         if settings != {'update_prereleases': True}:
-            raise RuntimeError('Debian upgrade lost the saved update channel')
+            raise RuntimeError('DEB upgrade lost the saved update channel')
         if [(profile['id'], profile['name']) for profile in profiles_after] != [
             (profiles_before[0]['id'], profile_name),
         ]:
-            raise RuntimeError('Debian upgrade lost the saved profile')
+            raise RuntimeError('DEB upgrade lost the saved profile')
         if profile_file.read_bytes() != profile_content:
-            raise RuntimeError('Debian upgrade changed the saved profile content')
+            raise RuntimeError('DEB upgrade changed the saved profile content')
         user_files = [data/'settings.json', data/'profiles.json', profile_file]
         contents = [path.read_bytes() for path in user_files]
         run_privileged_with_timeout(purge, 300)
@@ -300,9 +306,9 @@ def debian_upgrade_and_uninstall(package):
                      '/usr/share/applications/clash-of-rust.desktop',
                      '/usr/share/polkit-1/actions/org.clashofrust.tun.policy')
         if any(os.path.lexists(path) for path in artifacts):
-            raise RuntimeError('Debian uninstall left installed application files')
+            raise RuntimeError('DEB uninstall left installed application files')
         if [path.read_bytes() for path in user_files] != contents:
-            raise RuntimeError('Debian uninstall changed user data')
+            raise RuntimeError('DEB uninstall changed user data')
         write_json(report/'result.json', {'previous_version': '0.7.2',
                                          'previous_sha256': PREVIOUS_DEB_SHA256,
                                          'installed_version': candidate_version,
@@ -333,7 +339,7 @@ def run_compatibility(distribution, version, arch):
     binary.chmod(0o755)
     prepare_compatibility_environment()
     linux_package_tests(packages[0], binary, structure=False)
-    if distribution == 'debian':
+    if distribution in ('debian', 'linuxmint'):
         from cli_tui import verify
         installed = Path('/opt/clash-of-rust')
         verify(installed/'cor', installed/'resources', ROOT/'target/linux-report/tui')

@@ -16,3 +16,5 @@
 终端更新回归验证授权拒绝、失败恢复及用户服务接续。另从固定 SHA256 的 `v0.7.2` 官方 DEB 升级到本轮候选包，核对设置与订阅身份，再通过 APT 卸载并核对保留的用户数据。首轮覆盖范围见[新平台完整验收](install-validation.md#新平台完整验收)。
 
 两个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、完整验收范围和运行尝试。每个 VM 的 `linux-package-report-debian-<版本>-x64` 与最终回执保留三天。真实 VM 结果用于评估公开支持与发布门禁。
+
+首轮完整验收覆盖 Debian 12 x64（内核 `6.1.0-56-amd64`）和 Debian 13 x64（内核 `6.12.117+deb13-amd64`）。普通用户运行覆盖 GNOME X11 与 Wayland，实际 GDM 登录和 AppIndicator 托盘覆盖 GNOME X11。安装生命周期覆盖从 `v0.7.2` 升级和卸载后的数据保留。证据见 [Debian Compatibility 44330024889](https://github.com/Fu021/Clash-of-Rust/actions/runs/44330024889)。
