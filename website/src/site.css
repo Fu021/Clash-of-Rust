@@ -349,6 +349,43 @@ kbd { border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 5p
 .foot .wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) auto auto; gap: 2rem clamp(2rem, 6vw, 5rem); }
 .foot .brand { margin-bottom: 0.9rem; }
 .foot p { max-width: 30em; }
+.site-visitors:not([hidden]) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+  font-size: 0.875rem;
+}
+.site-visitors-icon {
+  position: relative;
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+  color: var(--rust);
+}
+.site-visitors-icon::before,
+.site-visitors-icon::after {
+  content: "";
+  position: absolute;
+  background: currentColor;
+}
+.site-visitors-icon::before {
+  inset: 0.0625rem auto auto 0.265625rem;
+  width: 0.34375rem;
+  height: 0.34375rem;
+  border-radius: 50%;
+}
+.site-visitors-icon::after {
+  inset: auto 0.0625rem 0.0625rem;
+  height: 0.34375rem;
+  border-radius: 0.35rem 0.35rem 0.1rem 0.1rem;
+}
+.site-visitors strong {
+  color: var(--ink);
+  font-family: var(--pixel);
+  font-weight: normal;
+}
 .foot nav { display: grid; gap: 0.45rem; align-content: start; }
 .foot nav a { text-decoration: none; color: var(--ink); }
 .foot nav a:hover { color: var(--rust); }

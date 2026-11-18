@@ -27,6 +27,7 @@ TEXT = {
         "nav_label": "Site", "menu": "Menu", "nav": {"start": "Get started", "guide": "Manual", "tools": "Network tools", "download": "Download", "releases": "Versions"},
         "other_lang": "中文", "other_label": "切换到中文", "star": "Star",
         "foot_note": "Free software under GPL-3.0. Runs on the mihomo core.",
+        "visitors": "Site visitors", "visitors_scope": "Unique browsers since counting began",
         "foot_links": {"releases": "All releases", "issues": "Report a problem", "docs": "Developer docs"},
         "labels": {"checks": "What it checks", "when": "Use it when", "note": "Keep in mind", "options": "Options",
                    "none": "No extra options", "symptom": "What you see", "try": "Start with",
@@ -37,6 +38,7 @@ TEXT = {
         "nav_label": "站内导航", "menu": "导航", "nav": {"start": "快速上手", "guide": "功能手册", "tools": "网络工具", "download": "下载", "releases": "版本记录"},
         "other_lang": "English", "other_label": "Switch to English", "star": "Star",
         "foot_note": "开源 mihomo 客户端 · GPL-3.0",
+        "visitors": "网站访客", "visitors_scope": "自启用起，按浏览器去重",
         "foot_links": {"releases": "全部版本", "issues": "反馈问题", "docs": "开发文档"},
         "labels": {"checks": "查什么", "when": "什么时候用", "note": "留意", "options": "可调参数",
                    "none": "没有额外参数", "symptom": "现象", "try": "先用",
@@ -269,7 +271,15 @@ def layout(lang, page, title, description, body, release_data):
 <footer class="foot">
   <div class="track" aria-hidden="true"></div>
   <div class="wrap">
-    <div><a class="brand" href="index.html" aria-label="{text['home']}">{wordmark}</a><p>{text['foot_note']}</p></div>
+    <div>
+      <a class="brand" href="index.html" aria-label="{text['home']}">{wordmark}</a>
+      <p>{text['foot_note']}</p>
+      <p class="site-visitors" id="site-visitors" title="{text['visitors_scope']}" hidden>
+        <span class="site-visitors-icon" aria-hidden="true"></span>
+        <span>{text['visitors']}</span>
+        <strong data-visitor-count></strong>
+      </p>
+    </div>
     <nav aria-label="{text['nav_label']}">{nav}</nav>
     <nav><a href="{REPO_URL}" target="_blank" rel="noopener">GitHub</a><a href="{REPO_URL}/releases" target="_blank" rel="noopener">{foot['releases']}</a><a href="{REPO_URL}/issues" target="_blank" rel="noopener">{foot['issues']}</a><a href="{DOCS_URL}/README.md" target="_blank" rel="noopener">{foot['docs']}</a></nav>
   </div>

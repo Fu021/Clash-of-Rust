@@ -395,6 +395,8 @@ class VmGuest:
                    '-drive', f'file={self.disk},if=virtio,format=qcow2,discard=unmap']
         if architecture == 'aarch64':
             command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
+            if target.full_desktop:
+                command.extend(['-device', 'virtio-gpu-pci'])
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                     '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',

@@ -30,9 +30,11 @@ path-exclude=/usr/share/info/*
 path-exclude=/usr/share/lintian/*
 """
 GUEST_MAN_DB_MARKER = '/var/lib/man-db/auto-update'
-PREVIOUS_DEB = 'Clash-of-Rust-0.7.2-linux-amd64.deb'
-PREVIOUS_DEB_URL = 'https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/' + PREVIOUS_DEB
-PREVIOUS_DEB_SHA256 = 'fac1162628914400446299d3bb22621cbc10a2c3b3aded03eec310458737c223'
+PREVIOUS_DEB_VERSION = '0.7.2'
+PREVIOUS_DEB_SHA256 = {
+    'amd64': 'fac1162628914400446299d3bb22621cbc10a2c3b3aded03eec310458737c223',
+    'arm64': '0bda8e2cf88cdedf2b047688b91d87616f6283e77a421a4398dddfde62e04b7d',
+}
 
 
 def prepare_guest_package_environment():
@@ -255,23 +257,27 @@ def deb_upgrade_and_uninstall(package):
     if (os.geteuid() == 0 or os.environ.get('COR_LINUX_GUEST') != 'true'
             or distribution not in ('debian', 'linuxmint')):
         raise RuntimeError('DEB installation lifecycle requires an ordinary user in a disposable compatibility VM')
+    architecture = subprocess.check_output(['dpkg-deb', '--field', package, 'Architecture'], text=True).strip()
+    previous_digest = PREVIOUS_DEB_SHA256[architecture]
+    previous_name = f'Clash-of-Rust-{PREVIOUS_DEB_VERSION}-linux-{architecture}.deb'
+    previous_url = f'https://github.com/Fu021/Clash-of-Rust/releases/download/v{PREVIOUS_DEB_VERSION}/{previous_name}'
     report = ROOT/'target/linux-report'/f'{distribution}-lifecycle'
     report.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cor-deb-lifecycle-') as temporary:
         directory = Path(temporary)
         directory.chmod(0o755)
-        previous = directory/PREVIOUS_DEB
-        download(PREVIOUS_DEB_URL, previous, digest=PREVIOUS_DEB_SHA256)
+        previous = directory/previous_name
+        download(previous_url, previous, digest=previous_digest)
         candidate_version = subprocess.check_output(
             ['dpkg-deb', '--field', package, 'Version'], text=True).strip()
-        run(['dpkg', '--compare-versions', '0.7.2', 'lt', candidate_version])
+        run(['dpkg', '--compare-versions', PREVIOUS_DEB_VERSION, 'lt', candidate_version])
         installed_version = ['dpkg-query', '--show', '--showformat=${Version}', 'clash-of-rust']
         if subprocess.check_output(installed_version, text=True) != candidate_version:
             raise RuntimeError('The clean installation did not install the candidate version')
         purge = [*APT_OPTIONS, 'purge', '-y', 'clash-of-rust']
         run_privileged_with_timeout(purge, 300)
         install_packages([previous])
-        if subprocess.check_output(installed_version, text=True) != '0.7.2':
+        if subprocess.check_output(installed_version, text=True) != PREVIOUS_DEB_VERSION:
             raise RuntimeError('Upgrade fixture is missing the previous installed version')
         data = directory/'profile'
         fixture = directory/'fixture.yaml'
@@ -309,8 +315,8 @@ def deb_upgrade_and_uninstall(package):
             raise RuntimeError('DEB uninstall left installed application files')
         if [path.read_bytes() for path in user_files] != contents:
             raise RuntimeError('DEB uninstall changed user data')
-        write_json(report/'result.json', {'previous_version': '0.7.2',
-                                         'previous_sha256': PREVIOUS_DEB_SHA256,
+        write_json(report/'result.json', {'previous_version': PREVIOUS_DEB_VERSION,
+                                         'previous_sha256': previous_digest,
                                          'installed_version': candidate_version,
                                          'candidate_sha256': sha256(package),
                                          'upgrade_preserved_settings_and_profile': True,

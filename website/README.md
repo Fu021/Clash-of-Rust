@@ -35,6 +35,8 @@ python3 -B website/export_preview.py
 
 浏览器回归还覆盖手机版版本记录的当前页标记、两种时区的昼夜边界、手动主题跨页与语言／标签页同步、存储不可用和无脚本深色回退；分别保存日间与夜间截图，检查插画和深浅字标。
 
+页脚访客数统计功能启用以来的独立浏览器。同一站点的页面、语言和标签页共用 IndexedDB 中的随机标识。Worker 只保存该标识的摘要，并用 SQLite 唯一约束去重。换浏览器、换设备或清除站点数据会重新计数。浏览器存储不可用时只查询总数，接口离线、静态预览或禁用 JavaScript 时隐藏计数。测试同一浏览器同时打开中英文页面、刷新和接口失败。需要连同计数接口预览时，先构建网站，再在仓库根目录运行 `npx wrangler dev`，使用本地的计数存储。
+
 首页内存区保留底部留白，使用与终端区相同的像素过渡连接下一节。“测试条件与来源”和手机菜单共用展开、收起动效，支持键盘、连续切换及动态启用减少动态效果；无脚本时保留原生折叠操作。浏览器回归另核对中英文电脑/手机的间距、展开/收起及无脚本回退，下载回退覆盖接口离线、缺少校验、非法链接、草稿及预发布响应；旧 `#preview` 不恢复通道切换。
 
 ## 内容与设计
@@ -58,8 +60,8 @@ python3 -B website/export_preview.py
 
 ## 部署
 
-[Cloudflare Workers 网站](https://clash-of-rust.fu021.shop/)从仓库构建；沿用仓库根目录、`python3 -B website/build.py` 和 `npx wrangler deploy --name clash-of-rust --assets ./website/dist --compatibility-date 2026-11-13`。推送来源分支可能触发现有自动部署；部署结果以 Cloudflare 为准。
+[Cloudflare Workers 网站](https://clash-of-rust.fu021.shop/)从仓库构建。仓库根目录执行 `python3 -B website/build.py`，再运行 `npx wrangler deploy`。现有显式传入 Worker 名称、静态目录和兼容日期的命令也使用根目录的 `wrangler.toml`，由首次迁移创建 SQLite Durable Object。推送来源分支可能触发现有自动部署，部署后可查询 `/api/visitors` 检查计数接口。
 
-为避免无关客户端提交触发网站构建，在 Workers 项目的 **Settings → Build → Build watch paths** 配置 Include paths：`website/*`、`resources/icons/wordmark-light.svg`、`resources/icons/wordmark-dark.svg`，Exclude paths 留空。这覆盖网站源码、构建脚本、部署元数据和仓库外的实际字标输入；新增构建输入时同步调整。该配置在 Cloudflare 账户中保存，提交仓库不能代替账户设置；不使用跳过客户端 CI 的提交标记。保存后分别用网站输入变化和无关文件变化验证。按 [Cloudflare 官方说明](https://developers.cloudflare.com/workers/ci-cd/builds/build-watch-paths/)，空 push、至少 20 个提交或至少 3000 个文件变化仍会直接构建。
+为避免无关客户端提交触发网站构建，在 Workers 项目的 **Settings → Build → Build watch paths** 配置 Include paths，加入 `website/*`、`wrangler.toml`、`resources/icons/wordmark-light.svg`、`resources/icons/wordmark-dark.svg`，Exclude paths 留空。这覆盖网站源码、构建脚本、部署配置和共享字标。该配置在 Cloudflare 账户中保存；保存后分别用网站输入变化和无关文件变化验证。按 [Cloudflare 官方说明](https://developers.cloudflare.com/workers/ci-cd/builds/build-watch-paths/)，空 push、至少 20 个提交或至少 3000 个文件变化仍会直接构建。
 
 构建复制 `_headers`、`_redirects`、`robots.txt` 和 `sitemap.xml`，canonical 与双语 alternate 均使用正式域名。旧 `/features` 跳至中文指南，`/zh/*` 跳至对应中文根路径，`/download` 继续有效。间距样式转换为外部规则以兼容 CSP；搜索引擎收录不作保证。

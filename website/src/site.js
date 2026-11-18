@@ -84,6 +84,61 @@ github("").then(repo => {
   for (const slot of $$("[data-stars]")) slot.textContent = repo.stargazers_count.toLocaleString(ZH ? "zh-CN" : "en");
 }).catch(() => {});
 
+function visitorIdentifier() {
+  return new Promise((resolve, reject) => {
+    if (!globalThis.crypto?.randomUUID || !globalThis.indexedDB) {
+      resolve(null);
+      return;
+    }
+    const request = indexedDB.open("cor-site-visitors", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("browser");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const transaction = database.transaction("browser", "readwrite");
+      const store = transaction.objectStore("browser");
+      const lookup = store.get("id");
+      let identifier;
+      lookup.onsuccess = () => {
+        identifier = lookup.result;
+        if (identifier === undefined) {
+          identifier = crypto.randomUUID();
+          store.add(identifier, "id");
+        }
+      };
+      transaction.oncomplete = () => {
+        database.close();
+        resolve(identifier);
+      };
+      transaction.onabort = () => {
+        database.close();
+        reject(transaction.error);
+      };
+    };
+  });
+}
+
+async function showVisitors(slot) {
+  const identifier = await visitorIdentifier().catch(() => null);
+  const response = await fetch("/api/visitors", {
+    method: identifier ? "POST" : "GET",
+    headers: identifier ? { "X-Cor-Visitor": identifier } : {},
+    credentials: "omit",
+    redirect: "error",
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!response.ok) return;
+  const { count } = await response.json();
+  if (!Number.isSafeInteger(count) || count < 0) return;
+  slot.textContent = count.toLocaleString(document.documentElement.lang);
+  slot.closest(".site-visitors").hidden = false;
+}
+
+const visitorCount = $("[data-visitor-count]");
+if (visitorCount && /^https?:$/.test(location.protocol)) {
+  showVisitors(visitorCount).catch(() => {});
+}
+
 const agent = navigator.userAgent;
 const tablet = /iPad/.test(agent) || (/Macintosh/.test(agent) && navigator.maxTouchPoints > 1);
 const platform = tablet || /iPhone/.test(agent) ? "" : /Android/.test(agent) ? "android" : /Windows/.test(agent) ? "windows"

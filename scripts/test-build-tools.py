@@ -296,6 +296,34 @@ class UbuntuVmTests(unittest.TestCase):
         self.assertIn('systemctl reboot', remote.call_args_list[0].args[0])
         self.assertIn('cloud-init status --wait', remote.call_args_list[1].args[0])
 
+    def test_arm_cloud_vm_adds_a_gpu_only_for_desktop_validation(self):
+        for suite, release, needs_gpu in (('ubuntu', '20.04', False), ('debian', '13', True)):
+            with self.subTest(suite=suite), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                target = linux_ci.target_for(suite, release, 'arm64')
+
+                def create_key(command, **kwargs):
+                    Path(command[-1]).with_suffix('.pub').write_text('fixture public key')
+
+                with patch.object(linux_ci, 'REPORT', directory), \
+                        patch.object(linux_ci, 'host_arch', return_value='arm64'), \
+                        patch.object(linux_ci.os, 'access', return_value=False), \
+                        patch.object(linux_ci, 'run', side_effect=create_key), \
+                        patch.object(linux_ci.socket, 'socket') as socket, \
+                        patch.object(linux_ci.VmGuest, 'cloud_disk', return_value=directory/'seed.img'), \
+                        patch.object(linux_ci.subprocess, 'Popen') as boot, \
+                        patch.object(linux_ci, 'wait_vm_ssh'), \
+                        patch.object(linux_ci.VmGuest, 'wait_cloud_init'), \
+                        patch.object(linux_ci.VmGuest, 'output', side_effect=[
+                            'aarch64\n', f'{suite}\n{release}\n', '5.4.0-fixture\n']):
+                    socket.return_value.__enter__.return_value.getsockname.return_value = ('127.0.0.1', 4321)
+                    guest = linux_ci.VmGuest(directory/'base.qcow2', directory, 'fixture', target)
+                    guest.console.close()
+                command = boot.call_args.args[0]
+                self.assertEqual(command[:3], ['qemu-system-aarch64', '-machine', 'virt,accel=tcg'])
+                self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
+                self.assertEqual('virtio-gpu-pci' in command, needs_gpu)
+
     def test_mint_automatic_boot_preserves_the_image_uuid_and_rejects_non_casper_media(self):
         source = ('menuentry "Start Linux Mint" {\n'
                   '  linux /casper/vmlinuz boot=casper uuid=fixture username=mint '
@@ -2502,6 +2530,29 @@ class BuildTests(unittest.TestCase):
             [sys.executable, '-I', *arguments[1:]], cwd=build.ROOT,
             capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_debian_upgrade_downloads_the_previous_deb_for_the_candidate_architecture(self):
+        cases = (
+            ('amd64', 'fac1162628914400446299d3bb22621cbc10a2c3b3aded03eec310458737c223'),
+            ('arm64', '0bda8e2cf88cdedf2b047688b91d87616f6283e77a421a4398dddfde62e04b7d'),
+        )
+        for arch, digest in cases:
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(release_package, 'ROOT', Path(temporary)), \
+                    patch.object(release_package.os, 'geteuid', return_value=1000), \
+                    patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \
+                    patch.object(release_package.platform, 'freedesktop_os_release', return_value={'ID': 'debian'}), \
+                    patch.object(release_package.subprocess, 'check_output', return_value=arch+'\n') as field, \
+                    patch.object(release_package, 'download', side_effect=RuntimeError('download fixture')) as download:
+                package = Path(temporary)/'candidate.deb'
+                with self.assertRaisesRegex(RuntimeError, 'download fixture'):
+                    release_package.deb_upgrade_and_uninstall(package)
+                field.assert_called_once_with(['dpkg-deb', '--field', package, 'Architecture'], text=True)
+                url, destination = download.call_args.args
+                name = f'Clash-of-Rust-0.7.2-linux-{arch}.deb'
+                self.assertTrue(url.endswith('/releases/download/v0.7.2/'+name))
+                self.assertEqual(destination.name, name)
+                self.assertEqual(download.call_args.kwargs['digest'], digest)
 
     def test_guest_debs_use_official_sources_and_verify_bytes_before_transferring(self):
         payload = b'verified-signed-deb'
@@ -6600,7 +6651,7 @@ class CompatibilityTests(unittest.TestCase):
         for suite, pairs in (
                 ('ubuntu', {(version, arch) for version in ('20.04', '22.04', '24.04', '26.04')
                             for arch in ('x64', 'arm64')}),
-                ('debian', {('12', 'x64'), ('13', 'x64')})):
+                ('debian', {(version, arch) for version in ('12', '13') for arch in ('x64', 'arm64')})):
             wrapper = (workflows / compatibility.WORKFLOWS[suite]).read_text()
             matrix = compatibility.suite_matrix(suite)['include']
             self.assertEqual({(entry['release'], entry['arch']) for entry in matrix}, pairs)
@@ -6619,7 +6670,8 @@ class CompatibilityTests(unittest.TestCase):
             self.assertIn(f'suite: {suite}\n', wrapper)
             self.assertIn('name: ' + compatibility.REPORT_JOBS[suite].removeprefix('Linux / '), shared)
         self.assertEqual(compatibility.input_names('debian'),
-                         ('package-linux-x64', 'linux-tun-test-x64', 'dependency-snapshot'))
+                         ('package-linux-x64', 'package-linux-arm64',
+                          'linux-tun-test-x64', 'linux-tun-test-arm64', 'dependency-snapshot'))
         self.assertEqual(len(release.CI_JOBS), 12)
 
     def test_hosted_compatibility_uses_verified_ci_package_and_no_guest(self):

@@ -3,6 +3,7 @@
 /bundle/
 /dist/
 /website/dist/
+/.wrangler/
 /ci-build/
 /dependency-snapshot/
 /tools/

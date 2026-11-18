@@ -1,0 +1,18 @@
+name = "clash-of-rust"
+main = "website/worker.mjs"
+compatibility_date = "2026-11-13"
+
+[assets]
+directory = "website/dist"
+binding = "ASSETS"
+
+[vars]
+VISITOR_HOST = "clash-of-rust.fu021.shop"
+
+[[durable_objects.bindings]]
+name = "SITE_VISITORS"
+class_name = "SiteVisitors"
+
+[[migrations]]
+tag = "site-visitors-v1"
+new_sqlite_classes = ["SiteVisitors"]

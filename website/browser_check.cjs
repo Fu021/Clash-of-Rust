@@ -30,6 +30,10 @@ const server = http.createServer((request, response) => {
   let target;
   try {
     const route = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
+    if (route === "/api/visitors") {
+      response.writeHead(200, { "Content-Type": "application/json" }).end('{"count":12480}');
+      return;
+    }
     const pathname = route.endsWith("/") ? route + "index.html"
       : path.extname(route) ? route : route + ".html";
     target = path.resolve(root, "." + pathname);
@@ -532,6 +536,41 @@ async function checkThemes(origin) {
   report.themes_and_local_time = "passed";
 }
 
+async function checkVisitors(origin) {
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  const identifiers = [];
+  let available = true;
+  try {
+    await context.route("**/*", route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== origin) return route.abort();
+      if (url.pathname !== "/api/visitors") return route.continue();
+      identifiers.push(route.request().headers()["x-cor-visitor"]);
+      return route.fulfill({ status: available ? 200 : 503, json: { count: 12480 } });
+    });
+    const [home, english] = await Promise.all([context.newPage(), context.newPage()]);
+    await Promise.all([home.goto(origin + "/"), english.goto(origin + "/en/download")]);
+    for (const page of [home, english]) {
+      const count = page.locator("[data-visitor-count]");
+      await count.waitFor({ state: "visible" });
+      assert.equal(await count.textContent(), "12,480");
+    }
+    await home.reload();
+    await home.locator("[data-visitor-count]").waitFor({ state: "visible" });
+    assert.equal(identifiers.length, 3);
+    assert.match(identifiers[0], /^[a-f0-9-]{36}$/);
+    assert.equal(new Set(identifiers).size, 1, "Concurrent tabs, another page and reload must share one visitor ID");
+    available = false;
+    const failure = english.waitForResponse(response => response.url() === origin + "/api/visitors");
+    await english.reload();
+    assert.equal((await failure).status(), 503);
+    assert.equal(await english.locator(".site-visitors").isVisible(), false);
+  } finally {
+    await context.close();
+  }
+  report.visitor_identifier_and_fallback = "passed";
+}
+
 async function run() {
   fs.mkdirSync(output, { recursive: true });
   await new Promise((resolve, reject) => {
@@ -574,6 +613,7 @@ async function run() {
   await checkDownloadFallbacks(origin);
   await checkBenchmarkDetails(origin);
   await checkThemes(origin);
+  await checkVisitors(origin);
   const context = await browser.newContext({
     viewport: { width: 360, height: 640 }, javaScriptEnabled: false, colorScheme: "dark", serviceWorkers: "block",
   });
@@ -583,6 +623,7 @@ async function run() {
     await page.goto(origin + "/download", { waitUntil: "load", timeout: 20000 });
     assert.equal(await page.locator("[data-pkgs] a").count(), 18);
     assert.equal(await page.locator("[data-channel]").count(), 0);
+    assert.equal(await page.locator(".site-visitors").isVisible(), false);
     assert.equal(await page.locator("[data-theme-toggle]").isVisible(), false);
     assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor), "rgb(16, 29, 35)");
     assert.ok((await page.locator(".scene img").evaluate(image => image.currentSrc)).includes("-night"));
