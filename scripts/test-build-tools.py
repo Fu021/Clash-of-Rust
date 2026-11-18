@@ -3179,6 +3179,33 @@ Private_Clean: 2 kB
             pixels[start:start+96] = bytes([180]) * 96
             self.assertEqual(memory_benchmark.subscription_rows_visible(width, pixels), vertical == 410)
 
+    def test_memory_subscription_fixture_checks_visible_cards_after_resetting_scroll(self):
+        width, height = 950, 700
+        pixels = bytearray(width * height * 3)
+        start = (194 * width + 195) * 3
+        pixels[start:start+3] = bytes((30, 30, 29))
+        start = (310 * width + 330) * 3
+        pixels[start:start+96] = bytes([180]) * 96
+        clicks = []
+        commands = []
+
+        def run(command, **kwargs):
+            commands.append(command)
+            if command[-1] == '4':
+                start = (410 * width + 330) * 3
+                pixels[start:start+96] = bytes([180]) * 96
+
+        def wait(check, description):
+            self.assertTrue(check(), description)
+
+        with (patch.object(memory_benchmark, 'window_pixels', return_value=(width, height, pixels)),
+              patch.object(memory_benchmark.subprocess, 'run', side_effect=run),
+              patch.object(memory_benchmark, 'wait_until', side_effect=wait)):
+            memory_benchmark.pagination_navigation('7', {}, lambda *point: clicks.append(point),
+                                                   proxies=False, reset_scroll=True)
+        self.assertEqual(clicks, [(70, 194)])
+        self.assertEqual(commands[-1], ['xdotool', 'click', '--repeat', '480', '--delay', '1', '4'])
+
     def test_memory_shard_accepts_pinned_action_single_artifact_layout(self):
         shards = memory_benchmark.memory_shards
         capabilities = dict(slint=False, cli=False, overrides=False)

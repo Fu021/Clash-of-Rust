@@ -372,20 +372,28 @@ def subscription_rows_visible(width, pixels):
     return True
 
 
-def pagination_navigation(window, env, click, proxies):
+def pagination_scroll(env, button='5'):
+    subprocess.run(['xdotool', 'click', '--repeat', '480', '--delay', '1', button],
+                   env=env, check=True)
+
+
+def pagination_navigation(window, env, click, proxies, reset_scroll=False):
     row = 156 if proxies else 194
     click(70, row)
     subprocess.run(['xdotool', 'mousemove', '--window', window, '590', '500'], env=env, check=True)
 
-    def selected():
+    def selected(check_content):
         width, height, pixels = window_pixels(window, env)
         if (width, height) != (950, 700):
             raise RuntimeError('Unexpected pagination fixture window size')
         offset = (row * width + 195) * 3
         return (pixels[offset:offset+3] == bytes((30, 30, 29))
-                and (proxies or subscription_rows_visible(width, pixels)))
+                and (not check_content or subscription_rows_visible(width, pixels)))
 
-    wait_until(selected, 'pagination fixture navigation and visible list content')
+    if reset_scroll:
+        wait_until(lambda: selected(False), 'pagination fixture sidebar selection')
+        pagination_scroll(env, '4')
+    wait_until(lambda: selected(not proxies), 'pagination fixture navigation and visible list content')
 
 
 def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False,
@@ -468,25 +476,18 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
 
                 if pagination is not None:
                     key, paginated, profiles_list = pagination
+                    proxies = key == 'proxy_groups_paginated'
 
-                    def visit():
-                        pagination_navigation(window, env, click, key == 'proxy_groups_paginated')
-
-                    def scroll(button='5'):
-                        subprocess.run(['xdotool', 'click', '--repeat', '480', '--delay', '1', button],
-                                       env=env, check=True)
-
-                    visit()
+                    pagination_navigation(window, env, click, proxies)
                     identity = owner_pair(measure('visible'), 'gui')
-                    scroll()
+                    pagination_scroll(env)
                     owner_pair(measure('scrolled'), 'gui', identity)
                     close()
                     measure_closed(benchmark, app.pid, prefix+'hidden', output, seconds, env, identity)
                     for _ in range(20):
                         reopen()
-                        visit()
-                        scroll('4')
-                        scroll()
+                        pagination_navigation(window, env, click, proxies, reset_scroll=True)
+                        pagination_scroll(env)
                         close()
                     measure_closed(benchmark, app.pid, prefix+'cycles-hidden', output, seconds, env, identity)
                     if not hidden() or not tray.registered(app.pid):
