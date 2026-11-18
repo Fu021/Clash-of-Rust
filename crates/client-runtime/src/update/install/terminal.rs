@@ -14,6 +14,9 @@ use std::{
 mod service;
 use service::UserService;
 
+const DPKG: &str = "/usr/bin/dpkg";
+const SUDO: &str = "/usr/bin/sudo";
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Recovery {
     executable: PathBuf,
@@ -53,7 +56,7 @@ pub(crate) fn prepare_terminal_install(
 ) -> Result<PathBuf> {
     let _lock = session_lock(&engine.store.root)?;
     anyhow::ensure!(
-        crate::platform::is_elevated() || Path::new("/usr/bin/sudo").is_file(),
+        crate::platform::is_elevated() || Path::new(SUDO).is_file(),
         "纯终端安装需要 sudo；请用 cor update download --output cor-update.deb 下载，再由管理员安装"
     );
     anyhow::ensure!(
@@ -200,36 +203,49 @@ pub fn run_terminal_install(directory: &Path) -> Result<InstallationStatus> {
     Ok(status)
 }
 
-fn authorize(interactive: bool) -> Result<()> {
+fn sudo(interactive: bool) -> Result<Command> {
+    let mut command = foreground(Path::new(SUDO))?;
+    if !interactive {
+        command.arg("-n");
+    }
+    Ok(command)
+}
+
+fn authorize(path: &Path, interactive: bool) -> Result<()> {
     if crate::platform::is_elevated() {
         return Ok(());
     }
     anyhow::ensure!(
-        Path::new("/usr/bin/sudo").is_file(),
+        Path::new(SUDO).is_file(),
         "纯终端安装需要 sudo；请用 cor update download --output cor-update.deb 下载，再由管理员安装"
     );
-    let mut command = foreground(Path::new("/usr/bin/sudo"))?;
-    if !interactive {
-        command.arg("-n");
-    }
-    let status = command.arg("-v").status().context("无法请求终端安装授权")?;
+    let status = sudo(interactive)?
+        .arg("-v")
+        .status()
+        .context("无法请求终端安装授权")?;
     anyhow::ensure!(
         status.success(),
         "未获得安装授权，未执行停止后台；请在交互终端重试，或由管理员手动安装"
     );
+    let status = sudo(interactive)?
+        .args(["-l", "--", DPKG, "-i"])
+        .arg(path)
+        .stdout(Stdio::null())
+        .status()
+        .context("无法核对 DEB 安装授权")?;
+    anyhow::ensure!(
+        status.success(),
+        "未获得安装授权，未执行停止后台；当前账户无权通过 sudo 安装此 DEB"
+    );
     Ok(())
 }
 
-fn install_package(plan: &Plan, interactive: bool) -> Result<()> {
-    let verified = verify(plan, plan.package.parent().context("安装包目录无效")?)?;
+fn install_package(verified: package::Verified, interactive: bool) -> Result<()> {
     let mut command = if crate::platform::is_elevated() {
-        foreground(Path::new("/usr/bin/dpkg"))?
+        foreground(Path::new(DPKG))?
     } else {
-        let mut command = foreground(Path::new("/usr/bin/sudo"))?;
-        if !interactive {
-            command.arg("-n");
-        }
-        command.args(["--", "/usr/bin/dpkg"]);
+        let mut command = sudo(interactive)?;
+        command.args(["--", DPKG]);
         command
     };
     command.arg("-i").arg(&verified.path);
@@ -433,16 +449,19 @@ fn check_interrupted() -> Result<()> {
     Ok(())
 }
 
-fn transaction(
+fn transaction<Package>(
     version: &str,
     starts_core: bool,
-    authorize: impl FnOnce() -> Result<()>,
+    authorize: impl FnOnce() -> Result<Package>,
     commit: impl FnOnce() -> Result<()>,
-    install: impl FnOnce() -> Result<()>,
+    install: impl FnOnce(Package) -> Result<()>,
     committed: impl FnOnce() -> bool,
     recover: impl FnOnce(bool) -> Result<()>,
 ) -> Outcome {
-    let result = authorize().and_then(|()| commit()).and_then(|()| install());
+    let result = authorize().and_then(|package| {
+        commit()?;
+        install(package)
+    });
     match result {
         Ok(()) => match recover(true) {
             Ok(()) => Outcome {
@@ -490,9 +509,10 @@ pub(super) fn helper(directory: &Path) {
             .as_ref()
             .is_some_and(|recovery| recovery.running || recovery.start_after_install),
         || {
-            verify(&plan, directory)?;
-            authorize(interactive)?;
-            check_interrupted()
+            let verified = verify(&plan, directory)?;
+            authorize(&verified.path, interactive)?;
+            check_interrupted()?;
+            Ok(verified)
         },
         || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -500,7 +520,7 @@ pub(super) fn helper(directory: &Path) {
                 .build()?;
             runtime.block_on(stop_owner(&plan, directory))
         },
-        || {
+        |verified| {
             check_interrupted()?;
             record_installation(
                 &plan,
@@ -509,7 +529,7 @@ pub(super) fn helper(directory: &Path) {
                 "正在安装，后台已暂停",
                 false,
             )?;
-            install_package(&plan, interactive)
+            install_package(verified, interactive)
         },
         || directory.join("commit").exists(),
         |installed| restore_owner(&plan, installed),
@@ -611,9 +631,9 @@ mod tests {
         let outcome = transaction(
             &plan.version,
             true,
-            || verify(&plan, download.path()).map(drop),
+            || verify(&plan, download.path()),
             || panic!("must not stop the owner"),
-            || panic!("must not install changed bytes"),
+            |_| panic!("must not install changed bytes"),
             || false,
             |_| panic!("the owner must remain running"),
         );
@@ -628,7 +648,7 @@ mod tests {
             true,
             || bail!("authorization denied"),
             || panic!("must not stop the owner"),
-            || panic!("must not install"),
+            |()| panic!("must not install"),
             || false,
             |_| panic!("must not start a second owner"),
         );
@@ -654,7 +674,7 @@ mod tests {
                     committed.set(true);
                     Ok(())
                 },
-                || {
+                |()| {
                     events.borrow_mut().push("install");
                     bail!("disk full")
                 },
@@ -691,7 +711,7 @@ mod tests {
                 true,
                 || Ok(()),
                 || bail!("commit failed"),
-                || panic!("must not install after an unacknowledged shutdown"),
+                |()| panic!("must not install after an unacknowledged shutdown"),
                 || stopped,
                 |installed| {
                     assert!(!installed);
@@ -716,7 +736,7 @@ mod tests {
                     events.borrow_mut().push("stop");
                     Ok(())
                 },
-                || {
+                |()| {
                     events.borrow_mut().push("install");
                     Ok(())
                 },
@@ -741,7 +761,7 @@ mod tests {
             true,
             || Ok(()),
             || Ok(()),
-            || Ok(()),
+            |()| Ok(()),
             || panic!("successful installation has already committed"),
             |_| bail!("service disabled during authorization"),
         );

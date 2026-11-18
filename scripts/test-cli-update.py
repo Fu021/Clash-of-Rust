@@ -196,11 +196,14 @@ def exercise(package, report, phase):
             cli(data, 'config', 'set', 'update_prereleases', 'true')
             original = endpoint(data)['pid']
             if phase == 'denied':
+                invoke(['/usr/bin/sudo', '-n', '-v'])
                 directory = stage(package, data, False)
                 directories.append(directory)
                 status = run_helper(directory, data)
-                require(status['state'] == 'failed' and status['error'], 'Denied sudo was reported successful')
-                require('未获得安装授权' in status['message'], 'Noninteractive sudo denial was not diagnosed')
+                require(status['state'] == 'failed' and status['error'],
+                        f'Denied sudo was reported as {status["state"]}: {status["message"]}')
+                require('未获得安装授权' in status['message'],
+                        f'Noninteractive sudo denial was not diagnosed: {status["message"]}')
                 require(endpoint(data)['pid'] == original, 'Authorization denial stopped the daemon')
                 require(cli(data, 'config', 'get', 'update_prereleases')['update_prereleases'],
                         'Authorization denial changed the update channel')
@@ -403,9 +406,10 @@ def main():
             for phase in ('denied', 'allowed', 'service'):
                 output = staging/phase
                 invoke(['sudo', '-n', 'install', '-d', '-m', '0700', '-o', user, '-g', user, output])
-                if phase == 'allowed':
+                if phase in ('denied', 'allowed'):
+                    command = '/usr/bin/true' if phase == 'denied' else '/usr/bin/dpkg'
                     with (staging/'sudoers').open('w') as stream:
-                        stream.write(f'{user} ALL=(root) NOPASSWD: /usr/bin/dpkg\n')
+                        stream.write(f'{user} ALL=(root) NOPASSWD: {command}\n')
                     invoke(['sudo', '-n', 'install', '-m', '0440', staging/'sudoers', sudoers])
                     invoke(['sudo', '-n', 'visudo', '-cf', sudoers])
                 if phase == 'service':
