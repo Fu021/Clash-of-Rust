@@ -1747,6 +1747,7 @@ impl App {
             }
 
             Message::GroupPage(group, next) => {
+                self.focus_active_group = false;
                 let offset = self.group_offsets.entry(group).or_default();
                 *offset = if next {
                     offset.saturating_add(PAGE_SIZE)

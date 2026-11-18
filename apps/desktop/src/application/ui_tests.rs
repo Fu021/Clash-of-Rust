@@ -3416,10 +3416,19 @@ fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual
 
 #[test]
 fn delayed_active_group_respects_manual_navigation_and_direct_mode() {
-    for intent in [Intent::ToggleGroup, Intent::Query, Intent::ListPage] {
+    for (intent, value, extra) in [
+        (Intent::ToggleGroup, "Manual", ""),
+        (Intent::Query, "Manual", ""),
+        (Intent::ListPage, "4", ""),
+        (Intent::GroupPage, "Manual", "true"),
+        (Intent::GroupPagination, "true", ""),
+        (Intent::Navigate, "0", ""),
+    ] {
         let mut app = fixture(Page::Home);
+        app.busy = true;
         let _ = app.ui_intent(Intent::Navigate, "1", "");
-        let _ = app.ui_intent(intent, "Manual", "");
+        assert!(app.focus_active_group);
+        let _ = app.ui_intent(intent, value, extra);
         assert!(!app.focus_active_group);
     }
     let mut app = fixture(Page::Home);

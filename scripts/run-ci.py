@@ -84,11 +84,17 @@ def main():
                      'application::ui_tests::protection_rejects_confirmations_that_would_save_or_delete',
                      'application::ui_tests::a_stopped_protected_core_exposes_a_retry_without_disabling_protection',
                      'application::ui_tests::a_locked_rules_page_still_accepts_the_global_exit_confirmation',
+                     'application::ui_tests::entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual_collapse',
+                     'application::ui_tests::delayed_active_group_respects_manual_navigation_and_direct_mode',
+                     'application::ui_tests::proxy_groups_default_to_all_and_keep_independent_node_pagination',
+                     'application::ui_tests::group_pagination_button_dispatches_while_protected_and_tracks_saved_state',
+                     'application::ui_tests::all_proxy_groups_are_scrollable_without_mounting_every_group',
+                     'application::dev2_tests::old_settings_receive_default_sort_and_new_preferences_round_trip',
                      'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])
         for case in ('application::notice::tests::', 'application::claude::tests::',
-                     'application::memory_tests::'):
+                     'application::memory_tests::', 'application::window_state::tests::'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
                  '--locked', case, '--', '--test-threads=1'])
         run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',

@@ -318,6 +318,7 @@ pub(super) fn setting_value(
         "proxy_mode" => json!(settings.proxy_mode),
         "node_sort" => json!(settings.node_sort),
         "tui_node_sort" => json!(settings.tui_node_sort),
+        "proxy_groups_paginated" => json!(settings.proxy_groups_paginated),
         "rule_overrides" => json!(settings.rule_overrides),
         "rule_profiles" => json!(format!("{} 份订阅的规则", settings.rule_profiles.len())),
         "application_rules" => json!(format!(

@@ -12,6 +12,8 @@ macro_rules! view_state {
             ViewState{page:data.get_page(),scroll:[$(data.$get()),+],accent:(data.get_modal()==12).then(||window.get_accent_draft()),position,maximized,fullscreen,sidebar_collapsed:window.get_sidebar_collapsed(),nodes_list:views.get_nodes_list(),profiles_list:views.get_profiles_list()}
         }
         pub fn prepare(state:&ViewState,window:&AppWindow)->bool{
+            window.global::<PageViews>().set_nodes_list(state.nodes_list);
+            window.global::<PageViews>().set_profiles_list(state.profiles_list);
             if let Some((x,y))=state.position{window.window().set_position(fit_window_position(window,slint::PhysicalPosition::new(x,y)));}
             if window.window().is_maximized()!=state.maximized{window.window().set_maximized(state.maximized);}
             if window.window().is_fullscreen()!=state.fullscreen{window.window().set_fullscreen(state.fullscreen);}
@@ -19,8 +21,6 @@ macro_rules! view_state {
         }
         pub fn restore(state:&ViewState,window:&AppWindow){
             window.set_sidebar_collapsed(state.sidebar_collapsed);
-            window.global::<PageViews>().set_nodes_list(state.nodes_list);
-            window.global::<PageViews>().set_profiles_list(state.profiles_list);
             let weak=window.as_weak();let state=state.clone();
             Timer::single_shot(Duration::from_millis(16),move||{
                 let Some(window)=weak.upgrade()else{return;};let data=window.global::<UiData>();if data.get_page()!=state.page{return;}
@@ -155,6 +155,50 @@ view_state! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Headless;
+
+    impl slint::platform::Platform for Headless {
+        fn create_window_adapter(
+            &self,
+        ) -> Result<std::rc::Rc<dyn slint::platform::WindowAdapter>, slint::platform::PlatformError>
+        {
+            Ok(
+                slint::platform::software_renderer::MinimalSoftwareWindow::new(
+                    slint::platform::software_renderer::RepaintBufferType::NewBuffer,
+                ),
+            )
+        }
+    }
+
+    #[test]
+    fn list_views_restore_before_initial_geometry_and_late_frames_preserve_new_input() {
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        for (nodes_list, profiles_list) in [(true, false), (false, true)] {
+            let window = AppWindow::new().unwrap();
+            let saved = ViewState {
+                nodes_list,
+                profiles_list,
+                ..Default::default()
+            };
+            prepare(&saved, &window);
+            let initial = capture(&window);
+            assert_eq!(
+                (initial.nodes_list, initial.profiles_list),
+                (nodes_list, profiles_list)
+            );
+            let views = window.global::<PageViews>();
+            views.set_nodes_list(!nodes_list);
+            views.set_profiles_list(!profiles_list);
+            restore(&saved, &window);
+            let current = capture(&window);
+            assert_eq!(
+                (current.nodes_list, current.profiles_list),
+                (!nodes_list, !profiles_list)
+            );
+        }
+    }
+
     #[test]
     fn recreated_windows_keep_reachable_negative_coordinates_but_recover_removed_monitors() {
         let screens = [(-1920, 0, 1920, 1080), (0, 0, 1920, 1080)];
