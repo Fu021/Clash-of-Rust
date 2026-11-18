@@ -118,8 +118,11 @@ pub(super) fn run(
             .build()?,
     );
     let _context = worker.enter();
-    let saved_view = state.position().map(|position| wire::ViewState {
-        position: Some(position),
+    let (nodes_list, profiles_list) = state.list_views();
+    let saved_view = Some(wire::ViewState {
+        position: state.position(),
+        nodes_list,
+        profiles_list,
         ..Default::default()
     });
     let (app, initial) = App::new(startup, state);
@@ -196,7 +199,9 @@ pub(super) fn run(
             Ok::<_, anyhow::Error>(())
         });
     }
+    let saved_state = worker.block_on(host.app.window_state.save());
     result?;
+    saved_state?;
     Ok(())
 }
 fn size(value: wire::Size) -> Size {
@@ -306,12 +311,17 @@ impl DesktopHost {
     }
     fn remember_view(&mut self, mut view: wire::ViewState) {
         let minimized = self.window.as_ref().is_some_and(|w| w.metrics.minimized);
+        let views_changed = self
+            .app
+            .window_state
+            .capture_list_views(view.nodes_list, view.profiles_list);
         if self.app.window_state.capture_position(
             view.position,
             view.maximized,
             minimized,
             view.fullscreen,
-        ) {
+        ) || views_changed
+        {
             self.position_save_at = Some(Instant::now() + Duration::from_millis(750));
         }
         if view.maximized || view.fullscreen || minimized {

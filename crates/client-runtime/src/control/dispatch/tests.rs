@@ -99,9 +99,21 @@ async fn protected_display_patch_persists_without_starting_or_changing_protectio
     )
     .await
     .unwrap();
+    execute(
+        &shared,
+        Command::ConfigSet {
+            key: "proxy_groups_paginated".into(),
+            value: json!(true),
+        },
+        Owner::Daemon,
+        None,
+    )
+    .await
+    .unwrap();
     let settings = {
         let engine = shared.lock().await;
         assert!(!engine.running());
+        assert!(engine.store.load_settings().unwrap().proxy_groups_paginated);
         assert_eq!(engine.settings.claude_protection, protection);
         assert_eq!(
             engine.store.load_settings().unwrap().accent_color,

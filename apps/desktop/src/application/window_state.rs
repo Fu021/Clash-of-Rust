@@ -1,4 +1,4 @@
-//! Remember ordinary logical dimensions and native screen position independently of core settings.
+//! Remember window geometry and page view preferences independently of core settings.
 use super::runtime::Size;
 use super::{DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE};
 use anyhow::{Context, Result};
@@ -61,6 +61,10 @@ struct Geometry {
     dimensions: Dimensions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     position: Option<(i32, i32)>,
+    #[serde(default)]
+    nodes_list: bool,
+    #[serde(default)]
+    profiles_list: bool,
 }
 
 fn valid_position(position: (i32, i32)) -> bool {
@@ -82,15 +86,22 @@ pub(super) struct State(Arc<Inner>);
 
 impl Default for State {
     fn default() -> Self {
-        Self::new(DEFAULT_WINDOW_SIZE, None, None)
+        Self::new(DEFAULT_WINDOW_SIZE, None, None, (false, false))
     }
 }
 
 impl State {
-    fn new(size: Size, position: Option<(i32, i32)>, path: Option<PathBuf>) -> Self {
+    fn new(
+        size: Size,
+        position: Option<(i32, i32)>,
+        path: Option<PathBuf>,
+        list_views: (bool, bool),
+    ) -> Self {
         let geometry = Geometry {
             dimensions: Dimensions::from_size(size).expect("valid initial window size"),
             position: position.filter(|p| valid_position(*p)),
+            nodes_list: list_views.0,
+            profiles_list: list_views.1,
         };
         Self(Arc::new(Inner {
             geometry: SyncMutex::new(GeometryState {
@@ -114,6 +125,9 @@ impl State {
             stored.map_or(DEFAULT_WINDOW_SIZE, |g| g.dimensions.size()),
             stored.and_then(|g| g.position),
             Some(path),
+            stored.map_or((false, false), |geometry| {
+                (geometry.nodes_list, geometry.profiles_list)
+            }),
         )
     }
 
@@ -123,6 +137,20 @@ impl State {
 
     pub(super) fn position(&self) -> Option<(i32, i32)> {
         self.0.geometry.lock().unwrap().normal.position
+    }
+
+    pub(super) fn list_views(&self) -> (bool, bool) {
+        let geometry = self.0.geometry.lock().unwrap();
+        (geometry.normal.nodes_list, geometry.normal.profiles_list)
+    }
+
+    pub(super) fn capture_list_views(&self, nodes_list: bool, profiles_list: bool) -> bool {
+        let mut geometry = self.0.geometry.lock().unwrap();
+        let changed = geometry.normal.nodes_list != nodes_list
+            || geometry.normal.profiles_list != profiles_list;
+        geometry.normal.nodes_list = nodes_list;
+        geometry.normal.profiles_list = profiles_list;
+        changed
     }
 
     pub(super) fn dirty(&self) -> bool {
@@ -263,6 +291,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn independent_list_preferences_survive_relaunch_without_a_window_position() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let before = std::fs::read(store.root.join("settings.json")).unwrap();
+        let state = State::load(&store);
+        assert_eq!(state.list_views(), (false, false));
+        assert!(state.capture_list_views(true, false));
+        assert!(!state.capture_list_views(true, false));
+        state.save().await.unwrap();
+        let restored = State::load(&store);
+        assert_eq!(restored.position(), None);
+        assert_eq!(restored.list_views(), (true, false));
+        assert!(restored.capture_list_views(false, true));
+        let delayed = restored.clone();
+        let writer = tokio::spawn(async move { delayed.save().await });
+        restored.capture_list_views(true, true);
+        restored.save().await.unwrap();
+        writer.await.unwrap().unwrap();
+        assert_eq!(State::load(&store).list_views(), (true, true));
+        assert_eq!(
+            std::fs::read(store.root.join("settings.json")).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
     async fn concurrent_saves_cannot_overwrite_the_latest_normal_size() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned()).unwrap();
@@ -288,6 +342,7 @@ mod tests {
         let state = State::load(&store);
         assert_eq!(state.size(), Size::new(900.0, 500.0));
         assert_eq!(state.position(), None);
+        assert_eq!(state.list_views(), (false, false));
         assert!(state.capture_position(Some((-1800, 120)), false, false, false));
         assert!(!state.capture_position(Some((0, 0)), true, false, false));
         assert!(!state.capture_position(Some((0, 0)), false, true, false));

@@ -74,22 +74,33 @@ impl App {
             groups[..=index].rotate_right(1);
         }
         let total = groups.len();
-        let offset = self
-            .list_offset
-            .min(total.saturating_sub(1) / GROUP_PAGE_SIZE * GROUP_PAGE_SIZE);
-        let visible = &groups[offset..(offset + GROUP_PAGE_SIZE).min(total)];
+        let offset = if self.settings.proxy_groups_paginated {
+            self.list_offset
+                .min(total.saturating_sub(1) / GROUP_PAGE_SIZE * GROUP_PAGE_SIZE)
+        } else {
+            0
+        };
+        let end = if self.settings.proxy_groups_paginated {
+            (offset + GROUP_PAGE_SIZE).min(total)
+        } else {
+            total
+        };
+        let visible = &groups[offset..end];
         let mut orders = self.proxy_order.borrow_mut();
         orders.retain(|name, _| {
-            visible.iter().any(|(group, _)| {
-                *group == name && (self.expanded.contains(name.as_str()) || !query.is_empty())
+            visible.iter().enumerate().any(|(index, (group, _))| {
+                *group == name
+                    && (self.expanded.contains(name.as_str())
+                        || (!query.is_empty() && index < GROUP_PAGE_SIZE))
             })
         });
         let mut rows = Vec::with_capacity(visible.len());
         let mut delay_labels = BTreeMap::<Option<u32>, SharedString>::new();
         let unknown_kind = SharedString::from("");
-        for &(group, proxy) in visible {
+        for (index, &(group, proxy)) in visible.iter().enumerate() {
             let group_name = SharedString::from(group.shared());
-            let expanded = self.expanded.contains(group.as_str()) || !query.is_empty();
+            let expanded = self.expanded.contains(group.as_str())
+                || (!query.is_empty() && index < GROUP_PAGE_SIZE);
             let mut pairs = Vec::new();
             let mut count = 0;
             let mut start = 0;
@@ -562,7 +573,20 @@ impl App {
         if self.page == Page::Proxies {
             let (total, groups) = self.proxy_rows();
             models.set_groups(groups);
-            self.pager(data, total, GROUP_PAGE_SIZE);
+            set!(
+                get_groups_paginated,
+                set_groups_paginated,
+                self.settings.proxy_groups_paginated
+            );
+            self.pager(
+                data,
+                total,
+                if self.settings.proxy_groups_paginated {
+                    GROUP_PAGE_SIZE
+                } else {
+                    total.max(1)
+                },
+            );
         } else {
             models.set_groups(Vec::new());
         }

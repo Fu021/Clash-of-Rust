@@ -3378,7 +3378,7 @@ fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual
     reply.snapshot = Some(Snapshot {
         running: true,
         mode: "rule".into(),
-        active_group: Some("ZZ Active".into()),
+        active_group: None,
         proxies: serde_json::from_value(serde_json::json!({"proxies": {
             "AA Unused": {"type":"Selector", "now":"Leaf", "all":["Leaf"]},
             "ZZ Active": {"type":"Selector", "now":"Leaf", "all":["Leaf"]},
@@ -3388,11 +3388,20 @@ fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual
         ..Default::default()
     });
     let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(app.focus_active_group);
+    assert!(!app.proxy_rows().1.iter().any(|(group, _)| group.expanded));
+    let mut reply = synchronized_reply(&app);
+    reply.scope = Scope::Proxies;
+    let mut snapshot = app.snapshot.clone();
+    snapshot.active_group = Some("ZZ Active".into());
+    reply.snapshot = Some(snapshot);
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(!app.focus_active_group);
     let (_, groups) = app.proxy_rows();
     assert_eq!(groups[0].0.id.as_str(), "ZZ Active");
     assert!(groups[0].0.expanded);
     assert_eq!(groups[1].0.id.as_str(), "AA Unused");
-    app.expanded.remove("ZZ Active");
+    let _ = app.ui_intent(Intent::ToggleGroup, "ZZ Active", "");
     let mut reply = synchronized_reply(&app);
     reply.scope = Scope::Proxies;
     reply.snapshot = Some(app.snapshot.clone());
@@ -3403,6 +3412,138 @@ fn entering_proxies_pins_and_expands_the_actual_group_without_reopening_a_manual
     app.snapshot.active_group = None;
     app.query.clear();
     assert_eq!(app.proxy_rows().1[0].0.id.as_str(), "AA Unused");
+}
+
+#[test]
+fn delayed_active_group_respects_manual_navigation_and_direct_mode() {
+    for intent in [Intent::ToggleGroup, Intent::Query, Intent::ListPage] {
+        let mut app = fixture(Page::Home);
+        let _ = app.ui_intent(Intent::Navigate, "1", "");
+        let _ = app.ui_intent(intent, "Manual", "");
+        assert!(!app.focus_active_group);
+    }
+    let mut app = fixture(Page::Home);
+    let _ = app.ui_intent(Intent::Navigate, "1", "");
+    let mut reply = synchronized_reply(&app);
+    reply.scope = Scope::Proxies;
+    reply.snapshot = Some(Snapshot {
+        running: true,
+        mode: "direct".into(),
+        ..Default::default()
+    });
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert!(!app.focus_active_group);
+}
+
+#[test]
+fn proxy_groups_default_to_all_and_keep_independent_node_pagination() {
+    let mut app = fixture(Page::Proxies);
+    let mut proxies = serde_json::Map::new();
+    let names: Vec<_> = (0..125).map(|index| format!("Node {index:03}")).collect();
+    for index in 0..9 {
+        proxies.insert(
+            format!("Group {index}"),
+            serde_json::json!({"type":"Selector","now":names[0],"all":names}),
+        );
+    }
+    app.snapshot.proxies = serde_json::from_value(serde_json::json!({"proxies":proxies})).unwrap();
+    app.snapshot.active_group = Some("Group 8".into());
+    app.expanded.insert("Group 8".into());
+    let (total, groups) = app.proxy_rows();
+    assert_eq!(total, 9);
+    assert_eq!(groups.len(), 9);
+    assert_eq!(groups[0].0.id, "Group 8");
+    assert!(groups[0].0.next);
+    assert_eq!(groups[0].1.len(), PAGE_SIZE / 2);
+    assert!(groups[1..].iter().all(|(_, nodes)| nodes.is_empty()));
+    let _ = app.ui_intent(Intent::GroupPage, "Group 8", "true");
+    assert!(app.proxy_rows().1[0].0.previous);
+    app.settings.proxy_groups_paginated = true;
+    app.list_offset = GROUP_PAGE_SIZE;
+    assert_eq!(app.proxy_rows().1.len(), GROUP_PAGE_SIZE);
+    assert_eq!(app.proxy_rows().1[0].0.id, "Group 3");
+    app.settings.proxy_groups_paginated = false;
+    assert_eq!(app.proxy_rows().1.len(), 9);
+    app.query = "Group 7".into();
+    assert_eq!(app.proxy_rows().1[0].0.id, "Group 7");
+    app.query.clear();
+    let _ = app.ui_intent(Intent::Navigate, "0", "");
+    assert!(app.proxy_order.borrow().is_empty());
+}
+
+#[test]
+fn group_pagination_button_dispatches_while_protected_and_tracks_saved_state() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    data.set_page(1);
+    data.set_protected(true);
+    track_targets(&window);
+    let events = std::rc::Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    window
+        .global::<UiActions>()
+        .on_dispatch(move |intent, a, b| recorded.borrow_mut().push((intent, a, b)));
+    window.show().unwrap();
+    let mut app = fixture(Page::Proxies);
+    app.busy = true;
+    app.claude.protection_pending = Some(true);
+    for (saved, requested) in [(false, "true"), (true, "false")] {
+        data.set_groups_paginated(saved);
+        let _ = window.window().take_snapshot().unwrap();
+        click_target(&window, "group-pagination");
+        assert_eq!(
+            events.borrow_mut().pop(),
+            Some((Intent::GroupPagination, requested.into(), "".into()))
+        );
+        let _ = app.ui_intent(Intent::GroupPagination, requested, "");
+        assert!(matches!(
+            app.queued_actions.pop_back(),
+            Some(Action::GroupPagination(value)) if value != saved
+        ));
+    }
+    window.hide().unwrap();
+}
+
+#[test]
+fn all_proxy_groups_are_scrollable_without_mounting_every_group() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    data.set_page(1);
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    models.set_groups(
+        (0..500)
+            .map(|index| {
+                (
+                    clash_client_ui::GroupItem {
+                        id: format!("group-{index}").into(),
+                        title: format!("Group {index}").into(),
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                )
+            })
+            .collect(),
+    );
+    track_targets(&window);
+    window.show().unwrap();
+    let _ = window.window().take_snapshot().unwrap();
+    let mounted = TARGETS.with(|targets| {
+        targets
+            .borrow()
+            .keys()
+            .filter(|key| key.starts_with("group:"))
+            .count()
+    });
+    assert!((1..100).contains(&mounted), "{mounted} mounted groups");
+    assert_eq!(data.get_groups().row_count(), 500);
+    data.set_scroll_proxies(-100_000.);
+    let _ = window.window().take_snapshot().unwrap();
+    let bounds = target_bounds("group:group-499");
+    assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= 700.);
+    window.hide().unwrap();
 }
 
 #[test]

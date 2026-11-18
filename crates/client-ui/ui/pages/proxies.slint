@@ -1,10 +1,26 @@
+import { ListView as SlintListView } from "std-widgets.slint";
 import { PageSurface, Disclosure, Motion } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, NodeItem, NodePair } from "../state.slint";
 import { CardGrid } from "../components/card-grid.slint";
 import { PageViews, ViewToggle } from "../components/view-toggle.slint";
 import { GeometryTarget, UiGeometry } from "../components/geometry.slint";
-import { PageScroll, Label, Caption, Heading, Chevron, ContentPanel, RowPanel, ActionButton, Badge, Field, Select } from "../components/controls.slint";
+import { Label, Caption, Heading, Chevron, ContentPanel, ActionButton, Field, Select } from "../components/controls.slint";
+
+component ListView inherits SlintListView {
+    in property <string> content-key;
+    min-width: 0px; min-height: 0px; vertical-stretch: 1;
+    content-width: self.visible-width;
+    horizontal-scrollbar-policy: always-off;
+    property <length> bottom: min(0px, self.visible-height - self.content-height);
+    changed content-key => { self.content-y = 0px; }
+    changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
+    changed content-y => {
+        if self.content-y < self.bottom || self.content-y > 0px {
+            self.content-y = clamp(self.content-y, self.bottom, 0px);
+        }
+    }
+}
 
 component NodeCard inherits ContentPanel {
     in property <NodeItem> node;
@@ -52,19 +68,19 @@ export component ProxiesPage inherits PageSurface {
     motion-enabled: Motion.layout-active;
     property <string> detail-group;
     property <string> detail-node;
-    PageScroll {
-        content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.node-sort;
-        content-y <=> UiData.scroll-proxies;
-        x: 0px; width: parent.width + Theme.content-gap;
-        VerticalLayout {
-            alignment: start;
-            padding-right: Theme.content-gap; spacing: Theme.page-gap;
+    VerticalLayout {
+            spacing: Theme.page-gap;
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 ViewToggle { geometry-key: "nodes-view"; list-view <=> PageViews.nodes-list; }
                 Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
                 Select { geometry-key: "node-sort"; width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
             }
-            for group in UiData.groups: group-card := ContentPanel {
+            ListView {
+                content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.node-sort + "/" + (UiData.groups-paginated ? "paged" : "all");
+                content-y <=> UiData.scroll-proxies;
+                for group in UiData.groups: VerticalLayout {
+                padding-bottom: Theme.page-gap;
+                group-card := ContentPanel {
                 property <[NodePair]> closing-nodes;
                 property <string> closing-page;
                 property <bool> expanded: group.expanded;
@@ -128,12 +144,20 @@ export component ProxiesPage inherits PageSurface {
                     }
                 }
             }
+                }
+            }
             if UiData.groups.length == 0: ContentPanel { Caption { text: UiData.running ? "当前配置没有匹配的代理组" : "内核启动后显示代理组"; } }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Caption { text: UiData.page-status; }
-                ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 4), ""); } }
-                ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 4), ""); } }
+                Caption { text: (UiData.groups-paginated ? "分页显示 · " : "全部代理组 · ") + UiData.page-status; }
+                ActionButton {
+                    geometry-key: "group-pagination";
+                    text: UiData.groups-paginated ? "显示全部" : "分页显示";
+                    compact: true; quiet: true;
+                    accessible-label: UiData.groups-paginated ? "当前分页显示，切换为显示全部代理组" : "当前显示全部代理组，切换为每页四组";
+                    clicked => { UiActions.dispatch(Intent.group-pagination, UiData.groups-paginated ? "false" : "true", ""); }
+                }
+                if UiData.groups-paginated: ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 4), ""); } }
+                if UiData.groups-paginated: ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 4), ""); } }
             }
         }
-    }
 }

@@ -26,6 +26,7 @@ pub(super) enum Action {
     SubscriptionInterval(u32),
     UpdateInterval(u32),
     NodeSort(NodeSort),
+    GroupPagination(bool),
     Import(String, String),
     EditProfile(String, String, String),
     RefreshTray,
@@ -54,6 +55,7 @@ impl Action {
                 | Self::TextScale(_)
                 | Self::TraySpeed(_)
                 | Self::NodeSort(_)
+                | Self::GroupPagination(_)
                 | Self::LoadRules(_)
                 | Self::RefreshTray
                 | Self::OpenProfiles
@@ -394,6 +396,14 @@ pub(super) async fn execute(
                 engine.save_settings(settings).await?;
                 Ok("节点排序已保存".into())
             }
+            Action::GroupPagination(proxy_groups_paginated) => {
+                let settings = Settings {
+                    proxy_groups_paginated,
+                    ..engine.settings.clone()
+                };
+                engine.save_settings(settings).await?;
+                Ok("代理组显示方式已保存".into())
+            }
             Action::DeleteProfile(id) => {
                 engine.delete_profile(&id).await?;
                 Ok("订阅已删除；使用中的订阅会先切换到默认直连".into())
@@ -547,6 +557,7 @@ mod synchronization_tests {
             Action::TextScale(125),
             Action::TraySpeed(true),
             Action::NodeSort(proxy_order::NodeSort::Name),
+            Action::GroupPagination(true),
         ] {
             assert!(allowed.allowed_during_protection());
         }

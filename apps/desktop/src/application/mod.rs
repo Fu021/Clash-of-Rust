@@ -195,6 +195,7 @@ enum Message {
     Navigate(Page),
     Query(String),
     NodeSort(NodeSort),
+    GroupPagination(bool),
     ConnectionSort(ConnectionField),
     SiteCategory(CategoryFilter),
     SiteStatus(StatusFilter),
@@ -1321,6 +1322,7 @@ impl App {
                 return self.dispatch(Action::Refresh);
             }
             Message::Query(value) => {
+                self.focus_active_group = false;
                 if self.page == Page::Rules {
                     self.rule_state.clear_selection();
                 }
@@ -1341,6 +1343,12 @@ impl App {
                 self.group_offsets.clear();
                 self.proxy_order.get_mut().clear();
                 return self.dispatch(Action::NodeSort(mode));
+            }
+            Message::GroupPagination(paginated) => {
+                self.focus_active_group = false;
+                self.list_offset = 0;
+                self.proxy_order.get_mut().clear();
+                return self.dispatch(Action::GroupPagination(paginated));
             }
             Message::SiteCategory(category) => {
                 self.site_category = category;
@@ -1386,7 +1394,10 @@ impl App {
                 self.list_offset = 0;
                 self.site_show_results = false;
             }
-            Message::ListPage(offset) => self.list_offset = offset,
+            Message::ListPage(offset) => {
+                self.focus_active_group = false;
+                self.list_offset = offset;
+            }
             Message::ProfileName(value) => self.profile_name = value,
             Message::ProfileSource(value) => self.profile_source = value,
             Message::MixedPort(value) => self.mixed_port = value,
@@ -1666,6 +1677,7 @@ impl App {
                 return self.dispatch(action);
             }
             Message::ToggleGroup(group) => {
+                self.focus_active_group = false;
                 if !self.expanded.remove(&group) {
                     self.expanded.insert(group);
                 }
@@ -2329,12 +2341,20 @@ impl App {
                         );
                     }
                     if reply.scope == Scope::Proxies && snapshot.running {
-                        if self.focus_active_group {
-                            if let Some(group) = &snapshot.active_group {
+                        if self.page == Page::Proxies && self.focus_active_group {
+                            if let Some(group) = &snapshot.active_group
+                                && snapshot
+                                    .proxies
+                                    .proxies
+                                    .get(group.as_str())
+                                    .is_some_and(|proxy| !proxy.all.is_empty())
+                            {
                                 self.expanded.insert(group.clone());
                                 self.group_offsets.remove(group);
+                                self.focus_active_group = false;
+                            } else if snapshot.mode == "direct" {
+                                self.focus_active_group = false;
                             }
-                            self.focus_active_group = false;
                         }
                         self.proxy_order.get_mut().clear();
                         let proxies = &snapshot.proxies.proxies;
@@ -3170,7 +3190,7 @@ mod memory_tests {
     }
 
     #[test]
-    fn proxy_widget_count_is_bounded_across_many_expanded_groups() {
+    fn proxy_search_lists_all_groups_without_materializing_all_matching_nodes() {
         fn nodes(groups: usize) -> usize {
             let mut app = App::initial_state(Err(anyhow::anyhow!("view test")), None);
             let mut proxies = serde_json::Map::new();
@@ -3187,8 +3207,8 @@ mod memory_tests {
             app.snapshot.proxies =
                 serde_json::from_value(serde_json::json!({"proxies":proxies})).unwrap();
             app.query = "node-".into();
-            let (_, groups) = app.proxy_rows();
-            assert!(groups.len() <= GROUP_PAGE_SIZE);
+            let (total, groups) = app.proxy_rows();
+            assert_eq!(groups.len(), total);
             groups
                 .iter()
                 .map(|(_, pairs)| {
@@ -3780,8 +3800,19 @@ mod dev2_tests {
     fn old_settings_receive_default_sort_and_new_preferences_round_trip() {
         let mut json = serde_json::to_value(Settings::default()).unwrap();
         json.as_object_mut().unwrap().remove("node_sort");
+        json.as_object_mut()
+            .unwrap()
+            .remove("proxy_groups_paginated");
         let settings: Settings = serde_json::from_value(json).unwrap();
         assert_eq!(settings.node_sort, NodeSort::Name);
+        assert!(!settings.proxy_groups_paginated);
+        let paginated = Settings {
+            proxy_groups_paginated: true,
+            ..Settings::default()
+        };
+        let decoded: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&paginated).unwrap()).unwrap();
+        assert!(decoded.proxy_groups_paginated);
         for mode in NodeSort::ALL {
             let settings = Settings {
                 node_sort: mode,

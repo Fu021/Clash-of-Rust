@@ -49,6 +49,7 @@ pub const READABLE_SETTINGS: &[&str] = &[
     "run_mode",
     "proxy_mode",
     "node_sort",
+    "proxy_groups_paginated",
     "tui_node_sort",
     "rule_overrides",
     "rule_profiles",
@@ -76,6 +77,7 @@ pub const MUTABLE_SETTINGS: &[&str] = &[
     "delay_interval_minutes",
     "subscription_update_interval_minutes",
     "node_sort",
+    "proxy_groups_paginated",
     "tui_node_sort",
 ];
 
@@ -199,6 +201,7 @@ pub struct Settings {
     pub run_mode: String,
     pub proxy_mode: crate::model::ProxyMode,
     pub node_sort: crate::proxy_order::NodeSort,
+    pub proxy_groups_paginated: bool,
     pub tui_node_sort: crate::proxy_order::NodeSort,
     pub rule_overrides: RuleOverrides,
     pub rule_profiles:
@@ -245,6 +248,7 @@ impl Default for Settings {
             run_mode: "rule".into(),
             proxy_mode: crate::model::ProxyMode::Off,
             node_sort: crate::proxy_order::NodeSort::default(),
+            proxy_groups_paginated: false,
             tui_node_sort: crate::proxy_order::NodeSort::LatencyAscending,
             rule_overrides: RuleOverrides::default(),
             rule_profiles: Default::default(),
@@ -262,6 +266,7 @@ impl Settings {
         proposed.text_scale = self.text_scale;
         proposed.tray_speed = self.tray_speed;
         proposed.node_sort = self.node_sort;
+        proposed.proxy_groups_paginated = self.proxy_groups_paginated;
         proposed.tui_node_sort = self.tui_node_sort;
         *self == proposed
     }
@@ -994,6 +999,7 @@ mod tests {
         appearance.text_scale = 125;
         appearance.tray_speed = true;
         appearance.node_sort = crate::proxy_order::NodeSort::LatencyAscending;
+        appearance.proxy_groups_paginated = true;
         appearance.tui_node_sort = crate::proxy_order::NodeSort::Name;
         assert!(before.require_settings_change(&appearance).is_ok());
         assert_eq!(appearance.claude_protection, before.claude_protection);
