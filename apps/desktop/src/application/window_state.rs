@@ -294,6 +294,7 @@ mod tests {
     async fn independent_list_preferences_survive_relaunch_without_a_window_position() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned()).unwrap();
+        store.load_settings().unwrap();
         let before = std::fs::read(store.root.join("settings.json")).unwrap();
         let state = State::load(&store);
         assert_eq!(state.list_views(), (false, false));
