@@ -472,16 +472,18 @@ class UbuntuVmTests(unittest.TestCase):
         self.assertNotIn('policykit-1-gnome', dependencies)
 
     def test_mint_desktop_system_proxy_checks_the_session_and_restores_settings(self):
-        for after, restored in (('original', True), ('changed', False)):
-            with self.subTest(restored=restored), \
+        for port, after, error in (('49152', 'original', None),
+                                   ('7897', 'original', 'did not apply'),
+                                   ('49152', 'changed', 'restore')):
+            with self.subTest(port=port, after=after), \
                     patch.object(linux_mint_desktop, 'output', side_effect=[
-                        *(['original'] * 4), "'manual'", "'127.0.0.1'", *([after] * 4),
+                        *(['original'] * 4), "'manual'", "'127.0.0.1'", port, *([after] * 4),
                     ]), patch.object(linux_mint_desktop, 'cli') as cli:
-                if restored:
-                    linux_mint_desktop.verify_system_proxy()
+                if error is None:
+                    linux_mint_desktop.verify_system_proxy(49152)
                 else:
-                    with self.assertRaisesRegex(RuntimeError, 'restore'):
-                        linux_mint_desktop.verify_system_proxy()
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        linux_mint_desktop.verify_system_proxy(49152)
                 self.assertEqual(cli.call_args_list, [call('proxy', 'system'), call('proxy', 'off')])
 
     def test_mint_wayland_checks_use_the_real_session_and_its_socket(self):
@@ -2619,6 +2621,23 @@ class BuildTests(unittest.TestCase):
                                     .isdisjoint(packages))
                     self.assertIn('gsettings-desktop-schemas',
                                   release_package.compatibility_download_dependencies())
+
+    def test_linux_gui_retries_a_mixed_port_in_use_on_udp(self):
+        import errno
+        import linux_gui
+
+        first_tcp, first_udp, next_tcp, next_udp = [MagicMock() for _ in range(4)]
+        for reserved in (first_tcp, first_udp, next_tcp, next_udp):
+            reserved.__enter__.return_value = reserved
+        first_tcp.getsockname.return_value = ('127.0.0.1', 49152)
+        first_udp.bind.side_effect = OSError(errno.EADDRINUSE, 'already in use')
+        next_tcp.getsockname.return_value = ('127.0.0.1', 49153)
+        with patch.object(linux_gui.socket, 'socket', side_effect=[first_tcp, first_udp, next_tcp, next_udp]):
+            self.assertEqual(linux_gui.available_mixed_port(), 49153)
+        first_udp.bind.assert_called_once_with(('127.0.0.1', 49152))
+        next_udp.bind.assert_called_once_with(('127.0.0.1', 49153))
+        for reserved in (first_tcp, first_udp, next_tcp, next_udp):
+            reserved.__exit__.assert_called_once()
 
     @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Unix sockets are unavailable')
     def test_linux_gui_finds_only_wayland_sockets(self):

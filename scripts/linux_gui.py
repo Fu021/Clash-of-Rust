@@ -6,6 +6,7 @@ the production polkit action and a real graphical authentication agent.
 import argparse
 import ast
 import contextlib
+import errno
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import platform
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -291,6 +293,21 @@ def core_processes(proc=Path('/proc'), uid=None):
     return result
 
 
+def available_mixed_port():
+    for attempt in range(32):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            tcp.bind(('127.0.0.1', 0))
+            port = tcp.getsockname()[1]
+            try:
+                udp.bind(('127.0.0.1', port))
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE or attempt == 31:
+                    raise
+                continue
+            return port
+
+
 def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verify_proxy=None):
     data = report/('profile-'+backend)
     data.mkdir()
@@ -304,6 +321,8 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
     os.environ['CLASH_OF_RUST_DATA_DIR'] = str(data)
     fixture = report/'local.yaml'
     fixture.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
+    mixed_port = available_mixed_port()
+    write_json(data/'settings.json', {'mixed_port': mixed_port})
     with (report/(backend+'.log')).open('w') as log, process([APP/'clash-of-rust'], log, env) as owner:
         observed = []
         renderer_pids = []
@@ -347,7 +366,7 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
                 or before.get('owner') != 'gui' or not before.get('running')):
             raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core')
         if verify_proxy:
-            verify_proxy()
+            verify_proxy(mixed_port)
         with Session([APP/'cor', 'ui'], env=env) as terminal:
             terminal.wait('CLASH OF RUST')
             terminal.send(terminal.page_key('订阅'))

@@ -99,7 +99,7 @@ def authorization():
         write_json(home/AUTH_RESULT, result)
 
 
-def verify_system_proxy():
+def verify_system_proxy(mixed_port):
     schema = 'org.gnome.system.proxy'
 
     def settings():
@@ -110,7 +110,8 @@ def verify_system_proxy():
     try:
         cli('proxy', 'system')
         if (output(['gsettings', 'get', schema, 'mode']) != "'manual'"
-                or output(['gsettings', 'get', schema+'.http', 'host']) != "'127.0.0.1'"):
+                or output(['gsettings', 'get', schema+'.http', 'host']) != "'127.0.0.1'"
+                or output(['gsettings', 'get', schema+'.http', 'port']) != str(mixed_port)):
             raise RuntimeError('The installed owner did not apply the Cinnamon system proxy')
     finally:
         cli('proxy', 'off')
