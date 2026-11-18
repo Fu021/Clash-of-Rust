@@ -332,6 +332,7 @@ def verify(console, resources, report):
                    'native-setting-save-failure-persistence-and-cross-client-refresh',
                    'fake-ip-list-add-disable-restore-and-stale-confirmation',
                    'profile-list-selection-and-included-shortcut-state',
+                   'long-profile-name-and-source-survive-phone-resize',
                    'rule-list-sources-add-move-disable-delete-and-stale-confirmation',
                    'q-restores-terminal', 'ctrl-c-restores-terminal'],
     }), encoding='utf-8')
@@ -648,6 +649,7 @@ def verify_network_export(command, data, report):
 
 
 def verify_profile_catalog(call, command, data, report):
+    from cli_tui_preview import selected, verify_desktop_catalog
     included = data/'included.yaml'
     plain = data/'plain.yaml'
     included_raw = 'proxies: []\nrules:\n  - GEOSITE,category-ads-all,REJECT\n  - MATCH,DIRECT\n'
@@ -660,7 +662,6 @@ def verify_profile_catalog(call, command, data, report):
     first = next(profile['id'] for profile in profiles if profile['name'] == '含规则线路')
     second = next(profile['id'] for profile in profiles if profile['name'] == '备用线路')
     call('profile', 'use', first)
-    from cli_tui_preview import verify_desktop_catalog
     verify_desktop_catalog(call, command, report, first, second)
     with Session([*command, 'ui']) as terminal:
         terminal.wait('内核未运行')
@@ -726,3 +727,16 @@ def verify_profile_catalog(call, command, data, report):
         terminal.capture(report, 'shortcut-external-profile-refresh')
     if included.read_text(encoding='utf-8') != included_raw or plain.read_text(encoding='utf-8') != included_raw:
         raise RuntimeError('TUI shortcut changes rewrote an original subscription')
+    long_name = '跨地域远程线路' * 5 + '验收终点'
+    call('profile', 'edit', second, '--name', long_name)
+    with Session([*command, 'ui'], columns=120, rows=40) as terminal:
+        terminal.wait('内核未运行')
+        terminal.send('3/验收终点\r'.encode())
+        terminal.wait(long_name)
+        for columns, heading in ((40, '[订阅]'), (60, '[3 订阅]')):
+            terminal.resize(columns, 24)
+            terminal.wait(heading, rows=24)
+            terminal.wait(r'验\s*收\s*终\s*点\s*·\s*本\s*地', rows=24, regex=True)
+            if long_name+'·本地' not in ''.join(selected(terminal).split()):
+                raise RuntimeError(f'{columns}-column profile selection lost its name or source')
+            terminal.capture(report, f'profile-long-{columns}x24')
