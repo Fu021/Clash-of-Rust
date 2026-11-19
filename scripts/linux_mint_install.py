@@ -25,6 +25,7 @@ d-i keyboard-configuration/layoutcode string us
 d-i time/zone string Etc/UTC
 d-i clock-setup/utc boolean true
 d-i clock-setup/ntp boolean false
+d-i netcfg/enable boolean false
 d-i netcfg/get_hostname string cor-linux-test
 d-i netcfg/get_domain string local
 d-i passwd/user-fullname string Compatibility Test
@@ -121,7 +122,8 @@ def automatic_grub(source):
                          if value not in {'quiet', 'splash'} and not value.startswith('iso-scan/'))
     return ('set default=0\nset timeout=0\nmenuentry "Install Mint compatibility guest" {\n'
             f'  linux /casper/vmlinuz {arguments} automatic-ubiquity only-ubiquity '
-            'file=/cdrom/preseed/cor.cfg noprompt console=tty0 console=ttyS0,115200n8 --\n'
+            'file=/cdrom/preseed/cor.cfg noprompt console=tty0 console=ttyS0,115200n8 '
+            'systemd.journald.forward_to_console=1 --\n'
             '  initrd /casper/initrd.lz\n}\n')
 
 
@@ -155,8 +157,7 @@ def install(iso, directory, public_key, command, console):
     problem = None
     with console.open('w') as log:
         try:
-            run([*command, '-cdrom', media, '-boot', 'order=d', '-no-reboot',
-                 '-netdev', 'user,id=net0', '-device', 'virtio-net-pci,netdev=net0'],
+            run([*command, '-cdrom', media, '-boot', 'order=d', '-no-reboot', '-nic', 'none'],
                 stdout=log, stderr=subprocess.STDOUT, timeout=2100)
         except subprocess.SubprocessError as error:
             problem = error

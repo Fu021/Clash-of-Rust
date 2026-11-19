@@ -2,9 +2,9 @@
 
 [工作流索引](../workflows.md) · [新平台完整验收](install-validation.md#新平台完整验收)
 
-Linux Mint Compatibility 是独立的手动工作流，目标为 Cinnamon x64 的 21.3 和 22.3。两个目标各用一个固定 `ubuntu-24.04` runner。runner 下载并校验固定的官方 ISO，然后在一次性 VM 磁盘上安装 Linux Mint。镜像和磁盘随 runner 销毁。安装测试复用同提交成功 CI 的 x64 DEB、依赖快照和 TUN 测试程序。
+Linux Mint Compatibility 是独立的手动工作流，目标为 Cinnamon x64 的 21.3 和 22.3。两个目标各用一个固定 `ubuntu-24.04` runner。runner 下载并校验固定的官方 ISO，然后在没有网卡的一次性 VM 中从 ISO 安装 Linux Mint，安装服务日志随串口记录，不启用安装器的密码调试日志。镜像和磁盘随 runner 销毁。安装测试复用同提交成功 CI 的 x64 DEB、依赖快照和 TUN 测试程序。
 
-安装后的 VM 使用 [Mint 官方 HTTPS 镜像](https://linuxmint.com/mirrors.php)读取 Mint 软件包索引，APT 使用系统自带密钥校验签名。Ubuntu 源沿用系统默认配置。
+从安装好的磁盘启动后才接入虚拟网卡。来宾使用 [Mint 官方 HTTPS 镜像](https://linuxmint.com/mirrors.php)读取 Mint 软件包索引，APT 使用系统自带密钥校验签名。Ubuntu 源沿用系统默认配置。
 
 ```bash
 gh workflow run linuxmint-compatibility.yml --ref main -f run_id=<成功的CI编号>

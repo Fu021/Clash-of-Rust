@@ -333,6 +333,8 @@ class UbuntuVmTests(unittest.TestCase):
         self.assertIn('boot=casper uuid=fixture username=mint automatic-ubiquity', config)
         self.assertIn('file=/cdrom/preseed/cor.cfg', config)
         self.assertIn('initrd /casper/initrd.lz', config)
+        self.assertIn('systemd.journald.forward_to_console=1', config)
+        self.assertNotIn('debug-ubiquity', config)
         self.assertNotIn('iso-scan/filename', config)
         self.assertNotIn('quiet splash', config)
         with self.assertRaisesRegex(ValueError, 'expected Casper boot menu'):
@@ -360,6 +362,7 @@ class UbuntuVmTests(unittest.TestCase):
             extracted = directory/'source-grub.cfg'
             self.assertEqual(extracted.read_text(), source)
             self.assertEqual(extracted.stat().st_mode & 0o777, 0o444)
+            self.assertIn('d-i netcfg/enable boolean false', (directory/'preseed/cor.cfg').read_text())
             self.assertEqual(media.read_bytes(), b'installer')
 
     def test_mint_installer_requires_completion_and_only_reboots_the_installed_disk(self):
@@ -382,6 +385,8 @@ class UbuntuVmTests(unittest.TestCase):
                 def boot(arguments, **kwargs):
                     self.assertEqual(arguments[:2], ['qemu-system-x86_64', '-serial'])
                     self.assertIn('-no-reboot', arguments)
+                    self.assertEqual(arguments[arguments.index('-nic') + 1], 'none')
+                    self.assertNotIn('-netdev', arguments)
                     self.assertIn(derived, arguments)
                     self.assertFalse(original.exists())
                     kwargs['stdout'].write(serial_lines+'\n')
