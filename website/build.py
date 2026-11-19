@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 import shutil
-from release_content import validate, render as render_releases, SUFFIXES
+from release_content import validate, render as render_releases, SUFFIXES, OPTIONAL_SUFFIXES
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -105,8 +105,8 @@ def render_downloads(body, release_data):
     body = body.replace("{{stable_version}}", escape(version)).replace("{{stable_tag}}", escape(stable["tag"]))
     for system in ("windows", "linux", "macos", "android"):
         rows = []
-        for suffix in SUFFIXES:
-            if not suffix.startswith(system + "-"):
+        for suffix in SUFFIXES + OPTIONAL_SUFFIXES:
+            if not suffix.startswith(system + "-") or suffix not in stable["sizes"]:
                 continue
             name = f"Clash-of-Rust-{version}-{suffix}"
             url = f"{REPO_URL}/releases/download/{stable['tag']}/{name}"

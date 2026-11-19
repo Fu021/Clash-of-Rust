@@ -23,6 +23,7 @@ for suite, targets in TARGETS.items():
     if all(target.full_desktop for target in targets):
         CHECKS[suite] += ['desktop_gui', 'tui', 'cli', 'desktop_login', 'package_lifecycle']
 CHECKS['linuxmint'] += ['native_cinnamon_authorization', 'native_cinnamon_wayland']
+CHECKS['pop'] += ['native_cosmic_authorization', 'native_cosmic_wayland']
 
 
 def release_suites(scope):
@@ -36,9 +37,16 @@ def release_suites(scope):
 
 
 def iso_targets(suite):
-    return {'iso_targets': [{'release': target.release, 'arch': target.arch,
-                             'url': target.image_url, 'sha256': target.image_digest}
-                            for target in TARGETS[suite]]} if suite == 'linuxmint' else {}
+    images = [{'release': target.release, 'arch': target.arch,
+               'url': target.image_url, 'sha256': target.image_digest}
+              for target in TARGETS.get(suite, ()) if target.image_format == 'iso']
+    if images:
+        return {'iso_targets': images}
+    if suite in ('fedora', 'opensuse', 'arch'):
+        return {'cloud_targets': [{'release': target.release, 'arch': target.arch,
+                                   'url': target.image_url, 'sha256': target.image_digest}
+                                  for target in TARGETS[suite]]}
+    return {}
 
 
 def matrix():
@@ -69,8 +77,9 @@ def input_names(suite):
     if suite == 'android':
         return ('build-android-x64', 'dependency-snapshot')
     architectures = dict.fromkeys(target.arch for target in TARGETS[suite])
+    native = ('linux-rpm-x64',) if suite in ('fedora', 'opensuse') else ()
     return (*('package-linux-' + arch for arch in architectures),
-            *('linux-tun-test-' + arch for arch in architectures), 'dependency-snapshot')
+            *('linux-tun-test-' + arch for arch in architectures), *native, 'dependency-snapshot')
 
 
 def validate_run(run, repository, expected_commit):

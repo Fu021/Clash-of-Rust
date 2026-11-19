@@ -340,6 +340,30 @@ fn package(release: &Release, version: &str) -> Option<Package> {
     })
 }
 
+#[cfg(target_os = "linux")]
+fn external_linux_package_manager_at(executable: &Path) -> Option<&'static str> {
+    let executable = executable.canonicalize().ok()?;
+    let directory = executable.parent()?;
+    if directory != Path::new("/opt/clash-of-rust") {
+        return None;
+    }
+    let marker = directory.join("package-manager");
+    let metadata = std::fs::symlink_metadata(&marker).ok()?;
+    if !metadata.is_file() || metadata.len() > 16 {
+        return None;
+    }
+    match std::fs::read_to_string(marker).ok()?.as_str() {
+        "rpm\n" => Some("dnf / zypper"),
+        "pacman\n" => Some("pacman"),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn external_linux_package_manager() -> Option<&'static str> {
+    external_linux_package_manager_at(&std::env::current_exe().ok()?)
+}
+
 #[cfg(test)]
 fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
     newest_channel(releases, current, false)
@@ -360,8 +384,16 @@ fn newest_channel(
             .expect("GitHub URL has a path")
             .push("tag")
             .push(&release.tag_name);
+        #[cfg(target_os = "linux")]
+        let external_manager = external_linux_package_manager().is_some();
+        #[cfg(not(target_os = "linux"))]
+        let external_manager = false;
         Available {
-            package: package(&release, &version.to_string()),
+            package: if external_manager {
+                None
+            } else {
+                package(&release, &version.to_string())
+            },
             version: version.to_string(),
             url: url.into(),
             preview: release.prerelease || !version.pre.is_empty(),
@@ -426,6 +458,10 @@ pub async fn download(
     api: Option<crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
+    #[cfg(target_os = "linux")]
+    if let Some(manager) = external_linux_package_manager() {
+        bail!("请使用 {manager} 更新此版本的客户端");
+    }
     if cfg!(windows)
         && Version::parse(&available.version)
             .context("新版本号无效")?

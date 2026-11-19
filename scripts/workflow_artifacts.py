@@ -72,6 +72,8 @@ def current_ci_artifacts(client, run, records):
                 return name.removeprefix(prefix)
         if name in ('linux-tun-test-x64', 'linux-tun-test-arm64'):
             return 'linux-' + name.removeprefix('linux-tun-test-')
+        if name == 'linux-rpm-x64':
+            return 'linux-x64'
         return None
 
     names = {name for record in records if (name := producer(record.get('name', '')))}
@@ -375,7 +377,7 @@ def wait_package(client, run_id, system, arch, expected_commit, timeout=1200):
         time.sleep(15)
 
 
-def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_ci_run_id):
+def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_ci_run_id, *, rpm=False):
     if type(expected_ci_run_id) is not int or expected_ci_run_id <= 0:
         raise ValueError('Package inputs require a verified source CI run')
     wait_package(client, run_id, 'linux', arch, expected_commit, timeout=3600)
@@ -383,10 +385,15 @@ def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_c
     records = current_ci_artifacts(client, client(f'/actions/runs/{run_id}'), records)
     suffix = 'amd64' if arch == 'x64' else 'arm64'
     package = f'Clash-of-Rust-{package_version()}-linux-{suffix}.deb'
-    for name, folder, expected in [
+    expected_artifacts = [
             (f'package-linux-{arch}', root/'dist',
              {package, package+'.sha256', 'package-receipt.json'}),
-            (f'linux-tun-test-{arch}', root/'target', {'linux-tun-test'})]:
+            (f'linux-tun-test-{arch}', root/'target', {'linux-tun-test'})]
+    if rpm:
+        expected_artifacts.append(('linux-rpm-x64', root/'dist/linux-rpm',
+                                   {f'Clash-of-Rust-{package_version()}-linux-x86_64.rpm',
+                                    'rpm-receipt.json'}))
+    for name, folder, expected in expected_artifacts:
         matches = [record for record in records if record['name'] == name]
         if len(matches) != 1 or matches[0].get('expired'):
             raise ValueError('Package artifact duplicated, expired or missing: '+name)
@@ -415,6 +422,9 @@ def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_c
             or (root/'dist'/(package+'.sha256')).read_text().strip() != receipt.get('sha256')
             or receipt.get('linux_tun_test_sha256') != sha256(root/'target/linux-tun-test')):
         raise ValueError('Package receipt differs from the selected source or binaries')
+    if rpm:
+        from linux_native_package import verify_rpm
+        verify_rpm(root/'dist/linux-rpm', receipt)
 
 
 def main():

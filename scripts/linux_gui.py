@@ -104,7 +104,7 @@ def tun_permissions():
     return (output(['getcap', APP/'clash-tun-launcher']), (APP/'libexec/resolvectl').stat().st_mode & 0o7777)
 
 
-def verify_authorization(log, password_file, locate):
+def verify_authorization(log, password_file, locate, *, respond=None):
     helper = APP/'clash-of-rust'
     before = tun_permissions()
     for allow in (False, True):
@@ -123,19 +123,22 @@ def verify_authorization(log, password_file, locate):
                         if state == 'retry':
                             time.sleep(1)
                             continue
-                        if window:
-                            run(['xdotool', 'windowactivate', '--sync', window], timeout=15)
-                        if allow:
-                            password = password_file.read_text()
-                            if not password.isascii() or not password.isalnum():
-                                raise ValueError('Invalid disposable account password')
-                            run(['xdotool', '-'], text=True, timeout=15,
-                                input=f'type --clearmodifiers --delay 10 {password}\n',
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            run(['xdotool', 'key', 'Return'], timeout=15)
+                        if respond:
+                            respond(allow)
                         else:
-                            run(['xdotool', 'key', 'Escape'], timeout=15)
-                        code = request.wait(timeout=30)
+                            if window:
+                                run(['xdotool', 'windowactivate', '--sync', window], timeout=15)
+                            if allow:
+                                password = password_file.read_text()
+                                if not password.isascii() or not password.isalnum():
+                                    raise ValueError('Invalid disposable account password')
+                                run(['xdotool', '-'], text=True, timeout=15,
+                                    input=f'type --clearmodifiers --delay 10 {password}\n',
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                run(['xdotool', 'key', 'Return'], timeout=15)
+                            else:
+                                run(['xdotool', 'key', 'Escape'], timeout=15)
+                        code = request.wait(timeout=100 if respond else 30)
                         capabilities, mode = tun_permissions()
                         if allow:
                             if code or 'cap_net_admin,cap_net_raw' not in capabilities or mode != 0o4755:
@@ -153,8 +156,12 @@ def verify_authorization(log, password_file, locate):
 
 def authentication():
     agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
-    if platform.freedesktop_os_release().get('ID') == 'debian':
-        agent = '/usr/libexec/polkit-mate-authentication-agent-1'
+    distro = platform.freedesktop_os_release().get('ID')
+    if distro in ('debian', 'fedora', 'opensuse-leap', 'opensuse-tumbleweed', 'arch'):
+        candidates = (Path('/usr/libexec/polkit-mate-authentication-agent-1'),
+                      Path('/usr/lib/polkit-mate/polkit-mate-authentication-agent-1'),
+                      Path('/usr/lib/mate-polkit/polkit-mate-authentication-agent-1'))
+        agent = next((path for path in candidates if path.is_file()), candidates[0])
     with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log:
         with process([agent], log) as registered:
             def locate():
@@ -308,7 +315,8 @@ def available_mixed_port():
             return port
 
 
-def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verify_proxy=None):
+def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verify_proxy=None,
+        inspect_window=None, close_window=None):
     data = report/('profile-'+backend)
     data.mkdir()
     env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(data), SLINT_BACKEND='winit-software')
@@ -331,7 +339,7 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
             nonlocal observed, renderer_pids
             if owner.poll() is not None:
                 raise RuntimeError(f'Installed {backend} GUI owner exited: {owner.returncode}')
-            windows = inspect(backend, evaluate_window)
+            windows = inspect_window() if inspect_window else inspect(backend, evaluate_window)
             if backend == 'wayland':
                 observed = windows
                 renderer_pids = [int(path.name) for path in Path('/proc').glob('[0-9]*')
@@ -385,6 +393,8 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
                 raise RuntimeError('Expected exactly one UI renderer')
             if crash:
                 os.kill(renderers[0], signal.SIGKILL)
+            elif close_window:
+                close_window()
             elif backend == 'wayland':
                 evaluate_window('global.get_window_actors().map(a=>a.meta_window)'
                                 f'.filter(w=>w && w.get_stable_sequence()==={windows[0]["sequence"]}'
@@ -429,6 +439,14 @@ def require_logind_session():
     return session_id
 
 
+def appindicator_extension():
+    directory = Path('/usr/share/gnome-shell/extensions')
+    for name in ('appindicatorsupport@rgcjonas.gmail.com', 'ubuntu-appindicators@ubuntu.com'):
+        if (directory/name/'metadata.json').is_file():
+            return name
+    raise RuntimeError('The AppIndicator extension is not installed')
+
+
 def session():
     if os.geteuid() == 0:
         raise RuntimeError('GUI must run as an ordinary user')
@@ -449,9 +467,9 @@ def session():
                  'XDG_CURRENT_DESKTOP'])
             stack.enter_context(process(['openbox'], log))
             result['checks']['authorization'] = authentication()
-            run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
-                 "['ubuntu-appindicators@ubuntu.com']"])
-            if 'ubuntu-appindicators@ubuntu.com' not in output(
+            extension = appindicator_extension()
+            run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions', f"['{extension}']"])
+            if extension not in output(
                     ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions']):
                 raise RuntimeError('GNOME test extension setting did not persist')
             import re
@@ -492,8 +510,14 @@ def session():
                 wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
             except TimeoutError as error:
                 raise RuntimeError(f'{error}; last DBus probe: {last_probe_error}') from error
+            from linux_native_guest import DISTROS
+            native_package = platform.freedesktop_os_release().get('ID') in DISTROS
+            proxy_check = None
+            if native_package:
+                from linux_mint_desktop import verify_system_proxy
+                proxy_check = verify_system_proxy
             for backend in ('x11', 'wayland'):
-                result['checks'][backend] = gui(backend, report)
+                result['checks'][backend] = gui(backend, report, verify_proxy=proxy_check)
             result['status'] = 'passed'
     except BaseException as error:
         result['status'] = 'failed'
@@ -507,7 +531,8 @@ def stage_session(directory):
     scripts = directory/'scripts'
     scripts.mkdir(mode=0o755)
     scripts.chmod(0o755)
-    for name in ('linux_gui.py', 'build_support.py', 'cli_tui.py'):
+    for name in ('linux_gui.py', 'linux_native_guest.py', 'linux_compatibility_targets.py', 'linux_mint_desktop.py',
+                 'build_support.py', 'cli_tui.py'):
         target = scripts/name
         shutil.copyfile(Path(__file__).resolve().parent/name, target)
         target.chmod(0o644)
@@ -553,11 +578,23 @@ def installed_tests():
         script = stage_session(home)
         report = home/'report'
         created = False
+        rule = None
         try:
-            run(['sudo', 'useradd', '--create-home', '--groups', 'sudo',
+            from linux_native_guest import DISTROS
+            admin_group = 'wheel' if platform.freedesktop_os_release().get('ID') in DISTROS else 'sudo'
+            run(['sudo', 'useradd', '--create-home', '--groups', admin_group,
                  '--home-dir', home/'home', '--shell', '/bin/bash', user])
             created = True
             run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True)
+            if admin_group == 'wheel':
+                from linux_native_guest import distribution
+                distribution()
+                rule = Path('/etc/polkit-1/rules.d')/f'10-{user}.rules'
+                contents = ('polkit.addAdminRule(function(action, subject) {'
+                            f' if (action.id === "{ACTION}" && subject.user === "{user}")'
+                            f' return ["unix-user:{user}"];'
+                            ' });\n')
+                run(['sudo', 'tee', rule], input=contents, text=True, stdout=subprocess.DEVNULL)
             run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report])
             password_file = home/'password'
             descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -579,6 +616,8 @@ def installed_tests():
                             sys.executable, '-E', '-s', '-B', script, '--session-launch'],
                            check=True, cwd=home, timeout=360)
         finally:
+            if rule:
+                run(['sudo', 'rm', '-f', rule], check=False)
             if created:
                 subprocess.run(['sudo', 'loginctl', 'terminate-user', user], check=False)
                 subprocess.run(['sudo', 'pkill', '-KILL', '-u', user], check=False)

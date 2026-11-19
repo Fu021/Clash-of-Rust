@@ -50,6 +50,8 @@ DOWNLOAD_BUTTONS = (
     ('Android', 'package-android-x64', 'APK', 'x64', '3DDC84', 'android'),
 )
 PACKAGE_JOBS = {name for name in PACKAGES if name.startswith('package-android-')}
+RPM_SUFFIX = 'linux-x86_64.rpm'
+RPM_ARTIFACT = 'linux-rpm-x64'
 
 
 def git(*args):
@@ -210,15 +212,16 @@ def release_metadata(commit, tag=None, notes_path=None, check_only=False, prerel
     return version, expected_tag, notes
 
 
-def release_notes_with_downloads(notes, repo, version, tag):
+def release_notes_with_downloads(notes, repo, version, tag, *, rpm=False):
     require(bool(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo)), 'Invalid repository path')
     require(validate_version(version) == version and tag == 'v' + version, 'Invalid release identity')
     require({item[1] for item in DOWNLOAD_BUTTONS} == set(PACKAGES)
             and len(DOWNLOAD_BUTTONS) == len(PACKAGES), 'Download buttons do not match packages')
     rows = {}
     release_tag = urllib.parse.quote(tag, safe='')
-    for system, key, kind, architecture, color, logo in DOWNLOAD_BUTTONS:
-        name = 'Clash-of-Rust-' + version + '-' + PACKAGES[key]
+    buttons = (*DOWNLOAD_BUTTONS, ('Linux', RPM_ARTIFACT, 'RPM', 'x64', 'E95420', 'linux')) if rpm else DOWNLOAD_BUTTONS
+    for system, key, kind, architecture, color, logo in buttons:
+        name = 'Clash-of-Rust-' + version + '-' + (RPM_SUFFIX if key == RPM_ARTIFACT else PACKAGES[key])
         asset = urllib.parse.quote(name, safe='')
         download = f'https://github.com/{repo}/releases/download/{release_tag}/{asset}'
         query = urllib.parse.urlencode({'logo': logo, 'logoColor': 'white'}) if logo else ''
@@ -242,14 +245,16 @@ def release_notes_with_downloads(notes, repo, version, tag):
     return result + '\n'
 
 
-def filenames(version):
-    names = {'Clash-of-Rust-' + version + '-' + suffix for suffix in PACKAGES.values()}
+def filenames(version, *, rpm=False):
+    suffixes = (*PACKAGES.values(), RPM_SUFFIX) if rpm else PACKAGES.values()
+    names = {'Clash-of-Rust-' + version + '-' + suffix for suffix in suffixes}
     return names | {name + '.sha256' for name in names}
 
 
-def validate_files(paths, version):
+def validate_files(paths, version, *, rpm=False):
     files = {p.name: p for p in paths}
-    require(len(files) == len(paths) and set(files) == filenames(version), 'Expected the complete installer/APK and checksum set')
+    require(len(files) == len(paths) and set(files) == filenames(version, rpm=rpm),
+            'Expected the complete installer/APK and checksum set')
     for name, path in files.items():
         require(path.is_file() and not path.is_symlink(), 'Release asset must be a regular file: ' + name)
         if name.endswith('.sha256'):
@@ -307,7 +312,43 @@ def candidate_artifacts(client, run_id):
     return packages
 
 
-def download_package_files(client, run_id, ci_run_id, commit, version, directory, check_only=False):
+def download_release_rpm(client, ci_run_id, commit, version, directory):
+    from workflow_artifacts import current_ci_artifacts
+
+    run = client(f'/actions/runs/{ci_run_id}')
+    artifacts = client(f'/actions/runs/{ci_run_id}/artifacts?per_page=100')['artifacts']
+    matches = [item for item in current_ci_artifacts(client, run, artifacts) if item['name'] == RPM_ARTIFACT]
+    require(len(matches) == 1 and matches[0].get('expired') is False, 'Missing or expired CI RPM')
+    artifact = matches[0]
+    source = artifact.get('workflow_run', {})
+    require(source.get('id') == ci_run_id and source.get('head_sha') == commit,
+            'RPM artifact source differs from the selected CI')
+    payload = client(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
+    require(artifact.get('digest') == 'sha256:' + hashlib.sha256(payload).hexdigest(),
+            'RPM artifact archive checksum mismatch')
+    name = f'Clash-of-Rust-{version}-{RPM_SUFFIX}'
+    with zipfile.ZipFile(io.BytesIO(payload)) as zipped:
+        entries = zipped.infolist()
+        require(len(entries) == 2 and {entry.filename for entry in entries} == {name, 'rpm-receipt.json'}
+                and all(not entry.is_dir() and entry.file_size <= 512*1024*1024 for entry in entries),
+                'Unexpected RPM artifact contents')
+        receipt = json.loads(zipped.read('rpm-receipt.json'))
+        data = zipped.read(name)
+    digest = hashlib.sha256(data).hexdigest()
+    deb = directory/f'Clash-of-Rust-{version}-linux-amd64.deb'
+    require(receipt == {'schema': 1, 'commit': commit, 'ci_run_id': ci_run_id,
+                        'source_sha256': sha256(deb), 'package': name, 'sha256': digest},
+            'RPM receipt differs from the selected CI build')
+    for filename, contents in ((name, data), (name+'.sha256', (digest+'\n').encode('ascii'))):
+        path = directory/filename
+        require(not path.is_symlink(), 'Output path is a symbolic link')
+        if path.exists():
+            require(path.is_file() and path.read_bytes() == contents, 'Existing output differs from verified RPM')
+        else:
+            path.write_bytes(contents)
+
+
+def download_package_files(client, run_id, ci_run_id, commit, version, directory, check_only=False, *, rpm=False):
     builds = build_artifacts(client, ci_run_id)
     candidates = candidate_artifacts(client, ci_run_id)
     if check_only:
@@ -320,7 +361,8 @@ def download_package_files(client, run_id, ci_run_id, commit, version, directory
                 'Distribution-signed Android packages are incomplete or duplicated')
         packages = [artifact for artifact in candidates if artifact['name'] not in PACKAGE_JOBS] + signed
     directory.mkdir(parents=True, exist_ok=True)
-    require({p.name for p in directory.iterdir()} <= filenames(version), 'Output directory contains unexpected files')
+    require({p.name for p in directory.iterdir()} <= filenames(version, rpm=rpm),
+            'Output directory contains unexpected files')
     for artifact in packages:
         require(not artifact['expired'], 'Release artifact expired: ' + artifact['name'])
         archive = client(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
@@ -351,7 +393,9 @@ def download_package_files(client, run_id, ci_run_id, commit, version, directory
                     require(destination.is_file() and destination.read_bytes() == data, 'Existing output differs from release tests: ' + filename)
                 else:
                     destination.write_bytes(data)
-    return validate_files(list(directory.iterdir()), version)
+    if rpm:
+        download_release_rpm(client, ci_run_id, commit, version, directory)
+    return validate_files(list(directory.iterdir()), version, rpm=rpm)
 
 
 def find_release(client, tag):
@@ -448,6 +492,7 @@ def main():
     args = parser.parse_args()
     require(not (args.check and args.prerelease), 'Choose either test-only packaging or prerelease publishing')
     suites = compatibility.release_suites(args.linux_scope)
+    rpm = bool({'fedora', 'opensuse'} & set(suites))
     repo = repository()
     client = GitHub(repo, credential(repo), args.proxy)
     commit = git('rev-parse', 'HEAD')
@@ -470,20 +515,20 @@ def main():
                          prerelease=args.prerelease, source_branch=run['head_branch'])
     directory = args.output_dir or ROOT / f"dist/release-{version}-run-{package_run_id}"
     files = download_package_files(client, package_run_id, run['id'], commit, version, directory,
-                                   check_only=args.check)
+                                   check_only=args.check, **({'rpm': True} if rpm else {}))
     if args.asset:
-        local = validate_files(args.asset, version)
+        local = validate_files(args.asset, version, rpm=rpm)
         require(all(sha256(local[name]) == sha256(path) for name, path in files.items()), 'Local assets differ from selected CI')
     print('Verified CI:', run['html_url'])
     print(f'Verified version and all {len(files)} attachments:', tag)
     if args.check:
         print('Check complete; no release changes made')
         return
-    notes = release_notes_with_downloads(notes, repo, version, tag)
+    notes = release_notes_with_downloads(notes, repo, version, tag, rpm=rpm)
     url = publish(client, commit, tag, notes, files, source_branch=run['head_branch'], prerelease=args.prerelease)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as summary:
-            summary.write(f'[Published {tag}]({url}) — {len(PACKAGES)} packages and their SHA256 files verified.\n')
+            summary.write(f'[Published {tag}]({url}) — {len(files)//2} packages and their SHA256 files verified.\n')
 
 
 if __name__ == '__main__':

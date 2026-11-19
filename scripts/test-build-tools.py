@@ -6582,6 +6582,59 @@ class CompatibilityTests(unittest.TestCase):
             with self.subTest(scope=scope), self.assertRaisesRegex(ValueError, 'Linux release scope'):
                 compatibility.release_suites(scope)
 
+    def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
+        expected = {'pop': 2, 'zorin': 2, 'fedora': 2, 'opensuse': 3, 'arch': 1}
+        for suite, count in expected.items():
+            with self.subTest(suite=suite):
+                targets = linux_ci.TARGETS[suite]
+                self.assertEqual(len(targets), count)
+                self.assertTrue(all(target.full_desktop and not target.hosted for target in targets))
+                self.assertTrue(all(re.fullmatch('[0-9a-f]{64}', target.image_digest) for target in targets))
+                self.assertEqual('linux-rpm-x64' in compatibility.input_names(suite),
+                                 suite in ('fedora', 'opensuse'))
+                self.assertIn(suite, compatibility.release_suites(suite))
+                client, source, receipt = self.client(suite)
+                self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
+                key = 'iso_targets' if suite in ('pop', 'zorin') else 'cloud_targets'
+                client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
+                with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
+                    compatibility.verified_suite(client, source, suite)
+
+    def test_zorin_selects_the_pinned_zstd_initramfs(self):
+        boot = '\tlinux\t/casper/vmlinuz maybe-ubiquity quiet splash ---\n'
+        config = linux_mint_install.automatic_grub(boot, '/casper/initrd.zstd')
+        self.assertIn('initrd /casper/initrd.zstd', config)
+        self.assertIn('boot=casper automatic-ubiquity only-ubiquity', config)
+        self.assertNotIn('maybe-ubiquity', config)
+        with self.assertRaisesRegex(ValueError, 'Unsupported Ubiquity initramfs'):
+            linux_mint_install.automatic_grub(boot, '/tmp/elsewhere')
+
+    def test_versioned_native_packages_and_receipt_never_accept_other_bytes(self):
+        from linux_native_package import native_version, verify_rpm
+
+        self.assertEqual(native_version('0.7.3-fix.2.install', '~'), '0.7.3~fix.2.install')
+        self.assertEqual(native_version('0.7.3-fix.2.install', ''), '0.7.3fix.2.install')
+        self.assertEqual(native_version('0.7.3', '~'), '0.7.3')
+        with self.assertRaises(ValueError):
+            native_version('0.7.3-../injected', '~')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            name = 'Clash-of-Rust-0.7.3-linux-x86_64.rpm'
+            binary = root/name
+            binary.write_bytes(b'verified')
+            source = {'version': '0.7.3', 'commit': self.source_commit,
+                      'ci_run_id': 123, 'sha256': 'a'*64}
+            build.write_json(root/'rpm-receipt.json', {
+                'schema': 1, 'commit': self.source_commit, 'ci_run_id': 123,
+                'source_sha256': source['sha256'], 'package': name, 'sha256': build.sha256(binary),
+            })
+            self.assertEqual(verify_rpm(root, source), binary)
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                verify_rpm(root, source | {'ci_run_id': 124})
+            binary.write_bytes(b'not the tested RPM')
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                verify_rpm(root, source)
+
     def client(self, suite, run_changes=None, jobs=None, receipt_changes=None,
                bad_digest=False, expired=False, missing_input=False):
         source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': self.source_commit,
@@ -6600,8 +6653,9 @@ class CompatibilityTests(unittest.TestCase):
                    'ci_run_id': 123, 'run_id': 456, 'run_attempt': 2,
                    'checks': compatibility.CHECKS[suite],
                    'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs]}
-        if suite == 'linuxmint':
-            receipt['iso_targets'] = [
+        if suite in ('linuxmint', 'pop', 'zorin', 'fedora', 'opensuse', 'arch'):
+            source_kind = 'iso' if suite in ('linuxmint', 'pop', 'zorin') else 'cloud'
+            receipt[source_kind+'_targets'] = [
                 {'release': target.release, 'arch': 'x64', 'url': target.image_url,
                  'sha256': target.image_digest} for target in linux_ci.TARGETS[suite]]
         receipt.update(receipt_changes or {})
@@ -6776,6 +6830,44 @@ class ReleaseTests(unittest.TestCase):
         printing = patch('builtins.print')
         printing.start()
         self.addCleanup(printing.stop)
+
+    def test_optional_rpm_is_bound_to_the_tested_deb_and_never_changes_baseline(self):
+        name = f'Clash-of-Rust-{self.version}-linux-x86_64.rpm'
+        self.assertNotIn(name, release.filenames(self.version))
+        self.assertEqual(release.filenames(self.version, rpm=True) - release.filenames(self.version),
+                         {name, name+'.sha256'})
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            deb = directory/f'Clash-of-Rust-{self.version}-linux-amd64.deb'
+            deb.write_bytes(b'tested DEB bytes')
+            binary = b'identical payload packaged as RPM'
+            receipt = {'schema': 1, 'commit': self.commit, 'ci_run_id': 77,
+                       'source_sha256': build.sha256(deb), 'package': name,
+                       'sha256': hashlib.sha256(binary).hexdigest()}
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w') as archive:
+                archive.writestr(name, binary)
+                archive.writestr('rpm-receipt.json', json.dumps(receipt))
+            payload = stream.getvalue()
+            record = {'id': 55, 'name': 'linux-rpm-x64', 'expired': False,
+                      'workflow_run': {'id': 77, 'head_sha': self.commit},
+                      'digest': 'sha256:' + hashlib.sha256(payload).hexdigest()}
+
+            def client(path, raw=False):
+                if path == '/actions/runs/77':
+                    return {'path': '.github/workflows/ci.yml'}
+                if path == '/actions/runs/77/artifacts?per_page=100':
+                    return {'artifacts': [record]}
+                if path == '/actions/artifacts/55/zip' and raw:
+                    return payload
+                self.fail(path)
+
+            release.download_release_rpm(client, 77, self.commit, self.version, directory)
+            self.assertEqual((directory/name).read_bytes(), binary)
+            self.assertEqual((directory/(name+'.sha256')).read_text(), receipt['sha256']+'\n')
+            deb.write_bytes(b'wrong DEB')
+            with self.assertRaisesRegex(ValueError, 'RPM receipt differs'):
+                release.download_release_rpm(client, 77, self.commit, self.version, directory)
 
     def client(self, run_changes=None, jobs=None, main=None):
         run = {'id':77, 'path':'.github/workflows/ci.yml@main', 'event':'push', 'head_branch':'main',
@@ -7519,12 +7611,14 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
         self.assertNotRegex(workflow, r'\b(?:gh cache|saveCache|restoreCache)\b')
 
     def test_monitor_negotiates_before_using_the_short_command_timeout(self):
+        import linux_vm_monitor
+
         stream = io.BytesIO(b'{"QMP": {"version": {}, "capabilities": []}}\r\n'
                             b'{"return": {}}\r\n')
         connection = MagicMock()
         connection.makefile.return_value = stream
-        with patch.object(cosmic_startup_host.socket, 'socket', return_value=connection):
-            monitor = cosmic_startup_host.Monitor(Path('/fixture/qmp.sock'), ':93')
+        with patch.object(linux_vm_monitor.socket, 'socket', return_value=connection):
+            monitor = cosmic_startup_host.ScreenshotMonitor(Path('/fixture/qmp.sock'), ':93')
         self.assertEqual(connection.settimeout.call_args_list, [call(60), call(10)])
         request = json.loads(connection.sendall.call_args.args[0])
         self.assertEqual(request['execute'], 'qmp_capabilities')
@@ -7534,6 +7628,8 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
         connection.close.assert_called_once()
 
     def test_monitor_startup_failure_closes_the_socket_and_stream(self):
+        import linux_vm_monitor
+
         for greeting, failure in [
             (b'{"QMP": {}}\n', TimeoutError('capability negotiation timed out')),
             (b'{"return": {}}\n', None),
@@ -7543,9 +7639,9 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
                 stream = MagicMock()
                 connection.makefile.return_value = stream
                 stream.readline.side_effect = [greeting, failure] if failure else [greeting]
-                with patch.object(cosmic_startup_host.socket, 'socket', return_value=connection):
+                with patch.object(linux_vm_monitor.socket, 'socket', return_value=connection):
                     with self.assertRaises((TimeoutError, RuntimeError)):
-                        cosmic_startup_host.Monitor(Path('/fixture/qmp.sock'), ':93')
+                        cosmic_startup_host.ScreenshotMonitor(Path('/fixture/qmp.sock'), ':93')
                 stream.close.assert_called_once()
                 connection.close.assert_called_once()
                 self.assertEqual(connection.settimeout.call_args_list, [call(60)])

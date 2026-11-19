@@ -372,6 +372,7 @@ class VmGuest:
         self.directory = Path(directory) / label
         self.directory.mkdir()
         self.process = None
+        self.display = None
         self.console = None
         boot_started = time.monotonic()
         self.architecture = 'x86_64' if host_arch() == 'x64' else 'aarch64'
@@ -391,12 +392,22 @@ class VmGuest:
         cpu = 'host' if kvm else ('max' if architecture == 'x86_64' else 'cortex-a72')
         command = ['qemu-system-'+architecture, '-machine', machine+',accel='+('kvm' if kvm else 'tcg'),
                    '-cpu', cpu, '-smp', '2', '-m', '4096', '-display', 'none',
-                   '-serial', 'stdio', '-monitor', 'none',
-                   '-drive', f'file={self.disk},if=virtio,format=qcow2,discard=unmap']
+                   '-serial', 'stdio', '-monitor', 'none']
+        drive = f'file={self.disk},format=qcow2,discard=unmap'
+        if target.family == 'pop':
+            command.extend(['-drive', drive+',if=none,id=compatdisk',
+                            '-device', 'virtio-blk-pci,drive=compatdisk,serial=cor-pop-compatibility'])
+        else:
+            command.extend(['-drive', drive+',if=virtio'])
         if architecture == 'aarch64':
             command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
             if target.full_desktop:
                 command.extend(['-device', 'virtio-gpu-pci'])
+        elif target.package_format != 'deb':
+            command.extend(['-vga', 'virtio'])
+        self.monitor_path = None
+        if (target.family, target.release) == ('pop', '24.04'):
+            self.monitor_path = directory/'qmp.sock'
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                     '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
@@ -414,21 +425,40 @@ class VmGuest:
         try:
             ready_command = 'true'
             if target.image_format == 'iso':
-                from linux_mint_install import FIRMWARE, FIRMWARE_VARS, INSTALLED_READY, install
+                from linux_mint_install import FIRMWARE, FIRMWARE_VARS, INSTALL_SSH, SSH_UNIT
                 variables = directory/'ovmf-vars.fd'
                 shutil.copyfile(FIRMWARE_VARS, variables)
                 command.extend(['-vga', 'virtio', '-drive', f'if=pflash,format=raw,readonly=on,file={FIRMWARE}',
                                 '-drive', f'if=pflash,format=raw,file={variables}'])
                 run(['qemu-img', 'create', '-f', 'qcow2', self.disk, '24G'])
-                install(base, directory, public, command, REPORT/'vm-console-installer.log')
+                installer_console = REPORT/'vm-console-installer.log'
+                if target.family == 'pop':
+                    from pop_live_install import INSTALLED_READY, install
+                    install(base, directory, public, command, installer_console, SSH_UNIT, INSTALL_SSH)
+                elif target.family in ('linuxmint', 'zorin'):
+                    from linux_mint_install import INSTALLED_READY, install
+                    options = {'initrd': '/casper/initrd.zstd'} if target.family == 'zorin' else {}
+                    install(base, directory, public, command, installer_console, **options)
+                else:
+                    raise ValueError(f'No ISO installer for {target.family}')
                 ready_command = INSTALLED_READY
             else:
                 seed = self.cloud_disk(base, public)
                 command.extend(['-drive', f'file={seed},if=virtio,format=raw,readonly=on'])
             command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
                             '-device', 'virtio-net-pci,netdev=net0'])
+            environment = None
+            if self.monitor_path:
+                from linux_vm_monitor import SoftwareDisplay
+                self.display = SoftwareDisplay(REPORT/'vm-xvfb.log')
+                environment = self.display.environment
+                command[command.index('-display')+1] = 'sdl,gl=on'
+                vga = command.index('-vga')
+                command[vga:vga+2] = ['-device', 'virtio-vga-gl']
+                command.extend(['-qmp', f'unix:{self.monitor_path},server=on,wait=off',
+                                '-device', 'virtio-tablet-pci', '-name', 'cor-cosmic-compatibility'])
             self.console = (REPORT / ('vm-console-' + label + '.log')).open('w')
-            self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT)
+            self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT, env=environment)
             wait_vm_ssh(self.process, self.ssh, ready_command=ready_command,
                         timeout=900 if target.image_format == 'iso' else 600)
             self.wait_cloud_init()
@@ -436,8 +466,9 @@ class VmGuest:
             if actual != architecture:
                 raise RuntimeError(f'Linux VM returned {actual} instead of {architecture}')
             identity = self.output('. /etc/os-release && printf "%s\\n" "$ID" "$VERSION_ID"').splitlines()
-            if identity != [target.family, target.release]:
-                raise RuntimeError(f'Linux VM returned {identity!r} instead of {target.family} {target.release}')
+            expected = [target.os_release_id, target.os_release_version]
+            if identity != expected:
+                raise RuntimeError(f'Linux VM returned {identity!r} instead of {expected!r}')
             self.kernel = self.output('uname -r').strip()
             if target.kernel_series and not self.kernel.startswith(target.kernel_series + '.'):
                 raise RuntimeError(f'{target.distribution} {target.release} requires kernel '
@@ -450,10 +481,12 @@ class VmGuest:
     def cloud_disk(self, base, public):
         directory = self.directory
         user_data = {'ssh_genkeytypes': ['ed25519'],
-                     'users': [{'name': 'ubuntu', 'groups': 'adm,sudo',
+                     'users': [{'name': 'ubuntu',
                                'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'shell': '/bin/bash',
                                'ssh_authorized_keys': [public]}],
                      'ssh_pwauth': False, 'package_update': False, 'package_upgrade': False}
+        if self.target.package_format == 'deb':
+            user_data['users'][0]['groups'] = 'adm,sudo'
         (directory/'user-data').write_text('#cloud-config\n'+json.dumps(user_data))
         (directory/'meta-data').write_text(
             'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
@@ -485,6 +518,20 @@ class VmGuest:
         fresh_ssh = [self.ssh[0], '-o', 'ControlPath=none', *self.ssh[1:]]
         wait_vm_ssh(self.process, fresh_ssh, ready_command=ready)
         self.wait_cloud_init()
+
+    def capture_desktop_failure(self, stage):
+        from linux_vm_monitor import Monitor, capture_screen
+        snapshot = REPORT/f'cosmic-failure-{stage}.png'
+        try:
+            monitor = Monitor(self.monitor_path)
+            try:
+                method = capture_screen(monitor, snapshot, self.display.environment)
+            finally:
+                monitor.close()
+            result = {'method': method, 'screenshot': snapshot.name}
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            result = {'error': str(error)}
+        write_json(snapshot.with_suffix('.json'), result)
 
     def stage(self, archive, python):
         started = time.monotonic()
@@ -544,14 +591,19 @@ class VmGuest:
                 self.process.wait(timeout=10)
         if self.console:
             self.console.close()
+        if self.display:
+            self.display.close()
 
 
-def vm_source_archive(directory, include_frozen_apt=True):
+def vm_source_archive(directory, include_frozen_apt=True, include_cosmic_probe=False):
     archive = directory / 'source.tar.gz'
     from build_inputs import FILES
     from workflow_artifacts import commit
     paths = {'Cargo.toml', '.github/build-versions.json', 'apps/cli/src/args.rs', *FILES}
     paths.update(path.relative_to(ROOT).as_posix() for path in (ROOT / 'scripts').glob('*.py'))
+    if include_cosmic_probe:
+        paths.add('scripts/wayland-window-count.c')
+    paths.add('installer/arch/PKGBUILD')
     snapshot = Path(os.environ.get('BUILD_INPUTS_DIR', 'dependency-snapshot'))
     if not snapshot.is_absolute():
         snapshot = ROOT / snapshot
@@ -580,6 +632,8 @@ def prepare_vm_guest(guest, directory, frozen=None):
                      "value=manifest(); install_frozen('dependency-snapshot',"
                      "frozen_environments(value)[host_arch()],"
                      "value['upstream']['linux'])", timeout=2100)
+    elif guest.target.package_format != 'deb':
+        guest.python("from linux_native_guest import refresh; refresh()", timeout=900)
     else:
         guest.remote('sudo timeout --signal=TERM --kill-after=30s 300s '
                      + shlex.join([*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update']),
@@ -588,17 +642,17 @@ def prepare_vm_guest(guest, directory, frozen=None):
             guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs')
 
 
-def fetch_compatibility_package(package_run_id, arch):
+def fetch_compatibility_package(package_run_id, arch, *, rpm=False):
     from workflow_artifacts import commit, fetch_package_inputs, release_module
     module = release_module()
     repo = module.repository()
     client = module.GitHub(repo, module.credential(repo))
-    fetch_package_inputs(client, package_run_id, arch, ROOT, commit(), package_run_id)
+    fetch_package_inputs(client, package_run_id, arch, ROOT, commit(), package_run_id, rpm=rpm)
 
 
 def compatibility_command(target, python):
     return [python, 'scripts/test-release-package.py', '--linux-compat',
-            '--expect-linux', target.family, target.release, '--expect-arch', target.arch]
+            '--expect-linux', target.os_release_id, target.os_release_version, '--expect-arch', target.arch]
 
 
 def hosted_test(package_run_id, target):
@@ -620,10 +674,10 @@ def hosted_test(package_run_id, target):
         write_json(REPORT/'linux-runner.json', result)
 
 
-def fetch_vm_package(directory, package_run_id, timings):
+def fetch_vm_package(directory, package_run_id, timings, *, rpm=False):
     started = time.monotonic()
     try:
-        fetch_compatibility_package(package_run_id, host_arch())
+        fetch_compatibility_package(package_run_id, host_arch(), rpm=rpm)
         with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
             for relative in ('dist', 'target/linux-tun-test'):
                 tar.add(ROOT/relative, arcname=relative)
@@ -654,21 +708,34 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
         guest.remote(guest.environment + extra + command,
                      timeout=2400 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
         if guest.target.full_desktop:
+            cosmic = (guest.target.family, guest.target.release) == ('pop', '24.04')
             phases = ('prepare', 'first-login', 'background-login')
             if guest.target.family == 'linuxmint':
                 phases += ('prepare-x11', 'x11', 'prepare-wayland', 'wayland')
+            elif cosmic:
+                phases += ('prepare-wayland', 'wayland')
             for phase in phases:
                 phase_started = time.monotonic()
                 try:
                     if not phase.startswith('prepare'):
                         guest.reboot()
+                    if phase == 'first-login' and cosmic:
+                        from linux_cosmic_authorization import verify_dialogs
+                        verify_dialogs(guest, REPORT)
                     guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
                                  'scripts/linux_desktop_login.py ' + phase, timeout=800)
+                except Exception:
+                    if cosmic:
+                        with contextlib.suppress(OSError):
+                            guest.capture_desktop_failure(phase)
+                    raise
                 finally:
                     timings['desktop_' + phase.replace('-', '_')] = round(
                         time.monotonic() - phase_started, 3)
+            operation = ('deb_upgrade_and_uninstall' if guest.target.package_format == 'deb'
+                         else 'native_upgrade_and_uninstall')
             guest.python("from pathlib import Path; import runpy; "
-                         "runpy.run_path('scripts/test-release-package.py')['deb_upgrade_and_uninstall']"
+                         f"runpy.run_path('scripts/test-release-package.py')['{operation}']"
                          "(next(Path('dist').glob('*.deb')).resolve())", timeout=900)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
@@ -699,7 +766,8 @@ def vm_test(package_run_id, target):
     with tempfile.TemporaryDirectory(prefix='cor-linux-vm-', dir=temporary_root) as temporary:
         directory = Path(temporary)
         phase_started = time.monotonic()
-        archive = vm_source_archive(directory, include_frozen_apt=bool(frozen))
+        archive = vm_source_archive(directory, include_frozen_apt=bool(frozen),
+                                    include_cosmic_probe=(target.family, target.release) == ('pop', '24.04'))
         timings['source_archive'] = round(time.monotonic() - phase_started, 3)
         guest = None
         report_image = 'iso' if target.image_format == 'iso' else 'cloud'
@@ -710,7 +778,8 @@ def vm_test(package_run_id, target):
                   report_image + '_' + target.digest_algorithm: image[target.digest_algorithm]}
         with ThreadPoolExecutor(max_workers=1) as workers:
             try:
-                package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings)
+                package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings,
+                                                rpm=target.package_format == 'rpm')
                 phase_started = time.monotonic()
                 filename = (f'{target.family}-{target.release}-{architecture}.{target.image_format}'
                             if target.image_url else 'focal.img')
@@ -748,7 +817,9 @@ def vm_test(package_run_id, target):
                         finally:
                             guest.close()
                 finally:
-                    result.update(apt_inputs='frozen' if frozen else 'current',
+                    result.update(package_format=target.package_format,
+                                  apt_inputs=('frozen' if frozen else 'current')
+                                  if target.package_format == 'deb' else None,
                                   seconds=round(time.monotonic() - overall_started, 3),
                                   timings_seconds=timings)
                     write_json(REPORT/'linux-vm.json', result)

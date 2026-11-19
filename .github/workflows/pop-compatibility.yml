@@ -1,0 +1,21 @@
+name: Pop!_OS Compatibility
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful CI run for the selected branch commit
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: pop-compatibility-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    name: Linux
+    uses: ./.github/workflows/linux-compatibility.yml
+    with:
+      suite: pop
+      run_id: ${{ inputs.run_id }}

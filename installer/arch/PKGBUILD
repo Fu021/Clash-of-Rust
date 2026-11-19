@@ -1,0 +1,23 @@
+pkgname=clash-of-rust
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Native desktop client for mihomo'
+arch=('x86_64')
+url='https://github.com/Fu021/Clash-of-Rust'
+license=('GPL-3.0-only')
+depends=('glibc' 'gcc-libs' 'libxkbcommon-x11' 'libx11' 'libxcb' 'libxrandr' 'libxi'
+         'libxcursor' 'libxinerama' 'wayland' 'fontconfig' 'freetype2'
+         'gsettings-desktop-schemas' 'iproute2' 'util-linux' 'polkit')
+makedepends=('binutils')
+options=('!strip' '!debug' '!lto')
+source=('candidate.deb')
+noextract=('candidate.deb')
+sha256sums=('@SHA256@')
+
+package() {
+    local archive
+    archive=$(ar t "$srcdir/candidate.deb" | awk '/^data\.tar([.]|$)/ {print}')
+    [[ $archive =~ ^data\.tar(\.(xz|zst|gz))?$ ]] || return 1
+    ar p "$srcdir/candidate.deb" "$archive" | bsdtar -xf - -C "$pkgdir"
+    printf 'pacman\n' > "$pkgdir/opt/clash-of-rust/package-manager"
+}

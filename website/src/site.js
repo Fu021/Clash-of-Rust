@@ -273,6 +273,7 @@ if (downloads) {
     { os: "windows", suffix: "windows-arm64-setup.exe", label: say("ARM64 installer", "ARM64 安装程序"), hint: say("Snapdragon and other ARM PCs", "骁龙等 ARM 电脑") },
     { os: "linux", suffix: "linux-amd64.deb", label: "amd64 DEB", hint: say("Most PCs and servers", "多数电脑和服务器") },
     { os: "linux", suffix: "linux-arm64.deb", label: "arm64 DEB", hint: say("ARM servers and boards", "ARM 服务器和开发板") },
+    { os: "linux", suffix: "linux-x86_64.rpm", label: "x86_64 RPM", hint: say("RPM-based Linux", "使用 RPM 的 Linux"), optional: true },
     { os: "macos", suffix: "macos-arm64.dmg", label: "Apple Silicon DMG", hint: say("M-series Macs", "M 系列芯片") },
     { os: "macos", suffix: "macos-x64.dmg", label: "Intel DMG", hint: say("Intel Macs", "Intel 芯片") },
     { os: "android", suffix: "android-arm64.apk", label: "ARM64 APK", hint: say("Most phones and tablets", "多数手机和平板") },
@@ -301,8 +302,9 @@ if (downloads) {
         Number.isSafeInteger(asset.size) && asset.size > 0 &&
         asset.browser_download_url === `${WEB}/releases/download/${record.tag_name}/${file}`);
       const installer = find(name);
-      if (!installer || !find(`${name}.sha256`)) return null;
-      sizes.push(installer.size);
+      const checksum = find(`${name}.sha256`);
+      if ((!installer || !checksum) && !item.optional) return null;
+      sizes.push(installer && checksum ? installer.size : null);
     }
     return { tag: record.tag_name, sizes };
   }
@@ -319,7 +321,8 @@ if (downloads) {
     for (const list of $$("[data-pkgs]")) {
       const os = list.closest("[data-os]").dataset.os;
       const first = PACKAGES.findIndex(item => item.os === os);
-      list.replaceChildren(...PACKAGES.map((item, index) => ({ item, index })).filter(entry => entry.item.os === os).map(({ item, index }) => {
+      list.replaceChildren(...PACKAGES.map((item, index) => ({ item, index }))
+        .filter(entry => entry.item.os === os && release.sizes[entry.index] > 0).map(({ item, index }) => {
         const file = `Clash-of-Rust-${version}-${item.suffix}`;
         const url = `${WEB}/releases/download/${release.tag}/${file}`;
         const row = document.createElement("li");

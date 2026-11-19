@@ -49,6 +49,20 @@ class SiteTests(unittest.TestCase):
         build.build()
     def test_current_snapshot(self):
         validate(self.data)
+    def test_optional_rpm_is_rendered_only_when_present(self):
+        snapshot = copy.deepcopy(self.data)
+        data = snapshot['downloads']['stable']
+        body = (build.SRC/'pages/en/download.html').read_text()
+        suffix = 'linux-x86_64.rpm'
+        self.assertNotIn(suffix, build.render_downloads(body, snapshot))
+        data['sizes'][suffix] = 45 * 1048576
+        validate(snapshot)
+        rendered = build.render_downloads(body, snapshot)
+        self.assertIn(suffix + '.sha256', rendered)
+        self.assertIn('45.0 MiB', rendered)
+        data['sizes'][suffix] = 0
+        with self.assertRaises(ValueError):
+            validate(snapshot)
     def test_tool_catalog_matches_the_shared_cli_and_both_languages(self):
         catalog = json.loads((build.SRC/'content/tools.json').read_text())
         core = (REPO_ROOT/'crates/client-core/src/detection/tools/mod.rs').read_text()

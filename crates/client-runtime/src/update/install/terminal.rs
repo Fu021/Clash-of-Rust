@@ -55,6 +55,9 @@ pub(crate) fn prepare_terminal_install(
     start_after_install: bool,
 ) -> Result<PathBuf> {
     let _lock = session_lock(&engine.store.root)?;
+    if let Some(manager) = super::super::external_linux_package_manager() {
+        bail!("请使用 {manager} 更新此版本的客户端");
+    }
     anyhow::ensure!(
         crate::platform::is_elevated() || Path::new(SUDO).is_file(),
         "纯终端安装需要 sudo；请用 cor update download --output cor-update.deb 下载，再由管理员安装"
@@ -212,6 +215,11 @@ fn sudo(interactive: bool) -> Result<Command> {
 }
 
 fn authorize(path: &Path, interactive: bool) -> Result<()> {
+    if let Some(manager) =
+        super::super::external_linux_package_manager_at(Path::new("/opt/clash-of-rust/cor"))
+    {
+        bail!("请使用 {manager} 更新此版本的客户端");
+    }
     if crate::platform::is_elevated() {
         return Ok(());
     }

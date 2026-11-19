@@ -1,4 +1,4 @@
-"""Install the pinned Mint Cinnamon ISO on an empty CI VM disk."""
+"""Install a pinned Ubiquity desktop ISO on an empty CI VM disk."""
 import re
 import secrets
 import subprocess
@@ -56,9 +56,11 @@ trap 'if [ "$?" -ne 0 ]; then /bin/sh /cdrom/preseed/cor-install-failed cor-mint
 target=/target
 seed=/cdrom/preseed
 mountpoint -q "$target"
-mint_sources="$target/etc/apt/sources.list.d/official-package-repositories.list"
-sed -i -E 's@^(deb(-src)?[[:space:]]+)http://packages\\.linuxmint\\.com/?([[:space:]])@\\1https://fastly.linuxmint.io/\\3@' "$mint_sources"
-grep -qE '^deb[[:space:]]+https://fastly\\.linuxmint\\.io/[[:space:]]' "$mint_sources"
+if [ "$(. "$target/etc/os-release"; printf '%s' "$ID")" = linuxmint ]; then
+    mint_sources="$target/etc/apt/sources.list.d/official-package-repositories.list"
+    sed -i -E 's@^(deb(-src)?[[:space:]]+)http://packages\\.linuxmint\\.com/?([[:space:]])@\\1https://fastly.linuxmint.io/\\3@' "$mint_sources"
+    grep -qE '^deb[[:space:]]+https://fastly\\.linuxmint\\.io/[[:space:]]' "$mint_sources"
+fi
 install -d -m 0755 "$target/etc/ssh/sshd_config.d" "$target/etc/sudoers.d" \\
     "$target/etc/systemd/system/multi-user.target.wants" "$target/usr/local/sbin"
 chroot "$target" install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
@@ -111,28 +113,33 @@ touch /var/lib/cor-guest-ssh-ready
 """
 
 
-def automatic_grub(source):
+def automatic_grub(source, initrd='/casper/initrd.lz'):
+    if initrd not in ('/casper/initrd.lz', '/casper/initrd.zstd'):
+        raise ValueError('Unsupported Ubiquity initramfs')
+    expected = 'maybe-ubiquity' if initrd.endswith('.zstd') else 'boot=casper'
     for line in source.splitlines():
         kernel = re.fullmatch(r'\s*linux\s+/casper/vmlinuz\s+(.+?)\s+--+\s*', line)
-        if kernel and 'boot=casper' in kernel[1].split():
+        if kernel and expected in kernel[1].split():
             break
     else:
-        raise ValueError('Mint ISO does not expose the expected Casper boot menu')
-    arguments = ' '.join(value for value in kernel[1].split()
-                         if value not in {'quiet', 'splash'} and not value.startswith('iso-scan/'))
-    return ('set default=0\nset timeout=0\nmenuentry "Install Mint compatibility guest" {\n'
-            f'  linux /casper/vmlinuz {arguments} automatic-ubiquity only-ubiquity '
+        raise ValueError('ISO does not expose the expected Casper boot menu')
+    arguments = [value for value in kernel[1].split()
+                 if value not in {'quiet', 'splash', 'maybe-ubiquity'} and not value.startswith('iso-scan/')]
+    if 'boot=casper' not in arguments:
+        arguments.insert(0, 'boot=casper')
+    return ('set default=0\nset timeout=0\nmenuentry "Install compatibility guest" {\n'
+            f'  linux /casper/vmlinuz {" ".join(arguments)} automatic-ubiquity only-ubiquity '
             'file=/cdrom/preseed/cor.cfg noprompt console=tty0 console=ttyS0,115200n8 '
             'systemd.journald.forward_to_console=1 --\n'
-            '  initrd /casper/initrd.lz\n}\n')
+            f'  initrd {initrd}\n}}\n')
 
 
-def installation_media(iso, directory, public_key):
+def installation_media(iso, directory, public_key, initrd='/casper/initrd.lz'):
     source_grub = directory/'source-grub.cfg'
     grub = directory/'grub.cfg'
     run(['xorriso', '-osirrox', 'on', '-indev', iso, '-extract', '/boot/grub/grub.cfg',
          source_grub], timeout=120)
-    grub.write_text(automatic_grub(source_grub.read_text()))
+    grub.write_text(automatic_grub(source_grub.read_text(), initrd))
     seed = directory/'preseed'
     seed.mkdir()
     password = subprocess.check_output(['openssl', 'passwd', '-6', '-stdin'],
@@ -151,8 +158,8 @@ def installation_media(iso, directory, public_key):
     return media
 
 
-def install(iso, directory, public_key, command, console):
-    media = installation_media(iso, directory, public_key)
+def install(iso, directory, public_key, command, console, *, initrd='/casper/initrd.lz'):
+    media = installation_media(iso, directory, public_key, initrd)
     iso.unlink()
     problem = None
     with console.open('w') as log:

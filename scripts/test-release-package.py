@@ -156,9 +156,11 @@ def linux_package_tests(package, tun_test, structure=True):
         # This checks old user-space libraries; its host kernel is recorded
         # separately and never presented as minimum-kernel evidence.
         linux_gui_smoke()
-    elif extended_tests() and platform.freedesktop_os_release().get('ID') != 'linuxmint':
-        from linux_gui import installed_tests
-        installed_tests()
+    elif extended_tests():
+        release = platform.freedesktop_os_release()
+        if release.get('ID') != 'linuxmint' and (release.get('ID'), release.get('VERSION_ID')) != ('pop', '24.04'):
+            from linux_gui import installed_tests
+            installed_tests()
     if not os.environ.get('COR_LINUX_BASELINE'):
         run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
              '--test-binary', tun_test, '--bundle', '/opt/clash-of-rust'])
@@ -170,11 +172,12 @@ def compatibility_dependencies():
     from ci_test_policy import extended_tests
     from ubuntu_vm_environment import TEST_PACKAGES
     if extended_tests():
-        distribution = platform.freedesktop_os_release().get('ID')
+        release = platform.freedesktop_os_release()
+        distribution = release.get('ID')
         if distribution == 'debian':
             return ['mate-polkit' if package == 'policykit-1-gnome' else package
                     for package in TEST_PACKAGES]
-        if distribution == 'linuxmint':
+        if distribution == 'linuxmint' or (distribution, release.get('VERSION_ID')) == ('pop', '24.04'):
             return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
                     'x11-utils', 'xdotool', 'wmctrl']
         return list(TEST_PACKAGES)
@@ -255,7 +258,7 @@ def run_upgrade_cli(data, report, phase, *commands):
 def deb_upgrade_and_uninstall(package):
     distribution = platform.freedesktop_os_release().get('ID')
     if (os.geteuid() == 0 or os.environ.get('COR_LINUX_GUEST') != 'true'
-            or distribution not in ('debian', 'linuxmint')):
+            or distribution not in ('debian', 'linuxmint', 'pop', 'zorin')):
         raise RuntimeError('DEB installation lifecycle requires an ordinary user in a disposable compatibility VM')
     architecture = subprocess.check_output(['dpkg-deb', '--field', package, 'Architecture'], text=True).strip()
     previous_digest = PREVIOUS_DEB_SHA256[architecture]
@@ -272,62 +275,128 @@ def deb_upgrade_and_uninstall(package):
             ['dpkg-deb', '--field', package, 'Version'], text=True).strip()
         run(['dpkg', '--compare-versions', PREVIOUS_DEB_VERSION, 'lt', candidate_version])
         installed_version = ['dpkg-query', '--show', '--showformat=${Version}', 'clash-of-rust']
-        if subprocess.check_output(installed_version, text=True) != candidate_version:
-            raise RuntimeError('The clean installation did not install the candidate version')
         purge = [*APT_OPTIONS, 'purge', '-y', 'clash-of-rust']
-        run_privileged_with_timeout(purge, 300)
-        install_packages([previous])
-        if subprocess.check_output(installed_version, text=True) != PREVIOUS_DEB_VERSION:
-            raise RuntimeError('Upgrade fixture is missing the previous installed version')
-        data = directory/'profile'
-        fixture = directory/'fixture.yaml'
-        fixture.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
-        profile_name = 'DEB upgrade fixture'
-        list_profile = ('profile', 'list', '--filter', profile_name)
-        _, _, profiles_before = run_upgrade_cli(
-            data, report, 'before', ('config', 'set', 'update_prereleases', 'true'),
-            ('profile', 'add', profile_name, fixture), list_profile)
-        if len(profiles_before) != 1:
-            raise RuntimeError('The previous installation could not save the upgrade fixture')
-        profile_file = data/'profiles'/f'{profiles_before[0]["id"]}.yaml'
-        profile_content = profile_file.read_bytes()
+        verify_package_lifecycle(
+            package, previous, candidate_version, PREVIOUS_DEB_VERSION, directory, report,
+            lambda path: install_packages([path]), lambda: run_privileged_with_timeout(purge, 300),
+            lambda: subprocess.check_output(installed_version, text=True),
+            previous_source_digest=previous_digest)
 
-        install_packages([package])
-        if subprocess.check_output(installed_version, text=True) != candidate_version:
-            raise RuntimeError('DEB upgrade did not install the candidate version')
-        settings, profiles_after = run_upgrade_cli(
-            data, report, 'after', ('config', 'get', 'update_prereleases'), list_profile)
-        if settings != {'update_prereleases': True}:
-            raise RuntimeError('DEB upgrade lost the saved update channel')
-        if [(profile['id'], profile['name']) for profile in profiles_after] != [
-            (profiles_before[0]['id'], profile_name),
-        ]:
-            raise RuntimeError('DEB upgrade lost the saved profile')
-        if profile_file.read_bytes() != profile_content:
-            raise RuntimeError('DEB upgrade changed the saved profile content')
-        user_files = [data/'settings.json', data/'profiles.json', profile_file]
-        contents = [path.read_bytes() for path in user_files]
-        run_privileged_with_timeout(purge, 300)
-        artifacts = ('/opt/clash-of-rust', '/usr/bin/cor', '/usr/bin/clash-of-rust',
-                     '/usr/share/applications/clash-of-rust.desktop',
-                     '/usr/share/polkit-1/actions/org.clashofrust.tun.policy')
-        if any(os.path.lexists(path) for path in artifacts):
-            raise RuntimeError('DEB uninstall left installed application files')
-        if [path.read_bytes() for path in user_files] != contents:
-            raise RuntimeError('DEB uninstall changed user data')
-        write_json(report/'result.json', {'previous_version': PREVIOUS_DEB_VERSION,
-                                         'previous_sha256': previous_digest,
-                                         'installed_version': candidate_version,
-                                         'candidate_sha256': sha256(package),
-                                         'upgrade_preserved_settings_and_profile': True,
-                                         'uninstall_preserved_user_data': True})
+
+def verify_package_lifecycle(package, previous, candidate_version, previous_version,
+                             directory, report, install, remove, installed_version,
+                             *, previous_source_digest):
+    if installed_version() != candidate_version:
+        raise RuntimeError('The clean installation did not install the candidate version')
+    remove()
+    install(previous)
+    if installed_version() != previous_version:
+        raise RuntimeError('Upgrade fixture is missing the previous installed version')
+    data = directory/'profile'
+    fixture = directory/'fixture.yaml'
+    fixture.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
+    profile_name = 'Package upgrade fixture'
+    list_profile = ('profile', 'list', '--filter', profile_name)
+    _, _, profiles_before = run_upgrade_cli(
+        data, report, 'before', ('config', 'set', 'update_prereleases', 'true'),
+        ('profile', 'add', profile_name, fixture), list_profile)
+    if len(profiles_before) != 1:
+        raise RuntimeError('The previous installation could not save the upgrade fixture')
+    profile_file = data/'profiles'/f'{profiles_before[0]["id"]}.yaml'
+    profile_content = profile_file.read_bytes()
+
+    install(package)
+    if installed_version() != candidate_version:
+        raise RuntimeError('Package upgrade did not install the candidate version')
+    settings, profiles_after = run_upgrade_cli(
+        data, report, 'after', ('config', 'get', 'update_prereleases'), list_profile)
+    if settings != {'update_prereleases': True}:
+        raise RuntimeError('Package upgrade lost the saved update channel')
+    if [(profile['id'], profile['name']) for profile in profiles_after] != [
+        (profiles_before[0]['id'], profile_name),
+    ]:
+        raise RuntimeError('Package upgrade lost the saved profile')
+    if profile_file.read_bytes() != profile_content:
+        raise RuntimeError('Package upgrade changed the saved profile content')
+    user_files = [data/'settings.json', data/'profiles.json', profile_file]
+    contents = [path.read_bytes() for path in user_files]
+    remove()
+    artifacts = ('/opt/clash-of-rust', '/usr/bin/cor', '/usr/bin/clash-of-rust',
+                 '/usr/share/applications/clash-of-rust.desktop',
+                 '/usr/share/polkit-1/actions/org.clashofrust.tun.policy')
+    if any(os.path.lexists(path) for path in artifacts):
+        raise RuntimeError('Package uninstall left installed application files')
+    if [path.read_bytes() for path in user_files] != contents:
+        raise RuntimeError('Package uninstall changed user data')
+    write_json(report/'result.json', {'previous_version': previous_version,
+                                     'previous_sha256': sha256(previous),
+                                     'previous_source_sha256': previous_source_digest,
+                                     'installed_version': candidate_version,
+                                     'candidate_sha256': sha256(package),
+                                     'upgrade_preserved_settings_and_profile': True,
+                                     'uninstall_preserved_user_data': True})
+
+
+def native_upgrade_and_uninstall(deb):
+    from linux_native_guest import (
+        RPM, distribution, install_package, package_version, remove_package, verify_upgrade_order,
+    )
+    from linux_native_package import build_arch, build_rpm, native_version, verify_rpm
+
+    distro = distribution()
+    separator = '~' if distro in RPM else ''
+    for old, new in (('0.7.3-fix.2.install', '0.7.3-fix.10.install'),
+                     ('0.7.3-fix.10.install', '0.7.3')):
+        verify_upgrade_order(native_version(old, separator)+'-1', native_version(new, separator)+'-1')
+    report = ROOT/'target/linux-report'/f'{distro}-lifecycle'
+    report.mkdir(parents=True, exist_ok=True)
+    if distro in RPM:
+        receipt = json.loads((deb.parent/'package-receipt.json').read_text())
+        candidate = verify_rpm(deb.parent/'linux-rpm', receipt)
+    else:
+        candidate, = (deb.parent/'linux-arch').glob('*.pkg.tar.zst')
+    previous_digest = PREVIOUS_DEB_SHA256['amd64']
+    previous_name = f'Clash-of-Rust-{PREVIOUS_DEB_VERSION}-linux-amd64.deb'
+    previous_url = f'https://github.com/Fu021/Clash-of-Rust/releases/download/v{PREVIOUS_DEB_VERSION}/{previous_name}'
+    with tempfile.TemporaryDirectory(prefix='cor-native-lifecycle-') as temporary:
+        directory = Path(temporary)
+        previous_source = directory/previous_name
+        download(previous_url, previous_source, digest=previous_digest)
+        previous = (build_rpm(previous_source, PREVIOUS_DEB_VERSION, directory) if distro in RPM
+                    else build_arch(previous_source, PREVIOUS_DEB_VERSION, directory, previous_digest))
+        previous_version, candidate_version = package_version(previous), package_version(candidate)
+        verify_upgrade_order(previous_version, candidate_version)
+        verify_package_lifecycle(candidate, previous, candidate_version, previous_version,
+                                 directory, report, install_package, remove_package, package_version,
+                                 previous_source_digest=previous_digest)
+
+
+def native_package_tests(deb, receipt, binary):
+    from linux_gui import installed_tests
+    from linux_native_guest import RPM, distribution, install_package, prepare
+    from linux_native_package import build_arch, verify_rpm
+
+    distro = distribution()
+    prepare()
+    package = (verify_rpm(deb.parent/'linux-rpm', receipt) if distro in RPM else
+               build_arch(deb, receipt['version'], deb.parent/'linux-arch', receipt['sha256']))
+    run(['sudo', 'chown', 'root:root', '/opt'])
+    run(['sudo', 'chmod', '0755', '/opt'])
+    install_package(package)
+    require_linux_polkit_tools()
+    installed_tests()
+    run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
+         '--test-binary', binary, '--bundle', '/opt/clash-of-rust'])
+    write_json(ROOT/'target/linux-report/native-package.json',
+               {'candidate': package.name, 'sha256': sha256(package),
+                'source_deb_sha256': receipt['sha256']})
 
 
 def run_compatibility(distribution, version, arch):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Compatibility tests require a disposable GitHub Actions runner')
     release = platform.freedesktop_os_release()
-    actual = (release.get('ID'), release.get('VERSION_ID'), host_arch())
+    actual = (release.get('ID'), release.get('VERSION_ID', ''), host_arch())
     if actual != (distribution, version, arch):
         raise ValueError(f'Compatibility test expected {(distribution, version, arch)}, got {actual}')
     packages = list((ROOT/'dist').glob('*.deb'))
@@ -343,9 +412,13 @@ def run_compatibility(distribution, version, arch):
         or receipt['linux_tun_test_sha256'] != sha256(binary)):
         raise ValueError('Compatibility inputs differ from the verified package/test binaries')
     binary.chmod(0o755)
-    prepare_compatibility_environment()
-    linux_package_tests(packages[0], binary, structure=False)
-    if distribution in ('debian', 'linuxmint'):
+    from linux_native_guest import DISTROS
+    if distribution in DISTROS:
+        native_package_tests(packages[0], receipt, binary)
+    else:
+        prepare_compatibility_environment()
+        linux_package_tests(packages[0], binary, structure=False)
+    if distribution != 'ubuntu':
         from cli_tui import verify
         installed = Path('/opt/clash-of-rust')
         verify(installed/'cor', installed/'resources', ROOT/'target/linux-report/tui')

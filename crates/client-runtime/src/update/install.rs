@@ -412,8 +412,14 @@ pub fn ensure_installable() -> Result<PathBuf> {
         bail!("请先使用 EXE 安装程序安装客户端，再使用自动更新");
     }
     #[cfg(target_os = "linux")]
-    if executable != Path::new("/opt/clash-of-rust/clash-of-rust") {
-        bail!("请先使用 DEB 安装客户端，再使用自动更新");
+    {
+        anyhow::ensure!(
+            executable == Path::new("/opt/clash-of-rust/clash-of-rust"),
+            "请先使用 DEB 安装客户端，再使用自动更新"
+        );
+        if let Some(manager) = super::external_linux_package_manager_at(&executable) {
+            bail!("请使用 {manager} 更新此版本的客户端");
+        }
     }
     #[cfg(target_os = "macos")]
     macos::ensure_installable(&executable)?;
@@ -596,6 +602,11 @@ fn install(plan: &Plan, directory: &Path, verified: &package::Verified) -> Resul
 
 #[cfg(target_os = "linux")]
 fn install(_plan: &Plan, directory: &Path, verified: &package::Verified) -> Result<()> {
+    if let Some(manager) =
+        super::external_linux_package_manager_at(Path::new("/opt/clash-of-rust/clash-of-rust"))
+    {
+        bail!("请使用 {manager} 更新此版本的客户端");
+    }
     if !Path::new("/usr/bin/dpkg").is_file() {
         bail!("当前系统没有 dpkg，无法安装 DEB");
     }

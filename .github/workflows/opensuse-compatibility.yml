@@ -1,0 +1,21 @@
+name: openSUSE Compatibility
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful CI run for the selected branch commit
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: opensuse-compatibility-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    name: Linux
+    uses: ./.github/workflows/linux-compatibility.yml
+    with:
+      suite: opensuse
+      run_id: ${{ inputs.run_id }}

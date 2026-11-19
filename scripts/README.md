@@ -32,9 +32,12 @@
 | `ubuntu_vm_environment.py` | 共享模块 | 冻结 Ubuntu 双架构的官方 APT 计划与签名索引，在隔离 VM 中校验及安装。 |
 | `linux_apt.py` | 模块 | 限时安装系统依赖，按签名索引校验同次运行中已下载的 DEB。 |
 | `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证。 |
-| `linux_desktop_login.py` | 兼容 VM 内 CLI | Debian GDM/GNOME 与 Linux Mint LightDM/Cinnamon 的实际登录、旧自启动迁移、托盘注册及窗口恢复。Mint 的已安装 GUI 生命周期在 Cinnamon X11 和 Wayland 会话中运行。 |
+| `linux_desktop_login.py` | 兼容 VM 内 CLI | 实际 GDM、LightDM 或 COSMIC 登录、旧自启动迁移、托盘注册及窗口恢复；各发行版会话范围见工作流文档。 |
 | `linux_mint_desktop.py` | Mint 兼容 VM 内 CLI / 模块 | 在 Cinnamon X11 登录内驱动图形授权，核验取消和允许后的安装文件权限。为原生会话复用已安装 GUI、托盘和共享后台回归。 |
-| `linux_mint_install.py` | Linux 兼容模块 | 用固定的 Cinnamon ISO 和 Ubiquity 准备一次性 VM 磁盘。串口区分交互提示、安装失败和 SSH 预置失败，安装完成后从硬盘启动验收。 |
+| `linux_mint_install.py` / `pop_live_install.py` | Linux 兼容模块 | Mint、Zorin 的 Ubiquity 和 Pop!_OS 的 distinst 安装器，共用一次性磁盘和 SSH 引导合同。 |
+| `linux_native_package.py` / `linux_native_guest.py` | Linux 兼容模块 | 由已验候选准备 RPM、Arch 包和收据；来宾内用发行版原生包管理器验证安装与生命周期。 |
+| `linux_gnome_login.py` / `linux_cosmic_*.py` | Linux 兼容模块 | 从真实 Wayland 会话验证窗口、桌面授权或代理，限定于一次性来宾。 |
+| `linux_vm_console.py` / `linux_vm_monitor.py` | Linux VM 模块 | 隔离串口、QMP 和虚拟显示截图，供 ISO 安装及 COSMIC 诊断复用。 |
 | `windows_ci.py` | 模块 | Windows 普通用户、服务、含空格和中文的自定义目录安装与更新，以及安装包/未压缩 EXE/DLL 的 Defender 验证；扫描证据进入打包收据。 |
 | `macos_ci.py` | CLI / 模块 | macOS 原生验证、安装检查和诊断报告。 |
 | `macos_runner_network.py` | 共享模块 | 供 macOS 安装验收采集 runner 原生 DNS、路由与解析探针。 |
