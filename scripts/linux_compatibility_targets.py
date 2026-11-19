@@ -2,6 +2,9 @@
 from dataclasses import dataclass
 
 UBUNTU_BASELINE = '20.04'
+TUMBLEWEED_ARM64_REPOMD = {
+    '20261117': '781d163094bd76fc89ff4fea07636bca733f4fdd51600ed1f6c0eb31baf853ad',
+}
 
 
 @dataclass(frozen=True)
@@ -82,10 +85,11 @@ def zorin_target(release, filename, digest):
                   digest, image_format='iso')
 
 
-def fedora_target(build, digest):
+def fedora_target(build, arch, digest):
     release = build.split('-')[0]
-    root = f'https://dl.fedoraproject.org/pub/fedora/linux/releases/{release}/Cloud/x86_64/images'
-    return Target('fedora', release, 'x64', f'{root}/Fedora-Cloud-Base-Generic-{build}.x86_64.qcow2',
+    image_arch = {'x64': 'x86_64', 'arm64': 'aarch64'}[arch]
+    root = f'https://dl.fedoraproject.org/pub/fedora/linux/releases/{release}/Cloud/{image_arch}/images'
+    return Target('fedora', release, arch, f'{root}/Fedora-Cloud-Base-Generic-{build}.{image_arch}.qcow2',
                   digest)
 
 
@@ -94,6 +98,13 @@ def leap_target(release, build, arch, digest):
     image_arch = {'x64': 'x86_64', 'arm64': 'aarch64'}[arch]
     return Target('opensuse', release, arch,
                   f'{root}/Leap-{release}-Minimal-VM.{image_arch}-Cloud-Build{build}.qcow2', digest)
+
+
+def tumbleweed_target(snapshot, arch, digest):
+    root = 'https://downloadcontent.opensuse.org'
+    port, image_arch = {'x64': ('', 'x86_64'), 'arm64': ('/ports/aarch64', 'aarch64')}[arch]
+    image = f'openSUSE-Tumbleweed-Minimal-VM.{image_arch}-1.0.0-Cloud-Snapshot{snapshot}.qcow2'
+    return Target('opensuse', snapshot, arch, f'{root}{port}/tumbleweed/appliances/{image}', digest)
 
 
 TARGETS = {
@@ -132,18 +143,18 @@ TARGETS = {
                      '44649b97bd307fc4c8529205d098ebbf98575a1e1ba2ee7d7005b697af1721d5'),
     ),
     'fedora': (
-        fedora_target('44-1.7', '28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f'),
-        fedora_target('45-1.4', '50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0'),
+        fedora_target('44-1.7', 'x64', '28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f'),
+        fedora_target('45-1.4', 'x64', '50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0'),
+        fedora_target('44-1.7', 'arm64', '55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b'),
+        fedora_target('45-1.4', 'arm64', '1632acc8bc14d45b6c9596a0acc71b070d3748d1abdcf1a519be5c983bb0286c'),
     ),
     'opensuse': (
         leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
         leap_target('16.1', '3.18', 'x64', '2cbf0121ccb8eef5452b43e14685715452ffa049e6a618bb165382aa1f2aab3b'),
-        Target('opensuse', '20261118', 'x64',
-               'https://downloadcontent.opensuse.org/tumbleweed/appliances/'
-               'openSUSE-Tumbleweed-Minimal-VM.x86_64-1.0.0-Cloud-Snapshot20261118.qcow2',
-               'c1cb4f8eb3dd0b86d496ba78f10dc35fdfe062aab642b32ea0421b447e6ee1fb'),
+        tumbleweed_target('20261118', 'x64', 'c1cb4f8eb3dd0b86d496ba78f10dc35fdfe062aab642b32ea0421b447e6ee1fb'),
         leap_target('16.0', '18.95', 'arm64', '9158494113be517a940a32394200ccd87ab1abed427317a4e93e4aa9a070b6eb'),
         leap_target('16.1', '3.18', 'arm64', 'd810f634121df1fa5dcee5e958e24a107f5fc2ef6efa0d134fe1482946ddb93b'),
+        tumbleweed_target('20261117', 'arm64', '47675dba1903fb4d1c668f12dc0e80ca6f43ee0ee1918555a1449c3b8b108a53'),
     ),
     'arch': (
         Target('arch', '20261115.625457', 'x64',

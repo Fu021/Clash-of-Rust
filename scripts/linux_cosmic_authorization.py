@@ -1,5 +1,6 @@
 """Locate and operate the installed COSMIC authorization dialog in a disposable VM."""
 import csv
+import json
 import os
 import re
 import shlex
@@ -7,6 +8,7 @@ import struct
 import subprocess
 import time
 
+from build_support import write_json
 from linux_vm_monitor import Monitor, capture_screen
 
 
@@ -131,7 +133,7 @@ def verify_dialogs(guest, report):
     from linux_desktop_login import HOME, USER
 
     def read(path):
-        command = shlex.join(['sudo', '-u', USER, '--', 'cat', str(HOME/path)])
+        command = shlex.join(['sudo', '-u', USER, '--', 'head', '-c', '4096', '--', str(HOME/path)])
         return guest.output(f'{command} 2>/dev/null || true', timeout=15).strip()
 
     monitor = Monitor(guest.monitor_path)
@@ -139,7 +141,15 @@ def verify_dialogs(guest, report):
         for phase in ('cancel', 'accept'):
             deadline = time.monotonic() + 150
             while time.monotonic() < deadline:
-                if read(AUTH_RESULT):
+                result = read(AUTH_RESULT)
+                try:
+                    result = json.loads(result)
+                except ValueError:
+                    result = None
+                if isinstance(result, dict):
+                    write_json(report/'cosmic-authorization-early-result.json', {
+                        'expected_phase': phase, 'guest_result': result,
+                    })
                     raise RuntimeError('COSMIC authorization exited before the expected '+phase+' dialog')
                 if read(AUTH_MARKER) == phase:
                     break

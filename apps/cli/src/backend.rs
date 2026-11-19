@@ -265,9 +265,12 @@ pub async fn run(args: &Args) -> Result<()> {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut delay_at = tokio::time::Instant::now();
     let mut delay_job: Option<tokio::task::JoinHandle<()>> = None;
+    let interrupt = interrupted();
+    tokio::pin!(interrupt);
     loop {
         tokio::select! {
-            result = interrupted() => { result?; break; },
+            biased;
+            result = &mut interrupt => { result?; break; },
             result = shutdown.changed() => { if result.is_err() || *shutdown.borrow() { break; } },
             _ = tick.tick() => {
                 let mut owner = engine.lock().await;

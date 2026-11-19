@@ -7382,7 +7382,7 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.release_suites(scope)
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
-        expected = {'pop': 2, 'zorin': 2, 'fedora': 2, 'opensuse': 5, 'arch': 1}
+        expected = {'pop': 2, 'zorin': 2, 'fedora': 4, 'opensuse': 6, 'arch': 1}
         for suite, count in expected.items():
             with self.subTest(suite=suite):
                 targets = linux_ci.TARGETS[suite]
@@ -7391,7 +7391,8 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertTrue(all(re.fullmatch('[0-9a-f]{64}', target.image_digest) for target in targets))
                 self.assertEqual('linux-rpm-x64' in compatibility.input_names(suite),
                                  suite in ('fedora', 'opensuse'))
-                self.assertEqual('linux-rpm-arm64' in compatibility.input_names(suite), suite == 'opensuse')
+                self.assertEqual('linux-rpm-arm64' in compatibility.input_names(suite),
+                                 suite in ('fedora', 'opensuse'))
                 self.assertIn(suite, compatibility.release_suites(suite))
                 client, source, receipt = self.client(suite)
                 self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
@@ -7399,6 +7400,51 @@ class CompatibilityTests(unittest.TestCase):
                 client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
                 with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
                     compatibility.verified_suite(client, source, suite)
+
+    def test_tumbleweed_only_enables_the_signed_repository_for_the_guest_snapshot(self):
+        import linux_native_guest
+
+        metadata = b'signed fixture metadata'
+        digest = hashlib.sha256(metadata).hexdigest()
+        content = 'https://downloadcontent.opensuse.org/ports/aarch64/tumbleweed/repo/oss/'
+        archive = 'https://openqa.opensuse.org/assets/repo/openSUSE-Tumbleweed-oss-aarch64-Snapshot20261117/'
+        for machine, arch, snapshot, published, cached_digest, source in (
+            ('x86_64', 'x64', '20261118', None, None,
+             'https://download.opensuse.org/history/20261118/tumbleweed/repo/oss/'),
+            ('aarch64', 'arm64', '20261117', metadata, digest, content),
+            ('aarch64', 'arm64', '20261117', b'next snapshot', digest, archive),
+            ('aarch64', 'arm64', '20261117', metadata, 'wrong digest', content),
+        ):
+            with self.subTest(arch=arch, source=source, cached_digest=cached_digest):
+                target = linux_ci.target_for('opensuse', snapshot, arch)
+                self.assertTrue(target.image_url.endswith(f'.{machine}-1.0.0-Cloud-Snapshot{snapshot}.qcow2'))
+                with patch.object(linux_native_guest, 'distribution', return_value='opensuse-tumbleweed'), \
+                        patch.object(platform, 'machine', return_value=machine), \
+                        patch.object(platform, 'freedesktop_os_release', return_value={'VERSION_ID': snapshot}), \
+                        patch.dict(linux_native_guest.TUMBLEWEED_ARM64_REPOMD, {snapshot: digest}), \
+                        patch.object(linux_native_guest, 'urlopen') as fetch, \
+                        patch.object(Path, 'is_file', return_value=True), \
+                        patch.object(linux_native_guest, 'sha256', return_value=cached_digest) as cached, \
+                        patch.object(linux_native_guest, 'privileged') as zypper:
+                    fetch.return_value.__enter__.return_value.read.return_value = published
+                    if cached_digest == 'wrong digest':
+                        with self.assertRaisesRegex(RuntimeError, 'does not match the pinned SHA256'):
+                            linux_native_guest.refresh()
+                    else:
+                        linux_native_guest.refresh()
+                if arch == 'arm64':
+                    fetch.assert_called_once_with(content + 'repodata/repomd.xml', timeout=15)
+                    cached.assert_called_once_with(Path('/var/cache/zypp/raw/cor-tumbleweed-snapshot'
+                                                        '/repodata/repomd.xml'))
+                else:
+                    fetch.assert_not_called()
+                    cached.assert_not_called()
+                self.assertEqual(zypper.call_args_list, [
+                    call('modifyrepo', '--all', '--disable', timeout=60),
+                    call('addrepo', '--check', '--gpgcheck', '--no-refresh',
+                         source, 'cor-tumbleweed-snapshot', timeout=90),
+                    call('refresh', 'cor-tumbleweed-snapshot', timeout=300),
+                ])
 
     def test_ci_rpm_assembly_uses_the_declared_python_shell(self):
         workflow = (build.ROOT/'.github/workflows/ci.yml').read_text()
@@ -7760,7 +7806,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn(name, release.filenames(self.version))
         self.assertEqual(release.filenames(self.version, rpm_arches=('arm64',)) - release.filenames(self.version),
                          {name, name+'.sha256'})
-        self.assertEqual(compatibility.rpm_architectures(('fedora',)), ('x64',))
+        self.assertEqual(compatibility.rpm_architectures(('fedora',)), ('x64', 'arm64'))
         self.assertEqual(compatibility.rpm_architectures(('fedora', 'opensuse')), ('x64', 'arm64'))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -8638,6 +8684,40 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             call(monitor.return_value, report/'cosmic-authorization-accept.png', {}, 'a'*48),
         ])
         monitor.return_value.close.assert_called_once()
+
+    def test_cosmic_probe_waits_for_the_active_display_login(self):
+        import linux_cosmic_desktop
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            password = home/linux_cosmic_desktop.AUTH_PASSWORD
+            password.touch(mode=0o600)
+            with patch.object(linux_cosmic_desktop, 'output', side_effect=['', '1', 'no', '1', 'yes']) as output, \
+                    patch.object(linux_gui.time, 'sleep'), \
+                    patch.object(linux_cosmic_desktop, 'tun_permissions', return_value=('', 0o755)), \
+                    patch.object(linux_cosmic_desktop, 'verify_authorization', return_value={'fixture': True}):
+                linux_cosmic_desktop.authorize(home)
+            self.assertEqual(output.call_count, 5)
+            self.assertEqual(json.loads((home/linux_cosmic_desktop.AUTH_RESULT).read_text()),
+                             {'session': '1', 'fixture': True})
+            self.assertFalse(password.exists())
+
+    def test_cosmic_early_authorization_exit_preserves_the_guest_error(self):
+        import linux_cosmic_authorization
+
+        result = {'error': 'The COSMIC user has no real display login'}
+        guest = SimpleNamespace(monitor_path=Path('/fixture/qmp.sock'),
+                                output=MagicMock(return_value=json.dumps(result)))
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary)
+            with patch.object(linux_cosmic_authorization, 'Monitor') as monitor, \
+                    patch.object(linux_cosmic_authorization, 'answer_dialog') as answer, \
+                    self.assertRaisesRegex(RuntimeError, 'before the expected cancel dialog'):
+                linux_cosmic_authorization.verify_dialogs(guest, report)
+            self.assertEqual(json.loads((report/'cosmic-authorization-early-result.json').read_text()),
+                             {'expected_phase': 'cancel', 'guest_result': result})
+            answer.assert_not_called()
+            monitor.return_value.close.assert_called_once()
 
     def test_diagnostic_workflow_cannot_restore_or_save_build_caches(self):
         workflow = (build.ROOT/'.github/workflows/cosmic-startup-investigation.yml').read_text()

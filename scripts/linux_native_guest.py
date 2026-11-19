@@ -1,15 +1,17 @@
 """Native package operations for disposable non-DEB compatibility guests."""
 from datetime import datetime
+import hashlib
 import os
 from pathlib import Path
 import platform
 import shutil
 import subprocess
 import tempfile
+from urllib.request import urlopen
 import zipfile
 
-from build_support import download, run
-from linux_compatibility_targets import TARGETS
+from build_support import download, run, sha256
+from linux_compatibility_targets import TARGETS, TUMBLEWEED_ARM64_REPOMD
 
 DISTROS = ('fedora', 'opensuse-leap', 'opensuse-tumbleweed', 'arch')
 RPM = ('fedora', 'opensuse-leap', 'opensuse-tumbleweed')
@@ -41,18 +43,41 @@ def privileged(*arguments, timeout=900):
          *manager(), *arguments], timeout=timeout+45)
 
 
+def refresh_tumbleweed():
+    snapshot = platform.freedesktop_os_release()['VERSION_ID']
+    datetime.strptime(snapshot, '%Y%m%d')
+    alias = 'cor-tumbleweed-snapshot'
+    source = f'https://download.opensuse.org/history/{snapshot}/tumbleweed/repo/oss/'
+    digest = None
+    if platform.machine() == 'aarch64':
+        digest = TUMBLEWEED_ARM64_REPOMD[snapshot]
+        source = ('https://openqa.opensuse.org/assets/repo/'
+                  f'openSUSE-Tumbleweed-oss-aarch64-Snapshot{snapshot}/')
+        content = 'https://downloadcontent.opensuse.org/ports/aarch64/tumbleweed/repo/oss/'
+        try:
+            with urlopen(content + 'repodata/repomd.xml', timeout=15) as response:
+                published = hashlib.sha256(response.read(64*1024)).hexdigest()
+        except OSError as error:
+            print(f'Tumbleweed CDN metadata unavailable: {error}', flush=True)
+        else:
+            if published == digest:
+                source = content
+    privileged('modifyrepo', '--all', '--disable', timeout=60)
+    privileged('addrepo', '--check', '--gpgcheck', '--no-refresh', source, alias, timeout=90)
+    privileged('refresh', alias, timeout=300)
+    if digest:
+        cached = Path('/var/cache/zypp/raw')/alias/'repodata/repomd.xml'
+        if not cached.is_file() or sha256(cached) != digest:
+            raise RuntimeError(f'Tumbleweed {snapshot} ARM64 repository metadata does not match the pinned SHA256')
+
+
 def refresh():
     distro = distribution()
     if distro == 'fedora':
         privileged('makecache', timeout=300)
-    elif distro in RPM:
-        if distro == 'opensuse-tumbleweed':
-            snapshot = platform.freedesktop_os_release()['VERSION_ID']
-            datetime.strptime(snapshot, '%Y%m%d')
-            privileged('modifyrepo', '--all', '--disable', timeout=60)
-            privileged('addrepo', '--check', '--gpgcheck',
-                       f'https://download.opensuse.org/history/{snapshot}/tumbleweed/repo/oss/',
-                       'cor-tumbleweed-snapshot', timeout=90)
+    elif distro == 'opensuse-tumbleweed':
+        refresh_tumbleweed()
+    elif distro == 'opensuse-leap':
         privileged('refresh', timeout=300)
     else:
         mirrorlist = '/etc/pacman.d/mirrorlist'

@@ -17,6 +17,8 @@ Debian ARM64 TCG 来宾用 [一级压缩](https://manpages.debian.org/bookworm/i
 
 ARM64 在同一隔离网络命名空间执行完整 CLI 用户矩阵与 TUN 子测试时，外层额外预留 60 秒供整组测试及清理，常规模式总上限为 580 秒。TUN 子测试本身仍限 240 秒。
 
+隔离测试在模拟网络切换后和退出 TUN 后重启后台，让各组订阅直连回退检查从当前路由建立监控基线。保护状态下的后台退出只发送一次 `SIGTERM`，35 秒内未退出即记录进程状态和信号掩码。
+
 两种架构的首次登录和后台登录各有 300 秒的状态等待预算。GDM 登录最多等待 180 秒，确认本次会话后，首登的候选启动最多等待 110 秒，后台登录最多等待 135 秒，后续托盘和窗口操作各限 45 秒。每次等待以该阶段剩余预算为上限。确认候选进程并读取到托盘初始化明确失败时立即结束验收。登录探针及来宾取证合计最多运行 420 秒，重启单独计时。
 
 桌面阶段异常时，关闭来宾前通过 [QEMU 私有监控套接字](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-screendump)尝试截图。实际 GNOME 登录后失败时也尝试使用 `gnome-screenshot`，以满足 [GNOME Shell 的截图调用方限制](https://github.com/GNOME/gnome-shell/blob/43.9/js/ui/screenshot.js)。报告尽可能保留启动轨迹、托盘宿主状态、登录日志和进程快照，截图失败时记录原因。

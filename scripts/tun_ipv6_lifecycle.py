@@ -162,12 +162,16 @@ def verify(directory, invoke, api, http):
         deadline = time.monotonic()+35
         while True:
             try:
-                process_state = Path(f'/proc/{owner_pid}/stat').read_text().rpartition(') ')[2].split()[0]
+                status_fields = Path(f'/proc/{owner_pid}/status').read_text().splitlines()
             except FileNotFoundError:
                 break
-            if process_state == 'Z':
+            if any(line.startswith('State:\tZ') for line in status_fields):
                 break
-            assert time.monotonic() < deadline, 'The protected test owner did not exit'
+            if time.monotonic() >= deadline:
+                signal_status = '; '.join(line for line in status_fields if line.startswith(
+                    ('State:', 'Threads:', 'SigPnd:', 'ShdPnd:', 'SigBlk:', 'SigCgt:')))
+                raise AssertionError(f'The protected test owner {owner_pid} did not exit '
+                                     f'after SIGTERM in 35 seconds: {signal_status}')
             time.sleep(0.1)
         assert json.loads(settings_path.read_text())['claude_protection'] == previous['claude_protection']
         assert invoke('start')['running']

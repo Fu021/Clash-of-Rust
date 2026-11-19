@@ -7,7 +7,7 @@ import platform
 
 from build_support import write_json
 from linux_cosmic_windows import close, windows
-from linux_gui import cli, gui, output, tun_permissions, verify_authorization
+from linux_gui import cli, gui, output, tun_permissions, verify_authorization, wait_for
 
 AUTH_MARKER = '.cor-cosmic-authorization'
 AUTH_PASSWORD = '.cor-cosmic-password'
@@ -21,10 +21,14 @@ def authorize(home):
         return
     result = {}
     try:
-        session = output(['loginctl', 'show-user', str(os.getuid()), '-p', 'Display', '--value'])
-        if not session:
-            raise RuntimeError('The COSMIC user has no real display login')
-        result['session'] = session
+        def active_session():
+            session = output(['loginctl', 'show-user', str(os.getuid()), '-p', 'Display', '--value'])
+            if session and output(['loginctl', 'show-session', session, '-p', 'Active', '--value']) == 'yes':
+                return session
+            return None
+
+        result['session'] = wait_for('The COSMIC user did not reach an active display login',
+                                     active_session, timeout=45)
         if tun_permissions() != ('', 0o755):
             raise RuntimeError('COSMIC authorization requires an unprivileged installed helper')
 

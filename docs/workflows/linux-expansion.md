@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | Pop!_OS Compatibility | System76 22.04 build 58、24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动；DEB；分别验证 Pop GNOME 和 COSMIC |
 | Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity；DEB；Zorin GNOME 与发行版原生托盘 |
-| Fedora Compatibility | Fedora Cloud Base Generic 44-1.7、45-1.4（x64） | DNF 安装同源 RPM；GNOME Wayland |
-| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18（x64、ARM64）；Tumbleweed 20261118（x64） | 可写 Cloud VM，Zypper 安装同源 RPM；GNOME Wayland |
+| Fedora Compatibility | Fedora Cloud Base Generic 44-1.7、45-1.4（x64、ARM64） | DNF 安装同架构的同源 RPM；GNOME Wayland |
+| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18（x64、ARM64）；Tumbleweed 20261118（x64）、20261117（ARM64） | 可写 Cloud VM，Zypper 安装同架构的同源 RPM；GNOME Wayland |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 由同源 DEB 或固定的升级夹具还原安装目录；`pacman` 验收；GNOME Wayland |
 
 镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照，避免镜像跳转指向尚未同步该文件的站点。QEMU 来宾运行在同架构的 `ubuntu-24.04` 或 `ubuntu-24.04-arm` 托管 runner。COSMIC live ISO 的独立启动诊断保留，直到安装版取得等价的真实登录和失败取证证据。
@@ -24,9 +24,9 @@ Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`。该代
 
 Debian、openSUSE 和 Arch 的隔离 X11 探针使用 MATE 授权代理。在可见窗体和 [polkit 的隐藏输入请求](https://github.com/polkit-org/polkit/blob/127/src/polkitagent/polkitagentsession.c)都就绪后才发送操作；每次重启代理同时清空私有探测输出。报告记录验收结果，原始认证调试流只在探针运行期间使用。
 
-COSMIC 探针依次用原图、去黑边灰度图和全幅灰度图定位实际授权对话框。取消阶段点击 `Cancel`，接受阶段点击 `Password` 输入框，再用 [COSMIC 密码框的回车提交](https://github.com/pop-os/cosmic-osd/blob/master/src/components/polkit_dialog.rs)完成图形授权。两阶段均匹配应用授权文本，验收确认取消保留原权限、接受后安装助手取得预期权限。实际登录通过窗口列表和托盘注册确认应用状态。授权取证和失败画面通过宿主捕获，避开来宾截图门户的交互授权。
+COSMIC 登录探针等待 logind 标记本次桌面会话为活动状态后发起授权。宿主依次用原图、去黑边灰度图和全幅灰度图定位实际授权对话框。取消阶段点击 `Cancel`，接受阶段点击 `Password` 输入框，再用 [COSMIC 密码框的回车提交](https://github.com/pop-os/cosmic-osd/blob/master/src/components/polkit_dialog.rs)完成图形授权。两阶段均匹配应用授权文本，验收确认取消保留原权限、接受后安装助手取得预期权限。实际登录通过窗口列表和托盘注册确认应用状态。宿主捕获授权取证和失败画面，探针在预期弹窗前终止时另存来宾结果。
 
-Tumbleweed 的 [GDM 打包补丁](https://api.opensuse.org/public/source/openSUSE:Factory/gdm/gdm-sysconfig-settings.patch)使 `/etc/sysconfig/displaymanager` 的 `DISPLAYMANAGER_AUTOLOGIN` 优先于 `custom.conf`。在一次性 VM 仅替换该键的值，保留实际 GDM 启动 Wayland 会话与登录自启动的断言。
+Tumbleweed 在来宾关闭预设仓库，只启用与云镜像日期一致的签名仓库，并禁用自动刷新。x64 使用 openSUSE 历史目录。ARM64 的索引 SHA256 固定到 [openSUSE openQA 快照](https://openqa.opensuse.org/api/v1/assets/repo/openSUSE-Tumbleweed-oss-aarch64-Snapshot20261117)。官方 CDN 的索引逐字节匹配时优先使用 CDN，否则使用 openQA。Zypper 验签后再次核对缓存中的索引 SHA256，匹配才继续安装。openQA 会清理非永久资产，固定源不可访问时须重新选择并校验一对匹配的镜像与仓库。Tumbleweed 的 [GDM 打包补丁](https://api.opensuse.org/public/source/openSUSE:Factory/gdm/gdm-sysconfig-settings.patch)使 `/etc/sysconfig/displaymanager` 的 `DISPLAYMANAGER_AUTOLOGIN` 优先于 `custom.conf`。在一次性 VM 仅替换该键的值，保留实际 GDM 启动 Wayland 会话与登录自启动的断言。
 
 真实 GNOME Wayland 登录前，探针通过短生命周期的 D-Bus 会话写入扩展设置，指定 GIO 的本地文件实现以免启动 GVfs。若 SSH 阶段超时而 `desktop-login/prepare.json` 已写入成功结果，核对该命令是否启动了仍持有 SSH 输出的进程。真实 X11 登录中，窗口枚举遇到已销毁的 X11 客户窗口时短暂重试，成功读取窗口列表后再判断是否前台显示。
 
@@ -34,6 +34,6 @@ RPM 与 Arch 安装由各自包管理器更新，应用不调用 DEB 安装器�
 
 原生包的预发布版本字段使用 RPM 的 `~` 或 pacman 的 `pre.` 标记，版本后缀中的连字符转换为 `+`。RPM 发行附件名使用原始发行版本，Arch 候选包名使用原生 `pkgver`。兼容来宾用原生比较器校验预发布编号递增及正式版顺序。隔离 DNS 夹具按来宾实际存在的系统 CA 文件装载临时测试根，并在同一挂载命名空间中恢复。
 
-提交 `0d6a3fb3` 使用 CI `44608121738` 完成 [Zorin 17.3 和 18.1](https://github.com/Fu021/Clash-of-Rust/actions/runs/44611717263) 及 [Arch x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/44611718436) 的完整兼容验收。来宾报告记录真实登录与托盘、三端和原生升级、卸载后的数据保留。新提交仍按发布范围取得同源回执。
+提交 `3b62e2ef` 使用 CI `44625972854` 完成 [Zorin 17.3 和 18.1](https://github.com/Fu021/Clash-of-Rust/actions/runs/44628541362)、[Arch x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/44628537194)和 [Fedora 44/45 x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/44628532038)的完整兼容验收。回执均经发布门禁复核。来宾报告记录真实登录与托盘、三端和原生升级、卸载后的数据保留。新提交仍按发布范围取得同源回执。
 
 提交 `0f48d91d` 使用 CI `44580277926` 完成 [openSUSE 三个 x64 目标](https://github.com/Fu021/Clash-of-Rust/actions/runs/44584087058) 的完整兼容验收，回执经发布门禁复核。Tumbleweed 的实际 GNOME 登录、托盘和菜单复用、23 项真实 PTY 与 RPM 升级和卸载均通过。

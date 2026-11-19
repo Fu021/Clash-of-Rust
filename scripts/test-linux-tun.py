@@ -399,6 +399,8 @@ def root_cli_smoke():
             verify_tun_http()
             from tun_ipv6_lifecycle import verify
             verify(directory, invoke, api, http)
+            invoke('stop')
+            assert invoke('start')['running'] and api('configs')['tun']['enable']
             unavailable = directory/'unavailable.yaml'
             unavailable.write_text(
                 'proxies: [{name: Unavailable, type: socks5, server: 203.0.113.10, port: 9}]\n'
@@ -444,6 +446,8 @@ def root_cli_smoke():
             print('PASS: subscription import/update bypass a failed rule through managed DIRECT with TUN active',
                   flush=True)
             invoke('proxy', 'off')
+            invoke('stop')
+            assert invoke('start')['running']
             assert not api('configs')['tun']['enable']
             for proxy_mode in ('off', 'system'):
                 invoke('proxy', proxy_mode)
