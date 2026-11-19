@@ -3,7 +3,7 @@
 | 工作流 | 触发与职责 | 产物 |
 | --- | --- | --- |
 | [CI](workflows/ci.md) | main push、PR；源码检查、编译及九组候选包的安装回归 | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
-| [Publish Release](workflows/release.md) | 手动；核验同提交成功 CI 及两套兼容性回执；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
+| [Publish Release](workflows/release.md) | 手动；核验同提交 CI 及发布范围所需的兼容回执；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 | [Android Compatibility](workflows/android-compatibility.md) | 手动；复用成功 CI 的 x64 APK，Android 8.0～16 基础代理/TUN，截图与诊断可选 | 状态和日志保留 7 天，发布回执保留 3 天 |
 | [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；在固定版本的 x64／ARM64 托管 runner 或 Canonical 云镜像上验收同提交 DEB 的安装与代理/TUN | 小型报告及发布回执保留 3 天 |
@@ -11,7 +11,9 @@
 | [Linux Mint Compatibility](workflows/linuxmint-compatibility.md) | 手动；Linux Mint 21.3 和 22.3 Cinnamon x64 的官方 ISO VM，验收同提交 DEB、原生桌面、登录自启动及代理/TUN | 小型报告及兼容回执保留 3 天 |
 | [COSMIC Startup Investigation](workflows/cosmic-startup.md) | 手动诊断；官方 Pop!_OS live VM，核对旧自启动入口迁移、后台登录和手动打开 | JSON、原始截图与 VM 日志，保留 3 天 |
 
-普通 CI 共 12 个必需 job（共享输入 1、桌面 6、Android 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布需要同提交、同源 CI 的 Android 和 Ubuntu 兼容回执。Debian 是独立的平台验收。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 执行采样与缓存预算两个 job。依赖维护模式不作为发布来源。
+普通 CI 共 12 个必需 job（共享输入 1、桌面 6、Android 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布所需矩阵见[兼容性发布门禁](workflows/release.md#兼容性发布门禁)。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 执行采样与缓存预算两个 job。依赖维护模式不作为发布来源。
+
+`Verify a Linux Compatibility Matrix` 是 Ubuntu、Debian、Linux Mint 的共用实现。手动运行相应发行版入口时，它解析同提交 CI 输入，在固定目标上安装测试并生成回执。各入口的测试范围见上表链接。
 
 COSMIC 诊断按需手动执行一个 VM job，保留供后续桌面启动排障复用，不加入常规 CI 或发布必需门禁。
 

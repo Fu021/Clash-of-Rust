@@ -16,9 +16,15 @@ on:
         required: false
         default: false
         type: boolean
+      linux_scope:
+        description: 'Linux 发布范围，supported 覆盖已支持发行版，专项发布填写逗号分隔的套件'
+        required: true
+        default: supported
+        type: string
 env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
   BUILD_INPUTS_DIR: dependency-snapshot
+  LINUX_RELEASE_SCOPE: ${{ inputs.linux_scope }}
 permissions:
   actions: read
   contents: read
@@ -45,7 +51,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ env.COR_PYTHON }}
-      - name: Verify candidate CI and both compatibility receipts, then freeze source
+      - name: Verify candidate CI and required compatibility receipts, then freeze source
         id: source
         shell: python
         env:
@@ -56,7 +62,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           import os, subprocess, sys
-          command = [sys.executable, 'scripts/publish-release.py', '--resolve']
+          command = [sys.executable, 'scripts/publish-release.py', '--resolve',
+              '--linux-scope', os.environ['LINUX_RELEASE_SCOPE']]
           if os.environ['CHECK_ONLY'] == 'true':
               command.append('--check')
           if os.environ['PRERELEASE'] == 'true':
@@ -195,7 +202,8 @@ jobs:
         run: |
           import os, subprocess, sys
           command = [sys.executable, 'scripts/publish-release.py', '--run-id', os.environ['CI_RUN_ID'],
-              '--package-run-id', os.environ['GITHUB_RUN_ID']]
+              '--package-run-id', os.environ['GITHUB_RUN_ID'],
+              '--linux-scope', os.environ['LINUX_RELEASE_SCOPE']]
           if os.environ['CHECK_ONLY'] == 'true':
               command.append('--check')
           if os.environ['PRERELEASE'] == 'true':

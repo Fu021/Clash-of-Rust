@@ -437,6 +437,8 @@ def main():
     parser.add_argument('--check', action='store_true', help='Verify the complete packaging/tests run without publishing')
     parser.add_argument('--prerelease', action='store_true', help='Explicitly publish a prerelease, including from same-repository PR branches')
     parser.add_argument('--resolve', action='store_true', help='Verify CI and emit immutable source/run metadata for packaging')
+    parser.add_argument('--linux-scope', default='supported',
+                        help='Supported distributions or comma-separated Linux suites for this release')
     parser.add_argument('--package-run-id', type=int, help='Successful packaging run; defaults to the current Actions run')
     parser.add_argument('--proxy', default='')
     parser.add_argument('--tag', help='Optional confirmation of the tested Cargo version tag')
@@ -445,12 +447,14 @@ def main():
     parser.add_argument('--output-dir', type=Path, help='Directory for downloaded CI installers')
     args = parser.parse_args()
     require(not (args.check and args.prerelease), 'Choose either test-only packaging or prerelease publishing')
+    suites = compatibility.release_suites(args.linux_scope)
     repo = repository()
     client = GitHub(repo, credential(repo), args.proxy)
     commit = git('rev-parse', 'HEAD')
     run = verified_run(client, commit, args.run_id, check_only=args.check, prerelease=args.prerelease)
-    for suite in compatibility.RELEASE_SUITES:
-        compatibility.verified_suite(client, run, suite)
+    for suite in suites:
+        receipt_run_id = compatibility.verified_suite(client, run, suite)
+        print(f'Verified {suite} compatibility: run {receipt_run_id}')
     version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check, prerelease=args.prerelease)
     if args.resolve:
         build_artifacts(client, run['id'])

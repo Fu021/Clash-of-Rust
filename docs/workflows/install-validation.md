@@ -70,7 +70,7 @@ Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 gues
 - CI 部分重跑后，GitHub 可能同时保留旧、新尝试的同名附件。按 attempt 合并各平台最后一次实际执行的 job，只接收创建时间位于该生产 job 执行区间、且 run/commit 一致的附件；未重跑的平台沿用自己的最近成功 job。同一区间仍重复、缺失、过期或时间身份不完整时拒绝，不按最大 ID 猜测，不删除旧记录。发布、兼容输入和候选包获取共用此筛选，安装收据仍须精确绑定本次构建 artifact 的 ID 与摘要。
 - 收据绑定完整提交、版本、CI run、平台/架构、包 SHA256，以及上传后的构建 artifact id/name/digest；只有该包的安装验证成功后才写 `tests_passed=true`。Ubuntu 兼容 job 还必须单独成功，不能以原生收据代替。
 - Android 收据用 `distribution_signed=false` 标识开发签名候选包。公开发布只接受签名后重新验证并记录 `distribution_signed=true` 的 APK；测试包不能混入正式附件。
-- 最终发布核对 CI 全部必需 job、两套兼容性回执、附件 digest、内部完整成员、构建身份和包摘要。不发布模式读取九份 CI 候选包；公开模式读取六份 CI 桌面包和本次发布的三份发行签名 APK。
+- 最终发布核对 CI 全部必需 job、[发布范围所需兼容回执](release.md#兼容性发布门禁)、附件 digest、内部完整成员、构建身份和包摘要。不发布模式读取九份 CI 候选包；公开模式读取六份 CI 桌面包和本次发布的三份发行签名 APK。
 - `macos-ci-report-*`、`linux-package-report-*` 与 `android-report-*` 保留对应运行的证据和失败诊断，Windows 扩展窗口与更新专项报告按需保存；常规 Windows 代理/TUN 结果见 job 日志。包及源码附件保留 3 天。证据过期则重新运行 CI，不悄悄重建另一份包。
 - Linux VM 的 `vm-guest-report-status.json` 区分 guest 报告已保存、未生成及传输失败。只有完整传输成功才保留归档，安装和网络测试结果以实际任务及收据为准。
 

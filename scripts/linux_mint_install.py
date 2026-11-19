@@ -55,6 +55,9 @@ trap 'if [ "$?" -ne 0 ]; then /bin/sh /cdrom/preseed/cor-install-failed cor-mint
 target=/target
 seed=/cdrom/preseed
 mountpoint -q "$target"
+mint_sources="$target/etc/apt/sources.list.d/official-package-repositories.list"
+sed -i -E 's@^(deb(-src)?[[:space:]]+)http://packages\\.linuxmint\\.com/?([[:space:]])@\\1https://fastly.linuxmint.io/\\3@' "$mint_sources"
+grep -qE '^deb[[:space:]]+https://fastly\\.linuxmint\\.io/[[:space:]]' "$mint_sources"
 install -d -m 0755 "$target/etc/ssh/sshd_config.d" "$target/etc/sudoers.d" \\
     "$target/etc/systemd/system/multi-user.target.wants" "$target/usr/local/sbin"
 chroot "$target" install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh

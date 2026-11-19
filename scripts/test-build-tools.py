@@ -6557,6 +6557,15 @@ class CompatibilityTests(unittest.TestCase):
     source_commit = 'a' * 40
     repository = 'example/project'
 
+    def test_release_scope_keeps_baseline_and_selects_linux_suites(self):
+        self.assertEqual(compatibility.release_suites('supported'), ('android', 'ubuntu', 'debian'))
+        self.assertEqual(compatibility.release_suites('ubuntu'), ('android', 'ubuntu'))
+        self.assertEqual(compatibility.release_suites('debian, linuxmint'),
+                         ('android', 'ubuntu', 'debian', 'linuxmint'))
+        for scope in ('', 'android', 'unknown', 'debian,', 'debian,debian', 'supported,linuxmint'):
+            with self.subTest(scope=scope), self.assertRaisesRegex(ValueError, 'Linux release scope'):
+                compatibility.release_suites(scope)
+
     def client(self, suite, run_changes=None, jobs=None, receipt_changes=None,
                bad_digest=False, expired=False, missing_input=False):
         source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': self.source_commit,
@@ -6952,16 +6961,19 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(transport.open.call_count,attempts)
 
     def test_release_check_mode_never_calls_publisher(self):
-        with patch.object(release.sys,'argv',['publish-release.py','--check','--run-id','77','--package-run-id','88']), \
+        with patch.object(release.sys, 'argv', ['publish-release.py', '--check', '--run-id', '77',
+                                               '--package-run-id', '88', '--linux-scope', 'linuxmint']), \
              patch.object(release,'repository',return_value='example/project'), \
              patch.object(release,'credential',return_value='test-only-token'), \
              patch.object(release,'GitHub'), patch.object(release,'git',return_value=self.commit), \
              patch.object(release,'verified_run',return_value={'id':77,'head_branch':'main','html_url':'https://example.test/ci'}), \
-             patch.object(compatibility,'verified_suite'), \
+             patch.object(compatibility, 'verified_suite') as verify_compatibility, \
              patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
              patch.object(release,'verified_package_run'), patch.object(release,'download_package_files',return_value={}), patch.object(release,'publish') as publishing:
             release.main()
             publishing.assert_not_called()
+            self.assertEqual([call.args[2] for call in verify_compatibility.call_args_list],
+                             ['android', 'ubuntu', 'linuxmint'])
 
     def test_release_requires_current_main_push_ci_and_every_job(self):
         self.assertEqual(release.verified_run(self.client(),self.commit)['id'],77)
@@ -7262,7 +7274,7 @@ class ReleaseTests(unittest.TestCase):
                 release.main()
                 download.assert_not_called();publishing.assert_not_called()
                 self.assertEqual([call.args[2] for call in verify_compatibility.call_args_list],
-                                 ['android', 'ubuntu'])
+                                 ['android', 'ubuntu', 'debian'])
             self.assertIn('commit='+self.commit,output.read_text())
             self.assertIn('ci_run_id=77',output.read_text())
 

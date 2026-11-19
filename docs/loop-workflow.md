@@ -55,7 +55,7 @@ Release 与 Pre-release 采用同一审查要求。按[Publish Release](workflow
 
 资源不足时本地只做静态检查和必要单页 UI 预览，其余验证交已授权的 Actions；未执行项如实记录。跟进频率按[历史耗时](workflows.md#actions-跟进节奏)，不因循环审查提高轮询频率或每修一个问题就推送。
 
-运行时集成的常规范围按[CI 说明](workflows/ci.md#ci)执行，聚焦系统代理/TUN；发布前另须完成同提交 Android 与 Ubuntu 兼容验证。已完成的键盘、多版本截图及全版本诊断专项不因 loop 自动重跑，重新调查须有维护者明确要求。
+运行时集成的常规范围按[CI 说明](workflows/ci.md#ci)执行，聚焦系统代理/TUN；发布前执行[发布范围所需的同提交兼容验证](workflows/release.md#兼容性发布门禁)。已完成的键盘、多版本截图及全版本诊断专项不因 loop 自动重跑，重新调查须有维护者明确要求。
 
 ## 统一收尾
 

@@ -13,7 +13,7 @@ CI 与 Memory Benchmark 使用 GitHub Actions Cache。`main` 每个用途及目�
 | Android Compatibility | 无 | 复用 CI APK，SDK、模拟器及系统镜像来自 Google 官方源 |
 | Ubuntu Compatibility | 无 | 复用同提交候选 DEB，[须启动 VM 的目标](ubuntu-compatibility.md)使用 Canonical 官方镜像，20.04 复用冻结 APT 索引 |
 | Debian Compatibility | 无 | 复用同提交候选 DEB，启动固定版本的 Debian 官方镜像 |
-| Publish Release | 无 | 校验同提交候选包和两套兼容回执，公开模式增加 Android 签名和签名包复验 |
+| Publish Release | 无 | 校验同提交候选包和[所需兼容回执](release.md#兼容性发布门禁)，公开模式增加 Android 签名和签名包复验 |
 | COSMIC Startup Investigation | 无 | 使用同提交候选 DEB 和 System76 官方镜像，保存诊断附件 |
 
 `scripts/workflow_storage.py` 按创建时间保留最新缓存，移除旧代、已退役键及非 `main` 缓存。`--dry-run` 列出计划删除的条目，`--read-only` 只盘点。CI 和 Memory 共用串行收尾。当最新基线超过 **20 GiB** 时，脚本记录告警并保留这些基线。仓库上限与费用见[缓存容量](cache-capacity.md#当前上限与保留预算)。

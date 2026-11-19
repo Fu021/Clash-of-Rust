@@ -14,6 +14,7 @@ from linux_compatibility_targets import TARGETS
 from workflow_artifacts import commit, current_ci_artifacts, release_module
 
 RELEASE_SUITES = ('android', 'ubuntu')
+SUPPORTED_LINUX_RELEASE_SUITES = ('debian',)
 WORKFLOWS = {suite: f'{suite}-compatibility.yml' for suite in ('android', *TARGETS)}
 REPORT_JOBS = {suite: 'Linux / Record compatibility' for suite in TARGETS}
 REPORT_JOBS['android'] = 'Record Android compatibility'
@@ -22,6 +23,16 @@ for suite, targets in TARGETS.items():
     if all(target.full_desktop for target in targets):
         CHECKS[suite] += ['desktop_gui', 'tui', 'cli', 'desktop_login', 'package_lifecycle']
 CHECKS['linuxmint'] += ['native_cinnamon_authorization', 'native_cinnamon_wayland']
+
+
+def release_suites(scope):
+    if scope == 'supported':
+        return RELEASE_SUITES + SUPPORTED_LINUX_RELEASE_SUITES
+    selected = tuple(suite.strip() for suite in scope.split(','))
+    if len(selected) != len(set(selected)) or not set(selected) <= TARGETS.keys():
+        raise ValueError('Linux release scope must be "supported" or a list of distinct suites: '
+                         + ', '.join(TARGETS))
+    return RELEASE_SUITES + tuple(suite for suite in selected if suite not in RELEASE_SUITES)
 
 
 def iso_targets(suite):
