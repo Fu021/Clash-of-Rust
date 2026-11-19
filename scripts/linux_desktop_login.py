@@ -11,7 +11,7 @@ import subprocess
 
 from build_support import ROOT, run, sha256, write_json
 from linux_apt import install
-from linux_gui import core_processes, output, owner_tray, wait_for, wayland_sockets
+from linux_gui import core_processes, output, owner_tray, wait_for
 
 USER = 'cor-desktop-login'
 HOME = Path('/home') / USER
@@ -118,6 +118,12 @@ def active_desktop(uid, desktop, session_type='x11'):
 
 def desktop_call(environment, *arguments):
     return output(as_user('env', *(f'{key}={value}' for key, value in environment.items()), *arguments))
+
+
+def desktop_wayland_sockets(runtime):
+    return set(output(as_user('find', runtime, '-maxdepth', '1', '-type', 's',
+                              '(', '-name', 'wayland-*', '-o', '-name', 'cor-wayland', ')',
+                              '-printf', r'%f\n')).splitlines())
 
 
 def startup(uid, previous, background, visible, current=None):
@@ -252,7 +258,7 @@ def verify_native_cinnamon(report, backend):
 
     if backend == 'wayland':
         def socket():
-            sockets = wayland_sockets(Path(environment['XDG_RUNTIME_DIR']))
+            sockets = desktop_wayland_sockets(environment['XDG_RUNTIME_DIR'])
             if len(sockets) > 1:
                 raise RuntimeError(f'Cinnamon created multiple Wayland sockets: {sorted(sockets)}')
             return next(iter(sockets), None)

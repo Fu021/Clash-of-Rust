@@ -491,6 +491,16 @@ class UbuntuVmTests(unittest.TestCase):
                         linux_mint_desktop.verify_system_proxy(49152)
                 self.assertEqual(cli.call_args_list, [call('proxy', 'system'), call('proxy', 'off')])
 
+    def test_mint_native_wayland_checks_the_private_runtime_as_the_desktop_user(self):
+        with patch.object(linux_desktop_login, 'output', return_value='wayland-0\n') as output:
+            sockets = linux_desktop_login.desktop_wayland_sockets('/run/user/1001')
+        self.assertEqual(sockets, {'wayland-0'})
+        output.assert_called_once_with([
+            'sudo', '-H', '-u', linux_desktop_login.USER, '--', 'find', '/run/user/1001',
+            '-maxdepth', '1', '-type', 's', '(', '-name', 'wayland-*', '-o', '-name', 'cor-wayland', ')',
+            '-printf', r'%f\n',
+        ])
+
     def test_mint_native_gui_requires_a_fresh_session_with_no_running_core(self):
         for backend, previous in (('x11', 'background-login'), ('wayland', 'x11')):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as temporary:
@@ -503,7 +513,8 @@ class UbuntuVmTests(unittest.TestCase):
                                      return_value=SimpleNamespace(pw_uid=1001)), \
                         patch.object(linux_desktop_login, 'active_desktop', return_value=(
                             {'session': 'c2'}, environment)) as active, \
-                        patch.object(linux_desktop_login, 'wayland_sockets', return_value={'wayland-0'}) as sockets, \
+                        patch.object(linux_desktop_login, 'desktop_wayland_sockets',
+                                     return_value={'wayland-0'}) as sockets, \
                         patch.object(linux_desktop_login, 'core_processes', side_effect=[{400: 300}, {}]) as cores, \
                         patch.object(linux_desktop_login, 'verify_cinnamon_gui', return_value={'tray': True}) as gui, \
                         patch.object(linux_desktop_login, 'run'):
@@ -521,7 +532,7 @@ class UbuntuVmTests(unittest.TestCase):
                 expected = {'XDG_RUNTIME_DIR': '/run/user/1001'}
                 if backend == 'wayland':
                     expected['WAYLAND_DISPLAY'] = 'wayland-0'
-                    self.assertEqual(sockets.call_args_list, [call(Path('/run/user/1001'))] * 2)
+                    self.assertEqual(sockets.call_args_list, [call('/run/user/1001')] * 2)
                 else:
                     sockets.assert_not_called()
                 gui.assert_called_once_with(expected, backend)
