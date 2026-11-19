@@ -10,9 +10,10 @@ import tempfile
 
 from build_support import run, write_json
 from linux_gui import (ACTION, APP, cli, gtk_authorization_window, gui, output, require_logind_session,
-                       tun_permissions, verify_authorization)
+                       tun_permissions, verify_authorization, wait_for)
 
 AUTH_RESULT = 'authorization.json'
+AUTH_LOG = 'authorization.log'
 PROBE_DIR = 'cor-desktop-probes'
 PASSWORD_FILE = '.cor-authorization-password'
 CINNAMON_PROMPT = (
@@ -81,15 +82,22 @@ def authorization():
         use_cinnamon_prompt = release['VERSION_ID'] == '22.3'
         result['agent'] = 'cinnamon' if use_cinnamon_prompt else 'gtk'
 
+        def shell_state(expression):
+            try:
+                return cinnamon_eval(output, expression) is True
+            except subprocess.SubprocessError:
+                return False
+
         def locate():
             if not use_cinnamon_prompt:
                 return gtk_authorization_window()
-            try:
-                return '' if cinnamon_eval(output, CINNAMON_PROMPT) else None
-            except subprocess.CalledProcessError:
-                return None
+            return '' if shell_state(CINNAMON_PROMPT) else None
 
-        with (home/'authorization.log').open('w') as log:
+        if use_cinnamon_prompt:
+            wait_for('Cinnamon did not finish desktop startup before authorization', lambda: shell_state(
+                'imports.ui.main.runState === imports.ui.main.RunState.RUNNING'), timeout=60)
+
+        with (home/AUTH_LOG).open('w') as log:
             result.update(verify_authorization(log, password, locate))
     except Exception as error:
         result['error'] = str(error)

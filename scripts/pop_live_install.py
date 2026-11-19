@@ -52,10 +52,10 @@ fail() {
 test "$(id -u)" = 0 || fail 'Live shell is not running as root'
 test -d /sys/firmware/efi || fail 'Live system did not boot in UEFI mode'
 grep -qw boot=casper /proc/cmdline || fail 'Live system is missing boot=casper'
-test "$(lsblk --noheadings --nodeps --output TYPE "$disk")" = disk || fail "$disk is not a disk"
-serial="$(lsblk --noheadings --nodeps --output SERIAL "$disk")" || fail "Cannot read $disk serial"
+test "$(lsblk --raw --noheadings --nodeps --output TYPE "$disk")" = disk || fail "$disk is not a disk"
+serial="$(lsblk --raw --noheadings --nodeps --output SERIAL "$disk")" || fail "Cannot read $disk serial"
 test "$serial" = "$expected_serial" || fail "$disk serial '$serial' does not match '$expected_serial'"
-test "$(lsblk --noheadings --nodeps --output RO "$disk")" = 0 || fail "$disk is not writable"
+test "$(lsblk --raw --noheadings --nodeps --output RO "$disk")" = 0 || fail "$disk is not writable"
 signatures="$(wipefs --no-act --noheadings --output TYPE "$disk")" || fail "Cannot inspect $disk signatures"
 test -z "$signatures" || fail "$disk is not blank"
 set -- /cdrom/casper*/filesystem.squashfs

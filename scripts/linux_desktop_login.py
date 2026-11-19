@@ -357,10 +357,16 @@ def verify(stage, report, desktop):
                                                authorization_result, timeout=250)
             report['foreground_screenshot'] = capture_cosmic(environment, 'first-login')
         if desktop == CINNAMON:
-            from linux_mint_desktop import authorization_result
-            report['authorization'] = wait_for('Cinnamon authorization probe did not return',
-                                               lambda: authorization_result(HOME, USER, login['session']),
-                                               timeout=250)
+            from linux_mint_desktop import AUTH_LOG, authorization_result
+            try:
+                report['authorization'] = wait_for('Cinnamon authorization probe did not return',
+                                                   lambda: authorization_result(HOME, USER, login['session']),
+                                                   timeout=250)
+            finally:
+                try:
+                    report['authorization_log'] = output(as_user('cat', HOME/AUTH_LOG), stderr=subprocess.PIPE)
+                except subprocess.SubprocessError:
+                    pass
 
 
 def prepare_cinnamon_gui(backend):

@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import zipfile
 
@@ -26,6 +27,7 @@ ABIS = {
     'x64': ('x86_64', 'x86_64-linux-android', 'x86_64-linux-android', 'amd64'),
 }
 MOBILE_TOOL = '19777044486779222400e9ca16c4306f9c6dbfa9'
+GRADLE_BUILD_TASKS = ('assembleRelease', 'assembleReleaseAndroidTest', 'lintRelease')
 
 
 def run(command, **kwargs):
@@ -244,16 +246,26 @@ def ensure_binding_tool(name):
     run(['go', 'install', package + '@' + revision])
 
 
-def gradle(*args, arch=None):
+def gradle(*args, arch=None, offline=False):
     code = 1_000_000 + int(os.environ.get('GITHUB_RUN_NUMBER', '1'))
     command = ['gradle', '--no-daemon', '--warning-mode', 'all', '-p', ANDROID,
                '-PappVersion=' + package_version(), '-PappVersionCode=' + str(code),
                '-PappNdkVersion=' + android_versions()['ndk']]
     if os.environ.get('RUNNER_DEBUG') == '1':
         command.extend(['--info', '-Dorg.gradle.deprecation.trace=true'])
+    if offline:
+        command.append('--offline')
     if arch:
         command += ['-PappAbi=' + ABIS[arch][0]]
     return [*command, *args]
+
+
+def seed_icons():
+    # Android adaptive launchers do not need the 1254-pixel source artwork.
+    logo = ANDROID/'app/generated-res/drawable-nodpi/app_logo.png'
+    logo.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT/'resources/icons/app-android.png', logo)
+    shutil.copy2(ROOT/'resources/icons/app.png', logo.with_name('notification_logo.png'))
 
 
 def seed_assets():
@@ -261,11 +273,7 @@ def seed_assets():
     from build_inputs import resource_release
     target = ANDROID/'app/offline-assets'
     target.mkdir(parents=True, exist_ok=True)
-    # Android adaptive launchers do not need the 1254-pixel source artwork.
-    logo=ANDROID/'app/generated-res/drawable-nodpi/app_logo.png'
-    logo.parent.mkdir(parents=True,exist_ok=True)
-    shutil.copy2(ROOT/'resources/icons/app-android.png',logo)
-    shutil.copy2(ROOT/'resources/icons/app.png',logo.with_name('notification_logo.png'))
+    seed_icons()
     release = resource_release('geo', target/'geodata.json')
     records = []
     for remote, local in {'geoip.dat':'GeoIP.dat', 'geosite.dat':'GeoSite.dat', 'country.mmdb':'Country.mmdb', 'GeoLite2-ASN.mmdb':'ASN.mmdb'}.items():
@@ -332,7 +340,42 @@ def apk_identity(metadata, version):
 
 
 
-def build(arch):
+def bind_core(arch, env):
+    ensure_binding_tool('gomobile')
+    ensure_binding_tool('gobind')
+    aar = ANDROID/'app/libs/mihomo.aar'
+    aar.parent.mkdir(parents=True, exist_ok=True)
+    # VpnService owns routing and package exclusions. The default Android
+    # listener tries to read root-only /data/system/packages.xml; cmfa
+    # selects the upstream app-hosted path. Our TUN explicitly uses gVisor.
+    run(['gomobile', 'bind', '-target', 'android/'+ABIS[arch][3], '-androidapi', '26',
+         '-tags', 'cmfa,with_gvisor',
+         '-javapkg', 'org.clashofrust.nativecore', '-ldflags=-s -w -extldflags=-Wl,-z,max-page-size=16384',
+         '-o', aar, '.'], cwd=ANDROID/'core', env=env)
+
+
+def prepare_maven_cache():
+    home = Path(os.environ['GRADLE_USER_HOME'])
+    modules = Path('caches/modules-2')
+    cache = home / modules
+    arch = 'x64'
+    bind_core(arch, dict(os.environ, ANDROID_NDK_HOME=os.environ['ANDROID_NDK_ROOT']))
+    seed_icons()
+    with tempfile.TemporaryDirectory(prefix='cor-gradle-online-', dir=home.parent) as temporary:
+        online = dict(os.environ, GRADLE_USER_HOME=temporary)
+        run(gradle(*GRADLE_BUILD_TASKS, arch=arch), cwd=ROOT, env=online)
+        if cache.exists():
+            shutil.rmtree(cache)
+        shutil.copytree(Path(temporary) / modules, cache,
+                        ignore=shutil.ignore_patterns('*.lock', 'gc.properties'))
+    run(gradle('--no-build-cache', '--project-cache-dir', home/'project-cache',
+               'clean', *GRADLE_BUILD_TASKS, arch=arch, offline=True), cwd=ROOT)
+    for path in cache.rglob('*'):
+        if path.is_file() and (path.suffix == '.lock' or path.name == 'gc.properties'):
+            path.unlink()
+
+
+def build(arch, gradle_offline=False):
     from action_cache import compiler_cache_checkpoint, workspace_sources
     from ci_test_policy import enabled, extended_tests
     workspace_sources(ROOT)
@@ -345,7 +388,7 @@ def build(arch):
     else:
         run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--lib',
              '--', '--test-threads=1'], cwd=ROOT)
-    abi, target, clang_target, go_arch = ABIS[arch]
+    abi, target, clang_target, _ = ABIS[arch]
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
     clang = toolchain/(clang_target+'26-clang')
@@ -385,25 +428,14 @@ def build(arch):
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT/'target'/target/'release/libclash_mobile.so', destination)
     # Android's supported backend is Skia, not the desktop software renderer.
-    ensure_binding_tool('gomobile')
-    ensure_binding_tool('gobind')
-    env['ANDROID_NDK_HOME'] = str(ndk)
     core = ANDROID/'core'
     run(['go', 'mod', 'tidy', '-diff'], cwd=core, env=env)
     if arch == 'x64' and (extended_tests() or enabled('COR_CI_ANDROID_ROUTING_TESTS')):
         run(['go', 'test', '-tags', 'cmfa,with_gvisor', '-count=1', '.'], cwd=core, env=env)
-    aar = ANDROID/'app/libs/mihomo.aar'
-    aar.parent.mkdir(parents=True, exist_ok=True)
-    run(['gomobile', 'bind', '-target', 'android/'+go_arch, '-androidapi', '26',
-         # VpnService owns routing and package exclusions. The default Android
-         # listener tries to read root-only /data/system/packages.xml; cmfa
-         # selects the upstream app-hosted path. Our TUN explicitly uses gVisor.
-         '-tags', 'cmfa,with_gvisor',
-         '-javapkg', 'org.clashofrust.nativecore', '-ldflags=-s -w -extldflags=-Wl,-z,max-page-size=16384',
-         '-o', aar, '.'], cwd=core, env=env)
+    bind_core(arch, env)
     seed_assets()
     try:
-        run(gradle('assembleRelease', 'assembleReleaseAndroidTest', 'lintRelease', arch=arch), cwd=ROOT)
+        run(gradle(*GRADLE_BUILD_TASKS, arch=arch, offline=gradle_offline), cwd=ROOT)
     finally:
         report=ROOT/'target/android-report'/arch
         report.mkdir(parents=True,exist_ok=True)
@@ -1377,6 +1409,7 @@ def main():
     parser.add_argument('--verify-application-rules', action='store_true',
                         help='Verify application scope and outbound routing after basic compatibility')
     parser.add_argument('--arch',choices=ABIS,required=True)
+    parser.add_argument('--gradle-offline', action='store_true', help='Build using previously resolved Maven dependencies')
     parser.add_argument('--run-id',type=int)
     parser.add_argument('--check',action='store_true')
     parser.add_argument('--build',type=Path,help='CI candidate input for package --check or application-preview')
@@ -1384,6 +1417,8 @@ def main():
     parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
     parser.add_argument('--api',type=int,help='Use an approved Android test image')
     args=parser.parse_args()
+    if args.gradle_offline and args.operation != 'build':
+        parser.error('--gradle-offline requires build')
     if args.verify_diagnostics and args.operation != 'application-preview':
         parser.error('--verify-diagnostics requires application-preview')
     if (args.compatibility or args.screenshots) and args.operation != 'application-preview':
@@ -1440,7 +1475,7 @@ def main():
         # Activity.onResume. Keep system transitions deterministic in CI only.
         for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
             run([ADB,'shell','settings','put','global',setting,'0'])
-    elif args.operation=='build': build(args.arch)
+    elif args.operation=='build': build(args.arch, gradle_offline=args.gradle_offline)
     elif args.operation=='export': export_build(args.arch)
     elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
     elif args.operation=='application-preview':

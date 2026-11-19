@@ -27,6 +27,7 @@ CI_JOBS = {
 }
 CI_JOBS |= {'android-arm64', 'android-armv7', 'android-x64', 'Actions cache budget', 'Resolve build inputs'}
 CI_JOBS.add('Website validation')
+CI_JOBS.add('Prepare Android Maven dependencies')
 PACKAGES = {
     'package-windows-x64': 'windows-x64-setup.exe',
     'package-windows-arm64': 'windows-arm64-setup.exe',

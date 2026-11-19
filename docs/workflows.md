@@ -12,7 +12,7 @@
 | [Pop!_OS、Zorin OS、Fedora、openSUSE、Arch Linux Compatibility](workflows/linux-expansion.md) | 每个发行版独立手动入口，复用成功 CI；固定 x64 来宾验收原生包与桌面登录 | 小型报告及兼容回执保留 3 天 |
 | [COSMIC Startup Investigation](workflows/cosmic-startup.md) | 手动诊断；官方 Pop!_OS live VM，核对旧自启动入口迁移、后台登录和手动打开 | JSON、原始截图与 VM 日志，保留 3 天 |
 
-普通 CI 共 12 个必需 job（共享输入 1、桌面 6、Android 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布所需矩阵见[兼容性发布门禁](workflows/release.md#兼容性发布门禁)。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 执行采样与缓存预算两个 job。依赖维护模式不作为发布来源。
+普通 CI 共 13 个必需 job（共享输入 1、桌面 6、Android Maven 准备 1、Android ABI 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布所需矩阵见[兼容性发布门禁](workflows/release.md#兼容性发布门禁)。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 执行采样与缓存预算两个 job。依赖维护模式不作为发布来源。
 
 `Verify a Linux Compatibility Matrix` 是各 Linux 发行版入口的共用实现，不是独立派发入口。它解析同提交 CI 输入，在固定目标上安装测试并生成回执。各入口的测试范围见上表链接。
 

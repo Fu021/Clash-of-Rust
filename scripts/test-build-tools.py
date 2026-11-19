@@ -544,6 +544,7 @@ class UbuntuVmTests(unittest.TestCase):
                 yield requests.pop(0)
 
             keys = []
+            locate = MagicMock(side_effect=['42', '42', None, '43', None])
 
             def run(command, **kwargs):
                 keys.append(command)
@@ -554,12 +555,35 @@ class UbuntuVmTests(unittest.TestCase):
                     patch.object(linux_gui, 'tun_permissions',
                                  side_effect=[('', 0o755), ('', 0o755),
                                               ('cap_net_admin,cap_net_raw=ep', 0o4755)]), \
-                    patch.object(linux_gui, 'run', side_effect=run):
-                result = linux_gui.verify_authorization(io.StringIO(), password, lambda: '')
+                    patch.object(linux_gui, 'run', side_effect=run), \
+                    patch.object(linux_gui.time, 'sleep'):
+                result = linux_gui.verify_authorization(io.StringIO(), password, locate)
             self.assertTrue(result['cancel_preserved_permissions'])
             self.assertTrue(result['accept_granted_helper'])
-            self.assertEqual(len(keys), 3)
-            self.assertEqual([command[-1] for command in keys], ['Escape', '-', 'Return'])
+            self.assertEqual([command[-1] for command in keys], ['42', 'Escape', '43', '-', 'Return'])
+            self.assertEqual(locate.call_count, 5)
+
+    def test_mint_22_authorization_waits_for_cinnamon_running(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            (home/linux_mint_desktop.PASSWORD_FILE).touch()
+            with patch.object(Path, 'home', return_value=home), \
+                    patch.dict(os.environ, {'DISPLAY': ':0', 'XDG_SESSION_TYPE': 'x11'}), \
+                    patch.object(linux_mint_desktop.os, 'geteuid', return_value=1001), \
+                    patch.object(linux_mint_desktop.platform, 'freedesktop_os_release',
+                                 return_value={'ID': 'linuxmint', 'VERSION_ID': '22.3'}), \
+                    patch.object(linux_mint_desktop, 'require_logind_session', return_value='c1'), \
+                    patch.object(linux_mint_desktop, 'tun_permissions', return_value=('', 0o755)), \
+                    patch.object(linux_mint_desktop, 'cinnamon_eval', side_effect=[False, True]) as shell, \
+                    patch.object(linux_gui.time, 'sleep'), \
+                    patch.object(linux_mint_desktop, 'verify_authorization', return_value={}) as verify:
+                def verify_after_shell(*args):
+                    self.assertEqual(shell.call_count, 2)
+                    return {}
+                verify.side_effect = verify_after_shell
+                linux_mint_desktop.authorization()
+            self.assertIn('RunState.RUNNING', shell.call_args.args[-1])
+            verify.assert_called_once()
 
     def test_mint_native_authorization_rejects_a_report_from_another_login(self):
         value = json.dumps({'session': 'c3', 'production_action': linux_gui.ACTION,
@@ -2856,6 +2880,14 @@ class BuildTests(unittest.TestCase):
         locate.side_effect = RuntimeError('agent exited')
         with self.assertRaisesRegex(RuntimeError, 'agent exited'):
             linux_gui.authorization_dialog(request, io.StringIO(), locate)
+
+    def test_linux_gui_requires_a_registered_tray_host_before_launch(self):
+        with patch.object(linux_gui, 'dbus', side_effect=[
+                subprocess.CalledProcessError(1, ['gdbus']), '(<false>,)', '(<true>,)']) as query:
+            self.assertFalse(linux_gui.notifier_host_ready())
+            self.assertFalse(linux_gui.notifier_host_ready())
+            self.assertTrue(linux_gui.notifier_host_ready())
+        self.assertEqual(query.call_args.args[-1], 'IsStatusNotifierHostRegistered')
 
     def test_linux_gui_waits_for_the_owner_to_adopt_its_registered_tray(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -5652,6 +5684,62 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertEqual('-Dorg.gradle.deprecation.trace=true' in command, debug == '1')
                 self.assertEqual(command[-1], 'assembleRelease')
 
+    def test_android_maven_cache_copies_only_resolved_modules_and_verifies_offline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / 'gradle'
+            cache = home / 'caches/modules-2'
+            cache.mkdir(parents=True)
+            (cache / 'interrupted-restore').touch()
+            dependencies = {'files-2.1/artifact.jar', 'metadata-2.107/descriptor.bin'}
+
+            def run_gradle(command, *, cwd, env=None):
+                self.assertEqual(tuple(command[-3:]), android_build.GRADLE_BUILD_TASKS)
+                if env is not None:
+                    online_home = Path(env['GRADLE_USER_HOME'])
+                    self.assertNotEqual(online_home, home)
+                    self.assertNotIn('--offline', command)
+                    for name in dependencies | {'modules-2.lock', 'gc.properties', '../transforms/result'}:
+                        path = online_home / 'caches/modules-2' / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.touch()
+                else:
+                    self.assertIn('--offline', command)
+                    self.assertIn('clean', command)
+                    self.assertFalse((home / 'caches/transforms').exists())
+                    self.assertEqual({path.relative_to(cache).as_posix()
+                                      for path in cache.rglob('*') if path.is_file()}, dependencies)
+                    (cache / 'modules-2.lock').touch()
+                    (cache / 'gc.properties').touch()
+
+            with patch.dict(os.environ, {'GRADLE_USER_HOME': str(home), 'ANDROID_NDK_ROOT': '/ndk'}), \
+                    patch.object(android_build, 'bind_core') as bind, \
+                    patch.object(android_build, 'seed_icons'), \
+                    patch.object(android_build, 'run', side_effect=run_gradle) as gradle_run:
+                android_build.prepare_maven_cache()
+            self.assertEqual(bind.call_args.args[0], 'x64')
+            self.assertEqual(bind.call_args.args[1]['ANDROID_NDK_HOME'], '/ndk')
+            self.assertEqual(gradle_run.call_count, 2)
+            self.assertEqual({path.relative_to(cache).as_posix() for path in cache.rglob('*') if path.is_file()},
+                             dependencies)
+
+    def test_android_ci_waits_for_one_maven_cache_and_builds_each_abi_offline(self):
+        workflow = (build.ROOT / '.github/workflows/ci.yml').read_text()
+        producer, matrix = workflow.split('\n  android_maven:\n')[1].split('\n  android:\n')
+        matrix = matrix.split('\n  check:\n')[0]
+        for arch in android_build.ABIS:
+            self.assertIn(f'- arch: {arch}', matrix)
+        self.assertIn('needs: [inputs, android_maven]', matrix)
+        self.assertIn('build --arch ${{ matrix.arch }} --gradle-offline', matrix)
+        self.assertIn('name: android-maven-dependencies', producer)
+        self.assertIn('name: android-maven-dependencies', matrix)
+        self.assertIn("hashFiles('.github/build-versions.json',", producer)
+        for identity in ('**/*.gradle.kts', '**/gradle.properties', '**/gradle/*.toml',
+                         '**/gradle/verification-metadata.xml', '**/gradle.lockfile'):
+            self.assertIn(f'apps/android/{identity}', producer)
+        self.assertNotIn('restore-keys:', producer)
+        self.assertIn("if: github.ref == 'refs/heads/main' && steps.maven_cache.outputs.cache-hit != 'true'", producer)
+        self.assertLess(producer.index('prepare_maven_cache()'), producer.index('actions/cache/save@'))
+
     def test_android_sdk_bootstrap_prefers_the_native_cli_and_reuses_the_pinned_install(self):
         versions = build_inputs.android_versions()
         with tempfile.TemporaryDirectory() as temporary:
@@ -5927,6 +6015,9 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual(storage.eviction_plan([old, new, go, gradle], 1), [gradle, go, old])
         other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
         self.assertEqual(storage.eviction_plan([new, other_branch], 100), [other_branch])
+        old_maven = entry(6, 'android-maven-v1-ubuntu-24.04-x64-'+'a'*64, 20)
+        new_maven = entry(7, 'android-maven-v1-ubuntu-24.04-x64-'+'b'*64, 20)
+        self.assertEqual(storage.eviction_plan([old_maven, new_maven, gradle], 100), [old_maven, gradle])
         for older,newer in (
                 ('linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261110.1.0',
                  'linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261117.1.0'),
@@ -6802,11 +6893,37 @@ class CompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Unsupported Ubiquity initramfs'):
             linux_mint_install.automatic_grub(boot, '/tmp/elsewhere')
 
+    def test_installed_iso_ssh_bootstrap_retries_signed_indexes_before_install(self):
+        script = linux_mint_install.INSTALL_SSH
+        subprocess.run(['sh', '-n'], input=script, text=True, check=True)
+        retry = script[script.index('for delay in '):script.index('apt-get -o Acquire::Retries=3')]
+        tools = """\
+set -eu
+attempt=0
+timeout() {
+    shift 3
+    printf 'apt: %s\\n' "$*"
+    attempt=$((attempt+1))
+    test "$attempt" -eq "$success"
+}
+sleep() { printf 'wait: %s\\n' "$1"; }
+success="$1"
+"""
+        for success, status in (('3', 0), ('4', 1)):
+            with self.subTest(success=success):
+                result = subprocess.run(['sh', '-c', tools + retry, 'apt-bootstrap', success],
+                                        capture_output=True, text=True)
+                for delay in linux_apt.INDEX_RETRY_DELAYS:
+                    self.assertIn(f'wait: {delay}\n', result.stdout)
+                self.assertEqual(result.stdout.count('APT::Update::Error-Mode=any update'), 3)
+                self.assertEqual(result.returncode, status)
+
     def test_pop_uses_a_disk_serial_that_virtio_blk_can_report(self):
         from pop_live_install import DISK_DEVICE, DISK_SERIAL, INSTALL
 
         self.assertLessEqual(len(DISK_SERIAL.encode('ascii')), 20)
         self.assertEqual(DISK_DEVICE.split('serial=', 1)[1], DISK_SERIAL)
+        self.assertIn('lsblk --raw --noheadings --nodeps --output RO "$disk"', INSTALL)
         subprocess.run(['sh', '-n'], input=INSTALL, text=True, check=True)
 
     def test_pop_install_and_cosmic_diagnostic_share_live_boot_files(self):
@@ -7049,7 +7166,8 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(compatibility.input_names('debian'),
                          ('package-linux-x64', 'package-linux-arm64',
                           'linux-tun-test-x64', 'linux-tun-test-arm64', 'dependency-snapshot'))
-        self.assertEqual(len(release.CI_JOBS), 12)
+        self.assertEqual(len(release.CI_JOBS), 13)
+        self.assertIn('Prepare Android Maven dependencies', release.CI_JOBS)
 
     def test_hosted_compatibility_uses_verified_ci_package_and_no_guest(self):
         with tempfile.TemporaryDirectory() as temporary, \

@@ -166,10 +166,109 @@ jobs:
           path: ${{ env.BUILD_INPUTS_DIR }}
           retention-days: 3
           if-no-files-found: error
+  android_maven:
+    if: ${{ !inputs.refresh_dependencies }}
+    name: Prepare Android Maven dependencies
+    needs: inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      ANDROID_CI_TEST: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set the isolated Gradle home
+        run: printf 'GRADLE_USER_HOME=%s/cor-android-gradle\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Restore the exact Android Maven dependency cache
+        id: maven_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/modules-2
+          key: >-
+            android-maven-v1-ubuntu-24.04-x64-${{ hashFiles('.github/build-versions.json',
+            'apps/android/**/*.gradle', 'apps/android/**/*.gradle.kts',
+            'apps/android/**/gradle.properties', 'apps/android/**/gradle/*.toml',
+            'apps/android/**/gradle/verification-metadata.xml',
+            'apps/android/**/gradle.lockfile', 'apps/android/**/dependency-locks/*.lockfile') }}
+      - name: Load approved tool versions
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        run: python3 scripts/build_inputs.py versions
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        with:
+          python-version: ${{ env.COR_PYTHON }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        with:
+          name: dependency-snapshot
+          path: ${{ env.BUILD_INPUTS_DIR }}
+      - name: Apply the resolved source dependency snapshot
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        run: python3 scripts/build_inputs.py apply
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        with:
+          name: android-shared-dependencies
+          path: target/shared-go
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        with:
+          go-version: ${{ needs.inputs.outputs.go }}
+          cache: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        with:
+          distribution: temurin
+          java-version: ${{ needs.inputs.outputs.java }}
+      - name: Prepare verified Go downloads and Gradle
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        run: |
+          python3 scripts/build_inputs.py restore-go --directory target/shared-go
+          python3 scripts/build_inputs.py prepare-gradle --directory "$RUNNER_TEMP/cor-gradle"
+      - name: Prepare Android SDK and NDK for the dependency build
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        shell: python
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from android import prepare_sdk
+          from build_inputs import check_tools
+          check_tools(('go', 'java', 'gradle'))
+          prepare_sdk()
+      - name: Resolve Maven dependencies online and verify them offline
+        if: steps.maven_cache.outputs.cache-hit != 'true'
+        shell: python
+        run: |
+          import sys
+          sys.path.insert(0, 'scripts')
+          from android import prepare_maven_cache
+          prepare_maven_cache()
+      - name: Share Maven dependencies with all Android ABIs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: android-maven-dependencies
+          path: ${{ env.GRADLE_USER_HOME }}/caches/modules-2
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+          overwrite: true
+      - name: Save verified Android Maven dependencies for main
+        if: github.ref == 'refs/heads/main' && steps.maven_cache.outputs.cache-hit != 'true' && steps.maven_cache.outputs.cache-primary-key != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/modules-2
+          key: ${{ steps.maven_cache.outputs.cache-primary-key }}
   android:
     if: ${{ !inputs.refresh_dependencies }}
     name: android-${{ matrix.arch }}
-    needs: inputs
+    needs: [inputs, android_maven]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -281,6 +380,13 @@ jobs:
           restore-keys: android-go-build-v1-${{ matrix.arch }}-
       - name: Prepare Gradle from a verified distribution
         run: python3 scripts/build_inputs.py prepare-gradle --directory '${{ runner.temp }}/cor-gradle'
+      - name: Set the isolated Gradle home
+        run: printf 'GRADLE_USER_HOME=%s/cor-android-gradle\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Load the shared Maven dependencies
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: android-maven-dependencies
+          path: ${{ env.GRADLE_USER_HOME }}/caches/modules-2
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
         with:
           distribution: temurin
@@ -322,7 +428,7 @@ jobs:
       - name: Compile Android application and embedded core
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/android.py build --arch ${{ matrix.arch }}
+        run: python3 scripts/android.py build --arch ${{ matrix.arch }} --gradle-offline
       - name: Retain completed Android compiler objects after later failures
         if: ${{ !cancelled() }}
         shell: python

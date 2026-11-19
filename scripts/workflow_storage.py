@@ -44,6 +44,8 @@ def lineage(key):
         return re.sub(r'-[0-9a-f]{64}-(?:approved|\d+-\d+)$', '', key)
     if key.startswith(('android-go-', 'skia-source-')):
         return re.sub(r'-[^-]+-[0-9a-f]{64}$', '', key)
+    if key.startswith('android-maven-'):
+        return 'android-maven'
     if key.startswith('gradle-linux-'):
         return 'gradle-linux'
     if key.startswith('tools-nsis-'):

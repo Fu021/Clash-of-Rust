@@ -4,6 +4,7 @@ import secrets
 import subprocess
 
 from build_support import run
+from linux_apt import INDEX_RETRY_DELAYS
 
 FIRMWARE = '/usr/share/OVMF/OVMF_CODE_4M.fd'
 FIRMWARE_VARS = '/usr/share/OVMF/OVMF_VARS_4M.fd'
@@ -115,15 +116,30 @@ INSTALL_SSH = """\
 #!/bin/sh
 set -eu
 export DEBIAN_FRONTEND=noninteractive
+for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    [ -f "$sources" ] || continue
+    sed -i -E 's@http://(archive|security)\\.ubuntu\\.com/ubuntu([/[:space:]]|$)@https://\\1.ubuntu.com/ubuntu\\2@g' "$sources"
+done
+for delay in @INDEX_RETRY_DELAYS@ 0; do
+    if timeout --signal=TERM --kill-after=5s 120s \\
+        apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \\
+        -o Acquire::Languages=none -o APT::Update::Error-Mode=any update; then
+        break
+    fi
+    if [ "$delay" -eq 0 ]; then
+        printf '%s\\n' 'Signed APT index refresh failed while preparing SSH' >&2
+        exit 1
+    fi
+    printf 'Signed APT index refresh failed, retrying in %s seconds\\n' "$delay" >&2
+    sleep "$delay"
+done
 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \\
-    -o APT::Update::Error-Mode=any update
-apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \\
-    install -y --no-install-recommends openssh-server
+    -o Dpkg::Use-Pty=0 install -y --no-install-recommends openssh-server
 if ! systemctl is-active --quiet ssh.service ssh.socket; then
     systemctl enable --now ssh.service
 fi
 touch /var/lib/cor-guest-ssh-ready
-"""
+""".replace('@INDEX_RETRY_DELAYS@', ' '.join(map(str, INDEX_RETRY_DELAYS)))
 
 
 def automatic_grub(source, initrd='/casper/initrd.lz'):

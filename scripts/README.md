@@ -18,7 +18,7 @@
 | `workflow_storage.py` | CLI | main 每个目标只留最新缓存，清除其他 ref 缓存；`--dry-run` 预览删除计划。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
-| `android.py` | CLI | Android 编译、模拟器、产物导出与 APK 打包；普通 CI 按变更选择专项。`application-preview --arch x64 --api LEVEL --build DIRECTORY --compatibility` 复用 CI APK 验证基础代理/TUN；可加 `--screenshots`、`--verify-diagnostics`，见[兼容验证](../docs/workflows/android-compatibility.md)。不带 `--compatibility` 的本地入口仍只截图或诊断。 |
+| `android.py` | CLI / 模块 | Android 编译、模拟器、产物导出与 APK 打包。[CI](../docs/workflows/ci.md#android-工具与原包)复用同一 Gradle 任务预热依赖及离线构建。`application-preview --arch x64 --api LEVEL --build DIRECTORY --compatibility` 复用 CI APK 验证基础代理/TUN，可加 `--screenshots`、`--verify-diagnostics`，见[兼容验证](../docs/workflows/android-compatibility.md)。不带 `--compatibility` 的本地入口仍只截图或诊断。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
 | `windows_update_tests.py` | 隔离安装测试模块 | 由 Windows 候选包验证按需调用；使用固定提交、固定摘要的旧安装器脚本和同一份 CI payload，对照文件占用、只读与 ACL 拒绝写入的旧/新退出码；另以独占端口和带身份标记的 HTTP 来源验证安装目录外独立 Mihomo 的流量、更新替换及外部进程/文件保留。首次启动等待有界的转发就绪并保留错误，正式更新前后拒绝错误响应，不重试掩盖失败。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |

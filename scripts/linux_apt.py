@@ -17,6 +17,7 @@ OPTIONS = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
            'Acquire::Languages=none', '-o', 'Dpkg::Use-Pty=0']
 UBUNTU_ARCHIVES = {'archive.ubuntu.com', 'security.ubuntu.com', 'ports.ubuntu.com'}
+INDEX_RETRY_DELAYS = (5, 15)
 
 
 def privileged(command, timeout, **kwargs):
@@ -129,7 +130,7 @@ def install(packages, timeout=900, no_recommends=False, *, options=OPTIONS):
 
 def update_indexes(timeout=300, *, options=OPTIONS):
     command = [*options, '-o', 'APT::Update::Error-Mode=any', 'update']
-    for delay in (5, 15, 0):
+    for delay in (*INDEX_RETRY_DELAYS, 0):
         try:
             privileged(command, timeout)
             return

@@ -108,6 +108,7 @@ def verify_authorization(log, password_file, locate, *, respond=None):
     helper = APP/'clash-of-rust'
     before = tun_permissions()
     for allow in (False, True):
+        phase = 'accept' if allow else 'cancel'
         deadline = time.monotonic()+90
         while True:
             remaining = deadline-time.monotonic()
@@ -123,6 +124,8 @@ def verify_authorization(log, password_file, locate, *, respond=None):
                         if state == 'retry':
                             time.sleep(1)
                             continue
+                        log.write(f'Graphical authorization {phase}: prompt received\n')
+                        log.flush()
                         if respond:
                             respond(allow)
                         else:
@@ -138,7 +141,10 @@ def verify_authorization(log, password_file, locate, *, respond=None):
                                 run(['xdotool', 'key', 'Return'], timeout=15)
                             else:
                                 run(['xdotool', 'key', 'Escape'], timeout=15)
-                        code = request.wait(timeout=100 if respond else 30)
+                        try:
+                            code = request.wait(timeout=100 if respond else 30)
+                        except subprocess.TimeoutExpired as error:
+                            raise TimeoutError(f'Graphical authorization {phase} did not complete') from error
                         capabilities, mode = tun_permissions()
                         if allow:
                             if code or 'cap_net_admin,cap_net_raw' not in capabilities or mode != 0o4755:
@@ -147,6 +153,9 @@ def verify_authorization(log, password_file, locate, *, respond=None):
                                     f'(exit {code}, capabilities={capabilities!r}, DNS helper mode={mode:#o})')
                         elif code == 0 or (capabilities, mode) != before:
                             raise RuntimeError('Cancelled graphical authorization changed network permissions')
+                        if not respond:
+                            wait_for(f'Graphical authorization {phase} dialog remained visible',
+                                     lambda: locate() is None, timeout=15)
                         break
                 finally:
                     request_log.seek(0)
@@ -172,6 +181,15 @@ def authentication():
                 return gtk_authorization_window()
 
             return verify_authorization(log, Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']), locate)
+
+
+def notifier_host_ready():
+    try:
+        return dbus('org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
+                    'org.freedesktop.DBus.Properties.Get', 'org.kde.StatusNotifierWatcher',
+                    'IsStatusNotifierHostRegistered') == '(<true>,)'
+    except subprocess.SubprocessError:
+        return False
 
 
 def notifier(session_output=output):
@@ -533,6 +551,8 @@ def session():
                 wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
             except TimeoutError as error:
                 raise RuntimeError(f'{error}; last DBus probe: {last_probe_error}') from error
+            wait_for('GNOME AppIndicator tray host did not become ready', notifier_host_ready, timeout=90)
+            result['checks']['tray_host_ready'] = True
             from linux_native_guest import DISTROS
             native_package = platform.freedesktop_os_release().get('ID') in DISTROS
             proxy_check = None
