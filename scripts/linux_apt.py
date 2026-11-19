@@ -1,6 +1,7 @@
 """Reuse DEB downloads only after checking the current signed APT indexes."""
 import os
 from pathlib import Path
+import platform
 import re
 import shlex
 import shutil
@@ -9,7 +10,7 @@ import subprocess
 import tempfile
 from urllib.parse import urlsplit, urlunsplit
 
-from build_support import run, sha256
+from build_support import host_arch, run, sha256
 
 OPTIONS = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
@@ -56,14 +57,14 @@ def matches(path, record):
         return False
 
 
-def install(packages, timeout=900, no_recommends=False):
+def install(packages, timeout=900, no_recommends=False, *, options=OPTIONS):
     arguments = ['install', '-y']
     if no_recommends:
         arguments.append('--no-install-recommends')
     arguments.extend(map(str, packages))
     configured = os.environ.get('COR_LINUX_APT_CACHE')
     if not configured:
-        return privileged([*OPTIONS, *arguments], timeout)
+        return privileged([*options, *arguments], timeout)
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('APT cache installation requires a disposable Actions environment')
     cache = Path(configured)
@@ -71,12 +72,12 @@ def install(packages, timeout=900, no_recommends=False):
         cache.mkdir(parents=True, exist_ok=True)
     except OSError:
         print('::warning::APT cache is unavailable; installing without it.', flush=True)
-        return privileged([*OPTIONS, *arguments], timeout)
+        return privileged([*options, *arguments], timeout)
     # A separate empty archive directory makes print-uris include every needed
     # package, including downloads already present in our untrusted cache.
     directory = Path(tempfile.mkdtemp(prefix='cor-apt-archives-'))
     directory.chmod(0o755)
-    command = [*OPTIONS, '-o', 'Dir::Cache::archives='+str(directory),
+    command = [*options, '-o', 'Dir::Cache::archives='+str(directory),
                '-o', 'Acquire::ForceHash=SHA256',
                '-o', 'APT::Keep-Downloaded-Packages=true']
     records = {}
@@ -88,7 +89,7 @@ def install(packages, timeout=900, no_recommends=False):
         except (OSError, ValueError, subprocess.SubprocessError):
             print('::warning::APT cache metadata unavailable; installing fresh downloads.',
                   flush=True)
-            return privileged([*OPTIONS, *arguments], timeout)
+            return privileged([*options, *arguments], timeout)
         restored, reused_bytes = 0, 0
         for name, record in records.items():
             source = cache/name
@@ -123,6 +124,29 @@ def install(packages, timeout=900, no_recommends=False):
             privileged(['rm', '-rf', '--', str(directory)], 60)
         except (OSError, subprocess.SubprocessError):
             print('::warning::Temporary APT archive cleanup failed.', flush=True)
+
+
+def install_vm_tools(packages):
+    release = platform.freedesktop_os_release()
+    if (os.environ.get('GITHUB_ACTIONS') != 'true'
+            or (release.get('ID'), release.get('VERSION_ID')) != ('ubuntu', '24.04')):
+        raise RuntimeError('VM tools require an Ubuntu 24.04 compatibility runner')
+    arm = host_arch() == 'arm64'
+    architecture = 'arm64' if arm else 'amd64'
+    archive = 'https://ports.ubuntu.com/ubuntu-ports' if arm else 'https://archive.ubuntu.com/ubuntu'
+    security = archive if arm else 'https://security.ubuntu.com/ubuntu'
+    signing = '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
+    with tempfile.TemporaryDirectory(prefix='cor-host-apt-') as temporary:
+        directory = Path(temporary)
+        directory.chmod(0o755)
+        sources = directory/'ubuntu.list'
+        sources.write_text(''.join(
+            f'deb [arch={architecture} signed-by={signing}] {origin} {suite} main universe restricted multiverse\n'
+            for suite, origin in (('noble', archive), ('noble-updates', archive), ('noble-security', security))))
+        options = [*OPTIONS, '-o', 'Dir::Etc::sourcelist='+str(sources),
+                   '-o', 'Dir::Etc::sourceparts=-', '-o', 'APT::Update::Error-Mode=any']
+        privileged([*options, 'update'], 360)
+        install([*packages, 'qemu-utils', 'cloud-image-utils'], 1200, True, options=options)
 
 
 def source_url(url):

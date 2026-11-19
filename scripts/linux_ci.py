@@ -496,9 +496,19 @@ class VmGuest:
         return seed
 
     def wait_cloud_init(self):
-        if self.target.image_format != 'iso':
-            self.remote('sudo timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait',
-                        timeout=360)
+        if self.target.image_format == 'iso':
+            return
+        command = 'sudo env LC_ALL=C timeout --signal=TERM --kill-after=30s 300s cloud-init status --wait --long'
+        diagnostics = REPORT/(self.directory.name+'-cloud-init-status.txt')
+        try:
+            result = self.remote(command, capture_output=True, text=True, timeout=360)
+        except subprocess.CalledProcessError as error:
+            diagnostics.write_text((error.stdout or '') + (error.stderr or ''))
+            if error.returncode != 2 or 'status: done' not in (error.stdout or '').splitlines():
+                raise
+            print('::warning::cloud-init completed with recoverable errors. See '+diagnostics.name, flush=True)
+        else:
+            diagnostics.write_text(result.stdout + result.stderr)
 
     def remote(self, script, **kwargs):
         return subprocess.run([*self.ssh, script], check=True, **kwargs)

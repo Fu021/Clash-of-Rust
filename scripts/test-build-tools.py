@@ -233,6 +233,36 @@ class TunIpv6LifecycleTests(unittest.TestCase):
 
 
 class UbuntuVmTests(unittest.TestCase):
+    def test_vm_tools_use_the_same_signed_https_sources_for_update_and_install(self):
+        for arch, archive in (('x64', 'https://archive.ubuntu.com/ubuntu'),
+                              ('arm64', 'https://ports.ubuntu.com/ubuntu-ports')):
+            with self.subTest(arch=arch):
+                release = {'ID': 'ubuntu', 'VERSION_ID': '24.04'}
+
+                def check_update(arguments, timeout):
+                    source = next(value for value in arguments if value.startswith('Dir::Etc::sourcelist='))
+                    sources = Path(source.split('=', 1)[1]).read_text().splitlines()
+                    self.assertEqual(len(sources), 3)
+                    self.assertIn(archive+' noble ', sources[0])
+                    self.assertIn(archive+' noble-updates ', sources[1])
+                    security = archive if arch == 'arm64' else 'https://security.ubuntu.com/ubuntu'
+                    self.assertIn(security+' noble-security ', sources[2])
+                    self.assertTrue(all('signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg'
+                                        in row for row in sources))
+                    self.assertIn('APT::Update::Error-Mode=any', arguments)
+                    self.assertIn('Dir::Etc::sourceparts=-', arguments)
+                    self.assertEqual(arguments[-1], 'update')
+                    self.assertEqual(timeout, 360)
+
+                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
+                        patch.object(linux_apt.platform, 'freedesktop_os_release', return_value=release), \
+                        patch.object(linux_apt, 'host_arch', return_value=arch), \
+                        patch.object(linux_apt, 'privileged', side_effect=check_update) as update, \
+                        patch.object(linux_apt, 'install') as install:
+                    linux_apt.install_vm_tools(['qemu-system'])
+                install.assert_called_once_with(['qemu-system', 'qemu-utils', 'cloud-image-utils'],
+                                                1200, True, options=update.call_args.args[0][:-1])
+
     def test_apt_sources_use_native_official_suites(self):
         for arch, native, base in (
                 ('arm64', 'arm64', 'https://ports.ubuntu.com/ubuntu-ports'),
@@ -299,14 +329,34 @@ class UbuntuVmTests(unittest.TestCase):
         with patch.object(guest, 'output', return_value='previous-boot\n'), \
                 patch.object(guest, 'remote') as remote, \
                 patch.object(guest, 'close_ssh') as close, \
-                patch.object(linux_ci, 'wait_vm_ssh') as ready:
+                patch.object(linux_ci, 'wait_vm_ssh') as ready, \
+                patch.object(guest, 'wait_cloud_init') as cloud_init:
             guest.reboot()
         close.assert_called_once_with()
         self.assertEqual(ready.call_args.args, (
             guest.process, ['ssh', '-o', 'ControlPath=none', '-o', 'ControlPath=existing', 'guest']))
         self.assertIn('test "$boot_id" != previous-boot', ready.call_args.kwargs['ready_command'])
         self.assertIn('systemctl reboot', remote.call_args_list[0].args[0])
-        self.assertIn('cloud-init status --wait', remote.call_args_list[1].args[0])
+        cloud_init.assert_called_once_with()
+
+    def test_vm_accepts_cloud_init_recoverable_errors_only_after_completion(self):
+        for code, status, fatal in ((2, 'done', False), (2, 'error', True),
+                                    (1, 'done', True), (124, 'running', True)):
+            with self.subTest(code=code, status=status), tempfile.TemporaryDirectory() as temporary:
+                guest = object.__new__(linux_ci.VmGuest)
+                guest.target = linux_ci.target_for('fedora', '44', 'x64')
+                guest.directory = Path('official-image')
+                text = f'status: {status}\nrecoverable_errors:\n  WARNING: test warning\n'
+                failure = subprocess.CalledProcessError(code, ['cloud-init'], output=text, stderr='')
+                with patch.object(linux_ci, 'REPORT', Path(temporary)), \
+                        patch.object(guest, 'remote', side_effect=failure) as command:
+                    if fatal:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            guest.wait_cloud_init()
+                    else:
+                        guest.wait_cloud_init()
+                self.assertIn('cloud-init status --wait --long', command.call_args.args[0])
+                self.assertEqual((Path(temporary)/'official-image-cloud-init-status.txt').read_text(), text)
 
     def test_arm_cloud_vm_adds_a_gpu_only_for_desktop_validation(self):
         for suite, release, needs_gpu in (('ubuntu', '20.04', False), ('debian', '13', True)):
@@ -418,6 +468,25 @@ class UbuntuVmTests(unittest.TestCase):
         with patch.object(guest, 'remote') as command:
             guest.wait_cloud_init()
         command.assert_not_called()
+
+    def test_arch_desktop_setup_does_not_require_a_fixed_os_version(self):
+        import linux_gnome_login
+
+        report = {}
+        desktop = linux_desktop_login.GNOME_WAYLAND
+        with patch.object(linux_desktop_login, 'run') as execute, \
+                patch.object(linux_desktop_login, 'install') as install, \
+                patch.object(linux_desktop_login, 'native_gnome_session', return_value='gnome'), \
+                patch.object(linux_gnome_login, 'install') as probe, \
+                patch.object(linux_desktop_login, 'boot_id', return_value='fixture-boot'), \
+                patch.object(linux_desktop_login, 'sha256', return_value='fixture-digest'), \
+                patch.object(Path, 'read_text', return_value='Exec=clash-of-rust\n'):
+            linux_desktop_login.prepare(report, desktop, {'ID': 'arch'})
+        install.assert_not_called()
+        probe.assert_called_once_with(linux_desktop_login.as_user)
+        self.assertTrue(any(call.args[0] == ['sudo', 'tee', '/etc/gdm/custom.conf']
+                            for call in execute.call_args_list))
+        self.assertEqual(report, {'menu_sha256': 'fixture-digest', 'boot_id': 'fixture-boot'})
 
     def test_mint_login_requires_lightdm_x11_and_the_matching_cinnamon_session(self):
         for pam, shell_session, found in (('lightdm-autologin', 'c2', True),
@@ -2753,6 +2822,25 @@ class BuildTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'agent exited'):
             linux_gui.authorization_dialog(request, io.StringIO(), locate)
 
+    def test_linux_gui_waits_for_the_owner_to_adopt_its_registered_tray(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            startup = data/'desktop-startup.json'
+            expected = ('test-service', '/StatusNotifierItem')
+            with patch.object(linux_gui, 'owner_tray', return_value=expected) as notifier:
+                self.assertIsNone(linux_gui.ready_tray(data, 42))
+                for pid, state in ((17, 'created'), (42, 'initializing')):
+                    startup.write_text(json.dumps({
+                        'schema': 1, 'kind': 'desktop_startup', 'pid': pid, 'status': {'tray_state': state},
+                    }))
+                    self.assertIsNone(linux_gui.ready_tray(data, 42))
+                notifier.assert_not_called()
+                startup.write_text(json.dumps({
+                    'schema': 1, 'kind': 'desktop_startup', 'pid': 42, 'status': {'tray_state': 'created'},
+                }))
+                self.assertEqual(linux_gui.ready_tray(data, 42), expected)
+                notifier.assert_called_once_with(42)
+
     def test_linux_gui_finds_authorized_core_without_reading_exe_link(self):
         import linux_gui
 
@@ -2794,6 +2882,9 @@ class BuildTests(unittest.TestCase):
             (report/'desktop.log').write_text('diagnostic')
             (report/'local.yaml').write_text('private fixture')
             (report/'x11.log').symlink_to(report/'local.yaml')
+            (report/'profile-x11').mkdir()
+            (report/'profile-x11/desktop-startup.json').write_text('startup trace')
+            (report/'profile-wayland').symlink_to(report/'profile-x11')
             with patch.object(linux_gui, 'REPORT', directory/'saved'):
                 linux_gui.preserve_report(report)
             saved = directory/'saved/desktop'
@@ -2801,6 +2892,39 @@ class BuildTests(unittest.TestCase):
             self.assertEqual((saved/'desktop.log').read_text(), 'diagnostic')
             self.assertFalse((saved/'local.yaml').exists())
             self.assertFalse((saved/'x11.log').exists())
+            self.assertEqual((saved/'x11-startup.json').read_text(), 'startup trace')
+            self.assertFalse((saved/'wayland-startup.json').exists())
+
+    def test_native_gui_failure_removes_the_polkit_fixture_and_preserves_the_report(self):
+        import linux_gui
+        import linux_native_guest
+
+        with tempfile.TemporaryDirectory() as temporary:
+            saved = Path(temporary)
+            failure = subprocess.CalledProcessError(1, ['systemd-run'])
+            user = 'corgui'+str(os.getpid())
+            rule = Path('/etc/polkit-1/rules.d')/f'10-{user}.rules'
+
+            def execute(command, **kwargs):
+                if command[:3] == ['sudo', 'install', '-d']:
+                    Path(command[-1]).mkdir()
+                elif command[:2] == ['sudo', 'systemd-run']:
+                    (kwargs['cwd']/'report/gui.json').write_text('{"status":"failed"}')
+                    raise failure
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.object(linux_ci, 'require_actions'), \
+                    patch.object(linux_native_guest, 'distribution', return_value='fedora'), \
+                    patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'fedora'}), \
+                    patch.object(linux_gui, 'REPORT', saved), \
+                    patch.object(subprocess, 'run', side_effect=execute) as commands:
+                with self.assertRaises(subprocess.CalledProcessError) as captured:
+                    linux_gui.installed_tests()
+
+            self.assertIs(captured.exception, failure)
+            commands.assert_any_call(['sudo', 'rm', '-f', rule], check=False)
+            commands.assert_any_call(['sudo', 'userdel', '--remove', user], check=False)
+            self.assertEqual(json.loads((saved/'desktop/gui.json').read_text()), {'status': 'failed'})
 
     def test_linux_gui_session_keeps_pam_identity_but_not_runner_credentials(self):
         import linux_gui
@@ -5761,6 +5885,8 @@ runpy.run_path(str(script), run_name='__main__')
         other_branch = entry(5, old['key'], 30, 'refs/pull/18/merge')
         self.assertEqual(storage.eviction_plan([new, other_branch], 100), [other_branch])
         for older,newer in (
+                ('linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261110.1.0',
+                 'linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261117.1.0'),
                 ('linux-python-ubuntu20-v1-x64-'+'a'*64, 'linux-python-ubuntu20-v1-x64-'+'b'*64),
                 ('linux-cloud-ubuntu20-v1-arm64-'+'a'*64, 'linux-cloud-ubuntu20-v1-arm64-'+'b'*64),
                 ('linux-apt-ubuntu20-v1-x64-100-1', 'linux-apt-ubuntu20-v1-x64-101-1'),
@@ -5807,6 +5933,9 @@ runpy.run_path(str(script), run_name='__main__')
             'native-main-v1-windows-11-arm-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb',
             'memory-main-v1-release-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
             'memory-main-v1-dev-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
+            'linux-host-apt-v1-ubuntu-24.04-aaaaaaaaaaaaaaaa-20261117.1.0',
+            'linux-host-apt-v1-ubuntu-24.04-bbbbbbbbbbbbbbbb-20261117.1.0',
+            'linux-host-apt-v1-ubuntu-24.04-arm-aaaaaaaaaaaaaaaa-20261117.1.0',
             'future-tool-one',
             'future-tool-two',
         ]

@@ -45,9 +45,9 @@ target=/mnt/cor-installed
 test "$(id -u)" = 0
 test -d /sys/firmware/efi
 grep -qw boot=casper /proc/cmdline
-test "$(lsblk -lnro TYPE "$disk")" = disk
-test "$(lsblk -ndro SERIAL "$disk")" = cor-pop-compatibility
-test "$(lsblk -ndro RO "$disk")" = 0
+test "$(lsblk --noheadings --nodeps --output TYPE "$disk")" = disk
+test "$(lsblk --noheadings --nodeps --output SERIAL "$disk")" = cor-pop-compatibility
+test "$(lsblk --noheadings --nodeps --output RO "$disk")" = 0
 signatures="$(wipefs --no-act --noheadings --output TYPE "$disk")"
 test -z "$signatures"
 set -- /cdrom/casper*/filesystem.squashfs

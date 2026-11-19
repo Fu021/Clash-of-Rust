@@ -11,8 +11,7 @@ CI 与 Memory Benchmark 使用 GitHub Actions Cache。`main` 每个用途及目�
 | CI | 桌面六平台与 Android 三 ABI 的 Rust 对象、Android 分 ABI 的 Go 对象、Ubuntu 20.04 两架构编译容器 | 分发依赖快照、已校验的 Go 源码、候选包及报告 |
 | Memory Benchmark | 各 profile 的 Linux x64 Rust 对象 | 复用冻结输入，保存本次基准的分片和报告 |
 | Android Compatibility | 无 | 复用 CI APK，SDK、模拟器及系统镜像来自 Google 官方源 |
-| Ubuntu Compatibility | 无 | 复用同提交候选 DEB，[须启动 VM 的目标](ubuntu-compatibility.md)使用 Canonical 官方镜像，20.04 复用冻结 APT 索引 |
-| Debian Compatibility | 无 | 复用同提交候选 DEB，启动固定版本的 Debian 官方镜像 |
+| Linux 发行版兼容验证 | VM 宿主工具的 Ubuntu 24.04 DEB 下载，按 runner 与所需工具保留最新一代 | 复用同提交候选包，使用各发行版的固定官方镜像；Ubuntu 20.04 来宾复用冻结 APT 索引 |
 | Publish Release | 无 | 校验同提交候选包和[所需兼容回执](release.md#兼容性发布门禁)，公开模式增加 Android 签名和签名包复验 |
 | COSMIC Startup Investigation | 无 | 使用同提交候选 DEB 和 System76 官方镜像，保存诊断附件 |
 
@@ -23,3 +22,4 @@ CI 与 Memory Benchmark 使用 GitHub Actions Cache。`main` 每个用途及目�
 - Gradle、NSIS、Mihomo、Geo、独立 Python 和 Linux 云镜像从公开上游下载，按固定摘要校验。Linux APT 软件包通过各发行版的签名索引核验。
 - CI 将锁文件、资源和输入身份作为短期附件分发。Android 三种 ABI 共享已验证的 Go 源码下载包与绑定工具，独立保存各 ABI 的 `GOCACHE`。
 - 构建容器按架构和官方镜像 digest 恢复，未命中时重新构建。VM 系统盘及运行写入层只存当次 runner。安装包、回执、日志和内存报告以附件保留，生命周期见各工作流。
+- VM 宿主从 Ubuntu 官方 HTTPS 源更新签名索引，缓存中的 DEB 按当前索引的大小与 SHA256 校验后才提供给 APT。

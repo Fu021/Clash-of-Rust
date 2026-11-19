@@ -142,7 +142,9 @@ def verify_authorization(log, password_file, locate, *, respond=None):
                         capabilities, mode = tun_permissions()
                         if allow:
                             if code or 'cap_net_admin,cap_net_raw' not in capabilities or mode != 0o4755:
-                                raise RuntimeError('Accepted graphical authorization did not grant the installed helper')
+                                raise RuntimeError(
+                                    'Accepted graphical authorization did not grant the installed helper '
+                                    f'(exit {code}, capabilities={capabilities!r}, DNS helper mode={mode:#o})')
                         elif code == 0 or (capabilities, mode) != before:
                             raise RuntimeError('Cancelled graphical authorization changed network permissions')
                         break
@@ -196,6 +198,25 @@ def owner_tray(pid, session_output=output):
         if owner == pid:
             return service, '/'+suffix if separator else '/StatusNotifierItem'
     return None
+
+
+def ready_tray(data, pid):
+    try:
+        trace = json.loads((data/'desktop-startup.json').read_text())
+        if (trace['schema'] == 1 and trace['kind'] == 'desktop_startup' and trace['pid'] == pid
+                and trace['status']['tray_state'] == 'created'):
+            return owner_tray(pid)
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
+def activate_tray(item):
+    try:
+        dbus(item[0], item[1], 'org.kde.StatusNotifierItem.Activate', '0', '0')
+    except subprocess.CalledProcessError:
+        return False
+    return True
 
 
 def window_script():
@@ -383,7 +404,8 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
             terminal.wait('GUI fixture')
             if core_processes() != processes:
                 raise RuntimeError('TUI did not share the existing GUI-owned core')
-        item = wait_for('Desktop did not register the GUI owner tray', lambda: owner_tray(owner.pid))
+        item = wait_for('GUI tray did not become ready and register with the desktop',
+                        lambda: ready_tray(data, owner.pid))
         # One graceful close and one renderer loss exercise different lifecycle
         # paths without repeating the proxy/TUN traffic suite.
         for crash in (False, True):
@@ -406,7 +428,8 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
             if owner.poll() is not None:
                 raise RuntimeError(f'{backend} {"crash" if crash else "close"} terminated '
                                    f'the GUI owner: {owner.returncode}')
-            dbus(item[0], item[1], 'org.kde.StatusNotifierItem.Activate', '0', '0')
+            wait_for(f'{backend} tray item {item} did not accept Activate', lambda: activate_tray(item),
+                     timeout=15)
             windows = wait_for_usable_window(backend, visible)
             after = cli('status')
             if (core_processes() != processes or not after.get('running')
@@ -542,10 +565,16 @@ def stage_session(directory):
 def preserve_report(source):
     destination = REPORT/'desktop'
     destination.mkdir(parents=True, exist_ok=True)
-    for name in ('gui.json', 'authentication.log', 'desktop.log', 'x11.log', 'wayland.log'):
+    for name in ('gui.json', 'authentication.log', 'desktop.log', 'x11.log', 'wayland.log',
+                 'dbus-probes.log'):
         path = source/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, destination/name)
+    for backend in ('x11', 'wayland'):
+        profile = source/f'profile-{backend}'
+        startup = profile/'desktop-startup.json'
+        if not profile.is_symlink() and startup.is_file() and not startup.is_symlink():
+            shutil.copyfile(startup, destination/f'{backend}-startup.json')
 
 
 def launch_session():
@@ -617,7 +646,7 @@ def installed_tests():
                            check=True, cwd=home, timeout=360)
         finally:
             if rule:
-                run(['sudo', 'rm', '-f', rule], check=False)
+                subprocess.run(['sudo', 'rm', '-f', rule], check=False)
             if created:
                 subprocess.run(['sudo', 'loginctl', 'terminate-user', user], check=False)
                 subprocess.run(['sudo', 'pkill', '-KILL', '-u', user], check=False)

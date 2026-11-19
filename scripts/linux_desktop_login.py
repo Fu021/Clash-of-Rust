@@ -67,11 +67,11 @@ def native_gnome_session(directory, desktop):
 
 
 def prepare(report, desktop, release):
-    distribution, version = release['ID'], release['VERSION_ID']
+    distribution = release['ID']
     packages = ['dbus-user-session', 'libgtk-3-bin', 'wmctrl']
     if distribution == 'debian':
         packages.extend(['gdm3', 'gnome-session', 'xserver-xorg'])
-        if version == '13':
+        if release['VERSION_ID'] == '13':
             packages.append('gnome-session-xsession')
     elif desktop == CINNAMON and not Path('/usr/share/xsessions/cinnamon.desktop').is_file():
         raise RuntimeError('The installed Mint guest lacks the Cinnamon X11 session')
