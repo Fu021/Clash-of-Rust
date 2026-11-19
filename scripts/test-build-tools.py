@@ -6600,6 +6600,15 @@ class CompatibilityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
                     compatibility.verified_suite(client, source, suite)
 
+    def test_ci_rpm_assembly_uses_the_declared_python_shell(self):
+        workflow = (build.ROOT/'.github/workflows/ci.yml').read_text()
+        step = workflow.split('- name: Assemble the x64 RPM compatibility candidate\n', 1)[1]
+        options, script = step.split('\n        run: |\n', 1)
+        self.assertIn('\n        shell: python', options)
+        script = script.split('\n      - ', 1)[0]
+        ast.parse('\n'.join(line.removeprefix(' '*10) for line in script.splitlines()))
+        self.assertIn('rpm_candidate()', script)
+
     def test_zorin_selects_the_pinned_zstd_initramfs(self):
         boot = '\tlinux\t/casper/vmlinuz maybe-ubiquity quiet splash ---\n'
         config = linux_mint_install.automatic_grub(boot, '/casper/initrd.zstd')

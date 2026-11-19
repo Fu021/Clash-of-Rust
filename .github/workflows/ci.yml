@@ -604,10 +604,14 @@ jobs:
           retention-days: 3
       - name: Assemble the x64 RPM compatibility candidate
         if: matrix.system == 'linux' && matrix.arch == 'x64'
+        shell: python
         run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::https::Timeout=20 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::https::Timeout=20 install -y --no-install-recommends rpm
-          python3 scripts/linux_native_package.py
+          import sys
+          sys.path.insert(0, 'scripts')
+          from linux_apt import install
+          from linux_native_package import rpm_candidate
+          install(['rpm', 'binutils'], timeout=300, no_recommends=True)
+          rpm_candidate()
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: matrix.system == 'linux' && matrix.arch == 'x64'
         with:
