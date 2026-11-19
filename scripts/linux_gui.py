@@ -173,8 +173,9 @@ def verify_authorization(log, password_file, locate, *, respond=None, restart_ag
 def authentication():
     agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
     distro = platform.freedesktop_os_release().get('ID')
+    xfce = distro == 'fedora'
     mate = distro in ('debian', 'opensuse-leap', 'opensuse-tumbleweed', 'arch')
-    if distro == 'fedora':
+    if xfce:
         agent = '/usr/libexec/xfce-polkit'
     elif mate:
         candidates = (Path('/usr/libexec/polkit-mate-authentication-agent-1'),
@@ -182,22 +183,36 @@ def authentication():
                       Path('/usr/lib/mate-polkit/polkit-mate-authentication-agent-1'))
         agent = next((path for path in candidates if path.is_file()), candidates[0])
     with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log, \
+            (tempfile.TemporaryFile() if xfce else contextlib.nullcontext()) as agent_log, \
             contextlib.ExitStack() as processes:
         print(f'Graphical authorization agent: {agent}', file=log, flush=True)
-        registered = processes.enter_context(process([agent], log))
+
+        def launch():
+            if xfce:
+                return processes.enter_context(process([agent], agent_log,
+                                                       env={**os.environ, 'G_MESSAGES_DEBUG': 'all'}))
+            return processes.enter_context(process([agent], log))
+
+        registered = launch()
 
         def locate():
             if registered.poll() is not None:
                 raise RuntimeError('Graphical polkit agent exited before authorization')
-            return gtk_authorization_window()
+            window = gtk_authorization_window()
+            if window and xfce and b'\nVisibility: 0\n' not in os.pread(agent_log.fileno(), 65536, 0):
+                return None
+            return window
 
         def restart():
             nonlocal registered
             processes.close()
-            registered = processes.enter_context(process([agent], log))
+            if xfce:
+                agent_log.seek(0)
+                agent_log.truncate()
+            registered = launch()
 
         return verify_authorization(log, Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']), locate,
-                                    restart_agent=restart if mate else None)
+                                    restart_agent=restart if mate or xfce else None)
 
 
 def notifier_host_ready():

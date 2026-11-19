@@ -41,11 +41,20 @@ def recognize_button(source, label, width, height, *, page_mode, image=None):
     return dialog_button(tsv.decode(), label, width, height), True
 
 
-def enlarged_grayscale(screenshot):
-    code = ('from PIL import Image; import sys; image = Image.open(sys.argv[1]); '
-            'image.convert("L").resize((image.width*2, image.height*2)).'
-            'save(sys.stdout.buffer, format="PNG")')
-    return subprocess.check_output(['/usr/bin/python3', '-c', code, screenshot], timeout=10)
+def enlarged_grayscale(screenshot, *, trim):
+    code = (
+        'from PIL import Image\n'
+        'import struct, sys\n'
+        'image = Image.open(sys.argv[1]).convert("L")\n'
+        'bounds = (image.getbbox() if sys.argv[2] == "trim" else None) or (0, 0, *image.size)\n'
+        'image = image.crop(bounds)\n'
+        'sys.stdout.buffer.write(struct.pack(">4I", *bounds))\n'
+        'image.resize((image.width * 2, image.height * 2)).save(sys.stdout.buffer, format="PNG")\n'
+    )
+    data = subprocess.check_output(
+        ['/usr/bin/python3', '-c', code, screenshot, 'trim' if trim else 'full'], timeout=10)
+    left, top, right, bottom = struct.unpack('>4I', data[:16])
+    return data[16:], (left, top, right-left, bottom-top)
 
 
 def capture_button(monitor, screenshot, label, environment):
@@ -58,14 +67,17 @@ def capture_button(monitor, screenshot, label, environment):
     if not (800 <= width <= 4096 and 450 <= height <= 4096):
         return None
     button, complete = recognize_button(screenshot, label, width, height, page_mode=11)
-    if button is None and complete and label == 'Authenticate':
+    for trim, page_mode in ((True, 11), (False, 6)):
+        if button is not None or not complete:
+            break
         try:
-            image = enlarged_grayscale(screenshot)
+            image, (left, top, crop_width, crop_height) = enlarged_grayscale(screenshot, trim=trim)
         except subprocess.TimeoutExpired:
             return None
-        scaled, _ = recognize_button('-', label, width*2, height*2, page_mode=6, image=image)
+        scaled, complete = recognize_button('-', label, crop_width*2, crop_height*2,
+                                           page_mode=page_mode, image=image)
         if scaled is not None:
-            button = tuple(coordinate//2 for coordinate in scaled)
+            button = left + scaled[0]//2, top + scaled[1]//2
     if button is None:
         return None
     if method == 'x11':

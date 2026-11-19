@@ -266,24 +266,38 @@ def capture_cosmic(environment, stage):
     return {'filename': destination.name, 'width': width, 'height': height}
 
 
-def startup(uid, previous, background, visible, current=None):
+def startup_record():
+    limit = 256 * 1024
     try:
         files = output(as_user('find', HOME/'.local/share', '-maxdepth', '2', '-name',
                                'desktop-startup.json', '-type', 'f'),
                        stderr=subprocess.DEVNULL).splitlines()
-        if len(files) != 1:
-            return None
-        value = json.loads(output(as_user('cat', files[0])))
+        if len(files) == 1:
+            data = output(as_user('head', '-c', str(limit+1), '--', files[0]))
+            if len(data.encode()) <= limit:
+                value = json.loads(data)
+                if isinstance(value, dict) and value.get('kind') == 'desktop_startup' and value.get('schema') == 1:
+                    return value
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def startup(uid, previous, background, visible, current=None):
+    value = startup_record()
+    if value is None:
+        return None
+    try:
         session = value['session_id']
         status = value['status'] or {}
-        if (value['kind'] == 'desktop_startup' and value['schema'] == 1 and session
-                and session != previous and (current is None or session == current)
+        if (session and session != previous and (current is None or session == current)
                 and value['background_requested'] is background
+                and isinstance(status, dict)
                 and status.get('tray_state') == 'created'
                 and status.get('window_visible') is visible
                 and Path('/proc', str(value['pid'])).stat().st_uid == uid):
             return value
-    except (OSError, ValueError, TypeError, KeyError, subprocess.CalledProcessError):
+    except (OSError, TypeError, KeyError):
         pass
     return None
 
@@ -301,8 +315,20 @@ def verify(stage, report, desktop):
         lambda: active_desktop(uid, desktop, session_type), timeout=guest_budget(180, 360))
     report['login'] = login
     prior_session = previous.get('startup', {}).get('session_id')
-    trace = wait_for(f'{desktop.name} did not autostart the candidate', lambda: startup(
-        uid, prior_session, background, not background), timeout=guest_budget(90, 300))
+    try:
+        trace = wait_for(f'{desktop.name} candidate did not reach the expected window and tray state',
+                         lambda: startup(uid, prior_session, background, not background),
+                         timeout=guest_budget(90, 300))
+    except TimeoutError:
+        report['startup_observed'] = startup_record()
+        try:
+            report['notifier_host_state'] = desktop_call(
+                environment, 'busctl', '--user', 'get-property', 'org.kde.StatusNotifierWatcher',
+                '/StatusNotifierWatcher', 'org.kde.StatusNotifierWatcher', 'IsStatusNotifierHostRegistered',
+                stderr=subprocess.PIPE)
+        except (OSError, subprocess.SubprocessError) as error:
+            report['notifier_host_state'] = getattr(error, 'stderr', None) or str(error)
+        raise
     report['startup'] = trace
     pid = trace['pid']
     try:

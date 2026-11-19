@@ -562,6 +562,39 @@ class UbuntuVmTests(unittest.TestCase):
                     patch.object(linux_desktop_login.platform, 'machine', return_value=machine):
                 self.assertEqual(linux_desktop_login.guest_budget(90, 300), 300)
 
+    def test_real_login_failure_preserves_candidate_and_notifier_host_state(self):
+        desktop = linux_desktop_login.GNOME
+        trace = {'kind': 'desktop_startup', 'schema': 1, 'session_id': 'first',
+                 'background_requested': False, 'pid': 297,
+                 'status': {'window_visible': True, 'tray_state': 'failed'}}
+        login, environment = {'session': 'active'}, {'DISPLAY': ':0'}
+
+        def wait(description, probe, **kwargs):
+            result = probe()
+            if result is None:
+                raise TimeoutError(description)
+            return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory/'prepare.json').write_text('{"boot_id":"old"}')
+            report = {}
+            path = '/home/cor-desktop-login/.local/share/clashofrust/desktop-startup.json'
+            with patch.object(linux_desktop_login, 'REPORT', directory), \
+                    patch.object(linux_desktop_login, 'boot_id', return_value='new'), \
+                    patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
+                    patch.object(linux_desktop_login, 'active_desktop', return_value=(login, environment)), \
+                    patch.object(linux_desktop_login, 'wait_for', side_effect=wait), \
+                    patch.object(linux_desktop_login, 'output', side_effect=[path, json.dumps(trace)]*2), \
+                    patch.object(linux_desktop_login, 'desktop_call', return_value='b true') as query:
+                with self.assertRaisesRegex(TimeoutError, 'expected window and tray state'):
+                    linux_desktop_login.verify('first-login', report, desktop)
+            self.assertEqual(report['login'], login)
+            self.assertEqual(report['startup_observed'], trace)
+            self.assertEqual(report['notifier_host_state'], 'b true')
+            self.assertEqual(query.call_args.args[0], environment)
+            self.assertEqual(query.call_args.args[-1], 'IsStatusNotifierHostRegistered')
+
     def test_mint_login_requires_lightdm_x11_and_the_matching_cinnamon_session(self):
         for pam, shell_session, found in (('lightdm-autologin', 'c2', True),
                                           ('lightdm', 'c2', False),
@@ -2980,6 +3013,7 @@ class BuildTests(unittest.TestCase):
             directory = Path(temporary)
             password = directory/'password'
             agent = MagicMock()
+            agent.__enter__.return_value.poll.return_value = None
             with patch.dict(os.environ, {'COR_GUI_REPORT': str(directory),
                                         'COR_GUI_AUTH_PASSWORD_FILE': str(password)}), \
                     patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'fedora'}), \
@@ -2988,15 +3022,30 @@ class BuildTests(unittest.TestCase):
                     patch.object(linux_native_guest, 'install_appindicator'), \
                     patch.object(Path, 'is_file', return_value=False), \
                     patch.object(linux_gui, 'process', return_value=agent) as launches, \
-                    patch.object(linux_gui, 'verify_authorization') as verify:
+                    patch.object(linux_gui, 'verify_authorization') as verify, \
+                    patch.object(linux_gui, 'gtk_authorization_window', return_value='42'):
+                def authorize(log, secret, locate, *, restart_agent):
+                    self.assertEqual(secret, password)
+                    self.assertIsNone(locate())
+                    agent_log = launches.call_args.args[1]
+                    agent_log.write(b'Request: Password:\nVisibility: 0\n')
+                    agent_log.flush()
+                    self.assertEqual(locate(), '42')
+                    restart_agent()
+                    self.assertEqual(launches.call_count, 2)
+                    self.assertIsNone(locate())
+                    self.assertEqual(launches.call_args.kwargs['env']['G_MESSAGES_DEBUG'], 'all')
+                    return {'accept_granted_helper': True}
+
+                verify.side_effect = authorize
                 linux_native_guest.prepare()
-                linux_gui.authentication()
+                self.assertEqual(linux_gui.authentication(), {'accept_granted_helper': True})
             self.assertIn('xfce-polkit', install.call_args.args[0])
             self.assertNotIn('mate-polkit', install.call_args.args[0])
             self.assertEqual(launches.call_args.args[0], ['/usr/libexec/xfce-polkit'])
-            self.assertEqual(verify.call_args.args[1], password)
-            self.assertIsNone(verify.call_args.kwargs['restart_agent'])
-            self.assertIn('/usr/libexec/xfce-polkit', (directory/'authentication.log').read_text())
+            public_log = (directory/'authentication.log').read_text()
+            self.assertIn('/usr/libexec/xfce-polkit', public_log)
+            self.assertNotIn('Request: Password:', public_log)
 
     def test_linux_gui_requires_a_registered_tray_host_before_launch(self):
         with patch.object(linux_gui, 'dbus', side_effect=[
@@ -8205,21 +8254,41 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             incomplete = (header+''.join(f'20\t10\t10\t10\t90\t{word}\n' for word in words)).encode()
             enlarged = (header+''.join(f'80\t40\t20\t20\t90\t{word}\n'
                                        for word in (*words, 'Authenticate'))).encode()
+            transform = (b'enlarged image', (0, 0, 1280, 800))
             monitor = MagicMock()
             with patch.object(linux_cosmic_authorization, 'capture_screen', return_value='x11'), \
                     patch.object(linux_cosmic_authorization, 'enlarged_grayscale',
-                                 side_effect=[b'enlarged image', b'enlarged image',
+                                 side_effect=[transform, transform, transform, transform,
                                               subprocess.TimeoutExpired('python3', 10)]) as scale, \
                     patch.object(linux_cosmic_authorization.subprocess, 'check_output',
-                                 side_effect=[incomplete, enlarged, incomplete, incomplete, incomplete]) as ocr:
+                                 side_effect=[incomplete, incomplete, enlarged, incomplete, incomplete,
+                                              incomplete, incomplete]) as ocr:
                 self.assertEqual(linux_cosmic_authorization.capture_button(
                     monitor, screenshot, 'Authenticate', {}), ((45, 25), 'x11'))
                 self.assertIsNone(linux_cosmic_authorization.capture_button(monitor, screenshot, 'Authenticate', {}))
                 self.assertEqual(ocr.call_args.args[0][:5], ['tesseract', '-', 'stdout', '--psm', '6'])
                 self.assertEqual(ocr.call_args.kwargs['input'], b'enlarged image')
                 self.assertIsNone(linux_cosmic_authorization.capture_button(monitor, screenshot, 'Authenticate', {}))
-            self.assertEqual(scale.call_args_list, [call(screenshot)]*3)
-            self.assertEqual(ocr.call_count, 5)
+            self.assertEqual(scale.call_args_list, [call(screenshot, trim=True), call(screenshot, trim=False)]*2
+                             + [call(screenshot, trim=True)])
+            self.assertEqual(ocr.call_count, 7)
+
+    def test_cosmic_cancel_ocr_fallback_restores_the_trimmed_origin(self):
+        import linux_cosmic_authorization
+
+        with tempfile.TemporaryDirectory() as temporary:
+            screenshot = Path(temporary)/'dialog.png'
+            screenshot.write_bytes(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+                                   b'\x00\x00\x05\x00\x00\x00\x03\x20')
+            with patch.object(linux_cosmic_authorization, 'capture_screen', return_value='x11'), \
+                    patch.object(linux_cosmic_authorization, 'enlarged_grayscale',
+                                 return_value=(b'cropped image', (100, 200, 800, 500))) as scale, \
+                    patch.object(linux_cosmic_authorization, 'recognize_button',
+                                 side_effect=[(None, True), ((80, 40), True)]) as recognize:
+                self.assertEqual(linux_cosmic_authorization.capture_button(
+                    MagicMock(), screenshot, 'Cancel', {}), ((140, 220), 'x11'))
+            scale.assert_called_once_with(screenshot, trim=True)
+            recognize.assert_called_with('-', 'Cancel', 1600, 1000, page_mode=11, image=b'cropped image')
 
     def test_compatibility_authorization_reads_quoted_guest_paths(self):
         import linux_cosmic_authorization
