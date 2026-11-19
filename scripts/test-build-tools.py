@@ -633,8 +633,8 @@ class UbuntuVmTests(unittest.TestCase):
 
             def run(command, **kwargs):
                 keys.append(command)
-                if command[1] == '-':
-                    self.assertEqual(kwargs['input'], 'type --clearmodifiers --delay 10 test123\n')
+                if command[1] == 'type':
+                    self.assertEqual(kwargs['input'], 'test123')
 
             with patch.object(linux_gui, 'process', side_effect=process), \
                     patch.object(linux_gui, 'tun_permissions',
@@ -648,7 +648,8 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertEqual([command[1:] for command in keys], [
                 ['windowactivate', '--sync', '42'],
                 ['key', 'Escape'], ['windowactivate', '--sync', '43'],
-                ['windowfocus', '--sync', '43'], ['-'], ['key', 'Return'],
+                ['windowfocus', '--sync', '43'],
+                ['type', '--clearmodifiers', '--delay', '10', '--file', '-'], ['key', 'Return'],
             ])
             self.assertEqual(locate.call_count, 5)
 
@@ -3019,6 +3020,7 @@ class BuildTests(unittest.TestCase):
                     patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'fedora'}), \
                     patch.object(linux_native_guest, 'distribution', return_value='fedora'), \
                     patch.object(linux_native_guest, 'install_dependencies') as install, \
+                    patch.object(linux_native_guest, 'privileged') as privileged, \
                     patch.object(linux_native_guest, 'install_appindicator'), \
                     patch.object(Path, 'is_file', return_value=False), \
                     patch.object(linux_gui, 'process', return_value=agent) as launches, \
@@ -3041,6 +3043,7 @@ class BuildTests(unittest.TestCase):
                 linux_native_guest.prepare()
                 self.assertEqual(linux_gui.authentication(), {'accept_granted_helper': True})
             self.assertIn('xfce-polkit', install.call_args.args[0])
+            privileged.assert_called_once_with('upgrade', 'liblastlog2', 'pam')
             self.assertNotIn('mate-polkit', install.call_args.args[0])
             self.assertEqual(launches.call_args.args[0], ['/usr/libexec/xfce-polkit'])
             public_log = (directory/'authentication.log').read_text()
@@ -3200,8 +3203,15 @@ class BuildTests(unittest.TestCase):
                     (kwargs['cwd']/'report/gui.json').write_text('{"status":"failed"}')
                     raise failure
                 elif command[:2] == ['sudo', 'journalctl']:
-                    self.assertIn(user+'-desktop.service', command)
-                    kwargs['stdout'].write('session start diagnostics\n')
+                    if '-g' in command:
+                        self.assertIn('avc:.*(polkit|chkpwd|shadow|faillock)', command)
+                        kwargs['stdout'].write('audit diagnostics\n')
+                    else:
+                        self.assertIn(user+'-desktop.service', command)
+                        kwargs['stdout'].write('session start diagnostics\n')
+                elif command[:2] == ['rpm', '-q']:
+                    self.assertIn('liblastlog2', command)
+                    kwargs['stdout'].write('package version diagnostics\n')
                 return subprocess.CompletedProcess(command, 0)
 
             with patch.object(linux_ci, 'require_actions'), \
@@ -3216,7 +3226,8 @@ class BuildTests(unittest.TestCase):
             commands.assert_any_call(['sudo', 'rm', '-f', rule], check=False)
             commands.assert_any_call(['sudo', 'userdel', '--remove', user], check=False)
             self.assertEqual(json.loads((saved/'desktop/gui.json').read_text()), {'status': 'failed'})
-            self.assertEqual((saved/'desktop-session-journal.log').read_text(), 'session start diagnostics\n')
+            self.assertEqual((saved/'desktop-session-journal.log').read_text(),
+                             'session start diagnostics\npackage version diagnostics\naudit diagnostics\n')
 
     def test_linux_gui_session_keeps_pam_identity_but_not_runner_credentials(self):
         import linux_gui
@@ -8253,7 +8264,7 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             header = 'left\ttop\twidth\theight\tconf\ttext\n'
             incomplete = (header+''.join(f'20\t10\t10\t10\t90\t{word}\n' for word in words)).encode()
             enlarged = (header+''.join(f'80\t40\t20\t20\t90\t{word}\n'
-                                       for word in (*words, 'Authenticate'))).encode()
+                                       for word in (*words, 'Password'))).encode()
             transform = (b'enlarged image', (0, 0, 1280, 800))
             monitor = MagicMock()
             with patch.object(linux_cosmic_authorization, 'capture_screen', return_value='x11'), \
@@ -8263,12 +8274,12 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
                     patch.object(linux_cosmic_authorization.subprocess, 'check_output',
                                  side_effect=[incomplete, incomplete, enlarged, incomplete, incomplete,
                                               incomplete, incomplete]) as ocr:
-                self.assertEqual(linux_cosmic_authorization.capture_button(
-                    monitor, screenshot, 'Authenticate', {}), ((45, 25), 'x11'))
-                self.assertIsNone(linux_cosmic_authorization.capture_button(monitor, screenshot, 'Authenticate', {}))
+                self.assertEqual(linux_cosmic_authorization.capture_control(
+                    monitor, screenshot, 'Password', {}), ((45, 25), 'x11'))
+                self.assertIsNone(linux_cosmic_authorization.capture_control(monitor, screenshot, 'Password', {}))
                 self.assertEqual(ocr.call_args.args[0][:5], ['tesseract', '-', 'stdout', '--psm', '6'])
                 self.assertEqual(ocr.call_args.kwargs['input'], b'enlarged image')
-                self.assertIsNone(linux_cosmic_authorization.capture_button(monitor, screenshot, 'Authenticate', {}))
+                self.assertIsNone(linux_cosmic_authorization.capture_control(monitor, screenshot, 'Password', {}))
             self.assertEqual(scale.call_args_list, [call(screenshot, trim=True), call(screenshot, trim=False)]*2
                              + [call(screenshot, trim=True)])
             self.assertEqual(ocr.call_count, 7)
@@ -8283,12 +8294,31 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             with patch.object(linux_cosmic_authorization, 'capture_screen', return_value='x11'), \
                     patch.object(linux_cosmic_authorization, 'enlarged_grayscale',
                                  return_value=(b'cropped image', (100, 200, 800, 500))) as scale, \
-                    patch.object(linux_cosmic_authorization, 'recognize_button',
+                    patch.object(linux_cosmic_authorization, 'recognize_control',
                                  side_effect=[(None, True), ((80, 40), True)]) as recognize:
-                self.assertEqual(linux_cosmic_authorization.capture_button(
+                self.assertEqual(linux_cosmic_authorization.capture_control(
                     MagicMock(), screenshot, 'Cancel', {}), ((140, 220), 'x11'))
             scale.assert_called_once_with(screenshot, trim=True)
             recognize.assert_called_with('-', 'Cancel', 1600, 1000, page_mode=11, image=b'cropped image')
+
+    def test_cosmic_authorization_accepts_through_the_visible_password_field(self):
+        import linux_cosmic_authorization
+
+        monitor = MagicMock()
+        screenshot = Path('/fixture/dialog.png')
+        password = 'a'*48
+        with patch.object(linux_cosmic_authorization, 'capture_control',
+                          return_value=((120, 150), 'qmp')) as capture, \
+                patch.object(linux_cosmic_authorization.time, 'sleep'):
+            linux_cosmic_authorization.answer_dialog(monitor, screenshot, {}, password)
+        capture.assert_called_once_with(monitor, screenshot, 'Password', {})
+        commands = [command.args for command in monitor.execute.call_args_list]
+        self.assertEqual([command[0] for command in commands[:3]], ['input-send-event']*3)
+        self.assertEqual(len(commands), 52)
+        self.assertTrue(all(command[1]['keys'][0]['data'] == 'a' for command in commands[3:-1]))
+        self.assertEqual(commands[-1], ('send-key', {
+            'keys': [{'type': 'qcode', 'data': 'ret'}], 'hold-time': 30,
+        }))
 
     def test_compatibility_authorization_reads_quoted_guest_paths(self):
         import linux_cosmic_authorization

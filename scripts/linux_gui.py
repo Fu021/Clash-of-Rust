@@ -138,8 +138,8 @@ def verify_authorization(log, password_file, locate, *, respond=None, restart_ag
                                 if not password.isascii() or not password.isalnum():
                                     raise ValueError('Invalid disposable account password')
                                 time.sleep(.3)
-                                run(['xdotool', '-'], text=True, timeout=15,
-                                    input=f'type --clearmodifiers --delay 10 {password}\n',
+                                run(['xdotool', 'type', '--clearmodifiers', '--delay', '10', '--file', '-'],
+                                    text=True, timeout=15, input=password,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                                 run(['xdotool', 'key', 'Return'], timeout=15)
                             else:
@@ -725,6 +725,15 @@ def installed_tests():
                                         '--unit', 'systemd-logind.service', '--unit', 'polkit.service',
                                         '--unit', 'polkit-agent-helper@*.service'],
                                        stdout=log, stderr=subprocess.STDOUT, timeout=15)
+                    if platform.freedesktop_os_release().get('ID') == 'fedora':
+                        with contextlib.suppress(OSError, subprocess.SubprocessError):
+                            subprocess.run(['rpm', '-q', 'pam', 'pam-libs', 'liblastlog2',
+                                            'polkit', 'polkit-libs', 'selinux-policy-targeted'],
+                                           stdout=log, stderr=subprocess.STDOUT, timeout=15)
+                        with contextlib.suppress(OSError, subprocess.SubprocessError):
+                            subprocess.run(['sudo', 'journalctl', '--boot', '--no-pager', '-n', '40',
+                                            '-g', 'avc:.*(polkit|chkpwd|shadow|faillock)'],
+                                           stdout=log, stderr=subprocess.STDOUT, timeout=15)
                 raise
         finally:
             if rule:

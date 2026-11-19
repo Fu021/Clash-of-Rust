@@ -10,7 +10,7 @@ import time
 from linux_vm_monitor import Monitor, capture_screen
 
 
-def dialog_button(tsv, label, width, height):
+def dialog_control(tsv, label, width, height):
     words = list(csv.DictReader(tsv.splitlines(), delimiter='\t'))
     visible = {word.get('text', '').casefold() for word in words}
     if not {'authentication', 'tun', 'clash', 'rust'} <= visible:
@@ -18,11 +18,12 @@ def dialog_button(tsv, label, width, height):
     matches = [word for word in words if word.get('text', '').casefold() == label.casefold()]
     if len(matches) != 1:
         return None
-    button = matches[0]
+    control = matches[0]
+    minimum_confidence = 40 if label == 'Password' else 70
     try:
-        if float(button['conf']) < 70:
+        if float(control['conf']) < minimum_confidence:
             return None
-        left, top, span, depth = (int(button[key]) for key in ('left', 'top', 'width', 'height'))
+        left, top, span, depth = (int(control[key]) for key in ('left', 'top', 'width', 'height'))
     except (KeyError, ValueError):
         return None
     if not (0 <= left < left+span <= width and 0 <= top < top+depth <= height):
@@ -30,7 +31,7 @@ def dialog_button(tsv, label, width, height):
     return left + span//2, top + depth//2
 
 
-def recognize_button(source, label, width, height, *, page_mode, image=None):
+def recognize_control(source, label, width, height, *, page_mode, image=None):
     try:
         tsv = subprocess.check_output(
             ['tesseract', source, 'stdout', '--psm', str(page_mode), '-l', 'eng', 'tsv'],
@@ -38,7 +39,7 @@ def recognize_button(source, label, width, height, *, page_mode, image=None):
             env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
     except subprocess.TimeoutExpired:
         return None, False
-    return dialog_button(tsv.decode(), label, width, height), True
+    return dialog_control(tsv.decode(), label, width, height), True
 
 
 def enlarged_grayscale(screenshot, *, trim):
@@ -57,7 +58,7 @@ def enlarged_grayscale(screenshot, *, trim):
     return data[16:], (left, top, right-left, bottom-top)
 
 
-def capture_button(monitor, screenshot, label, environment):
+def capture_control(monitor, screenshot, label, environment):
     method = capture_screen(monitor, screenshot, environment)
     with screenshot.open('rb') as stream:
         data = stream.read(24)
@@ -66,24 +67,24 @@ def capture_button(monitor, screenshot, label, environment):
     width, height = struct.unpack('>II', data[16:24])
     if not (800 <= width <= 4096 and 450 <= height <= 4096):
         return None
-    button, complete = recognize_button(screenshot, label, width, height, page_mode=11)
+    control, complete = recognize_control(screenshot, label, width, height, page_mode=11)
     for trim, page_mode in ((True, 11), (False, 6)):
-        if button is not None or not complete:
+        if control is not None or not complete:
             break
         try:
             image, (left, top, crop_width, crop_height) = enlarged_grayscale(screenshot, trim=trim)
         except subprocess.TimeoutExpired:
             return None
-        scaled, complete = recognize_button('-', label, crop_width*2, crop_height*2,
-                                           page_mode=page_mode, image=image)
+        scaled, complete = recognize_control('-', label, crop_width*2, crop_height*2,
+                                             page_mode=page_mode, image=image)
         if scaled is not None:
-            button = left + scaled[0]//2, top + scaled[1]//2
-    if button is None:
+            control = left + scaled[0]//2, top + scaled[1]//2
+    if control is None:
         return None
     if method == 'x11':
-        return button, method
+        return control, method
     return (tuple(round(coordinate * 0x7fff / (limit-1))
-                  for coordinate, limit in zip(button, (width, height))), method)
+                  for coordinate, limit in zip(control, (width, height))), method)
 
 
 def click(monitor, point):
@@ -105,23 +106,24 @@ def type_password(monitor, password):
 
 
 def answer_dialog(monitor, screenshot, environment, password=None, timeout=90):
-    label = 'Authenticate' if password is not None else 'Cancel'
+    label = 'Password' if password is not None else 'Cancel'
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        target = capture_button(monitor, screenshot, label, environment)
+        target = capture_control(monitor, screenshot, label, environment)
         if target is None:
             time.sleep(1)
             continue
         point, method = target
-        if password is not None:
-            type_password(monitor, password)
         if method == 'x11':
             subprocess.run(['xdotool', 'mousemove', str(point[0]), str(point[1]), 'click', '1'],
                            env=environment, check=True, timeout=10)
         else:
             click(monitor, point)
+        if password is not None:
+            type_password(monitor, password)
+            monitor.execute('send-key', {'keys': [{'type': 'qcode', 'data': 'ret'}], 'hold-time': 30})
         return
-    raise TimeoutError(f'COSMIC authorization did not show the {label} button')
+    raise TimeoutError(f'COSMIC authorization did not show the {label} control')
 
 
 def verify_dialogs(guest, report):
