@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from build_support import ROOT, run, sha256, write_json
+from build_support import ROOT, run, sha256, validate_version, write_json
 
 RPM_REQUIREMENTS = (
     'glibc', 'libgcc_s.so.1()(64bit)', 'libstdc++.so.6()(64bit)',
@@ -23,11 +23,8 @@ RPM_REQUIREMENTS = (
 
 
 def native_version(version, separator):
-    match = re.fullmatch(r'(\d+\.\d+\.\d+)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?', version)
-    if not match:
-        raise ValueError(f'Unsupported native package version: {version!r}')
-    base, prerelease = match.groups()
-    return base + (separator + prerelease if prerelease else '')
+    base, _, prerelease = validate_version(version).partition('-')
+    return base + (separator + prerelease.replace('-', '+') if prerelease else '')
 
 
 def build_rpm(deb, version, output):
@@ -74,21 +71,23 @@ def build_rpm(deb, version, output):
 def build_arch(deb, version, output, expected_digest):
     if sha256(deb) != expected_digest:
         raise ValueError('Arch recipe source digest mismatch')
+    pkgver = native_version(version, 'pre.')
     with tempfile.TemporaryDirectory(prefix='cor-arch-') as temporary:
         directory = Path(temporary)
         shutil.copyfile(deb, directory/'candidate.deb')
         recipe = (ROOT/'installer/arch/PKGBUILD').read_text()
-        recipe = recipe.replace('@VERSION@', native_version(version, ''))
+        recipe = recipe.replace('@VERSION@', pkgver)
         recipe = recipe.replace('@SHA256@', expected_digest)
         (directory/'PKGBUILD').write_text(recipe)
         info = directory/'.SRCINFO'
         with info.open('w') as stream:
-            run(['makepkg', '--printsrcinfo'], cwd=directory, stdout=stream)
+            subprocess.run(['makepkg', '--printsrcinfo'], cwd=directory, stdout=stream, check=True)
         values = {line.strip() for line in info.read_text().splitlines()}
         if not {'pkgname = clash-of-rust', 'arch = x86_64', 'source = candidate.deb',
-                f'pkgver = {native_version(version, "")}', f'sha256sums = {expected_digest}'} <= values:
+                f'pkgver = {pkgver}', f'sha256sums = {expected_digest}'} <= values:
             raise ValueError('Arch recipe metadata differs from the verified input')
-        run(['makepkg', '--cleanbuild', '--noconfirm', '--nodeps'], cwd=directory)
+        subprocess.run(['makepkg', '--cleanbuild', '--noconfirm', '--nodeps'],
+                       cwd=directory, check=True)
         packages = list(directory.glob('*.pkg.tar.zst'))
         if len(packages) != 1:
             raise ValueError('Expected a single native Arch package')

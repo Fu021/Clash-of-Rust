@@ -94,6 +94,18 @@ _cosmic_startup_host_spec.loader.exec_module(cosmic_startup_host)
 
 
 class TunDnsFixtureTests(unittest.TestCase):
+    def test_fixture_uses_the_guest_system_ca_bundle(self):
+        debian = '/etc/ssl/certs/ca-certificates.crt'
+        fedora = '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'
+        suse = '/etc/ssl/ca-bundle.pem'
+        for choices, expected in (((debian, fedora), debian), ((fedora,), fedora), ((suse,), suse)):
+            with self.subTest(choices=choices), \
+                    patch.object(Path, 'is_file', lambda path: str(path) in choices):
+                self.assertEqual(linux_tun_test.system_ca_bundle(), Path(expected))
+        with patch.object(Path, 'is_file', return_value=False):
+            with self.assertRaisesRegex(RuntimeError, 'no recognized system CA bundle'):
+                linux_tun_test.system_ca_bundle()
+
     def query(self, name, kind):
         labels = b''.join(bytes([len(label)]) + label.encode('ascii') for label in name.split('.'))
         return struct.pack('!HHHHHH', 1, 0x0100, 1, 0, 0, 0) + labels + b'\0' + struct.pack('!HH', kind, 1)
@@ -6622,7 +6634,9 @@ class CompatibilityTests(unittest.TestCase):
         from linux_native_package import native_version, verify_rpm
 
         self.assertEqual(native_version('0.7.3-fix.2.install', '~'), '0.7.3~fix.2.install')
-        self.assertEqual(native_version('0.7.3-fix.2.install', ''), '0.7.3fix.2.install')
+        self.assertEqual(native_version('0.7.3-fix.2.install', 'pre.'), '0.7.3pre.fix.2.install')
+        self.assertEqual(native_version('0.7.3-dev.1.tui-and-lists', '~'), '0.7.3~dev.1.tui+and+lists')
+        self.assertEqual(native_version('0.7.3-1', 'pre.'), '0.7.3pre.1')
         self.assertEqual(native_version('0.7.3', '~'), '0.7.3')
         with self.assertRaises(ValueError):
             native_version('0.7.3-../injected', '~')
@@ -6643,6 +6657,34 @@ class CompatibilityTests(unittest.TestCase):
             binary.write_bytes(b'not the tested RPM')
             with self.assertRaisesRegex(ValueError, 'differs'):
                 verify_rpm(root, source)
+
+    def test_arch_build_runs_makepkg_from_the_staged_recipe_directory(self):
+        from linux_native_package import build_arch
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            deb = root/'verified.deb'
+            deb.write_bytes(b'candidate')
+            digest = build.sha256(deb)
+            package_name = 'clash-of-rust-0.7.3pre.dev.1.tui+and+lists-1-x86_64.pkg.tar.zst'
+
+            def makepkg(command, *, cwd, check, stdout=None):
+                self.assertNotEqual(cwd, build.ROOT)
+                self.assertTrue(check)
+                self.assertEqual(build.sha256(cwd/'candidate.deb'), digest)
+                self.assertIn('pkgver=0.7.3pre.dev.1.tui+and+lists', (cwd/'PKGBUILD').read_text())
+                if command == ['makepkg', '--printsrcinfo']:
+                    stdout.write('pkgname = clash-of-rust\narch = x86_64\nsource = candidate.deb\n'
+                                 f'pkgver = 0.7.3pre.dev.1.tui+and+lists\nsha256sums = {digest}\n')
+                else:
+                    self.assertEqual(command, ['makepkg', '--cleanbuild', '--noconfirm', '--nodeps'])
+                    (cwd/package_name).write_bytes(b'arch package')
+
+            with patch.object(subprocess, 'run', side_effect=makepkg) as commands:
+                result = build_arch(deb, '0.7.3-dev.1.tui-and-lists', root/'output', digest)
+            self.assertEqual(commands.call_count, 2)
+            self.assertEqual(result, root/'output'/package_name)
+            self.assertEqual(result.read_bytes(), b'arch package')
 
     def client(self, suite, run_changes=None, jobs=None, receipt_changes=None,
                bad_digest=False, expired=False, missing_input=False):

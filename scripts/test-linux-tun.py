@@ -131,6 +131,15 @@ def create_uplink_certificates(directory, addresses):
     return ca
 
 
+def system_ca_bundle():
+    for location in ('/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt',
+                     '/etc/ssl/ca-bundle.pem', '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'):
+        path = Path(location)
+        if path.is_file():
+            return path
+    raise RuntimeError('The disposable guest has no recognized system CA bundle')
+
+
 @contextlib.contextmanager
 def isolated_uplink():
     """Real dual-stack peer, encrypted DNS and node, outside the client's TUN.
@@ -149,7 +158,7 @@ def isolated_uplink():
         context = ssl.create_default_context(cafile=str(ca))
         root_der = ssl.PEM_cert_to_DER_cert(certificate.decode('ascii'))
         assert root_der in context.get_ca_certs(binary_form=True), 'The fixture root is not a valid CA'
-        system_bundle = Path('/etc/ssl/certs/ca-certificates.crt')
+        system_bundle = system_ca_bundle()
         trust = directory/'trust.pem'
         # Keep the isolated root before the distribution's certificate entries.
         trust.write_bytes(certificate+b'\n'+system_bundle.read_bytes())
@@ -218,7 +227,7 @@ def isolated_uplink():
                         except (OSError, subprocess.TimeoutExpired) as error:
                             print('Fixture TLS diagnostic failed:', error, flush=True)
                         raise
-                    yield
+                    yield system_bundle
                 finally:
                     process.terminate()
                     process.wait(timeout=5)
@@ -233,7 +242,7 @@ def isolated_uplink():
                 process.kill()
                 process.wait()
             subprocess.run(['ip', 'netns', 'delete', namespace], check=False)
-            run(['umount', '/etc/ssl/certs/ca-certificates.crt'])
+            run(['umount', system_bundle])
 
 
 def tun_device_counters(device):
@@ -752,7 +761,7 @@ def main():
         os.setuid(user.pw_uid)
 
     if args.inside_namespace:
-        with isolated_resolved(), isolated_uplink():
+        with isolated_resolved(), isolated_uplink() as ca_bundle:
             if args.with_user_tests:
                 root_cli_smoke()
                 account_cli_matrix()
@@ -766,7 +775,7 @@ def main():
                      '--ignored', '--test-threads=1', '--nocapture'],
                     env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
                              MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
-                             GSETTINGS_BACKEND='memory', SSL_CERT_FILE='/etc/ssl/certs/ca-certificates.crt',
+                             GSETTINGS_BACKEND='memory', SSL_CERT_FILE=str(ca_bundle),
                              SSL_CERT_DIR='/etc/ssl/certs', **benchmark_environment),
                     preexec_fn=ordinary_user, timeout=360 if args.proxy_benchmark else 240)
         return

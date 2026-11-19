@@ -344,9 +344,9 @@ def native_upgrade_and_uninstall(deb):
     from linux_native_package import build_arch, build_rpm, native_version, verify_rpm
 
     distro = distribution()
-    separator = '~' if distro in RPM else ''
-    for old, new in (('0.7.3-fix.2.install', '0.7.3-fix.10.install'),
-                     ('0.7.3-fix.10.install', '0.7.3')):
+    separator = '~' if distro in RPM else 'pre.'
+    for old, new in (('0.7.3-fix.2.native-install', '0.7.3-fix.10.native-install'),
+                     ('0.7.3-fix.10.native-install', '0.7.3'), ('0.7.3-1', '0.7.3')):
         verify_upgrade_order(native_version(old, separator)+'-1', native_version(new, separator)+'-1')
     report = ROOT/'target/linux-report'/f'{distro}-lifecycle'
     report.mkdir(parents=True, exist_ok=True)

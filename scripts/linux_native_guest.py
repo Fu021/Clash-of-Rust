@@ -77,7 +77,8 @@ def prepare():
     common = ('git', 'gdm', 'gnome-session', 'gnome-shell',
               'gsettings-desktop-schemas', 'polkit', 'mate-polkit', 'binutils', 'sudo')
     if distro == 'fedora':
-        packages = ('xorg-x11-server-Xvfb', 'xorg-x11-server-Xwayland', 'xprop', 'xdpyinfo',
+        packages = ('dbus-daemon', 'openssl', 'xorg-x11-server-Xvfb',
+                    'xorg-x11-server-Xwayland', 'xprop', 'xdpyinfo',
                     'xwininfo', 'xdotool', 'wmctrl', 'openbox', 'gtk3', 'iproute', 'systemd-resolved',
                     'libcap', 'rpm-build', 'glib2', 'glib-networking', 'google-noto-sans-cjk-fonts')
     elif distro in RPM:
