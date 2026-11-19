@@ -93,7 +93,7 @@ def verify_dialogs(guest, report):
     from linux_desktop_login import HOME, USER
 
     def read(path):
-        command = shlex.join(['sudo', '-u', USER, '--', 'cat', HOME/path])
+        command = shlex.join(['sudo', '-u', USER, '--', 'cat', str(HOME/path)])
         return guest.output(f'{command} 2>/dev/null || true', timeout=15).strip()
 
     monitor = Monitor(guest.monitor_path)

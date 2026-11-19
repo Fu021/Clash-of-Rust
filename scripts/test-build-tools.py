@@ -380,7 +380,7 @@ class UbuntuVmTests(unittest.TestCase):
                 self.assertIn('cloud-init status --wait --long', command.call_args.args[0])
                 self.assertEqual((Path(temporary)/'official-image-cloud-init-status.txt').read_text(), text)
 
-    def test_arm_cloud_vm_adds_a_gpu_only_for_desktop_validation(self):
+    def test_arm_cloud_vm_adds_desktop_resources_only_for_desktop_validation(self):
         for suite, release, needs_gpu in (('ubuntu', '20.04', False), ('debian', '13', True)):
             with self.subTest(suite=suite), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
@@ -392,6 +392,7 @@ class UbuntuVmTests(unittest.TestCase):
                 with patch.object(linux_ci, 'REPORT', directory), \
                         patch.object(linux_ci, 'host_arch', return_value='arm64'), \
                         patch.object(linux_ci.os, 'access', return_value=False), \
+                        patch.object(linux_ci.os, 'sched_getaffinity', return_value={0, 1, 2, 3}), \
                         patch.object(linux_ci, 'run', side_effect=create_key), \
                         patch.object(linux_ci.socket, 'socket') as socket, \
                         patch.object(linux_ci.VmGuest, 'cloud_disk', return_value=directory/'seed.img'), \
@@ -407,6 +408,7 @@ class UbuntuVmTests(unittest.TestCase):
                 self.assertEqual(command[:3], ['qemu-system-aarch64', '-machine', 'virt,accel=tcg'])
                 self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
                 self.assertEqual('virtio-gpu-pci' in command, needs_gpu)
+                self.assertEqual(command[command.index('-smp')+1], '4' if needs_gpu else '2')
 
     def test_mint_automatic_boot_preserves_the_image_uuid_and_rejects_non_casper_media(self):
         source = ('menuentry "Start Linux Mint" {\n'
@@ -2911,6 +2913,57 @@ class BuildTests(unittest.TestCase):
             self.assertFalse(linux_gui.notifier_host_ready())
             self.assertTrue(linux_gui.notifier_host_ready())
         self.assertEqual(query.call_args.args[-1], 'IsStatusNotifierHostRegistered')
+
+    def test_linux_gui_waits_for_openbox_and_gnome_before_their_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary)
+            environment = dict.fromkeys(('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+                                         'XDG_CACHE_HOME'), '/tmp/test home')
+            environment.update(COR_GUI_REPORT=temporary, XDG_CURRENT_DESKTOP='GNOME',
+                               DBUS_SESSION_BUS_ADDRESS='unix:path=/tmp/test-bus', XDG_RUNTIME_DIR=temporary)
+            display, manager, shell = (MagicMock(poll=MagicMock(return_value=None)) for _ in range(3))
+            with patch.dict(os.environ, environment), \
+                    patch.object(linux_gui.os, 'geteuid', return_value=1001), \
+                    patch.object(linux_gui, 'require_logind_session'), \
+                    patch.object(linux_gui, 'process', side_effect=[nullcontext(display),
+                                 nullcontext(manager), nullcontext(shell)]) as launch, \
+                    patch.object(linux_gui, 'dbus') as dbus, \
+                    patch.object(linux_gui.subprocess, 'run', side_effect=[
+                                 SimpleNamespace(returncode=0), SimpleNamespace(returncode=1),
+                                 SimpleNamespace(returncode=0)]) as probe, \
+                    patch.object(linux_gui.time, 'sleep'), \
+                    patch.object(linux_gui, 'authentication') as authorize, \
+                    patch.object(linux_gui, 'appindicator_extension', return_value='fixture'), \
+                    patch.object(linux_gui, 'run'), \
+                    patch.object(linux_gui, 'output', side_effect=[
+                                 "['fixture']", 'GNOME Shell 48.7', '--headless --wayland-display']), \
+                    patch.object(linux_gui, 'evaluate', side_effect=[False, True]) as evaluate, \
+                    patch.object(linux_gui, 'wayland_sockets', side_effect=[set(), {'cor-wayland'}]), \
+                    patch.object(linux_gui, 'notifier_host_ready', side_effect=[False, True]) as notifier, \
+                    patch.object(linux_gui, 'gui') as gui:
+                def verify_authorization():
+                    self.assertEqual([entry.args[0] for entry in probe.call_args_list],
+                                     [['xdpyinfo'], ['wmctrl', '-m'], ['wmctrl', '-m']])
+                    return {'graphical_agent': True}
+
+                def verify_gui(backend, destination, **kwargs):
+                    self.assertEqual(evaluate.call_count, 2)
+                    self.assertEqual(notifier.call_count, 2)
+                    self.assertEqual(os.environ['WAYLAND_DISPLAY'], 'cor-wayland')
+                    return {'tray': True}
+
+                authorize.side_effect = verify_authorization
+                gui.side_effect = verify_gui
+                linux_gui.session()
+            self.assertIn('-noreset', launch.call_args_list[0].args[0])
+            self.assertEqual(dbus.call_args.args[:3],
+                             ('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                              'org.freedesktop.DBus.UpdateActivationEnvironment'))
+            self.assertEqual(ast.literal_eval(dbus.call_args.args[3])['DISPLAY'], ':91')
+            self.assertEqual(json.loads((report/'gui.json').read_text())['checks'],
+                             {'login_session': True, 'authorization': {'graphical_agent': True},
+                              'gnome_startup_complete': True, 'tray_host_ready': True,
+                              'x11': {'tray': True}, 'wayland': {'tray': True}})
 
     def test_linux_gui_waits_for_the_owner_to_adopt_its_registered_tray(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -8026,6 +8079,25 @@ class AptCacheTests(unittest.TestCase):
 
 
 class CosmicStartupInvestigationTests(unittest.TestCase):
+    def test_compatibility_authorization_reads_quoted_guest_paths(self):
+        import linux_cosmic_authorization
+        import linux_desktop_login
+
+        display = SimpleNamespace(environment={})
+        guest = SimpleNamespace(monitor_path=Path('/fixture/qmp.sock'), display=display,
+                                output=MagicMock(side_effect=['', 'cancel', '', 'accept', 'a'*48]))
+        report = Path('/fixture/reports')
+        with patch.object(linux_cosmic_authorization, 'Monitor') as monitor, \
+                patch.object(linux_cosmic_authorization, 'answer_dialog') as answer, \
+                patch.object(linux_desktop_login, 'HOME', Path('/home/test fixture')):
+            linux_cosmic_authorization.verify_dialogs(guest, report)
+        self.assertIn("'/home/test fixture/cosmic-authorization.json'", guest.output.call_args_list[0].args[0])
+        self.assertEqual(answer.call_args_list, [
+            call(monitor.return_value, report/'cosmic-authorization-cancel.png', {}, None),
+            call(monitor.return_value, report/'cosmic-authorization-accept.png', {}, 'a'*48),
+        ])
+        monitor.return_value.close.assert_called_once()
+
     def test_diagnostic_workflow_cannot_restore_or_save_build_caches(self):
         workflow = (build.ROOT/'.github/workflows/cosmic-startup-investigation.yml').read_text()
         self.assertNotRegex(workflow, r'uses:\s*(?:actions/cache|Swatinem/rust-cache)')

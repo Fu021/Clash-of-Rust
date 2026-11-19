@@ -415,6 +415,8 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
                 return False
         # A visible window can precede asynchronous engine initialization.
         wait_for('GUI control endpoint did not become ready', gui_owner_ready)
+        item = wait_for('GUI tray did not become ready and register with the desktop',
+                        lambda: ready_tray(data, owner.pid))
         cli('profile', 'add', 'GUI fixture', str(fixture))
         cli('start')
         cli('mode', 'global')
@@ -433,8 +435,6 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
             terminal.wait('GUI fixture')
             if core_processes() != processes:
                 raise RuntimeError('TUI did not share the existing GUI-owned core')
-        item = wait_for('GUI tray did not become ready and register with the desktop',
-                        lambda: ready_tray(data, owner.pid))
         # One graceful close and one renderer loss exercise different lifecycle
         # paths without repeating the proxy/TUN traffic suite.
         for crash in (False, True):
@@ -509,15 +509,25 @@ def session():
         result['checks']['login_session'] = True
         with (report/'desktop.log').open('w') as log, contextlib.ExitStack() as stack:
             display = stack.enter_context(process(['Xvfb', ':91', '-screen', '0', '1280x900x24',
-                                                   '-nolisten', 'tcp'], log))
+                                                   '-nolisten', 'tcp', '-noreset'], log))
             os.environ['DISPLAY'] = ':91'
             wait_for('X11 display did not start',
                      lambda: subprocess.run(['xdpyinfo'], stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL).returncode == 0)
-            run(['dbus-update-activation-environment', 'DBUS_SESSION_BUS_ADDRESS',
-                 'DISPLAY', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
-                 'XDG_CURRENT_DESKTOP'])
-            stack.enter_context(process(['openbox'], log))
+            activation = {name: os.environ[name] for name in
+                          ('DBUS_SESSION_BUS_ADDRESS', 'DISPLAY', 'HOME', 'XDG_CONFIG_HOME',
+                           'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_CURRENT_DESKTOP')}
+            dbus('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                 'org.freedesktop.DBus.UpdateActivationEnvironment', repr(activation))
+            window_manager = stack.enter_context(process(['openbox'], log))
+
+            def openbox_ready():
+                if window_manager.poll() is not None or display.poll() is not None:
+                    raise RuntimeError('Openbox or X11 exited before graphical authorization')
+                return subprocess.run(['wmctrl', '-m'], timeout=5, stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL).returncode == 0
+
+            wait_for('Openbox did not become ready', openbox_ready, timeout=15)
             result['checks']['authorization'] = authentication()
             extension = appindicator_extension()
             run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions', f"['{extension}']"])
@@ -544,7 +554,7 @@ def session():
                 if shell.poll() is not None or display.poll() is not None:
                     raise RuntimeError('Desktop compositor exited')
                 try:
-                    if not evaluate('true'):
+                    if evaluate('Main.layoutManager && Main.layoutManager._startingUp === false') is not True:
                         return False
                 except (subprocess.SubprocessError, ValueError, RuntimeError) as error:
                     last_probe_error = getattr(error, 'stderr', None) or str(error)
@@ -561,7 +571,8 @@ def session():
             try:
                 wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
             except TimeoutError as error:
-                raise RuntimeError(f'{error}; last DBus probe: {last_probe_error}') from error
+                raise RuntimeError(f'{error}; last DBus probe: {last_probe_error or "no error"}') from error
+            result['checks']['gnome_startup_complete'] = True
             wait_for('GNOME AppIndicator tray host did not become ready', notifier_host_ready, timeout=90)
             result['checks']['tray_host_ready'] = True
             from linux_native_guest import DISTROS

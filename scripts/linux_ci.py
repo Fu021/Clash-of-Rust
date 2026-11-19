@@ -385,12 +385,15 @@ class VmGuest:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
         architecture, kvm = self.architecture, self.kvm
-        print(f'{target.distribution} {target.release} VM: {label}, {architecture}, '
-              f'acceleration={"kvm" if kvm else "tcg"}', flush=True)
         machine = 'q35' if architecture == 'x86_64' else 'virt'
         cpu = 'host' if kvm else ('max' if architecture == 'x86_64' else 'cortex-a72')
+        cpus = 2
+        if architecture == 'aarch64' and not kvm and target.full_desktop:
+            cpus = min(4, len(os.sched_getaffinity(0)))
+        print(f'{target.distribution} {target.release} VM: {label}, {architecture}, '
+              f'acceleration={"kvm" if kvm else "tcg"}, vcpus={cpus}', flush=True)
         command = ['qemu-system-'+architecture, '-machine', machine+',accel='+('kvm' if kvm else 'tcg'),
-                   '-cpu', cpu, '-smp', '2', '-m', '4096', '-display', 'none',
+                   '-cpu', cpu, '-smp', str(cpus), '-m', '4096', '-display', 'none',
                    '-serial', 'stdio', '-monitor', 'none']
         drive = f'file={self.disk},format=qcow2,discard=unmap'
         if target.family == 'pop':
@@ -712,6 +715,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
     command = shlex.join(compatibility_command(guest.target, '/opt/cor-test-python/bin/python3'))
     started = time.monotonic()
     try:
+        print(f'{guest.target.distribution} {guest.target.release}: verifying installed candidate', flush=True)
         guest.remote(guest.environment + extra + command,
                      timeout=2400 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
         if guest.target.full_desktop:
@@ -722,6 +726,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             elif cosmic:
                 phases += ('prepare-wayland', 'wayland')
             for phase in phases:
+                print(f'{guest.target.distribution} {guest.target.release}: desktop {phase}', flush=True)
                 phase_started = time.monotonic()
                 try:
                     if not phase.startswith('prepare'):
@@ -741,6 +746,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                         time.monotonic() - phase_started, 3)
             operation = ('deb_upgrade_and_uninstall' if guest.target.package_format == 'deb'
                          else 'native_upgrade_and_uninstall')
+            print(f'{guest.target.distribution} {guest.target.release}: verifying upgrade and uninstall', flush=True)
             guest.python("from pathlib import Path; import runpy; "
                          f"runpy.run_path('scripts/test-release-package.py')['{operation}']"
                          "(next(Path('dist').glob('*.deb')).resolve())", timeout=900)
