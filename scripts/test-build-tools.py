@@ -486,24 +486,41 @@ class UbuntuVmTests(unittest.TestCase):
                         linux_mint_desktop.verify_system_proxy(49152)
                 self.assertEqual(cli.call_args_list, [call('proxy', 'system'), call('proxy', 'off')])
 
-    def test_mint_wayland_checks_use_the_real_session_and_its_socket(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            (directory/'background-login.json').write_text('{"boot_id":"previous"}')
-            with patch.object(linux_desktop_login, 'REPORT', directory), \
-                    patch.object(linux_desktop_login, 'boot_id', return_value='current'), \
-                    patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
-                    patch.object(linux_desktop_login, 'active_desktop', return_value=(
-                        {'session': 'c2'}, {'XDG_RUNTIME_DIR': '/run/user/1001'})) as active, \
-                    patch.object(linux_desktop_login, 'wayland_sockets', return_value={'wayland-0'}), \
-                    patch.object(linux_desktop_login, 'verify_cinnamon_gui', return_value={'tray': True}) as gui, \
-                    patch.object(linux_desktop_login, 'run'):
-                report = {}
-                linux_desktop_login.verify_wayland(report)
-            active.assert_called_once_with(1001, linux_desktop_login.CINNAMON, 'wayland')
-            gui.assert_called_once_with(
-                {'XDG_RUNTIME_DIR': '/run/user/1001', 'WAYLAND_DISPLAY': 'wayland-0'}, 'wayland')
-            self.assertEqual(report['gui'], {'tray': True})
+    def test_mint_native_gui_requires_a_fresh_session_with_no_running_core(self):
+        for backend, previous in (('x11', 'background-login'), ('wayland', 'x11')):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                (directory/f'{previous}.json').write_text('{"boot_id":"previous","success":true}')
+                environment = {'XDG_RUNTIME_DIR': '/run/user/1001'}
+                with patch.object(linux_desktop_login, 'REPORT', directory), \
+                        patch.object(linux_desktop_login, 'boot_id', return_value='previous') as boot, \
+                        patch.object(linux_desktop_login.pwd, 'getpwnam',
+                                     return_value=SimpleNamespace(pw_uid=1001)), \
+                        patch.object(linux_desktop_login, 'active_desktop', return_value=(
+                            {'session': 'c2'}, environment)) as active, \
+                        patch.object(linux_desktop_login, 'wayland_sockets', return_value={'wayland-0'}) as sockets, \
+                        patch.object(linux_desktop_login, 'core_processes', side_effect=[{400: 300}, {}]) as cores, \
+                        patch.object(linux_desktop_login, 'verify_cinnamon_gui', return_value={'tray': True}) as gui, \
+                        patch.object(linux_desktop_login, 'run'):
+                    with self.assertRaisesRegex(RuntimeError, 'requires a new boot'):
+                        linux_desktop_login.verify_native_cinnamon({}, backend)
+                    active.assert_not_called()
+                    boot.return_value = 'current'
+                    with self.assertRaisesRegex(RuntimeError, 'unexpected cores before GUI launch'):
+                        linux_desktop_login.verify_native_cinnamon({}, backend)
+                    gui.assert_not_called()
+                    report = {}
+                    linux_desktop_login.verify_native_cinnamon(report, backend)
+                self.assertEqual(active.call_args_list, [call(1001, linux_desktop_login.CINNAMON, backend)] * 2)
+                self.assertEqual(cores.call_args_list, [call(uid=1001)] * 2)
+                expected = {'XDG_RUNTIME_DIR': '/run/user/1001'}
+                if backend == 'wayland':
+                    expected['WAYLAND_DISPLAY'] = 'wayland-0'
+                    self.assertEqual(sockets.call_args_list, [call(Path('/run/user/1001'))] * 2)
+                else:
+                    sockets.assert_not_called()
+                gui.assert_called_once_with(expected, backend)
+                self.assertEqual(report['gui'], {'tray': True})
 
     def test_guest_report_preserves_only_complete_generated_archives(self):
         for result, body, state in ((0, b'', 'not_generated'),
@@ -583,7 +600,7 @@ class UbuntuVmTests(unittest.TestCase):
                     self.assertEqual(commands, expected)
                     self.assertEqual(guest.python.called, not failed)
 
-    def test_mint_package_runs_native_wayland_before_upgrade_and_uninstall(self):
+    def test_mint_package_runs_native_x11_and_wayland_before_upgrade_and_uninstall(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             archive = directory/'package.tar.gz'
@@ -592,11 +609,14 @@ class UbuntuVmTests(unittest.TestCase):
                 guest = MagicMock(target=linux_ci.target_for('linuxmint', '22.3', 'x64'),
                                   environment='guest ', architecture='x86_64', kvm=True)
                 linux_ci.verify_vm_package(guest, directory, 123)
-            self.assertEqual(guest.reboot.call_count, 3)
+            self.assertEqual(guest.reboot.call_count, 4)
             commands = [(method, args[0].split()[-1] if method == 'remote' else None)
                         for method, args, _ in guest.method_calls]
-            self.assertEqual(commands[-4:], [('remote', 'prepare-wayland'), ('reboot', None),
-                                             ('remote', 'wayland'), ('python', None)])
+            self.assertEqual(commands[-8:], [
+                ('remote', 'background-login'), ('remote', 'prepare-x11'), ('reboot', None),
+                ('remote', 'x11'), ('remote', 'prepare-wayland'), ('reboot', None),
+                ('remote', 'wayland'), ('python', None),
+            ])
 
     def test_vm_retries_frozen_apt_on_the_same_verified_public_image(self):
         with tempfile.TemporaryDirectory() as temporary:

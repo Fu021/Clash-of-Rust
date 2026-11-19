@@ -10,4 +10,6 @@ gh workflow run linuxmint-compatibility.yml --ref main -f run_id=<成功的CI编
 
 首次验收覆盖原生 Cinnamon X11 和 Wayland 的窗口、托盘和三端共享后台，另在 X11 核对真实 LightDM 登录自启动、旧入口迁移和图形授权。网络与安装包括系统代理恢复、TUN/DNS、升级、卸载和数据保留。MATE、Xfce、ARM64 和物理设备在矩阵之外。
 
+自启动和菜单验收结束后，测试移除专用账号的自启动夹具。原生 X11 和 Wayland 分别在重新启动后的登录中验收，启动独立 GUI 前确认该账号没有运行中的内核。
+
 `linux-package-report-linuxmint-<版本>-x64` 包含来宾及安装诊断。两个安装验证 job 都成功后，工作流生成 `linuxmint-compatibility-attempt-<次数>` 回执，绑定提交、CI 附件身份和两份 ISO 的摘要。报告与回执保留 3 天。

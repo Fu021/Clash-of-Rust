@@ -11,7 +11,7 @@ import subprocess
 
 from build_support import ROOT, run, sha256, write_json
 from linux_apt import install
-from linux_gui import output, owner_tray, wait_for, wayland_sockets
+from linux_gui import core_processes, output, owner_tray, wait_for, wayland_sockets
 
 USER = 'cor-desktop-login'
 HOME = Path('/home') / USER
@@ -196,8 +196,6 @@ def verify(stage, report, desktop):
             desktop_call(environment, 'wmctrl', '-ic', window)
         report['closed_window'] = wait_for('Closing the window did not return the owner to the tray',
                                            lambda: window_state(False))
-        if desktop == CINNAMON:
-            report['gui'] = verify_cinnamon_gui(environment, 'x11')
         desktop_call(environment, 'gtk-launch', MENU.stem)
         report['menu_reopen'] = wait_for('The application menu did not reopen the existing owner',
                                          lambda: window_state(True))
@@ -212,11 +210,13 @@ def verify(stage, report, desktop):
                                                timeout=250)
 
 
-def prepare_wayland():
+def prepare_cinnamon_gui(backend):
+    if backend == 'x11':
+        run(as_user('unlink', AUTOSTART))
+        return
     if not Path('/usr/share/wayland-sessions/cinnamon-wayland.desktop').is_file():
         raise RuntimeError('The installed Mint guest lacks the Cinnamon Wayland session')
     configure_lightdm('cinnamon-wayland')
-    run(as_user('unlink', AUTOSTART))
 
 
 def verify_cinnamon_gui(environment, backend):
@@ -239,48 +239,54 @@ def verify_cinnamon_gui(environment, backend):
     return json.loads(output(as_user('cat', source/'gui.json')))
 
 
-def verify_wayland(report):
-    previous = json.loads((REPORT/'background-login.json').read_text())
+def verify_native_cinnamon(report, backend):
+    previous_stage = 'background-login' if backend == 'x11' else 'x11'
+    previous = json.loads((REPORT/f'{previous_stage}.json').read_text())
     report['boot_id'] = boot_id()
-    if report['boot_id'] == previous['boot_id']:
-        raise RuntimeError('Cinnamon Wayland verification requires a new system boot')
+    if previous['success'] is not True or report['boot_id'] == previous['boot_id']:
+        raise RuntimeError(f'Cinnamon {backend} verification requires a new boot after {previous_stage}')
     uid = pwd.getpwnam(USER).pw_uid
-    login, environment = wait_for('LightDM did not open a real Cinnamon Wayland session',
-                                  lambda: active_desktop(uid, CINNAMON, 'wayland'), timeout=180)
+    login, environment = wait_for(f'LightDM did not open a real Cinnamon {backend} session',
+                                  lambda: active_desktop(uid, CINNAMON, backend), timeout=180)
     report['login'] = login
 
-    def socket():
-        sockets = wayland_sockets(Path(environment['XDG_RUNTIME_DIR']))
-        if len(sockets) > 1:
-            raise RuntimeError(f'Cinnamon created multiple Wayland sockets: {sorted(sockets)}')
-        return next(iter(sockets), None)
+    if backend == 'wayland':
+        def socket():
+            sockets = wayland_sockets(Path(environment['XDG_RUNTIME_DIR']))
+            if len(sockets) > 1:
+                raise RuntimeError(f'Cinnamon created multiple Wayland sockets: {sorted(sockets)}')
+            return next(iter(sockets), None)
 
-    environment['WAYLAND_DISPLAY'] = wait_for('Cinnamon did not create a Wayland socket', socket)
-    report['gui'] = verify_cinnamon_gui(environment, 'wayland')
+        environment['WAYLAND_DISPLAY'] = wait_for('Cinnamon did not create a Wayland socket', socket)
+    existing = core_processes(uid=uid)
+    if existing:
+        raise RuntimeError(f'Cinnamon {backend} session has unexpected cores before GUI launch: {existing}')
+    report['gui'] = verify_cinnamon_gui(environment, backend)
     run(['sudo', 'systemctl', 'stop', CINNAMON.service])
     run(['sudo', 'systemctl', 'stop', f'user@{uid}.service'])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('stage', choices=('prepare', 'first-login', 'background-login',
-                                         'prepare-wayland', 'wayland'))
+    native_stages = ('prepare-x11', 'x11', 'prepare-wayland', 'wayland')
+    parser.add_argument('stage', choices=('prepare', 'first-login', 'background-login', *native_stages))
     stage = parser.parse_args().stage
     release = platform.freedesktop_os_release()
     desktop = {'debian': GNOME, 'linuxmint': CINNAMON}.get(release.get('ID'))
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('COR_LINUX_GUEST') != 'true'
             or desktop is None or os.geteuid() == 0):
         raise RuntimeError('This check requires a disposable Debian or Linux Mint compatibility VM')
-    if stage in ('prepare-wayland', 'wayland') and desktop != CINNAMON:
-        raise RuntimeError('The native Wayland stages require the Cinnamon guest')
+    if stage in native_stages and desktop != CINNAMON:
+        raise RuntimeError('The native GUI stages require the Cinnamon guest')
     report = {'stage': stage, 'success': False}
     try:
         if stage == 'prepare':
             prepare(report, desktop, release.get('VERSION_ID'))
-        elif stage == 'prepare-wayland':
-            prepare_wayland()
-        elif stage == 'wayland':
-            verify_wayland(report)
+        elif stage in native_stages:
+            if stage.startswith('prepare-'):
+                prepare_cinnamon_gui(stage.removeprefix('prepare-'))
+            else:
+                verify_native_cinnamon(report, stage)
         else:
             verify(stage, report, desktop)
         report['success'] = True

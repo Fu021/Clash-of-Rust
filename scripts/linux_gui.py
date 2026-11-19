@@ -364,7 +364,9 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
         processes = wait_for('GUI did not own a core process', core_processes)
         if (len(processes) != 1 or next(iter(processes.values())) != owner.pid
                 or before.get('owner') != 'gui' or not before.get('running')):
-            raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core')
+            raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core: '
+                               f'GUI PID {owner.pid}, core processes {processes}, '
+                               f'CLI owner {before.get("owner")}, running {before.get("running")}')
         if verify_proxy:
             verify_proxy(mixed_port)
         with Session([APP/'cor', 'ui'], env=env) as terminal:

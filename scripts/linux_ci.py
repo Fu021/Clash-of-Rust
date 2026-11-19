@@ -656,7 +656,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
         if guest.target.full_desktop:
             phases = ('prepare', 'first-login', 'background-login')
             if guest.target.family == 'linuxmint':
-                phases += ('prepare-wayland', 'wayland')
+                phases += ('prepare-x11', 'x11', 'prepare-wayland', 'wayland')
             for phase in phases:
                 phase_started = time.monotonic()
                 try:
