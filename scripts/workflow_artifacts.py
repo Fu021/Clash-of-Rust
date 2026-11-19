@@ -72,8 +72,8 @@ def current_ci_artifacts(client, run, records):
                 return name.removeprefix(prefix)
         if name in ('linux-tun-test-x64', 'linux-tun-test-arm64'):
             return 'linux-' + name.removeprefix('linux-tun-test-')
-        if name == 'linux-rpm-x64':
-            return 'linux-x64'
+        if name in ('linux-rpm-x64', 'linux-rpm-arm64'):
+            return 'linux-' + name.removeprefix('linux-rpm-')
         return None
 
     names = {name for record in records if (name := producer(record.get('name', '')))}
@@ -390,9 +390,9 @@ def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_c
              {package, package+'.sha256', 'package-receipt.json'}),
             (f'linux-tun-test-{arch}', root/'target', {'linux-tun-test'})]
     if rpm:
-        expected_artifacts.append(('linux-rpm-x64', root/'dist/linux-rpm',
-                                   {f'Clash-of-Rust-{package_version()}-linux-x86_64.rpm',
-                                    'rpm-receipt.json'}))
+        from linux_native_package import rpm_filename, verify_rpm
+        expected_artifacts.append((f'linux-rpm-{arch}', root/'dist/linux-rpm',
+                                   {rpm_filename(package_version(), arch), 'rpm-receipt.json'}))
     for name, folder, expected in expected_artifacts:
         matches = [record for record in records if record['name'] == name]
         if len(matches) != 1 or matches[0].get('expired'):
@@ -423,7 +423,6 @@ def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_c
             or receipt.get('linux_tun_test_sha256') != sha256(root/'target/linux-tun-test')):
         raise ValueError('Package receipt differs from the selected source or binaries')
     if rpm:
-        from linux_native_package import verify_rpm
         verify_rpm(root/'dist/linux-rpm', receipt)
 
 

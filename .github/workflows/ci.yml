@@ -708,8 +708,8 @@ jobs:
           path: dist/linux-tun-test
           if-no-files-found: error
           retention-days: 3
-      - name: Assemble the x64 RPM compatibility candidate
-        if: matrix.system == 'linux' && matrix.arch == 'x64'
+      - name: Assemble the native RPM compatibility candidate
+        if: matrix.system == 'linux'
         shell: python
         run: |
           import sys
@@ -719,9 +719,9 @@ jobs:
           install(['rpm', 'binutils'], timeout=300, no_recommends=True)
           rpm_candidate()
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: matrix.system == 'linux' && matrix.arch == 'x64'
+        if: matrix.system == 'linux'
         with:
-          name: linux-rpm-x64
+          name: linux-rpm-${{ matrix.arch }}
           path: dist/linux-rpm
           if-no-files-found: error
           retention-days: 3

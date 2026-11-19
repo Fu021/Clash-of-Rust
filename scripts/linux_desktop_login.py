@@ -222,6 +222,34 @@ def desktop_call(environment, *arguments, **options):
                   **options)
 
 
+def capture_gnome_failure(stage):
+    uid = pwd.getpwnam(USER).pw_uid
+    session = active_desktop(uid, GNOME)
+    if session is None:
+        raise RuntimeError('No active GNOME X11 session is available for a screenshot')
+    _, environment = session
+    screenshot = HOME / f'cor-failure-{secrets.token_hex(8)}.png'
+    try:
+        result = desktop_call(
+            environment, 'gdbus', 'call', '--session', '--dest', 'org.gnome.Shell.Screenshot',
+            '--object-path', '/org/gnome/Shell/Screenshot', '--method',
+            'org.gnome.Shell.Screenshot.Screenshot', 'false', 'false', str(screenshot),
+            stderr=subprocess.PIPE)
+        if not result.startswith('(true,'):
+            raise RuntimeError(f'GNOME rejected the screenshot request: {result}')
+        limit = 12 * 1024 * 1024
+        data = subprocess.check_output(as_user('head', '-c', str(limit + 1), '--', screenshot), timeout=15)
+        if len(data) > limit or not data.startswith(b'\x89PNG\r\n\x1a\n'):
+            raise RuntimeError('GNOME returned an invalid or oversized screenshot')
+        REPORT.mkdir(parents=True, exist_ok=True)
+        destination = REPORT / f'{stage}-failure.png'
+        destination.write_bytes(data)
+        return destination.name
+    finally:
+        subprocess.run(as_user('rm', '-f', '--', screenshot), timeout=10, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def x11_windows(environment):
     def listing():
         try:
@@ -283,7 +311,7 @@ def startup_record():
     return None
 
 
-def startup(uid, previous, background, visible, current=None):
+def startup(uid, previous, background, visible, current=None, *, fail_on_tray_error=False):
     value = startup_record()
     if value is None:
         return None
@@ -293,10 +321,11 @@ def startup(uid, previous, background, visible, current=None):
         if (session and session != previous and (current is None or session == current)
                 and value['background_requested'] is background
                 and isinstance(status, dict)
-                and status.get('tray_state') == 'created'
-                and status.get('window_visible') is visible
                 and Path('/proc', str(value['pid'])).stat().st_uid == uid):
-            return value
+            if fail_on_tray_error and status.get('tray_state') == 'failed':
+                raise RuntimeError(f'Candidate tray initialization failed: {status.get("tray_error")}')
+            if status.get('tray_state') == 'created' and status.get('window_visible') is visible:
+                return value
     except (OSError, TypeError, KeyError):
         pass
     return None
@@ -304,6 +333,7 @@ def startup(uid, previous, background, visible, current=None):
 
 def verify(stage, report, desktop):
     background = stage == 'background-login'
+    debian = desktop == GNOME
     previous = json.loads((REPORT/('first-login.json' if background else 'prepare.json')).read_text())
     report['boot_id'] = boot_id()
     if report['boot_id'] == previous['boot_id']:
@@ -312,14 +342,17 @@ def verify(stage, report, desktop):
     session_type = 'wayland' if desktop in (COSMIC, GNOME_WAYLAND) else 'x11'
     login, environment = wait_for(
         f'{desktop.service} did not open a real {desktop.name} {session_type} session',
-        lambda: active_desktop(uid, desktop, session_type), timeout=guest_budget(180, 360))
+        lambda: active_desktop(uid, desktop, session_type),
+        timeout=180 if debian else guest_budget(180, 360))
     report['login'] = login
     prior_session = previous.get('startup', {}).get('session_id')
+    startup_timeout = (135 if background else 110) if debian else guest_budget(90, 300)
+    window_timeout = 45 if debian else guest_budget(45, 180)
     try:
         trace = wait_for(f'{desktop.name} candidate did not reach the expected window and tray state',
-                         lambda: startup(uid, prior_session, background, not background),
-                         timeout=guest_budget(90, 300))
-    except TimeoutError:
+                         lambda: startup(uid, prior_session, background, not background, fail_on_tray_error=debian),
+                         timeout=startup_timeout)
+    except (TimeoutError, RuntimeError):
         report['startup_observed'] = startup_record()
         try:
             report['notifier_host_state'] = desktop_call(
@@ -338,7 +371,7 @@ def verify(stage, report, desktop):
         raise RuntimeError(f'Could not connect to the {desktop.name} user session bus') from error
     report['tray_item'] = wait_for(f'{desktop.name} did not register the candidate tray PID',
                                    lambda: owner_tray(pid, lambda command: desktop_call(environment, *command)),
-                                   timeout=guest_budget(45, 180))
+                                   timeout=window_timeout)
     menu_sha256 = sha256(MENU)
     entry = output(as_user('cat', AUTOSTART))
     mode = output(as_user('stat', '--format=%a:%F', AUTOSTART), env=dict(os.environ, LC_ALL='C'))
@@ -373,7 +406,7 @@ def verify(stage, report, desktop):
         desktop_call(environment, 'gdbus', 'call', '--session', '--dest', service, '--object-path', path,
                      '--method', 'org.kde.StatusNotifierItem.Activate', '0', '0')
         tray = wait_for('The tray did not reopen the existing owner', lambda: window_state(True),
-                        timeout=guest_budget(45, 180))
+                        timeout=window_timeout)
         report['tray_reopen'] = tray
         if desktop == COSMIC:
             from linux_cosmic_windows import close
@@ -387,17 +420,17 @@ def verify(stage, report, desktop):
             for window in tray['windows']:
                 desktop_call(environment, 'wmctrl', '-ic', window)
         report['closed_window'] = wait_for('Closing the window did not return the owner to the tray',
-                                           lambda: window_state(False), timeout=guest_budget(45, 180))
+                                           lambda: window_state(False), timeout=window_timeout)
         desktop_call(environment, 'gtk-launch', MENU.stem)
         report['menu_reopen'] = wait_for('The application menu did not reopen the existing owner',
-                                         lambda: window_state(True), timeout=guest_budget(45, 180))
+                                         lambda: window_state(True), timeout=window_timeout)
         if desktop == COSMIC:
             report['menu_screenshot'] = capture_cosmic(environment, 'manual-launch')
         run(['sudo', 'systemctl', 'stop', desktop.service])
         run(['sudo', 'systemctl', 'stop', f'user@{uid}.service'])
     else:
         report['foreground_windows'] = wait_for('The foreground window was not mapped', windows,
-                                                timeout=guest_budget(45, 180))
+                                                timeout=window_timeout)
         if desktop == COSMIC:
             from linux_cosmic_desktop import AUTH_RESULT
             from linux_gui import ACTION
@@ -578,6 +611,11 @@ def main():
         report['success'] = True
     except Exception as error:
         report['error'] = str(error)
+        if desktop == GNOME and stage in ('first-login', 'background-login'):
+            try:
+                report['failure_screenshot'] = capture_gnome_failure(stage)
+            except (KeyError, OSError, RuntimeError, subprocess.SubprocessError) as screenshot_error:
+                report['failure_screenshot_error'] = str(screenshot_error)
         try:
             report[desktop.service.removesuffix('.service') + '_journal'] = output(
                 ['sudo', 'journalctl', '-b', '-u', desktop.service, '-n', '80', '--no-pager'])

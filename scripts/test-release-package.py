@@ -347,19 +347,21 @@ def native_upgrade_and_uninstall(deb):
         verify_upgrade_order(native_version(old, separator)+'-1', native_version(new, separator)+'-1')
     report = ROOT/'target/linux-report'/f'{distro}-lifecycle'
     report.mkdir(parents=True, exist_ok=True)
+    receipt = json.loads((deb.parent/'package-receipt.json').read_text())
+    arch = receipt['arch']
     if distro in RPM:
-        receipt = json.loads((deb.parent/'package-receipt.json').read_text())
         candidate = verify_rpm(deb.parent/'linux-rpm', receipt)
     else:
         candidate, = (deb.parent/'linux-arch').glob('*.pkg.tar.zst')
-    previous_digest = PREVIOUS_DEB_SHA256['amd64']
-    previous_name = f'Clash-of-Rust-{PREVIOUS_DEB_VERSION}-linux-amd64.deb'
+    architecture = {'x64': 'amd64', 'arm64': 'arm64'}[arch]
+    previous_digest = PREVIOUS_DEB_SHA256[architecture]
+    previous_name = f'Clash-of-Rust-{PREVIOUS_DEB_VERSION}-linux-{architecture}.deb'
     previous_url = f'https://github.com/Fu021/Clash-of-Rust/releases/download/v{PREVIOUS_DEB_VERSION}/{previous_name}'
     with tempfile.TemporaryDirectory(prefix='cor-native-lifecycle-') as temporary:
         directory = Path(temporary)
         previous_source = directory/previous_name
         download(previous_url, previous_source, digest=previous_digest)
-        previous = (build_rpm(previous_source, PREVIOUS_DEB_VERSION, directory) if distro in RPM
+        previous = (build_rpm(previous_source, PREVIOUS_DEB_VERSION, directory, arch) if distro in RPM
                     else build_arch(previous_source, PREVIOUS_DEB_VERSION, directory, previous_digest))
         previous_version, candidate_version = package_version(previous), package_version(candidate)
         verify_upgrade_order(previous_version, candidate_version)

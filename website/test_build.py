@@ -53,7 +53,7 @@ class SiteTests(unittest.TestCase):
         snapshot = copy.deepcopy(self.data)
         data = snapshot['downloads']['stable']
         body = (build.SRC/'pages/en/download.html').read_text()
-        suffix = 'linux-x86_64.rpm'
+        suffix = 'linux-aarch64.rpm'
         self.assertNotIn(suffix, build.render_downloads(body, snapshot))
         data['sizes'][suffix] = 45 * 1048576
         validate(snapshot)

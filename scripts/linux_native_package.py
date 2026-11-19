@@ -9,6 +9,7 @@ from pathlib import Path
 
 from build_support import ROOT, run, sha256, validate_version, write_json
 
+RPM_ARCHITECTURES = {'x64': 'x86_64', 'arm64': 'aarch64'}
 RPM_REQUIREMENTS = (
     'glibc', 'libgcc_s.so.1()(64bit)', 'libstdc++.so.6()(64bit)',
     'libxkbcommon.so.0()(64bit)', 'libxkbcommon-x11.so.0()(64bit)',
@@ -27,7 +28,12 @@ def native_version(version, separator):
     return base + (separator + prerelease.replace('-', '+') if prerelease else '')
 
 
-def build_rpm(deb, version, output):
+def rpm_filename(version, arch):
+    return f'Clash-of-Rust-{version}-linux-{RPM_ARCHITECTURES[arch]}.rpm'
+
+
+def build_rpm(deb, version, output, arch):
+    rpm_arch = RPM_ARCHITECTURES[arch]
     with tempfile.TemporaryDirectory(prefix='cor-rpm-') as temporary:
         work = Path(temporary)
         payload = work/'payload'
@@ -47,7 +53,7 @@ def build_rpm(deb, version, output):
             'Name: clash-of-rust\n'
             f'Version: {native_version(version, "~")}\n'
             'Release: 1\nSummary: Native desktop client for mihomo\nLicense: GPL-3.0-only\n'
-            'BuildArch: x86_64\nAutoReqProv: no\n'
+            f'BuildArch: {rpm_arch}\nAutoReqProv: no\n'
             + ''.join(f'Requires: {dependency}\n' for dependency in RPM_REQUIREMENTS)
             + '\n%description\nNative Rust client for mihomo.\n'
             '%install\nmkdir -p "%{buildroot}"\n'
@@ -59,11 +65,11 @@ def build_rpm(deb, version, output):
             '/usr/share/icons/hicolor/128x128/apps/clash-of-rust.png\n'
             '/usr/share/doc/clash-of-rust\n', encoding='utf-8')
         run(['rpmbuild', '-bb', '--define', f'_topdir {work}', spec])
-        packages = list((work/'RPMS/x86_64').glob('*.rpm'))
+        packages = list((work/'RPMS'/rpm_arch).glob('*.rpm'))
         if len(packages) != 1:
-            raise ValueError('Expected a single native x86_64 RPM')
+            raise ValueError(f'Expected a single native {rpm_arch} RPM')
         output.mkdir(parents=True, exist_ok=True)
-        result = output/f'Clash-of-Rust-{version}-linux-x86_64.rpm'
+        result = output/rpm_filename(version, arch)
         shutil.copyfile(packages[0], result)
         return result
 
@@ -101,12 +107,13 @@ def rpm_candidate():
     source = ROOT/'dist/package-receipt.json'
     receipt = json.loads(source.read_text())
     deb = source.parent/receipt['package']
-    if (receipt['system'], receipt['arch'], receipt['tests_passed']) != ('linux', 'x64', True):
-        raise ValueError('RPM assembly requires a verified x64 Linux candidate')
+    arch = receipt['arch']
+    if receipt['system'] != 'linux' or arch not in RPM_ARCHITECTURES or receipt['tests_passed'] is not True:
+        raise ValueError('RPM assembly requires a verified Linux candidate')
     if deb.parent != source.parent or deb.suffix != '.deb' or sha256(deb) != receipt['sha256']:
         raise ValueError('RPM assembly input differs from the verified DEB')
     output = ROOT/'dist/linux-rpm'
-    package = build_rpm(deb, receipt['version'], output)
+    package = build_rpm(deb, receipt['version'], output, arch)
     write_json(output/'rpm-receipt.json', {
         'schema': 1, 'commit': receipt['commit'], 'ci_run_id': receipt['ci_run_id'],
         'source_sha256': receipt['sha256'], 'package': package.name, 'sha256': sha256(package),
@@ -115,7 +122,7 @@ def rpm_candidate():
 
 def verify_rpm(directory, deb_receipt):
     receipt = json.loads((directory/'rpm-receipt.json').read_text())
-    name = f'Clash-of-Rust-{deb_receipt["version"]}-linux-x86_64.rpm'
+    name = rpm_filename(deb_receipt['version'], deb_receipt['arch'])
     path = directory/name
     if (receipt.get('schema'), receipt.get('commit'), receipt.get('ci_run_id'),
             receipt.get('source_sha256'), receipt.get('package'), receipt.get('sha256')) != (

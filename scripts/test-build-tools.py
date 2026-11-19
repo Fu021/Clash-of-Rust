@@ -408,6 +408,11 @@ class UbuntuVmTests(unittest.TestCase):
                 self.assertEqual(command[:3], ['qemu-system-aarch64', '-machine', 'virt,accel=tcg'])
                 self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
                 self.assertEqual('virtio-gpu-pci' in command, needs_gpu)
+                self.assertEqual('-qmp' in command, needs_gpu)
+                if needs_gpu:
+                    self.assertEqual(command[command.index('-qmp')+1],
+                                     f'unix:{guest.monitor_path},server=on,wait=off')
+                    self.assertEqual(command[command.index('-display')+1], 'none')
                 self.assertEqual(command[command.index('-smp')+1], '4' if needs_gpu else '2')
 
     def test_mint_automatic_boot_preserves_the_image_uuid_and_rejects_non_casper_media(self):
@@ -565,8 +570,8 @@ class UbuntuVmTests(unittest.TestCase):
     def test_real_login_failure_preserves_candidate_and_notifier_host_state(self):
         desktop = linux_desktop_login.GNOME
         trace = {'kind': 'desktop_startup', 'schema': 1, 'session_id': 'first',
-                 'background_requested': False, 'pid': 297,
-                 'status': {'window_visible': True, 'tray_state': 'failed'}}
+                 'background_requested': False, 'pid': os.getpid(),
+                 'status': {'window_visible': True, 'tray_state': 'failed', 'tray_error': 'No tray host'}}
         login, environment = {'session': 'active'}, {'DISPLAY': ':0'}
 
         def wait(description, probe, **kwargs):
@@ -582,18 +587,48 @@ class UbuntuVmTests(unittest.TestCase):
             path = '/home/cor-desktop-login/.local/share/clashofrust/desktop-startup.json'
             with patch.object(linux_desktop_login, 'REPORT', directory), \
                     patch.object(linux_desktop_login, 'boot_id', return_value='new'), \
-                    patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
+                    patch.object(linux_desktop_login.pwd, 'getpwnam',
+                                 return_value=SimpleNamespace(pw_uid=os.getuid())), \
                     patch.object(linux_desktop_login, 'active_desktop', return_value=(login, environment)), \
-                    patch.object(linux_desktop_login, 'wait_for', side_effect=wait), \
+                    patch.object(linux_desktop_login, 'wait_for', side_effect=wait) as wait_for, \
                     patch.object(linux_desktop_login, 'output', side_effect=[path, json.dumps(trace)]*2), \
                     patch.object(linux_desktop_login, 'desktop_call', return_value='b true') as query:
-                with self.assertRaisesRegex(TimeoutError, 'expected window and tray state'):
+                with self.assertRaisesRegex(RuntimeError, 'initialization failed: No tray host'):
                     linux_desktop_login.verify('first-login', report, desktop)
+            self.assertEqual([poll.kwargs['timeout'] for poll in wait_for.call_args_list], [180, 110])
             self.assertEqual(report['login'], login)
             self.assertEqual(report['startup_observed'], trace)
             self.assertEqual(report['notifier_host_state'], 'b true')
             self.assertEqual(query.call_args.args[0], environment)
             self.assertEqual(query.call_args.args[-1], 'IsStatusNotifierHostRegistered')
+
+    def test_gnome_failure_screenshot_uses_the_real_session_and_validates_png(self):
+        environment = {'DISPLAY': ':0', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1001/bus'}
+        image = b'\x89PNG\r\n\x1a\nfixture'
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(linux_desktop_login, 'REPORT', Path(temporary)), \
+                patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
+                patch.object(linux_desktop_login, 'active_desktop', return_value=({}, environment)), \
+                patch.object(linux_desktop_login, 'desktop_call', return_value="(true, '/tmp/screen.png')") as call, \
+                patch.object(linux_desktop_login.subprocess, 'check_output', return_value=image), \
+                patch.object(linux_desktop_login.subprocess, 'run') as cleanup:
+            name = linux_desktop_login.capture_gnome_failure('first-login')
+            self.assertEqual((Path(temporary)/name).read_bytes(), image)
+            self.assertEqual(call.call_args.args[0], environment)
+            self.assertIn('org.gnome.Shell.Screenshot.Screenshot', call.call_args.args)
+            cleanup.assert_called_once()
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(linux_desktop_login, 'REPORT', Path(temporary)), \
+                patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
+                patch.object(linux_desktop_login, 'active_desktop', return_value=({}, environment)), \
+                patch.object(linux_desktop_login, 'desktop_call', return_value="(true, '/tmp/screen.png')"), \
+                patch.object(linux_desktop_login.subprocess, 'check_output', return_value=b'invalid'), \
+                patch.object(linux_desktop_login.subprocess, 'run') as cleanup:
+            with self.assertRaisesRegex(RuntimeError, 'invalid or oversized'):
+                linux_desktop_login.capture_gnome_failure('first-login')
+            self.assertEqual(list(Path(temporary).iterdir()), [])
+            cleanup.assert_called_once()
 
     def test_mint_login_requires_lightdm_x11_and_the_matching_cinnamon_session(self):
         for pam, shell_session, found in (('lightdm-autologin', 'c2', True),
@@ -828,10 +863,42 @@ class UbuntuVmTests(unittest.TestCase):
                                 for method, args, _ in guest.method_calls]
                     expected = [('remote', '~/cor-source'), ('remote', 'x64'),
                                 ('remote', 'prepare'), ('reboot', None), ('remote', 'first-login')]
-                    if not failed:
+                    if failed:
+                        expected.append(('capture_desktop_failure', None))
+                        guest.capture_desktop_failure.assert_called_once_with('first-login')
+                    else:
                         expected.extend([('reboot', None), ('remote', 'background-login'), ('python', None)])
                     self.assertEqual(commands, expected)
+                    self.assertEqual(guest.remote.call_args_list[3].kwargs['timeout'], 600)
                     self.assertEqual(guest.python.called, not failed)
+
+    def test_debian_desktop_failure_uses_bounded_headless_screenshot(self):
+        import linux_vm_monitor
+
+        guest = object.__new__(linux_ci.VmGuest)
+        guest.target = linux_ci.target_for('debian', '13', 'arm64')
+        guest.display = None
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            guest.monitor_path = directory/'qmp.sock'
+            filename = 'debian-failure-first-login'
+            with patch.object(linux_ci, 'REPORT', directory), \
+                    patch.object(linux_vm_monitor, 'Monitor') as monitor, \
+                    patch.object(linux_vm_monitor.subprocess, 'run') as fallback:
+                connection = monitor.return_value
+                guest.capture_desktop_failure('first-login')
+                monitor.assert_called_once_with(guest.monitor_path, handshake_timeout=5)
+                connection.execute.assert_called_once_with('screendump', {
+                    'filename': str(directory/(filename+'.png')), 'format': 'png',
+                })
+                self.assertEqual(json.loads((directory/(filename+'.json')).read_text()), {
+                    'method': 'qmp', 'screenshot': filename+'.png',
+                })
+                connection.execute.side_effect = linux_vm_monitor.MonitorError({'desc': 'no surface'})
+                guest.capture_desktop_failure('first-login')
+                self.assertIn('no surface', json.loads((directory/(filename+'.json')).read_text())['error'])
+                self.assertEqual(connection.close.call_count, 2)
+                fallback.assert_not_called()
 
     def test_arm64_installed_candidate_uses_an_extended_tcg_budget(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -7086,7 +7153,7 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.release_suites(scope)
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
-        expected = {'pop': 2, 'zorin': 2, 'fedora': 2, 'opensuse': 3, 'arch': 1}
+        expected = {'pop': 2, 'zorin': 2, 'fedora': 2, 'opensuse': 5, 'arch': 1}
         for suite, count in expected.items():
             with self.subTest(suite=suite):
                 targets = linux_ci.TARGETS[suite]
@@ -7095,6 +7162,7 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertTrue(all(re.fullmatch('[0-9a-f]{64}', target.image_digest) for target in targets))
                 self.assertEqual('linux-rpm-x64' in compatibility.input_names(suite),
                                  suite in ('fedora', 'opensuse'))
+                self.assertEqual('linux-rpm-arm64' in compatibility.input_names(suite), suite == 'opensuse')
                 self.assertIn(suite, compatibility.release_suites(suite))
                 client, source, receipt = self.client(suite)
                 self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
@@ -7105,7 +7173,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_ci_rpm_assembly_uses_the_declared_python_shell(self):
         workflow = (build.ROOT/'.github/workflows/ci.yml').read_text()
-        step = workflow.split('- name: Assemble the x64 RPM compatibility candidate\n', 1)[1]
+        step = workflow.split('- name: Assemble the native RPM compatibility candidate\n', 1)[1]
         options, script = step.split('\n        run: |\n', 1)
         self.assertIn('\n        shell: python', options)
         script = script.split('\n      - ', 1)[0]
@@ -7220,7 +7288,7 @@ success="$1"
             name = 'Clash-of-Rust-0.7.3-linux-x86_64.rpm'
             binary = root/name
             binary.write_bytes(b'verified')
-            source = {'version': '0.7.3', 'commit': self.source_commit,
+            source = {'version': '0.7.3', 'arch': 'x64', 'commit': self.source_commit,
                       'ci_run_id': 123, 'sha256': 'a'*64}
             build.write_json(root/'rpm-receipt.json', {
                 'schema': 1, 'commit': self.source_commit, 'ci_run_id': 123,
@@ -7282,7 +7350,7 @@ success="$1"
         if suite in ('linuxmint', 'pop', 'zorin', 'fedora', 'opensuse', 'arch'):
             source_kind = 'iso' if suite in ('linuxmint', 'pop', 'zorin') else 'cloud'
             receipt[source_kind+'_targets'] = [
-                {'release': target.release, 'arch': 'x64', 'url': target.image_url,
+                {'release': target.release, 'arch': target.arch, 'url': target.image_url,
                  'sha256': target.image_digest} for target in linux_ci.TARGETS[suite]]
         receipt.update(receipt_changes or {})
         stream = io.BytesIO()
@@ -7459,14 +7527,17 @@ class ReleaseTests(unittest.TestCase):
         self.addCleanup(printing.stop)
 
     def test_optional_rpm_is_bound_to_the_tested_deb_and_never_changes_baseline(self):
-        name = f'Clash-of-Rust-{self.version}-linux-x86_64.rpm'
+        name = f'Clash-of-Rust-{self.version}-linux-aarch64.rpm'
         self.assertNotIn(name, release.filenames(self.version))
-        self.assertEqual(release.filenames(self.version, rpm=True) - release.filenames(self.version),
+        self.assertEqual(release.filenames(self.version, rpm_arches=('arm64',)) - release.filenames(self.version),
                          {name, name+'.sha256'})
+        self.assertEqual(compatibility.rpm_architectures(('fedora',)), ('x64',))
+        self.assertEqual(compatibility.rpm_architectures(('fedora', 'opensuse')), ('x64', 'arm64'))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            deb = directory/f'Clash-of-Rust-{self.version}-linux-amd64.deb'
+            deb = directory/f'Clash-of-Rust-{self.version}-linux-arm64.deb'
             deb.write_bytes(b'tested DEB bytes')
+            (directory/f'Clash-of-Rust-{self.version}-linux-amd64.deb').write_bytes(b'other architecture')
             binary = b'identical payload packaged as RPM'
             receipt = {'schema': 1, 'commit': self.commit, 'ci_run_id': 77,
                        'source_sha256': build.sha256(deb), 'package': name,
@@ -7476,7 +7547,7 @@ class ReleaseTests(unittest.TestCase):
                 archive.writestr(name, binary)
                 archive.writestr('rpm-receipt.json', json.dumps(receipt))
             payload = stream.getvalue()
-            record = {'id': 55, 'name': 'linux-rpm-x64', 'expired': False,
+            record = {'id': 55, 'name': 'linux-rpm-arm64', 'expired': False,
                       'workflow_run': {'id': 77, 'head_sha': self.commit},
                       'digest': 'sha256:' + hashlib.sha256(payload).hexdigest()}
 
@@ -7489,12 +7560,12 @@ class ReleaseTests(unittest.TestCase):
                     return payload
                 self.fail(path)
 
-            release.download_release_rpm(client, 77, self.commit, self.version, directory)
+            release.download_release_rpm(client, 77, self.commit, self.version, directory, 'arm64')
             self.assertEqual((directory/name).read_bytes(), binary)
             self.assertEqual((directory/(name+'.sha256')).read_text(), receipt['sha256']+'\n')
             deb.write_bytes(b'wrong DEB')
             with self.assertRaisesRegex(ValueError, 'RPM receipt differs'):
-                release.download_release_rpm(client, 77, self.commit, self.version, directory)
+                release.download_release_rpm(client, 77, self.commit, self.version, directory, 'arm64')
 
     def client(self, run_changes=None, jobs=None, main=None):
         run = {'id':77, 'path':'.github/workflows/ci.yml@main', 'event':'push', 'head_branch':'main',

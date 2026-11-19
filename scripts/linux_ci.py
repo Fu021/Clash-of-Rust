@@ -407,9 +407,8 @@ class VmGuest:
                 command.extend(['-device', 'virtio-gpu-pci'])
         elif target.package_format != 'deb':
             command.extend(['-vga', 'virtio'])
-        self.monitor_path = None
-        if (target.family, target.release) == ('pop', '24.04'):
-            self.monitor_path = directory/'qmp.sock'
+        cosmic = (target.family, target.release) == ('pop', '24.04')
+        self.monitor_path = directory/'qmp.sock' if cosmic or target.family == 'debian' else None
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                     '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
@@ -451,14 +450,15 @@ class VmGuest:
                             '-device', 'virtio-net-pci,netdev=net0'])
             environment = None
             if self.monitor_path:
+                command.extend(['-qmp', f'unix:{self.monitor_path},server=on,wait=off'])
+            if cosmic:
                 from linux_vm_monitor import SoftwareDisplay
                 self.display = SoftwareDisplay(REPORT/'vm-xvfb.log')
                 environment = self.display.environment
                 command[command.index('-display')+1] = 'sdl,gl=on'
                 vga = command.index('-vga')
                 command[vga:vga+2] = ['-device', 'virtio-vga-gl']
-                command.extend(['-qmp', f'unix:{self.monitor_path},server=on,wait=off',
-                                '-device', 'virtio-tablet-pci', '-name', 'cor-cosmic-compatibility'])
+                command.extend(['-device', 'virtio-tablet-pci', '-name', 'cor-cosmic-compatibility'])
             self.console = (REPORT / ('vm-console-' + label + '.log')).open('w')
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT, env=environment)
             wait_vm_ssh(self.process, self.ssh, ready_command=ready_command,
@@ -533,11 +533,12 @@ class VmGuest:
 
     def capture_desktop_failure(self, stage):
         from linux_vm_monitor import Monitor, capture_screen
-        snapshot = REPORT/f'cosmic-failure-{stage}.png'
+        desktop = 'cosmic' if self.display else self.target.family
+        snapshot = REPORT/f'{desktop}-failure-{stage}.png'
         try:
-            monitor = Monitor(self.monitor_path)
+            monitor = Monitor(self.monitor_path, handshake_timeout=5)
             try:
-                method = capture_screen(monitor, snapshot, self.display.environment)
+                method = capture_screen(monitor, snapshot, self.display.environment if self.display else None)
             finally:
                 monitor.close()
             result = {'method': method, 'screenshot': snapshot.name}
@@ -720,6 +721,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                      timeout=3600 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
         if guest.target.full_desktop:
             cosmic = (guest.target.family, guest.target.release) == ('pop', '24.04')
+            debian = guest.target.family == 'debian'
             phases = ('prepare', 'first-login', 'background-login')
             if guest.target.family == 'linuxmint':
                 phases += ('prepare-x11', 'x11', 'prepare-wayland', 'wayland')
@@ -728,17 +730,20 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             for phase in phases:
                 print(f'{guest.target.distribution} {guest.target.release}: desktop {phase}', flush=True)
                 phase_started = time.monotonic()
+                preparing = phase.startswith('prepare')
+                timeout = 1800 if guest.architecture == 'aarch64' or not guest.kvm else 800
+                if debian and not preparing:
+                    timeout = 600
                 try:
-                    if not phase.startswith('prepare'):
+                    if not preparing:
                         guest.reboot()
                     if phase == 'first-login' and cosmic:
                         from linux_cosmic_authorization import verify_dialogs
                         verify_dialogs(guest, REPORT)
                     guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
-                                 'scripts/linux_desktop_login.py ' + phase,
-                                 timeout=1800 if guest.architecture == 'aarch64' or not guest.kvm else 800)
+                                 'scripts/linux_desktop_login.py ' + phase, timeout=timeout)
                 except Exception:
-                    if cosmic:
+                    if cosmic or debian:
                         with contextlib.suppress(OSError):
                             guest.capture_desktop_failure(phase)
                     raise

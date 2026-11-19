@@ -89,10 +89,11 @@ def fedora_target(build, digest):
                   digest)
 
 
-def leap_target(release, build, digest):
+def leap_target(release, build, arch, digest):
     root = f'https://download.opensuse.org/distribution/leap/{release}/appliances'
-    return Target('opensuse', release, 'x64',
-                  f'{root}/Leap-{release}-Minimal-VM.x86_64-Cloud-Build{build}.qcow2', digest)
+    image_arch = {'x64': 'x86_64', 'arm64': 'aarch64'}[arch]
+    return Target('opensuse', release, arch,
+                  f'{root}/Leap-{release}-Minimal-VM.{image_arch}-Cloud-Build{build}.qcow2', digest)
 
 
 TARGETS = {
@@ -135,12 +136,14 @@ TARGETS = {
         fedora_target('45-1.4', '50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0'),
     ),
     'opensuse': (
-        leap_target('16.0', '18.95', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
-        leap_target('16.1', '3.18', '2cbf0121ccb8eef5452b43e14685715452ffa049e6a618bb165382aa1f2aab3b'),
+        leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
+        leap_target('16.1', '3.18', 'x64', '2cbf0121ccb8eef5452b43e14685715452ffa049e6a618bb165382aa1f2aab3b'),
         Target('opensuse', '20261118', 'x64',
                'https://downloadcontent.opensuse.org/tumbleweed/appliances/'
                'openSUSE-Tumbleweed-Minimal-VM.x86_64-1.0.0-Cloud-Snapshot20261118.qcow2',
                'c1cb4f8eb3dd0b86d496ba78f10dc35fdfe062aab642b32ea0421b447e6ee1fb'),
+        leap_target('16.0', '18.95', 'arm64', '9158494113be517a940a32394200ccd87ab1abed427317a4e93e4aa9a070b6eb'),
+        leap_target('16.1', '3.18', 'arm64', 'd810f634121df1fa5dcee5e958e24a107f5fc2ef6efa0d134fe1482946ddb93b'),
     ),
     'arch': (
         Target('arch', '20261115.625457', 'x64',

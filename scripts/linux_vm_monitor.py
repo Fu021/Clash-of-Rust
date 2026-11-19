@@ -13,11 +13,11 @@ class MonitorError(RuntimeError):
 
 
 class Monitor:
-    def __init__(self, path):
+    def __init__(self, path, *, handshake_timeout=60):
         self.connection = socket.socket(socket.AF_UNIX)
         self.stream = None
         try:
-            self.connection.settimeout(60)
+            self.connection.settimeout(handshake_timeout)
             self.connection.connect(str(path))
             self.stream = self.connection.makefile('rb')
             if 'QMP' not in self.read():
@@ -56,11 +56,11 @@ class Monitor:
             self.connection.close()
 
 
-def capture_screen(monitor, destination, environment):
+def capture_screen(monitor, destination, environment=None):
     try:
         monitor.execute('screendump', {'filename': str(destination), 'format': 'png'})
     except MonitorError as error:
-        if error.response.get('desc') != 'no surface':
+        if error.response.get('desc') != 'no surface' or environment is None:
             raise
         code = ('from PIL import ImageGrab; import sys; '
                 'ImageGrab.grab(xdisplay=sys.argv[2]).save(sys.argv[1])')

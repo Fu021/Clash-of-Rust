@@ -1,16 +1,16 @@
 # Linux 扩展兼容验证
 
-每个发行版有独立 `workflow_dispatch` 入口，指定同提交成功的 `CI` 运行编号 `run_id`。普通 push/PR 不启动这些 VM；CI 一次编译并生成 DEB，Linux x64 job 另从同一候选组装 RPM。发布时按 [Linux 范围](release.md)要求相应回执。本页描述测试目标，不是兼容通过或可下载声明。
+每个发行版有独立 `workflow_dispatch` 入口，指定同提交成功的 `CI` 运行编号 `run_id`。普通 push/PR 不启动这些 VM；CI 每个 Linux 架构只编译一次并生成 DEB，再从同架构 DEB 组装 RPM。发布时按 [Linux 范围](release.md)要求相应回执。本页描述测试目标，不是兼容通过或可下载声明。
 
-| 手动入口 | 固定来宾（x64） | 安装与桌面 |
+| 手动入口 | 固定来宾及架构 | 安装与桌面 |
 | --- | --- | --- |
-| Pop!_OS Compatibility | System76 22.04 build 58、24.04 build 20 | 离线 `distinst` 后从系统盘启动；DEB；分别验证 Pop GNOME 和 COSMIC |
-| Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core | 离线 Ubiquity；DEB；Zorin GNOME 与发行版原生托盘 |
-| Fedora Compatibility | Fedora Cloud Base Generic 44-1.7、45-1.4 | DNF 安装同源 RPM；GNOME Wayland |
-| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18；Tumbleweed 20261118 | 可写 Cloud VM，Zypper 安装同源 RPM；GNOME Wayland |
-| Arch Linux Compatibility | 官方 Cloud 20261115.625457 | `makepkg` 由同源 DEB 或固定的升级夹具还原安装目录；`pacman` 验收；GNOME Wayland |
+| Pop!_OS Compatibility | System76 22.04 build 58、24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动；DEB；分别验证 Pop GNOME 和 COSMIC |
+| Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity；DEB；Zorin GNOME 与发行版原生托盘 |
+| Fedora Compatibility | Fedora Cloud Base Generic 44-1.7、45-1.4（x64） | DNF 安装同源 RPM；GNOME Wayland |
+| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18（x64、ARM64）；Tumbleweed 20261118（x64） | 可写 Cloud VM，Zypper 安装同源 RPM；GNOME Wayland |
+| Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 由同源 DEB 或固定的升级夹具还原安装目录；`pacman` 验收；GNOME Wayland |
 
-镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照，避免镜像跳转指向尚未同步该文件的站点。新工作流在固定 `ubuntu-24.04` 托管 runner 上运行所需的 QEMU 来宾。COSMIC live ISO 的独立启动诊断保留，直到安装版取得等价的真实登录和失败取证证据。
+镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照，避免镜像跳转指向尚未同步该文件的站点。QEMU 来宾运行在同架构的 `ubuntu-24.04` 或 `ubuntu-24.04-arm` 托管 runner。COSMIC live ISO 的独立启动诊断保留，直到安装版取得等价的真实登录和失败取证证据。
 
 新增或替换目标时核对发行版的维护期限和镜像来源。上游宣布停止维护后，复查本项目是否仍需该目标作为明确的兼容基线。替换受支持目标须先验证替代版本，再同步目标矩阵、公开支持范围和发布门禁。滚动版每次更换快照都记录日期与摘要，使用配套的软件源并完整复验。Ubuntu 的最低内核基线见 [Ubuntu 兼容验证](ubuntu-compatibility.md)。
 

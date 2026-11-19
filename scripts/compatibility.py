@@ -73,13 +73,18 @@ def required_jobs(suite):
         for target in TARGETS[suite]}
 
 
+def rpm_architectures(suites):
+    return tuple(dict.fromkeys(target.arch for suite in suites for target in TARGETS.get(suite, ())
+                               if target.package_format == 'rpm'))
+
+
 def input_names(suite):
     if suite == 'android':
         return ('build-android-x64', 'dependency-snapshot')
     architectures = dict.fromkeys(target.arch for target in TARGETS[suite])
-    native = ('linux-rpm-x64',) if suite in ('fedora', 'opensuse') else ()
     return (*('package-linux-' + arch for arch in architectures),
-            *('linux-tun-test-' + arch for arch in architectures), *native, 'dependency-snapshot')
+            *('linux-tun-test-' + arch for arch in architectures),
+            *('linux-rpm-' + arch for arch in rpm_architectures((suite,))), 'dependency-snapshot')
 
 
 def validate_run(run, repository, expected_commit):
