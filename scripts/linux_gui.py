@@ -104,7 +104,7 @@ def tun_permissions():
     return (output(['getcap', APP/'clash-tun-launcher']), (APP/'libexec/resolvectl').stat().st_mode & 0o7777)
 
 
-def verify_authorization(log, password_file, locate, *, respond=None):
+def verify_authorization(log, password_file, locate, *, respond=None, restart_agent=None):
     helper = APP/'clash-of-rust'
     before = tun_permissions()
     for allow in (False, True):
@@ -161,6 +161,8 @@ def verify_authorization(log, password_file, locate, *, respond=None):
                     request_log.seek(0)
                     log.write(request_log.read())
                     log.flush()
+        if not allow and restart_agent:
+            restart_agent()
     return {'cancel_preserved_permissions': True, 'accept_granted_helper': True,
             'production_action': ACTION, 'graphical_agent': True}
 
@@ -168,19 +170,28 @@ def verify_authorization(log, password_file, locate, *, respond=None):
 def authentication():
     agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
     distro = platform.freedesktop_os_release().get('ID')
-    if distro in ('debian', 'fedora', 'opensuse-leap', 'opensuse-tumbleweed', 'arch'):
+    mate = distro in ('debian', 'fedora', 'opensuse-leap', 'opensuse-tumbleweed', 'arch')
+    if mate:
         candidates = (Path('/usr/libexec/polkit-mate-authentication-agent-1'),
                       Path('/usr/lib/polkit-mate/polkit-mate-authentication-agent-1'),
                       Path('/usr/lib/mate-polkit/polkit-mate-authentication-agent-1'))
         agent = next((path for path in candidates if path.is_file()), candidates[0])
-    with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log:
-        with process([agent], log) as registered:
-            def locate():
-                if registered.poll() is not None:
-                    raise RuntimeError('Graphical polkit agent exited before authorization')
-                return gtk_authorization_window()
+    with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log, \
+            contextlib.ExitStack() as processes:
+        registered = processes.enter_context(process([agent], log))
 
-            return verify_authorization(log, Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']), locate)
+        def locate():
+            if registered.poll() is not None:
+                raise RuntimeError('Graphical polkit agent exited before authorization')
+            return gtk_authorization_window()
+
+        def restart():
+            nonlocal registered
+            processes.close()
+            registered = processes.enter_context(process([agent], log))
+
+        return verify_authorization(log, Path(os.environ['COR_GUI_AUTH_PASSWORD_FILE']), locate,
+                                    restart_agent=restart if mate else None)
 
 
 def notifier_host_ready():
@@ -612,7 +623,12 @@ def launch_session():
                XDG_DATA_HOME=str(home/'.local/share'), XDG_CACHE_HOME=str(home/'.cache'))
     command = ['/usr/bin/dbus-run-session', '--', sys.executable, '-E', '-s', '-B',
                str(Path(__file__).resolve()), '--session']
-    os.execve(command[0], command, env)
+    try:
+        os.execve(command[0], command, env)
+    except OSError as error:
+        write_json(Path(env['COR_GUI_REPORT'])/'gui.json',
+                   {'status': 'failed', 'checks': {}, 'error': str(error)})
+        raise
 
 
 def installed_tests():
@@ -674,7 +690,8 @@ def installed_tests():
                     with contextlib.suppress(OSError, subprocess.SubprocessError):
                         subprocess.run(['sudo', 'journalctl', '--boot', '--no-pager', '-n', '80',
                                         '--unit', unit, '--unit', 'init.scope',
-                                        '--unit', 'systemd-logind.service'],
+                                        '--unit', 'systemd-logind.service', '--unit', 'polkit.service',
+                                        '--unit', 'polkit-agent-helper@*.service'],
                                        stdout=log, stderr=subprocess.STDOUT, timeout=15)
                 raise
         finally:

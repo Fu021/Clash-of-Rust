@@ -2,6 +2,7 @@
 import os
 from pathlib import PurePosixPath
 import secrets
+import shlex
 import subprocess
 import time
 
@@ -42,6 +43,7 @@ def extract_casper_boot(iso, directory):
 INSTALL = """\
 set -eu
 expected_serial="$1"
+media="$2"
 seed=/mnt/cor-test
 disk=/dev/vda
 target=/mnt/cor-installed
@@ -58,12 +60,12 @@ test "$serial" = "$expected_serial" || fail "$disk serial '$serial' does not mat
 test "$(lsblk --raw --noheadings --nodeps --output RO "$disk")" = 0 || fail "$disk is not writable"
 signatures="$(wipefs --no-act --noheadings --output TYPE "$disk")" || fail "Cannot inspect $disk signatures"
 test -z "$signatures" || fail "$disk is not blank"
-set -- /cdrom/casper*/filesystem.squashfs
-test "$#" -eq 1 && test -r "$1" || fail 'Expected one readable live squashfs'
-remove="${1%/*}/filesystem.manifest-remove"
+squashfs="/cdrom$media/filesystem.squashfs"
+test -f "$squashfs" && test -r "$squashfs" || fail "Cannot read $squashfs"
+remove="/cdrom$media/filesystem.manifest-remove"
 test -r "$remove" || fail "Cannot read $remove"
 printf 'Pop!_OS installer: starting distinst\\n'
-distinst -s "$1" -r "$remove" -h cor-linux-test -k us -l en_US.UTF-8 \\
+distinst -s "$squashfs" -r "$remove" -h cor-linux-test -k us -l en_US.UTF-8 \\
     -b "$disk" -t "$disk:gpt" \\
     -n "$disk:primary:start:512M:fat32:mount=/boot/efi:flags=esp" \\
     -n "$disk:primary:512M:-4096M:ext4:mount=/" \\
@@ -146,7 +148,8 @@ def install(iso, directory, public_key, command, console_log, ssh_unit, install_
             console.wait_shell(process)
             console.command('mkdir -p /mnt/cor-test && mount -t 9p '
                             '-o trans=virtio,version=9p2000.L,ro cor-test /mnt/cor-test')
-            evidence = console.command(f'sh /mnt/cor-test/install.sh {DISK_SERIAL}', timeout=2100)
+            install_command = shlex.join(['sh', '/mnt/cor-test/install.sh', DISK_SERIAL, media])
+            evidence = console.command(install_command, timeout=2100)
             if 'cor-pop-install-complete' not in evidence.splitlines():
                 raise RuntimeError('Pop!_OS installer did not complete disk provisioning')
             console.command('systemd-run --on-active=2s /usr/bin/systemctl poweroff')

@@ -10,6 +10,9 @@ use tray_icon::{
 };
 mod startup_diagnostics;
 
+pub const FOREGROUND_START_TIMEOUT: Duration =
+    Duration::from_secs(if cfg!(target_os = "linux") { 15 } else { 5 });
+
 #[derive(Debug, Clone)]
 pub enum Command {
     Show,
@@ -438,7 +441,7 @@ pub fn start() -> anyhow::Result<Guard> {
         drop(stop_rx);
     });
     let id = ready_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(FOREGROUND_START_TIMEOUT)
         .map_err(|e| anyhow::anyhow!(e))?
         .map_err(|e| anyhow::anyhow!(e))?;
     Ok(Guard {

@@ -62,7 +62,9 @@ Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按�
 
 `Prepare Android Maven dependencies` 按固定 runner、工具基线、Gradle 配置和依赖声明恢复精确缓存。未命中时，单个 runner 使用实际 Go AAR 和应用资源在线执行 `assembleRelease`、`assembleReleaseAndroidTest` 和 `lintRelease`，只复制 `caches/modules-2` 的构件与解析元数据，再从独立 Gradle home 清理并离线重跑这三个任务。此作业只产出 Maven 依赖，安装候选仍由三种 ABI 各自完整构建和验收。
 
-准备作业通过同轮 `android-maven-dependencies` 附件向三个 ABI 提供相同的依赖，三者都用 `--offline` 执行正式 Gradle 任务。仅 `main` 保存跨运行缓存，每次失效后重新在线准备；Gradle 转换及构建产物在各自 runner 生成。调整预热任务覆盖范围时更新缓存键的方案版本。冷缓存与精确命中各需一次 Actions 实测，均检查三个 ABI 的 APK、测试 APK 与 Lint。
+准备作业通过同轮 `android-maven-dependencies` 附件向三个 ABI 提供相同的依赖，三者都用 `--offline` 执行正式 Gradle 任务。仅 `main` 保存跨运行缓存，每次失效后重新在线准备。Gradle 转换及构建产物在各自 runner 生成。调整预热任务覆盖范围时更新缓存键的方案版本。
+
+提交 `8a176d3c` 的 [冷缓存 CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/44534000149)确认缺失键时成功在线准备并离线重跑，[暖缓存 CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/44538353609)确认命中精确键后跳过在线准备。两次均为 13/13，三个 ABI 的 Release APK、测试 APK 和 Lint 均离线通过。暖 CI 读取约 214 MiB 压缩缓存。
 
 CI 与 Memory 的编译基线保存在 [GitHub Actions 缓存](cache-coverage.md)，未命中时从公开上游准备输入并编译。Publish Release 使用同提交的 CI 附件。
 

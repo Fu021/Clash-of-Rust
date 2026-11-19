@@ -110,9 +110,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
         );
     }
     // Publish the native icon before cold font loading and Geo integrity checks.
-    let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(Duration::from_secs(
-        if background_start() { 120 } else { 5 },
-    ))));
+    let tray_timeout = if background_start() {
+        Duration::from_secs(120)
+    } else {
+        tray::FOREGROUND_START_TIMEOUT
+    };
+    let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(tray_timeout)));
     #[cfg(any(windows, target_os = "linux"))]
     std::thread::spawn(platform::migrate_autostart);
     let state = startup_store()

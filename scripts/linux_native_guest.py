@@ -82,7 +82,7 @@ def prepare():
                     'xwininfo', 'xdotool', 'wmctrl', 'openbox', 'gtk3', 'iproute', 'systemd-resolved',
                     'libcap', 'rpm-build', 'glib2', 'glib-networking', 'google-noto-sans-cjk-fonts')
     elif distro in RPM:
-        packages = ('xorg-x11-server-Xvfb', 'xwayland', 'xprop', 'xdpyinfo', 'xwininfo', 'xdotool',
+        packages = ('dbus-1-daemon', 'xorg-x11-server-Xvfb', 'xwayland', 'xprop', 'xdpyinfo', 'xwininfo', 'xdotool',
                     'wmctrl', 'openbox', 'gtk3-tools', 'iproute2', 'systemd-resolved', 'libcap-progs',
                     'rpm-build', 'glib2-tools', 'glib-networking', 'gsettings-backend-dconf',
                     'google-noto-sans-cjk-fonts')

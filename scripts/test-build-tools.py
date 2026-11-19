@@ -2881,6 +2881,29 @@ class BuildTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'agent exited'):
             linux_gui.authorization_dialog(request, io.StringIO(), locate)
 
+    def test_linux_gui_restarts_mate_between_cancel_and_accept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            password = directory/'password'
+            password.write_text('fixture')
+            agent = MagicMock()
+            with patch.dict(os.environ, {'COR_GUI_REPORT': str(directory),
+                                        'COR_GUI_AUTH_PASSWORD_FILE': str(password)}), \
+                    patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'fedora'}), \
+                    patch.object(linux_gui, 'process', return_value=agent) as launches, \
+                    patch.object(linux_gui, 'verify_authorization') as verify:
+                def authorize(log, secret, locate, *, restart_agent):
+                    self.assertEqual(launches.call_count, 1)
+                    restart_agent()
+                    self.assertEqual(agent.__exit__.call_count, 1)
+                    self.assertEqual(launches.call_count, 2)
+                    self.assertEqual(launches.call_args_list[0], launches.call_args_list[1])
+                    return {'accept_granted_helper': True}
+
+                verify.side_effect = authorize
+                self.assertEqual(linux_gui.authentication(), {'accept_granted_helper': True})
+            self.assertEqual(agent.__exit__.call_count, 2)
+
     def test_linux_gui_requires_a_registered_tray_host_before_launch(self):
         with patch.object(linux_gui, 'dbus', side_effect=[
                 subprocess.CalledProcessError(1, ['gdbus']), '(<false>,)', '(<true>,)']) as query:
@@ -6947,6 +6970,28 @@ success="$1"
                 self.assertEqual(path, f'/{media}')
                 self.assertTrue(kernel.read_bytes().endswith(b'/vmlinuz.efi'))
                 self.assertTrue(initrd.read_bytes().endswith(b'/initrd.gz'))
+
+    def test_pop_installer_uses_the_same_media_path_as_casper(self):
+        import pop_live_install
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            media = '/casper_pop-os_24.04_amd64_intel_debug_377'
+            boot = (directory/'vmlinuz', directory/'initrd', media, directory/'share')
+            command = ['qemu-system-x86_64', '-serial', 'stdio', '-device', pop_live_install.DISK_DEVICE]
+            with patch.object(pop_live_install, 'installer_media', return_value=boot), \
+                    patch.object(Path, 'is_socket', return_value=True), \
+                    patch.object(pop_live_install, 'Console') as console, \
+                    patch.object(subprocess, 'Popen') as launch:
+                console.return_value.command.return_value = 'cor-pop-install-complete'
+                launch.return_value.wait.return_value = 0
+                launch.return_value.poll.return_value = 0
+                pop_live_install.install(directory/'pop.iso', directory, 'public-key', command,
+                                         directory/'installer.log', 'ssh-unit', 'install-ssh')
+            arguments = launch.call_args.args[0]
+            self.assertIn(f'live-media-path={media}', arguments[arguments.index('-append')+1].split())
+            console.return_value.command.assert_any_call(
+                f'sh /mnt/cor-test/install.sh {pop_live_install.DISK_SERIAL} {media}', timeout=2100)
 
     def test_arm_vm_targets_install_the_virtio_net_rom(self):
         targets = (*linux_ci.TARGETS['ubuntu'], *linux_ci.TARGETS['debian'])
