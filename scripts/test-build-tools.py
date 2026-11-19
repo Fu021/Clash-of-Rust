@@ -4948,6 +4948,47 @@ runpy.run_path(str(script), run_name='__main__')
         self.assertEqual(preview, regular + ['build-tools;' + versions['build_tools']])
         self.assertIn('platform-tools@' + versions['platform_tools'], preview)
 
+    def test_archived_linux_emulator_verifies_the_runtime_outside_the_sdk(self):
+        version = '37.2.13'
+        versions = dict(build_inputs.android_versions(), emulator=version)
+        url, digest = android_build.LINUX_X64_EMULATOR_ARCHIVES[version]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root/'sdk'
+            device_root = root/'device'
+            device_root.mkdir()
+            image, revision, source_revision = android_build.emulator_image(api=31)
+            installed = sdk/image.replace(';', '/')
+            installed.mkdir(parents=True)
+            (installed/'source.properties').write_text('Pkg.Revision='+source_revision)
+
+            def unpack(command, **kwargs):
+                self.assertEqual(command[:2], ['unzip', '-q'])
+                self.assertEqual(command[3], '-d')
+                emulator = command[-1]/'emulator'
+                emulator.mkdir()
+                (emulator/'source.properties').write_text('Pkg.Revision='+version)
+                (emulator/'emulator').touch()
+
+            with patch.dict(os.environ, {'ANDROID_HOME': str(sdk)}), \
+                    patch.object(android_build.sys, 'platform', 'linux'), \
+                    patch.object(android_build, 'host_arch', return_value='x64'), \
+                    patch.object(android_build, 'android_versions', return_value=versions), \
+                    patch.object(android_build, 'install_sdk_packages') as install, \
+                    patch.object(android_build, 'download') as download, \
+                    patch.object(android_build, 'run', side_effect=unpack):
+                binary, actual_image = android_build.prepare_emulator(sdk, sdk/'bin', device_root, api=31)
+            self.assertEqual(actual_image, image)
+            self.assertTrue(binary.is_file())
+            self.assertTrue(binary.is_relative_to(device_root))
+            self.assertFalse((sdk/'emulator').exists())
+            packages = install.call_args.args[0]
+            self.assertFalse(any(str(package).startswith('emulator@') for package in packages))
+            self.assertIn(image.replace(';', '/')+'@'+revision, packages)
+            self.assertIn('build-tools/'+versions['build_tools'], packages)
+            self.assertEqual(download.call_args.args[0], url)
+            self.assertEqual(download.call_args.kwargs['digest'], digest)
+
     def test_emulator_rejects_revisions_that_differ_from_the_cache_identity(self):
         versions = build_inputs.android_versions()
         with tempfile.TemporaryDirectory() as temporary:

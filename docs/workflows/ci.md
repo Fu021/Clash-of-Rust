@@ -58,6 +58,8 @@ macOS x64 上一轮构建全部测试程序耗时 20 分 32 秒，本轮只准�
 
 Android 使用固定 Python、JDK 和 Go；`build_inputs.py prepare-gradle` 按冻结快照中的版本及已提交的官方 SHA256 下载并校验官方 Gradle ZIP，解压后加入 PATH。编译前执行 `build_inputs.py check-tools --tools go java gradle` 核对实际版本。环境变量里记录的版本或早先 setup 成功不能代替当前 PATH 上的工具检查；版本漂移先失败，不放宽 `go mod tidy -diff` 或自动下载另一套编译器。Android 编译脚本将同一冻结 NDK 版本传给 Gradle，避免原生库编译和 APK 符号剥离各自选择工具链；`RUNNER_DEBUG=1` 时保留 Gradle 详细诊断及弃用栈。
 
+Linux x64 的固定 Android Emulator 37.2.13 使用 [Google 官方归档](https://developer.android.com/studio/emulator_archive)及其 SHA256，在当次 runner 的临时目录安装并核对模拟器版本。SDK CLI 仍按固定修订安装平台工具和系统镜像，启动前核对镜像内的实际修订。
+
 共享 Go 下载在矩阵启动前执行 `go mod tidy -diff`，先拒绝未规范化的锁文件，避免三种 Android ABI 完成 Rust 编译后才发现同一问题。
 
 `Prepare Android Maven dependencies` 按固定 runner、工具基线、Gradle 配置和依赖声明恢复精确缓存。未命中时，单个 runner 使用实际 Go AAR 和应用资源在线执行 `assembleRelease`、`assembleReleaseAndroidTest` 和 `lintRelease`，只复制 `caches/modules-2` 的构件与解析元数据，再从独立 Gradle home 清理并离线重跑这三个任务。此作业只产出 Maven 依赖，安装候选仍由三种 ABI 各自完整构建和验收。

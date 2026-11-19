@@ -16,7 +16,7 @@ import tempfile
 import time
 import zipfile
 
-from build_support import ROOT, mihomo_go_version, package_version, sha256, write_json, write_mihomo_notice
+from build_support import ROOT, download, host_arch, mihomo_go_version, package_version, sha256, write_json, write_mihomo_notice
 from build_inputs import android_versions
 
 ANDROID = ROOT / 'apps/android'
@@ -28,6 +28,10 @@ ABIS = {
 }
 MOBILE_TOOL = '19777044486779222400e9ca16c4306f9c6dbfa9'
 GRADLE_BUILD_TASKS = ('assembleRelease', 'assembleReleaseAndroidTest', 'lintRelease')
+LINUX_X64_EMULATOR_ARCHIVES = {
+    '37.2.13': ('https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip',
+                'cbc7c3cfb83220b8a0f9c513fdab557712e74d339ec19ddffa43f23350ae9bdd'),
+}
 
 
 def run(command, **kwargs):
@@ -172,30 +176,53 @@ def emulator_image(legacy=False, api=None):
             versions.get(image_key+'_source_revision', versions[image_key+'_revision']))
 
 
-def emulator_sdk_packages(image, image_revision, preview=False):
+def emulator_sdk_packages(image, image_revision, preview=False, *, include_emulator=True):
     versions = android_versions()
-    packages = ['platform-tools@'+versions['platform_tools'], 'emulator@'+versions['emulator'],
-                image+'@'+image_revision]
+    packages = ['platform-tools@'+versions['platform_tools'], image+'@'+image_revision]
+    if include_emulator:
+        packages.insert(1, 'emulator@'+versions['emulator'])
     if preview:
         packages.append('build-tools;'+versions['build_tools'])
     return packages
 
 
-def verify_emulator_versions(sdk, legacy=False, api=None):
+def verify_emulator_versions(sdk, legacy=False, api=None, *, emulator=None):
     versions = android_versions()
     image, _, source_revision = emulator_image(legacy, api)
     def revision(value):
         parts = value.split('.')
         return tuple(int(part) for part in parts + ['0'] * (3 - len(parts)))
-    for relative, expected in (('emulator', versions['emulator']),
-                               (image.replace(';', '/'), source_revision)):
-        properties = (sdk / relative / 'source.properties').read_text()
+    relative = image.replace(';', '/')
+    for name, directory, expected in (('emulator', emulator or sdk/'emulator', versions['emulator']),
+                                      (relative, sdk/relative, source_revision)):
+        properties = (directory/'source.properties').read_text()
         match = re.search(r'(?m)^\s*Pkg\.Revision\s*=\s*([0-9.]+)\s*$', properties)
         if not match or revision(match[1]) != revision(expected):
             actual = match[1] if match else 'missing'
-            raise ValueError(f'Android runtime revision differs from the approved version: {relative}: '
+            raise ValueError(f'Android runtime revision differs from the approved version: {name}: '
                              f'expected {expected}, got {actual}')
-        print('Verified Android runtime:', relative, match[1], flush=True)
+        print('Verified Android runtime:', name, match[1], flush=True)
+
+
+def prepare_emulator(sdk, manager, device_root, *, legacy=False, api=None):
+    version = android_versions()['emulator']
+    archived = LINUX_X64_EMULATOR_ARCHIVES.get(version) if sys.platform == 'linux' and host_arch() == 'x64' else None
+    image, image_revision, _ = emulator_image(legacy, api)
+    packages = emulator_sdk_packages(image, image_revision, preview=api is not None,
+                                     include_emulator=archived is None)
+    install_sdk_packages(sdk_install_command(manager, packages), device_root)
+    emulator = sdk/'emulator'
+    if archived:
+        url, digest = archived
+        print(f'Preparing Android emulator {version} from the verified Google archive', flush=True)
+        runtime = Path(tempfile.mkdtemp(prefix='runtime-', dir=device_root))
+        with tempfile.TemporaryDirectory(prefix='download-', dir=device_root) as temporary:
+            archive = Path(temporary)/'emulator.zip'
+            download(url, archive, digest=digest)
+            run(['unzip', '-q', archive, '-d', runtime], timeout=120)
+        emulator = runtime/'emulator'
+    verify_emulator_versions(sdk, legacy, api, emulator=emulator)
+    return emulator/'emulator', image
 
 
 def configure_emulator_storage(avd, report):
@@ -1441,13 +1468,11 @@ def main():
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=prepare_sdk_manager()
         device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
-        image,image_revision,_=emulator_image(args.legacy,args.api)
-        packages=emulator_sdk_packages(image,image_revision,preview=args.api is not None)
-        install_sdk_packages(sdk_install_command(manager,packages), device_root)
-        verify_emulator_versions(sdk,legacy=args.legacy,api=args.api)
+        emulator,image=prepare_emulator(sdk,manager,device_root,legacy=args.legacy,api=args.api)
         user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
-        env=dict(os.environ,ANDROID_USER_HOME=str(user_home),ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
+        env=dict(os.environ,ANDROID_SDK_ROOT=str(sdk),ANDROID_USER_HOME=str(user_home),
+                 ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
         run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
              '--device','pixel_6','--package',image],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
@@ -1458,7 +1483,7 @@ def main():
         cores=min(4,os.cpu_count() or 1)
         print(f'Disposable Android emulator: 4096 MiB RAM, {cores} virtual CPUs',flush=True)
         with (report/'emulator.txt').open('w') as log:
-            process=subprocess.Popen([sdk/'emulator/emulator','-avd','cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot','-no-metrics',
+            process=subprocess.Popen([emulator,'-avd','cor-ci','-no-window','-no-audio','-no-boot-anim','-no-snapshot','-no-metrics',
                 '-gpu','swiftshader_indirect','-memory','4096','-cores',str(cores)],
                 env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         run([ADB,'start-server'],env=env,timeout=30)
