@@ -9,7 +9,7 @@
 | 12 Bookworm | x64、ARM64 | `20261117-2665` |
 | 13 Trixie | x64、ARM64 | `20261116-2664` |
 
-下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证实际安装后的系统代理、TUN、DNS 和关闭恢复。ARM64 在 `ubuntu-24.04-arm` runner 上运行，来宾使用 Virtio GPU；无 KVM 时，桌面来宾按宿主可用核数分配至多四个 TCG vCPU。报告记录 KVM 或 TCG 和阶段耗时。镜像与写入层留在当次 runner。
+下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证实际安装后的系统代理、TUN、DNS 和关闭恢复。ARM64 在 `ubuntu-24.04-arm` runner 上运行，来宾使用 Virtio GPU；无 KVM 时，桌面来宾按宿主可用核数分配至多四个 TCG vCPU。报告记录 KVM 或 TCG 和阶段耗时。TCG 下依赖安装、完整应用测试、登录与托盘状态使用更长的有界等待，仍要求实际会话、应用自启动和托盘注册成功；失败报告附带登录用户日志和进程快照。镜像与写入层留在当次 runner。
 
 两个版本都在普通用户会话验证 X11、GNOME Wayland、托盘、授权允许与取消。以安装后的 `cor` 完成全套 PTY 测试，并检查 TUI 能读取 GUI 后台的订阅且共用同一个内核。登录专项让 VM 两次重启，由 GDM 启动实际 GNOME X11 会话，并通过 `dbus-user-session` 提供本次登录的用户总线。首次登录检查旧入口迁移，第二次检查后台启动、GNOME 的 AppIndicator 托盘注册和窗口隐藏，再验证托盘打开、关闭回托盘及应用菜单重开均保持同一后台 PID。登录阶段分别保留 boot ID、logind 会话、应用启动记录及托盘项。
 

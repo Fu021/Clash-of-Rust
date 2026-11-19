@@ -69,7 +69,7 @@ def install(as_user):
         run(['sudo', 'install', '-d', '-m', '0755', directory])
         run(['sudo', 'install', '-m', '0644', source/'metadata.json', source/'extension.js', directory])
     extensions = [appindicator_extension(), UUID]
-    run(as_user('dbus-run-session', '--', 'gsettings', 'set', 'org.gnome.shell',
+    run(as_user('env', 'GIO_USE_VFS=local', 'dbus-run-session', '--', 'gsettings', 'set', 'org.gnome.shell',
                 'enabled-extensions', repr(extensions)))
 
 

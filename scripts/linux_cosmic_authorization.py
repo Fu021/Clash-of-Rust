@@ -1,5 +1,6 @@
 """Locate and operate the installed COSMIC authorization dialog in a disposable VM."""
 import csv
+import os
 import re
 import shlex
 import struct
@@ -38,9 +39,13 @@ def capture_button(monitor, screenshot, label, environment):
     width, height = struct.unpack('>II', data[16:24])
     if not (800 <= width <= 4096 and 450 <= height <= 4096):
         return None
-    tsv = subprocess.check_output(
-        ['tesseract', screenshot, 'stdout', '--psm', '11', '-l', 'eng', 'tsv'],
-        text=True, stderr=subprocess.DEVNULL, timeout=10)
+    try:
+        tsv = subprocess.check_output(
+            ['tesseract', screenshot, 'stdout', '--psm', '11', '-l', 'eng', 'tsv'],
+            text=True, stderr=subprocess.DEVNULL, timeout=10,
+            env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
+    except subprocess.TimeoutExpired:
+        return None
     button = dialog_button(tsv, label, width, height)
     if button is None:
         return None

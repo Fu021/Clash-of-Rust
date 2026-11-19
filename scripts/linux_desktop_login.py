@@ -79,7 +79,7 @@ def prepare(report, desktop, release):
         packages.extend(['gcc', 'libc6-dev', 'libwayland-dev', 'libwayland-bin', 'wayland-protocols',
                          'python3-gi', 'glib-networking'])
     if desktop != GNOME_WAYLAND:
-        install(packages, timeout=600, no_recommends=True)
+        install(packages, timeout=guest_budget(600, 1800), no_recommends=True)
     run(['sudo', 'systemctl', 'stop', desktop.service])
     groups = ['--groups', 'sudo'] if desktop in (CINNAMON, COSMIC) else []
     run(['sudo', 'useradd', '--create-home', '--shell', '/bin/bash', *groups, USER])
@@ -154,6 +154,10 @@ def boot_id():
     return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
 
 
+def guest_budget(standard, slow):
+    return slow if platform.machine().lower() in ('aarch64', 'arm64') else standard
+
+
 def active_desktop(uid, desktop, session_type='x11'):
     sessions = output(['loginctl', 'list-sessions', '--no-legend']).splitlines()
     for line in sessions:
@@ -204,6 +208,22 @@ def active_desktop(uid, desktop, session_type='x11'):
 def desktop_call(environment, *arguments, **options):
     return output(as_user('env', *(f'{key}={value}' for key, value in environment.items()), *arguments),
                   **options)
+
+
+def x11_windows(environment):
+    def listing():
+        try:
+            return (desktop_call(environment, 'wmctrl', '-l', stderr=subprocess.PIPE),)
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr or ''
+            if 'BadWindow' in detail:
+                return None
+            raise RuntimeError(f'Could not enumerate X11 windows: {detail.strip()}') from error
+
+    windows, = wait_for('X11 client list kept changing during enumeration', listing,
+                        timeout=guest_budget(5, 15))
+    return [line.split(maxsplit=1)[0] for line in windows.splitlines()
+            if line.endswith(' Clash of Rust')]
 
 
 def desktop_wayland_sockets(runtime):
@@ -266,11 +286,11 @@ def verify(stage, report, desktop):
     session_type = 'wayland' if desktop in (COSMIC, GNOME_WAYLAND) else 'x11'
     login, environment = wait_for(
         f'{desktop.service} did not open a real {desktop.name} {session_type} session',
-        lambda: active_desktop(uid, desktop, session_type), timeout=180)
+        lambda: active_desktop(uid, desktop, session_type), timeout=guest_budget(180, 360))
     report['login'] = login
     prior_session = previous.get('startup', {}).get('session_id')
     trace = wait_for(f'{desktop.name} did not autostart the candidate', lambda: startup(
-        uid, prior_session, background, not background), timeout=90)
+        uid, prior_session, background, not background), timeout=guest_budget(90, 300))
     report['startup'] = trace
     pid = trace['pid']
     try:
@@ -279,7 +299,8 @@ def verify(stage, report, desktop):
     except subprocess.CalledProcessError as error:
         raise RuntimeError(f'Could not connect to the {desktop.name} user session bus') from error
     report['tray_item'] = wait_for(f'{desktop.name} did not register the candidate tray PID',
-                                   lambda: owner_tray(pid, lambda command: desktop_call(environment, *command)))
+                                   lambda: owner_tray(pid, lambda command: desktop_call(environment, *command)),
+                                   timeout=guest_budget(45, 180))
     menu_sha256 = sha256(MENU)
     entry = output(as_user('cat', AUTOSTART))
     mode = output(as_user('stat', '--format=%a:%F', AUTOSTART), env=dict(os.environ, LC_ALL='C'))
@@ -294,8 +315,7 @@ def verify(stage, report, desktop):
         if desktop == GNOME_WAYLAND:
             from linux_gnome_login import windows as inspect_windows
             return inspect_windows(lambda *command: desktop_call(environment, *command, stderr=subprocess.PIPE))
-        return [line.split(maxsplit=1)[0] for line in desktop_call(environment, 'wmctrl', '-l').splitlines()
-                if line.endswith(' Clash of Rust')]
+        return x11_windows(environment)
 
     def window_state(visible):
         state = startup(uid, prior_session, True, visible, current=trace['session_id'])
@@ -314,7 +334,8 @@ def verify(stage, report, desktop):
         service, path = report['tray_item']
         desktop_call(environment, 'gdbus', 'call', '--session', '--dest', service, '--object-path', path,
                      '--method', 'org.kde.StatusNotifierItem.Activate', '0', '0')
-        tray = wait_for('The tray did not reopen the existing owner', lambda: window_state(True))
+        tray = wait_for('The tray did not reopen the existing owner', lambda: window_state(True),
+                        timeout=guest_budget(45, 180))
         report['tray_reopen'] = tray
         if desktop == COSMIC:
             from linux_cosmic_windows import close
@@ -328,16 +349,17 @@ def verify(stage, report, desktop):
             for window in tray['windows']:
                 desktop_call(environment, 'wmctrl', '-ic', window)
         report['closed_window'] = wait_for('Closing the window did not return the owner to the tray',
-                                           lambda: window_state(False))
+                                           lambda: window_state(False), timeout=guest_budget(45, 180))
         desktop_call(environment, 'gtk-launch', MENU.stem)
         report['menu_reopen'] = wait_for('The application menu did not reopen the existing owner',
-                                         lambda: window_state(True))
+                                         lambda: window_state(True), timeout=guest_budget(45, 180))
         if desktop == COSMIC:
             report['menu_screenshot'] = capture_cosmic(environment, 'manual-launch')
         run(['sudo', 'systemctl', 'stop', desktop.service])
         run(['sudo', 'systemctl', 'stop', f'user@{uid}.service'])
     else:
-        report['foreground_windows'] = wait_for('The foreground window was not mapped', windows)
+        report['foreground_windows'] = wait_for('The foreground window was not mapped', windows,
+                                                timeout=guest_budget(45, 180))
         if desktop == COSMIC:
             from linux_cosmic_desktop import AUTH_RESULT
             from linux_gui import ACTION
@@ -354,14 +376,14 @@ def verify(stage, report, desktop):
                 return value
 
             report['authorization'] = wait_for('COSMIC authorization probe did not return',
-                                               authorization_result, timeout=250)
+                                               authorization_result, timeout=guest_budget(250, 450))
             report['foreground_screenshot'] = capture_cosmic(environment, 'first-login')
         if desktop == CINNAMON:
             from linux_mint_desktop import AUTH_LOG, authorization_result
             try:
                 report['authorization'] = wait_for('Cinnamon authorization probe did not return',
                                                    lambda: authorization_result(HOME, USER, login['session']),
-                                                   timeout=250)
+                                                   timeout=guest_budget(250, 450))
             finally:
                 try:
                     report['authorization_log'] = output(as_user('cat', HOME/AUTH_LOG), stderr=subprocess.PIPE)
@@ -521,6 +543,18 @@ def main():
         try:
             report[desktop.service.removesuffix('.service') + '_journal'] = output(
                 ['sudo', 'journalctl', '-b', '-u', desktop.service, '-n', '80', '--no-pager'])
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            report['login_user_journal'] = output(
+                ['sudo', 'journalctl', '-b', f'_UID={pwd.getpwnam(USER).pw_uid}',
+                 '-n', '80', '--no-pager'])
+        except (KeyError, OSError, subprocess.SubprocessError):
+            pass
+        try:
+            report['login_processes'] = '\n'.join(output(
+                as_user('ps', '-u', USER, '-o', 'pid,ppid,stat,etimes,comm,args', '--no-headers')
+            ).splitlines()[:80])
         except (OSError, subprocess.SubprocessError):
             pass
         if desktop == COSMIC:

@@ -137,10 +137,10 @@ TARGETS = {
     'opensuse': (
         leap_target('16.0', '18.95', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
         leap_target('16.1', '3.18', '2cbf0121ccb8eef5452b43e14685715452ffa049e6a618bb165382aa1f2aab3b'),
-        Target('opensuse', '20261117', 'x64',
+        Target('opensuse', '20261118', 'x64',
                'https://downloadcontent.opensuse.org/tumbleweed/appliances/'
-               'openSUSE-Tumbleweed-Minimal-VM.x86_64-1.0.0-Cloud-Snapshot20261117.qcow2',
-               'fbdb555222faea0b07116c5af50e6dfa564afce2719ff3cfc458d585f9b9342b'),
+               'openSUSE-Tumbleweed-Minimal-VM.x86_64-1.0.0-Cloud-Snapshot20261118.qcow2',
+               'c1cb4f8eb3dd0b86d496ba78f10dc35fdfe062aab642b32ea0421b447e6ee1fb'),
     ),
     'arch': (
         Target('arch', '20261115.625457', 'x64',

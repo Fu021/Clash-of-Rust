@@ -512,6 +512,39 @@ class UbuntuVmTests(unittest.TestCase):
                             for call in execute.call_args_list))
         self.assertEqual(report, {'menu_sha256': 'fixture-digest', 'boot_id': 'fixture-boot'})
 
+    def test_gnome_login_probe_writes_settings_without_activating_gvfs(self):
+        import linux_gnome_login
+
+        with patch.object(linux_gui, 'output', return_value='GNOME Shell 49.1'), \
+                patch.object(linux_gui, 'appindicator_extension', return_value='fixture-appindicator'), \
+                patch.object(linux_gnome_login, 'run') as execute:
+            linux_gnome_login.install(linux_desktop_login.as_user)
+        execute.assert_called_with(linux_desktop_login.as_user(
+            'env', 'GIO_USE_VFS=local', 'dbus-run-session', '--', 'gsettings', 'set',
+            'org.gnome.shell', 'enabled-extensions',
+            repr(['fixture-appindicator', linux_gnome_login.UUID])))
+
+    def test_real_x11_login_retries_stale_client_ids_but_requires_a_successful_listing(self):
+        stale = subprocess.CalledProcessError(1, ['wmctrl'], stderr='X Error: BadWindow')
+        unavailable = subprocess.CalledProcessError(1, ['wmctrl'], stderr='Cannot open display')
+        with patch.object(linux_desktop_login, 'desktop_call', side_effect=[
+                stale, '0x004000 0 test-host Clash of Rust\n0x008000 0 test-host Settings',
+                '', unavailable,
+        ]) as command, patch.object(linux_gui.time, 'sleep'):
+            self.assertEqual(linux_desktop_login.x11_windows({}), ['0x004000'])
+            self.assertEqual(linux_desktop_login.x11_windows({}), [])
+            with self.assertRaisesRegex(RuntimeError, 'Cannot open display'):
+                linux_desktop_login.x11_windows({})
+        self.assertEqual(command.call_count, 4)
+
+    def test_arm64_tcg_login_uses_larger_budgets_for_the_same_state_checks(self):
+        with patch.object(linux_desktop_login.platform, 'machine', return_value='x86_64'):
+            self.assertEqual(linux_desktop_login.guest_budget(90, 300), 90)
+        for machine in ('aarch64', 'arm64'):
+            with self.subTest(machine=machine), \
+                    patch.object(linux_desktop_login.platform, 'machine', return_value=machine):
+                self.assertEqual(linux_desktop_login.guest_budget(90, 300), 300)
+
     def test_mint_login_requires_lightdm_x11_and_the_matching_cinnamon_session(self):
         for pam, shell_session, found in (('lightdm-autologin', 'c2', True),
                                           ('lightdm', 'c2', False),
@@ -562,7 +595,11 @@ class UbuntuVmTests(unittest.TestCase):
                 result = linux_gui.verify_authorization(io.StringIO(), password, locate)
             self.assertTrue(result['cancel_preserved_permissions'])
             self.assertTrue(result['accept_granted_helper'])
-            self.assertEqual([command[-1] for command in keys], ['42', 'Escape', '43', '-', 'Return'])
+            self.assertEqual([command[1:] for command in keys], [
+                ['windowactivate', '--sync', '42'],
+                ['key', 'Escape'], ['windowactivate', '--sync', '43'],
+                ['windowfocus', '--sync', '43'], ['-'], ['key', 'Return'],
+            ])
             self.assertEqual(locate.call_count, 5)
 
     def test_mint_22_authorization_waits_for_cinnamon_running(self):
@@ -744,6 +781,19 @@ class UbuntuVmTests(unittest.TestCase):
                         expected.extend([('reboot', None), ('remote', 'background-login'), ('python', None)])
                     self.assertEqual(commands, expected)
                     self.assertEqual(guest.python.called, not failed)
+
+    def test_arm64_installed_candidate_uses_an_extended_tcg_budget(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory/'package.tar.gz'
+            archive.touch()
+            guest = MagicMock(target=linux_ci.target_for('debian', '13', 'arm64'),
+                              environment='guest ', architecture='aarch64', kvm=False)
+            with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                linux_ci.verify_vm_package(guest, directory, 123)
+            timeouts = [call.kwargs.get('timeout') for call in guest.remote.call_args_list]
+            self.assertIn(3600, timeouts)
+            self.assertIn(1800, timeouts)
 
     def test_mint_package_runs_native_x11_and_wayland_before_upgrade_and_uninstall(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -8079,6 +8129,28 @@ class AptCacheTests(unittest.TestCase):
 
 
 class CosmicStartupInvestigationTests(unittest.TestCase):
+    def test_compatibility_authorization_retries_ocr_timeout_without_clicking(self):
+        import linux_cosmic_authorization
+
+        with tempfile.TemporaryDirectory() as temporary:
+            screenshot = Path(temporary)/'dialog.png'
+            screenshot.write_bytes(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+                                   b'\x00\x00\x05\x00\x00\x00\x03\x20')
+            header = 'left\ttop\twidth\theight\tconf\ttext\n'
+            recognized = header + ''.join(
+                f'20\t10\t10\t10\t90\t{word}\n'
+                for word in ('Authentication', 'TUN', 'Clash', 'Rust', 'Cancel'))
+            monitor = MagicMock()
+            with patch.object(linux_cosmic_authorization, 'capture_screen', return_value='qmp') as capture, \
+                    patch.object(linux_cosmic_authorization.subprocess, 'check_output', side_effect=[
+                        subprocess.TimeoutExpired('tesseract', 10), recognized,
+                    ]) as ocr, patch.object(linux_cosmic_authorization.time, 'sleep'), \
+                    patch.object(linux_cosmic_authorization, 'click') as click:
+                linux_cosmic_authorization.answer_dialog(monitor, screenshot, {})
+            self.assertEqual(capture.call_count, 2)
+            self.assertEqual(ocr.call_args.kwargs['env']['OMP_THREAD_LIMIT'], '1')
+            click.assert_called_once_with(monitor, (640, 615))
+
     def test_compatibility_authorization_reads_quoted_guest_paths(self):
         import linux_cosmic_authorization
         import linux_desktop_login

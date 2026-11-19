@@ -132,9 +132,12 @@ def verify_authorization(log, password_file, locate, *, respond=None, restart_ag
                             if window:
                                 run(['xdotool', 'windowactivate', '--sync', window], timeout=15)
                             if allow:
+                                if window:
+                                    run(['xdotool', 'windowfocus', '--sync', window], timeout=15)
                                 password = password_file.read_text()
                                 if not password.isascii() or not password.isalnum():
                                     raise ValueError('Invalid disposable account password')
+                                time.sleep(.3)
                                 run(['xdotool', '-'], text=True, timeout=15,
                                     input=f'type --clearmodifiers --delay 10 {password}\n',
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

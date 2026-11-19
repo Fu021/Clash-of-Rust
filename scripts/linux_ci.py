@@ -717,7 +717,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
     try:
         print(f'{guest.target.distribution} {guest.target.release}: verifying installed candidate', flush=True)
         guest.remote(guest.environment + extra + command,
-                     timeout=2400 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
+                     timeout=3600 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
         if guest.target.full_desktop:
             cosmic = (guest.target.family, guest.target.release) == ('pop', '24.04')
             phases = ('prepare', 'first-login', 'background-login')
@@ -735,7 +735,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                         from linux_cosmic_authorization import verify_dialogs
                         verify_dialogs(guest, REPORT)
                     guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
-                                 'scripts/linux_desktop_login.py ' + phase, timeout=800)
+                                 'scripts/linux_desktop_login.py ' + phase,
+                                 timeout=1800 if guest.architecture == 'aarch64' or not guest.kvm else 800)
                 except Exception:
                     if cosmic:
                         with contextlib.suppress(OSError):
@@ -749,7 +750,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             print(f'{guest.target.distribution} {guest.target.release}: verifying upgrade and uninstall', flush=True)
             guest.python("from pathlib import Path; import runpy; "
                          f"runpy.run_path('scripts/test-release-package.py')['{operation}']"
-                         "(next(Path('dist').glob('*.deb')).resolve())", timeout=900)
+                         "(next(Path('dist').glob('*.deb')).resolve())",
+                         timeout=1800 if guest.architecture == 'aarch64' or not guest.kvm else 900)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
