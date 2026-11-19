@@ -93,7 +93,7 @@ def prepare():
     agent = 'xfce-polkit' if distro == 'fedora' else 'mate-polkit'
     install_dependencies((*common, agent, *packages))
     if distro == 'fedora':
-        privileged('upgrade', 'liblastlog2', 'pam')
+        privileged('upgrade', 'liblastlog2', 'pam', 'selinux-policy-targeted')
     if Path('/usr/lib/systemd/system/polkit-agent-helper.socket').is_file():
         run(['sudo', 'systemctl', 'daemon-reload'], timeout=60)
         run(['sudo', 'systemctl', 'start', 'polkit-agent-helper.socket'], timeout=60)

@@ -94,6 +94,24 @@ _cosmic_startup_host_spec.loader.exec_module(cosmic_startup_host)
 
 
 class TunDnsFixtureTests(unittest.TestCase):
+    def test_tun_namespace_allows_arm64_extended_cli_cleanup_time(self):
+        import pwd
+        for machine, flags, timeout in (
+                ('x86_64', ['--with-user-tests'], 520),
+                ('aarch64', [], 520),
+                ('aarch64', ['--with-user-tests'], 580),
+                ('aarch64', ['--with-user-tests', '--proxy-benchmark'], 640)):
+            with self.subTest(machine=machine, flags=flags), \
+                    patch.object(sys, 'argv', ['test-linux-tun.py', '--test-binary', sys.executable,
+                                              '--uid', '1000', *flags]), \
+                    patch.object(pwd, 'getpwuid', return_value=SimpleNamespace(pw_uid=1000)), \
+                    patch.object(linux_tun_test, 'platform', SimpleNamespace(machine=lambda: machine)), \
+                    patch.object(linux_tun_test, 'os', MagicMock(geteuid=lambda: 0)), \
+                    patch.object(linux_tun_test, 'run') as execute:
+                linux_tun_test.main()
+            self.assertEqual(execute.call_args.kwargs['timeout'], timeout)
+            self.assertEqual(execute.call_args.args[0][-len(flags):] if flags else [], flags)
+
     def test_fixture_uses_the_guest_system_ca_bundle(self):
         debian = '/etc/ssl/certs/ca-certificates.crt'
         fedora = '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'
@@ -380,10 +398,39 @@ class UbuntuVmTests(unittest.TestCase):
                 self.assertIn('cloud-init status --wait --long', command.call_args.args[0])
                 self.assertEqual((Path(temporary)/'official-image-cloud-init-status.txt').read_text(), text)
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux KVM device API')
+    def test_kvm_requires_successful_vm_creation(self):
+        import fcntl
+
+        with patch.object(linux_ci, 'open', create=True) as open_device, \
+                patch.object(fcntl, 'ioctl', side_effect=[linux_ci.KVM_API_VERSION, 73]) as ioctl, \
+                patch.object(linux_ci.os, 'close') as close_fd:
+            device = open_device.return_value.__enter__.return_value
+            self.assertTrue(linux_ci.kvm_available())
+            open_device.assert_called_once_with('/dev/kvm', 'r+b')
+            self.assertEqual(ioctl.call_args_list, [
+                call(device, linux_ci.KVM_GET_API_VERSION), call(device, linux_ci.KVM_CREATE_VM, 0),
+            ])
+            close_fd.assert_called_once_with(73)
+            open_device.return_value.__exit__.assert_called_once()
+
+            ioctl.side_effect = [linux_ci.KVM_API_VERSION, PermissionError('KVM_CREATE_VM denied')]
+            with contextlib.redirect_stdout(io.StringIO()) as log:
+                self.assertFalse(linux_ci.kvm_available())
+            self.assertIn('KVM_CREATE_VM denied', log.getvalue())
+            close_fd.assert_called_once()
+
+            open_device.side_effect = FileNotFoundError('/dev/kvm is absent')
+            with contextlib.redirect_stdout(io.StringIO()) as log:
+                self.assertFalse(linux_ci.kvm_available())
+            self.assertIn('/dev/kvm is absent', log.getvalue())
+
     def test_arm_cloud_vm_adds_desktop_resources_only_for_desktop_validation(self):
-        for suite, release, needs_gpu in (('ubuntu', '20.04', False), ('debian', '13', True),
-                                          ('opensuse', '16.0', True)):
-            with self.subTest(suite=suite), tempfile.TemporaryDirectory() as temporary:
+        for suite, release, needs_gpu, kvm in (
+            ('ubuntu', '20.04', False, False), ('debian', '13', True, False),
+            ('opensuse', '16.0', True, False), ('debian', '13', True, True),
+        ):
+            with self.subTest(suite=suite, kvm=kvm), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 target = linux_ci.target_for(suite, release, 'arm64')
 
@@ -392,7 +439,7 @@ class UbuntuVmTests(unittest.TestCase):
 
                 with patch.object(linux_ci, 'REPORT', directory), \
                         patch.object(linux_ci, 'host_arch', return_value='arm64'), \
-                        patch.object(linux_ci.os, 'access', return_value=False), \
+                        patch.object(linux_ci, 'kvm_available', return_value=kvm), \
                         patch.object(linux_ci.os, 'sched_getaffinity', return_value={0, 1, 2, 3}), \
                         patch.object(linux_ci, 'run', side_effect=create_key), \
                         patch.object(linux_ci.socket, 'socket') as socket, \
@@ -407,7 +454,9 @@ class UbuntuVmTests(unittest.TestCase):
                     guest = linux_ci.VmGuest(directory/'base.qcow2', directory, 'fixture', target)
                     guest.console.close()
                 command = boot.call_args.args[0]
-                self.assertEqual(command[:3], ['qemu-system-aarch64', '-machine', 'virt,accel=tcg'])
+                machine = 'virt,gic-version=host,accel=kvm' if kvm else 'virt,accel=tcg'
+                cpu = 'host' if kvm else 'cortex-a72'
+                self.assertEqual(command[:5], ['qemu-system-aarch64', '-machine', machine, '-cpu', cpu])
                 self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
                 self.assertEqual('virtio-gpu-pci' in command, needs_gpu)
                 self.assertEqual('-qmp' in command, needs_gpu)
@@ -415,7 +464,7 @@ class UbuntuVmTests(unittest.TestCase):
                     self.assertEqual(command[command.index('-qmp')+1],
                                      f'unix:{guest.monitor_path},server=on,wait=off')
                     self.assertEqual(command[command.index('-display')+1], 'none')
-                self.assertEqual(command[command.index('-smp')+1], '4' if needs_gpu else '2')
+                self.assertEqual(command[command.index('-smp')+1], '4' if needs_gpu and not kvm else '2')
 
     def test_mint_automatic_boot_preserves_the_image_uuid_and_rejects_non_casper_media(self):
         source = ('menuentry "Start Linux Mint" {\n'
@@ -617,6 +666,51 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertEqual(report['notifier_host_state'], 'b true')
             self.assertEqual(query.call_args.args[0], environment)
             self.assertEqual(query.call_args.args[-1], 'IsStatusNotifierHostRegistered')
+
+    def test_debian_login_waits_share_a_stage_deadline(self):
+        login = {'session': 'active'}
+        trace = {'pid': 100, 'session_id': 'first'}
+        clock = SimpleNamespace(monotonic=MagicMock(side_effect=[0, 0, 170, 281]))
+        outcomes = [(login, {}), trace, TimeoutError('tray never registered')]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory/'prepare.json').write_text('{"boot_id":"old"}')
+            with patch.object(linux_desktop_login, 'REPORT', directory), \
+                    patch.object(linux_desktop_login, 'boot_id', return_value='new'), \
+                    patch.object(linux_desktop_login.pwd, 'getpwnam',
+                                 return_value=SimpleNamespace(pw_uid=1001)), \
+                    patch.object(linux_desktop_login, 'desktop_call'), \
+                    patch.object(linux_desktop_login, 'time', clock), \
+                    patch.object(linux_desktop_login, 'wait_for', side_effect=outcomes) as wait_for:
+                with self.assertRaisesRegex(TimeoutError, 'tray never registered'):
+                    linux_desktop_login.verify('first-login', {}, linux_desktop_login.GNOME)
+        self.assertEqual([poll.kwargs['timeout'] for poll in wait_for.call_args_list], [180, 110, 19])
+
+    def test_cosmic_first_login_verifies_authorization_without_a_screenshot_portal(self):
+        login = {'session': 'active'}
+        trace = {'pid': 100, 'session_id': 'first'}
+        authorization = {'session': 'active', 'production_action': linux_gui.ACTION,
+                         'cancel_preserved_permissions': True, 'accept_granted_helper': True}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory/'prepare.json').write_text('{"boot_id":"old","menu_sha256":"menu"}')
+            report = {}
+            with patch.object(linux_desktop_login, 'REPORT', directory), \
+                    patch.object(linux_desktop_login, 'boot_id', return_value='new'), \
+                    patch.object(linux_desktop_login.pwd, 'getpwnam',
+                                 return_value=SimpleNamespace(pw_uid=1001)), \
+                    patch.object(linux_desktop_login, 'active_desktop', return_value=(login, {})), \
+                    patch.object(linux_desktop_login, 'startup', return_value=trace), \
+                    patch.object(linux_desktop_login, 'owner_tray', return_value=('tray.bus', '/tray')), \
+                    patch.object(linux_desktop_login, 'desktop_call'), \
+                    patch.object(linux_desktop_login, 'sha256', return_value='menu'), \
+                    patch.object(linux_desktop_login, 'output',
+                                 side_effect=['Exec=cor --background', '600:regular file',
+                                              json.dumps(authorization)]), \
+                    patch('linux_cosmic_windows.windows', return_value=['Clash of Rust']):
+                linux_desktop_login.verify('first-login', report, linux_desktop_login.COSMIC)
+            self.assertEqual(report['foreground_windows'], ['Clash of Rust'])
+            self.assertEqual(report['authorization'], authorization)
 
     def test_gnome_failure_screenshot_uses_the_real_session_and_validates_png(self):
         environment = {'DISPLAY': ':0', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1001/bus'}
@@ -891,6 +985,25 @@ class UbuntuVmTests(unittest.TestCase):
         guest.remote.assert_not_called()
         self.assertIn('package_remaining_wait', timings)
 
+    def test_only_debian_arm64_tcg_guests_use_fast_initramfs_compression(self):
+        for suite, release, arch, kvm in (
+                ('debian', '12', 'arm64', False), ('debian', '13', 'arm64', False),
+                ('debian', '12', 'arm64', True), ('debian', '12', 'x64', False),
+                ('ubuntu', '20.04', 'arm64', False)):
+            with self.subTest(suite=suite, release=release, arch=arch, kvm=kvm), \
+                    patch.object(linux_ci, 'guest_deb_downloads'):
+                guest = MagicMock(target=linux_ci.target_for(suite, release, arch),
+                                  architecture='aarch64' if arch == 'arm64' else 'x86_64', kvm=kvm)
+                linux_ci.prepare_vm_guest(guest, Path('/unused'))
+                guest.python.assert_called_once_with(
+                    'from linux_apt import update_indexes; update_indexes()', timeout=1050)
+                if suite == 'debian' and arch == 'arm64' and not kvm:
+                    guest.remote.assert_called_once_with(
+                        'sudo tee /etc/initramfs-tools/conf.d/zz-cor-ci-compression >/dev/null',
+                        input='COMPRESSLEVEL=1\n', text=True, timeout=15)
+                else:
+                    guest.remote.assert_not_called()
+
     def test_debian_package_runs_boot_checks_before_upgrade_and_stops_on_login_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -917,7 +1030,7 @@ class UbuntuVmTests(unittest.TestCase):
                     else:
                         expected.extend([('reboot', None), ('remote', 'background-login'), ('python', None)])
                     self.assertEqual(commands, expected)
-                    self.assertEqual(guest.remote.call_args_list[3].kwargs['timeout'], 600)
+                    self.assertEqual(guest.remote.call_args_list[3].kwargs['timeout'], 420)
                     self.assertEqual(guest.python.called, not failed)
 
     def test_other_desktop_vm_captures_the_screen_when_login_fails(self):
@@ -3113,28 +3226,41 @@ class BuildTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'agent exited'):
             linux_gui.authorization_dialog(request, io.StringIO(), locate)
 
-    def test_linux_gui_restarts_mate_between_cancel_and_accept(self):
+    def test_linux_gui_waits_for_each_mate_password_prompt(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             password = directory/'password'
             password.write_text('fixture')
             agent = MagicMock()
+            agent.__enter__.return_value.poll.return_value = None
             with patch.dict(os.environ, {'COR_GUI_REPORT': str(directory),
                                         'COR_GUI_AUTH_PASSWORD_FILE': str(password)}), \
                     patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'debian'}), \
                     patch.object(linux_gui, 'process', return_value=agent) as launches, \
+                    patch.object(linux_gui, 'gtk_authorization_window', return_value='42'), \
                     patch.object(linux_gui, 'verify_authorization') as verify:
                 def authorize(log, secret, locate, *, restart_agent):
                     self.assertEqual(launches.call_count, 1)
+                    self.assertIsNone(locate())
+                    agent_log = launches.call_args.args[1]
+                    agent_log.write(b"PolkitAgentSession: initiating authentication, cookie test-only\n")
+                    agent_log.flush()
+                    self.assertIsNone(locate())
+                    agent_log.write(b"PolkitAgentSession: read `PAM_PROMPT_ECHO_OFF Password:' from helper\n")
+                    agent_log.flush()
+                    self.assertEqual(locate(), '42')
                     restart_agent()
                     self.assertEqual(agent.__exit__.call_count, 1)
                     self.assertEqual(launches.call_count, 2)
                     self.assertEqual(launches.call_args_list[0], launches.call_args_list[1])
+                    self.assertEqual(launches.call_args.kwargs['env']['POLKIT_DEBUG'], '1')
+                    self.assertIsNone(locate())
                     return {'accept_granted_helper': True}
 
                 verify.side_effect = authorize
                 self.assertEqual(linux_gui.authentication(), {'accept_granted_helper': True})
             self.assertEqual(agent.__exit__.call_count, 2)
+            self.assertNotIn('test-only', (directory/'authentication.log').read_text())
 
     def test_fedora_gui_uses_the_distribution_xfce_polkit_agent(self):
         import linux_native_guest
@@ -3172,7 +3298,7 @@ class BuildTests(unittest.TestCase):
                 linux_native_guest.prepare()
                 self.assertEqual(linux_gui.authentication(), {'accept_granted_helper': True})
             self.assertIn('xfce-polkit', install.call_args.args[0])
-            privileged.assert_called_once_with('upgrade', 'liblastlog2', 'pam')
+            privileged.assert_called_once_with('upgrade', 'liblastlog2', 'pam', 'selinux-policy-targeted')
             self.assertNotIn('mate-polkit', install.call_args.args[0])
             self.assertEqual(launches.call_args.args[0], ['/usr/libexec/xfce-polkit'])
             public_log = (directory/'authentication.log').read_text()

@@ -9,9 +9,9 @@ import platform
 import pwd
 import re
 import secrets
-import struct
 import subprocess
 import tempfile
+import time
 import tomllib
 
 from build_support import ROOT, run, sha256, write_json
@@ -28,6 +28,7 @@ LIGHTDM_CONFIG = Path('/etc/lightdm/lightdm.conf.d/99-cor-compatibility.conf')
 COSMIC_GREETER_CONFIG = Path('/etc/greetd/cosmic-greeter.toml')
 COSMIC_PROBES = HOME/'cor-desktop-probes'
 DISPLAYMANAGER_SYSCONFIG = Path('/etc/sysconfig/displaymanager')
+DEBIAN_LOGIN_BUDGET = 300
 
 
 @dataclass(frozen=True)
@@ -268,28 +269,6 @@ def desktop_wayland_sockets(runtime):
                               '-printf', r'%f\n')).splitlines())
 
 
-def capture_cosmic(environment, stage):
-    directory = Path(output(as_user('mktemp', '-d', HOME/'cor-capture-XXXXXXXX')))
-    result = subprocess.check_output(as_user(
-        'env', *(f'{key}={value}' for key, value in environment.items()),
-        'cosmic-screenshot', '--interactive=false', '--notify=false', '--save-dir', directory,
-    ), text=True, timeout=60).strip()
-    screenshot = Path(result)
-    if screenshot.parent != directory or screenshot.suffix != '.png':
-        raise RuntimeError('COSMIC portal did not return a PNG in its capture directory')
-    size_limit = 16 * 1024 * 1024
-    data = subprocess.check_output(as_user('head', '-c', str(size_limit + 1), screenshot), timeout=15)
-    if (not 24 <= len(data) <= size_limit or not data.startswith(b'\x89PNG\r\n\x1a\n')
-            or data[12:16] != b'IHDR'):
-        raise RuntimeError('COSMIC produced an invalid screenshot')
-    width, height = struct.unpack('>II', data[16:24])
-    if width < 800 or height < 450:
-        raise RuntimeError(f'COSMIC screenshot was too small: {width}x{height}')
-    destination = REPORT/f'{stage}.png'
-    destination.write_bytes(data)
-    return {'filename': destination.name, 'width': width, 'height': height}
-
-
 def startup_record():
     limit = 256 * 1024
     try:
@@ -330,13 +309,23 @@ def startup(uid, previous, background, visible, current=None, *, fail_on_tray_er
 def verify(stage, report, desktop):
     background = stage == 'background-login'
     debian = desktop == GNOME
+    deadline = time.monotonic() + DEBIAN_LOGIN_BUDGET if debian else None
+
+    def wait_for_state(description, probe, timeout):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f'{description} (Debian login stage deadline reached)')
+            timeout = min(timeout, remaining)
+        return wait_for(description, probe, timeout=timeout)
+
     previous = json.loads((REPORT/('first-login.json' if background else 'prepare.json')).read_text())
     report['boot_id'] = boot_id()
     if report['boot_id'] == previous['boot_id']:
         raise RuntimeError(f'{desktop.name} verification requires a new system boot')
     uid = pwd.getpwnam(USER).pw_uid
     session_type = 'wayland' if desktop in (COSMIC, GNOME_WAYLAND) else 'x11'
-    login, environment = wait_for(
+    login, environment = wait_for_state(
         f'{desktop.service} did not open a real {desktop.name} {session_type} session',
         lambda: active_desktop(uid, desktop, session_type),
         timeout=180 if debian else guest_budget(180, 360))
@@ -345,9 +334,10 @@ def verify(stage, report, desktop):
     startup_timeout = (135 if background else 110) if debian else guest_budget(90, 300)
     window_timeout = 45 if debian else guest_budget(45, 180)
     try:
-        trace = wait_for(f'{desktop.name} candidate did not reach the expected window and tray state',
-                         lambda: startup(uid, prior_session, background, not background, fail_on_tray_error=True),
-                         timeout=startup_timeout)
+        trace = wait_for_state(
+            f'{desktop.name} candidate did not reach the expected window and tray state',
+            lambda: startup(uid, prior_session, background, not background, fail_on_tray_error=True),
+            timeout=startup_timeout)
     except (TimeoutError, RuntimeError):
         report['startup_observed'] = startup_record()
         try:
@@ -365,9 +355,10 @@ def verify(stage, report, desktop):
                      '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'GetId')
     except subprocess.CalledProcessError as error:
         raise RuntimeError(f'Could not connect to the {desktop.name} user session bus') from error
-    report['tray_item'] = wait_for(f'{desktop.name} did not register the candidate tray PID',
-                                   lambda: owner_tray(pid, lambda command: desktop_call(environment, *command)),
-                                   timeout=window_timeout)
+    report['tray_item'] = wait_for_state(
+        f'{desktop.name} did not register the candidate tray PID',
+        lambda: owner_tray(pid, lambda command: desktop_call(environment, *command)),
+        timeout=window_timeout)
     menu_sha256 = sha256(MENU)
     entry = output(as_user('cat', AUTOSTART))
     mode = output(as_user('stat', '--format=%a:%F', AUTOSTART), env=dict(os.environ, LC_ALL='C'))
@@ -396,13 +387,11 @@ def verify(stage, report, desktop):
     if background:
         if windows():
             raise RuntimeError('Background autostart displayed the main window')
-        if desktop == COSMIC:
-            report['background_screenshot'] = capture_cosmic(environment, 'background-login')
         service, path = report['tray_item']
         desktop_call(environment, 'gdbus', 'call', '--session', '--dest', service, '--object-path', path,
                      '--method', 'org.kde.StatusNotifierItem.Activate', '0', '0')
-        tray = wait_for('The tray did not reopen the existing owner', lambda: window_state(True),
-                        timeout=window_timeout)
+        tray = wait_for_state('The tray did not reopen the existing owner', lambda: window_state(True),
+                              timeout=window_timeout)
         report['tray_reopen'] = tray
         if desktop == COSMIC:
             from linux_cosmic_windows import close
@@ -415,18 +404,16 @@ def verify(stage, report, desktop):
         else:
             for window in tray['windows']:
                 desktop_call(environment, 'wmctrl', '-ic', window)
-        report['closed_window'] = wait_for('Closing the window did not return the owner to the tray',
-                                           lambda: window_state(False), timeout=window_timeout)
+        report['closed_window'] = wait_for_state('Closing the window did not return the owner to the tray',
+                                                 lambda: window_state(False), timeout=window_timeout)
         desktop_call(environment, 'gtk-launch', MENU.stem)
-        report['menu_reopen'] = wait_for('The application menu did not reopen the existing owner',
-                                         lambda: window_state(True), timeout=window_timeout)
-        if desktop == COSMIC:
-            report['menu_screenshot'] = capture_cosmic(environment, 'manual-launch')
+        report['menu_reopen'] = wait_for_state('The application menu did not reopen the existing owner',
+                                               lambda: window_state(True), timeout=window_timeout)
         run(['sudo', 'systemctl', 'stop', desktop.service])
         run(['sudo', 'systemctl', 'stop', f'user@{uid}.service'])
     else:
-        report['foreground_windows'] = wait_for('The foreground window was not mapped', windows,
-                                                timeout=window_timeout)
+        report['foreground_windows'] = wait_for_state('The foreground window was not mapped', windows,
+                                                      timeout=window_timeout)
         if desktop == COSMIC:
             from linux_cosmic_desktop import AUTH_RESULT
             from linux_gui import ACTION
@@ -444,7 +431,6 @@ def verify(stage, report, desktop):
 
             report['authorization'] = wait_for('COSMIC authorization probe did not return',
                                                authorization_result, timeout=guest_budget(250, 450))
-            report['foreground_screenshot'] = capture_cosmic(environment, 'first-login')
         if desktop == CINNAMON:
             from linux_mint_desktop import AUTH_LOG, authorization_result
             try:

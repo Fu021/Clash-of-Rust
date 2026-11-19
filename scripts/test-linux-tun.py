@@ -12,6 +12,7 @@ from http.client import HTTPConnection, HTTPResponse
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import signal
@@ -801,10 +802,13 @@ def main():
         user_tests = ['--with-user-tests'] if args.with_user_tests else []
         if args.proxy_benchmark:
             user_tests += ['--proxy-benchmark']
+        timeout = 640 if args.proxy_benchmark else 520
+        if args.with_user_tests and not args.proxy_benchmark and platform.machine() in ('aarch64', 'arm64'):
+            timeout += 60
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid,
              '--test-case', args.test_case, *user_tests],
-            timeout=640 if args.proxy_benchmark else 520)
+            timeout=timeout)
         print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': args.with_user_tests, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))

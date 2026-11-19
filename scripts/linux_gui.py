@@ -182,15 +182,20 @@ def authentication():
                       Path('/usr/lib/polkit-mate/polkit-mate-authentication-agent-1'),
                       Path('/usr/lib/mate-polkit/polkit-mate-authentication-agent-1'))
         agent = next((path for path in candidates if path.is_file()), candidates[0])
+    prompt_debug, prompt_marker = {}, None
+    if xfce:
+        prompt_debug, prompt_marker = {'G_MESSAGES_DEBUG': 'all'}, b'\nVisibility: 0\n'
+    elif mate:
+        prompt_debug, prompt_marker = {'POLKIT_DEBUG': '1'}, b"read `PAM_PROMPT_ECHO_OFF "
     with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log, \
-            (tempfile.TemporaryFile() if xfce else contextlib.nullcontext()) as agent_log, \
+            (tempfile.TemporaryFile() if prompt_debug else contextlib.nullcontext()) as agent_log, \
             contextlib.ExitStack() as processes:
         print(f'Graphical authorization agent: {agent}', file=log, flush=True)
 
         def launch():
-            if xfce:
+            if prompt_debug:
                 return processes.enter_context(process([agent], agent_log,
-                                                       env={**os.environ, 'G_MESSAGES_DEBUG': 'all'}))
+                                                       env={**os.environ, **prompt_debug}))
             return processes.enter_context(process([agent], log))
 
         registered = launch()
@@ -199,14 +204,14 @@ def authentication():
             if registered.poll() is not None:
                 raise RuntimeError('Graphical polkit agent exited before authorization')
             window = gtk_authorization_window()
-            if window and xfce and b'\nVisibility: 0\n' not in os.pread(agent_log.fileno(), 65536, 0):
+            if window and prompt_marker and prompt_marker not in os.pread(agent_log.fileno(), 65536, 0):
                 return None
             return window
 
         def restart():
             nonlocal registered
             processes.close()
-            if xfce:
+            if agent_log:
                 agent_log.seek(0)
                 agent_log.truncate()
             registered = launch()

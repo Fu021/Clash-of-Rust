@@ -12,7 +12,7 @@ gh workflow run linuxmint-compatibility.yml --ref main -f run_id=<成功的CI编
 
 首次验收覆盖原生 Cinnamon X11 和 Wayland 的窗口、托盘和三端共享后台，另在 X11 核对真实 LightDM 登录自启动、旧入口迁移和图形授权。22.3 的探针等 Cinnamon 进入运行态后再触发认证。网络与安装包括系统代理恢复、TUN/DNS、升级、卸载和数据保留。MATE、Xfce、ARM64 和物理设备在矩阵之外。
 
-提交 `075c21f3` 的 [Mint 两版复验](https://github.com/Fu021/Clash-of-Rust/actions/runs/44561509445)完成上述检查，回执绑定同提交 [CI 44558284857](https://github.com/Fu021/Clash-of-Rust/actions/runs/44558284857)。
+提交 `0d6a3fb3` 的 [Mint 两版复验](https://github.com/Fu021/Clash-of-Rust/actions/runs/44611716860)完成上述检查，回执绑定同提交 [CI 44608121738](https://github.com/Fu021/Clash-of-Rust/actions/runs/44608121738)。
 
 自启动和菜单验收结束后，测试移除专用账号的自启动夹具。原生 X11 和 Wayland 分别在重新启动后的登录中验收，启动独立 GUI 前确认该账号没有运行中的内核。Wayland 探针以该登录账号检查其私有运行时目录内的套接字，不放宽目录权限。
 

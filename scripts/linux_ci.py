@@ -32,6 +32,9 @@ CACHE_ID = 'ubuntu20-v1'
 PYTHON_REPO = 'astral-sh/python-build-standalone'
 CLOUD_ROOT = 'https://cloud-images.ubuntu.com/focal/'
 REPORT = ROOT/'target/linux-report'
+KVM_GET_API_VERSION = 0xAE00
+KVM_CREATE_VM = 0xAE01
+KVM_API_VERSION = 12
 
 
 def text(url, headers=None):
@@ -365,6 +368,21 @@ def wait_vm_ssh(process, command, timeout=600, ready_command='true'):
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
+def kvm_available():
+    import fcntl
+
+    try:
+        with open('/dev/kvm', 'r+b') as device:
+            if fcntl.ioctl(device, KVM_GET_API_VERSION) != KVM_API_VERSION:
+                print('KVM: unexpected kernel API version, using TCG.', flush=True)
+                return False
+            os.close(fcntl.ioctl(device, KVM_CREATE_VM, 0))
+    except OSError as error:
+        print(f'KVM: {error}, using TCG.', flush=True)
+        return False
+    return True
+
+
 class VmGuest:
     def __init__(self, base, directory, label, target):
         self.target = target
@@ -375,7 +393,7 @@ class VmGuest:
         self.console = None
         boot_started = time.monotonic()
         self.architecture = 'x86_64' if host_arch() == 'x64' else 'aarch64'
-        self.kvm = os.access('/dev/kvm', os.R_OK | os.W_OK)
+        self.kvm = kvm_available()
         directory = self.directory
         key = directory / 'id_ed25519'
         run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', key], stdout=subprocess.DEVNULL)
@@ -386,6 +404,8 @@ class VmGuest:
             port = listener.getsockname()[1]
         architecture, kvm = self.architecture, self.kvm
         machine = 'q35' if architecture == 'x86_64' else 'virt'
+        if architecture == 'aarch64' and kvm:
+            machine += ',gic-version=host'
         cpu = 'host' if kvm else ('max' if architecture == 'x86_64' else 'cortex-a72')
         cpus = 2
         if architecture == 'aarch64' and not kvm and target.full_desktop:
@@ -649,6 +669,10 @@ def prepare_vm_guest(guest, directory, frozen=None):
         guest.python("from linux_native_guest import refresh; refresh()", timeout=900)
     else:
         guest.python('from linux_apt import update_indexes; update_indexes()', timeout=1050)
+        if guest.target.family == 'debian' and guest.architecture == 'aarch64' and not guest.kvm:
+            print('Debian ARM64 TCG: using compression level 1 for guest initramfs rebuilds', flush=True)
+            guest.remote('sudo tee /etc/initramfs-tools/conf.d/zz-cor-ci-compression >/dev/null',
+                         input='COMPRESSLEVEL=1\n', text=True, timeout=15)
         if (guest.target.family, guest.target.release) == ('ubuntu', BASELINE):
             guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs')
 
@@ -733,7 +757,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                 preparing = phase.startswith('prepare')
                 timeout = 1800 if guest.architecture == 'aarch64' or not guest.kvm else 800
                 if debian and not preparing:
-                    timeout = 600
+                    from linux_desktop_login import DEBIAN_LOGIN_BUDGET
+                    timeout = DEBIAN_LOGIN_BUDGET + 120
                 try:
                     if not preparing:
                         guest.reboot()
