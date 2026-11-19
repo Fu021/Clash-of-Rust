@@ -943,9 +943,10 @@ class UbuntuVmTests(unittest.TestCase):
                     patch.object(release_package, 'host_arch', return_value=arch), \
                     patch.object(release_package.Path, 'is_file', return_value=True), \
                     patch.object(release_package, 'run') as execute, \
-                    patch.object(release_package, 'run_privileged_with_timeout'), \
+                    patch.object(release_package, 'update_indexes') as refresh, \
                     patch.object(release_package, 'install_packages'):
                 release_package.prepare_compatibility_environment()
+                refresh.assert_called_once_with()
                 self.assertEqual(tuple(record.kwargs['input'] for record in execute.call_args_list), mirrors)
 
 
@@ -2493,6 +2494,18 @@ class BuildTests(unittest.TestCase):
             'sudo', 'env', 'DEBIAN_FRONTEND=noninteractive', 'timeout',
             '--signal=TERM', '--kill-after=30s', '900s', 'apt-get', 'install',
         ])
+
+    def test_linux_baseline_package_install_refreshes_indexes_first(self):
+        package = release_package.ROOT/'dist/example.deb'
+        failure = subprocess.CalledProcessError(100, ['apt-get', 'update'])
+        with patch.dict(os.environ, {'COR_LINUX_BASELINE': '20.04'}, clear=True), \
+             patch.object(release_package, 'run'), \
+             patch.object(release_package, 'update_indexes', side_effect=failure) as refresh, \
+             patch.object(release_package, 'install_packages') as install:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release_package.linux_package_tests(package, None)
+            refresh.assert_called_once_with()
+            install.assert_not_called()
 
     def test_linux_download_cache_identity_tracks_arch_and_upstream_content(self):
         value = {'image': 'ubuntu@sha256:' + 'c'*64, 'architectures': {

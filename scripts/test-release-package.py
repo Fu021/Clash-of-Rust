@@ -16,7 +16,7 @@ import time
 
 from build_support import download, host_system, ROOT, bundle_directory, host_arch, run, sha256, write_json
 from workflow_artifacts import commit, verify_build
-from linux_apt import OPTIONS as APT_OPTIONS, install as install_packages
+from linux_apt import OPTIONS as APT_OPTIONS, install as install_packages, update_indexes
 from linux_apt import privileged as run_privileged_with_timeout
 from linux_compatibility_targets import UBUNTU_BASELINE
 
@@ -139,9 +139,7 @@ def linux_package_tests(package, tun_test, structure=True):
     run(['sudo', 'chmod', '0755', '/opt'])
     if os.environ.get('COR_LINUX_BASELINE'):
         # The build image removes package indexes after installing build tools.
-        run(['sudo', 'apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
-             'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', 'update'],
-            timeout=300)
+        update_indexes()
     package_argument = './'+str(package.relative_to(ROOT))
     install_packages([package_argument])
     if os.environ.get('COR_LINUX_BASELINE'):
@@ -225,8 +223,7 @@ def prepare_compatibility_environment():
                 run(['sudo', 'tee', path], input=mirror+'\n', text=True)
     prepare_guest_package_environment()
     if not os.environ.get('COR_LINUX_GUEST'):
-        run_privileged_with_timeout(
-            [*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update'], 300)
+        update_indexes()
     package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
     install_packages(compatibility_dependencies(), package_timeout, no_recommends=True)
 
