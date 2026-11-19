@@ -610,12 +610,13 @@ def installed_tests():
         rule = None
         try:
             from linux_native_guest import DISTROS
-            admin_group = 'wheel' if platform.freedesktop_os_release().get('ID') in DISTROS else 'sudo'
-            run(['sudo', 'useradd', '--create-home', '--groups', admin_group,
+            native = platform.freedesktop_os_release().get('ID') in DISTROS
+            groups = [] if native else ['--groups', 'sudo']
+            run(['sudo', 'useradd', '--create-home', *groups,
                  '--home-dir', home/'home', '--shell', '/bin/bash', user])
             created = True
             run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True)
-            if admin_group == 'wheel':
+            if native:
                 from linux_native_guest import distribution
                 distribution()
                 rule = Path('/etc/polkit-1/rules.d')/f'10-{user}.rules'
@@ -638,12 +639,24 @@ def installed_tests():
                    'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8',
                    'GITHUB_ACTIONS': 'true', 'NO_AT_BRIDGE': '1'}
             # PAM registers a real logind session for the graphical polkit agent.
-            subprocess.run(['sudo', 'systemd-run', '--wait', '--pipe', '--collect', '--quiet',
-                            '--property=User='+user, '--property=PAMName=login',
-                            '--property=WorkingDirectory='+str(home),
-                            *('--setenv='+key+'='+value for key, value in env.items()),
-                            sys.executable, '-E', '-s', '-B', script, '--session-launch'],
-                           check=True, cwd=home, timeout=360)
+            unit = user+'-desktop.service'
+            try:
+                subprocess.run(['sudo', 'systemd-run', '--unit='+unit, '--wait', '--collect',
+                                '--quiet', '--property=User='+user, '--property=PAMName=login',
+                                '--property=StandardInput=null', '--property=StandardOutput=journal',
+                                '--property=StandardError=journal',
+                                '--property=WorkingDirectory='+str(home),
+                                *('--setenv='+key+'='+value for key, value in env.items()),
+                                sys.executable, '-E', '-s', '-B', script, '--session-launch'],
+                               check=True, cwd=home, timeout=360)
+            except subprocess.SubprocessError:
+                with (REPORT/'desktop-session-journal.log').open('w') as log:
+                    with contextlib.suppress(OSError, subprocess.SubprocessError):
+                        subprocess.run(['sudo', 'journalctl', '--boot', '--no-pager', '-n', '80',
+                                        '--unit', unit, '--unit', 'init.scope',
+                                        '--unit', 'systemd-logind.service'],
+                                       stdout=log, stderr=subprocess.STDOUT, timeout=15)
+                raise
         finally:
             if rule:
                 subprocess.run(['sudo', 'rm', '-f', rule], check=False)

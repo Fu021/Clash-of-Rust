@@ -261,7 +261,29 @@ class UbuntuVmTests(unittest.TestCase):
                         patch.object(linux_apt, 'install') as install:
                     linux_apt.install_vm_tools(['qemu-system'])
                 install.assert_called_once_with(['qemu-system', 'qemu-utils', 'cloud-image-utils'],
-                                                1200, True, options=update.call_args.args[0][:-1])
+                                                1200, True, options=update.call_args.args[0][:-3])
+
+    def test_vm_tools_retry_the_signed_index_before_installing(self):
+        failure = subprocess.CalledProcessError(100, ['apt-get', 'update'])
+        release = {'ID': 'ubuntu', 'VERSION_ID': '24.04'}
+        for results, success in (([failure, None], True), ([failure]*3, False)):
+            with self.subTest(success=success), \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
+                    patch.object(linux_apt.platform, 'freedesktop_os_release', return_value=release), \
+                    patch.object(linux_apt, 'host_arch', return_value='x64'), \
+                    patch.object(linux_apt, 'privileged', side_effect=results) as update, \
+                    patch.object(linux_apt.time, 'sleep') as sleep, \
+                    patch.object(linux_apt, 'install') as install:
+                if success:
+                    linux_apt.install_vm_tools(['qemu-system-x86'])
+                    install.assert_called_once()
+                else:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        linux_apt.install_vm_tools(['qemu-system-x86'])
+                    install.assert_not_called()
+                self.assertEqual(update.call_count, len(results))
+                self.assertEqual([call.args for call in sleep.call_args_list], [(5,), (15,)][:len(results)-1])
+                self.assertTrue(all(call == update.call_args for call in update.call_args_list))
 
     def test_apt_sources_use_native_official_suites(self):
         for arch, native, base in (
@@ -2909,8 +2931,15 @@ class BuildTests(unittest.TestCase):
                 if command[:3] == ['sudo', 'install', '-d']:
                     Path(command[-1]).mkdir()
                 elif command[:2] == ['sudo', 'systemd-run']:
+                    self.assertNotIn('--pipe', command)
+                    self.assertIn('--wait', command)
+                    self.assertIn('--property=PAMName=login', command)
+                    self.assertIn('--property=StandardOutput=journal', command)
                     (kwargs['cwd']/'report/gui.json').write_text('{"status":"failed"}')
                     raise failure
+                elif command[:2] == ['sudo', 'journalctl']:
+                    self.assertIn(user+'-desktop.service', command)
+                    kwargs['stdout'].write('session start diagnostics\n')
                 return subprocess.CompletedProcess(command, 0)
 
             with patch.object(linux_ci, 'require_actions'), \
@@ -2925,6 +2954,7 @@ class BuildTests(unittest.TestCase):
             commands.assert_any_call(['sudo', 'rm', '-f', rule], check=False)
             commands.assert_any_call(['sudo', 'userdel', '--remove', user], check=False)
             self.assertEqual(json.loads((saved/'desktop/gui.json').read_text()), {'status': 'failed'})
+            self.assertEqual((saved/'desktop-session-journal.log').read_text(), 'session start diagnostics\n')
 
     def test_linux_gui_session_keeps_pam_identity_but_not_runner_credentials(self):
         import linux_gui
@@ -6758,6 +6788,42 @@ class CompatibilityTests(unittest.TestCase):
         self.assertNotIn('maybe-ubiquity', config)
         with self.assertRaisesRegex(ValueError, 'Unsupported Ubiquity initramfs'):
             linux_mint_install.automatic_grub(boot, '/tmp/elsewhere')
+
+    def test_pop_uses_a_disk_serial_that_virtio_blk_can_report(self):
+        from pop_live_install import DISK_DEVICE, DISK_SERIAL, INSTALL
+
+        self.assertLessEqual(len(DISK_SERIAL.encode('ascii')), 20)
+        self.assertEqual(DISK_DEVICE.split('serial=', 1)[1], DISK_SERIAL)
+        subprocess.run(['sh', '-n'], input=INSTALL, text=True, check=True)
+
+    def test_pop_install_and_cosmic_diagnostic_share_live_boot_files(self):
+        from pop_live_install import extract_casper_boot
+
+        self.assertIs(cosmic_startup_host.extract_casper_boot, extract_casper_boot)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for suite in ('22.04', '24.04'):
+                media = f'casper_pop-os_{suite}_amd64_intel_debug'
+                members = f'./{media}/vmlinuz.efi\n./{media}/initrd.gz\nother/initrd.gz\n'
+
+                def extract(command, *, stdout, check):
+                    self.assertTrue(check)
+                    self.assertTrue(command[-1].startswith(f'./{media}/'))
+                    stdout.write(command[-1].encode())
+
+                with patch.object(subprocess, 'check_output', return_value=members), \
+                        patch.object(subprocess, 'run', side_effect=extract):
+                    kernel, initrd, path = extract_casper_boot(directory/'pop.iso', directory)
+                self.assertEqual(path, f'/{media}')
+                self.assertTrue(kernel.read_bytes().endswith(b'/vmlinuz.efi'))
+                self.assertTrue(initrd.read_bytes().endswith(b'/initrd.gz'))
+
+    def test_arm_vm_targets_install_the_virtio_net_rom(self):
+        targets = (*linux_ci.TARGETS['ubuntu'], *linux_ci.TARGETS['debian'])
+        for target in targets:
+            if target.arch == 'arm64' and not target.hosted:
+                with self.subTest(target=target):
+                    self.assertIn('ipxe-qemu', target.matrix_entry()['qemu'].split())
 
     def test_versioned_native_packages_and_receipt_never_accept_other_bytes(self):
         from linux_native_package import native_version, verify_rpm

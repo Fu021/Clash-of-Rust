@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import shlex
 import shutil
 import subprocess
@@ -12,6 +12,7 @@ import time
 
 from linux_vm_console import Console
 from linux_vm_monitor import Monitor, MonitorError
+from pop_live_install import extract_casper_boot
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / 'target/cosmic-startup-report'
@@ -85,19 +86,7 @@ def prepare():
         'url': IMAGE_URL, 'size': IMAGE_SIZE, 'sha256': IMAGE_SHA256,
         'metadata_source': 'https://api.pop-os.org/builds/24.04/intel',
     }, indent=2))
-    members = subprocess.check_output(['bsdtar', '-tf', str(image)], text=True).splitlines()
-    kernels = [name for name in members if PurePosixPath(name).name in ('vmlinuz', 'vmlinuz.efi')
-               and PurePosixPath(name).parent.name.startswith('casper')]
-    if len(kernels) != 1:
-        raise ValueError('Expected one live-system kernel')
-    media = PurePosixPath(kernels[0]).parent
-    initrds = [name for name in members if PurePosixPath(name).parent == media
-               and PurePosixPath(name).name in ('initrd', 'initrd.gz', 'initrd.lz')]
-    if len(initrds) != 1:
-        raise ValueError('Expected one live-system initramfs')
-    for source, name in [(kernels[0], 'vmlinuz'), (initrds[0], 'initrd')]:
-        with (WORK / name).open('wb') as output:
-            run('bsdtar', '-xOf', str(image), source, stdout=output)
+    _, _, media = extract_casper_boot(image, WORK)
     share = WORK / 'share'
     share.mkdir(exist_ok=True)
     shutil.copyfile(package, share / 'candidate.deb')
@@ -116,7 +105,7 @@ def main():
         'qemu-system-x86_64', '-machine', 'q35,accel=' + ('kvm' if kvm else 'tcg'),
         '-cpu', 'host' if kvm else 'max', '-m', '6144', '-smp', '4',
         '-kernel', str(WORK / 'vmlinuz'), '-initrd', str(WORK / 'initrd'),
-        '-append', f'boot=casper live-media-path=/{str(media).lstrip("./")} noprompt '
+        '-append', f'boot=casper live-media-path={media} noprompt '
                    'systemd.debug_shell=ttyS0 systemd.mask=serial-getty@ttyS0.service',
         '-cdrom', str(image), '-boot', 'd', '-display', 'sdl,gl=on', '-device', 'virtio-vga-gl',
         '-nic', 'user,model=virtio-net-pci',

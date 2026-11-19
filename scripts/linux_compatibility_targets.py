@@ -47,7 +47,8 @@ class Target:
         runner = f'ubuntu-{runner_release}' + ('-arm' if self.arch == 'arm64' else '')
         qemu = ''
         if not self.hosted:
-            qemu = {'x64': 'qemu-system-x86', 'arm64': 'qemu-system-arm qemu-efi-aarch64'}[self.arch]
+            qemu = {'x64': 'qemu-system-x86',
+                    'arm64': 'qemu-system-arm qemu-efi-aarch64 ipxe-qemu'}[self.arch]
         if self.family in ('linuxmint', 'zorin'):
             qemu += ' ovmf xorriso'
         elif self.family == 'pop':

@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from urllib.parse import urlsplit, urlunsplit
 
 from build_support import host_arch, run, sha256
@@ -126,6 +127,19 @@ def install(packages, timeout=900, no_recommends=False, *, options=OPTIONS):
             print('::warning::Temporary APT archive cleanup failed.', flush=True)
 
 
+def update_indexes(timeout=300, *, options=OPTIONS):
+    command = [*options, '-o', 'APT::Update::Error-Mode=any', 'update']
+    for delay in (5, 15, 0):
+        try:
+            privileged(command, timeout)
+            return
+        except subprocess.CalledProcessError:
+            if not delay:
+                raise
+            print(f'::warning::APT index refresh failed; retrying in {delay} seconds.', flush=True)
+            time.sleep(delay)
+
+
 def install_vm_tools(packages):
     release = platform.freedesktop_os_release()
     if (os.environ.get('GITHUB_ACTIONS') != 'true'
@@ -144,8 +158,8 @@ def install_vm_tools(packages):
             f'deb [arch={architecture} signed-by={signing}] {origin} {suite} main universe restricted multiverse\n'
             for suite, origin in (('noble', archive), ('noble-updates', archive), ('noble-security', security))))
         options = [*OPTIONS, '-o', 'Dir::Etc::sourcelist='+str(sources),
-                   '-o', 'Dir::Etc::sourceparts=-', '-o', 'APT::Update::Error-Mode=any']
-        privileged([*options, 'update'], 360)
+                   '-o', 'Dir::Etc::sourceparts=-']
+        update_indexes(360, options=options)
         install([*packages, 'qemu-utils', 'cloud-image-utils'], 1200, True, options=options)
 
 

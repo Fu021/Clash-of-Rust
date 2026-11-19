@@ -495,34 +495,39 @@ def isolated_accounts():
             if len(identities) == 2:
                 break
         assert len(identities) == 2
-        for name in ('passwd', 'group', 'shadow', 'gshadow'):
-            source = Path('/etc')/name
-            copy = root/name
-            shutil.copy2(source, copy)
-            with copy.open('a') as stream:
-                for user in identities:
-                    username, uid, home = user['name'], user['uid'], user['home']
-                    stream.write({
-                        'passwd': f'{username}:x:{uid}:{uid}::{home}:/bin/sh\n',
-                        'group': f'{username}:x:{uid}:\n',
-                        'shadow': f'{username}:!:20000:0:99999:7:::\n',
-                        'gshadow': f'{username}:!::\n',
-                    }[name])
-            run(['mount', '--bind', copy, source])
-        sudoers = root/'sudoers.d'
-        shutil.copytree('/etc/sudoers.d', sudoers)
-        rule = sudoers/'cor-matrix'
-        rule.write_text(''.join(f'{user["name"]} ALL=(root) NOPASSWD: /opt/clash-of-rust/cor\n'
-                                for user in identities))
-        rule.chmod(0o440)
-        run(['visudo', '-cf', rule], stdout=subprocess.DEVNULL)
-        run(['mount', '--bind', sudoers, '/etc/sudoers.d'])
+        mounts = []
         try:
+            for name in ('passwd', 'group', 'shadow', 'gshadow'):
+                source = Path('/etc')/name
+                if name == 'gshadow' and not source.exists():
+                    continue
+                copy = root/name
+                shutil.copy2(source, copy)
+                with copy.open('a') as stream:
+                    for user in identities:
+                        username, uid, home = user['name'], user['uid'], user['home']
+                        stream.write({
+                            'passwd': f'{username}:x:{uid}:{uid}::{home}:/bin/sh\n',
+                            'group': f'{username}:x:{uid}:\n',
+                            'shadow': f'{username}:!:20000:0:99999:7:::\n',
+                            'gshadow': f'{username}:!::\n',
+                        }[name])
+                run(['mount', '--bind', copy, source])
+                mounts.append(source)
+            sudoers = root/'sudoers.d'
+            shutil.copytree('/etc/sudoers.d', sudoers)
+            rule = sudoers/'cor-matrix'
+            rule.write_text(''.join(f'{user["name"]} ALL=(root) NOPASSWD: /opt/clash-of-rust/cor\n'
+                                    for user in identities))
+            rule.chmod(0o440)
+            run(['visudo', '-cf', rule], stdout=subprocess.DEVNULL)
+            run(['mount', '--bind', sudoers, '/etc/sudoers.d'])
+            mounts.append('/etc/sudoers.d')
             yield root, identities
         finally:
             # The enclosing namespace will disappear too; unmount now so getent
             # and sudo never retain paths in the removed temporary directory.
-            for path in ('/etc/sudoers.d', '/etc/gshadow', '/etc/shadow', '/etc/group', '/etc/passwd'):
+            for path in reversed(mounts):
                 run(['umount', path])
 
 

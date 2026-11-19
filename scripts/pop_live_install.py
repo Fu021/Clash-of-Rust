@@ -8,6 +8,8 @@ import time
 from linux_vm_console import Console
 
 
+DISK_SERIAL = 'cor-pop-install'
+DISK_DEVICE = f'virtio-blk-pci,drive=compatdisk,serial={DISK_SERIAL}'
 INSTALLED_READY = (
     'test -f /var/lib/cor-pop-install-complete && '
     'test "$(findmnt -n -o SOURCE --target /)" = /dev/vda2 && '
@@ -39,29 +41,37 @@ def extract_casper_boot(iso, directory):
 
 INSTALL = """\
 set -eu
+expected_serial="$1"
 seed=/mnt/cor-test
 disk=/dev/vda
 target=/mnt/cor-installed
-test "$(id -u)" = 0
-test -d /sys/firmware/efi
-grep -qw boot=casper /proc/cmdline
-test "$(lsblk --noheadings --nodeps --output TYPE "$disk")" = disk
-test "$(lsblk --noheadings --nodeps --output SERIAL "$disk")" = cor-pop-compatibility
-test "$(lsblk --noheadings --nodeps --output RO "$disk")" = 0
-signatures="$(wipefs --no-act --noheadings --output TYPE "$disk")"
-test -z "$signatures"
+fail() {
+    printf 'Pop!_OS installer: %s\\n' "$*" >&2
+    exit 1
+}
+test "$(id -u)" = 0 || fail 'Live shell is not running as root'
+test -d /sys/firmware/efi || fail 'Live system did not boot in UEFI mode'
+grep -qw boot=casper /proc/cmdline || fail 'Live system is missing boot=casper'
+test "$(lsblk --noheadings --nodeps --output TYPE "$disk")" = disk || fail "$disk is not a disk"
+serial="$(lsblk --noheadings --nodeps --output SERIAL "$disk")" || fail "Cannot read $disk serial"
+test "$serial" = "$expected_serial" || fail "$disk serial '$serial' does not match '$expected_serial'"
+test "$(lsblk --noheadings --nodeps --output RO "$disk")" = 0 || fail "$disk is not writable"
+signatures="$(wipefs --no-act --noheadings --output TYPE "$disk")" || fail "Cannot inspect $disk signatures"
+test -z "$signatures" || fail "$disk is not blank"
 set -- /cdrom/casper*/filesystem.squashfs
-test "$#" -eq 1
-test -r "$1"
+test "$#" -eq 1 && test -r "$1" || fail 'Expected one readable live squashfs'
 remove="${1%/*}/filesystem.manifest-remove"
-test -r "$remove"
+test -r "$remove" || fail "Cannot read $remove"
+printf 'Pop!_OS installer: starting distinst\\n'
 distinst -s "$1" -r "$remove" -h cor-linux-test -k us -l en_US.UTF-8 \\
     -b "$disk" -t "$disk:gpt" \\
     -n "$disk:primary:start:512M:fat32:mount=/boot/efi:flags=esp" \\
     -n "$disk:primary:512M:-4096M:ext4:mount=/" \\
     -n "$disk:primary:-4096M:end:swap" \\
     --username ubuntu --realname 'Compatibility Test' \\
-    --profile_icon /usr/share/pixmaps/faces/penguin.png --tz Etc/UTC < "$seed/installer-password"
+    --profile_icon /usr/share/pixmaps/faces/penguin.png --tz Etc/UTC < "$seed/installer-password" \\
+    || fail 'distinst failed'
+printf 'Pop!_OS installer: preparing installed system\\n'
 sync
 install -d -m 0755 "$target"
 mount -t ext4 "${disk}2" "$target"
@@ -107,8 +117,7 @@ def installer_media(iso, directory, public_key, ssh_unit, install_ssh):
 
 
 def install(iso, directory, public_key, command, console_log, ssh_unit, install_ssh):
-    if (command.count('-serial') != 1
-            or 'virtio-blk-pci,drive=compatdisk,serial=cor-pop-compatibility' not in command):
+    if command.count('-serial') != 1 or DISK_DEVICE not in command:
         raise ValueError('Pop!_OS installer requires an isolated serial console and its disposable disk')
     kernel, initrd, media, share = installer_media(
         iso, directory, public_key, ssh_unit, install_ssh)
@@ -137,7 +146,7 @@ def install(iso, directory, public_key, command, console_log, ssh_unit, install_
             console.wait_shell(process)
             console.command('mkdir -p /mnt/cor-test && mount -t 9p '
                             '-o trans=virtio,version=9p2000.L,ro cor-test /mnt/cor-test')
-            evidence = console.command('sh /mnt/cor-test/install.sh', timeout=2100)
+            evidence = console.command(f'sh /mnt/cor-test/install.sh {DISK_SERIAL}', timeout=2100)
             if 'cor-pop-install-complete' not in evidence.splitlines():
                 raise RuntimeError('Pop!_OS installer did not complete disk provisioning')
             console.command('systemd-run --on-active=2s /usr/bin/systemctl poweroff')

@@ -91,6 +91,11 @@ def prepare():
                     'xdotool', 'wmctrl', 'openbox', 'gtk3', 'iproute2', 'systemd-resolvconf', 'libcap',
                     'fakeroot', 'libarchive', 'glib2', 'glib-networking', 'noto-fonts-cjk')
     install_dependencies((*common, *packages))
+    if Path('/usr/lib/systemd/system/polkit-agent-helper.socket').is_file():
+        run(['sudo', 'systemctl', 'daemon-reload'], timeout=60)
+        run(['sudo', 'systemctl', 'start', 'polkit-agent-helper.socket'], timeout=60)
+        if not Path('/run/polkit/agent-helper.socket').is_socket():
+            raise RuntimeError('Polkit did not open its authentication helper socket')
     install_appindicator()
 
 

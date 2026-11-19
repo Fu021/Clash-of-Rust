@@ -25,7 +25,6 @@ import urllib.request
 import uuid
 
 from build_support import ROOT, download as download_original, host_arch, opener, read_json, run, sha256, write_json
-from linux_apt import OPTIONS as APT_OPTIONS
 from linux_compatibility_targets import TARGETS, UBUNTU_BASELINE, target_for
 
 BASELINE = UBUNTU_BASELINE
@@ -395,8 +394,8 @@ class VmGuest:
                    '-serial', 'stdio', '-monitor', 'none']
         drive = f'file={self.disk},format=qcow2,discard=unmap'
         if target.family == 'pop':
-            command.extend(['-drive', drive+',if=none,id=compatdisk',
-                            '-device', 'virtio-blk-pci,drive=compatdisk,serial=cor-pop-compatibility'])
+            from pop_live_install import DISK_DEVICE
+            command.extend(['-drive', drive+',if=none,id=compatdisk', '-device', DISK_DEVICE])
         else:
             command.extend(['-drive', drive+',if=virtio'])
         if architecture == 'aarch64':
@@ -645,9 +644,7 @@ def prepare_vm_guest(guest, directory, frozen=None):
     elif guest.target.package_format != 'deb':
         guest.python("from linux_native_guest import refresh; refresh()", timeout=900)
     else:
-        guest.remote('sudo timeout --signal=TERM --kill-after=30s 300s '
-                     + shlex.join([*APT_OPTIONS, '-o', 'APT::Update::Error-Mode=any', 'update']),
-                     timeout=360)
+        guest.python('from linux_apt import update_indexes; update_indexes()', timeout=1050)
         if (guest.target.family, guest.target.release) == ('ubuntu', BASELINE):
             guest_deb_downloads(guest.ssh, guest.remote, guest.environment, directory/'guest-debs')
 
@@ -788,6 +785,7 @@ def vm_test(package_run_id, target):
                   report_image + '_' + target.digest_algorithm: image[target.digest_algorithm]}
         with ThreadPoolExecutor(max_workers=1) as workers:
             try:
+                stage = 'download_inputs'
                 package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings,
                                                 rpm=target.package_format == 'rpm')
                 phase_started = time.monotonic()
@@ -796,8 +794,11 @@ def vm_test(package_run_id, target):
                 base = download(image, (directory if target.image_format == 'iso' else tools_directory())/filename)
                 python = download(value['python'], tools_directory()/'python.tar.gz')
                 timings['original_downloads'] = round(time.monotonic() - phase_started, 3)
+                stage = 'guest_boot'
                 guest = VmGuest(base, directory, 'official-image', target)
+                stage = 'guest_source_transfer'
                 guest.stage(archive, python)
+                stage = 'guest_dependencies'
                 phase_started = time.monotonic()
                 try:
                     prepare_vm_guest(guest, directory, frozen)
@@ -808,20 +809,30 @@ def vm_test(package_run_id, target):
                     print('::warning::Frozen Ubuntu APT inputs unavailable; retrying on the same '
                           'official image with current signed indexes: ' + type(error).__name__, flush=True)
                     guest.close()
+                    guest = None
+                    stage = 'guest_boot'
                     guest = VmGuest(base, directory, 'official-image-fresh-apt', target)
+                    stage = 'guest_source_transfer'
                     guest.stage(archive, python)
                     frozen = None
+                    stage = 'guest_dependencies'
                     phase_started = time.monotonic()
                     prepare_vm_guest(guest, directory)
                 timings['dependency_preparation'] = round(time.monotonic() - phase_started, 3)
                 timings['final_guest_boot'] = guest.boot_seconds
                 timings['source_transfer'] = guest.stage_seconds
+                stage = 'installed_candidate'
                 verify_vm_package(guest, directory, package_run_id, frozen=bool(frozen), timings=timings,
                                   package_future=package_future)
-                result.update(kernel=guest.kernel, acceleration='kvm' if guest.kvm else 'tcg', success=True)
+                result['success'] = True
+            except Exception:
+                result['failed_stage'] = stage
+                print(f'Linux compatibility failed at {stage}.', flush=True)
+                raise
             finally:
                 try:
                     if guest:
+                        result.update(kernel=guest.kernel, acceleration='kvm' if guest.kvm else 'tcg')
                         try:
                             guest.preserve()
                         finally:

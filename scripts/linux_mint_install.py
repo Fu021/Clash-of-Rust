@@ -56,10 +56,23 @@ trap 'if [ "$?" -ne 0 ]; then /bin/sh /cdrom/preseed/cor-install-failed cor-mint
 target=/target
 seed=/cdrom/preseed
 mountpoint -q "$target"
-if [ "$(. "$target/etc/os-release"; printf '%s' "$ID")" = linuxmint ]; then
+distribution="$(. "$target/etc/os-release"; printf '%s' "$ID")"
+if [ "$distribution" = linuxmint ]; then
     mint_sources="$target/etc/apt/sources.list.d/official-package-repositories.list"
     sed -i -E 's@^(deb(-src)?[[:space:]]+)http://packages\\.linuxmint\\.com/?([[:space:]])@\\1https://fastly.linuxmint.io/\\3@' "$mint_sources"
     grep -qE '^deb[[:space:]]+https://fastly\\.linuxmint\\.io/[[:space:]]' "$mint_sources"
+elif [ "$distribution" = zorin ]; then
+    suite="$(. "$target/etc/os-release"; printf '%s' "$UBUNTU_CODENAME")"
+    case "$suite" in
+        jammy|noble) ;;
+        *) printf 'Unexpected Zorin Ubuntu base: %s\\n' "$suite" >&2; exit 1 ;;
+    esac
+    keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+    test -r "$target$keyring"
+    for pocket in "$suite" "$suite-updates"; do
+        printf 'deb [signed-by=%s] https://archive.ubuntu.com/ubuntu %s main restricted universe multiverse\\n' \\
+            "$keyring" "$pocket"
+    done > "$target/etc/apt/sources.list.d/cor-ubuntu-base.list"
 fi
 install -d -m 0755 "$target/etc/ssh/sshd_config.d" "$target/etc/sudoers.d" \\
     "$target/etc/systemd/system/multi-user.target.wants" "$target/usr/local/sbin"
