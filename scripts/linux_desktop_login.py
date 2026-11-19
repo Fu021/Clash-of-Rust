@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import secrets
 import struct
 import subprocess
@@ -26,6 +27,7 @@ EXTENSION = 'ubuntu-appindicators@ubuntu.com'
 LIGHTDM_CONFIG = Path('/etc/lightdm/lightdm.conf.d/99-cor-compatibility.conf')
 COSMIC_GREETER_CONFIG = Path('/etc/greetd/cosmic-greeter.toml')
 COSMIC_PROBES = HOME/'cor-desktop-probes'
+DISPLAYMANAGER_SYSCONFIG = Path('/etc/sysconfig/displaymanager')
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,14 @@ def native_gnome_session(directory, desktop):
     raise RuntimeError(f'No installed {desktop.name} session found in {directory}')
 
 
+def configure_tumbleweed_autologin():
+    config, replacements = re.subn(r'^DISPLAYMANAGER_AUTOLOGIN=.*$', f'DISPLAYMANAGER_AUTOLOGIN="{USER}"',
+                                   DISPLAYMANAGER_SYSCONFIG.read_text(), flags=re.MULTILINE)
+    if replacements != 1:
+        raise RuntimeError('Expected one DISPLAYMANAGER_AUTOLOGIN setting from openSUSE')
+    run(['sudo', 'tee', DISPLAYMANAGER_SYSCONFIG], input=config, text=True, stdout=subprocess.DEVNULL)
+
+
 def prepare(report, desktop, release):
     distribution = release['ID']
     packages = ['dbus-user-session', 'libgtk-3-bin', 'wmctrl']
@@ -97,6 +107,8 @@ def prepare(report, desktop, release):
         config = f'[daemon]\nWaylandEnable=true\nAutomaticLoginEnable=true\nAutomaticLogin={USER}\n'
         config_path = '/etc/gdm/custom.conf'
         run(['sudo', 'tee', config_path], text=True, input=config, stdout=subprocess.DEVNULL)
+        if distribution == 'opensuse-tumbleweed':
+            configure_tumbleweed_autologin()
     elif desktop in (GNOME, POP_GNOME, ZORIN_GNOME):
         if desktop != GNOME:
             session = native_gnome_session(Path('/usr/share/xsessions'), desktop)

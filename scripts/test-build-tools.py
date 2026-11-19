@@ -524,6 +524,23 @@ class UbuntuVmTests(unittest.TestCase):
             'org.gnome.shell', 'enabled-extensions',
             repr(['fixture-appindicator', linux_gnome_login.UUID])))
 
+    def test_tumbleweed_sets_the_autologin_user_in_the_gdm_sysconfig_backend(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'displaymanager'
+            initial = '# DISPLAYMANAGER_AUTOLOGIN=\nDISPLAYMANAGER_AUTOLOGIN=""\nOTHER="yes"\n'
+            with patch.object(linux_desktop_login, 'DISPLAYMANAGER_SYSCONFIG', path), \
+                    patch.object(linux_desktop_login, 'run') as execute:
+                for invalid in ('# missing\n', initial+initial):
+                    path.write_text(invalid)
+                    with self.assertRaisesRegex(RuntimeError, 'Expected one DISPLAYMANAGER_AUTOLOGIN'):
+                        linux_desktop_login.configure_tumbleweed_autologin()
+                execute.assert_not_called()
+                path.write_text(initial)
+                linux_desktop_login.configure_tumbleweed_autologin()
+            self.assertEqual(execute.call_args.args[0], ['sudo', 'tee', path])
+            self.assertEqual(execute.call_args.kwargs['input'], initial.replace(
+                'AUTOLOGIN=""', f'AUTOLOGIN="{linux_desktop_login.USER}"'))
+
     def test_real_x11_login_retries_stale_client_ids_but_requires_a_successful_listing(self):
         stale = subprocess.CalledProcessError(1, ['wmctrl'], stderr='X Error: BadWindow')
         unavailable = subprocess.CalledProcessError(1, ['wmctrl'], stderr='Cannot open display')
@@ -2941,7 +2958,7 @@ class BuildTests(unittest.TestCase):
             agent = MagicMock()
             with patch.dict(os.environ, {'COR_GUI_REPORT': str(directory),
                                         'COR_GUI_AUTH_PASSWORD_FILE': str(password)}), \
-                    patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'fedora'}), \
+                    patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'debian'}), \
                     patch.object(linux_gui, 'process', return_value=agent) as launches, \
                     patch.object(linux_gui, 'verify_authorization') as verify:
                 def authorize(log, secret, locate, *, restart_agent):
@@ -2955,6 +2972,31 @@ class BuildTests(unittest.TestCase):
                 verify.side_effect = authorize
                 self.assertEqual(linux_gui.authentication(), {'accept_granted_helper': True})
             self.assertEqual(agent.__exit__.call_count, 2)
+
+    def test_fedora_gui_uses_the_distribution_xfce_polkit_agent(self):
+        import linux_native_guest
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            password = directory/'password'
+            agent = MagicMock()
+            with patch.dict(os.environ, {'COR_GUI_REPORT': str(directory),
+                                        'COR_GUI_AUTH_PASSWORD_FILE': str(password)}), \
+                    patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'fedora'}), \
+                    patch.object(linux_native_guest, 'distribution', return_value='fedora'), \
+                    patch.object(linux_native_guest, 'install_dependencies') as install, \
+                    patch.object(linux_native_guest, 'install_appindicator'), \
+                    patch.object(Path, 'is_file', return_value=False), \
+                    patch.object(linux_gui, 'process', return_value=agent) as launches, \
+                    patch.object(linux_gui, 'verify_authorization') as verify:
+                linux_native_guest.prepare()
+                linux_gui.authentication()
+            self.assertIn('xfce-polkit', install.call_args.args[0])
+            self.assertNotIn('mate-polkit', install.call_args.args[0])
+            self.assertEqual(launches.call_args.args[0], ['/usr/libexec/xfce-polkit'])
+            self.assertEqual(verify.call_args.args[1], password)
+            self.assertIsNone(verify.call_args.kwargs['restart_agent'])
+            self.assertIn('/usr/libexec/xfce-polkit', (directory/'authentication.log').read_text())
 
     def test_linux_gui_requires_a_registered_tray_host_before_launch(self):
         with patch.object(linux_gui, 'dbus', side_effect=[
@@ -8143,13 +8185,41 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             monitor = MagicMock()
             with patch.object(linux_cosmic_authorization, 'capture_screen', return_value='qmp') as capture, \
                     patch.object(linux_cosmic_authorization.subprocess, 'check_output', side_effect=[
-                        subprocess.TimeoutExpired('tesseract', 10), recognized,
+                        subprocess.TimeoutExpired('tesseract', 10), recognized.encode(),
                     ]) as ocr, patch.object(linux_cosmic_authorization.time, 'sleep'), \
                     patch.object(linux_cosmic_authorization, 'click') as click:
                 linux_cosmic_authorization.answer_dialog(monitor, screenshot, {})
             self.assertEqual(capture.call_count, 2)
             self.assertEqual(ocr.call_args.kwargs['env']['OMP_THREAD_LIMIT'], '1')
             click.assert_called_once_with(monitor, (640, 615))
+
+    def test_cosmic_accept_ocr_fallback_maps_enlarged_pixels_back_to_the_display(self):
+        import linux_cosmic_authorization
+
+        with tempfile.TemporaryDirectory() as temporary:
+            screenshot = Path(temporary)/'dialog.png'
+            screenshot.write_bytes(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+                                   b'\x00\x00\x05\x00\x00\x00\x03\x20')
+            words = ('Authentication', 'TUN', 'Clash', 'Rust')
+            header = 'left\ttop\twidth\theight\tconf\ttext\n'
+            incomplete = (header+''.join(f'20\t10\t10\t10\t90\t{word}\n' for word in words)).encode()
+            enlarged = (header+''.join(f'80\t40\t20\t20\t90\t{word}\n'
+                                       for word in (*words, 'Authenticate'))).encode()
+            monitor = MagicMock()
+            with patch.object(linux_cosmic_authorization, 'capture_screen', return_value='x11'), \
+                    patch.object(linux_cosmic_authorization, 'enlarged_grayscale',
+                                 side_effect=[b'enlarged image', b'enlarged image',
+                                              subprocess.TimeoutExpired('python3', 10)]) as scale, \
+                    patch.object(linux_cosmic_authorization.subprocess, 'check_output',
+                                 side_effect=[incomplete, enlarged, incomplete, incomplete, incomplete]) as ocr:
+                self.assertEqual(linux_cosmic_authorization.capture_button(
+                    monitor, screenshot, 'Authenticate', {}), ((45, 25), 'x11'))
+                self.assertIsNone(linux_cosmic_authorization.capture_button(monitor, screenshot, 'Authenticate', {}))
+                self.assertEqual(ocr.call_args.args[0][:5], ['tesseract', '-', 'stdout', '--psm', '6'])
+                self.assertEqual(ocr.call_args.kwargs['input'], b'enlarged image')
+                self.assertIsNone(linux_cosmic_authorization.capture_button(monitor, screenshot, 'Authenticate', {}))
+            self.assertEqual(scale.call_args_list, [call(screenshot)]*3)
+            self.assertEqual(ocr.call_count, 5)
 
     def test_compatibility_authorization_reads_quoted_guest_paths(self):
         import linux_cosmic_authorization

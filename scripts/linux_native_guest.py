@@ -75,7 +75,7 @@ def install_dependencies(packages):
 def prepare():
     distro = distribution()
     common = ('git', 'gdm', 'gnome-session', 'gnome-shell',
-              'gsettings-desktop-schemas', 'polkit', 'mate-polkit', 'binutils', 'sudo')
+              'gsettings-desktop-schemas', 'polkit', 'binutils', 'sudo')
     if distro == 'fedora':
         packages = ('dbus-daemon', 'openssl', 'xorg-x11-server-Xvfb',
                     'xorg-x11-server-Xwayland', 'xprop', 'xdpyinfo',
@@ -90,7 +90,8 @@ def prepare():
         packages = ('xorg-server-xvfb', 'xorg-xwayland', 'xorg-xprop', 'xorg-xdpyinfo', 'xorg-xwininfo',
                     'xdotool', 'wmctrl', 'openbox', 'gtk3', 'iproute2', 'systemd-resolvconf', 'libcap',
                     'fakeroot', 'libarchive', 'glib2', 'glib-networking', 'noto-fonts-cjk')
-    install_dependencies((*common, *packages))
+    agent = 'xfce-polkit' if distro == 'fedora' else 'mate-polkit'
+    install_dependencies((*common, agent, *packages))
     if Path('/usr/lib/systemd/system/polkit-agent-helper.socket').is_file():
         run(['sudo', 'systemctl', 'daemon-reload'], timeout=60)
         run(['sudo', 'systemctl', 'start', 'polkit-agent-helper.socket'], timeout=60)

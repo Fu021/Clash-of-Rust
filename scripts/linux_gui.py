@@ -173,14 +173,17 @@ def verify_authorization(log, password_file, locate, *, respond=None, restart_ag
 def authentication():
     agent = '/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1'
     distro = platform.freedesktop_os_release().get('ID')
-    mate = distro in ('debian', 'fedora', 'opensuse-leap', 'opensuse-tumbleweed', 'arch')
-    if mate:
+    mate = distro in ('debian', 'opensuse-leap', 'opensuse-tumbleweed', 'arch')
+    if distro == 'fedora':
+        agent = '/usr/libexec/xfce-polkit'
+    elif mate:
         candidates = (Path('/usr/libexec/polkit-mate-authentication-agent-1'),
                       Path('/usr/lib/polkit-mate/polkit-mate-authentication-agent-1'),
                       Path('/usr/lib/mate-polkit/polkit-mate-authentication-agent-1'))
         agent = next((path for path in candidates if path.is_file()), candidates[0])
     with (Path(os.environ['COR_GUI_REPORT'])/'authentication.log').open('w') as log, \
             contextlib.ExitStack() as processes:
+        print(f'Graphical authorization agent: {agent}', file=log, flush=True)
         registered = processes.enter_context(process([agent], log))
 
         def locate():

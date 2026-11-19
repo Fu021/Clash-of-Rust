@@ -30,6 +30,24 @@ def dialog_button(tsv, label, width, height):
     return left + span//2, top + depth//2
 
 
+def recognize_button(source, label, width, height, *, page_mode, image=None):
+    try:
+        tsv = subprocess.check_output(
+            ['tesseract', source, 'stdout', '--psm', str(page_mode), '-l', 'eng', 'tsv'],
+            input=image, stderr=subprocess.DEVNULL, timeout=10,
+            env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
+    except subprocess.TimeoutExpired:
+        return None, False
+    return dialog_button(tsv.decode(), label, width, height), True
+
+
+def enlarged_grayscale(screenshot):
+    code = ('from PIL import Image; import sys; image = Image.open(sys.argv[1]); '
+            'image.convert("L").resize((image.width*2, image.height*2)).'
+            'save(sys.stdout.buffer, format="PNG")')
+    return subprocess.check_output(['/usr/bin/python3', '-c', code, screenshot], timeout=10)
+
+
 def capture_button(monitor, screenshot, label, environment):
     method = capture_screen(monitor, screenshot, environment)
     with screenshot.open('rb') as stream:
@@ -39,14 +57,15 @@ def capture_button(monitor, screenshot, label, environment):
     width, height = struct.unpack('>II', data[16:24])
     if not (800 <= width <= 4096 and 450 <= height <= 4096):
         return None
-    try:
-        tsv = subprocess.check_output(
-            ['tesseract', screenshot, 'stdout', '--psm', '11', '-l', 'eng', 'tsv'],
-            text=True, stderr=subprocess.DEVNULL, timeout=10,
-            env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
-    except subprocess.TimeoutExpired:
-        return None
-    button = dialog_button(tsv, label, width, height)
+    button, complete = recognize_button(screenshot, label, width, height, page_mode=11)
+    if button is None and complete and label == 'Authenticate':
+        try:
+            image = enlarged_grayscale(screenshot)
+        except subprocess.TimeoutExpired:
+            return None
+        scaled, _ = recognize_button('-', label, width*2, height*2, page_mode=6, image=image)
+        if scaled is not None:
+            button = tuple(coordinate//2 for coordinate in scaled)
     if button is None:
         return None
     if method == 'x11':

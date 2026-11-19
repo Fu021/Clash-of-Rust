@@ -18,10 +18,14 @@
 
 全部目标均需实际验证普通用户 GUI/TUI/CLI、共享后台、代理/TUN/DNS、图形授权拒绝与允许、登录自启动迁移、托盘与菜单恢复同一进程、原生包升级/卸载后保留数据。Fedora、openSUSE、Arch 的 GNOME 采用明确记录的 AppIndicator 扩展；不将该验证写成默认桌面自带托盘。首个 RPM/Arch 升级夹具使用经 SHA256 校验的公开旧 DEB 重新封装，不冒充历史已发布的原生附件。
 
+Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`，避免 MATE 代理反复出现取消完成和密码交互异常。COSMIC 的普通 OCR 若识别不到接受按钮，用同一截图的放大灰度图复查，仍需匹配应用授权文本和唯一高置信按钮。两者均要求真实图形对话框、取消不改变权限、接受后安装助手取得预期权限，不改变应用的授权机制。
+
+Tumbleweed 的 [GDM 打包补丁](https://api.opensuse.org/public/source/openSUSE:Factory/gdm/gdm-sysconfig-settings.patch)使 `/etc/sysconfig/displaymanager` 的 `DISPLAYMANAGER_AUTOLOGIN` 优先于 `custom.conf`。在一次性 VM 仅替换该键的值，保留实际 GDM 启动 Wayland 会话与登录自启动的断言。
+
 真实 GNOME Wayland 登录前，探针通过短生命周期的 D-Bus 会话写入扩展设置，指定 GIO 的本地文件实现以免启动 GVfs。若 SSH 阶段超时而 `desktop-login/prepare.json` 已写入成功结果，核对该命令是否启动了仍持有 SSH 输出的进程。真实 X11 登录中，窗口枚举遇到已销毁的 X11 客户窗口时短暂重试，成功读取窗口列表后再判断是否前台显示。
 
 RPM 与 Arch 安装由各自包管理器更新，应用不调用 DEB 安装器覆盖其文件。Arch 配方和 `.SRCINFO` 使用本次已验证的候选，未提交 AUR，也不接管第三方包。
 
 原生包的预发布版本字段使用 RPM 的 `~` 或 pacman 的 `pre.` 标记，版本后缀中的连字符转换为 `+`。RPM 发行附件名使用原始发行版本，Arch 候选包名使用原生 `pkgver`。兼容来宾用原生比较器校验预发布编号递增及正式版顺序。隔离 DNS 夹具按来宾实际存在的系统 CA 文件装载临时测试根，并在同一挂载命名空间中恢复。
 
-提交 `628ef7b4` 使用 [CI 44544140980](https://github.com/Fu021/Clash-of-Rust/actions/runs/44544140980) 完成 [Zorin 17.3 和 18.1](https://github.com/Fu021/Clash-of-Rust/actions/runs/44548065940) 及 [Arch x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/44548065854) 的完整兼容验收。报告和回执记录各来宾使用的候选身份、真实登录和托盘、原生升级与卸载的数据保留。新提交仍按发布范围取得同源回执。
+提交 `45bdc6aa` 使用 CI `44570854731` 完成 [Zorin 17.3 和 18.1](https://github.com/Fu021/Clash-of-Rust/actions/runs/44573997866) 及 [Arch x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/44573996263) 的完整兼容验收，两份回执均经发布门禁复核。来宾报告记录真实登录与托盘、三端和原生升级、卸载后的数据保留。新提交仍按发布范围取得同源回执。
