@@ -16,6 +16,8 @@
 
 排查时先对照各目标 `linux-vm.json` 的 `failed_stage`，区分输入下载、来宾启动、源码传入、依赖准备和已安装候选验收。宿主工具安装失败看之前独立的 APT 步骤。来宾已启动时，报告同时记录内核与 KVM/TCG。桌面探针失败可检查来宾报告中的 `desktop/gui.json` 和 `desktop-session-journal.log`。openSUSE 显式安装提供 `dbus-run-session` 的 `dbus-1-daemon`，供探针启动独立用户总线。探针直接更新该总线的激活环境，等 Openbox 就绪后再给 X11 授权窗口焦点。COSMIC 用单线程 OCR 识别实际弹窗，单帧超时后重新截图识别。等待 GNOME Shell 完成启动、Wayland 套接字和 AppIndicator 宿主就绪后才启动应用，先验证真实托盘注册，再发起 CLI/TUI 负载。实际登录仍覆盖应用与托盘宿主并行启动。
 
+实际桌面登录一旦确认本次候选托盘初始化已经失败，立即结束该阶段；等待其他状态和截图均有时限。所有桌面 VM 在相关阶段失败时尝试通过私有 QEMU 监控保存画面，未能截图时保留失败原因；来宾报告仍记录启动状态、日志与进程快照。
+
 全部目标均需实际验证普通用户 GUI/TUI/CLI、共享后台、代理/TUN/DNS、图形授权拒绝与允许、登录自启动迁移、托盘与菜单恢复同一进程、原生包升级/卸载后保留数据。Fedora、openSUSE、Arch 的 GNOME 采用明确记录的 AppIndicator 扩展；不将该验证写成默认桌面自带托盘。首个 RPM/Arch 升级夹具使用经 SHA256 校验的公开旧 DEB 重新封装，不冒充历史已发布的原生附件。
 
 Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`。该代理可在收到 [PAM 密码请求](https://github.com/ncopa/xfce-polkit/blob/6d3282cc1734c305850d48f5bf4b4d94e88885e9/src/xfce-polkit-listener.c)前显示窗体。验收同时等待可见窗体和本次会话的密码请求，取消后重新注册代理，原始代理调试输出只用于探测。来宾先从 Fedora 官方仓库更新 `pam` 和 `liblastlog2`，后者包含 [Fedora 44 已知 PAM 模块加载故障](https://bugzilla.redhat.com/show_bug.cgi?id=2453457)的修复。失败报告记录已装版本和相关审核事件。

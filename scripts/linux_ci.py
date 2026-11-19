@@ -408,7 +408,7 @@ class VmGuest:
         elif target.package_format != 'deb':
             command.extend(['-vga', 'virtio'])
         cosmic = (target.family, target.release) == ('pop', '24.04')
-        self.monitor_path = directory/'qmp.sock' if cosmic or target.family == 'debian' else None
+        self.monitor_path = directory/'qmp.sock' if target.full_desktop else None
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                     '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
@@ -743,9 +743,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                     guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
                                  'scripts/linux_desktop_login.py ' + phase, timeout=timeout)
                 except Exception:
-                    if cosmic or debian:
-                        with contextlib.suppress(OSError):
-                            guest.capture_desktop_failure(phase)
+                    with contextlib.suppress(OSError):
+                        guest.capture_desktop_failure(phase)
                     raise
                 finally:
                     timings['desktop_' + phase.replace('-', '_')] = round(

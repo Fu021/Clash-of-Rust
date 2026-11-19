@@ -381,7 +381,8 @@ class UbuntuVmTests(unittest.TestCase):
                 self.assertEqual((Path(temporary)/'official-image-cloud-init-status.txt').read_text(), text)
 
     def test_arm_cloud_vm_adds_desktop_resources_only_for_desktop_validation(self):
-        for suite, release, needs_gpu in (('ubuntu', '20.04', False), ('debian', '13', True)):
+        for suite, release, needs_gpu in (('ubuntu', '20.04', False), ('debian', '13', True),
+                                          ('opensuse', '16.0', True)):
             with self.subTest(suite=suite), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 target = linux_ci.target_for(suite, release, 'arm64')
@@ -400,7 +401,8 @@ class UbuntuVmTests(unittest.TestCase):
                         patch.object(linux_ci, 'wait_vm_ssh'), \
                         patch.object(linux_ci.VmGuest, 'wait_cloud_init'), \
                         patch.object(linux_ci.VmGuest, 'output', side_effect=[
-                            'aarch64\n', f'{suite}\n{release}\n', '5.4.0-fixture\n']):
+                            'aarch64\n', f'{target.os_release_id}\n{target.os_release_version}\n',
+                            '5.4.0-fixture\n']):
                     socket.return_value.__enter__.return_value.getsockname.return_value = ('127.0.0.1', 4321)
                     guest = linux_ci.VmGuest(directory/'base.qcow2', directory, 'fixture', target)
                     guest.console.close()
@@ -517,6 +519,20 @@ class UbuntuVmTests(unittest.TestCase):
                             for call in execute.call_args_list))
         self.assertEqual(report, {'menu_sha256': 'fixture-digest', 'boot_id': 'fixture-boot'})
 
+    def test_debian_desktop_setup_installs_screenshot_tool(self):
+        for version in ('12', '13'):
+            with self.subTest(version=version), \
+                    patch.object(linux_desktop_login, 'run'), \
+                    patch.object(linux_desktop_login, 'install') as install, \
+                    patch.object(linux_desktop_login, 'boot_id', return_value='fixture-boot'), \
+                    patch.object(linux_desktop_login, 'sha256', return_value='fixture-digest'), \
+                    patch.object(Path, 'read_text', return_value='Exec=clash-of-rust\n'):
+                linux_desktop_login.prepare({}, linux_desktop_login.GNOME,
+                                            {'ID': 'debian', 'VERSION_ID': version})
+                packages = install.call_args.args[0]
+                self.assertIn('gnome-screenshot', packages)
+                self.assertEqual('gnome-session-xsession' in packages, version == '13')
+
     def test_gnome_login_probe_writes_settings_without_activating_gvfs(self):
         import linux_gnome_login
 
@@ -609,26 +625,58 @@ class UbuntuVmTests(unittest.TestCase):
                 patch.object(linux_desktop_login, 'REPORT', Path(temporary)), \
                 patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
                 patch.object(linux_desktop_login, 'active_desktop', return_value=({}, environment)), \
-                patch.object(linux_desktop_login, 'desktop_call', return_value="(true, '/tmp/screen.png')") as call, \
                 patch.object(linux_desktop_login.subprocess, 'check_output', return_value=image), \
-                patch.object(linux_desktop_login.subprocess, 'run') as cleanup:
+                patch.object(linux_desktop_login.subprocess, 'run') as execute:
             name = linux_desktop_login.capture_gnome_failure('first-login')
             self.assertEqual((Path(temporary)/name).read_bytes(), image)
-            self.assertEqual(call.call_args.args[0], environment)
-            self.assertIn('org.gnome.Shell.Screenshot.Screenshot', call.call_args.args)
-            cleanup.assert_called_once()
+            command = execute.call_args_list[0]
+            self.assertIn('DISPLAY=:0', command.args[0])
+            self.assertIn('DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus', command.args[0])
+            self.assertIn('gnome-screenshot', command.args[0])
+            self.assertEqual(command.kwargs['timeout'], 30)
+            self.assertIn('rm', execute.call_args_list[1].args[0])
 
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.object(linux_desktop_login, 'REPORT', Path(temporary)), \
                 patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
                 patch.object(linux_desktop_login, 'active_desktop', return_value=({}, environment)), \
-                patch.object(linux_desktop_login, 'desktop_call', return_value="(true, '/tmp/screen.png')"), \
                 patch.object(linux_desktop_login.subprocess, 'check_output', return_value=b'invalid'), \
-                patch.object(linux_desktop_login.subprocess, 'run') as cleanup:
+                patch.object(linux_desktop_login.subprocess, 'run') as execute:
             with self.assertRaisesRegex(RuntimeError, 'invalid or oversized'):
                 linux_desktop_login.capture_gnome_failure('first-login')
             self.assertEqual(list(Path(temporary).iterdir()), [])
-            cleanup.assert_called_once()
+            self.assertEqual(execute.call_count, 2)
+
+        with patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
+                patch.object(linux_desktop_login, 'active_desktop', return_value=({}, environment)), \
+                patch.object(linux_desktop_login.subprocess, 'run',
+                             side_effect=[subprocess.CalledProcessError(1, 'gnome-screenshot'), None]) as execute:
+            with self.assertRaises(subprocess.CalledProcessError):
+                linux_desktop_login.capture_gnome_failure('first-login')
+            self.assertEqual(execute.call_count, 2)
+
+    def test_all_real_desktop_logins_stop_on_terminal_tray_failure(self):
+        desktops = (linux_desktop_login.GNOME, linux_desktop_login.POP_GNOME,
+                    linux_desktop_login.ZORIN_GNOME, linux_desktop_login.CINNAMON,
+                    linux_desktop_login.COSMIC, linux_desktop_login.GNOME_WAYLAND)
+        for desktop in desktops:
+            with self.subTest(desktop=desktop.name), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                (directory/'prepare.json').write_text('{"boot_id":"old"}')
+                with patch.object(linux_desktop_login, 'REPORT', directory), \
+                        patch.object(linux_desktop_login, 'boot_id', return_value='new'), \
+                        patch.object(linux_desktop_login.pwd, 'getpwnam',
+                                     return_value=SimpleNamespace(pw_uid=1001)), \
+                        patch.object(linux_desktop_login, 'active_desktop', return_value=({}, {})), \
+                        patch.object(linux_desktop_login, 'wait_for',
+                                     side_effect=lambda description, probe, **kwargs: probe()), \
+                        patch.object(linux_desktop_login, 'startup',
+                                     side_effect=RuntimeError('tray failed')) as startup, \
+                        patch.object(linux_desktop_login, 'startup_record', return_value={}), \
+                        patch.object(linux_desktop_login, 'desktop_call', return_value='b true'):
+                    with self.assertRaisesRegex(RuntimeError, 'tray failed'):
+                        linux_desktop_login.verify('first-login', {}, desktop)
+                self.assertTrue(startup.call_args.kwargs['fail_on_tray_error'])
 
     def test_mint_login_requires_lightdm_x11_and_the_matching_cinnamon_session(self):
         for pam, shell_session, found in (('lightdm-autologin', 'c2', True),
@@ -871,6 +919,20 @@ class UbuntuVmTests(unittest.TestCase):
                     self.assertEqual(commands, expected)
                     self.assertEqual(guest.remote.call_args_list[3].kwargs['timeout'], 600)
                     self.assertEqual(guest.python.called, not failed)
+
+    def test_other_desktop_vm_captures_the_screen_when_login_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory/'package.tar.gz'
+            archive.touch()
+            guest = MagicMock(target=linux_ci.target_for('fedora', '44', 'x64'),
+                              environment='guest ', architecture='x86_64', kvm=True)
+            guest.remote.side_effect = [None, None, None, RuntimeError('GDM did not open')]
+            with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                with self.assertRaisesRegex(RuntimeError, 'GDM did not open'):
+                    linux_ci.verify_vm_package(guest, directory, 123)
+            guest.capture_desktop_failure.assert_called_once_with('first-login')
+            guest.python.assert_not_called()
 
     def test_debian_desktop_failure_uses_bounded_headless_screenshot(self):
         import linux_vm_monitor

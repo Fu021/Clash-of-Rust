@@ -80,7 +80,7 @@ def prepare(report, desktop, release):
     distribution = release['ID']
     packages = ['dbus-user-session', 'libgtk-3-bin', 'wmctrl']
     if distribution == 'debian':
-        packages.extend(['gdm3', 'gnome-session', 'xserver-xorg'])
+        packages.extend(['gdm3', 'gnome-session', 'gnome-screenshot', 'xserver-xorg'])
         if release['VERSION_ID'] == '13':
             packages.append('gnome-session-xsession')
     elif desktop == CINNAMON and not Path('/usr/share/xsessions/cinnamon.desktop').is_file():
@@ -230,13 +230,9 @@ def capture_gnome_failure(stage):
     _, environment = session
     screenshot = HOME / f'cor-failure-{secrets.token_hex(8)}.png'
     try:
-        result = desktop_call(
-            environment, 'gdbus', 'call', '--session', '--dest', 'org.gnome.Shell.Screenshot',
-            '--object-path', '/org/gnome/Shell/Screenshot', '--method',
-            'org.gnome.Shell.Screenshot.Screenshot', 'false', 'false', str(screenshot),
-            stderr=subprocess.PIPE)
-        if not result.startswith('(true,'):
-            raise RuntimeError(f'GNOME rejected the screenshot request: {result}')
+        subprocess.run(as_user('env', *(f'{key}={value}' for key, value in environment.items()),
+                               'gnome-screenshot', '--file', screenshot),
+                       check=True, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         limit = 12 * 1024 * 1024
         data = subprocess.check_output(as_user('head', '-c', str(limit + 1), '--', screenshot), timeout=15)
         if len(data) > limit or not data.startswith(b'\x89PNG\r\n\x1a\n'):
@@ -350,7 +346,7 @@ def verify(stage, report, desktop):
     window_timeout = 45 if debian else guest_budget(45, 180)
     try:
         trace = wait_for(f'{desktop.name} candidate did not reach the expected window and tray state',
-                         lambda: startup(uid, prior_session, background, not background, fail_on_tray_error=debian),
+                         lambda: startup(uid, prior_session, background, not background, fail_on_tray_error=True),
                          timeout=startup_timeout)
     except (TimeoutError, RuntimeError):
         report['startup_observed'] = startup_record()
