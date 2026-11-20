@@ -51,17 +51,20 @@ def streamed_command(command, **kwargs):
     return status, ''.join(tail)
 
 
-def cargo_build(command, *, restored_profile=None, **kwargs):
+def cargo_build(command, *, restored_profiles=(), **kwargs):
     """Retry dependency downloads and recover once from a missing cached Slint crate."""
     transient = re.compile(r'(?:HTTP(?:/[0-9.]+)?\s+|returned error:\s*)(?:429|50[0234])\b'
                            r'|Could not resolve host|Failed to connect to|Connection timed out', re.I)
     for attempt in range(3):
         status, tail = streamed_command(command, **kwargs)
-        if status and restored_profile and re.search(r"\[E0463\].*can't find crate for `slint`", tail):
-            print(f'::warning::Restored Android {restored_profile.parent.name} objects could not supply Slint; '
-                  'rebuilding that release target once', flush=True)
-            shutil.rmtree(restored_profile)
-            restored_profile = None
+        if (status and restored_profiles
+                and re.search(r"\[E0463\].*can't find crate for `slint(?:_macros)?`", tail)):
+            print('::warning::Restored Android compiler objects could not supply Slint; '
+                  'rebuilding the host and current ABI release objects once', flush=True)
+            for profile in restored_profiles:
+                if profile.is_dir() and profile.resolve() == profile:
+                    shutil.rmtree(profile)
+            restored_profiles = ()
             status, tail = streamed_command(command, **kwargs)
         if status == 0:
             return
@@ -411,7 +414,12 @@ def prepare_maven_cache():
 def build(arch, gradle_offline=False):
     from action_cache import compiler_cache_checkpoint, workspace_sources
     from ci_test_policy import enabled, extended_tests
+    abi, target, clang_target, _ = ABIS[arch]
     workspace_sources(ROOT)
+    profiles = (ROOT/'target/release', ROOT/'target'/target/'release')
+    restored_profiles = profiles if (
+        os.environ.get('GITHUB_ACTIONS') == 'true' and any(profile.is_dir() for profile in profiles)
+    ) else ()
     packages = ['-p', 'clash-mobile-runtime', '-p', 'clash-android']
     targets = ['--all-targets'] if extended_tests() else ['--lib']
     cargo_build(['cargo', 'clippy', *packages, '--release', *targets, '--locked', '--', '-D', 'warnings'], cwd=ROOT)
@@ -421,7 +429,6 @@ def build(arch, gradle_offline=False):
     else:
         run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--lib',
              '--', '--test-threads=1'], cwd=ROOT)
-    abi, target, clang_target, _ = ABIS[arch]
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
     clang = toolchain/(clang_target+'26-clang')
@@ -453,13 +460,8 @@ def build(arch, gradle_offline=False):
         'CXXSTDLIB':'c++_static',
         'RUSTFLAGS':'-C link-arg=-Wl,-z,max-page-size=16384',
     })
-    target_profile = ROOT/'target'/target/'release'
-    restored_profile = target_profile if (
-        os.environ.get('GITHUB_ACTIONS') == 'true' and target_profile.is_dir()
-        and target_profile.resolve() == target_profile
-    ) else None
     cargo_build(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked',
-                 '--', '-D', 'warnings'], cwd=ROOT, env=env, restored_profile=restored_profile)
+                 '--', '-D', 'warnings'], cwd=ROOT, env=env, restored_profiles=restored_profiles)
     cargo_build(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
     workspace_sources(ROOT, save=True)
     compiler_cache_checkpoint(ROOT)

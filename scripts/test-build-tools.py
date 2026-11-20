@@ -6817,13 +6817,14 @@ runpy.run_path(str(script), run_name='__main__')
             spawn.assert_called_once()
             delay.assert_not_called()
 
-    def test_android_cross_clippy_rebuilds_only_the_affected_restored_target_once(self):
+    def test_android_cross_clippy_rebuilds_its_host_and_abi_profiles_once(self):
         target = 'x86_64-linux-android'
         command = ['cargo', 'clippy', '--target', target, '--release', '--locked']
         missing_slint = "error[E0463]\x1b[0m: can't find crate for `slint`\n"
         for restored, failure, retry_status, expected_clean in (
             (True, missing_slint, 0, True),
             (True, missing_slint, 101, True),
+            (True, "error[E0463]: can't find crate for `slint_macros`\n", 0, True),
             (False, missing_slint, 101, False),
             (True, "error[E0463]: can't find crate for `std`\n", 101, False),
         ):
@@ -6838,14 +6839,15 @@ runpy.run_path(str(script), run_name='__main__')
                 for directory in (profile, host_profile, other_abi):
                     directory.mkdir(parents=True)
                     (directory/'object.rmeta').write_bytes(b'artifact')
-                kwargs = {'restored_profile': profile if restored else None, 'cwd': root}
+                kwargs = {'restored_profiles': (host_profile, profile) if restored else (),
+                          'cwd': root}
                 if retry_status == 0:
                     android_build.cargo_build(command, **kwargs)
                 else:
                     with self.assertRaises(subprocess.CalledProcessError):
                         android_build.cargo_build(command, **kwargs)
                 self.assertEqual(profile.exists(), not expected_clean)
-                self.assertTrue((host_profile/'object.rmeta').is_file())
+                self.assertEqual(host_profile.exists(), not expected_clean)
                 self.assertTrue((other_abi/'object.rmeta').is_file())
                 self.assertEqual(build_command.call_args_list,
                                  [call(command, cwd=root)] * (2 if expected_clean else 1))
