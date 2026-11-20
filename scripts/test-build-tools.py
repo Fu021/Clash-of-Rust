@@ -3335,6 +3335,34 @@ class BuildTests(unittest.TestCase):
                 self.assertFalse(path.exists())
                 self.assertFalse(path.with_suffix('.partial').exists())
 
+    def test_vm_image_uses_a_mirror_of_the_same_pinned_image_after_404(self):
+        from linux_compatibility_targets import leap_target
+
+        data = b'known image bytes'
+        digest = hashlib.sha256(data).hexdigest()
+        target = leap_target('16.1', '3.20', 'x64', digest)
+        mirror, = target.image_mirrors
+        image = {'url': target.image_url, 'sha256': digest}
+
+        def get(request, **options):
+            if request.full_url == target.image_url:
+                raise urllib.error.HTTPError(request.full_url, 404, 'gone', {}, None)
+            self.assertEqual(request.full_url, mirror)
+            return io.BytesIO(data)
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(build, 'opener') as http, patch.object(build.time, 'sleep'):
+            path = Path(temporary)/'image.qcow2'
+            http.return_value.open.side_effect = get
+            self.assertEqual(linux_ci.download_vm_image(image, target.image_mirrors, path), (path, mirror))
+            self.assertEqual(path.read_bytes(), data)
+            path.unlink()
+            http.return_value.open.side_effect = lambda *args, **kwargs: io.BytesIO(b'changed')
+            with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
+                linux_ci.download_vm_image(image, target.image_mirrors, path)
+            self.assertEqual(http.return_value.open.call_args.args[0].full_url, target.image_url)
+            self.assertFalse(path.exists())
+
     def test_linux_gui_supports_gnome_336_and_newer_compositors(self):
         import linux_gui
 

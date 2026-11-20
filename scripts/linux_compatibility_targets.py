@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import hashlib
 
 UBUNTU_BASELINE = '20.04'
+OPENSUSE_MIRROR = 'https://ftp.gwdg.de/pub/opensuse'
 TUMBLEWEED_ARM64_REPOMD = {
     '20261117': '781d163094bd76fc89ff4fea07636bca733f4fdd51600ed1f6c0eb31baf853ad',
 }
@@ -22,6 +23,7 @@ class Target:
     writable_arm_uefi: bool = False
     vm_runner_release: str = '24.04'
     full_desktop: bool = False
+    image_mirrors: tuple[str, ...] = ()
 
     @property
     def distribution(self):
@@ -107,17 +109,19 @@ def fedora_target(build, arch, digest, *, variant='Generic', runner_release='24.
 
 
 def leap_target(release, build, arch, digest):
-    root = f'https://download.opensuse.org/distribution/leap/{release}/appliances'
     image_arch = {'x64': 'x86_64', 'arm64': 'aarch64'}[arch]
-    return Target('opensuse', release, arch,
-                  f'{root}/Leap-{release}-Minimal-VM.{image_arch}-Cloud-Build{build}.qcow2', digest)
+    path = (f'/distribution/leap/{release}/appliances/'
+            f'Leap-{release}-Minimal-VM.{image_arch}-Cloud-Build{build}.qcow2')
+    return Target('opensuse', release, arch, 'https://download.opensuse.org' + path, digest,
+                  image_mirrors=(OPENSUSE_MIRROR + path,))
 
 
 def tumbleweed_target(snapshot, arch, digest):
-    root = 'https://downloadcontent.opensuse.org'
     port, image_arch = {'x64': ('', 'x86_64'), 'arm64': ('/ports/aarch64', 'aarch64')}[arch]
-    image = f'openSUSE-Tumbleweed-Minimal-VM.{image_arch}-1.0.0-Cloud-Snapshot{snapshot}.qcow2'
-    return Target('opensuse', snapshot, arch, f'{root}{port}/tumbleweed/appliances/{image}', digest)
+    path = (f'{port}/tumbleweed/appliances/'
+            f'openSUSE-Tumbleweed-Minimal-VM.{image_arch}-1.0.0-Cloud-Snapshot{snapshot}.qcow2')
+    return Target('opensuse', snapshot, arch, 'https://downloadcontent.opensuse.org' + path, digest,
+                  image_mirrors=(OPENSUSE_MIRROR + path,))
 
 
 TARGETS = {
@@ -154,7 +158,7 @@ TARGETS = {
     ),
     'opensuse': (
         leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
-        leap_target('16.1', '3.18', 'x64', '2cbf0121ccb8eef5452b43e14685715452ffa049e6a618bb165382aa1f2aab3b'),
+        leap_target('16.1', '3.20', 'x64', '32f11d6fb607b8cb1239b1b73e33a2f6b375194cc9f76f30f8c75bf4d34a2655'),
         tumbleweed_target('20261119', 'x64', '941eafeafc2361d7097652ff86e2f06ebb6ef654566687d0759af530fb53af5a'),
     ),
     'arch': (

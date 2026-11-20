@@ -21,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from urllib.error import HTTPError
 import urllib.request
 import uuid
 
@@ -133,6 +134,18 @@ def download(record, path):
     download_original(record['url'], path, digest=record[algorithm], digest_algorithm=algorithm)
     print(f'Linux download: verified {path.name} ({path.stat().st_size / 1024**2:.1f} MiB)', flush=True)
     return path
+
+
+def download_vm_image(image, mirrors, path):
+    urls = (image['url'], *mirrors)
+    for url in urls:
+        try:
+            return download(dict(image, url=url), path), url
+        except HTTPError as error:
+            if error.code not in (404, 410) or url == urls[-1]:
+                raise
+            print(f'Linux image unavailable (HTTP {error.code}): {url}. Trying a listed mirror.',
+                  flush=True)
 
 
 def require_actions():
@@ -897,7 +910,9 @@ def vm_test(package_run_id, target):
                 filename = (f'{target.family}-{target.release}-{architecture}.{target.image_format}'
                             if target.image_url else 'focal.img')
                 try:
-                    base = download(image, (directory if target.image_format == 'iso' else tools_directory())/filename)
+                    image_path = (directory if target.image_format == 'iso' else tools_directory())/filename
+                    base, used_url = download_vm_image(image, target.image_mirrors, image_path)
+                    result[report_image + '_url'] = used_url
                 finally:
                     timings['image_download_and_verify'] = round(time.monotonic() - phase_started, 3)
                 python_started = time.monotonic()
