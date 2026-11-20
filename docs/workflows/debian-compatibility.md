@@ -29,4 +29,4 @@ ARM64 在同一隔离网络命名空间执行完整 CLI 用户矩阵与 TUN 子�
 
 四个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、完整验收范围和运行尝试。每个 VM 的 `linux-package-report-debian-<版本>-<架构>` 与最终回执保留三天。真实 VM 结果用于评估公开支持与发布门禁。
 
-提交 `280d5679` 使用 CI `44639212301` 取得 Debian 12/13 的 x64、ARM64 四目标回执。各目标均通过普通用户的桌面和终端探针、真实 GNOME X11 登录与 AppIndicator 托盘，以及从 `v0.7.2` 升级和卸载后的数据保留。两版 x64 使用 KVM，两版 ARM64 使用 TCG。[Debian Compatibility 44642518024](https://github.com/Fu021/Clash-of-Rust/actions/runs/44642518024)
+提交 `a7167e2c` 使用 CI `44652374432` 取得 Debian 12/13 的 x64、ARM64 四目标回执，并经发布门禁复核。各目标均通过普通用户的桌面和终端探针、真实 GNOME X11 登录与 AppIndicator 托盘，以及从 `v0.7.2` 升级和卸载后的数据保留。两版 ARM64 使用 TCG，作业分别耗时 66 分 55 秒和 47 分 36 秒。[Debian Compatibility 44654293182](https://github.com/Fu021/Clash-of-Rust/actions/runs/44654293182)

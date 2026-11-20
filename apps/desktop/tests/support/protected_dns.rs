@@ -55,7 +55,11 @@ async fn hijacked_dns(host: &str, tcp: bool) -> IpAddr {
         bytes
     };
     assert_eq!(&reply[..2], &packet[..2]);
-    assert_eq!(reply[3] & 15, 0, "DNS response: {reply:?}");
+    assert_eq!(
+        reply[3] & 15,
+        0,
+        "DNS response for {host} (TCP={tcp}): {reply:?}"
+    );
     assert!(
         reply.len() >= packet.len() + 16,
         "Missing DNS answer: {reply:?}"
@@ -342,6 +346,7 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
                 .await
                 .expect("Protected DNS/HTTP must work after network refresh");
         }
+        let before_restart = metrics().await;
         engine.stop().await.unwrap();
         engine.start_with_proxy_mode().await.unwrap();
         if node == "node6.fixture.test" && fixed_blocked && !explicit {
@@ -385,6 +390,12 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
             .await
             .expect("Cold-start protected DNS/HTTP must work");
+        let after_restart = metrics().await;
+        assert!(
+            after_restart["bootstrap"].as_u64().unwrap()
+                > before_restart["bootstrap"].as_u64().unwrap(),
+            "Cold restart did not exercise node bootstrap: {after_restart}"
+        );
         engine.claude_protection(false).await.unwrap();
         let auto: serde_json::Value = controller
             .get(&auto_url)

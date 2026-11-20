@@ -1,8 +1,11 @@
+#define _POSIX_C_SOURCE 200809L
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <wayland-client.h>
 
 #include "ext-foreign-toplevel-list-v1-client.h"
@@ -208,6 +211,39 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = global_remove,
 };
 
+static bool awaiting_geometry(struct probe *probe)
+{
+    struct window *window;
+    wl_list_for_each(window, &probe->windows, link) {
+        if (window->matches && (window->width <= 0 || window->height <= 0))
+            return true;
+    }
+    return false;
+}
+
+static bool receive_geometry(struct wl_display *display, struct probe *probe)
+{
+    enum { geometry_timeout_ms = 1000 };
+    struct timespec start, now;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) < 0)
+        return false;
+    struct pollfd connection = {.fd = wl_display_get_fd(display), .events = POLLIN};
+    while (awaiting_geometry(probe)) {
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+            return false;
+        long long elapsed_ms = (now.tv_sec - start.tv_sec) * 1000LL
+            + (now.tv_nsec - start.tv_nsec) / 1000000L;
+        if (elapsed_ms >= geometry_timeout_ms)
+            break;
+        int events = poll(&connection, 1, (int)(geometry_timeout_ms - elapsed_ms));
+        if (events == 0)
+            break;
+        if (events < 0 || !(connection.revents & POLLIN) || wl_display_dispatch(display) < 0)
+            return false;
+    }
+    return !probe->failed;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3 || (strcmp(argv[1], "inspect") != 0 && strcmp(argv[1], "close") != 0)) {
@@ -226,6 +262,8 @@ int main(int argc, char **argv)
         && wl_display_roundtrip(display) >= 0 && probe.list && probe.info
         && wl_display_roundtrip(display) >= 0 && wl_display_roundtrip(display) >= 0
         && !probe.failed;
+    if (ready && strcmp(argv[1], "inspect") == 0)
+        ready = receive_geometry(display, &probe);
     unsigned int count = 0;
     struct window *matched = NULL;
     struct window *window, *next;

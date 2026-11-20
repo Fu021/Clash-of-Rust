@@ -372,11 +372,10 @@ def native_upgrade_and_uninstall(deb):
 
 def native_package_tests(deb, receipt, binary):
     from linux_gui import installed_tests
-    from linux_native_guest import RPM, distribution, install_package, prepare
+    from linux_native_guest import RPM, distribution, install_package
     from linux_native_package import build_arch, verify_rpm
 
     distro = distribution()
-    prepare()
     package = (verify_rpm(deb.parent/'linux-rpm', receipt) if distro in RPM else
                build_arch(deb, receipt['version'], deb.parent/'linux-arch', receipt['sha256']))
     run(['sudo', 'chown', 'root:root', '/opt'])
@@ -411,11 +410,20 @@ def run_compatibility(distribution, version, arch):
         or receipt['linux_tun_test_sha256'] != sha256(binary)):
         raise ValueError('Compatibility inputs differ from the verified package/test binaries')
     binary.chmod(0o755)
-    from linux_native_guest import DISTROS
-    if distribution in DISTROS:
+    from linux_native_guest import DISTROS, prepare as prepare_native_environment
+    native = distribution in DISTROS
+    prepare = prepare_native_environment if native else prepare_compatibility_environment
+    started = time.monotonic()
+    prepared = False
+    try:
+        prepare()
+        prepared = True
+    finally:
+        write_json(ROOT/'target/linux-report/compatibility-environment.json',
+                   {'seconds': round(time.monotonic() - started, 3), 'success': prepared})
+    if native:
         native_package_tests(packages[0], receipt, binary)
     else:
-        prepare_compatibility_environment()
         linux_package_tests(packages[0], binary, structure=False)
     if distribution != 'ubuntu':
         from cli_tui import verify

@@ -39,13 +39,14 @@ def dns_question(query):
 
 def dns_response(query, bootstrap):
     name, kind, end = dns_question(query)
+    node = name.startswith(('node.', 'node6.'))
     if name in ('resolver.fixture.test', 'updates.fixture.test'):
         address = UPDATES
     else:
-        address = NODE if name.startswith(('node.', 'node6.')) else WEBSITE
+        address = NODE if node else WEBSITE
     # Bootstrap may resolve only node names. A public lookup sent here would
     # constitute a privacy regression even if it received a usable answer.
-    allowed = not bootstrap or name.startswith(('node.', 'node6.'))
+    allowed = not bootstrap or node
     if not allowed:
         METRICS['bootstrap_public_lookup'] += 1
     if name.startswith('node6.') and kind == 1:
@@ -54,7 +55,8 @@ def dns_response(query, bootstrap):
     response = query[:2] + struct.pack('!HHHHH', 0x8180, 1, int(answer), 0, 0) + query[12:end]
     if answer:
         value = ipaddress.ip_address(address[kind == 28]).packed
-        response += b'\xc0\x0c' + struct.pack('!HHIH', kind, 1, 0, len(value)) + value
+        ttl = 30 if bootstrap and node else 0
+        response += b'\xc0\x0c' + struct.pack('!HHIH', kind, 1, ttl, len(value)) + value
     return response
 
 

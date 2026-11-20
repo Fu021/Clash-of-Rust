@@ -151,6 +151,20 @@ class TunDnsFixtureTests(unittest.TestCase):
                 answer = tun_dns_fixture.dns_response(self.query('updates.fixture.test', kind), True)
                 self.assertEqual(struct.unpack_from('!H', answer, 6)[0], 0)
 
+    def test_bootstrap_caches_positive_node_answers_only(self):
+        for name, kind, bootstrap, expected_ttl in (
+                ('node.fixture.test', 1, True, 30),
+                ('node6.fixture.test', 28, True, 30),
+                ('node6.fixture.test', 1, True, None),
+                ('node.fixture.test', 1, False, 0),
+                ('web.fixture.test', 1, False, 0)):
+            with self.subTest(name=name, kind=kind, bootstrap=bootstrap):
+                query = self.query(name, kind)
+                answer = tun_dns_fixture.dns_response(query, bootstrap)
+                self.assertEqual(struct.unpack_from('!H', answer, 6)[0], int(expected_ttl is not None))
+                if expected_ttl is not None:
+                    self.assertEqual(struct.unpack_from('!I', answer, len(query)+6)[0], expected_ttl)
+
     def test_managed_direct_probe_delegates_dns_and_preserves_http_target(self):
         for bound_type, bound in ((1, b'\x7f\x00\x00\x01'),
                                   (4, b'\0'*16),
@@ -453,6 +467,7 @@ class UbuntuVmTests(unittest.TestCase):
         for suite, release, needs_gpu, kvm in (
             ('ubuntu', '20.04', False, False), ('debian', '13', True, False),
             ('opensuse', '16.0', True, False), ('debian', '13', True, True),
+            ('fedora', '44', True, False), ('fedora', '45', True, False),
         ):
             with self.subTest(suite=suite, kvm=kvm), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
@@ -466,6 +481,7 @@ class UbuntuVmTests(unittest.TestCase):
                         patch.object(linux_ci.os, 'sched_getaffinity', return_value={0, 1, 2, 3}), \
                         patch.object(linux_ci, 'run', side_effect=create_key), \
                         patch.object(linux_ci.socket, 'socket') as socket, \
+                        patch.object(linux_ci.shutil, 'copyfile') as copy_firmware, \
                         patch.object(linux_ci.VmGuest, 'cloud_disk', return_value=directory/'seed.img'), \
                         patch.object(linux_ci.subprocess, 'Popen') as boot, \
                         patch.object(linux_ci, 'wait_vm_ssh'), \
@@ -474,13 +490,24 @@ class UbuntuVmTests(unittest.TestCase):
                             'aarch64\n', f'{target.os_release_id}\n{target.os_release_version}\n',
                             '5.4.0-fixture\n']):
                     socket.return_value.__enter__.return_value.getsockname.return_value = ('127.0.0.1', 4321)
-                    guest = linux_ci.VmGuest(directory/'base.qcow2', directory, 'fixture', target, kvm=kvm)
+                    guest = linux_ci.VmGuest(directory/'base.qcow2', directory, 'fixture', target,
+                                             kvm=kvm, timings={})
                     guest.console.close()
                 command = boot.call_args.args[0]
                 machine = 'virt,gic-version=host,accel=kvm' if kvm else 'virt,accel=tcg'
                 cpu = 'host' if kvm else 'cortex-a72'
                 self.assertEqual(command[:5], ['qemu-system-aarch64', '-machine', machine, '-cpu', cpu])
-                self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
+                self.assertIn(f'COR_LINUX_VM_ACCELERATION={"kvm" if kvm else "tcg"} ', guest.environment)
+                if (suite, release) == ('fedora', '45'):
+                    variables = guest.directory/'aavmf-vars.fd'
+                    copy_firmware.assert_called_once_with(Path('/usr/share/AAVMF/AAVMF_VARS.fd'), variables)
+                    self.assertNotIn('-bios', command)
+                    self.assertIn('if=pflash,format=raw,readonly=on,file=/usr/share/AAVMF/AAVMF_CODE.fd',
+                                  command)
+                    self.assertIn(f'if=pflash,format=raw,file={variables}', command)
+                else:
+                    copy_firmware.assert_not_called()
+                    self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
                 self.assertEqual('virtio-gpu-pci' in command, needs_gpu)
                 self.assertEqual('-qmp' in command, needs_gpu)
                 if needs_gpu:
@@ -1114,24 +1141,24 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertGreaterEqual(timings['installed_candidate'], 0)
             self.assertGreaterEqual(timings['package_lifecycle'], 0)
 
-    def test_candidate_timeout_captures_desktop_before_propagating_failure(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            archive = directory/'package.tar.gz'
-            archive.touch()
-            guest = MagicMock(target=linux_ci.target_for('debian', '13', 'arm64'),
-                              environment='guest ', architecture='aarch64', kvm=False)
-            failure = subprocess.TimeoutExpired(['ssh'], 3600)
-            guest.remote.side_effect = [None, failure]
-            timings = {}
-            with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
-                with self.assertRaises(subprocess.TimeoutExpired) as raised:
-                    linux_ci.verify_vm_package(guest, directory, 123, timings=timings)
-            self.assertIs(raised.exception, failure)
-            guest.capture_desktop_failure.assert_called_once_with('installed-candidate')
-            guest.reboot.assert_not_called()
-            self.assertGreaterEqual(timings['installed_candidate'], 0)
-            self.assertNotIn('package_lifecycle', timings)
+    def test_candidate_failure_captures_desktop_before_propagating_failure(self):
+        for failure in (subprocess.TimeoutExpired(['ssh'], 3600), subprocess.CalledProcessError(1, ['ssh'])):
+            with self.subTest(failure=type(failure)), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                archive = directory/'package.tar.gz'
+                archive.touch()
+                guest = MagicMock(target=linux_ci.target_for('debian', '13', 'arm64'),
+                                  environment='guest ', architecture='aarch64', kvm=False)
+                guest.remote.side_effect = [None, failure]
+                timings = {}
+                with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                    with self.assertRaises(type(failure)) as raised:
+                        linux_ci.verify_vm_package(guest, directory, 123, timings=timings)
+                self.assertIs(raised.exception, failure)
+                guest.capture_desktop_failure.assert_called_once_with('installed-candidate')
+                guest.reboot.assert_not_called()
+                self.assertGreaterEqual(timings['installed_candidate'], 0)
+                self.assertNotIn('package_lifecycle', timings)
 
     def test_mint_package_runs_native_x11_and_wayland_before_upgrade_and_uninstall(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1195,6 +1222,8 @@ class UbuntuVmTests(unittest.TestCase):
             report = json.loads((root/'report/linux-vm.json').read_text())
             self.assertEqual(report['apt_inputs'], 'current')
             self.assertEqual(report['acceleration'], 'tcg')
+            self.assertGreaterEqual(report['timings_seconds']['image_download_and_verify'], 0)
+            self.assertGreaterEqual(report['timings_seconds']['python_download_and_verify'], 0)
             self.assertEqual(report['timings_seconds']['final_guest_boot'], 1)
             self.assertEqual(report['cloud_sha256'], public_image['sha256'])
             self.assertTrue(report['success'])
@@ -1226,6 +1255,68 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertGreaterEqual(report['timings_seconds']['failed_guest_boot'], 0)
             self.assertFalse(report['success'])
             self.assertNotIn('kernel', report)
+
+    def test_iso_vm_reports_install_and_disk_boot_separately(self):
+        for failure in (None, 'iso_install', 'guest_boot'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                target = linux_ci.target_for('linuxmint', '22.3', 'x64')
+                archive = root/'source.tar.gz'
+                archive.touch()
+                elapsed = 0
+
+                def run_host(command, **kwargs):
+                    if command[0] == 'ssh-keygen':
+                        Path(command[-1]).with_suffix('.pub').write_text('fixture public key')
+
+                def install(*args, **kwargs):
+                    nonlocal elapsed
+                    elapsed += 20
+                    if failure == 'iso_install':
+                        raise RuntimeError('fixture installer failure')
+
+                def wait_for_ssh(*args, **kwargs):
+                    nonlocal elapsed
+                    elapsed += 7
+                    if failure == 'guest_boot':
+                        raise RuntimeError('fixture disk boot failure')
+
+                with patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
+                        patch.object(build_inputs, 'manifest', return_value=None), \
+                        patch.multiple(linux_ci, REPORT=root/'report',
+                                       inputs=MagicMock(return_value={'architectures': {'x64': {'python': {}}}}),
+                                       host_arch=MagicMock(return_value='x64'),
+                                       time=SimpleNamespace(monotonic=lambda: elapsed),
+                                       kvm_available=MagicMock(return_value=True),
+                                       tools_directory=MagicMock(return_value=root),
+                                       vm_source_archive=MagicMock(return_value=archive),
+                                       download=MagicMock(return_value=root/'image'), fetch_vm_package=MagicMock(),
+                                       run=MagicMock(side_effect=run_host), wait_vm_ssh=MagicMock(side_effect=wait_for_ssh),
+                                       prepare_vm_guest=MagicMock(), verify_vm_package=MagicMock()), \
+                        patch.object(linux_ci.socket, 'socket') as listener, \
+                        patch.object(linux_ci.shutil, 'copyfile'), \
+                        patch.object(linux_mint_install, 'install', side_effect=install), \
+                        patch.object(linux_ci.subprocess, 'Popen'), \
+                        patch.multiple(linux_ci.VmGuest, create=True, stage_seconds=0, stage=MagicMock(),
+                                       output=MagicMock(side_effect=['x86_64\n', 'linuxmint\n22.3\n', '6.8\n']),
+                                       capture_desktop_failure=MagicMock(), close_ssh=MagicMock(), preserve=MagicMock()):
+                    listener.return_value.__enter__.return_value.getsockname.return_value = ('127.0.0.1', 4321)
+                    if failure:
+                        with self.assertRaisesRegex(RuntimeError, 'fixture .* failure'):
+                            linux_ci.vm_test(123, target)
+                    else:
+                        linux_ci.vm_test(123, target)
+
+                report = json.loads((root/'report/linux-vm.json').read_text())
+                timings = report['timings_seconds']
+                self.assertEqual(report.get('failed_stage'), failure)
+                if failure == 'iso_install':
+                    self.assertEqual(timings['failed_iso_install'], 20)
+                    self.assertNotIn('failed_guest_boot', timings)
+                else:
+                    boot_key = 'failed_guest_boot' if failure else 'final_guest_boot'
+                    self.assertEqual(timings['iso_install'], 20)
+                    self.assertEqual(timings[boot_key], 7)
 
     def test_vm_archive_omits_git_history_builds_and_other_architecture_indexes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3429,7 +3520,8 @@ class BuildTests(unittest.TestCase):
                     patch.object(linux_gui, 'output', side_effect=[
                                  "['fixture']", 'GNOME Shell 48.7', '--headless --wayland-display']), \
                     patch.object(linux_gui, 'evaluate', side_effect=[False, True]) as evaluate, \
-                    patch.object(linux_gui, 'wayland_sockets', side_effect=[set(), {'cor-wayland'}]), \
+                    patch.object(linux_gui, 'wayland_sockets',
+                                 side_effect=[set(), set(), {'cor-wayland'}, {'cor-wayland'}]) as sockets, \
                     patch.object(linux_gui, 'notifier_host_ready', side_effect=[False, True]) as notifier, \
                     patch.object(linux_gui, 'gui') as gui:
                 def verify_authorization():
@@ -3439,6 +3531,7 @@ class BuildTests(unittest.TestCase):
 
                 def verify_gui(backend, destination, **kwargs):
                     self.assertEqual(evaluate.call_count, 2)
+                    self.assertEqual(sockets.call_count, 4)
                     self.assertEqual(notifier.call_count, 2)
                     self.assertEqual(os.environ['WAYLAND_DISPLAY'], 'cor-wayland')
                     return {'tray': True}
@@ -3583,6 +3676,7 @@ class BuildTests(unittest.TestCase):
                        'HOME': '/home/runner', 'XDG_CONFIG_HOME': '/home/runner/.config',
                        'COR_GUI_REPORT': '/tmp/disposable/report',
                        'COR_GUI_AUTH_PASSWORD_FILE': '/tmp/disposable/password',
+                       'COR_LINUX_VM_ACCELERATION': 'tcg',
                        'GITHUB_ACTIONS': 'true', 'GITHUB_TOKEN': 'secret',
                        'AWS_SECRET_ACCESS_KEY': 'secret'}
         with patch.dict(os.environ, environment, clear=True), patch.object(os, 'execve') as launch:
@@ -3595,6 +3689,7 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(retained['HOME'], str(Path('/tmp/disposable/home')))
         self.assertEqual(retained['XDG_CONFIG_HOME'], str(Path('/tmp/disposable/home/.config')))
         self.assertEqual(retained['COR_GUI_AUTH_PASSWORD_FILE'], '/tmp/disposable/password')
+        self.assertEqual(retained['COR_LINUX_VM_ACCELERATION'], 'tcg')
         self.assertNotIn('GITHUB_TOKEN', retained)
         self.assertNotIn('AWS_SECRET_ACCESS_KEY', retained)
 

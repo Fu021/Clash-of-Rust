@@ -393,7 +393,7 @@ def kvm_available():
 
 
 class VmGuest:
-    def __init__(self, base, directory, label, target, *, kvm):
+    def __init__(self, base, directory, label, target, *, kvm, timings):
         self.target = target
         self.directory = Path(directory) / label
         self.directory.mkdir()
@@ -431,7 +431,16 @@ class VmGuest:
         else:
             command.extend(['-drive', drive+',if=virtio'])
         if architecture == 'aarch64':
-            command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
+            if target.writable_arm_uefi:
+                firmware = Path('/usr/share/AAVMF')
+                variables = directory/'aavmf-vars.fd'
+                shutil.copyfile(firmware/'AAVMF_VARS.fd', variables)
+                command.extend([
+                    '-drive', f'if=pflash,format=raw,readonly=on,file={firmware/"AAVMF_CODE.fd"}',
+                    '-drive', f'if=pflash,format=raw,file={variables}',
+                ])
+            else:
+                command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
             if target.full_desktop:
                 command.extend(['-device', 'virtio-gpu-pci'])
         elif target.package_format != 'deb':
@@ -445,6 +454,7 @@ class VmGuest:
                     '-o', 'ControlPath='+str(directory/'ssh-control'),
                     '-p', str(port), 'ubuntu@127.0.0.1']
         self.environment = ('cd ~/cor-source && GITHUB_ACTIONS=true COR_LINUX_GUEST=true '
+                            f'COR_LINUX_VM_ACCELERATION={"kvm" if kvm else "tcg"} '
                             'BUILD_INPUTS_DIR=dependency-snapshot RUNNER_TEMP=/home/ubuntu/cor-runner-temp '
                             'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
                             'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
@@ -462,15 +472,22 @@ class VmGuest:
                                 '-drive', f'if=pflash,format=raw,file={variables}'])
                 run(['qemu-img', 'create', '-f', 'qcow2', self.disk, '24G'])
                 installer_console = REPORT/'vm-console-installer.log'
-                if target.family == 'pop':
-                    from pop_live_install import INSTALLED_READY, install
-                    install(base, directory, public, command, installer_console, SSH_UNIT, INSTALL_SSH)
-                elif target.family in ('linuxmint', 'zorin'):
-                    from linux_mint_install import INSTALLED_READY, install
-                    options = {'initrd': '/casper/initrd.zstd'} if target.family == 'zorin' else {}
-                    install(base, directory, public, command, installer_console, **options)
-                else:
-                    raise ValueError(f'No ISO installer for {target.family}')
+                install_started = time.monotonic()
+                try:
+                    if target.family == 'pop':
+                        from pop_live_install import INSTALLED_READY, install
+                        install(base, directory, public, command, installer_console, SSH_UNIT, INSTALL_SSH)
+                    elif target.family in ('linuxmint', 'zorin'):
+                        from linux_mint_install import INSTALLED_READY, install
+                        options = {'initrd': '/casper/initrd.zstd'} if target.family == 'zorin' else {}
+                        install(base, directory, public, command, installer_console, **options)
+                    else:
+                        raise ValueError(f'No ISO installer for {target.family}')
+                except Exception:
+                    timings['failed_iso_install'] = round(time.monotonic() - install_started, 3)
+                    raise
+                boot_started = time.monotonic()
+                timings['iso_install'] = round(boot_started - install_started, 3)
                 ready_command = INSTALLED_READY
             else:
                 seed = self.cloud_disk(base, public)
@@ -762,7 +779,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
         try:
             guest.remote(guest.environment + extra + command,
                          timeout=3600 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
-        except subprocess.TimeoutExpired:
+        except subprocess.SubprocessError:
             if guest.target.full_desktop:
                 with contextlib.suppress(OSError):
                     guest.capture_desktop_failure('installed-candidate')
@@ -859,14 +876,21 @@ def vm_test(package_run_id, target):
                 phase_started = time.monotonic()
                 filename = (f'{target.family}-{target.release}-{architecture}.{target.image_format}'
                             if target.image_url else 'focal.img')
-                base = download(image, (directory if target.image_format == 'iso' else tools_directory())/filename)
-                python = download(value['python'], tools_directory()/'python.tar.gz')
-                timings['original_downloads'] = round(time.monotonic() - phase_started, 3)
+                try:
+                    base = download(image, (directory if target.image_format == 'iso' else tools_directory())/filename)
+                finally:
+                    timings['image_download_and_verify'] = round(time.monotonic() - phase_started, 3)
+                python_started = time.monotonic()
+                try:
+                    python = download(value['python'], tools_directory()/'python.tar.gz')
+                finally:
+                    timings['python_download_and_verify'] = round(time.monotonic() - python_started, 3)
+                    timings['original_downloads'] = round(time.monotonic() - phase_started, 3)
                 stage = 'guest_boot'
                 phase_started = time.monotonic()
                 kvm = kvm_available()
                 result['acceleration'] = 'kvm' if kvm else 'tcg'
-                guest = VmGuest(base, directory, 'official-image', target, kvm=kvm)
+                guest = VmGuest(base, directory, 'official-image', target, kvm=kvm, timings=timings)
                 timings['final_guest_boot'] = guest.boot_seconds
                 stage = 'guest_source_transfer'
                 guest.stage(archive, python)
@@ -885,7 +909,7 @@ def vm_test(package_run_id, target):
                     frozen = None
                     stage = 'guest_boot'
                     phase_started = time.monotonic()
-                    guest = VmGuest(base, directory, 'official-image-fresh-apt', target, kvm=kvm)
+                    guest = VmGuest(base, directory, 'official-image-fresh-apt', target, kvm=kvm, timings=timings)
                     timings['final_guest_boot'] = guest.boot_seconds
                     stage = 'guest_source_transfer'
                     guest.stage(archive, python)
@@ -899,8 +923,11 @@ def vm_test(package_run_id, target):
                                   package_future=package_future)
                 result['success'] = True
             except Exception:
-                if stage == 'guest_boot':
-                    timings['failed_guest_boot'] = round(time.monotonic() - phase_started, 3)
+                if 'failed_iso_install' in timings:
+                    stage = 'iso_install'
+                elif stage == 'guest_boot':
+                    timings['failed_guest_boot'] = round(
+                        time.monotonic() - phase_started - timings.get('iso_install', 0), 3)
                 result['failed_stage'] = stage
                 print(f'Linux compatibility failed at {stage}.', flush=True)
                 raise

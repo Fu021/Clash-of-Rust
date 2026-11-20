@@ -575,27 +575,31 @@ def session():
             existing_sockets = wayland_sockets(runtime)
             shell = stack.enter_context(process(command, log))
             last_probe_error = ''
+
             def ready():
                 nonlocal last_probe_error
                 if shell.poll() is not None or display.poll() is not None:
                     raise RuntimeError('Desktop compositor exited')
+                sockets = wayland_sockets(runtime)-existing_sockets
+                if '--wayland-display=cor-wayland' in command:
+                    sockets &= {'cor-wayland'}
+                if len(sockets) > 1:
+                    raise RuntimeError(f'GNOME created multiple Wayland sockets: {sorted(sockets)}')
+                if not sockets:
+                    return False
                 try:
                     if evaluate('Main.layoutManager && Main.layoutManager._startingUp === false') is not True:
                         return False
                 except (subprocess.SubprocessError, ValueError, RuntimeError) as error:
                     last_probe_error = getattr(error, 'stderr', None) or str(error)
                     return False
-                sockets = wayland_sockets(runtime)-existing_sockets
-                if '--wayland-display=cor-wayland' in command:
-                    sockets &= {'cor-wayland'}
-                if len(sockets) > 1:
-                    raise RuntimeError(f'GNOME created multiple Wayland sockets: {sorted(sockets)}')
-                if sockets:
-                    os.environ['WAYLAND_DISPLAY'] = next(iter(sockets))
-                    return True
-                return False
+                os.environ['WAYLAND_DISPLAY'] = next(iter(sockets))
+                return True
+
+            arm_tcg = (os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
+                       and platform.machine().lower() in ('aarch64', 'arm64'))
             try:
-                wait_for('GNOME Wayland compositor did not become ready', ready, timeout=60)
+                wait_for('GNOME Wayland compositor did not become ready', ready, timeout=120 if arm_tcg else 60)
             except TimeoutError as error:
                 raise RuntimeError(f'{error}; last DBus probe: {last_probe_error or "no error"}') from error
             result['checks']['gnome_startup_complete'] = True
@@ -652,7 +656,7 @@ def launch_session():
                'XDG_RUNTIME_DIR', 'XDG_SEAT', 'XDG_VTNR', 'XDG_SESSION_TYPE',
                'XDG_SESSION_CLASS', 'XDG_CONFIG_HOME', 'XDG_CURRENT_DESKTOP',
                'GNOME_SHELL_SESSION_MODE', 'LIBGL_ALWAYS_SOFTWARE', 'GSETTINGS_BACKEND',
-               'COR_GUI_REPORT', 'COR_GUI_AUTH_PASSWORD_FILE', 'PYTHONDONTWRITEBYTECODE',
+               'COR_GUI_REPORT', 'COR_GUI_AUTH_PASSWORD_FILE', 'COR_LINUX_VM_ACCELERATION', 'PYTHONDONTWRITEBYTECODE',
                'GITHUB_ACTIONS', 'NO_AT_BRIDGE')
     env = {key: os.environ[key] for key in allowed if key in os.environ}
     home = Path(env['COR_GUI_REPORT']).parent/'home'
@@ -709,6 +713,7 @@ def installed_tests():
                    'XDG_CURRENT_DESKTOP': 'GNOME', 'GNOME_SHELL_SESSION_MODE': 'user',
                    'LIBGL_ALWAYS_SOFTWARE': '1', 'GSETTINGS_BACKEND': 'dconf',
                    'COR_GUI_REPORT': str(report), 'COR_GUI_AUTH_PASSWORD_FILE': str(password_file),
+                   'COR_LINUX_VM_ACCELERATION': os.environ.get('COR_LINUX_VM_ACCELERATION', ''),
                    'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8',
                    'GITHUB_ACTIONS': 'true', 'NO_AT_BRIDGE': '1'}
             # PAM registers a real logind session for the graphical polkit agent.
