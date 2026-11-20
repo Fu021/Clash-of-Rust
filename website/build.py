@@ -233,6 +233,7 @@ def layout(lang, page, title, description, body, release_data):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)}</title>
 <meta name="description" content="{escape(description)}">
+<meta name="google-site-verification" content="DVQrkZ9F6W1fmzfe2hot12n9274smsKHaaTPcB_gUNE">
 <meta name="theme-color" content="#f8f3e7">
 <meta name="color-scheme" content="light dark">
 <script src="{root}theme.js"></script>
