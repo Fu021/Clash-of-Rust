@@ -22,8 +22,10 @@ CHECKS = {suite: ['system_proxy', 'tun'] for suite in WORKFLOWS}
 for suite, targets in TARGETS.items():
     if all(target.full_desktop for target in targets):
         CHECKS[suite] += ['desktop_gui', 'tui', 'cli', 'desktop_login', 'package_lifecycle']
-CHECKS['linuxmint'] += ['native_cinnamon_authorization', 'native_cinnamon_wayland']
-CHECKS['pop'] += ['native_cosmic_authorization', 'native_cosmic_wayland']
+        if suite == 'linuxmint':
+            CHECKS[suite] += ['native_cinnamon_authorization', 'native_cinnamon_wayland']
+        elif suite == 'pop' and any(target.release == '24.04' for target in targets):
+            CHECKS[suite] += ['native_cosmic_authorization', 'native_cosmic_wayland']
 
 
 def release_suites(scope):

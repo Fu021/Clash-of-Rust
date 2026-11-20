@@ -1,5 +1,6 @@
-"""Fixed runner and guest releases for installed DEB checks."""
+"""Fixed runner and guest releases for installed Linux package checks."""
 from dataclasses import dataclass
+import hashlib
 
 UBUNTU_BASELINE = '20.04'
 TUMBLEWEED_ARM64_REPOMD = {
@@ -20,16 +21,13 @@ class Target:
     image_format: str = 'qcow2'
     writable_arm_uefi: bool = False
     vm_runner_release: str = '24.04'
+    full_desktop: bool = False
 
     @property
     def distribution(self):
         return {'linuxmint': 'Linux Mint', 'pop': 'Pop!_OS',
                 'zorin': 'Zorin OS', 'opensuse': 'openSUSE',
                 'arch': 'Arch Linux'}.get(self.family, self.family.capitalize())
-
-    @property
-    def full_desktop(self):
-        return self.family != 'ubuntu'
 
     @property
     def package_format(self):
@@ -58,10 +56,20 @@ class Target:
             qemu += ' ovmf xorriso'
         elif self.family == 'pop':
             qemu += ' ovmf libarchive-tools' if self.arch == 'x64' else ' libarchive-tools'
-            if self.release == '24.04':
+            if self.release == '24.04' and self.full_desktop:
                 qemu += ' qemu-system-gui libgl1-mesa-dri xvfb python3-pil xdotool tesseract-ocr tesseract-ocr-eng'
+        if self.hosted:
+            timeout = 30
+        elif self.full_desktop:
+            timeout = 120
+        else:
+            timeout = 75 if self.image_format == 'iso' else 45
+        cache_prefix = ''
+        if qemu:
+            profile = hashlib.sha256(qemu.encode()).hexdigest()[:16]
+            cache_prefix = f'linux-host-apt-v1-{runner}-{profile}-'
         return {'distribution': self.distribution, 'release': self.release, 'arch': self.arch,
-                'os': runner, 'qemu': qemu}
+                'os': runner, 'qemu': qemu, 'timeout': timeout, 'vm_cache_prefix': cache_prefix}
 
 
 def debian_target(release, series, build, arch, digest):

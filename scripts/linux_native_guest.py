@@ -99,25 +99,33 @@ def install_dependencies(packages):
 
 
 def prepare():
+    from ci_test_policy import extended_tests
+
     distro = distribution()
-    common = ('git', 'gdm', 'gnome-session', 'gnome-shell',
-              'gsettings-desktop-schemas', 'polkit', 'binutils', 'sudo')
     if distro == 'fedora':
-        packages = ('dbus-daemon', 'openssl', 'xorg-x11-server-Xvfb',
+        basic = ('openssl', 'dbus-daemon', 'iproute', 'systemd-resolved', 'libcap')
+        desktop = ('binutils', 'xorg-x11-server-Xvfb',
                     'xorg-x11-server-Xwayland', 'xprop', 'xdpyinfo',
-                    'xwininfo', 'xdotool', 'wmctrl', 'openbox', 'gtk3', 'iproute', 'systemd-resolved',
-                    'libcap', 'rpm-build', 'glib2', 'glib-networking', 'google-noto-sans-cjk-fonts')
+                    'xwininfo', 'xdotool', 'wmctrl', 'openbox', 'gtk3',
+                    'rpm-build', 'glib2', 'glib-networking', 'google-noto-sans-cjk-fonts', 'xfce-polkit')
     elif distro in RPM:
-        packages = ('dbus-1-daemon', 'xorg-x11-server-Xvfb', 'xwayland', 'xprop', 'xdpyinfo', 'xwininfo', 'xdotool',
-                    'wmctrl', 'openbox', 'gtk3-tools', 'iproute2', 'systemd-resolved', 'libcap-progs',
+        basic = ('openssl-3', 'dbus-1-daemon', 'iproute2', 'systemd-resolved', 'libcap-progs')
+        desktop = ('binutils', 'xorg-x11-server-Xvfb', 'xwayland', 'xprop', 'xdpyinfo', 'xwininfo', 'xdotool',
+                    'wmctrl', 'openbox', 'gtk3-tools', 'mate-polkit',
                     'rpm-build', 'glib2-tools', 'glib-networking', 'gsettings-backend-dconf',
                     'google-noto-sans-cjk-fonts')
     else:
-        packages = ('xorg-server-xvfb', 'xorg-xwayland', 'xorg-xprop', 'xorg-xdpyinfo', 'xorg-xwininfo',
-                    'xdotool', 'wmctrl', 'openbox', 'gtk3', 'iproute2', 'systemd-resolvconf', 'libcap',
-                    'fakeroot', 'libarchive', 'glib2', 'glib-networking', 'noto-fonts-cjk')
-    agent = 'xfce-polkit' if distro == 'fedora' else 'mate-polkit'
-    install_dependencies((*common, agent, *packages))
+        basic = ('openssl', 'dbus', 'iproute2', 'systemd-resolvconf', 'libcap', 'binutils', 'fakeroot', 'libarchive')
+        desktop = ('xorg-server-xvfb', 'xorg-xwayland', 'xorg-xprop', 'xorg-xdpyinfo', 'xorg-xwininfo',
+                   'xdotool', 'wmctrl', 'openbox', 'gtk3', 'glib2', 'glib-networking', 'noto-fonts-cjk',
+                   'mate-polkit')
+    basic = ('polkit', 'util-linux', *basic)
+    if not extended_tests():
+        install_dependencies(basic)
+        return
+    common = ('git', 'gdm', 'gnome-session', 'gnome-shell',
+              'gsettings-desktop-schemas', 'sudo')
+    install_dependencies((*basic, *common, *desktop))
     if distro == 'fedora':
         privileged('upgrade', 'liblastlog2', 'pam', 'selinux-policy-targeted')
     if Path('/usr/lib/systemd/system/polkit-agent-helper.socket').is_file():

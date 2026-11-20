@@ -446,8 +446,8 @@ class VmGuest:
                 command.extend(['-device', 'virtio-gpu-pci'])
         elif target.package_format != 'deb':
             command.extend(['-vga', 'virtio'])
-        cosmic = (target.family, target.release) == ('pop', '24.04')
-        self.monitor_path = directory/'qmp.sock' if target.full_desktop else None
+        cosmic = target.full_desktop and (target.family, target.release) == ('pop', '24.04')
+        self.monitor_path = directory/'qmp.sock'
         self.ssh = ['ssh', '-i', str(key), '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile='+str(directory/'known_hosts'),
                     '-o', 'ConnectTimeout=5', '-o', 'BatchMode=yes',
@@ -459,10 +459,7 @@ class VmGuest:
                             'BUILD_INPUTS_DIR=dependency-snapshot RUNNER_TEMP=/home/ubuntu/cor-runner-temp '
                             'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
                             'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
-        from ci_test_policy import extended_tests, linux_user_tests
-        self.environment += (
-            f'COR_CI_EXTENDED_TESTS={str(extended_tests() or target.full_desktop).lower()} '
-            f'COR_CI_LINUX_USER_TESTS={str(linux_user_tests()).lower()} ')
+        self.environment += f'COR_CI_EXTENDED_TESTS={str(target.full_desktop).lower()} '
         try:
             ready_command = 'true'
             if target.image_format == 'iso':
@@ -498,8 +495,7 @@ class VmGuest:
             command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
                             '-device', 'virtio-net-pci,netdev=net0'])
             environment = None
-            if self.monitor_path:
-                command.extend(['-qmp', f'unix:{self.monitor_path},server=on,wait=off'])
+            command.extend(['-qmp', f'unix:{self.monitor_path},server=on,wait=off'])
             if cosmic:
                 from linux_vm_monitor import SoftwareDisplay
                 self.display = SoftwareDisplay(REPORT/'vm-xvfb.log')
@@ -520,9 +516,8 @@ class VmGuest:
                             timeout=boot_timeout)
                 self.wait_cloud_init()
             except (RuntimeError, TimeoutError):
-                if self.monitor_path:
-                    with contextlib.suppress(OSError):
-                        self.capture_desktop_failure('boot-' + label)
+                with contextlib.suppress(OSError):
+                    self.capture_desktop_failure('boot-' + label)
                 raise
             actual = self.output('uname -m').strip()
             if actual != architecture:
@@ -797,9 +792,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             guest.remote(guest.environment + extra + command,
                          timeout=2520 if bookworm_tcg else candidate_timeout)
         except subprocess.SubprocessError:
-            if guest.target.full_desktop:
-                with contextlib.suppress(OSError):
-                    guest.capture_desktop_failure('installed-candidate')
+            with contextlib.suppress(OSError):
+                guest.capture_desktop_failure('installed-candidate')
             raise
         finally:
             timings['installed_candidate'] = round(time.monotonic() - started, 3)
@@ -882,8 +876,9 @@ def vm_test(package_run_id, target):
     with tempfile.TemporaryDirectory(prefix='cor-linux-vm-', dir=temporary_root) as temporary:
         directory = Path(temporary)
         phase_started = time.monotonic()
-        archive = vm_source_archive(directory, include_frozen_apt=bool(frozen),
-                                    include_cosmic_probe=(target.family, target.release) == ('pop', '24.04'))
+        archive = vm_source_archive(
+            directory, include_frozen_apt=bool(frozen),
+            include_cosmic_probe=target.full_desktop and (target.family, target.release) == ('pop', '24.04'))
         timings['source_archive'] = round(time.monotonic() - phase_started, 3)
         guest = None
         report_image = 'iso' if target.image_format == 'iso' else 'cloud'

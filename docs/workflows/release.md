@@ -50,7 +50,7 @@ Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果
 
 ### 兼容性发布门禁
 
-普通 CI 成功后，以同一 `ci_run_id` 并行运行 [Android Compatibility](android-compatibility.md)、[Ubuntu Compatibility](ubuntu-compatibility.md) 和本次发布所涉及的其他发行版工作流。默认范围也需要 [Debian Compatibility](debian-compatibility.md)。每套矩阵的所有目标及最终回执 job 均须成功。
+普通 CI 成功后，以同一 `ci_run_id` 并行运行 [Android Compatibility](android-compatibility.md)、[Ubuntu Compatibility](ubuntu-compatibility.md) 和本次发布所涉及的其他发行版工作流。默认范围也需要 [Debian Compatibility](debian-compatibility.md)。Linux 各套常规门禁安装同源候选包并执行基础系统代理与 TUN 检查。每套矩阵的所有目标及最终回执 job 均须成功。
 
 `scripts/compatibility.py` 自动查找同提交最新的兼容运行，并核对 workflow 路径、同仓库、成功终态、所有必需 job、attempt 及回执 ZIP 的 digest。回执必须精确绑定所选 CI 的输入 artifact id/name/digest；只检查分支名、工作流绿色、旧运行成功或过期附件均不够。最新兼容运行尚未完成或失败时阻止发布，不静默退回旧结果。前置解析和最终核验都执行门禁，`check_only`、正式版与预发布一视同仁。
 

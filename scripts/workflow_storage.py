@@ -6,9 +6,14 @@ import re
 import time
 import urllib.error
 
+from linux_compatibility_targets import TARGETS
 from workflow_artifacts import release_module
 
 BUDGET = 20 * 1024**3
+VM_TOOL_CACHE_PREFIXES = tuple(sorted({
+    entry['vm_cache_prefix'] for targets in TARGETS.values()
+    for target in targets if (entry := target.matrix_entry())['qemu']
+}))
 
 
 def caches(client):
@@ -68,8 +73,8 @@ def lineage(key):
 def retired(key):
     if key.startswith('android-go-build-v1-'):
         return False
-    if re.match(r'^linux-host-apt-v\d+-ubuntu-\d+\.\d+-arm-', key):
-        return True
+    if key.startswith('linux-host-apt-'):
+        return not key.startswith(VM_TOOL_CACHE_PREFIXES)
     return key.startswith((
         'action-setup-tailscale/', 'branch-delta-', 'macos-compiler-', 'android-go-',
         'runtime-v1-', 'resources-', 'source-',

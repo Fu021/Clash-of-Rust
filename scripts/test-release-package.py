@@ -373,7 +373,7 @@ def native_upgrade_and_uninstall(deb):
 
 
 def native_package_tests(deb, receipt, binary):
-    from linux_gui import installed_tests
+    from ci_test_policy import extended_tests
     from linux_native_guest import RPM, distribution, install_package
     from linux_native_package import build_arch, verify_rpm
 
@@ -384,7 +384,9 @@ def native_package_tests(deb, receipt, binary):
     run(['sudo', 'chmod', '0755', '/opt'])
     install_package(package)
     require_linux_polkit_tools()
-    installed_tests()
+    if extended_tests():
+        from linux_gui import installed_tests
+        installed_tests()
     run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
          '--test-binary', binary, '--bundle', '/opt/clash-of-rust'])
     write_json(ROOT/'target/linux-report/native-package.json',
@@ -393,6 +395,8 @@ def native_package_tests(deb, receipt, binary):
 
 
 def run_compatibility(distribution, version, arch):
+    from ci_test_policy import extended_tests
+
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('Compatibility tests require a disposable GitHub Actions runner')
     release = platform.freedesktop_os_release()
@@ -427,7 +431,7 @@ def run_compatibility(distribution, version, arch):
         native_package_tests(packages[0], receipt, binary)
     else:
         linux_package_tests(packages[0], binary, structure=False)
-    if distribution != 'ubuntu':
+    if distribution != 'ubuntu' and extended_tests():
         from cli_tui import verify
         installed = Path('/opt/clash-of-rust')
         verify(installed/'cor', installed/'resources', ROOT/'target/linux-report/tui')

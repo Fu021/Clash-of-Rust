@@ -40,7 +40,7 @@ jobs:
     name: ${{ matrix.distribution }} ${{ matrix.release }}-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.qemu != '' && 120 || 30 }}
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -68,12 +68,10 @@ jobs:
         id: vm-tools
         shell: python
         env:
-          RUNNER_LABEL: ${{ matrix.os }}
-          QEMU_PACKAGES: ${{ matrix.qemu }}
+          CACHE_PREFIX: ${{ matrix.vm_cache_prefix }}
         run: |
-          import hashlib, os
-          profile = hashlib.sha256(os.environ['QEMU_PACKAGES'].encode()).hexdigest()[:16]
-          prefix = f"linux-host-apt-v1-{os.environ['RUNNER_LABEL']}-{profile}-"
+          import os
+          prefix = os.environ['CACHE_PREFIX']
           version = os.environ['ImageVersion']
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'prefix={prefix}\nkey={prefix}{version}\n')
