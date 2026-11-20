@@ -6,6 +6,8 @@
 
 CI 与 Memory Benchmark 使用 GitHub Actions Cache。`main` 每个用途及目标只保留最新一代，开发分支和 PR 只恢复兼容基线。Rust Cache 以编译器、平台及编译环境定兼容范围。工作区源码回执逐文件校验内容，匹配后恢复时间戳；变更的 crate、共享构建输入及 SVG 等资源由 Cargo 重新编译或失效重建。
 
+Android 交叉目标恢复了旧编译对象且 Clippy 报 Slint crate 缺失时，清理该目标的 Release 编译产物并重跑一次 Clippy。重建成功后继续生成 APK、测试 APK 并运行 Lint；仍失败则保留编译错误。
+
 | 工作流 | GitHub Actions Cache | 同次 CI 附件与公开下载 |
 | --- | --- | --- |
 | CI | 桌面六平台与 Android 三 ABI 的 Rust 对象、Android 分 ABI 的 Go 对象、Android 共享 Maven 构件及元数据、Ubuntu 20.04 两架构编译容器 | 分发依赖快照、已校验的 Go 源码、本轮共享的 Maven 依赖、候选包及报告 |

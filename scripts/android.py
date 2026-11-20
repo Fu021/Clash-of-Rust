@@ -51,12 +51,18 @@ def streamed_command(command, **kwargs):
     return status, ''.join(tail)
 
 
-def cargo_build(command, **kwargs):
-    """Retry transient dependency downloads, while preserving compiler failures."""
+def cargo_build(command, *, restored_target=None, **kwargs):
+    """Retry dependency downloads and recover once from a missing cached Slint crate."""
     transient = re.compile(r'(?:HTTP(?:/[0-9.]+)?\s+|returned error:\s*)(?:429|50[0234])\b'
                            r'|Could not resolve host|Failed to connect to|Connection timed out', re.I)
     for attempt in range(3):
         status, tail = streamed_command(command, **kwargs)
+        if status and restored_target and re.search(r"\[E0463\].*can't find crate for `slint`", tail):
+            print(f'::warning::Restored Android {restored_target} objects could not supply Slint; '
+                  'rebuilding that release target once', flush=True)
+            run(['cargo', 'clean', '--release', '--target', restored_target, '--locked'], **kwargs)
+            restored_target = None
+            status, tail = streamed_command(command, **kwargs)
         if status == 0:
             return
         if attempt == 2 or not transient.search(tail):
@@ -447,7 +453,10 @@ def build(arch, gradle_offline=False):
         'CXXSTDLIB':'c++_static',
         'RUSTFLAGS':'-C link-arg=-Wl,-z,max-page-size=16384',
     })
-    cargo_build(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked', '--', '-D', 'warnings'], cwd=ROOT, env=env)
+    restored_target = target if (os.environ.get('GITHUB_ACTIONS') == 'true'
+                                 and (ROOT/'target'/target/'release').is_dir()) else None
+    cargo_build(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked',
+                 '--', '-D', 'warnings'], cwd=ROOT, env=env, restored_target=restored_target)
     cargo_build(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
     workspace_sources(ROOT, save=True)
     compiler_cache_checkpoint(ROOT)
