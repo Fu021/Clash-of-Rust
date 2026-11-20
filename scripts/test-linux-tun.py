@@ -772,6 +772,8 @@ def main():
         os.setuid(user.pw_uid)
 
     if args.inside_namespace:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
         with isolated_resolved(), isolated_uplink() as ca_bundle:
             if args.with_user_tests:
                 print('Checking the installed root CLI in the isolated network', flush=True)

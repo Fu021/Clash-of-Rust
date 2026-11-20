@@ -471,6 +471,11 @@ class VmGuest:
                 command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
             if target.full_desktop:
                 command.extend(['-device', 'virtio-gpu-pci'])
+            if (target.family, target.release, kvm) == ('fedora', '45', False):
+                command.extend([
+                    '-smbios', 'type=11,value=io.systemd.stub.kernel-cmdline-extra='
+                    'systemd.log_level=debug systemd.log_target=console rd.udev.log_level=debug',
+                ])
         elif target.package_format != 'deb':
             command.extend(['-vga', 'virtio'])
         cosmic = (target.family, target.release) == ('pop', '24.04')

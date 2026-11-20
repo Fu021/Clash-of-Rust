@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from pathlib import Path
+import signal
 import socket
 import shlex
 import stat
@@ -95,6 +96,30 @@ _cosmic_startup_host_spec.loader.exec_module(cosmic_startup_host)
 
 
 class TunDnsFixtureTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux namespace signal handling')
+    def test_tun_namespace_children_can_terminate_when_unshare_ignores_signals(self):
+        import pwd
+
+        term_handler = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        int_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            with patch.object(sys, 'argv', ['test-linux-tun.py', '--test-binary', sys.executable,
+                                            '--uid', '1000', '--inside-namespace']), \
+                    patch.object(os, 'geteuid', return_value=0), \
+                    patch.object(pwd, 'getpwuid', return_value=SimpleNamespace(pw_uid=1000, pw_gid=1000)), \
+                    patch.object(linux_tun_test, 'isolated_resolved', return_value=nullcontext()), \
+                    patch.object(linux_tun_test, 'isolated_uplink', return_value=nullcontext()), \
+                    patch.object(linux_tun_test, 'run'):
+                linux_tun_test.main()
+            fixture = subprocess.run([sys.executable, '-c',
+                                      'import os, signal; os.kill(os.getpid(), signal.SIGTERM)'],
+                                     timeout=5)
+            self.assertEqual(fixture.returncode, -signal.SIGTERM)
+            self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+        finally:
+            signal.signal(signal.SIGTERM, term_handler)
+            signal.signal(signal.SIGINT, int_handler)
+
     def test_tun_namespace_reserves_the_traffic_budget_after_arm64_cli_checks(self):
         import pwd
         for machine, flags, timeout in (
@@ -638,6 +663,13 @@ class UbuntuVmTests(unittest.TestCase):
                 else:
                     copy_firmware.assert_not_called()
                     self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
+                if (suite, release) == ('fedora', '45'):
+                    extra = command[command.index('-smbios')+1]
+                    self.assertIn('io.systemd.stub.kernel-cmdline-extra=', extra)
+                    self.assertIn('rd.udev.log_level=debug', extra)
+                    self.assertNotIn('root=', extra)
+                else:
+                    self.assertNotIn('-smbios', command)
                 if suite == 'pop':
                     install_iso.assert_called_once()
                     self.assertEqual(install_iso.call_args.kwargs['architecture'], 'aarch64')
