@@ -4,13 +4,13 @@
 
 | 手动入口 | 固定来宾及架构 | 安装与桌面 |
 | --- | --- | --- |
-| Pop!_OS Compatibility | System76 22.04 build 58、24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，分别验证 Pop GNOME 和 COSMIC。COSMIC 保留 TUN 与应用代理，系统代理请求返回明确错误并保留原有路由 |
+| Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64），24.04 Generic build 3（ARM64） | 离线 `distinst` 后从系统盘启动，分别验证 Pop GNOME 和 COSMIC。COSMIC 保留 TUN 与应用代理，系统代理请求返回明确错误并保留原有路由 |
 | Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity；DEB；Zorin GNOME 与发行版原生托盘 |
 | Fedora Compatibility | Fedora Cloud Base 44-1.7、45-1.4（x64、ARM64） | 45 ARM64 使用 UEFI-UKI，其余使用 Generic；DNF 安装同源 RPM；GNOME Wayland |
 | openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18（x64、ARM64）；Tumbleweed 20261118（x64）、20261117（ARM64） | 可写 Cloud VM，Zypper 安装同架构的同源 RPM；GNOME Wayland |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 由同源 DEB 或固定的升级夹具还原安装目录；`pacman` 验收；GNOME Wayland |
 
-镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照，避免镜像跳转指向尚未同步该文件的站点。QEMU 来宾运行在同架构的 `ubuntu-24.04` 或 `ubuntu-24.04-arm` 托管 runner。COSMIC live ISO 的独立启动诊断保留，直到安装版取得等价的真实登录和失败取证证据。
+镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照。QEMU 来宾通常使用同架构的 `ubuntu-24.04` 或 `ubuntu-24.04-arm`。Fedora 45 ARM64 使用 `ubuntu-26.04-arm` 的 QEMU 10.2 和 EDK II 2025.11 系列。COSMIC live ISO 的独立启动诊断保留，直到安装版取得等价的真实登录和失败取证证据。依据 [QEMU 软件包](https://packages.ubuntu.com/resolute-updates/qemu-system-arm)和 [EDK II 软件包](https://packages.ubuntu.com/source/resolute/edk2)。
 
 新增或替换目标时核对发行版的维护期限和镜像来源。上游宣布停止维护后，复查本项目是否仍需该目标作为明确的兼容基线。替换受支持目标须先验证替代版本，再同步目标矩阵、公开支持范围和发布门禁。滚动版每次更换快照都记录日期与摘要，使用配套的软件源并完整复验。Ubuntu 的最低内核基线见 [Ubuntu 兼容验证](ubuntu-compatibility.md)。
 
@@ -18,11 +18,15 @@
 
 `linux-vm.json` 单列官方镜像与 Python 工具的下载校验时间。ISO 来宾分别记录安装器和安装盘启动的耗时。安装器失败时记录 `iso_install` 失败阶段和已用时间。已安装候选检查、桌面登录和包升级卸载分别计时。候选检查内部的依赖准备由 `compatibility-environment.json` 单列，VM 在来宾归档内保存，直接使用托管 runner 时随报告上传。候选检查超时或桌面阶段失败时，通过私有 QEMU 监控尝试保存画面并记录截图失败原因。实际登录一旦确认候选托盘初始化失败，立即结束该阶段。状态等待和截图均有时限，来宾报告仍保留启动状态、日志与进程快照。
 
+隔离网络检查分别记录 root CLI、普通账户矩阵和原生代理/TUN 流量阶段。开启 ARM64 扩展账户检查时，命名空间为环境准备和账户检查留出 560 秒，再计入流量探针的独立时限。流量探针通常最多 240 秒，启用代理基准时为 360 秒。各阶段的子检查仍保留自己的超时。
+
 全部目标均需实际验证普通用户 GUI/TUI/CLI、共享后台、代理/TUN/DNS、图形授权拒绝与允许、登录自启动迁移、托盘与菜单恢复同一进程、原生包升级/卸载后保留数据。Fedora、openSUSE、Arch 的 GNOME 采用明确记录的 AppIndicator 扩展；不将该验证写成默认桌面自带托盘。首个 RPM/Arch 升级夹具使用经 SHA256 校验的公开旧 DEB 重新封装，不冒充历史已发布的原生附件。
 
 Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`。该代理可在收到 [PAM 密码请求](https://github.com/ncopa/xfce-polkit/blob/6d3282cc1734c305850d48f5bf4b4d94e88885e9/src/xfce-polkit-listener.c)前显示窗体。验收同时等待可见窗体和本次会话的密码请求，取消后重新注册代理，原始代理调试输出只用于探测。来宾先从 Fedora 官方仓库更新 `pam`、`liblastlog2` 和 `selinux-policy-targeted`。后两者分别包含 [Fedora 44 PAM 模块加载修复](https://bugzilla.redhat.com/show_bug.cgi?id=2453457)及 [polkit socket 助手域转换修复](https://github.com/fedora-selinux/selinux-policy/commit/8ad5d5112fa8b47426e0e6674616d5577f825fde)。失败报告记录已装版本和相关审核事件。
 
 Fedora 45 ARM64 的 Generic 镜像在 TCG 上切换系统根后曾两次进入紧急模式。矩阵固定到同版官方 [UEFI-UKI](https://fedoraproject.org/wiki/Changes/Unified_Kernel_Support_Phase_2) 镜像，给每个来宾单独复制可写的 AAVMF 变量存储，支持该镜像的 UEFI 启动项。
+
+Pop!_OS ARM64 使用 AAVMF、`ttyAMA0` 和只读 VirtIO SCSI 光驱。安装器按一次性磁盘的序列号校验写入目标。系统从原生 `distinst` 写入的磁盘重启，再用非 VGA VirtIO GPU 接入实际 COSMIC 会话和宿主画面探针。兼容回执覆盖三个目标及两种架构的 CI 候选。
 
 隔离 GNOME 探针看到新的 Wayland 套接字后才查询 Shell 的 D-Bus 对象。GNOME 50 [完成 UI 初始化后才导出该对象](https://github.com/GNOME/gnome-shell/blob/50.6/js/ui/main.js#L163-L176)。ARM64 TCG 的合成器就绪限时为 120 秒，其余目标为 60 秒。进程提前退出会立即结束验收。候选阶段出错或超时均尝试保存 QEMU 画面，嵌套桌面状态另见来宾日志。
 
@@ -40,7 +44,7 @@ RPM 与 Arch 安装由各自包管理器更新，应用不调用 DEB 安装器�
 
 原生包的预发布版本字段使用 RPM 的 `~` 或 pacman 的 `pre.` 标记，版本后缀中的连字符转换为 `+`。RPM 发行附件名使用原始发行版本，Arch 候选包名使用原生 `pkgver`。兼容来宾用原生比较器校验预发布编号递增及正式版顺序。隔离 DNS 夹具按来宾实际存在的系统 CA 文件装载临时测试根，并在同一挂载命名空间中恢复。夹具仅给节点引导的正向解析结果 30 秒 TTL，以减少 ARM64 TCG 上重复的加密握手。测试仍要求每次冷启动重新解析节点，并验证 UDP、TCP 和 DNS 未旁路。
 
-提交 `280d5679` 使用 CI `44639212301` 完成 Zorin 17.3/18.1 和 Arch 的 x64 验收，以及 openSUSE Leap 16.0/16.1、Tumbleweed 的 x64 和 ARM64 验收。回执均经发布门禁复核。来宾报告记录真实登录与托盘、三端、原生升级与卸载后的数据保留。openSUSE x64 使用 KVM，ARM64 使用 TCG。新提交仍按发布范围取得同源回执。[Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/44642551667) · [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/44642558397) · [openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/44642538483)
+提交 `a433d221` 使用 CI `44670222142` 完成 Pop!_OS 22.04/24.04、Zorin 17.3/18.1 及 Arch 的 x64 验收，来宾均使用 KVM。提交 `280d5679` 使用 CI `44639212301` 完成 openSUSE Leap 16.0/16.1 及 Tumbleweed 的 x64 和 ARM64 验收，分别使用 KVM 和 TCG。回执均经发布门禁复核，来宾报告记录真实登录与托盘、三端、原生升级及卸载后保留数据。新提交仍按实际发布范围取得同源回执。[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672608619) · [Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672632359) · [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672635871) · [openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/44642538483)
 
 提交 `3b62e2ef` 使用 CI `44625972854` 完成 [Fedora 44/45 x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/44628532038)的完整兼容验收，覆盖图形授权、真实登录与托盘、三端和 RPM 升级及卸载。该历史回执只覆盖 x64。
 

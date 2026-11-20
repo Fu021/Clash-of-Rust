@@ -94,13 +94,14 @@ _cosmic_startup_host_spec.loader.exec_module(cosmic_startup_host)
 
 
 class TunDnsFixtureTests(unittest.TestCase):
-    def test_tun_namespace_allows_arm64_extended_cli_cleanup_time(self):
+    def test_tun_namespace_reserves_the_traffic_budget_after_arm64_cli_checks(self):
         import pwd
         for machine, flags, timeout in (
                 ('x86_64', ['--with-user-tests'], 520),
                 ('aarch64', [], 520),
-                ('aarch64', ['--with-user-tests'], 580),
-                ('aarch64', ['--with-user-tests', '--proxy-benchmark'], 640)):
+                ('aarch64', ['--with-user-tests'], 800),
+                ('aarch64', ['--proxy-benchmark'], 640),
+                ('aarch64', ['--with-user-tests', '--proxy-benchmark'], 920)):
             with self.subTest(machine=machine, flags=flags), \
                     patch.object(sys, 'argv', ['test-linux-tun.py', '--test-binary', sys.executable,
                                               '--uid', '1000', *flags]), \
@@ -266,19 +267,23 @@ class TunIpv6LifecycleTests(unittest.TestCase):
 
 class UbuntuVmTests(unittest.TestCase):
     def test_vm_tools_use_the_same_signed_https_sources_for_update_and_install(self):
-        for arch, archive in (('x64', 'https://archive.ubuntu.com/ubuntu'),
-                              ('arm64', 'https://ports.ubuntu.com/ubuntu-ports')):
-            with self.subTest(arch=arch):
-                release = {'ID': 'ubuntu', 'VERSION_ID': '24.04'}
+        standard = 'https://archive.ubuntu.com/ubuntu'
+        ports = 'https://ports.ubuntu.com/ubuntu-ports'
+        for version, codename, arch, archive in (
+                ('24.04', 'noble', 'x64', standard),
+                ('24.04', 'noble', 'arm64', ports),
+                ('26.04', 'resolute', 'arm64', standard)):
+            with self.subTest(version=version, arch=arch):
+                release = {'ID': 'ubuntu', 'VERSION_ID': version}
 
                 def check_update(arguments, timeout):
                     source = next(value for value in arguments if value.startswith('Dir::Etc::sourcelist='))
                     sources = Path(source.split('=', 1)[1]).read_text().splitlines()
                     self.assertEqual(len(sources), 3)
-                    self.assertIn(archive+' noble ', sources[0])
-                    self.assertIn(archive+' noble-updates ', sources[1])
-                    security = archive if arch == 'arm64' else 'https://security.ubuntu.com/ubuntu'
-                    self.assertIn(security+' noble-security ', sources[2])
+                    self.assertIn(f'{archive} {codename} ', sources[0])
+                    self.assertIn(f'{archive} {codename}-updates ', sources[1])
+                    security = ports if archive == ports else 'https://security.ubuntu.com/ubuntu'
+                    self.assertIn(f'{security} {codename}-security ', sources[2])
                     self.assertTrue(all('signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg'
                                         in row for row in sources))
                     self.assertIn('APT::Update::Error-Mode=any', arguments)
@@ -501,18 +506,20 @@ class UbuntuVmTests(unittest.TestCase):
                 self.assertFalse(linux_ci.kvm_available())
             self.assertIn('/dev/kvm is absent', log.getvalue())
 
-    def test_arm_cloud_vm_adds_desktop_resources_only_for_desktop_validation(self):
+    def test_arm_vm_adds_desktop_resources_only_for_desktop_validation(self):
         for suite, release, needs_gpu, kvm in (
             ('ubuntu', '20.04', False, False), ('debian', '13', True, False),
             ('opensuse', '16.0', True, False), ('debian', '13', True, True),
             ('fedora', '44', True, False), ('fedora', '45', True, False),
+            ('pop', '24.04', True, False),
         ):
             with self.subTest(suite=suite, kvm=kvm), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 target = linux_ci.target_for(suite, release, 'arm64')
 
                 def create_key(command, **kwargs):
-                    Path(command[-1]).with_suffix('.pub').write_text('fixture public key')
+                    if command[0] == 'ssh-keygen':
+                        Path(command[-1]).with_suffix('.pub').write_text('fixture public key')
 
                 with patch.object(linux_ci, 'REPORT', directory), \
                         patch.object(linux_ci, 'host_arch', return_value='arm64'), \
@@ -521,6 +528,8 @@ class UbuntuVmTests(unittest.TestCase):
                         patch.object(linux_ci.socket, 'socket') as socket, \
                         patch.object(linux_ci.shutil, 'copyfile') as copy_firmware, \
                         patch.object(linux_ci.VmGuest, 'cloud_disk', return_value=directory/'seed.img'), \
+                        patch('linux_vm_monitor.SoftwareDisplay'), \
+                        patch('pop_live_install.install') as install_iso, \
                         patch.object(linux_ci.subprocess, 'Popen') as boot, \
                         patch.object(linux_ci, 'wait_vm_ssh'), \
                         patch.object(linux_ci.VmGuest, 'wait_cloud_init'), \
@@ -536,7 +545,7 @@ class UbuntuVmTests(unittest.TestCase):
                 cpu = 'host' if kvm else 'cortex-a72'
                 self.assertEqual(command[:5], ['qemu-system-aarch64', '-machine', machine, '-cpu', cpu])
                 self.assertIn(f'COR_LINUX_VM_ACCELERATION={"kvm" if kvm else "tcg"} ', guest.environment)
-                if (suite, release) == ('fedora', '45'):
+                if target.writable_arm_uefi:
                     variables = guest.directory/'aavmf-vars.fd'
                     copy_firmware.assert_called_once_with(Path('/usr/share/AAVMF/AAVMF_VARS.fd'), variables)
                     self.assertNotIn('-bios', command)
@@ -546,12 +555,21 @@ class UbuntuVmTests(unittest.TestCase):
                 else:
                     copy_firmware.assert_not_called()
                     self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
-                self.assertEqual('virtio-gpu-pci' in command, needs_gpu)
+                if suite == 'pop':
+                    install_iso.assert_called_once()
+                    self.assertEqual(install_iso.call_args.kwargs['architecture'], 'aarch64')
+                    self.assertNotIn('-vga', command)
+                    self.assertNotIn('virtio-gpu-pci', command)
+                    self.assertEqual(command.count('virtio-gpu-gl-pci'), 1)
+                else:
+                    install_iso.assert_not_called()
+                    self.assertEqual('virtio-gpu-pci' in command, needs_gpu)
                 self.assertEqual('-qmp' in command, needs_gpu)
                 if needs_gpu:
                     self.assertEqual(command[command.index('-qmp')+1],
                                      f'unix:{guest.monitor_path},server=on,wait=off')
-                    self.assertEqual(command[command.index('-display')+1], 'none')
+                    self.assertEqual(command[command.index('-display')+1],
+                                     'sdl,gl=on' if suite == 'pop' else 'none')
                 self.assertEqual(command[command.index('-smp')+1], '4' if needs_gpu and not kvm else '2')
 
     def test_mint_automatic_boot_preserves_the_image_uuid_and_rejects_non_casper_media(self):
@@ -1287,7 +1305,7 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertFalse(boot.call_args.kwargs['kvm'])
             report = json.loads((root/'report/linux-vm.json').read_text())
             self.assertEqual(report['failed_stage'], 'guest_boot')
-            self.assertEqual(report['runner'], 'ubuntu-24.04-arm')
+            self.assertEqual(report['runner'], 'ubuntu-26.04-arm')
             self.assertEqual(report['runner_image'], '20261119.1')
             self.assertEqual(report['acceleration'], 'tcg')
             self.assertGreaterEqual(report['timings_seconds']['failed_guest_boot'], 0)
@@ -7609,7 +7627,7 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.release_suites(scope)
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
-        expected = {'pop': 2, 'zorin': 2, 'fedora': 4, 'opensuse': 6, 'arch': 1}
+        expected = {'pop': 3, 'zorin': 2, 'fedora': 4, 'opensuse': 6, 'arch': 1}
         for suite, count in expected.items():
             with self.subTest(suite=suite):
                 targets = linux_ci.TARGETS[suite]
@@ -7627,6 +7645,16 @@ class CompatibilityTests(unittest.TestCase):
                 client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
                 with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
                     compatibility.verified_suite(client, source, suite)
+        self.assertEqual({(target.release, target.arch) for target in linux_ci.TARGETS['pop']},
+                         {('22.04', 'x64'), ('24.04', 'x64'), ('24.04', 'arm64')})
+        self.assertIn('package-linux-arm64', compatibility.input_names('pop'))
+        self.assertIn('linux-tun-test-arm64', compatibility.input_names('pop'))
+        fedora_runners = {(target.release, target.arch): target.matrix_entry()['os']
+                          for target in linux_ci.TARGETS['fedora']}
+        self.assertEqual(fedora_runners, {
+            ('44', 'x64'): 'ubuntu-24.04', ('45', 'x64'): 'ubuntu-24.04',
+            ('44', 'arm64'): 'ubuntu-24.04-arm', ('45', 'arm64'): 'ubuntu-26.04-arm',
+        })
 
     def test_tumbleweed_only_enables_the_signed_repository_for_the_guest_snapshot(self):
         import linux_native_guest
@@ -7746,27 +7774,43 @@ success="$1"
                 self.assertTrue(kernel.read_bytes().endswith(b'/vmlinuz.efi'))
                 self.assertTrue(initrd.read_bytes().endswith(b'/initrd.gz'))
 
-    def test_pop_installer_uses_the_same_media_path_as_casper(self):
+    def test_pop_installer_uses_casper_media_and_the_native_serial_device(self):
         import pop_live_install
 
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            media = '/casper_pop-os_24.04_amd64_intel_debug_377'
-            boot = (directory/'vmlinuz', directory/'initrd', media, directory/'share')
-            command = ['qemu-system-x86_64', '-serial', 'stdio', '-device', pop_live_install.DISK_DEVICE]
-            with patch.object(pop_live_install, 'installer_media', return_value=boot), \
-                    patch.object(Path, 'is_socket', return_value=True), \
-                    patch.object(pop_live_install, 'Console') as console, \
-                    patch.object(subprocess, 'Popen') as launch:
-                console.return_value.command.return_value = 'cor-pop-install-complete'
-                launch.return_value.wait.return_value = 0
-                launch.return_value.poll.return_value = 0
-                pop_live_install.install(directory/'pop.iso', directory, 'public-key', command,
-                                         directory/'installer.log', 'ssh-unit', 'install-ssh')
-            arguments = launch.call_args.args[0]
-            self.assertIn(f'live-media-path={media}', arguments[arguments.index('-append')+1].split())
-            console.return_value.command.assert_any_call(
-                f'sh /mnt/cor-test/install.sh {pop_live_install.DISK_SERIAL} {media}', timeout=2100)
+        for arch, terminal, variant in (
+                ('x86_64', 'ttyS0', 'amd64_intel_debug_377'),
+                ('aarch64', 'ttyAMA0', 'arm64_generic_debug_217')):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                media = f'/casper_pop-os_24.04_{variant}'
+                boot = (directory/'vmlinuz', directory/'initrd', media, directory/'share')
+                command = ['qemu-system-'+arch, '-serial', 'stdio', '-device', pop_live_install.DISK_DEVICE]
+                with patch.object(pop_live_install, 'installer_media', return_value=boot) as stage, \
+                        patch.object(Path, 'is_socket', return_value=True), \
+                        patch.object(pop_live_install, 'Console') as console, \
+                        patch.object(subprocess, 'Popen') as launch:
+                    console.return_value.command.return_value = 'cor-pop-install-complete'
+                    launch.return_value.wait.return_value = 0
+                    launch.return_value.poll.return_value = 0
+                    pop_live_install.install(directory/'pop.iso', directory, 'public-key', command,
+                                             directory/'installer.log', linux_mint_install.SSH_UNIT, 'install-ssh',
+                                             architecture=arch)
+                arguments = launch.call_args.args[0]
+                kernel_args = arguments[arguments.index('-append')+1].split()
+                self.assertIn(f'live-media-path={media}', kernel_args)
+                self.assertIn(f'systemd.debug_shell={terminal}', kernel_args)
+                self.assertIn(f'systemd.mask=serial-getty@{terminal}.service', kernel_args)
+                self.assertIn(f'TTYPath=/dev/{terminal}', stage.call_args.args[3].splitlines())
+                if arch == 'aarch64':
+                    self.assertIn(f'console={terminal},115200', kernel_args)
+                    self.assertIn('scsi-cd,drive=compat-iso,bus=compat-scsi.0', arguments)
+                    self.assertIn(f'file={directory/"pop.iso"},if=none,media=cdrom,readonly=on,id=compat-iso',
+                                  arguments)
+                    self.assertNotIn('-cdrom', arguments)
+                else:
+                    self.assertEqual(arguments[arguments.index('-cdrom')+1], directory/'pop.iso')
+                console.return_value.command.assert_any_call(
+                    f'sh /mnt/cor-test/install.sh {pop_live_install.DISK_SERIAL} {media}', timeout=2100)
 
     def test_arm_vm_targets_install_the_virtio_net_rom(self):
         targets = (*linux_ci.TARGETS['ubuntu'], *linux_ci.TARGETS['debian'])

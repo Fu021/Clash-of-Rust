@@ -143,13 +143,15 @@ def update_indexes(timeout=300, *, options=OPTIONS):
 
 def install_vm_tools(packages):
     release = platform.freedesktop_os_release()
+    codename = {'24.04': 'noble', '26.04': 'resolute'}.get(release.get('VERSION_ID'))
     if (os.environ.get('GITHUB_ACTIONS') != 'true'
-            or (release.get('ID'), release.get('VERSION_ID')) != ('ubuntu', '24.04')):
-        raise RuntimeError('VM tools require an Ubuntu 24.04 compatibility runner')
+            or release.get('ID') != 'ubuntu' or codename is None):
+        raise RuntimeError('VM tools require an Ubuntu 24.04 or 26.04 compatibility runner')
     arm = host_arch() == 'arm64'
+    use_ports = arm and codename == 'noble'
     architecture = 'arm64' if arm else 'amd64'
-    archive = 'https://ports.ubuntu.com/ubuntu-ports' if arm else 'https://archive.ubuntu.com/ubuntu'
-    security = archive if arm else 'https://security.ubuntu.com/ubuntu'
+    archive = 'https://ports.ubuntu.com/ubuntu-ports' if use_ports else 'https://archive.ubuntu.com/ubuntu'
+    security = archive if use_ports else 'https://security.ubuntu.com/ubuntu'
     signing = '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
     with tempfile.TemporaryDirectory(prefix='cor-host-apt-') as temporary:
         directory = Path(temporary)
@@ -157,7 +159,8 @@ def install_vm_tools(packages):
         sources = directory/'ubuntu.list'
         sources.write_text(''.join(
             f'deb [arch={architecture} signed-by={signing}] {origin} {suite} main universe restricted multiverse\n'
-            for suite, origin in (('noble', archive), ('noble-updates', archive), ('noble-security', security))))
+            for suite, origin in ((codename, archive), (f'{codename}-updates', archive),
+                                  (f'{codename}-security', security))))
         options = [*OPTIONS, '-o', 'Dir::Etc::sourcelist='+str(sources),
                    '-o', 'Dir::Etc::sourceparts=-']
         update_indexes(360, options=options)

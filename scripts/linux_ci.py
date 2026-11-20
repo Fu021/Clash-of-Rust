@@ -467,17 +467,19 @@ class VmGuest:
             ready_command = 'true'
             if target.image_format == 'iso':
                 from linux_mint_install import FIRMWARE, FIRMWARE_VARS, INSTALL_SSH, SSH_UNIT
-                variables = directory/'ovmf-vars.fd'
-                shutil.copyfile(FIRMWARE_VARS, variables)
-                command.extend(['-vga', 'virtio', '-drive', f'if=pflash,format=raw,readonly=on,file={FIRMWARE}',
-                                '-drive', f'if=pflash,format=raw,file={variables}'])
+                if architecture == 'x86_64':
+                    variables = directory/'ovmf-vars.fd'
+                    shutil.copyfile(FIRMWARE_VARS, variables)
+                    command.extend(['-vga', 'virtio', '-drive', f'if=pflash,format=raw,readonly=on,file={FIRMWARE}',
+                                    '-drive', f'if=pflash,format=raw,file={variables}'])
                 run(['qemu-img', 'create', '-f', 'qcow2', self.disk, '24G'])
                 installer_console = REPORT/'vm-console-installer.log'
                 install_started = time.monotonic()
                 try:
                     if target.family == 'pop':
                         from pop_live_install import INSTALLED_READY, install
-                        install(base, directory, public, command, installer_console, SSH_UNIT, INSTALL_SSH)
+                        install(base, directory, public, command, installer_console, SSH_UNIT, INSTALL_SSH,
+                                architecture=architecture)
                     elif target.family in ('linuxmint', 'zorin'):
                         from linux_mint_install import INSTALLED_READY, install
                         options = {'initrd': '/casper/initrd.zstd'} if target.family == 'zorin' else {}
@@ -503,8 +505,11 @@ class VmGuest:
                 self.display = SoftwareDisplay(REPORT/'vm-xvfb.log')
                 environment = self.display.environment
                 command[command.index('-display')+1] = 'sdl,gl=on'
-                vga = command.index('-vga')
-                command[vga:vga+2] = ['-device', 'virtio-vga-gl']
+                if architecture == 'aarch64':
+                    command[command.index('virtio-gpu-pci')] = 'virtio-gpu-gl-pci'
+                else:
+                    vga = command.index('-vga')
+                    command[vga:vga+2] = ['-device', 'virtio-vga-gl']
                 command.extend(['-device', 'virtio-tablet-pci', '-name', 'cor-cosmic-compatibility'])
             self.console_path = REPORT / ('vm-console-' + label + '.log')
             self.console = self.console_path.open('w')

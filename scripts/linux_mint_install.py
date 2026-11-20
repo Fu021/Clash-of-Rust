@@ -118,7 +118,7 @@ set -eu
 export DEBIAN_FRONTEND=noninteractive
 for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
     [ -f "$sources" ] || continue
-    sed -i -E 's@http://(archive|security)\\.ubuntu\\.com/ubuntu([/[:space:]]|$)@https://\\1.ubuntu.com/ubuntu\\2@g' "$sources"
+    sed -i -E 's@http://((archive|security)\\.ubuntu\\.com/ubuntu|ports\\.ubuntu\\.com/ubuntu-ports)([/[:space:]]|$)@https://\\1\\3@g' "$sources"
 done
 for delay in @INDEX_RETRY_DELAYS@ 0; do
     if timeout --signal=TERM --kill-after=5s 120s \\

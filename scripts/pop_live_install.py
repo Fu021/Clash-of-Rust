@@ -118,17 +118,26 @@ def installer_media(iso, directory, public_key, ssh_unit, install_ssh):
     return kernel, initrd, media, share
 
 
-def install(iso, directory, public_key, command, console_log, ssh_unit, install_ssh):
+def install(iso, directory, public_key, command, console_log, ssh_unit, install_ssh, *, architecture):
     if command.count('-serial') != 1 or DISK_DEVICE not in command:
         raise ValueError('Pop!_OS installer requires an isolated serial console and its disposable disk')
+    serial_device = {'x86_64': 'ttyS0', 'aarch64': 'ttyAMA0'}[architecture]
+    media_args = ['-cdrom', iso]
+    kernel_console = ''
+    if architecture == 'aarch64':
+        ssh_unit = ssh_unit.replace('TTYPath=/dev/ttyS0', f'TTYPath=/dev/{serial_device}')
+        kernel_console = f'console={serial_device},115200 '
+        media_args = ['-device', 'virtio-scsi-pci,id=compat-scsi',
+                      '-drive', f'file={iso},if=none,media=cdrom,readonly=on,id=compat-iso',
+                      '-device', 'scsi-cd,drive=compat-iso,bus=compat-scsi.0']
     kernel, initrd, media, share = installer_media(
         iso, directory, public_key, ssh_unit, install_ssh)
     serial = directory/'pop-installer.sock'
     installer_args = [
-        '-kernel', kernel, '-initrd', initrd, '-cdrom', iso,
-        '-append', f'boot=casper live-media-path={media} noprompt '
-                   'systemd.unit=multi-user.target systemd.debug_shell=ttyS0 '
-                   'systemd.mask=serial-getty@ttyS0.service',
+        '-kernel', kernel, '-initrd', initrd, *media_args,
+        '-append', f'boot=casper live-media-path={media} noprompt {kernel_console}'
+                   f'systemd.unit=multi-user.target systemd.debug_shell={serial_device} '
+                   f'systemd.mask=serial-getty@{serial_device}.service',
         '-virtfs', f'local,path={share},mount_tag=cor-test,security_model=none,readonly=on',
         '-serial', f'unix:{serial},server=on,wait=off', '-no-reboot',
         '-nic', 'none',

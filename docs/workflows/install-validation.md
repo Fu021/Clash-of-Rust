@@ -30,6 +30,7 @@ Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压
 | Ubuntu 固定版本 x64 / ARM64 | 独立 [Ubuntu Compatibility](ubuntu-compatibility.md) 复用成功 CI，在对应版本的托管 runner 或 VM 上安装并验证基础代理/TUN。20.04 校验 5.4 GA 内核。 |
 | Debian 12 / 13 x64、ARM64 | 独立 [Debian Compatibility](debian-compatibility.md) 复用成功 CI，在各版本官方镜像 VM 执行新平台完整验收。 |
 | Linux Mint 21.3 / 22.3 Cinnamon x64 | 独立 [Linux Mint Compatibility](linuxmint-compatibility.md) 复用成功 CI，在各版官方 ISO 安装的 VM 执行新平台完整验收。 |
+| Pop!_OS、Zorin OS、Fedora、openSUSE、Arch Linux | 每个发行版有独立工作流。固定版本、架构、桌面环境和安装格式见 [Linux 扩展兼容验证](linux-expansion.md)。 |
 | Android ARM64 / ARMv7 / x64 | 三种 ABI 候选 APK 核对签名、架构和 16 KiB 对齐；x64 在 Android 16 模拟器执行真实代理/TUN。ARM 实机、键盘与截图专项不因此冒充已验收。 |
 | Android 8.0～16 | 独立 [Android Compatibility](android-compatibility.md) 复用成功 CI 的 x64 APK，11 版本各验证基础代理/TUN；截图及诊断显式按需选择。 |
 

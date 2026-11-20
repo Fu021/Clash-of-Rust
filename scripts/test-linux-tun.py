@@ -764,6 +764,7 @@ def main():
     assert os.geteuid() == 0 and args.uid != 0
     binary = args.test_binary.resolve(strict=True)
     user = pwd.getpwuid(args.uid)
+    tun_timeout = 360 if args.proxy_benchmark else 240
 
     def ordinary_user():
         os.setgroups([])
@@ -773,7 +774,9 @@ def main():
     if args.inside_namespace:
         with isolated_resolved(), isolated_uplink() as ca_bundle:
             if args.with_user_tests:
+                print('Checking the installed root CLI in the isolated network', flush=True)
                 root_cli_smoke()
+                print('Checking the installed CLI across local accounts', flush=True)
                 account_cli_matrix()
             run(['/opt/clash-of-rust/clash-of-rust', '--authorize-tun'])
             benchmark = contextlib.nullcontext({})
@@ -781,13 +784,14 @@ def main():
                 from proxy_benchmark import fixture
                 benchmark = fixture(uid=user.pw_uid, gid=user.pw_gid)
             with benchmark as benchmark_environment:
+                print(f'Checking native proxy and TUN traffic with a {tun_timeout}s deadline', flush=True)
                 run([binary, args.test_case, '--exact',
                      '--ignored', '--test-threads=1', '--nocapture'],
                     env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
                              MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
                              GSETTINGS_BACKEND='memory', SSL_CERT_FILE=str(ca_bundle),
                              SSL_CERT_DIR='/etc/ssl/certs', **benchmark_environment),
-                    preexec_fn=ordinary_user, timeout=360 if args.proxy_benchmark else 240)
+                    preexec_fn=ordinary_user, timeout=tun_timeout)
         return
 
     core = '/opt/clash-of-rust/resources/mihomo'
@@ -806,13 +810,13 @@ def main():
         user_tests = ['--with-user-tests'] if args.with_user_tests else []
         if args.proxy_benchmark:
             user_tests += ['--proxy-benchmark']
-        timeout = 640 if args.proxy_benchmark else 520
-        if args.with_user_tests and not args.proxy_benchmark and platform.machine() in ('aarch64', 'arm64'):
-            timeout += 60
+        setup_and_cli_budget = 280
+        if args.with_user_tests and platform.machine() in ('aarch64', 'arm64'):
+            setup_and_cli_budget = 560
         run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid,
              '--test-case', args.test_case, *user_tests],
-            timeout=timeout)
+            timeout=setup_and_cli_budget + tun_timeout)
         print(json.dumps({'basic': True, 'native_authorization': True, 'root_cli': args.with_user_tests, 'ordinary_user': args.uid,
                           'tun_traffic_cleanup': True, 'network_namespace': True,
                           'resolved_without_polkit': True}))

@@ -19,6 +19,7 @@ class Target:
     hosted: bool = False
     image_format: str = 'qcow2'
     writable_arm_uefi: bool = False
+    vm_runner_release: str = '24.04'
 
     @property
     def distribution(self):
@@ -47,7 +48,7 @@ class Target:
         return self.release.split('.')[0] if self.family == 'zorin' else self.release
 
     def matrix_entry(self):
-        runner_release = self.release if self.hosted else '24.04'
+        runner_release = self.release if self.hosted else self.vm_runner_release
         runner = f'ubuntu-{runner_release}' + ('-arm' if self.arch == 'arm64' else '')
         qemu = ''
         if not self.hosted:
@@ -56,7 +57,7 @@ class Target:
         if self.family in ('linuxmint', 'zorin'):
             qemu += ' ovmf xorriso'
         elif self.family == 'pop':
-            qemu += ' ovmf libarchive-tools'
+            qemu += ' ovmf libarchive-tools' if self.arch == 'x64' else ' libarchive-tools'
             if self.release == '24.04':
                 qemu += ' qemu-system-gui libgl1-mesa-dri xvfb python3-pil xdotool tesseract-ocr tesseract-ocr-eng'
         return {'distribution': self.distribution, 'release': self.release, 'arch': self.arch,
@@ -75,9 +76,11 @@ def mint_target(release, digest):
     return Target('linuxmint', release, 'x64', url, digest, image_format='iso')
 
 
-def pop_target(release, build, digest):
-    url = f'https://iso.pop-os.org/{release}/amd64/intel/{build}/pop-os_{release}_amd64_intel_{build}.iso'
-    return Target('pop', release, 'x64', url, digest, image_format='iso')
+def pop_target(release, build, digest, *, arch='x64'):
+    image_arch, variant = {'x64': ('amd64', 'intel'), 'arm64': ('arm64', 'generic')}[arch]
+    root = f'https://iso.pop-os.org/{release}/{image_arch}/{variant}/{build}'
+    return Target('pop', release, arch, f'{root}/pop-os_{release}_{image_arch}_{variant}_{build}.iso',
+                  digest, image_format='iso', writable_arm_uefi=arch == 'arm64')
 
 
 def zorin_target(release, filename, digest):
@@ -86,12 +89,13 @@ def zorin_target(release, filename, digest):
                   digest, image_format='iso')
 
 
-def fedora_target(build, arch, digest, *, variant='Generic'):
+def fedora_target(build, arch, digest, *, variant='Generic', runner_release='24.04'):
     release = build.split('-')[0]
     image_arch = {'x64': 'x86_64', 'arm64': 'aarch64'}[arch]
     root = f'https://dl.fedoraproject.org/pub/fedora/linux/releases/{release}/Cloud/{image_arch}/images'
     return Target('fedora', release, arch, f'{root}/Fedora-Cloud-Base-{variant}-{build}.{image_arch}.qcow2',
-                  digest, writable_arm_uefi=arch == 'arm64' and variant == 'UEFI-UKI')
+                  digest, writable_arm_uefi=arch == 'arm64' and variant == 'UEFI-UKI',
+                  vm_runner_release=runner_release)
 
 
 def leap_target(release, build, arch, digest):
@@ -136,6 +140,7 @@ TARGETS = {
     'pop': (
         pop_target('22.04', 58, '4e1c5e391062c79dc611ce383c2a709fecac36798ebd81444a734fd41252608e'),
         pop_target('24.04', 20, 'a0ef3842ab710db4f4407cf3499560b59dddbbcd59bee17beab7b0e99dc22b4c'),
+        pop_target('24.04', 3, '7b4cce0e92dc5c903464e7e7c33760c4417f1400165e9ecfcd064fbceb68ef22', arch='arm64'),
     ),
     'zorin': (
         zorin_target('17.3', 'Zorin-OS-17.3-Core-64-bit-r2.iso',
@@ -148,7 +153,7 @@ TARGETS = {
         fedora_target('45-1.4', 'x64', '50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0'),
         fedora_target('44-1.7', 'arm64', '55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b'),
         fedora_target('45-1.4', 'arm64', 'f51f556104434e66df591d647d3e54254cc722378c5ac31c4b1c37b15075e4f1',
-                      variant='UEFI-UKI'),
+                      variant='UEFI-UKI', runner_release='26.04'),
     ),
     'opensuse': (
         leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
