@@ -96,7 +96,12 @@ fn home_update_states_never_invent_an_installable_package() {
     managed.package_manager = Some("pacman");
     home::accept(&mut state, Ok(Some(managed)));
     assert!(!home::items(&state).contains(&"update_install"));
-    assert!(content(&state, 120, 40).contains("请使用 pacman 更新"));
+    assert!(content(&state, 120, 40).contains("AUR 请用助手"));
+    assert!(content(&state, 120, 40).contains("makepkg -si"));
+    select(&mut state, "update_check");
+    let narrow = content(&state, 80, 24);
+    assert!(narrow.contains("AUR 请用助手"));
+    assert!(narrow.contains("makepkg"));
     home::accept(&mut state, Ok(Some(available(true))));
     assert!(home::items(&state).contains(&"update_install"));
     assert!(content(&state, 100, 30).contains("安装更新 · 99.0.0"));

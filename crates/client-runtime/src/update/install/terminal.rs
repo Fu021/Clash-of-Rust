@@ -56,7 +56,7 @@ pub(crate) fn prepare_terminal_install(
 ) -> Result<PathBuf> {
     let _lock = session_lock(&engine.store.root)?;
     if let Some(manager) = super::super::external_linux_package_manager() {
-        bail!("请使用 {manager} 更新此版本的客户端");
+        bail!("{}", super::super::package_manager_update_hint(manager));
     }
     anyhow::ensure!(
         crate::platform::is_elevated() || Path::new(SUDO).is_file(),
@@ -218,7 +218,7 @@ fn authorize(path: &Path, interactive: bool) -> Result<()> {
     if let Some(manager) =
         super::super::external_linux_package_manager_at(Path::new("/opt/clash-of-rust/cor"))
     {
-        bail!("请使用 {manager} 更新此版本的客户端");
+        bail!("{}", super::super::package_manager_update_hint(manager));
     }
     if crate::platform::is_elevated() {
         return Ok(());

@@ -299,7 +299,11 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                     &text(value, "version"),
                 )?;
                 if let Some(manager) = manager {
-                    field(out, "更新方式", manager)?;
+                    field(
+                        out,
+                        "更新方式",
+                        &clash_client_runtime::update::package_manager_update_hint(manager),
+                    )?;
                 } else if !value["package"].is_null() {
                     field(out, "安装包", &text(value, "package"))?;
                 }

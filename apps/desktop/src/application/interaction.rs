@@ -613,22 +613,27 @@ mod tests {
 
     #[test]
     fn update_managed_by_a_package_manager_never_prompts_for_installation() {
-        let mut app = app();
-        assert!(app.updates.begin());
-        let _ = app.update(Message::UpdateChecked(
-            app.updates.check_id,
-            Ok(Some(update::Available {
-                version: "99.0.0".into(),
-                url: update::RELEASES_URL.into(),
-                preview: false,
-                package: None,
-                package_manager: Some("zypper"),
-            })),
-        ));
-        assert!(app.updates.status.contains("请使用 zypper 更新"));
-        let _ = app.update(Message::InstallUpdate);
-        assert!(app.confirmation.is_none());
-        assert!(!app.updates.busy());
+        for (manager, hint) in [
+            ("zypper", "请使用 zypper 更新"),
+            ("pacman", "更新配方后运行 makepkg -si"),
+        ] {
+            let mut app = app();
+            assert!(app.updates.begin());
+            let _ = app.update(Message::UpdateChecked(
+                app.updates.check_id,
+                Ok(Some(update::Available {
+                    version: "99.0.0".into(),
+                    url: update::RELEASES_URL.into(),
+                    preview: false,
+                    package: None,
+                    package_manager: Some(manager),
+                })),
+            ));
+            assert!(app.updates.status.contains(hint));
+            let _ = app.update(Message::InstallUpdate);
+            assert!(app.confirmation.is_none());
+            assert!(!app.updates.busy());
+        }
     }
 
     #[test]

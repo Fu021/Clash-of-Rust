@@ -94,10 +94,16 @@ pub struct Available {
     pub package_manager: Option<&'static str>,
 }
 
+pub fn package_manager_update_hint(manager: &str) -> String {
+    match manager {
+        "pacman" => "AUR 请用助手或更新配方后运行 makepkg -si；其他包请用 pacman".into(),
+        _ => format!("请使用 {manager} 更新此版本的客户端"),
+    }
+}
+
 impl Available {
     pub fn package_manager_hint(&self) -> Option<String> {
-        self.package_manager
-            .map(|manager| format!("请使用 {manager} 更新此版本的客户端"))
+        self.package_manager.map(package_manager_update_hint)
     }
 
     pub(crate) fn require_selected(&self, expected: Option<&(String, bool)>) -> Result<()> {
@@ -488,7 +494,7 @@ pub async fn download(
 ) -> Result<Downloaded> {
     #[cfg(target_os = "linux")]
     if let Some(manager) = external_linux_package_manager() {
-        bail!("请使用 {manager} 更新此版本的客户端");
+        bail!("{}", package_manager_update_hint(manager));
     }
     if cfg!(windows)
         && Version::parse(&available.version)
@@ -784,6 +790,32 @@ mod tests {
         available.version = "0.7.2".into();
         assert!(available.require_selected(Some(&selected)).is_err());
         assert!(available.require_selected(None).is_ok());
+    }
+
+    #[test]
+    fn native_package_update_hints_distinguish_aur_from_other_pacman_packages() {
+        let mut available = Available {
+            version: "0.7.1".into(),
+            url: RELEASES_URL.into(),
+            preview: false,
+            package: None,
+            package_manager: Some("pacman"),
+        };
+        let hint = available.package_manager_hint().unwrap();
+        assert!(hint.contains("AUR"));
+        assert!(hint.contains("助手"));
+        assert!(hint.contains("更新配方后运行 makepkg -si"));
+        assert!(hint.contains("其他包请用 pacman"));
+        let mut state = State::default();
+        state.finish(Ok(Some(available.clone())));
+        assert!(state.status.contains(&hint));
+        available.package_manager = Some("dnf");
+        assert_eq!(
+            available.package_manager_hint().as_deref(),
+            Some("请使用 dnf 更新此版本的客户端")
+        );
+        available.package_manager = None;
+        assert_eq!(available.package_manager_hint(), None);
     }
 
     #[cfg(target_os = "linux")]

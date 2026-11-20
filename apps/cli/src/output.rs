@@ -259,20 +259,26 @@ mod tests {
 
     #[test]
     fn update_check_reports_the_package_manager_for_native_installs() {
-        let text = render(
-            &["update", "check"],
-            json!({
-                "available": true,
-                "version": "0.8.0",
-                "preview": false,
-                "package": null,
-                "package_manager": "dnf",
-                "url": "https://example.test/release"
-            }),
-        );
-        assert!(text.contains("发现正式版"));
-        assert!(text.contains("dnf"));
-        assert!(!text.contains("安装包"));
+        for manager in ["dnf", "pacman"] {
+            let text = render(
+                &["update", "check"],
+                json!({
+                    "available": true,
+                    "version": "0.8.0",
+                    "preview": false,
+                    "package": null,
+                    "package_manager": manager,
+                    "url": "https://example.test/release"
+                }),
+            );
+            assert!(text.contains("发现正式版"));
+            assert!(text.contains(manager));
+            assert!(!text.contains("安装包"));
+            if manager == "pacman" {
+                assert!(text.contains("AUR"));
+                assert!(text.contains("更新配方后运行 makepkg -si"));
+            }
+        }
     }
 
     #[test]
