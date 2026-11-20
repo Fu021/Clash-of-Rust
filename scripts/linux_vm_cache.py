@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import re
+import runpy
 import subprocess
 import time
 
@@ -11,11 +12,7 @@ from build_support import ROOT, run, sha256
 MAX_BYTES = 2 * 1024**3
 IMAGE = 'debian-12-arm64.qcow2'
 CHECKSUM = IMAGE + '.sha256'
-RECIPE = (
-    'linux_apt.py', 'linux_ci.py', 'linux_compatibility_targets.py',
-    'linux_desktop_login.py', 'linux_vm_cache.py', 'test-release-package.py',
-    'ubuntu_vm_environment.py',
-)
+RECIPE = ('linux_apt.py', 'linux_vm_cache.py')
 
 
 def supported(target):
@@ -26,12 +23,17 @@ def key(target):
     if not supported(target):
         raise ValueError('This target has no prepared guest cache')
     from linux_ci import inputs
+    from linux_desktop_login import GNOME, login_dependencies
 
     python = inputs()['architectures'][target.arch]['python']['sha256']
-    digests = [target.image_digest, python, *(sha256(ROOT/'scripts'/name) for name in RECIPE)]
-    identity = hashlib.sha256('\n'.join(digests).encode('ascii')).hexdigest()
+    release = {'ID': target.os_release_id, 'VERSION_ID': target.os_release_version}
+    package = runpy.run_path(str(ROOT/'scripts/test-release-package.py'))
+    recipe = [target.image_digest, python, package['GUEST_PACKAGE_CONFIG'],
+              package['compatibility_dependencies'](release=release, extended=True),
+              login_dependencies(GNOME, release), *(sha256(ROOT/'scripts'/name) for name in RECIPE)]
+    identity = hashlib.sha256(json.dumps(recipe).encode('utf-8')).hexdigest()
     week = datetime.now(timezone.utc).strftime('%G-%V')
-    return f'linux-prepared-v1-debian-12-arm64-{week}-{identity}'
+    return f'linux-prepared-v2-debian-12-arm64-{week}-{identity}'
 
 
 def check_image(path):
@@ -68,18 +70,21 @@ def restore(directory, timings):
 
 
 def export(guest, directory):
+    guest.remote('sudo systemctl set-default multi-user.target', timeout=15)
     guest.python(
         "import platform, runpy; "
         "from linux_desktop_login import GNOME, install_login_dependencies; "
         "runpy.run_path('scripts/test-release-package.py')['prepare_compatibility_environment'](); "
         "install_login_dependencies(GNOME, platform.freedesktop_os_release())",
-        timeout=3300,
+        timeout=1200,
     )
     guest.remote(
+        'sudo systemctl stop gdm.service && '
         'sudo rm -rf -- /home/ubuntu/cor-source /home/ubuntu/cor-apt /opt/cor-test-python && '
         'sudo rm -f -- /home/ubuntu/.ssh/authorized_keys && '
         'sudo shred -u -- /etc/ssh/ssh_host_* && '
-        'sudo apt-get clean && sudo cloud-init clean --logs --machine-id && sudo fstrim / && '
+        'sudo rm -f -- /etc/netplan/50-cloud-init.yaml && '
+        'sudo apt-get clean && sudo cloud-init clean --logs --machine-id --seed && sudo fstrim / && '
         'sudo systemd-run --on-active=2s /usr/bin/systemctl poweroff',
         timeout=120,
     )

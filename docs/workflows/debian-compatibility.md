@@ -13,9 +13,11 @@
 
 启动前通过 `/dev/kvm` [创建并关闭空虚拟机](https://docs.kernel.org/virt/kvm/api.html#kvm-create-vm)。探测成功时通过 KVM 启动同架构来宾，ARM64 来宾采用宿主支持的 [GIC](https://www.qemu.org/docs/master/system/arm/virt.html)。探测失败时记录原因并使用 TCG。本项目的 GitHub 托管 x64 作业已用过 KVM，`ubuntu-24.04-arm` 的已核验运行使用 TCG。[GitHub Actions 团队](https://github.com/orgs/community/discussions/160591)计划随 Cobalt 200 迁移开放 ARM64 嵌套虚拟化，迁移期间取决于实际分配的宿主。支持 KVM 的 ARM64 裸机或提供嵌套虚拟化的 ARM64 自托管 runner 也可提供该设备。
 
-Debian ARM64 TCG 来宾用 [一级压缩](https://manpages.debian.org/bookworm/initramfs-tools-core/initramfs.conf.5.en.html)生成桌面依赖所需的 initramfs。来宾沿用镜像的压缩算法，照常执行包触发器、生成同一内核的引导镜像并重启。
+Debian ARM64 TCG 来宾需要重建 initramfs 时沿用镜像的压缩算法并使用[一级压缩](https://manpages.debian.org/bookworm/initramfs-tools-core/initramfs.conf.5.en.html)。Debian 12 的桌面依赖安装先模拟 APT 事务。当前内核的 initrd 存在且非空、计划新增 FUSE、无软件包升级或移除，也无内核或引导相关软件包变更时，仅在该次安装内[暂停重建现有 initramfs](https://manpages.debian.org/bookworm/initramfs-tools/update-initramfs.conf.5.en.html)。安装完成或报错后恢复原配置，两次实际重启与 GNOME 登录仍照常执行。一份未优化的作业日志中，桌面依赖下载为 3 秒，重建 initramfs 为 17 分 30 秒。[Debian Compatibility 44654293182](https://github.com/Fu021/Clash-of-Rust/actions/runs/44654293182)
 
-ARM64 在同一隔离网络命名空间执行完整 CLI 用户矩阵与 TUN 子测试时，外层额外预留 60 秒供整组测试及清理，常规模式总上限为 580 秒。TUN 子测试本身仍限 240 秒。
+Debian 12 ARM64 TCG 已安装候选检查限 42 分钟，快速 APT 安装限 10 分钟，使用原生触发器时 APT 限 22 分钟，升级卸载限 7 分钟。每次重启的 SSH 就绪限 4 分钟。来宾验收达到 65 分钟或相关阶段提前失败时，尝试保留画面并回收来宾。GitHub 的验收步骤限 70 分钟，作业限 80 分钟，给报告上传和缓存保存留出时间。
+
+ARM64 在同一隔离网络命名空间执行完整 CLI 用户矩阵与 TUN 子测试。阶段时限和超时清理沿用 [Linux 共用验证](linux-expansion.md)。
 
 隔离测试在模拟网络切换后和退出 TUN 后重启后台，让各组订阅直连回退检查从当前路由建立监控基线。保护状态下的后台退出只发送一次 `SIGTERM`，35 秒内未退出即记录进程状态和信号掩码。
 

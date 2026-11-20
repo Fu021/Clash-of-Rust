@@ -124,9 +124,11 @@ def install(iso, directory, public_key, command, console_log, ssh_unit, install_
     serial_device = {'x86_64': 'ttyS0', 'aarch64': 'ttyAMA0'}[architecture]
     media_args = ['-cdrom', iso]
     kernel_console = ''
+    installer_mask = ''
     if architecture == 'aarch64':
         ssh_unit = ssh_unit.replace('TTYPath=/dev/ttyS0', f'TTYPath=/dev/{serial_device}')
         kernel_console = f'console={serial_device},115200 '
+        installer_mask = ' systemd.mask=distinst-v2.service'
         media_args = ['-device', 'virtio-scsi-pci,id=compat-scsi',
                       '-drive', f'file={iso},if=none,media=cdrom,readonly=on,id=compat-iso',
                       '-device', 'scsi-cd,drive=compat-iso,bus=compat-scsi.0']
@@ -137,7 +139,7 @@ def install(iso, directory, public_key, command, console_log, ssh_unit, install_
         '-kernel', kernel, '-initrd', initrd, *media_args,
         '-append', f'boot=casper live-media-path={media} noprompt {kernel_console}'
                    f'systemd.unit=multi-user.target systemd.debug_shell={serial_device} '
-                   f'systemd.mask=serial-getty@{serial_device}.service',
+                   f'systemd.mask=serial-getty@{serial_device}.service{installer_mask}',
         '-virtfs', f'local,path={share},mount_tag=cor-test,security_model=none,readonly=on',
         '-serial', f'unix:{serial},server=on,wait=off', '-no-reboot',
         '-nic', 'none',
@@ -155,6 +157,10 @@ def install(iso, directory, public_key, command, console_log, ssh_unit, install_
                 time.sleep(.2)
             console = Console(serial, console_log)
             console.wait_shell(process)
+            if architecture == 'aarch64':
+                console.command('systemctl start dbus.service systemd-logind.service && '
+                                'test -S /run/dbus/system_bus_socket && '
+                                'udevadm wait --timeout=45 /dev/vda', timeout=120)
             console.command('mkdir -p /mnt/cor-test && mount -t 9p '
                             '-o trans=virtio,version=9p2000.L,ro cor-test /mnt/cor-test')
             install_command = shlex.join(['sh', '/mnt/cor-test/install.sh', DISK_SERIAL, media])

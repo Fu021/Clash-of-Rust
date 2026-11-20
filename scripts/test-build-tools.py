@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 import socket
 import shlex
+import stat
 import tempfile
 import threading
 import tomllib
@@ -111,7 +112,10 @@ class TunDnsFixtureTests(unittest.TestCase):
                     patch.object(linux_tun_test, 'run') as execute:
                 linux_tun_test.main()
             self.assertEqual(execute.call_args.kwargs['timeout'], timeout)
-            self.assertEqual(execute.call_args.args[0][-len(flags):] if flags else [], flags)
+            command = execute.call_args.args[0]
+            self.assertEqual(command[:6],
+                             ['unshare', '--net', '--pid', '--mount-proc', '--kill-child', '--'])
+            self.assertEqual(command[-len(flags):] if flags else [], flags)
 
     def test_fixture_uses_the_guest_system_ca_bundle(self):
         debian = '/etc/ssl/certs/ca-certificates.crt'
@@ -460,6 +464,85 @@ class UbuntuVmTests(unittest.TestCase):
                 info.return_value = json.dumps(dict(metadata, **{'backing-filename': 'other'})).encode()
                 self.assertIsNone(linux_vm_cache.restore(directory, {}))
 
+    def test_prepared_guest_uses_a_fresh_seed_for_the_private_qemu_network(self):
+        guest = object.__new__(linux_ci.VmGuest)
+        guest.target = linux_ci.target_for('debian', '12', 'arm64')
+        for prepared in (True, False):
+            with self.subTest(prepared=prepared), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(linux_ci, 'run') as command:
+                guest.directory = Path(temporary)
+                guest.disk = guest.directory/'disk.qcow2'
+                guest.cloud_disk(guest.directory/'upstream.qcow2', 'ssh-ed25519 fixture', prepared=prepared)
+                network = guest.directory/'network-config'
+                create_seed, create_disk = (item.args[0] for item in command.call_args_list)
+                if prepared:
+                    self.assertIn(f'--network-config={network}', create_seed)
+                    self.assertEqual(create_disk[-1], guest.disk)
+                    nic, = json.loads(network.read_text())['ethernets'].values()
+                    self.assertEqual(nic['match'], {'macaddress': linux_ci.PREPARED_GUEST_MAC})
+                    self.assertIs(nic['dhcp4'], False)
+                    self.assertEqual(nic['addresses'], ['10.0.2.15/24'])
+                    self.assertEqual(nic['routes'], [{'to': '0.0.0.0/0', 'via': '10.0.2.2'}])
+                    self.assertEqual(nic['nameservers'], {'addresses': ['10.0.2.3']})
+                else:
+                    self.assertEqual(len(create_seed), 4)
+                    self.assertEqual(create_disk[-1], '24G')
+                    self.assertFalse(network.exists())
+
+    def test_prepared_guest_key_tracks_dependencies_instead_of_verification_code(self):
+        import linux_vm_cache
+
+        target = linux_ci.target_for('debian', '12', 'arm64')
+        pinned = {'architectures': {'arm64': {'python': {'sha256': 'a'*64}}}}
+        with patch.object(linux_ci, 'inputs', return_value=pinned), \
+                patch.object(linux_vm_cache, 'sha256', return_value='b'*64) as recipe_digest, \
+                patch.object(linux_vm_cache, 'datetime') as clock:
+            clock.now.return_value.strftime.return_value = '2026-47'
+            key = linux_vm_cache.key(target)
+            recipe_files = {item.args[0].name for item in recipe_digest.call_args_list}
+            self.assertEqual(recipe_files, {'linux_apt.py', 'linux_vm_cache.py'})
+            with patch.object(linux_desktop_login, 'login_dependencies', return_value=['different-gnome']):
+                self.assertNotEqual(linux_vm_cache.key(target), key)
+            pinned['architectures']['arm64']['python']['sha256'] = 'c'*64
+            self.assertNotEqual(linux_vm_cache.key(target), key)
+
+    def test_bookworm_uses_the_warm_guest_or_preserves_failed_cold_preparation(self):
+        import linux_vm_cache
+
+        target = linux_ci.target_for('debian', '12', 'arm64')
+        for warm in (True, False):
+            with self.subTest(warm=warm), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                cache = root/'cache'
+                base = root/'debian.qcow2'
+                prepared = root/'prepared.qcow2'
+                prepared.write_bytes(b'dependency disk')
+                archive, python = root/'source.tar.gz', root/'python.tar.gz'
+                report, timings = {}, {}
+                builder, guest = MagicMock(), MagicMock()
+                builder.process.poll.return_value = None
+                with patch.dict(os.environ, {'COR_LINUX_PREPARED_DISK': str(cache)}), \
+                        patch.object(linux_vm_cache, 'restore', return_value=prepared if warm else None), \
+                        patch.object(linux_ci, 'prepare_vm_guest') as prepare, \
+                        patch.object(linux_ci, 'VmGuest', side_effect=[guest] if warm else [builder, guest]) as boot, \
+                        patch.object(linux_vm_cache, 'export',
+                                     side_effect=subprocess.TimeoutExpired(['ssh'], 1200)) as export:
+                    self.assertIs(linux_ci.open_test_guest(
+                        base, root, target, archive, python, False, timings, report), guest)
+                if warm:
+                    boot.assert_called_once_with(prepared, root, 'prepared-image', target,
+                                                 kvm=False, timings=timings, prepared=True)
+                    prepare.assert_not_called()
+                    export.assert_not_called()
+                    self.assertEqual(report['prepared_disk']['source'], 'restored')
+                else:
+                    self.assertEqual(boot.call_args.args[:3], (base, root, 'official-image'))
+                    prepare.assert_called_once_with(builder, root)
+                    export.assert_called_once_with(builder, cache)
+                    builder.capture_desktop_failure.assert_called_once_with('prepared-dependencies')
+                    builder.close.assert_called_once_with()
+                    self.assertEqual(report['prepared_disk']['source'], 'fallback')
+
     def test_vm_accepts_cloud_init_recoverable_errors_only_after_completion(self):
         for code, status, fatal in ((2, 'done', False), (2, 'error', True),
                                     (1, 'done', True), (124, 'running', True)):
@@ -687,6 +770,63 @@ class UbuntuVmTests(unittest.TestCase):
                 packages = install.call_args.args[0]
                 self.assertIn('gnome-screenshot', packages)
                 self.assertEqual('gnome-session-xsession' in packages, version == '13')
+
+    def test_bookworm_desktop_preserves_initrd_only_for_the_expected_apt_plan(self):
+        desktop_packages = ('Inst fuse3:arm64 (3.14.0-4 Debian:12/oldstable [arm64])\n'
+                            'Inst gdm3 (43.0-3 Debian:12/oldstable [arm64])\n')
+        for initrd_ok, output, expected in (
+                (True, desktop_packages, True),
+                (True, desktop_packages + 'Inst linux-image-arm64 (6.1 Debian:12 [arm64])\n', False),
+                (True, desktop_packages + 'Inst udev [252.38] (252.39 Debian:12 [arm64])\n', False),
+                (True, desktop_packages + 'Remv fuse [2.9.9]\n', False),
+                (True, desktop_packages.splitlines()[1], False),
+                (False, desktop_packages, False)):
+            with self.subTest(initrd_ok=initrd_ok, output=output), \
+                    patch.object(Path, 'stat', return_value=MagicMock(st_mode=stat.S_IFREG,
+                                                                    st_size=int(initrd_ok))), \
+                    patch.object(linux_desktop_login, 'run', return_value=MagicMock(stdout=output)) as execute:
+                self.assertEqual(linux_desktop_login.bookworm_desktop_needs_only_new_packages(['gdm3']), expected)
+                if initrd_ok:
+                    self.assertEqual(execute.call_args.args[0][-4:],
+                                     ['--simulate', '--no-install-recommends', 'install', 'gdm3'])
+                else:
+                    execute.assert_not_called()
+
+    def test_bookworm_desktop_restores_initramfs_configuration_when_install_exits(self):
+        failure = subprocess.CalledProcessError(1, ['apt-get', 'install'])
+        environment = {'COR_LINUX_GUEST': 'true', 'GITHUB_ACTIONS': 'true'}
+        for acceleration, release, safe_plan, error, override in (
+                ('tcg', '12', True, None, True),
+                ('tcg', '12', True, failure, True),
+                ('tcg', '12', False, None, False),
+                ('tcg', '13', True, None, False),
+                ('kvm', '12', True, None, False)):
+            with self.subTest(acceleration=acceleration, release=release, safe_plan=safe_plan, error=error), \
+                    tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, dict(environment, COR_LINUX_VM_ACCELERATION=acceleration)), \
+                    patch.object(linux_desktop_login.platform, 'machine', return_value='aarch64'), \
+                    patch.object(linux_desktop_login, 'bookworm_desktop_needs_only_new_packages',
+                                 return_value=safe_plan), \
+                    patch.object(linux_desktop_login, 'install', side_effect=error) as install, \
+                    patch.object(linux_desktop_login, 'run') as execute:
+                config = Path(temporary)/'update-initramfs.conf'
+                original = b'update_initramfs=yes\n'
+                config.write_bytes(original)
+                with patch.object(linux_desktop_login, 'INITRAMFS_CONFIG', config):
+                    if error:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            linux_desktop_login.install_login_dependencies(
+                                linux_desktop_login.GNOME, {'ID': 'debian', 'VERSION_ID': release})
+                    else:
+                        linux_desktop_login.install_login_dependencies(
+                            linux_desktop_login.GNOME, {'ID': 'debian', 'VERSION_ID': release})
+                self.assertIn('gdm3', install.call_args.args[0])
+                expected_timeout = 1800
+                if acceleration == 'tcg' and release == '12':
+                    expected_timeout = 600 if override else 1320
+                self.assertEqual(install.call_args.kwargs['timeout'], expected_timeout)
+                self.assertEqual([item.kwargs['input'] for item in execute.call_args_list],
+                                 [original + b'\nupdate_initramfs=no\n', original] if override else [])
 
     def test_gnome_login_probe_writes_settings_without_activating_gvfs(self):
         import linux_gnome_login
@@ -1197,6 +1337,23 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertGreaterEqual(timings['installed_candidate'], 0)
             self.assertGreaterEqual(timings['package_lifecycle'], 0)
 
+    def test_bookworm_tcg_limits_slow_phases_and_captures_lifecycle_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory/'package.tar.gz'
+            archive.touch()
+            guest = MagicMock(target=linux_ci.target_for('debian', '12', 'arm64'),
+                              environment='guest ', architecture='aarch64', kvm=False)
+            guest.python.side_effect = subprocess.TimeoutExpired(['ssh'], 420)
+            with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    linux_ci.verify_vm_package(guest, directory, 123)
+            self.assertEqual([item.kwargs['timeout'] for item in guest.remote.call_args_list],
+                             [300, 2520, 1440, 420, 420])
+            self.assertEqual(guest.reboot.call_args_list, [call(timeout=240), call(timeout=240)])
+            self.assertEqual(guest.python.call_args.kwargs['timeout'], 420)
+            guest.capture_desktop_failure.assert_called_once_with('package-lifecycle')
+
     def test_candidate_failure_captures_desktop_before_propagating_failure(self):
         for failure in (subprocess.TimeoutExpired(['ssh'], 3600), subprocess.CalledProcessError(1, ['ssh'])):
             with self.subTest(failure=type(failure)), tempfile.TemporaryDirectory() as temporary:
@@ -1311,6 +1468,45 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertGreaterEqual(report['timings_seconds']['failed_guest_boot'], 0)
             self.assertFalse(report['success'])
             self.assertNotIn('kernel', report)
+
+    @unittest.skipUnless(hasattr(linux_ci.signal, 'SIGALRM'), 'POSIX verification deadline')
+    def test_bookworm_vm_deadline_preserves_failure_evidence_and_cleans_up(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root/'source.tar.gz'
+            archive.touch()
+            target = linux_ci.target_for('debian', '12', 'arm64')
+            inputs = {'architectures': {'arm64': {'python': {}}}}
+            guest = MagicMock(boot_seconds=1, stage_seconds=1, kernel='6.1.0-56-arm64')
+            signal = linux_ci.signal
+            original = signal.getsignal(signal.SIGALRM)
+
+            def exceed_deadline(*args, **kwargs):
+                signal.getsignal(signal.SIGALRM)(signal.SIGALRM, None)
+
+            with patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
+                    patch.object(signal, 'alarm') as timer, \
+                    patch.multiple(linux_ci, REPORT=root/'report',
+                                   inputs=MagicMock(return_value=inputs),
+                                   download=MagicMock(),
+                                   tools_directory=MagicMock(return_value=root),
+                                   vm_source_archive=MagicMock(return_value=archive),
+                                   fetch_vm_package=MagicMock(),
+                                   kvm_available=MagicMock(return_value=False),
+                                   open_test_guest=MagicMock(return_value=guest),
+                                   prepare_vm_guest=MagicMock(),
+                                   verify_vm_package=MagicMock(side_effect=exceed_deadline)):
+                with self.assertRaisesRegex(TimeoutError, 'exceeded 65 minutes'):
+                    linux_ci.vm_test(123, target)
+            self.assertEqual(signal.getsignal(signal.SIGALRM), original)
+            self.assertEqual(timer.call_args_list, [call(3900), call(0), call(0)])
+            guest.capture_desktop_failure.assert_called_once_with('verification-deadline')
+            guest.preserve.assert_called_once_with()
+            guest.close.assert_called_once_with()
+            report = json.loads((root/'report/linux-vm.json').read_text())
+            self.assertFalse(report['success'])
+            self.assertEqual(report['failed_stage'], 'installed_candidate')
+            self.assertIn('exceeded 65 minutes', report['error'])
 
     def test_iso_vm_reports_install_and_disk_boot_separately(self):
         for failure in (None, 'iso_install', 'guest_boot'):
@@ -7803,12 +7999,18 @@ success="$1"
                 self.assertIn(f'TTYPath=/dev/{terminal}', stage.call_args.args[3].splitlines())
                 if arch == 'aarch64':
                     self.assertIn(f'console={terminal},115200', kernel_args)
+                    self.assertIn('systemd.mask=distinst-v2.service', kernel_args)
                     self.assertIn('scsi-cd,drive=compat-iso,bus=compat-scsi.0', arguments)
                     self.assertIn(f'file={directory/"pop.iso"},if=none,media=cdrom,readonly=on,id=compat-iso',
                                   arguments)
                     self.assertNotIn('-cdrom', arguments)
+                    self.assertEqual(console.return_value.command.call_args_list[0],
+                                     call('systemctl start dbus.service systemd-logind.service && '
+                                          'test -S /run/dbus/system_bus_socket && '
+                                          'udevadm wait --timeout=45 /dev/vda', timeout=120))
                 else:
                     self.assertEqual(arguments[arguments.index('-cdrom')+1], directory/'pop.iso')
+                    self.assertNotIn('systemd.mask=distinst-v2.service', kernel_args)
                 console.return_value.command.assert_any_call(
                     f'sh /mnt/cor-test/install.sh {pop_live_install.DISK_SERIAL} {media}', timeout=2100)
 

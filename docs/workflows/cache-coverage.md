@@ -24,4 +24,4 @@ CI 与 Memory Benchmark 使用 GitHub Actions Cache。`main` 每个用途及目�
 - Android 的 [Maven 缓存](ci.md#android-工具与原包)在 `main` 共用一代，范围限于 `caches/modules-2` 中的 Maven 构件和解析元数据。Gradle 锁文件、缓存维护标记、转换产物、签名材料、APK 和报告均排除在该缓存之外。
 - 构建容器按架构和官方镜像 digest 恢复，未命中时重新构建。运行 VM 的写入层只存当次 runner。安装包、回执、日志和内存报告以附件保留，生命周期见各工作流。
 - VM 宿主从 Ubuntu 官方 HTTPS 源更新签名索引，缓存中的 DEB 按当前索引的大小与 SHA256 校验后才提供给 APT。
-- Debian 12 ARM64 TCG 在 `main` 可恢复一个至多 2 GiB 的压缩 QCOW2。冷运行在官方来宾上安装系统测试依赖，清理 SSH 及 cloud-init 身份后关闭来宾并导出。键绑定基础镜像、Python 摘要、准备脚本和 UTC 周，仅接受精确匹配。每个验收任务从独立的写入层启动，仍安装并验证当次 CI 候选。恢复或引导失败时改用官方镜像。仓库缓存占用超过 30 GiB 时跳过保存。
+- Debian 12 ARM64 TCG 在 `main` 可恢复一个至多 2 GiB 的压缩 QCOW2。冷运行在官方来宾上安装系统测试依赖，以多用户目标保存种子，让 GDM 在实际桌面登录阶段启动。导出前清理 SSH、cloud-init 身份和旧的生成网络配置。复用时从当次 [NoCloud 种子](https://cloudinit.readthedocs.io/en/latest/reference/datasources/nocloud.html)配置 [QEMU 私有网段](https://www.qemu.org/docs/master/system/devices/net.html)的 IPv4、网关及 DNS，并在 4 分钟内验证 SSH。缓存键绑定基础镜像、Python 摘要、实际测试与桌面依赖清单、来宾包配置、APT 与导出配方和 UTC 周，仅接受精确匹配。每个验收任务从独立的写入层启动，仍安装并验证当次 CI 候选。恢复或引导失败时改用官方镜像。仓库缓存占用超过 30 GiB 时跳过保存。

@@ -18,7 +18,7 @@
 
 `linux-vm.json` 单列官方镜像与 Python 工具的下载校验时间。ISO 来宾分别记录安装器和安装盘启动的耗时。安装器失败时记录 `iso_install` 失败阶段和已用时间。已安装候选检查、桌面登录和包升级卸载分别计时。候选检查内部的依赖准备由 `compatibility-environment.json` 单列，VM 在来宾归档内保存，直接使用托管 runner 时随报告上传。候选检查超时或桌面阶段失败时，通过私有 QEMU 监控尝试保存画面并记录截图失败原因。实际登录一旦确认候选托盘初始化失败，立即结束该阶段。状态等待和截图均有时限，来宾报告仍保留启动状态、日志与进程快照。
 
-隔离网络检查分别记录 root CLI、普通账户矩阵和原生代理/TUN 流量阶段。开启 ARM64 扩展账户检查时，命名空间为环境准备和账户检查留出 560 秒，再计入流量探针的独立时限。流量探针通常最多 240 秒，启用代理基准时为 360 秒。各阶段的子检查仍保留自己的超时。
+隔离网络检查分别记录 root CLI、普通账户矩阵和原生代理/TUN 流量阶段。开启 ARM64 扩展账户检查时，命名空间为环境准备和账户检查留出 560 秒，再计入流量探针的独立时限。流量探针通常最多 240 秒，启用代理基准时为 360 秒。各阶段的子检查仍保留自己的超时。外层到达时限时终止整个测试 PID 命名空间，避免后台进程继续占用 SSH 通道、延迟失败截图和来宾清理。
 
 全部目标均需实际验证普通用户 GUI/TUI/CLI、共享后台、代理/TUN/DNS、图形授权拒绝与允许、登录自启动迁移、托盘与菜单恢复同一进程、原生包升级/卸载后保留数据。Fedora、openSUSE、Arch 的 GNOME 采用明确记录的 AppIndicator 扩展；不将该验证写成默认桌面自带托盘。首个 RPM/Arch 升级夹具使用经 SHA256 校验的公开旧 DEB 重新封装，不冒充历史已发布的原生附件。
 
@@ -26,7 +26,7 @@ Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`。该代
 
 Fedora 45 ARM64 的 Generic 镜像在 TCG 上切换系统根后曾两次进入紧急模式。矩阵固定到同版官方 [UEFI-UKI](https://fedoraproject.org/wiki/Changes/Unified_Kernel_Support_Phase_2) 镜像，给每个来宾单独复制可写的 AAVMF 变量存储，支持该镜像的 UEFI 启动项。
 
-Pop!_OS ARM64 使用 AAVMF、`ttyAMA0` 和只读 VirtIO SCSI 光驱。安装器按一次性磁盘的序列号校验写入目标。系统从原生 `distinst` 写入的磁盘重启，再用非 VGA VirtIO GPU 接入实际 COSMIC 会话和宿主画面探针。兼容回执覆盖三个目标及两种架构的 CI 候选。
+Pop!_OS ARM64 使用 AAVMF、`ttyAMA0` 和只读 VirtIO SCSI 光驱。Live 系统先等待 D-Bus、logind 和目标磁盘的 udev 初始化，避免早期串口抢在系统总线之前启动安装器。Live 系统仅启动直接调用的 `distinst`，屏蔽独立的 `distinst-v2` 服务。安装器按一次性磁盘的序列号校验写入目标。系统从安装盘重启后，用非 VGA VirtIO GPU 接入实际 COSMIC 会话和宿主画面探针。兼容回执覆盖三个目标及两种架构的 CI 候选。
 
 隔离 GNOME 探针看到新的 Wayland 套接字后才查询 Shell 的 D-Bus 对象。GNOME 50 [完成 UI 初始化后才导出该对象](https://github.com/GNOME/gnome-shell/blob/50.6/js/ui/main.js#L163-L176)。ARM64 TCG 的合成器就绪限时为 120 秒，其余目标为 60 秒。进程提前退出会立即结束验收。候选阶段出错或超时均尝试保存 QEMU 画面，嵌套桌面状态另见来宾日志。
 

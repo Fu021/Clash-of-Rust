@@ -40,7 +40,7 @@ jobs:
     name: ${{ matrix.distribution }} ${{ matrix.release }}-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.qemu != '' && 120 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'debian' && matrix.release == '12' && matrix.arch == 'arm64' && 80 || matrix.qemu != '' && 120 || 30 }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -128,6 +128,7 @@ jobs:
           key: ${{ steps.guest-image.outputs.key }}
       - name: Verify the installed CI candidate on the target distribution
         id: verify
+        timeout-minutes: ${{ inputs.suite == 'debian' && matrix.release == '12' && matrix.arch == 'arm64' && 70 || 360 }}
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ needs.resolve.outputs.ci_run_id }}

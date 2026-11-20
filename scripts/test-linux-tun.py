@@ -813,7 +813,8 @@ def main():
         setup_and_cli_budget = 280
         if args.with_user_tests and platform.machine() in ('aarch64', 'arm64'):
             setup_and_cli_budget = 560
-        run(['unshare', '--net', '--mount', sys.executable, Path(__file__).resolve(),
+        run(['unshare', '--net', '--pid', '--mount-proc', '--kill-child', '--',
+             sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid,
              '--test-case', args.test_case, *user_tests],
             timeout=setup_and_cli_budget + tun_timeout)

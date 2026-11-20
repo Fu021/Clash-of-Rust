@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
@@ -35,6 +36,32 @@ REPORT = ROOT/'target/linux-report'
 KVM_GET_API_VERSION = 0xAE00
 KVM_CREATE_VM = 0xAE01
 KVM_API_VERSION = 12
+BOOKWORM_ARM64_VM_BUDGET = 65 * 60
+PREPARED_GUEST_MAC = '52:54:00:12:34:56'
+
+
+class VmVerificationDeadline(BaseException):
+    """End verification and keep evidence even when a phase is still within its own timeout."""
+
+
+@contextlib.contextmanager
+def vm_verification_deadline(target):
+    if (target.family, target.release, target.arch) != ('debian', '12', 'arm64'):
+        yield lambda: None
+        return
+
+    def expire(signum, frame):
+        raise VmVerificationDeadline('Debian 12 ARM64 verification exceeded 65 minutes')
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.alarm(BOOKWORM_ARM64_VM_BUDGET)
+    try:
+        yield lambda: signal.alarm(0)
+    except VmVerificationDeadline as error:
+        raise TimeoutError(str(error)) from error
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def text(url, headers=None):
@@ -495,8 +522,10 @@ class VmGuest:
             else:
                 seed = self.cloud_disk(base, public, prepared=prepared)
                 command.extend(['-drive', f'file={seed},if=virtio,format=raw,readonly=on'])
-            command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
-                            '-device', 'virtio-net-pci,netdev=net0'])
+            guest_address = '10.0.2.15' if prepared else ''
+            nic = 'virtio-net-pci,netdev=net0' + (f',mac={PREPARED_GUEST_MAC}' if prepared else '')
+            command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-{guest_address}:22',
+                            '-device', nic])
             environment = None
             if self.monitor_path:
                 command.extend(['-qmp', f'unix:{self.monitor_path},server=on,wait=off'])
@@ -515,14 +544,15 @@ class VmGuest:
             self.console = self.console_path.open('w')
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT, env=environment)
             try:
+                boot_timeout = 900 if target.image_format == 'iso' else 600
                 wait_vm_ssh(self.process, self.ssh, ready_command=ready_command, console=self.console_path,
-                            timeout=900 if target.image_format == 'iso' else 600)
-            except (RuntimeError, TimeoutError):
+                            timeout=240 if prepared else boot_timeout)
+                self.wait_cloud_init()
+            except (RuntimeError, TimeoutError, VmVerificationDeadline):
                 if self.monitor_path:
                     with contextlib.suppress(OSError):
                         self.capture_desktop_failure('boot-' + label)
                 raise
-            self.wait_cloud_init()
             actual = self.output('uname -m').strip()
             if actual != architecture:
                 raise RuntimeError(f'Linux VM returned {actual} instead of {architecture}')
@@ -555,7 +585,17 @@ class VmGuest:
         (directory/'meta-data').write_text(
             'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
         seed = directory/'seed.img'
-        run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
+        seed_command = ['cloud-localds']
+        if prepared:
+            network_config = directory/'network-config'
+            write_json(network_config, {'version': 2, 'renderer': 'networkd', 'ethernets': {
+                'cor-transport': {'match': {'macaddress': PREPARED_GUEST_MAC}, 'dhcp4': False,
+                                  'addresses': ['10.0.2.15/24'],
+                                  'routes': [{'to': '0.0.0.0/0', 'via': '10.0.2.2'}],
+                                  'nameservers': {'addresses': ['10.0.2.3']}},
+            }})
+            seed_command.append(f'--network-config={network_config}')
+        run([*seed_command, seed, directory/'user-data', directory/'meta-data'])
         command = ['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk]
         if not (self.target.writable_arm_uefi or prepared):
             command.append('24G')
@@ -586,7 +626,7 @@ class VmGuest:
     def python(self, script, timeout=120):
         return guest_python(self.remote, self.environment, script, timeout)
 
-    def reboot(self):
+    def reboot(self, timeout=600):
         previous_boot = self.output('cat /proc/sys/kernel/random/boot_id').strip()
         console_offset = self.console_path.stat().st_size
         self.remote('sudo systemd-run --on-active=2s /usr/bin/systemctl reboot', timeout=15)
@@ -595,7 +635,7 @@ class VmGuest:
                  'test -n "$boot_id" && test "$boot_id" != ' + shlex.quote(previous_boot))
         fresh_ssh = [self.ssh[0], '-o', 'ControlPath=none', *self.ssh[1:]]
         wait_vm_ssh(self.process, fresh_ssh, ready_command=ready, console=self.console_path,
-                    console_offset=console_offset)
+                    console_offset=console_offset, timeout=timeout)
         self.wait_cloud_init()
 
     def capture_desktop_failure(self, stage):
@@ -785,12 +825,16 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
         timings['package_transfer'] = round(time.monotonic() - started, 3)
     extra = 'COR_UBUNTU_VM_FROZEN=true ' if frozen else ''
     command = shlex.join(compatibility_command(guest.target, '/opt/cor-test-python/bin/python3'))
+    bookworm_tcg = ((guest.target.family, guest.target.release, guest.target.arch, guest.kvm)
+                    == ('debian', '12', 'arm64', False))
+    slow_guest = guest.architecture == 'aarch64' or not guest.kvm
     started = time.monotonic()
     try:
         print(f'{guest.target.distribution} {guest.target.release}: verifying installed candidate', flush=True)
+        candidate_timeout = 3600 if slow_guest else 1200
         try:
             guest.remote(guest.environment + extra + command,
-                         timeout=3600 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
+                         timeout=2520 if bookworm_tcg else candidate_timeout)
         except subprocess.SubprocessError:
             if guest.target.full_desktop:
                 with contextlib.suppress(OSError):
@@ -810,13 +854,16 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                 print(f'{guest.target.distribution} {guest.target.release}: desktop {phase}', flush=True)
                 phase_started = time.monotonic()
                 preparing = phase.startswith('prepare')
-                timeout = 1800 if guest.architecture == 'aarch64' or not guest.kvm else 800
+                timeout = 1800 if slow_guest else 800
                 if debian and not preparing:
                     from linux_desktop_login import DEBIAN_LOGIN_BUDGET
                     timeout = DEBIAN_LOGIN_BUDGET + 120
+                elif bookworm_tcg and preparing:
+                    from linux_desktop_login import BOOKWORM_TCG_DESKTOP_APT_BUDGET
+                    timeout = BOOKWORM_TCG_DESKTOP_APT_BUDGET + 120
                 try:
                     if not preparing:
-                        guest.reboot()
+                        guest.reboot(timeout=240 if bookworm_tcg else 600)
                     if phase == 'first-login' and cosmic:
                         from linux_cosmic_authorization import verify_dialogs
                         verify_dialogs(guest, REPORT)
@@ -833,11 +880,16 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                          else 'native_upgrade_and_uninstall')
             print(f'{guest.target.distribution} {guest.target.release}: verifying upgrade and uninstall', flush=True)
             phase_started = time.monotonic()
+            lifecycle_timeout = 1800 if slow_guest else 900
             try:
                 guest.python("from pathlib import Path; import runpy; "
                              f"runpy.run_path('scripts/test-release-package.py')['{operation}']"
                              "(next(Path('dist').glob('*.deb')).resolve())",
-                             timeout=1800 if guest.architecture == 'aarch64' or not guest.kvm else 900)
+                             timeout=420 if bookworm_tcg else lifecycle_timeout)
+            except subprocess.SubprocessError:
+                with contextlib.suppress(OSError):
+                    guest.capture_desktop_failure('package-lifecycle')
+                raise
             finally:
                 timings['package_lifecycle'] = round(time.monotonic() - phase_started, 3)
     finally:
@@ -857,6 +909,7 @@ def open_test_guest(base, directory, target, archive, python, kvm, timings, repo
         guest = None
         try:
             if not prepared:
+                print('Debian ARM64 prepared guest cache miss: preparing test dependencies', flush=True)
                 builder = VmGuest(base, directory, 'prepare-debian', target, kvm=kvm, timings={})
                 builder.stage(archive, python)
                 prepare_vm_guest(builder, directory)
@@ -872,9 +925,14 @@ def open_test_guest(base, directory, target, archive, python, kvm, timings, repo
                 with Path(output).open('a', encoding='utf-8') as stream:
                     stream.write('prepared_disk=true\n')
             return guest
-        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError, VmVerificationDeadline) as error:
             if guest:
                 guest.close()
+            if builder and builder.process.poll() is None:
+                with contextlib.suppress(OSError):
+                    builder.capture_desktop_failure('prepared-dependencies')
+            if isinstance(error, VmVerificationDeadline):
+                raise
             timings['prepared_disk_fallback'] = round(time.monotonic() - started, 3)
             report['prepared_disk'] = {'source': 'fallback'}
             print(f'::warning::Prepared guest unavailable, using the official image: {error}', flush=True)
@@ -906,7 +964,8 @@ def vm_test(package_run_id, target):
     temporary_root = Path(os.environ.get('RUNNER_TEMP', tempfile.gettempdir())).resolve()
     if temporary_root.is_relative_to(ROOT):
         raise ValueError('VM files must stay outside the checkout')
-    with tempfile.TemporaryDirectory(prefix='cor-linux-vm-', dir=temporary_root) as temporary:
+    with tempfile.TemporaryDirectory(prefix='cor-linux-vm-', dir=temporary_root) as temporary, \
+            vm_verification_deadline(target) as stop_deadline:
         directory = Path(temporary)
         phase_started = time.monotonic()
         archive = vm_source_archive(directory, include_frozen_apt=bool(frozen),
@@ -974,16 +1033,22 @@ def vm_test(package_run_id, target):
                 verify_vm_package(guest, directory, package_run_id, frozen=bool(frozen), timings=timings,
                                   package_future=package_future)
                 result['success'] = True
-            except Exception:
+            except (Exception, VmVerificationDeadline) as error:
                 if 'failed_iso_install' in timings:
                     stage = 'iso_install'
                 elif stage == 'guest_boot':
                     timings['failed_guest_boot'] = round(
                         time.monotonic() - phase_started - timings.get('iso_install', 0), 3)
                 result['failed_stage'] = stage
+                if isinstance(error, VmVerificationDeadline):
+                    result['error'] = str(error)
+                    if guest and target.full_desktop:
+                        with contextlib.suppress(OSError):
+                            guest.capture_desktop_failure('verification-deadline')
                 print(f'Linux compatibility failed at {stage}.', flush=True)
                 raise
             finally:
+                stop_deadline()
                 try:
                     if guest:
                         result['kernel'] = guest.kernel

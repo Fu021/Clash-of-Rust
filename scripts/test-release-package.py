@@ -166,11 +166,13 @@ def linux_package_tests(package, tun_test, structure=True):
             run([sys.executable, ROOT/'scripts/test-cli-update.py', '--package', package], timeout=900)
 
 
-def compatibility_dependencies():
+def compatibility_dependencies(*, release=None, extended=None):
     from ci_test_policy import extended_tests
     from ubuntu_vm_environment import TEST_PACKAGES
-    if extended_tests():
-        release = platform.freedesktop_os_release()
+    if extended is None:
+        extended = extended_tests()
+    if extended:
+        release = release if release is not None else platform.freedesktop_os_release()
         distribution = release.get('ID')
         if distribution == 'debian':
             return ['mate-polkit' if package == 'policykit-1-gnome' else package
@@ -180,7 +182,7 @@ def compatibility_dependencies():
                     'x11-utils', 'xdotool', 'wmctrl']
         return list(TEST_PACKAGES)
     if os.environ.get('COR_LINUX_GUEST') == 'true':
-        release = platform.freedesktop_os_release()
+        release = release if release is not None else platform.freedesktop_os_release()
         if (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', UBUNTU_BASELINE):
             return list(TEST_PACKAGES)
     return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']

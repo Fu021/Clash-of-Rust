@@ -9,13 +9,14 @@ import platform
 import pwd
 import re
 import secrets
+import stat
 import subprocess
 import tempfile
 import time
 import tomllib
 
 from build_support import ROOT, run, sha256, write_json
-from linux_apt import install
+from linux_apt import OPTIONS, install
 from linux_gui import core_processes, output, owner_tray, wait_for
 
 USER = 'cor-desktop-login'
@@ -29,6 +30,9 @@ COSMIC_GREETER_CONFIG = Path('/etc/greetd/cosmic-greeter.toml')
 COSMIC_PROBES = HOME/'cor-desktop-probes'
 DISPLAYMANAGER_SYSCONFIG = Path('/etc/sysconfig/displaymanager')
 DEBIAN_LOGIN_BUDGET = 300
+BOOKWORM_TCG_DESKTOP_APT_BUDGET = 1320
+BOOKWORM_TCG_FAST_APT_BUDGET = 600
+INITRAMFS_CONFIG = Path('/etc/initramfs-tools/update-initramfs.conf')
 
 
 @dataclass(frozen=True)
@@ -77,7 +81,27 @@ def configure_tumbleweed_autologin():
     run(['sudo', 'tee', DISPLAYMANAGER_SYSCONFIG], input=config, text=True, stdout=subprocess.DEVNULL)
 
 
-def install_login_dependencies(desktop, release):
+def bookworm_desktop_needs_only_new_packages(packages):
+    initrd = Path('/boot') / ('initrd.img-' + os.uname().release)
+    try:
+        info = initrd.stat()
+        if not stat.S_ISREG(info.st_mode) or not info.st_size:
+            return False
+        plan = run(['env', 'LC_ALL=C', *OPTIONS, '--simulate', '--no-install-recommends', 'install', *packages],
+                   capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    installs = re.findall(r'^Inst (\S+) (.+)$', plan.stdout, re.MULTILINE)
+    return (not re.search(r'^Remv ', plan.stdout, re.MULTILINE)
+            and any(name.split(':', 1)[0] == 'fuse3' for name, _ in installs)
+            and all(not action.startswith('[')
+                    and not name.startswith(('linux-', 'initramfs-', 'dracut', 'udev', 'cryptsetup', 'firmware-'))
+                    and not name.split(':', 1)[0].endswith('-dkms') for name, action in installs))
+
+
+def login_dependencies(desktop, release):
+    if desktop == GNOME_WAYLAND:
+        return []
     distribution = release['ID']
     packages = ['dbus-user-session', 'libgtk-3-bin', 'wmctrl']
     if distribution == 'debian':
@@ -87,8 +111,29 @@ def install_login_dependencies(desktop, release):
     elif desktop == COSMIC:
         packages.extend(['gcc', 'libc6-dev', 'libwayland-dev', 'libwayland-bin', 'wayland-protocols',
                          'python3-gi', 'glib-networking'])
-    if desktop != GNOME_WAYLAND:
-        install(packages, timeout=guest_budget(600, 1800), no_recommends=True)
+    return packages
+
+
+def install_login_dependencies(desktop, release):
+    packages = login_dependencies(desktop, release)
+    if not packages:
+        return
+    bookworm_tcg = ((release.get('ID'), release.get('VERSION_ID')) == ('debian', '12')
+                    and platform.machine().lower() in ('aarch64', 'arm64')
+                    and os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
+                    and os.environ.get('COR_LINUX_GUEST') == os.environ.get('GITHUB_ACTIONS') == 'true')
+    timeout = BOOKWORM_TCG_DESKTOP_APT_BUDGET if bookworm_tcg else guest_budget(600, 1800)
+    if not (bookworm_tcg and INITRAMFS_CONFIG.is_file() and bookworm_desktop_needs_only_new_packages(packages)):
+        install(packages, timeout=timeout, no_recommends=True)
+        return
+    original = INITRAMFS_CONFIG.read_bytes()
+    command = ['sudo', 'tee', INITRAMFS_CONFIG]
+    print('Debian 12 ARM64 TCG: reusing the booted initrd for the desktop dependency install', flush=True)
+    try:
+        run(command, input=original+b'\nupdate_initramfs=no\n', stdout=subprocess.DEVNULL, timeout=15)
+        install(packages, timeout=BOOKWORM_TCG_FAST_APT_BUDGET, no_recommends=True)
+    finally:
+        run(command, input=original, stdout=subprocess.DEVNULL, timeout=15)
 
 
 def prepare(report, desktop, release):
