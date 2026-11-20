@@ -2153,6 +2153,73 @@ fn claude_report_rows_keep_titles_and_labeled_explanations() {
 }
 
 #[test]
+fn claude_summary_keeps_quality_disagreements_visible_with_many_risks() {
+    use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
+
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Claude);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut report = Report::new(Environment::Core, "fixture");
+    report.signals.extend((1..=7).map(|index| {
+        let mut signal = Signal::new(
+            Group::Dns,
+            &format!("DNS 风险 {index}"),
+            "解析器地区不同",
+            "DNS fixture",
+            Evidence::Measured,
+            "",
+        );
+        signal.risk = true;
+        signal
+    }));
+    report.signals.push(Signal::new(
+        Group::Quality,
+        "出口 IP 质量",
+        "机房或托管网络来源不一致",
+        "IPQuery、IPLogs",
+        Evidence::Inferred,
+        "IPQuery 是、IPLogs 否",
+    ));
+    app.claude.reports[0] = Some(report);
+    app.present_slint(&data, &mut models);
+
+    let rows = data.get_claude_results();
+    assert_eq!(rows.row_count(), 6);
+    assert_eq!(data.get_claude_risk(), "7");
+    assert_eq!(data.get_claude_clues(), "1");
+    let disagreement = rows
+        .iter()
+        .find(|row| row.value.contains("来源不一致"))
+        .expect("the overview includes the source disagreement");
+    assert_eq!(disagreement.tone, 2);
+    assert_eq!(disagreement.source, "IPQuery、IPLogs");
+    assert!(disagreement.detail.contains("IPQuery 是、IPLogs 否"));
+
+    let report = app.claude.reports[0].as_mut().unwrap();
+    report.signals.extend((2..=7).map(|index| {
+        Signal::new(
+            Group::Quality,
+            &format!("出口 IP 质量 {index}"),
+            "机房或托管网络来源不一致",
+            "IPQuery、IPLogs",
+            Evidence::Inferred,
+            "",
+        )
+    }));
+    app.present_slint(&data, &mut models);
+    let rows = data.get_claude_results();
+    assert_eq!(rows.row_count(), 6);
+    assert!(
+        rows.iter().any(|row| row.tone == 3),
+        "the overview also includes risks when many sources disagree"
+    );
+    assert!(rows.iter().any(|row| row.value.contains("来源不一致")));
+}
+
+#[test]
 fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals() {
     use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
 

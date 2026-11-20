@@ -2918,7 +2918,6 @@ fn project(state: &State) -> Projection {
         });
     }
     let mut claude = vec![];
-    let mut claude_quality = vec![];
     let mut claude_counts = (0, 0, 0);
     if let Some(report) = &state.claude {
         for (index, signal) in report.signals.iter().enumerate() {
@@ -2938,62 +2937,67 @@ fn project(state: &State) -> Projection {
                 claude_counts.2 += 1;
                 2
             };
-            let rows = if signal.group == core::claude_check::Group::Quality {
-                &mut claude_quality
-            } else {
-                &mut claude
-            };
-            rows.push(ReportRow {
-                id: index.to_string(),
-                title: signal.display_title().into(),
-                value: if country_label.is_empty() {
-                    signal.display_value().into()
-                } else {
-                    signal.ip.clone()
+            let order = core::claude_check::summary_order(Some(signal), tone == 3);
+            claude.push((
+                order,
+                ReportRow {
+                    id: index.to_string(),
+                    title: signal.display_title().into(),
+                    value: if country_label.is_empty() {
+                        signal.display_value().into()
+                    } else {
+                        signal.ip.clone()
+                    },
+                    detail: signal.explanation(),
+                    source: signal.source.clone(),
+                    tone,
+                    country: signal.country.clone(),
+                    country_label,
+                    millis: None,
                 },
-                detail: signal.explanation(),
-                source: signal.source.clone(),
-                tone,
-                country: signal.country.clone(),
-                country_label,
-                millis: None,
-            });
+            ));
         }
     }
+    let guard_order = core::claude_check::summary_order(None, true);
     for (index, route) in state.guard_snapshot.routes.iter().enumerate() {
         claude_counts.1 += 1;
-        claude.push(ReportRow {
-            id: format!("guard-{index}"),
-            title: route.display_title().into(),
-            value: if route.outcome.is_empty() {
-                "仅记录选路".into()
-            } else {
-                route.outcome.clone()
+        claude.push((
+            guard_order,
+            ReportRow {
+                id: format!("guard-{index}"),
+                title: route.display_title().into(),
+                value: if route.outcome.is_empty() {
+                    "仅记录选路".into()
+                } else {
+                    route.outcome.clone()
+                },
+                detail: route.explanation(),
+                source: "实时拦截 · 内核连接记录".into(),
+                tone: 3,
+                country: String::new(),
+                country_label: String::new(),
+                millis: None,
             },
-            detail: route.explanation(),
-            source: "实时拦截 · 内核连接记录".into(),
-            tone: 3,
-            country: String::new(),
-            country_label: String::new(),
-            millis: None,
-        });
+        ));
     }
     if !state.guard_snapshot.error.is_empty() {
         claude_counts.1 += 1;
-        claude.push(ReportRow {
-            id: "guard-status".into(),
-            title: "实时保护状态".into(),
-            value: state.guard_snapshot.error.clone(),
-            detail: state.guard_snapshot.error.clone(),
-            source: "Android 后台保护服务".into(),
-            tone: 3,
-            country: String::new(),
-            country_label: String::new(),
-            millis: None,
-        });
+        claude.push((
+            guard_order,
+            ReportRow {
+                id: "guard-status".into(),
+                title: "实时保护状态".into(),
+                value: state.guard_snapshot.error.clone(),
+                detail: state.guard_snapshot.error.clone(),
+                source: "Android 后台保护服务".into(),
+                tone: 3,
+                country: String::new(),
+                country_label: String::new(),
+                millis: None,
+            },
+        ));
     }
-    claude_quality.append(&mut claude);
-    claude_quality.sort_by_key(|row| row.tone != 3);
+    core::claude_check::order_summary(&mut claude, |(order, _)| *order);
     Projection {
         application_policies: state.application_policies.view(s),
         overview: state.overview.present(s.running),
@@ -3034,7 +3038,7 @@ fn project(state: &State) -> Projection {
             .collect(),
         site_details,
         claude_busy: state.claude_busy,
-        claude: claude_quality,
+        claude: claude.into_iter().map(|(_, row)| row).collect(),
         claude_counts,
         progress: (report.totals.completed(), report.totals.total()),
         detecting: state.detecting,

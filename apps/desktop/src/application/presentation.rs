@@ -1071,16 +1071,15 @@ impl App {
             .collect();
         let summary = self.claude.results_filter.is_none();
         if summary {
-            entries.sort_by_key(|entry| {
-                if self.claude.kind(entry) == claude_view::ResultKind::Risk {
-                    0
-                } else if matches!(entry, claude_view::Entry::Signal(_, signal)
-                    if signal.group == clash_of_rust::claude_check::Group::Quality)
-                {
-                    1
-                } else {
-                    2
-                }
+            clash_of_rust::claude_check::order_summary(&mut entries, |entry| {
+                let signal = match entry {
+                    claude_view::Entry::Signal(_, signal) => Some(*signal),
+                    _ => None,
+                };
+                clash_of_rust::claude_check::summary_order(
+                    signal,
+                    self.claude.kind(entry) == claude_view::ResultKind::Risk,
+                )
             });
         }
         let page_size = if summary { 6 } else { 20 };

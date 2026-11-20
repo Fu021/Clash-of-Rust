@@ -5,6 +5,8 @@ use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 use std::net::IpAddr;
 
+pub(super) const SOURCE_DISAGREEMENT: &str = "来源不一致";
+
 #[derive(Clone, Copy)]
 enum Provider {
     IpQuery,
@@ -197,7 +199,7 @@ fn summarize(ip: IpAddr, lookups: &[(Provider, Result<Observation, LookupFailure
             }
         }
         match (yes, no) {
-            (true, true) => highlights.push(format!("{title}来源不一致")),
+            (true, true) => highlights.push(format!("{title}{SOURCE_DISAGREEMENT}")),
             (true, false) => highlights.push(format!("有来源标记{title}")),
             (false, false) => unknown += 1,
             (false, true) => {}

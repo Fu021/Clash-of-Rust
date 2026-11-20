@@ -143,6 +143,16 @@ mod tests {
         use clash_client_core::claude_check::{Environment, Evidence, Group, Report, Signal};
 
         let mut report = Report::new(Environment::Core, "test");
+        let mut risk = Signal::new(
+            Group::Dns,
+            "DNS 地区",
+            "地区不同",
+            "示例解析器",
+            Evidence::Measured,
+            "",
+        );
+        risk.risk = true;
+        report.signals.push(risk);
         report.signals.push(Signal::new(
             Group::Quality,
             "出口 IP 质量",
@@ -151,10 +161,11 @@ mod tests {
             Evidence::Inferred,
             "逐来源证据",
         ));
-        let exported = json!({"normal":0,"risk":0,"clues":1,"report":report});
+        let exported = json!({"normal":0,"risk":1,"clues":1,"report":report});
         let summary = render(&["claude", "check"], exported.clone());
-        assert!(summary.contains("正常项目 0 · 风险项目 0 · 线索 1"));
+        assert!(summary.contains("正常项目 0 · 风险项目 1 · 线索 1"));
         assert!(summary.contains("出口 IP 质量：机房来源不一致"));
+        assert!(summary.find("出口 IP 质量").unwrap() < summary.find("DNS 地区").unwrap());
         assert!(!summary.contains("逐来源证据"));
         let details = render(&["claude", "check", "--details"], exported.clone());
         assert!(details.contains("示例数据源") && details.contains("逐来源证据"));

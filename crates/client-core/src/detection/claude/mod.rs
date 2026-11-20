@@ -197,6 +197,33 @@ impl Signal {
     }
 }
 
+pub fn summary_order(signal: Option<&Signal>, risk: bool) -> u8 {
+    match signal {
+        Some(signal) if signal.group == Group::Quality => {
+            if signal.value.contains(quality::SOURCE_DISAGREEMENT) {
+                0
+            } else {
+                2
+            }
+        }
+        _ if risk => 1,
+        _ => 3,
+    }
+}
+
+pub fn order_summary<T>(items: &mut [T], priority: impl Fn(&T) -> u8) {
+    items.sort_by_key(|item| priority(item));
+    let disagreements = items.partition_point(|item| priority(item) == 0);
+    let risks = items[disagreements..].partition_point(|item| priority(item) == 1);
+    for index in 0..disagreements.min(risks) {
+        let from = disagreements + index;
+        let to = index * 2 + 1;
+        if from > to {
+            items[to..=from].rotate_right(1);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Route {
     pub host: String,
@@ -894,6 +921,33 @@ mod tests {
         assert_eq!(report.counts(), (1, 0, 2));
         assert!(!report.differs(&report.signals[1]));
         assert!(!report.differs(&report.signals[2]));
+    }
+    #[test]
+    fn summary_interleaves_disagreements_and_risks_without_losing_order() {
+        let mut items = [
+            (1, "risk-a"),
+            (0, "disagreement-a"),
+            (2, "quality"),
+            (0, "disagreement-b"),
+            (1, "risk-b"),
+            (0, "disagreement-c"),
+            (3, "normal"),
+            (1, "risk-c"),
+        ];
+        order_summary(&mut items, |item| item.0);
+        assert_eq!(
+            items.map(|item| item.1),
+            [
+                "disagreement-a",
+                "risk-a",
+                "disagreement-b",
+                "risk-b",
+                "disagreement-c",
+                "risk-c",
+                "quality",
+                "normal",
+            ]
+        );
     }
     #[test]
     fn routing_does_not_match_lookalike_hosts_or_keep_unrelated_connections() {

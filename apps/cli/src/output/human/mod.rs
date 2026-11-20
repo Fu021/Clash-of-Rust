@@ -4,7 +4,7 @@ mod lists;
 mod table;
 use crate::args::Args;
 use anyhow::Result;
-use clash_client_core::claude_check::{Group, Report};
+use clash_client_core::claude_check::{Group, Report, order_summary, summary_order};
 use fields::{clean, label, scalar, text};
 use serde::Deserialize;
 use serde_json::Value;
@@ -367,25 +367,22 @@ fn claude_summary(out: &mut dyn Write, command: &str, value: &Value) -> Result<(
         out,
         "Claude 检测 · 正常项目 {normal} · 风险项目 {risk} · 线索 {clues}"
     )?;
-    for signal in report
+    let mut entries: Vec<_> = report
         .signals
         .iter()
-        .filter(|signal| report.differs(signal))
-    {
+        .filter_map(|signal| {
+            let risk = report.differs(signal);
+            (risk || signal.group == Group::Quality).then_some((signal, risk))
+        })
+        .collect();
+    order_summary(&mut entries, |(signal, risk)| {
+        summary_order(Some(signal), *risk)
+    });
+    for (signal, risk) in entries {
+        let label = if risk { "风险" } else { "线索" };
         field(
             out,
-            &format!("风险 · {}", clean(signal.display_title())),
-            &clean(signal.display_value()),
-        )?;
-    }
-    for signal in report
-        .signals
-        .iter()
-        .filter(|signal| signal.group == Group::Quality)
-    {
-        field(
-            out,
-            &format!("线索 · {}", clean(signal.display_title())),
+            &format!("{label} · {}", clean(signal.display_title())),
             &clean(signal.display_value()),
         )?;
     }
