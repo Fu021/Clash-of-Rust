@@ -1,16 +1,16 @@
 # Linux 扩展兼容验证
 
-每个发行版有独立 `workflow_dispatch` 入口，指定同提交成功的 `CI` 运行编号 `run_id`。普通 push/PR 不启动这些 VM；CI 每个 Linux 架构只编译一次并生成 DEB，再从同架构 DEB 组装 RPM。发布时按 [Linux 范围](release.md)要求相应回执。本页描述测试目标，不是兼容通过或可下载声明。
+每个发行版有独立 `workflow_dispatch` 入口，指定同提交成功的 `CI` 运行编号 `run_id`。普通 push/PR 不启动这些 VM。CI 每个 Linux 架构只编译一次并生成 DEB，另从 x64 DEB 组装 Fedora 和 openSUSE 所需的 RPM。发布时按 [Linux 范围](release.md)要求相应回执。
 
 | 手动入口 | 固定来宾及架构 | 安装与桌面 |
 | --- | --- | --- |
-| Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64），24.04 Generic build 3（ARM64） | 离线 `distinst` 后从系统盘启动，分别验证 Pop GNOME 和 COSMIC。COSMIC 保留 TUN 与应用代理，系统代理请求返回明确错误并保留原有路由 |
+| Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，分别验证 Pop GNOME 和 COSMIC。COSMIC 保留 TUN 与应用代理，系统代理请求返回明确错误并保留原有路由 |
 | Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity；DEB；Zorin GNOME 与发行版原生托盘 |
-| Fedora Compatibility | Fedora Cloud Base 44-1.7、45-1.4（x64、ARM64） | 45 ARM64 使用 UEFI-UKI，其余使用 Generic；DNF 安装同源 RPM；GNOME Wayland |
-| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18（x64、ARM64）；Tumbleweed 20261118（x64）、20261117（ARM64） | 可写 Cloud VM，Zypper 安装同架构的同源 RPM；GNOME Wayland |
+| Fedora Compatibility | Fedora Cloud Base Generic 44-1.7、45-1.4（x64） | DNF 安装同源 RPM，验收 GNOME Wayland |
+| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18、Tumbleweed 20261118（x64） | 可写 Cloud VM，Zypper 安装同源 RPM，验收 GNOME Wayland |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 由同源 DEB 或固定的升级夹具还原安装目录；`pacman` 验收；GNOME Wayland |
 
-镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照。QEMU 来宾通常使用同架构的 `ubuntu-24.04` 或 `ubuntu-24.04-arm`。Fedora 45 ARM64 使用 `ubuntu-26.04-arm` 的 QEMU 10.2 和 EDK II 2025.11 系列。COSMIC live ISO 的独立启动诊断保留，直到安装版取得等价的真实登录和失败取证证据。依据 [QEMU 软件包](https://packages.ubuntu.com/resolute-updates/qemu-system-arm)和 [EDK II 软件包](https://packages.ubuntu.com/source/resolute/edk2)。
+镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照。这里的 QEMU 来宾统一用 x64 `ubuntu-24.04` runner。COSMIC live ISO 的独立启动诊断保留，直到安装版取得等价的真实登录和失败取证证据。
 
 新增或替换目标时核对发行版的维护期限和镜像来源。上游宣布停止维护后，复查本项目是否仍需该目标作为明确的兼容基线。替换受支持目标须先验证替代版本，再同步目标矩阵、公开支持范围和发布门禁。滚动版每次更换快照都记录日期与摘要，使用配套的软件源并完整复验。Ubuntu 的最低内核基线见 [Ubuntu 兼容验证](ubuntu-compatibility.md)。
 
@@ -24,11 +24,7 @@
 
 Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`。该代理可在收到 [PAM 密码请求](https://github.com/ncopa/xfce-polkit/blob/6d3282cc1734c305850d48f5bf4b4d94e88885e9/src/xfce-polkit-listener.c)前显示窗体。验收同时等待可见窗体和本次会话的密码请求，取消后重新注册代理，原始代理调试输出只用于探测。来宾先从 Fedora 官方仓库更新 `pam`、`liblastlog2` 和 `selinux-policy-targeted`。后两者分别包含 [Fedora 44 PAM 模块加载修复](https://bugzilla.redhat.com/show_bug.cgi?id=2453457)及 [polkit socket 助手域转换修复](https://github.com/fedora-selinux/selinux-policy/commit/8ad5d5112fa8b47426e0e6674616d5577f825fde)。失败报告记录已装版本和相关审核事件。
 
-Fedora 45 ARM64 的 Generic 镜像在 TCG 上切换系统根后曾两次进入紧急模式。矩阵固定到同版官方 [UEFI-UKI](https://fedoraproject.org/wiki/Changes/Unified_Kernel_Support_Phase_2) 镜像，给每个来宾单独复制可写的 AAVMF 变量存储，支持该镜像的 UEFI 启动项。只有此版本的 ARM64 TCG 来宾通过 [SMBIOS 选项](https://systemd.io/VM_INTERFACE/)增加启动取证，仍由官方镜像发现根盘。
-
-Pop!_OS ARM64 使用 AAVMF、`ttyAMA0` 和只读 VirtIO SCSI 光驱。Live 系统先等待 D-Bus、logind 和目标磁盘的 udev 初始化，避免早期串口抢在系统总线之前启动安装器。Live 系统仅启动直接调用的 `distinst`，屏蔽独立的 `distinst-v2` 服务。安装器按一次性磁盘的序列号校验写入目标。系统从安装盘重启后，用非 VGA VirtIO GPU 接入实际 COSMIC 会话和宿主画面探针。兼容回执覆盖三个目标及两种架构的 CI 候选。
-
-隔离 GNOME 探针看到新的 Wayland 套接字后才查询 Shell 的 D-Bus 对象。GNOME 50 [完成 UI 初始化后才导出该对象](https://github.com/GNOME/gnome-shell/blob/50.6/js/ui/main.js#L163-L176)。ARM64 TCG 的合成器就绪限时为 120 秒，其余目标为 60 秒。进程提前退出会立即结束验收。候选阶段出错或超时均尝试保存 QEMU 画面，嵌套桌面状态另见来宾日志。
+隔离 GNOME 探针看到新的 Wayland 套接字后才查询 Shell 的 D-Bus 对象，合成器就绪限时为 60 秒。GNOME 50 [完成 UI 初始化后才导出该对象](https://github.com/GNOME/gnome-shell/blob/50.6/js/ui/main.js#L163-L176)。进程提前退出会立即结束验收。候选阶段出错或超时均尝试保存 QEMU 画面，嵌套桌面状态另见来宾日志。
 
 Debian、openSUSE 和 Arch 的隔离 X11 探针使用 MATE 授权代理。在可见窗体和 [polkit 的隐藏输入请求](https://github.com/polkit-org/polkit/blob/127/src/polkitagent/polkitagentsession.c)都就绪后才发送操作；每次重启代理同时清空私有探测输出。报告记录验收结果，原始认证调试流只在探针运行期间使用。
 
@@ -36,7 +32,7 @@ COSMIC 登录探针等待 logind 标记本次桌面会话为活动状态后发�
 
 COSMIC 的[合成器刷新](https://github.com/pop-os/cosmic-comp/blob/master/src/wayland/protocols/toplevel_info.rs)异步发送几何事件。探针识别出目标窗口后最多等待一秒接收几何，原生 Wayland 验收仍检查 800×450 的最低尺寸。
 
-Tumbleweed 在来宾关闭预设仓库，只启用与云镜像日期一致的签名仓库，并禁用自动刷新。x64 使用 openSUSE 历史目录。ARM64 的索引 SHA256 固定到 [openSUSE openQA 快照](https://openqa.opensuse.org/api/v1/assets/repo/openSUSE-Tumbleweed-oss-aarch64-Snapshot20261117)。官方 CDN 的索引逐字节匹配时优先使用 CDN，否则使用 openQA。Zypper 验签后再次核对缓存中的索引 SHA256，匹配才继续安装。openQA 会清理非永久资产，固定源不可访问时须重新选择并校验一对匹配的镜像与仓库。Tumbleweed 的 [GDM 打包补丁](https://api.opensuse.org/public/source/openSUSE:Factory/gdm/gdm-sysconfig-settings.patch)使 `/etc/sysconfig/displaymanager` 的 `DISPLAYMANAGER_AUTOLOGIN` 优先于 `custom.conf`。在一次性 VM 仅替换该键的值，保留实际 GDM 启动 Wayland 会话与登录自启动的断言。
+Tumbleweed 在来宾关闭预设仓库，只启用 openSUSE 历史目录中与云镜像日期一致的签名仓库，并禁用自动刷新。Tumbleweed 的 [GDM 打包补丁](https://api.opensuse.org/public/source/openSUSE:Factory/gdm/gdm-sysconfig-settings.patch)使 `/etc/sysconfig/displaymanager` 的 `DISPLAYMANAGER_AUTOLOGIN` 优先于 `custom.conf`。在一次性 VM 仅替换该键的值，保留实际 GDM 启动 Wayland 会话与登录自启动的断言。
 
 真实 GNOME Wayland 登录前，探针通过短生命周期的 D-Bus 会话写入扩展设置，指定 GIO 的本地文件实现以免启动 GVfs。若 SSH 阶段超时而 `desktop-login/prepare.json` 已写入成功结果，核对该命令是否启动了仍持有 SSH 输出的进程。真实 X11 登录中，窗口枚举遇到已销毁的 X11 客户窗口时短暂重试，成功读取窗口列表后再判断是否前台显示。
 

@@ -13,7 +13,7 @@
 - `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main push CI。不发布核验也接受显式指定的 main 手动 CI，仍要求全部必需 job 和所需兼容回执通过；公开发布不接受手动 CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
 - `check_only`：默认勾选，核验同提交 CI 的候选包、SHA256 和收据，包括九组标准安装包及发布范围需要的 RPM。标准包保存在 `package-{system}-{arch}` 附件，RPM 保存在 `linux-rpm-{arch}` 附件。工作流直接复用这些产物，Release 保持原样。
 - `prerelease`：经维护者确认后显式发布预发布版，须关闭 `check_only`。可在开发/修复分支上运行，必须指定同仓库、同分支头成功的 PR CI，源码使用合法预发布版本，并提交 `docs/releases/<完整版本>.md`。不能用此开关发布无后缀的正式版本；两种模式同时勾选会在前置校验失败。
-- `linux_scope`：通用发布使用默认的 `supported`，覆盖 Ubuntu 和 Debian。专项发布填实际面向的 Linux 套件，用逗号分隔（如 `debian,linuxmint,pop,zorin`）；Android 和 Ubuntu 始终验收。纳入 `fedora` 或 `opensuse` 时，按所选套件矩阵中的架构核验并加入同源 RPM 及其 SHA256，每个 RPM 绑定同架构 DEB 的摘要。`arch` 核对原生包管理验收，不发布 Arch 二进制包或写入 AUR。新增发行版须先通过完整验收，再按实际发布范围列明；未验收目标不进入默认范围。
+- `linux_scope`：通用发布使用默认的 `supported`，覆盖 Ubuntu 和 Debian。专项发布填实际面向的 Linux 套件，用逗号分隔（如 `debian,linuxmint,pop,zorin`）。Android 和 Ubuntu 始终验收。纳入 `fedora` 或 `opensuse` 时，按所选套件的 x64 矩阵核验并加入同源 RPM 及其 SHA256，RPM 绑定 x64 DEB 的摘要。`arch` 核对原生包管理验收，不发布 Arch 二进制包或写入 AUR。新增发行版须先通过完整验收，再按实际发布范围列明。
 
 正式版还须同步[网站版本介绍](../../website/README.md)：在 `website/src/content/releases.json` 维护发布日期、中英文亮点、必要限制和九组安装包数据，保留历次正式版入口；预发布不单独更新网站内容或版本记录。以同版发布文案为依据，执行 `python website/build.py`，检查两种语言的版本页、下载及 SHA256 入口；发布后核对公开标签、日期和附件，不把未发布版本写成已发布。网页维护和验收细节只在网站说明中维护。
 

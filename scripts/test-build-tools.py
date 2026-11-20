@@ -1,6 +1,7 @@
 """Offline tests for resource validation and clean package staging."""
 import ast
 import contextlib
+from dataclasses import replace
 import hashlib
 import json
 import logging
@@ -458,7 +459,7 @@ class UbuntuVmTests(unittest.TestCase):
 
     def test_fedora_uki_retains_the_official_gpt_geometry(self):
         guest = object.__new__(linux_ci.VmGuest)
-        guest.target = linux_ci.target_for('fedora', '45', 'arm64')
+        guest.target = replace(linux_ci.target_for('fedora', '45', 'x64'), arch='arm64', writable_arm_uefi=True)
         with tempfile.TemporaryDirectory() as temporary, patch.object(linux_ci, 'run') as command:
             guest.directory = Path(temporary)
             guest.disk = guest.directory/'disk.qcow2'
@@ -467,106 +468,6 @@ class UbuntuVmTests(unittest.TestCase):
             user = json.loads((guest.directory/'user-data').read_text().split('\n', 1)[1])
             self.assertEqual(user['growpart'], {'mode': 'off'})
             self.assertIs(user['resize_rootfs'], False)
-
-    def test_prepared_guest_rejects_backing_file_and_mismatched_digest(self):
-        import linux_vm_cache
-
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            disk = directory/linux_vm_cache.IMAGE
-            disk.write_bytes(b'fixture')
-            checksum = directory/linux_vm_cache.CHECKSUM
-            checksum.write_text(hashlib.sha256(b'fixture').hexdigest()+'\n')
-            metadata = {'format': 'qcow2', 'virtual-size': 24*1024**3}
-            with patch.object(linux_vm_cache.subprocess, 'check_output') as info:
-                info.return_value = json.dumps(metadata).encode()
-                timings = {}
-                self.assertEqual(linux_vm_cache.restore(directory, timings), disk)
-                self.assertIn('prepared_disk_verify', timings)
-                disk.write_bytes(b'changed')
-                self.assertIsNone(linux_vm_cache.restore(directory, {}))
-                disk.write_bytes(b'fixture')
-                info.return_value = json.dumps(dict(metadata, **{'backing-filename': 'other'})).encode()
-                self.assertIsNone(linux_vm_cache.restore(directory, {}))
-
-    def test_prepared_guest_uses_a_fresh_seed_for_the_private_qemu_network(self):
-        guest = object.__new__(linux_ci.VmGuest)
-        guest.target = linux_ci.target_for('debian', '12', 'arm64')
-        for prepared in (True, False):
-            with self.subTest(prepared=prepared), tempfile.TemporaryDirectory() as temporary, \
-                    patch.object(linux_ci, 'run') as command:
-                guest.directory = Path(temporary)
-                guest.disk = guest.directory/'disk.qcow2'
-                guest.cloud_disk(guest.directory/'upstream.qcow2', 'ssh-ed25519 fixture', prepared=prepared)
-                network = guest.directory/'network-config'
-                create_seed, create_disk = (item.args[0] for item in command.call_args_list)
-                if prepared:
-                    self.assertIn(f'--network-config={network}', create_seed)
-                    self.assertEqual(create_disk[-1], guest.disk)
-                    nic, = json.loads(network.read_text())['ethernets'].values()
-                    self.assertEqual(nic['match'], {'macaddress': linux_ci.PREPARED_GUEST_MAC})
-                    self.assertIs(nic['dhcp4'], False)
-                    self.assertEqual(nic['addresses'], ['10.0.2.15/24'])
-                    self.assertEqual(nic['routes'], [{'to': '0.0.0.0/0', 'via': '10.0.2.2'}])
-                    self.assertEqual(nic['nameservers'], {'addresses': ['10.0.2.3']})
-                else:
-                    self.assertEqual(len(create_seed), 4)
-                    self.assertEqual(create_disk[-1], '24G')
-                    self.assertFalse(network.exists())
-
-    def test_prepared_guest_key_tracks_dependencies_instead_of_verification_code(self):
-        import linux_vm_cache
-
-        target = linux_ci.target_for('debian', '12', 'arm64')
-        pinned = {'architectures': {'arm64': {'python': {'sha256': 'a'*64}}}}
-        with patch.object(linux_ci, 'inputs', return_value=pinned), \
-                patch.object(linux_vm_cache, 'sha256', return_value='b'*64) as recipe_digest, \
-                patch.object(linux_vm_cache, 'datetime') as clock:
-            clock.now.return_value.strftime.return_value = '2026-47'
-            key = linux_vm_cache.key(target)
-            recipe_files = {item.args[0].name for item in recipe_digest.call_args_list}
-            self.assertEqual(recipe_files, {'linux_apt.py', 'linux_vm_cache.py'})
-            with patch.object(linux_desktop_login, 'login_dependencies', return_value=['different-gnome']):
-                self.assertNotEqual(linux_vm_cache.key(target), key)
-            pinned['architectures']['arm64']['python']['sha256'] = 'c'*64
-            self.assertNotEqual(linux_vm_cache.key(target), key)
-
-    def test_bookworm_uses_the_warm_guest_or_preserves_failed_cold_preparation(self):
-        import linux_vm_cache
-
-        target = linux_ci.target_for('debian', '12', 'arm64')
-        for warm in (True, False):
-            with self.subTest(warm=warm), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                cache = root/'cache'
-                base = root/'debian.qcow2'
-                prepared = root/'prepared.qcow2'
-                prepared.write_bytes(b'dependency disk')
-                archive, python = root/'source.tar.gz', root/'python.tar.gz'
-                report, timings = {}, {}
-                builder, guest = MagicMock(), MagicMock()
-                builder.process.poll.return_value = None
-                with patch.dict(os.environ, {'COR_LINUX_PREPARED_DISK': str(cache)}), \
-                        patch.object(linux_vm_cache, 'restore', return_value=prepared if warm else None), \
-                        patch.object(linux_ci, 'prepare_vm_guest') as prepare, \
-                        patch.object(linux_ci, 'VmGuest', side_effect=[guest] if warm else [builder, guest]) as boot, \
-                        patch.object(linux_vm_cache, 'export',
-                                     side_effect=subprocess.TimeoutExpired(['ssh'], 1200)) as export:
-                    self.assertIs(linux_ci.open_test_guest(
-                        base, root, target, archive, python, False, timings, report), guest)
-                if warm:
-                    boot.assert_called_once_with(prepared, root, 'prepared-image', target,
-                                                 kvm=False, timings=timings, prepared=True)
-                    prepare.assert_not_called()
-                    export.assert_not_called()
-                    self.assertEqual(report['prepared_disk']['source'], 'restored')
-                else:
-                    self.assertEqual(boot.call_args.args[:3], (base, root, 'official-image'))
-                    prepare.assert_called_once_with(builder, root)
-                    export.assert_called_once_with(builder, cache)
-                    builder.capture_desktop_failure.assert_called_once_with('prepared-dependencies')
-                    builder.close.assert_called_once_with()
-                    self.assertEqual(report['prepared_disk']['source'], 'fallback')
 
     def test_vm_accepts_cloud_init_recoverable_errors_only_after_completion(self):
         for code, status, fatal in ((2, 'done', False), (2, 'error', True),
@@ -623,7 +524,8 @@ class UbuntuVmTests(unittest.TestCase):
         ):
             with self.subTest(suite=suite, kvm=kvm), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
-                target = linux_ci.target_for(suite, release, 'arm64')
+                target = replace(linux_ci.target_for(suite, release, 'x64'), arch='arm64',
+                                 writable_arm_uefi=(suite, release) in (('fedora', '45'), ('pop', '24.04')))
 
                 def create_key(command, **kwargs):
                     if command[0] == 'ssh-keygen':
@@ -663,13 +565,6 @@ class UbuntuVmTests(unittest.TestCase):
                 else:
                     copy_firmware.assert_not_called()
                     self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
-                if (suite, release) == ('fedora', '45'):
-                    extra = command[command.index('-smbios')+1]
-                    self.assertIn('io.systemd.stub.kernel-cmdline-extra=', extra)
-                    self.assertIn('rd.udev.log_level=debug', extra)
-                    self.assertNotIn('root=', extra)
-                else:
-                    self.assertNotIn('-smbios', command)
                 if suite == 'pop':
                     install_iso.assert_called_once()
                     self.assertEqual(install_iso.call_args.kwargs['architecture'], 'aarch64')
@@ -1270,7 +1165,7 @@ class UbuntuVmTests(unittest.TestCase):
                 ('ubuntu', '20.04', 'arm64', False)):
             with self.subTest(suite=suite, release=release, arch=arch, kvm=kvm), \
                     patch.object(linux_ci, 'guest_deb_downloads'):
-                guest = MagicMock(target=linux_ci.target_for(suite, release, arch),
+                guest = MagicMock(target=replace(linux_ci.target_for(suite, release, 'x64'), arch=arch),
                                   architecture='aarch64' if arch == 'arm64' else 'x86_64', kvm=kvm)
                 linux_ci.prepare_vm_guest(guest, Path('/unused'))
                 guest.python.assert_called_once_with(
@@ -1329,7 +1224,7 @@ class UbuntuVmTests(unittest.TestCase):
         import linux_vm_monitor
 
         guest = object.__new__(linux_ci.VmGuest)
-        guest.target = linux_ci.target_for('debian', '13', 'arm64')
+        guest.target = linux_ci.target_for('debian', '13', 'x64')
         guest.display = None
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -1358,7 +1253,7 @@ class UbuntuVmTests(unittest.TestCase):
             directory = Path(temporary)
             archive = directory/'package.tar.gz'
             archive.touch()
-            guest = MagicMock(target=linux_ci.target_for('debian', '13', 'arm64'),
+            guest = MagicMock(target=replace(linux_ci.target_for('debian', '13', 'x64'), arch='arm64'),
                               environment='guest ', architecture='aarch64', kvm=False)
             timings = {}
             with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
@@ -1374,7 +1269,7 @@ class UbuntuVmTests(unittest.TestCase):
             directory = Path(temporary)
             archive = directory/'package.tar.gz'
             archive.touch()
-            guest = MagicMock(target=linux_ci.target_for('debian', '12', 'arm64'),
+            guest = MagicMock(target=replace(linux_ci.target_for('debian', '12', 'x64'), arch='arm64'),
                               environment='guest ', architecture='aarch64', kvm=False)
             guest.python.side_effect = subprocess.TimeoutExpired(['ssh'], 420)
             with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
@@ -1392,8 +1287,8 @@ class UbuntuVmTests(unittest.TestCase):
                 directory = Path(temporary)
                 archive = directory/'package.tar.gz'
                 archive.touch()
-                guest = MagicMock(target=linux_ci.target_for('debian', '13', 'arm64'),
-                                  environment='guest ', architecture='aarch64', kvm=False)
+                guest = MagicMock(target=linux_ci.target_for('debian', '13', 'x64'),
+                                  environment='guest ', architecture='x86_64', kvm=True)
                 guest.remote.side_effect = [None, failure]
                 timings = {}
                 with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
@@ -1431,9 +1326,9 @@ class UbuntuVmTests(unittest.TestCase):
             base = root/'focal.img'
             python = root/'python.tar.gz'
             public_image = {'url': 'https://cloud-images.ubuntu.com/focal/image.img', 'sha256': 'a'*64}
-            linux = {'architectures': {'arm64': {'cloud': public_image, 'python': {'sha256': 'b'*64}}}}
+            linux = {'architectures': {'x64': {'cloud': public_image, 'python': {'sha256': 'b'*64}}}}
             frozen = {'status': 'frozen'}
-            snapshot = {'ubuntu_vm_environments': {'arm64': frozen, 'x64': {'status': 'disabled'}}}
+            snapshot = {'ubuntu_vm_environments': {'x64': frozen, 'arm64': {'status': 'disabled'}}}
             original = MagicMock(boot_seconds=2)
             retry = MagicMock(kernel='5.4.0-216-generic', kvm=False, boot_seconds=1, stage_seconds=1)
             with patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
@@ -1441,7 +1336,7 @@ class UbuntuVmTests(unittest.TestCase):
                     patch.object(ubuntu_vm_environment, 'verify_frozen', return_value=True), \
                     patch.object(linux_ci, 'REPORT', root/'report'), \
                     patch.object(linux_ci, 'inputs', return_value=linux), \
-                    patch.object(linux_ci, 'host_arch', return_value='arm64'), \
+                    patch.object(linux_ci, 'host_arch', return_value='x64'), \
                     patch.object(linux_ci, 'kvm_available', return_value=False) as accelerator, \
                     patch.object(linux_ci, 'tools_directory', return_value=root), \
                     patch.object(linux_ci, 'vm_source_archive', return_value=archive), \
@@ -1451,7 +1346,7 @@ class UbuntuVmTests(unittest.TestCase):
                                  side_effect=[subprocess.CalledProcessError(1, 'apt'), None]) as prepare, \
                     patch.object(linux_ci, 'fetch_vm_package', return_value=root/'package.tar.gz') as package, \
                     patch.object(linux_ci, 'verify_vm_package') as application:
-                linux_ci.vm_test(123, linux_ci.target_for('ubuntu', '20.04', 'arm64'))
+                linux_ci.vm_test(123, linux_ci.target_for('ubuntu', '20.04', 'x64'))
             self.assertEqual(download.call_args_list[0], call(public_image, base))
             self.assertEqual(download.call_count, 2)
             self.assertEqual([attempt.args[0] for attempt in boot.call_args_list], [base, base])
@@ -1478,8 +1373,8 @@ class UbuntuVmTests(unittest.TestCase):
             root = Path(temporary)
             archive = root/'source.tar.gz'
             archive.touch()
-            target = linux_ci.target_for('fedora', '45', 'arm64')
-            linux = {'architectures': {'arm64': {'python': {}}}}
+            target = linux_ci.target_for('fedora', '45', 'x64')
+            linux = {'architectures': {'x64': {'python': {}}}}
             with patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'ImageVersion': '20261119.1'}), \
                     patch.object(linux_ci, 'REPORT', root/'report'), \
                     patch.object(linux_ci, 'inputs', return_value=linux), \
@@ -1494,51 +1389,12 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertFalse(boot.call_args.kwargs['kvm'])
             report = json.loads((root/'report/linux-vm.json').read_text())
             self.assertEqual(report['failed_stage'], 'guest_boot')
-            self.assertEqual(report['runner'], 'ubuntu-26.04-arm')
+            self.assertEqual(report['runner'], 'ubuntu-24.04')
             self.assertEqual(report['runner_image'], '20261119.1')
             self.assertEqual(report['acceleration'], 'tcg')
             self.assertGreaterEqual(report['timings_seconds']['failed_guest_boot'], 0)
             self.assertFalse(report['success'])
             self.assertNotIn('kernel', report)
-
-    @unittest.skipUnless(hasattr(linux_ci.signal, 'SIGALRM'), 'POSIX verification deadline')
-    def test_bookworm_vm_deadline_preserves_failure_evidence_and_cleans_up(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root/'source.tar.gz'
-            archive.touch()
-            target = linux_ci.target_for('debian', '12', 'arm64')
-            inputs = {'architectures': {'arm64': {'python': {}}}}
-            guest = MagicMock(boot_seconds=1, stage_seconds=1, kernel='6.1.0-56-arm64')
-            signal = linux_ci.signal
-            original = signal.getsignal(signal.SIGALRM)
-
-            def exceed_deadline(*args, **kwargs):
-                signal.getsignal(signal.SIGALRM)(signal.SIGALRM, None)
-
-            with patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
-                    patch.object(signal, 'alarm') as timer, \
-                    patch.multiple(linux_ci, REPORT=root/'report',
-                                   inputs=MagicMock(return_value=inputs),
-                                   download=MagicMock(),
-                                   tools_directory=MagicMock(return_value=root),
-                                   vm_source_archive=MagicMock(return_value=archive),
-                                   fetch_vm_package=MagicMock(),
-                                   kvm_available=MagicMock(return_value=False),
-                                   open_test_guest=MagicMock(return_value=guest),
-                                   prepare_vm_guest=MagicMock(),
-                                   verify_vm_package=MagicMock(side_effect=exceed_deadline)):
-                with self.assertRaisesRegex(TimeoutError, 'exceeded 65 minutes'):
-                    linux_ci.vm_test(123, target)
-            self.assertEqual(signal.getsignal(signal.SIGALRM), original)
-            self.assertEqual(timer.call_args_list, [call(3900), call(0), call(0)])
-            guest.capture_desktop_failure.assert_called_once_with('verification-deadline')
-            guest.preserve.assert_called_once_with()
-            guest.close.assert_called_once_with()
-            report = json.loads((root/'report/linux-vm.json').read_text())
-            self.assertFalse(report['success'])
-            self.assertEqual(report['failed_stage'], 'installed_candidate')
-            self.assertIn('exceeded 65 minutes', report['error'])
 
     def test_iso_vm_reports_install_and_disk_boot_separately(self):
         for failure in (None, 'iso_install', 'guest_boot'):
@@ -7013,11 +6869,12 @@ runpy.run_path(str(script), run_name='__main__')
         old_maven = entry(6, 'android-maven-v1-ubuntu-24.04-x64-'+'a'*64, 20)
         new_maven = entry(7, 'android-maven-v1-ubuntu-24.04-x64-'+'b'*64, 20)
         self.assertEqual(storage.eviction_plan([old_maven, new_maven, gradle], 100), [old_maven, gradle])
+        vm_tools = entry(8, 'linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261110.1.0', 20)
+        prepared_vm = entry(9, 'linux-prepared-v1-debian-12-arm64-2026-46-'+'a'*64, 20)
+        self.assertEqual(storage.eviction_plan([vm_tools, prepared_vm], 100), [prepared_vm, vm_tools])
         for older,newer in (
                 ('linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261110.1.0',
                  'linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261117.1.0'),
-                ('linux-prepared-v1-debian-12-arm64-2026-46-'+'a'*64,
-                 'linux-prepared-v1-debian-12-arm64-2026-47-'+'b'*64),
                 ('linux-python-ubuntu20-v1-x64-'+'a'*64, 'linux-python-ubuntu20-v1-x64-'+'b'*64),
                 ('linux-cloud-ubuntu20-v1-arm64-'+'a'*64, 'linux-cloud-ubuntu20-v1-arm64-'+'b'*64),
                 ('linux-apt-ubuntu20-v1-x64-100-1', 'linux-apt-ubuntu20-v1-x64-101-1'),
@@ -7066,7 +6923,7 @@ runpy.run_path(str(script), run_name='__main__')
             'memory-main-v1-dev-benchmark-Linux-x64-aaaaaaaa-bbbbbbbb',
             'linux-host-apt-v1-ubuntu-24.04-aaaaaaaaaaaaaaaa-20261117.1.0',
             'linux-host-apt-v1-ubuntu-24.04-bbbbbbbbbbbbbbbb-20261117.1.0',
-            'linux-host-apt-v1-ubuntu-24.04-arm-aaaaaaaaaaaaaaaa-20261117.1.0',
+            'linux-build-linux-image-ubuntu20-v1-arm64-'+'b'*64,
             'future-tool-one',
             'future-tool-two',
         ]
@@ -7855,37 +7712,38 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.release_suites(scope)
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
-        expected = {'pop': 3, 'zorin': 2, 'fedora': 4, 'opensuse': 6, 'arch': 1}
+        expected = {'debian': 2, 'linuxmint': 2, 'pop': 2, 'zorin': 2, 'fedora': 2, 'opensuse': 3, 'arch': 1}
         for suite, count in expected.items():
             with self.subTest(suite=suite):
                 targets = linux_ci.TARGETS[suite]
                 self.assertEqual(len(targets), count)
                 self.assertTrue(all(target.full_desktop and not target.hosted for target in targets))
-                self.assertTrue(all(re.fullmatch('[0-9a-f]{64}', target.image_digest) for target in targets))
+                for target in targets:
+                    length = 128 if target.digest_algorithm == 'sha512' else 64
+                    self.assertRegex(target.image_digest, rf'\A[0-9a-f]{{{length}}}\Z')
+                    self.assertEqual(target.arch, 'x64')
                 self.assertEqual('linux-rpm-x64' in compatibility.input_names(suite),
                                  suite in ('fedora', 'opensuse'))
-                self.assertEqual('linux-rpm-arm64' in compatibility.input_names(suite),
-                                 suite in ('fedora', 'opensuse'))
+                self.assertFalse(any(name.endswith('-arm64') for name in compatibility.input_names(suite)))
                 self.assertIn(suite, compatibility.release_suites(suite))
                 client, source, receipt = self.client(suite)
                 self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
-                key = 'iso_targets' if suite in ('pop', 'zorin') else 'cloud_targets'
-                client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
-                with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
-                    compatibility.verified_suite(client, source, suite)
+                if suite != 'debian':
+                    key = 'iso_targets' if targets[0].image_format == 'iso' else 'cloud_targets'
+                    client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
+                    with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
+                        compatibility.verified_suite(client, source, suite)
         self.assertEqual({(target.release, target.arch) for target in linux_ci.TARGETS['pop']},
-                         {('22.04', 'x64'), ('24.04', 'x64'), ('24.04', 'arm64')})
-        self.assertIn('package-linux-arm64', compatibility.input_names('pop'))
-        self.assertIn('linux-tun-test-arm64', compatibility.input_names('pop'))
+                         {('22.04', 'x64'), ('24.04', 'x64')})
         fedora_runners = {(target.release, target.arch): target.matrix_entry()['os']
                           for target in linux_ci.TARGETS['fedora']}
         self.assertEqual(fedora_runners, {
             ('44', 'x64'): 'ubuntu-24.04', ('45', 'x64'): 'ubuntu-24.04',
-            ('44', 'arm64'): 'ubuntu-24.04-arm', ('45', 'arm64'): 'ubuntu-26.04-arm',
         })
 
     def test_tumbleweed_only_enables_the_signed_repository_for_the_guest_snapshot(self):
         import linux_native_guest
+        from linux_compatibility_targets import tumbleweed_target
 
         metadata = b'signed fixture metadata'
         digest = hashlib.sha256(metadata).hexdigest()
@@ -7899,11 +7757,12 @@ class CompatibilityTests(unittest.TestCase):
             ('aarch64', 'arm64', '20261117', metadata, 'wrong digest', content),
         ):
             with self.subTest(arch=arch, source=source, cached_digest=cached_digest):
-                target = linux_ci.target_for('opensuse', snapshot, arch)
+                target = tumbleweed_target(snapshot, arch, digest)
                 self.assertTrue(target.image_url.endswith(f'.{machine}-1.0.0-Cloud-Snapshot{snapshot}.qcow2'))
                 with patch.object(linux_native_guest, 'distribution', return_value='opensuse-tumbleweed'), \
                         patch.object(platform, 'machine', return_value=machine), \
                         patch.object(platform, 'freedesktop_os_release', return_value={'VERSION_ID': snapshot}), \
+                        patch.dict(linux_native_guest.TARGETS, {'opensuse': (target,)}), \
                         patch.dict(linux_native_guest.TUMBLEWEED_ARM64_REPOMD, {snapshot: digest}), \
                         patch.object(linux_native_guest, 'urlopen') as fetch, \
                         patch.object(Path, 'is_file', return_value=True), \
@@ -7934,6 +7793,7 @@ class CompatibilityTests(unittest.TestCase):
         step = workflow.split('- name: Assemble the native RPM compatibility candidate\n', 1)[1]
         options, script = step.split('\n        run: |\n', 1)
         self.assertIn('\n        shell: python', options)
+        self.assertIn("matrix.system == 'linux' && matrix.arch == 'x64'", options)
         script = script.split('\n      - ', 1)[0]
         ast.parse('\n'.join(line.removeprefix(' '*10) for line in script.splitlines()))
         self.assertIn('rpm_candidate()', script)
@@ -8047,11 +7907,8 @@ success="$1"
                     f'sh /mnt/cor-test/install.sh {pop_live_install.DISK_SERIAL} {media}', timeout=2100)
 
     def test_arm_vm_targets_install_the_virtio_net_rom(self):
-        targets = (*linux_ci.TARGETS['ubuntu'], *linux_ci.TARGETS['debian'])
-        for target in targets:
-            if target.arch == 'arm64' and not target.hosted:
-                with self.subTest(target=target):
-                    self.assertIn('ipxe-qemu', target.matrix_entry()['qemu'].split())
+        target = replace(linux_ci.target_for('ubuntu', '20.04', 'x64'), arch='arm64')
+        self.assertIn('ipxe-qemu', target.matrix_entry()['qemu'].split())
 
     def test_versioned_native_packages_and_receipt_never_accept_other_bytes(self):
         from linux_native_package import native_version, verify_rpm
@@ -8241,9 +8098,9 @@ success="$1"
         workflows = build.ROOT / '.github/workflows'
         shared = (workflows / 'linux-compatibility.yml').read_text()
         for suite, pairs in (
-                ('ubuntu', {(version, arch) for version in ('20.04', '22.04', '24.04', '26.04')
-                            for arch in ('x64', 'arm64')}),
-                ('debian', {(version, arch) for version in ('12', '13') for arch in ('x64', 'arm64')})):
+                ('ubuntu', {('20.04', 'x64')} | {(version, arch) for version in ('22.04', '24.04', '26.04')
+                                                for arch in ('x64', 'arm64')}),
+                ('debian', {('12', 'x64'), ('13', 'x64')})):
             wrapper = (workflows / compatibility.WORKFLOWS[suite]).read_text()
             matrix = compatibility.suite_matrix(suite)['include']
             self.assertEqual({(entry['release'], entry['arch']) for entry in matrix}, pairs)
@@ -8262,8 +8119,7 @@ success="$1"
             self.assertIn(f'suite: {suite}\n', wrapper)
             self.assertIn('name: ' + compatibility.REPORT_JOBS[suite].removeprefix('Linux / '), shared)
         self.assertEqual(compatibility.input_names('debian'),
-                         ('package-linux-x64', 'package-linux-arm64',
-                          'linux-tun-test-x64', 'linux-tun-test-arm64', 'dependency-snapshot'))
+                         ('package-linux-x64', 'linux-tun-test-x64', 'dependency-snapshot'))
         self.assertEqual(len(release.CI_JOBS), 13)
         self.assertIn('Prepare Android Maven dependencies', release.CI_JOBS)
 
@@ -8311,8 +8167,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn(name, release.filenames(self.version))
         self.assertEqual(release.filenames(self.version, rpm_arches=('arm64',)) - release.filenames(self.version),
                          {name, name+'.sha256'})
-        self.assertEqual(compatibility.rpm_architectures(('fedora',)), ('x64', 'arm64'))
-        self.assertEqual(compatibility.rpm_architectures(('fedora', 'opensuse')), ('x64', 'arm64'))
+        self.assertEqual(compatibility.rpm_architectures(('fedora',)), ('x64',))
+        self.assertEqual(compatibility.rpm_architectures(('fedora', 'opensuse')), ('x64',))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             deb = directory/f'Clash-of-Rust-{self.version}-linux-arm64.deb'

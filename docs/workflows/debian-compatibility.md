@@ -6,22 +6,14 @@
 
 | Debian 版本 | 架构 | 官方 generic 云镜像构建 |
 | --- | --- | --- |
-| 12 Bookworm | x64、ARM64 | `20261117-2665` |
-| 13 Trixie | x64、ARM64 | `20261116-2664` |
+| 12 Bookworm | x64 | `20261117-2665` |
+| 13 Trixie | x64 | `20261116-2664` |
 
-下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证实际安装后的系统代理、TUN、DNS 和关闭恢复。ARM64 在 `ubuntu-24.04-arm` runner 上运行，来宾使用 Virtio GPU；无 KVM 时，桌面来宾按宿主可用核数分配至多四个 TCG vCPU。报告记录 KVM 或 TCG 和阶段耗时。TCG 下依赖安装和完整应用测试使用更长的有界等待。Debian 12 ARM64 TCG 可复用[预配置依赖盘](cache-coverage.md#下载与产物)，报告记录其大小、来源、恢复校验和构建或回退用时。
-
-启动前通过 `/dev/kvm` [创建并关闭空虚拟机](https://docs.kernel.org/virt/kvm/api.html#kvm-create-vm)。探测成功时通过 KVM 启动同架构来宾，ARM64 来宾采用宿主支持的 [GIC](https://www.qemu.org/docs/master/system/arm/virt.html)。探测失败时记录原因并使用 TCG。本项目的 GitHub 托管 x64 作业已用过 KVM，`ubuntu-24.04-arm` 的已核验运行使用 TCG。[GitHub Actions 团队](https://github.com/orgs/community/discussions/160591)计划随 Cobalt 200 迁移开放 ARM64 嵌套虚拟化，迁移期间取决于实际分配的宿主。支持 KVM 的 ARM64 裸机或提供嵌套虚拟化的 ARM64 自托管 runner 也可提供该设备。
-
-Debian ARM64 TCG 来宾需要重建 initramfs 时沿用镜像的压缩算法并使用[一级压缩](https://manpages.debian.org/bookworm/initramfs-tools-core/initramfs.conf.5.en.html)。Debian 12 的桌面依赖安装先模拟 APT 事务。当前内核的 initrd 存在且非空、计划新增 FUSE、无软件包升级或移除，也无内核或引导相关软件包变更时，仅在该次安装内[暂停重建现有 initramfs](https://manpages.debian.org/bookworm/initramfs-tools/update-initramfs.conf.5.en.html)。安装完成或报错后恢复原配置，两次实际重启与 GNOME 登录仍照常执行。一份未优化的作业日志中，桌面依赖下载为 3 秒，重建 initramfs 为 17 分 30 秒。[Debian Compatibility 44654293182](https://github.com/Fu021/Clash-of-Rust/actions/runs/44654293182)
-
-Debian 12 ARM64 TCG 已安装候选检查限 42 分钟，快速 APT 安装限 10 分钟，使用原生触发器时 APT 限 22 分钟，升级卸载限 7 分钟。每次重启的 SSH 就绪限 4 分钟。来宾验收达到 65 分钟或相关阶段提前失败时，尝试保留画面并回收来宾。GitHub 的验收步骤限 70 分钟，作业限 80 分钟，给报告上传和缓存保存留出时间。
-
-ARM64 在同一隔离网络命名空间执行完整 CLI 用户矩阵与 TUN 子测试。阶段时限和超时清理沿用 [Linux 共用验证](linux-expansion.md)。
+下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 在 `ubuntu-24.04` runner 上检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证实际安装后的系统代理、TUN、DNS 和关闭恢复。启动前通过 `/dev/kvm` [创建并关闭空虚拟机](https://docs.kernel.org/virt/kvm/api.html#kvm-create-vm)，探测失败时记录原因并使用 TCG。报告记录实际加速模式和阶段耗时。
 
 隔离测试在模拟网络切换后和退出 TUN 后重启后台，让各组订阅直连回退检查从当前路由建立监控基线。保护状态下的后台退出只发送一次 `SIGTERM`，35 秒内未退出即记录进程状态和信号掩码。
 
-两种架构的首次登录和后台登录各有 300 秒的状态等待预算。GDM 登录最多等待 180 秒，确认本次会话后，首登的候选启动最多等待 110 秒，后台登录最多等待 135 秒，后续托盘和窗口操作各限 45 秒。每次等待以该阶段剩余预算为上限。确认候选进程并读取到托盘初始化明确失败时立即结束验收。登录探针及来宾取证合计最多运行 420 秒，重启单独计时。
+首次登录和后台登录各有 300 秒的状态等待预算。GDM 登录最多等待 180 秒，确认本次会话后，首登的候选启动最多等待 110 秒，后台登录最多等待 135 秒，后续托盘和窗口操作各限 45 秒。每次等待以该阶段剩余预算为上限。确认候选进程并读取到托盘初始化明确失败时立即结束验收。登录探针及来宾取证合计最多运行 420 秒，重启单独计时。
 
 桌面阶段异常时，关闭来宾前通过 [QEMU 私有监控套接字](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-screendump)尝试截图。实际 GNOME 登录后失败时也尝试使用 `gnome-screenshot`，以满足 [GNOME Shell 的截图调用方限制](https://github.com/GNOME/gnome-shell/blob/43.9/js/ui/screenshot.js)。报告尽可能保留启动轨迹、托盘宿主状态、登录日志和进程快照，截图失败时记录原因。
 
@@ -29,6 +21,6 @@ ARM64 在同一隔离网络命名空间执行完整 CLI 用户矩阵与 TUN 子�
 
 终端更新回归验证授权拒绝、失败恢复及用户服务接续。另从同架构且固定 SHA256 的 `v0.7.2` 官方 DEB 升级到本轮候选包，核对设置与订阅身份，再通过 APT 卸载并核对保留的用户数据。首轮覆盖范围见[新平台完整验收](install-validation.md#新平台完整验收)。
 
-四个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、完整验收范围和运行尝试。每个 VM 的 `linux-package-report-debian-<版本>-<架构>` 与最终回执保留三天。真实 VM 结果用于评估公开支持与发布门禁。
+两个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、完整验收范围和运行尝试。每个 VM 的 `linux-package-report-debian-<版本>-<架构>` 与最终回执保留三天。真实 VM 结果用于评估公开支持与发布门禁。
 
 提交 `a7167e2c` 使用 CI `44652374432` 取得 Debian 12/13 的 x64、ARM64 四目标回执，并经发布门禁复核。各目标均通过普通用户的桌面和终端探针、真实 GNOME X11 登录与 AppIndicator 托盘，以及从 `v0.7.2` 升级和卸载后的数据保留。两版 ARM64 使用 TCG，作业分别耗时 66 分 55 秒和 47 分 36 秒。[Debian Compatibility 44654293182](https://github.com/Fu021/Clash-of-Rust/actions/runs/44654293182)

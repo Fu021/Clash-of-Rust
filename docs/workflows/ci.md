@@ -84,7 +84,7 @@ Linux CI 从固定 digest 的 Ubuntu 容器编译。宿主先下载并校验内�
 
 DEB 安装验收前，编译容器与 Linux 兼容 runner 共用签名 APT 索引刷新。刷新失败后分别等待 5 秒和 15 秒再试，每次刷新单独限时，三次仍失败则终止验收。
 
-共享输入阶段解析 Ubuntu 20.04 x64 和 ARM64 的官方云镜像、独立 Python 及签名 APT 索引。镜像及工具归档按 CI 快照的 SHA256 校验；[Ubuntu Compatibility](ubuntu-compatibility.md) 启动本轮 VM 并使用冻结 APT 输入准备测试工具，必要时记录回退并使用当前签名索引。
+共享输入阶段为 Ubuntu 20.04 x64 来宾准备官方云镜像、独立 Python 和冻结的签名 APT 索引。镜像及工具归档按 CI 快照的 SHA256 校验。[Ubuntu Compatibility](ubuntu-compatibility.md) 启动该来宾，用冻结 APT 输入准备测试工具，必要时记录回退并使用当前签名索引。
 
 ### 测试覆盖
 

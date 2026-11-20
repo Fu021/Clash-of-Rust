@@ -2,11 +2,11 @@
 
 [工作流索引](../workflows.md) · [CI](ci.md) · [安装验收](install-validation.md) · [发布门禁](release.md#兼容性发布门禁)
 
-`Ubuntu Compatibility` 在四个 LTS 版本的运行内核上验收同提交 DEB。Ubuntu 22.04、24.04 和 26.04 直接使用 GitHub 托管 runner。Ubuntu 20.04 在 Ubuntu 24.04 的同架构 runner 上启动 Canonical 云镜像。
+`Ubuntu Compatibility` 在四个 LTS 版本的运行内核上验收同提交 DEB。Ubuntu 22.04、24.04 和 26.04 直接使用 GitHub 托管 runner。Ubuntu 20.04 在 Ubuntu 24.04 的 x64 runner 上启动 Canonical 云镜像。
 
 | Ubuntu 版本 | x64 | ARM64 |
 | --- | --- | --- |
-| 20.04 LTS | focal VM，5.4 GA 内核 | focal VM，5.4 GA 内核 |
+| 20.04 LTS | focal VM，5.4 GA 内核 | — |
 | 22.04 LTS | `ubuntu-22.04` | `ubuntu-22.04-arm` |
 | 24.04 LTS | `ubuntu-24.04` | `ubuntu-24.04-arm` |
 | 26.04 LTS | `ubuntu-26.04` | `ubuntu-26.04-arm` |
@@ -29,7 +29,7 @@ Ubuntu 20.04 的 GitHub 托管镜像已于 2025 年 4 月 15 日退役。20.04 �
 - VM 只接收 Python 验证脚本、必要元数据、CLI 参数契约、来源提交标记及本架构冻结 APT 索引；不再传入整个仓库、Git 历史或其他架构索引。来源标记仅在隔离 Actions guest 使用，宿主仍读取实际 Git 提交。
 - 20.04 优先用 CI 冻结的 Ubuntu 官方签名 APT 索引和软件包摘要准备工具。冻结计划不可用时，记录回退并使用当前签名索引。较新版本直接使用该版本的当前签名索引。
 - 在托管 runner 上准备兼容测试依赖时，22.04 和 24.04 ARM64 仍使用 Ubuntu Ports。26.04 ARM64 使用与 x64 相同的主仓库及安全更新镜像。镜像差异见 [GitHub runner APT 配置](https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-apt.sh)。
-- 安装测试等待 SSH 和 cloud-init 就绪，核对实际发行版、版本、架构、内核及候选包身份，再执行网络检查。ARM64 runner 没有 KVM 时记录为 TCG。
+- VM 安装测试等待 SSH 和 cloud-init 就绪，核对实际发行版、版本、架构、内核及候选包身份，再执行网络检查。
 
 云镜像、系统盘及写入层仅保存在当次 runner；CI 附件携带冻结 APT 输入，兼容验证附件携带诊断报告和回执。
 

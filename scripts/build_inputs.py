@@ -324,9 +324,14 @@ def resolve(directory):
              'go_modules': go_modules,
              'policy': 'Repository lockfiles and approved build versions; latest Geo is verified once and reused for this run.'}
     if 'linux' in upstream:
+        from linux_compatibility_targets import TARGETS
         from ubuntu_vm_environment import ARCHITECTURES, freeze
-        value['ubuntu_vm_environments'] = {arch: freeze(directory, upstream['linux'], arch)
-                                            for arch in ARCHITECTURES}
+        vm_architectures = {target.arch for target in TARGETS['ubuntu'] if not target.hosted}
+        value['ubuntu_vm_environments'] = {
+            arch: (freeze(directory, upstream['linux'], arch) if arch in vm_architectures
+                   else {'schema': 1, 'status': 'disabled', 'reason': 'not_requested'})
+            for arch in ARCHITECTURES
+        }
     write_json(directory / 'inputs.json', value)
     report(value)
     if output := os.environ.get('GITHUB_OUTPUT'):

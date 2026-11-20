@@ -115,7 +115,6 @@ def tumbleweed_target(snapshot, arch, digest):
 TARGETS = {
     'ubuntu': (
         Target('ubuntu', UBUNTU_BASELINE, 'x64', kernel_series='5.4'),
-        Target('ubuntu', UBUNTU_BASELINE, 'arm64', kernel_series='5.4'),
         *(Target('ubuntu', release, arch, hosted=True)
           for release in ('22.04', '24.04', '26.04') for arch in ('x64', 'arm64')),
     ),
@@ -126,12 +125,6 @@ TARGETS = {
         debian_target('13', 'trixie', '20261116-2664', 'x64',
                       'e53a93ef33f828ceed0e7278c2cc2753bdc7d5098fbfae15bd64b6d878db350ea37'
                       '44247763a1c8ecb6b4019a0f623c38caf6038ad6f9c357fb4e01493ddf1a3'),
-        debian_target('12', 'bookworm', '20261117-2665', 'arm64',
-                      '1e8651e41b5cd07cd0f9ee63aa72dffe28afe8f2f197f0b340576f43df8f10c4bf'
-                      '8352d3f8630e9a99b225802f2c2fdb25ac17e7182310a4a181fa4a7880c889'),
-        debian_target('13', 'trixie', '20261116-2664', 'arm64',
-                      '3d4655799e64ca93f51832da31101188f28e01cb14fec2164ac9a7a5f70f303b80f'
-                      '72e9632498dd9cb0099ad04b12c186bffe4f0cd50c5e739faa3ee85007eb0'),
     ),
     'linuxmint': (
         mint_target('21.3', '5aa24abbc616807ab754a6a3b586f24460b0c213b6cacb0bf8b9a80b65013ecc'),
@@ -140,7 +133,6 @@ TARGETS = {
     'pop': (
         pop_target('22.04', 58, '4e1c5e391062c79dc611ce383c2a709fecac36798ebd81444a734fd41252608e'),
         pop_target('24.04', 20, 'a0ef3842ab710db4f4407cf3499560b59dddbbcd59bee17beab7b0e99dc22b4c'),
-        pop_target('24.04', 3, '7b4cce0e92dc5c903464e7e7c33760c4417f1400165e9ecfcd064fbceb68ef22', arch='arm64'),
     ),
     'zorin': (
         zorin_target('17.3', 'Zorin-OS-17.3-Core-64-bit-r2.iso',
@@ -151,17 +143,11 @@ TARGETS = {
     'fedora': (
         fedora_target('44-1.7', 'x64', '28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f'),
         fedora_target('45-1.4', 'x64', '50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0'),
-        fedora_target('44-1.7', 'arm64', '55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b'),
-        fedora_target('45-1.4', 'arm64', 'f51f556104434e66df591d647d3e54254cc722378c5ac31c4b1c37b15075e4f1',
-                      variant='UEFI-UKI', runner_release='26.04'),
     ),
     'opensuse': (
         leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
         leap_target('16.1', '3.18', 'x64', '2cbf0121ccb8eef5452b43e14685715452ffa049e6a618bb165382aa1f2aab3b'),
         tumbleweed_target('20261118', 'x64', 'c1cb4f8eb3dd0b86d496ba78f10dc35fdfe062aab642b32ea0421b447e6ee1fb'),
-        leap_target('16.0', '18.95', 'arm64', '9158494113be517a940a32394200ccd87ab1abed427317a4e93e4aa9a070b6eb'),
-        leap_target('16.1', '3.18', 'arm64', 'd810f634121df1fa5dcee5e958e24a107f5fc2ef6efa0d134fe1482946ddb93b'),
-        tumbleweed_target('20261117', 'arm64', '47675dba1903fb4d1c668f12dc0e80ca6f43ee0ee1918555a1449c3b8b108a53'),
     ),
     'arch': (
         Target('arch', '20261115.625457', 'x64',

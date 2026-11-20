@@ -14,7 +14,6 @@ from pathlib import Path
 import re
 import shlex
 import shutil
-import signal
 import socket
 import ssl
 import subprocess
@@ -36,32 +35,6 @@ REPORT = ROOT/'target/linux-report'
 KVM_GET_API_VERSION = 0xAE00
 KVM_CREATE_VM = 0xAE01
 KVM_API_VERSION = 12
-BOOKWORM_ARM64_VM_BUDGET = 65 * 60
-PREPARED_GUEST_MAC = '52:54:00:12:34:56'
-
-
-class VmVerificationDeadline(BaseException):
-    """End verification and keep evidence even when a phase is still within its own timeout."""
-
-
-@contextlib.contextmanager
-def vm_verification_deadline(target):
-    if (target.family, target.release, target.arch) != ('debian', '12', 'arm64'):
-        yield lambda: None
-        return
-
-    def expire(signum, frame):
-        raise VmVerificationDeadline('Debian 12 ARM64 verification exceeded 65 minutes')
-
-    previous = signal.signal(signal.SIGALRM, expire)
-    signal.alarm(BOOKWORM_ARM64_VM_BUDGET)
-    try:
-        yield lambda: signal.alarm(0)
-    except VmVerificationDeadline as error:
-        raise TimeoutError(str(error)) from error
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, previous)
 
 
 def text(url, headers=None):
@@ -421,7 +394,7 @@ def kvm_available():
 
 
 class VmGuest:
-    def __init__(self, base, directory, label, target, *, kvm, timings, prepared=False):
+    def __init__(self, base, directory, label, target, *, kvm, timings):
         self.target = target
         self.directory = Path(directory) / label
         self.directory.mkdir()
@@ -471,11 +444,6 @@ class VmGuest:
                 command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
             if target.full_desktop:
                 command.extend(['-device', 'virtio-gpu-pci'])
-            if (target.family, target.release, kvm) == ('fedora', '45', False):
-                command.extend([
-                    '-smbios', 'type=11,value=io.systemd.stub.kernel-cmdline-extra='
-                    'systemd.log_level=debug systemd.log_target=console rd.udev.log_level=debug',
-                ])
         elif target.package_format != 'deb':
             command.extend(['-vga', 'virtio'])
         cosmic = (target.family, target.release) == ('pop', '24.04')
@@ -525,12 +493,10 @@ class VmGuest:
                 timings['iso_install'] = round(boot_started - install_started, 3)
                 ready_command = INSTALLED_READY
             else:
-                seed = self.cloud_disk(base, public, prepared=prepared)
+                seed = self.cloud_disk(base, public)
                 command.extend(['-drive', f'file={seed},if=virtio,format=raw,readonly=on'])
-            guest_address = '10.0.2.15' if prepared else ''
-            nic = 'virtio-net-pci,netdev=net0' + (f',mac={PREPARED_GUEST_MAC}' if prepared else '')
-            command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-{guest_address}:22',
-                            '-device', nic])
+            command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
+                            '-device', 'virtio-net-pci,netdev=net0'])
             environment = None
             if self.monitor_path:
                 command.extend(['-qmp', f'unix:{self.monitor_path},server=on,wait=off'])
@@ -551,9 +517,9 @@ class VmGuest:
             try:
                 boot_timeout = 900 if target.image_format == 'iso' else 600
                 wait_vm_ssh(self.process, self.ssh, ready_command=ready_command, console=self.console_path,
-                            timeout=240 if prepared else boot_timeout)
+                            timeout=boot_timeout)
                 self.wait_cloud_init()
-            except (RuntimeError, TimeoutError, VmVerificationDeadline):
+            except (RuntimeError, TimeoutError):
                 if self.monitor_path:
                     with contextlib.suppress(OSError):
                         self.capture_desktop_failure('boot-' + label)
@@ -574,7 +540,7 @@ class VmGuest:
             self.close()
             raise
 
-    def cloud_disk(self, base, public, *, prepared=False):
+    def cloud_disk(self, base, public):
         directory = self.directory
         user_data = {'ssh_genkeytypes': ['ed25519'],
                      'users': [{'name': 'ubuntu',
@@ -590,19 +556,9 @@ class VmGuest:
         (directory/'meta-data').write_text(
             'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
         seed = directory/'seed.img'
-        seed_command = ['cloud-localds']
-        if prepared:
-            network_config = directory/'network-config'
-            write_json(network_config, {'version': 2, 'renderer': 'networkd', 'ethernets': {
-                'cor-transport': {'match': {'macaddress': PREPARED_GUEST_MAC}, 'dhcp4': False,
-                                  'addresses': ['10.0.2.15/24'],
-                                  'routes': [{'to': '0.0.0.0/0', 'via': '10.0.2.2'}],
-                                  'nameservers': {'addresses': ['10.0.2.3']}},
-            }})
-            seed_command.append(f'--network-config={network_config}')
-        run([*seed_command, seed, directory/'user-data', directory/'meta-data'])
+        run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
         command = ['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk]
-        if not (self.target.writable_arm_uefi or prepared):
+        if not self.target.writable_arm_uefi:
             command.append('24G')
         run(command)
         return seed
@@ -901,52 +857,6 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
 
-def open_test_guest(base, directory, target, archive, python, kvm, timings, report):
-    from linux_vm_cache import export, restore, supported
-
-    cache = os.environ.get('COR_LINUX_PREPARED_DISK')
-    if cache and supported(target) and not kvm:
-        cache = Path(cache)
-        prepared = restore(cache, timings)
-        source = 'restored' if prepared else 'generated'
-        started = time.monotonic()
-        builder = None
-        guest = None
-        try:
-            if not prepared:
-                print('Debian ARM64 prepared guest cache miss: preparing test dependencies', flush=True)
-                builder = VmGuest(base, directory, 'prepare-debian', target, kvm=kvm, timings={})
-                builder.stage(archive, python)
-                prepare_vm_guest(builder, directory)
-                prepared = export(builder, cache)
-                builder.close()
-                builder = None
-                timings['prepared_disk_build'] = round(time.monotonic() - started, 3)
-            print(f'Debian ARM64 prepared guest: {source}, {prepared.stat().st_size} bytes', flush=True)
-            guest = VmGuest(prepared, directory, 'prepared-image', target,
-                            kvm=kvm, timings=timings, prepared=True)
-            report['prepared_disk'] = {'source': source, 'bytes': prepared.stat().st_size}
-            if source == 'generated' and (output := os.environ.get('GITHUB_OUTPUT')):
-                with Path(output).open('a', encoding='utf-8') as stream:
-                    stream.write('prepared_disk=true\n')
-            return guest
-        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError, VmVerificationDeadline) as error:
-            if guest:
-                guest.close()
-            if builder and builder.process.poll() is None:
-                with contextlib.suppress(OSError):
-                    builder.capture_desktop_failure('prepared-dependencies')
-            if isinstance(error, VmVerificationDeadline):
-                raise
-            timings['prepared_disk_fallback'] = round(time.monotonic() - started, 3)
-            report['prepared_disk'] = {'source': 'fallback'}
-            print(f'::warning::Prepared guest unavailable, using the official image: {error}', flush=True)
-        finally:
-            if builder:
-                builder.close()
-    return VmGuest(base, directory, 'official-image', target, kvm=kvm, timings=timings)
-
-
 def vm_test(package_run_id, target):
     overall_started = time.monotonic()
     timings = {}
@@ -969,8 +879,7 @@ def vm_test(package_run_id, target):
     temporary_root = Path(os.environ.get('RUNNER_TEMP', tempfile.gettempdir())).resolve()
     if temporary_root.is_relative_to(ROOT):
         raise ValueError('VM files must stay outside the checkout')
-    with tempfile.TemporaryDirectory(prefix='cor-linux-vm-', dir=temporary_root) as temporary, \
-            vm_verification_deadline(target) as stop_deadline:
+    with tempfile.TemporaryDirectory(prefix='cor-linux-vm-', dir=temporary_root) as temporary:
         directory = Path(temporary)
         phase_started = time.monotonic()
         archive = vm_source_archive(directory, include_frozen_apt=bool(frozen),
@@ -1006,7 +915,7 @@ def vm_test(package_run_id, target):
                 phase_started = time.monotonic()
                 kvm = kvm_available()
                 result['acceleration'] = 'kvm' if kvm else 'tcg'
-                guest = open_test_guest(base, directory, target, archive, python, kvm, timings, result)
+                guest = VmGuest(base, directory, 'official-image', target, kvm=kvm, timings=timings)
                 timings['final_guest_boot'] = guest.boot_seconds
                 stage = 'guest_source_transfer'
                 guest.stage(archive, python)
@@ -1038,22 +947,16 @@ def vm_test(package_run_id, target):
                 verify_vm_package(guest, directory, package_run_id, frozen=bool(frozen), timings=timings,
                                   package_future=package_future)
                 result['success'] = True
-            except (Exception, VmVerificationDeadline) as error:
+            except Exception:
                 if 'failed_iso_install' in timings:
                     stage = 'iso_install'
                 elif stage == 'guest_boot':
                     timings['failed_guest_boot'] = round(
                         time.monotonic() - phase_started - timings.get('iso_install', 0), 3)
                 result['failed_stage'] = stage
-                if isinstance(error, VmVerificationDeadline):
-                    result['error'] = str(error)
-                    if guest and target.full_desktop:
-                        with contextlib.suppress(OSError):
-                            guest.capture_desktop_failure('verification-deadline')
                 print(f'Linux compatibility failed at {stage}.', flush=True)
                 raise
             finally:
-                stop_deadline()
                 try:
                     if guest:
                         result['kernel'] = guest.kernel
