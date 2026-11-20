@@ -788,7 +788,7 @@ export component MobileAiCheck inherits PageSurface {
         MSmall { text: MobileData.claude-status; wrap: word-wrap; }
         MCard { vertical-padding: 0px; horizontal-padding: 0px;
             GridLayout { spacing: 0px;
-                for title[index] in ["正常项目", "风险项目", "其他线索"]: Rectangle {
+                for title[index] in ["正常项目", "风险项目", "线索"]: Rectangle {
                     col: Theme.text-scale > 1.25 ? 0 : index; row: Theme.text-scale > 1.25 ? index : 0;
                     height: metric.preferred-height; min-width: 0px;
                     metric := VerticalLayout { padding: 12px; spacing: 6px;
@@ -800,8 +800,8 @@ export component MobileAiCheck inherits PageSurface {
             }
         }
         if MobileData.claude-results.length > 0: VerticalLayout { spacing: 8px;
-            MSmall { text: "检测结果"; font-weight: 600; }
-            MobileReport { items: MobileData.claude-results; }
+            MSmall { text: "报告摘要"; font-weight: 600; }
+            MobileReport { items: MobileData.claude-results; summary-limit: 6; }
         }
     } }
 }

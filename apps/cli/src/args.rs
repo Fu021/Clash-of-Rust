@@ -520,10 +520,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "claude check",
         "检测本机网络和 Claude 环境的地区线索",
-        "claude check [--output FILE]",
+        "claude check [--details] [--output FILE]",
         0,
         0,
-        "output"
+        "details output"
     ),
     command!(
         "claude audit",
@@ -536,10 +536,10 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "claude browser",
         "创建浏览器真实采样入口并等待报告",
-        "claude browser [--open] [--output FILE]",
+        "claude browser [--open] [--details] [--output FILE]",
         0,
         0,
-        "open output"
+        "open details output"
     ),
     command!(
         "claude protect",
@@ -1078,6 +1078,7 @@ fn option_help(key: &str) -> String {
         "reverse" => "反转排序方向（速率/流量默认降序，名称默认升序）",
         "limit" => "最多输出条数，默认 100，最大 10000",
         "offset" => "跳过的条数，默认 0",
+        "details" => "显示完整检测项目、说明和来源",
         "output" => "写入目标文件（-o）；完整日志/配置文件仅当前用户可读写",
         "name" => "订阅显示名称",
         "source" => "订阅来源 URL 或本机 YAML 路径",

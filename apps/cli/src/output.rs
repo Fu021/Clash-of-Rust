@@ -139,6 +139,30 @@ mod tests {
     }
 
     #[test]
+    fn claude_default_output_summarizes_and_details_preserve_source_evidence() {
+        use clash_client_core::claude_check::{Environment, Evidence, Group, Report, Signal};
+
+        let mut report = Report::new(Environment::Core, "test");
+        report.signals.push(Signal::new(
+            Group::Quality,
+            "出口 IP 质量",
+            "机房来源不一致",
+            "示例数据源",
+            Evidence::Inferred,
+            "逐来源证据",
+        ));
+        let exported = json!({"normal":0,"risk":0,"clues":1,"report":report});
+        let summary = render(&["claude", "check"], exported.clone());
+        assert!(summary.contains("正常项目 0 · 风险项目 0 · 线索 1"));
+        assert!(summary.contains("出口 IP 质量：机房来源不一致"));
+        assert!(!summary.contains("逐来源证据"));
+        let details = render(&["claude", "check", "--details"], exported.clone());
+        assert!(details.contains("示例数据源") && details.contains("逐来源证据"));
+        let browser = render(&["claude", "browser"], exported["report"].clone());
+        assert!(browser.contains("cor claude browser --details"));
+    }
+
+    #[test]
     fn service_output_separates_enabled_from_running_and_owner() {
         let value = json!({
             "installed":true,"enabled":true,"active":false,"main_pid":0,

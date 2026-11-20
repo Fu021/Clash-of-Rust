@@ -1052,7 +1052,7 @@ impl App {
                             String::new()
                         },
                         if audit.incomplete {
-                            " · 扫描未完成，详见风险与其他线索"
+                            " · 扫描未完成，详见线索"
                         } else {
                             ""
                         }
@@ -1061,7 +1061,7 @@ impl App {
                 .into(),
         );
         data.set_claude_filter(self.claude.results_filter.map_or(-1, |kind| kind as i32));
-        let entries: Vec<_> = entries
+        let mut entries: Vec<_> = entries
             .into_iter()
             .filter(|entry| {
                 self.claude
@@ -1069,19 +1069,37 @@ impl App {
                     .is_none_or(|kind| self.claude.kind(entry) == kind)
             })
             .collect();
-        let page = self
-            .claude
-            .results_page
-            .min(entries.len().saturating_sub(1) / 20);
+        let summary = self.claude.results_filter.is_none();
+        if summary {
+            entries.sort_by_key(|entry| {
+                if self.claude.kind(entry) == claude_view::ResultKind::Risk {
+                    0
+                } else if matches!(entry, claude_view::Entry::Signal(_, signal)
+                    if signal.group == clash_of_rust::claude_check::Group::Quality)
+                {
+                    1
+                } else {
+                    2
+                }
+            });
+        }
+        let page_size = if summary { 6 } else { 20 };
+        let page = if summary {
+            0
+        } else {
+            self.claude
+                .results_page
+                .min(entries.len().saturating_sub(1) / page_size)
+        };
         data.set_claude_result_page(page as i32);
         data.set_claude_previous(page > 0);
-        data.set_claude_next((page + 1) * 20 < entries.len());
+        data.set_claude_next(!summary && (page + 1) * page_size < entries.len());
         data.set_claude_result_status(
             format!(
                 "列出 {} 项 · 第 {} / {} 页",
                 entries.len(),
                 page + 1,
-                entries.len().div_ceil(20).max(1)
+                entries.len().div_ceil(page_size).max(1)
             )
             .into(),
         );
@@ -1089,8 +1107,8 @@ impl App {
             &models.claude_results,
             entries
                 .into_iter()
-                .skip(page * 20)
-                .take(20)
+                .skip(page * page_size)
+                .take(page_size)
                 .map(|entry| {
                     let kind = self.claude.kind(&entry);
                     let tone = match kind {

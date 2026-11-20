@@ -165,7 +165,7 @@ impl State {
                 }
             }
             Entry::Signal(r, s) => {
-                if s.risk {
+                if s.risk && s.group != Group::Quality {
                     ResultKind::Risk
                 } else if s.context_only()
                     || matches!(

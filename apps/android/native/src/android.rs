@@ -2918,6 +2918,7 @@ fn project(state: &State) -> Projection {
         });
     }
     let mut claude = vec![];
+    let mut claude_quality = vec![];
     let mut claude_counts = (0, 0, 0);
     if let Some(report) = &state.claude {
         for (index, signal) in report.signals.iter().enumerate() {
@@ -2937,7 +2938,12 @@ fn project(state: &State) -> Projection {
                 claude_counts.2 += 1;
                 2
             };
-            claude.push(ReportRow {
+            let rows = if signal.group == core::claude_check::Group::Quality {
+                &mut claude_quality
+            } else {
+                &mut claude
+            };
+            rows.push(ReportRow {
                 id: index.to_string(),
                 title: signal.display_title().into(),
                 value: if country_label.is_empty() {
@@ -2986,6 +2992,8 @@ fn project(state: &State) -> Projection {
             millis: None,
         });
     }
+    claude_quality.append(&mut claude);
+    claude_quality.sort_by_key(|row| row.tone != 3);
     Projection {
         application_policies: state.application_policies.view(s),
         overview: state.overview.present(s.running),
@@ -3026,7 +3034,7 @@ fn project(state: &State) -> Projection {
             .collect(),
         site_details,
         claude_busy: state.claude_busy,
-        claude,
+        claude: claude_quality,
         claude_counts,
         progress: (report.totals.completed(), report.totals.total()),
         detecting: state.detecting,

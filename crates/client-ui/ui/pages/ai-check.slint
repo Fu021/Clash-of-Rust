@@ -42,17 +42,13 @@ export component AiCheckPage inherits PageSurface {
                 metrics := HorizontalLayout { spacing: 1px;
                     SummaryMetric { title: "正常项目"; value: UiData.claude-normal; tone: 1; selected: UiData.claude-filter == 0; clicked => { UiActions.dispatch(Intent.claude-filter, "0", ""); } }
                     SummaryMetric { title: "风险项目"; value: UiData.claude-risk; tone: 3; selected: UiData.claude-filter == 1; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
-                    SummaryMetric { title: "其他线索"; value: UiData.claude-clues; tone: 2; selected: UiData.claude-filter == 2; clicked => { UiActions.dispatch(Intent.claude-filter, "2", ""); } }
+                    SummaryMetric { title: "线索"; value: UiData.claude-clues; tone: 2; selected: UiData.claude-filter == 2; clicked => { UiActions.dispatch(Intent.claude-filter, "2", ""); } }
                 }
             }
             if UiData.claude-filter < 0 && UiData.claude-results.length > 0: VerticalLayout {
                 spacing: 8px;
-                Heading { text: "检测结果"; }
-                FindingList { items: UiData.claude-results; }
-                HorizontalLayout {
-                    Caption { text: UiData.claude-result-status; }
-                    ActionButton { text: "查看风险项目"; quiet: true; compact: true; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
-                }
+                Heading { text: "报告摘要"; }
+                FindingList { items: UiData.claude-results; summary-limit: 6; }
             }
             if UiData.claude-filter >= 0: VerticalLayout {
                 spacing: Theme.page-gap;

@@ -1,5 +1,5 @@
 //! Bounded external evidence. Missing provider fields never become safe verdicts.
-use super::{Evidence, Group, Report, Signal, public_ip, response_bytes};
+use super::{EXIT_TRACE_HOSTS, Evidence, Group, Report, Signal, public_ip, response_bytes};
 use crate::probe::country_name;
 use reqwest::Client;
 use serde::Deserialize;
@@ -89,89 +89,11 @@ pub fn cloudflare_trace(body: &str, host: &str, source: &str) -> Signal {
     )
 }
 
-pub fn quality_signals(value: &Value, ip: &str) -> Vec<Signal> {
-    if value
-        .get("ip")
-        .and_then(Value::as_str)
-        .and_then(|s| s.parse::<IpAddr>().ok())
-        != ip.parse::<IpAddr>().ok()
-        || value.get("error").is_some()
-    {
-        return vec![Signal::unknown(
-            Group::Quality,
-            "IP 归属与信誉",
-            "ipapi.is",
-            "供应商未返回匹配的 IP 记录，无法确认。",
-        )];
-    }
-    let mut signals = vec![];
-    let title = format!("IP 归属 · {ip}");
-    let company = value
-        .get("company")
-        .and_then(Value::as_str)
-        .or_else(|| value.pointer("/company/name").and_then(Value::as_str))
-        .unwrap_or("未提供");
-    let asn = value
-        .get("asn")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| value.pointer("/asn/asn").map(|v| format!("AS{v}")))
-        .unwrap_or_else(|| "未提供".into());
-    let country = value
-        .get("country")
-        .and_then(Value::as_str)
-        .or_else(|| value.pointer("/location/country").and_then(Value::as_str))
-        .unwrap_or("未提供");
-    signals.push(Signal::new(Group::Quality,&title,format!("{} · {} · {}",clip(company),clip(&asn),clip(country)),"ipapi.is 独立 IP 数据库",Evidence::Measured,"记录注册归属、ASN 和地区来源；与 IP.SB、目标 trace 的判断分别展示，不从公司名称猜测住宅或原生 IP。"));
-    for (key, title, risk) in [
-        ("is_datacenter", "机房地址", false),
-        ("is_mobile", "移动网络", false),
-        ("is_proxy", "代理地址标签", false),
-        ("is_vpn", "VPN 地址标签", false),
-        ("is_tor", "Tor 出口", true),
-        ("is_crawler", "爬虫地址标签", true),
-        ("is_abuser", "滥用记录", true),
-    ] {
-        let mut signal = if let Some(flag) = value.get(key).and_then(Value::as_bool) {
-            Signal::new(
-                Group::Quality,
-                &format!("{title} · {ip}"),
-                if flag {
-                    "供应商标记为是"
-                } else {
-                    "供应商未标记"
-                },
-                "ipapi.is 信誉数据库",
-                Evidence::Inferred,
-                "第三方标签可能过时或误报；未标记不等于 Claude 判定可信，代理标签本身不作为异常流量拦截依据。",
-            )
-        } else {
-            Signal::unknown(
-                Group::Quality,
-                &format!("{title} · {ip}"),
-                "ipapi.is",
-                "公共查询没有返回此字段，可能受额度或供应商数据范围限制；不据此判定安全。",
-            )
-        };
-        signal.ip = ip.into();
-        signal.risk = risk && value.get(key).and_then(Value::as_bool) == Some(true);
-        signals.push(signal);
-    }
-    if let Some(score) = value
-        .pointer("/company/abuser_score")
-        .or_else(|| value.pointer("/asn/abuser_score"))
-        .and_then(Value::as_str)
-    {
-        signals.push(Signal::new(
-            Group::Quality,
-            "供应商滥用评分",
-            clip(score),
-            "ipapi.is",
-            Evidence::Inferred,
-            "保留供应商原始值；不是 Claude 官方评分，不自行合成可用性分数。",
-        ));
-    }
-    signals
+fn target_exit(signal: &Signal) -> bool {
+    signal
+        .title
+        .strip_suffix(" 出口")
+        .is_some_and(|host| EXIT_TRACE_HOSTS.contains(&host))
 }
 
 pub async fn extend(client: &Client, report: &mut Report) {
@@ -181,7 +103,7 @@ pub async fn extend(client: &Client, report: &mut Report) {
         .filter(|s| {
             s.group == Group::Exit
                 && s.evidence == Evidence::Measured
-                && s.title.contains("claude")
+                && target_exit(s)
                 && !s.country.is_empty()
         })
         .map(|s| (s.country.clone(), s.ip.clone()))
@@ -192,40 +114,19 @@ pub async fn extend(client: &Client, report: &mut Report) {
             report.signals.push(supported_region(&code, &ip));
         }
     }
-    let ips: Vec<_> = report
-        .signals
-        .iter()
-        .filter(|s| s.group == Group::Exit && s.evidence == Evidence::Measured && !s.ip.is_empty())
-        .map(|s| s.ip.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .take(2)
-        .collect();
-    for ip in ips {
-        if !ip.parse::<IpAddr>().is_ok_and(public_ip) {
-            continue;
-        }
-        let payload = serde_json::json!({"q":ip});
-        let result = async {
-            let response = client
-                .post("https://api.ipapi.is/")
-                .json(&payload)
-                .send()
-                .await?;
-            anyhow::ensure!(response.status().is_success(), "信誉服务未返回有效响应");
-            let value: Value = serde_json::from_slice(&response_bytes(response).await?)?;
-            Ok::<_, anyhow::Error>(quality_signals(&value, &ip))
-        }
-        .await;
-        report.signals.extend(result.unwrap_or_else(|_| {
-            vec![Signal::unknown(
-                Group::Quality,
-                &format!("IP 归属与信誉 · {ip}"),
-                "ipapi.is",
-                "请求被阻止、额度不足或供应商未返回有效数据；没有据此判定安全，也不会反复重试。",
-            )]
-        }));
+    let ips = quality_targets(report);
+    if ips.is_empty() {
+        report.signals.push(Signal::unknown(
+            Group::Quality,
+            "出口 IP 属性",
+            "第三方 IP 数据源",
+            "未测得有效公网出口 IP，本轮未向数据源发起查询。",
+        ));
     }
+    report.signals.extend(
+        futures_util::future::join_all(ips.into_iter().map(|ip| super::quality::check(client, ip)))
+            .await,
+    );
     let trace = async {
         let response = client
             .get("https://www.cloudflare.com/cdn-cgi/trace")
@@ -254,6 +155,31 @@ pub async fn extend(client: &Client, report: &mut Report) {
     );
     report.signals.extend([web, console, api]);
     super::additional::extend(client, report).await;
+}
+
+fn quality_targets(report: &Report) -> Vec<IpAddr> {
+    let mut seen = BTreeSet::new();
+    let mut targets = Vec::new();
+    for target_only in [true, false] {
+        for signal in &report.signals {
+            if signal.group != Group::Exit
+                || signal.evidence != Evidence::Measured
+                || target_exit(signal) != target_only
+            {
+                continue;
+            }
+            if let Ok(ip) = signal.ip.parse::<IpAddr>().map(|ip| ip.to_canonical())
+                && public_ip(ip)
+                && seen.insert(ip)
+            {
+                targets.push(ip);
+                if targets.len() == 5 {
+                    return targets;
+                }
+            }
+        }
+    }
+    targets
 }
 
 async fn connectivity(client: &Client, host: &str) -> Signal {
@@ -352,24 +278,31 @@ pub async fn configuration(
 mod tests {
     use super::*;
     #[test]
-    fn absent_flags_are_not_safe_and_provider_labels_do_not_trigger_network_blocking() {
-        let signals = quality_signals(
-            &serde_json::json!({"ip":"1.1.1.1","company":"Cloudflare","asn":"AS13335","country":"Australia"}),
-            "1.1.1.1",
-        );
+    fn quality_targets_prioritize_claude_endpoints_and_bound_queries() {
+        let mut report = Report::new(super::super::Environment::Core, "test");
+        for (title, ip) in [
+            ("IPv4 出口", "1.1.1.1"),
+            ("IPv6 出口", "2606:4700:4700::1111"),
+            ("claude.ai 出口", "8.8.8.8"),
+            ("claude.com 出口", "9.9.9.9"),
+            ("api.anthropic.com 出口", "1.0.0.1"),
+            ("额外出口", "8.8.4.4"),
+        ] {
+            let mut signal = Signal::new(Group::Exit, title, ip, "test", Evidence::Measured, "");
+            signal.ip = ip.into();
+            report.signals.push(signal);
+        }
         assert_eq!(
-            signals
-                .iter()
-                .filter(|s| s.evidence == Evidence::Unknown)
-                .count(),
-            7
+            quality_targets(&report),
+            [
+                "8.8.8.8",
+                "9.9.9.9",
+                "1.0.0.1",
+                "1.1.1.1",
+                "2606:4700:4700::1111"
+            ]
+            .map(|ip| ip.parse::<IpAddr>().unwrap())
         );
-        assert!(!signals.iter().any(|s| s.risk));
-        let flags = quality_signals(
-            &serde_json::json!({"ip":"1.1.1.1","is_proxy":true,"is_vpn":true,"is_abuser":true}),
-            "1.1.1.1",
-        );
-        assert_eq!(flags.iter().filter(|s| s.risk).count(), 1);
     }
     #[test]
     fn supported_regions_and_edge_locations_are_separate() {

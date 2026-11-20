@@ -176,6 +176,7 @@ export component ActionButton inherits Rectangle {
     in property <bool> notice-control;
     in property <bool> quiet;
     in property <bool> compact;
+    in property <length> touch-height;
     in property <color> text-color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
     property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && (!UiData.notice-modal || root.notice-control);
     // Mouse activation must not leave a focus highlight that resembles selection.
@@ -187,7 +188,7 @@ export component ActionButton inherits Rectangle {
     accessible-role: button;
     accessible-label: root.text;
     forward-focus: key-scope;
-    height: root.compact ? max(28px, Theme.detail-size * 1.5 + 8px) : Theme.control-height;
+    height: max(root.touch-height, root.compact ? max(28px, Theme.detail-size * 1.5 + 8px) : Theme.control-height);
     width: max(root.compact ? 42px : 68px, button-label.preferred-width + (root.compact ? 16px : 28px) + (root.dropdown ? 20px : 0px));
     vertical-stretch: 0;
     horizontal-stretch: 0;

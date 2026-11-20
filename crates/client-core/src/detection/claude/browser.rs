@@ -247,18 +247,24 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         Evidence::Measured,
         "浏览器实际返回的字段，不使用 GUI 的请求头或操作系统代替。",
     ));
-    report.signals.push(Signal::new(
-        Group::Browser,
-        "可识别字体",
-        if data.fonts.is_empty() {
-            "未识别到预设字体；不代表没有其他字体".into()
-        } else {
-            data.fonts.join("、")
-        },
-        "浏览器 Canvas 字形宽度比较",
-        Evidence::Inferred,
-        "字体识别可能受回退字体、隐私策略影响；中文字体全球通用，不按字体判定国家。",
-    ));
+    let font_source = "浏览器 Canvas 字形宽度比较";
+    report.signals.push(if data.fonts.is_empty() {
+        Signal::unknown(
+            Group::Browser,
+            "可识别字体",
+            font_source,
+            "未识别到预设字体，可能受回退字体或隐私策略影响。",
+        )
+    } else {
+        Signal::new(
+            Group::Browser,
+            "可识别字体",
+            data.fonts.join("、"),
+            font_source,
+            Evidence::Inferred,
+            "字体识别可能受回退字体、隐私策略影响；中文字体全球通用，不按字体判定国家。",
+        )
+    });
     report.signals.push(Signal::new(
         Group::Browser,
         "Emoji 渲染",

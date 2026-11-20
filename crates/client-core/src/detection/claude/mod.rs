@@ -7,6 +7,7 @@ pub mod enhanced;
 pub mod guard;
 pub mod observe;
 pub mod preferences;
+mod quality;
 pub use crate::protection;
 
 use crate::{api, probe::country_name};
@@ -16,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, net::IpAddr, time::Duration};
 
 pub const REPORT_LIMIT: usize = 64 * 1024;
+const EXIT_TRACE_HOSTS: [&str; 3] = ["claude.ai", "claude.com", "api.anthropic.com"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -178,7 +180,10 @@ impl Signal {
     /// A real challenge response still cannot establish service usability.
     /// Present it with other contextual observations instead of a safe verdict.
     pub fn context_only(&self) -> bool {
-        self.challenged || self.evidence != Evidence::Measured || self.value.trim().is_empty()
+        self.group == Group::Quality
+            || self.challenged
+            || self.evidence != Evidence::Measured
+            || self.value.trim().is_empty()
     }
     pub fn unknown(group: Group, title: &str, source: &str, detail: impl Into<String>) -> Self {
         Self::new(
@@ -307,6 +312,9 @@ impl Report {
     pub fn differs(&self, signal: &Signal) -> bool {
         // Preferences are not a physical-location assertion. Display the
         // difference and its evidence, never a regional-denial probability.
+        if signal.group == Group::Quality {
+            return false;
+        }
         signal.risk
             || (!signal.context_only()
                 && ((!signal.country.is_empty()
@@ -597,7 +605,7 @@ pub async fn network(client: &Client, report: &mut Report, source: &str) {
         )
     );
     report.signals.extend([v4, v6]);
-    for host in ["claude.ai", "claude.com", "api.anthropic.com"] {
+    for host in EXIT_TRACE_HOSTS {
         let mut signal = Signal::unknown(
             Group::Exit,
             &format!("{host} 出口"),
@@ -861,7 +869,7 @@ mod tests {
         assert_eq!(report.counts(), (1, 4, 0));
     }
     #[test]
-    fn explicit_risks_override_auxiliary_evidence_but_preferences_stay_context() {
+    fn preferences_and_imported_ip_classifications_stay_context() {
         let mut report = Report::new(Environment::Web, "test");
         let mut exit = Signal::new(Group::Exit, "出口", "德国", "test", Evidence::Measured, "");
         exit.country = "DE".into();
@@ -883,9 +891,9 @@ mod tests {
         );
         reputation.risk = true;
         report.signals.push(reputation);
-        assert_eq!(report.counts(), (1, 1, 1));
+        assert_eq!(report.counts(), (1, 0, 2));
         assert!(!report.differs(&report.signals[1]));
-        assert!(report.differs(&report.signals[2]));
+        assert!(!report.differs(&report.signals[2]));
     }
     #[test]
     fn routing_does_not_match_lookalike_hosts_or_keep_unrelated_connections() {

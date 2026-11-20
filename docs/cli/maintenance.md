@@ -17,9 +17,9 @@ GUI、CLI 与 TUI 的网络工具、参数、平台限制和错误结果见[网�
 | `network check URL` | 与界面共享网址检查：系统与内核 DNS、代理端口、网站响应及本次请求线路；支持 `--json` |
 | `ip-check list [--category NAME --filter TEXT]` | 查看内置检测项目与 ID |
 | `ip-check [ID] [--category NAME -o FILE]` | 全部、分类或单项测试；最多同时执行 3 项 |
-| `claude check [-o FILE]` | Claude 网络/地区线索及风险 |
+| `claude check [--details] [-o FILE]` | Claude 风险与出口 IP 质量摘要，按需展开完整报告 |
 | `claude audit [--offline -o FILE]` | 检查当前终端和已记录的项目配置；离线模式不启动内核或请求检测网站 |
-| `claude browser [--open -o FILE]` | 创建本机真实浏览器采样入口并等待报告 |
+| `claude browser [--open] [--details] [-o FILE]` | 创建本机真实浏览器采样入口并等待报告 |
 | `claude protect [on\|off] [--yes]` | 可逆保护、锁定节点、TUN/DNS/规则覆盖及实时异常流量拦截；开启时关闭已有内核连接 |
 | `claude watch [--interval 1]` | 只读观察 Claude 相关请求的真实线路，同时输出共享 `protection_status` 接管状态及拦截记录 |
 
