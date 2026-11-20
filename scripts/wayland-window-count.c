@@ -236,8 +236,10 @@ int main(int argc, char **argv)
         }
     }
     if (ready && strcmp(argv[1], "close") == 0) {
-        if (count != 1 || !probe.can_close || matched->width <= 0 || matched->height <= 0) {
-            fputs("Expected one mapped window and an advertised COSMIC close action\n", stderr);
+        if (count != 1 || !probe.can_close) {
+            fprintf(stderr, "COSMIC close requires one matching toplevel and compositor support "
+                            "(matches: %u, close advertised: %s)\n",
+                    count, probe.can_close ? "yes" : "no");
             ready = false;
         } else {
             zcosmic_toplevel_manager_v1_close(probe.manager, matched->cosmic);

@@ -94,7 +94,8 @@ def install_dependencies(packages):
         privileged('-S', '--needed', *packages)
     else:
         flags = ('--no-recommends',) if distro.startswith('opensuse-') else ()
-        privileged('install', *flags, *packages)
+        timeout = 1200 if distro == 'fedora' and platform.machine() == 'aarch64' else 900
+        privileged('install', *flags, *packages, timeout=timeout)
 
 
 def prepare():

@@ -350,11 +350,20 @@ def baseline_report():
             'packages': subprocess.check_output(['dpkg-query', '-W', '-f=${Package}=${Version}\\n'], text=True).splitlines()}
 
 
-def wait_vm_ssh(process, command, timeout=600, ready_command='true'):
+def wait_vm_ssh(process, command, timeout=600, ready_command='true', console=None, console_offset=0):
     deadline = time.monotonic() + timeout
     while True:
         if process.poll() is not None:
             raise RuntimeError('Linux VM exited during boot')
+        if console is not None:
+            with console.open('rb') as stream:
+                end = stream.seek(0, os.SEEK_END)
+                stream.seek(max(console_offset, end - 64 * 1024))
+                tail = stream.read(64 * 1024)
+            if b'You are in emergency mode.' in tail:
+                raise RuntimeError('Linux VM entered emergency mode before SSH was ready')
+            if b'Kernel panic - not syncing:' in tail:
+                raise RuntimeError('Linux VM reported a kernel panic before SSH was ready')
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError('Linux VM did not become SSH-ready')
@@ -384,7 +393,7 @@ def kvm_available():
 
 
 class VmGuest:
-    def __init__(self, base, directory, label, target):
+    def __init__(self, base, directory, label, target, *, kvm):
         self.target = target
         self.directory = Path(directory) / label
         self.directory.mkdir()
@@ -393,7 +402,7 @@ class VmGuest:
         self.console = None
         boot_started = time.monotonic()
         self.architecture = 'x86_64' if host_arch() == 'x64' else 'aarch64'
-        self.kvm = kvm_available()
+        self.kvm = kvm
         directory = self.directory
         key = directory / 'id_ed25519'
         run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', key], stdout=subprocess.DEVNULL)
@@ -479,10 +488,17 @@ class VmGuest:
                 vga = command.index('-vga')
                 command[vga:vga+2] = ['-device', 'virtio-vga-gl']
                 command.extend(['-device', 'virtio-tablet-pci', '-name', 'cor-cosmic-compatibility'])
-            self.console = (REPORT / ('vm-console-' + label + '.log')).open('w')
+            self.console_path = REPORT / ('vm-console-' + label + '.log')
+            self.console = self.console_path.open('w')
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT, env=environment)
-            wait_vm_ssh(self.process, self.ssh, ready_command=ready_command,
-                        timeout=900 if target.image_format == 'iso' else 600)
+            try:
+                wait_vm_ssh(self.process, self.ssh, ready_command=ready_command, console=self.console_path,
+                            timeout=900 if target.image_format == 'iso' else 600)
+            except (RuntimeError, TimeoutError):
+                if self.monitor_path:
+                    with contextlib.suppress(OSError):
+                        self.capture_desktop_failure('boot-' + label)
+                raise
             self.wait_cloud_init()
             actual = self.output('uname -m').strip()
             if actual != architecture:
@@ -543,12 +559,14 @@ class VmGuest:
 
     def reboot(self):
         previous_boot = self.output('cat /proc/sys/kernel/random/boot_id').strip()
+        console_offset = self.console_path.stat().st_size
         self.remote('sudo systemd-run --on-active=2s /usr/bin/systemctl reboot', timeout=15)
         self.close_ssh()
         ready = ('boot_id=$(cat /proc/sys/kernel/random/boot_id) && '
                  'test -n "$boot_id" && test "$boot_id" != ' + shlex.quote(previous_boot))
         fresh_ssh = [self.ssh[0], '-o', 'ControlPath=none', *self.ssh[1:]]
-        wait_vm_ssh(self.process, fresh_ssh, ready_command=ready)
+        wait_vm_ssh(self.process, fresh_ssh, ready_command=ready, console=self.console_path,
+                    console_offset=console_offset)
         self.wait_cloud_init()
 
     def capture_desktop_failure(self, stage):
@@ -741,8 +759,16 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
     started = time.monotonic()
     try:
         print(f'{guest.target.distribution} {guest.target.release}: verifying installed candidate', flush=True)
-        guest.remote(guest.environment + extra + command,
-                     timeout=3600 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
+        try:
+            guest.remote(guest.environment + extra + command,
+                         timeout=3600 if guest.architecture == 'aarch64' or not guest.kvm else 1200)
+        except subprocess.TimeoutExpired:
+            if guest.target.full_desktop:
+                with contextlib.suppress(OSError):
+                    guest.capture_desktop_failure('installed-candidate')
+            raise
+        finally:
+            timings['installed_candidate'] = round(time.monotonic() - started, 3)
         if guest.target.full_desktop:
             cosmic = (guest.target.family, guest.target.release) == ('pop', '24.04')
             debian = guest.target.family == 'debian'
@@ -777,10 +803,14 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             operation = ('deb_upgrade_and_uninstall' if guest.target.package_format == 'deb'
                          else 'native_upgrade_and_uninstall')
             print(f'{guest.target.distribution} {guest.target.release}: verifying upgrade and uninstall', flush=True)
-            guest.python("from pathlib import Path; import runpy; "
-                         f"runpy.run_path('scripts/test-release-package.py')['{operation}']"
-                         "(next(Path('dist').glob('*.deb')).resolve())",
-                         timeout=1800 if guest.architecture == 'aarch64' or not guest.kvm else 900)
+            phase_started = time.monotonic()
+            try:
+                guest.python("from pathlib import Path; import runpy; "
+                             f"runpy.run_path('scripts/test-release-package.py')['{operation}']"
+                             "(next(Path('dist').glob('*.deb')).resolve())",
+                             timeout=1800 if guest.architecture == 'aarch64' or not guest.kvm else 900)
+            finally:
+                timings['package_lifecycle'] = round(time.monotonic() - phase_started, 3)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
@@ -817,6 +847,7 @@ def vm_test(package_run_id, target):
         report_image = 'iso' if target.image_format == 'iso' else 'cloud'
         result = {'distribution': target.family, 'version_id': target.release,
                   'arch': architecture, 'execution': 'vm', 'success': False,
+                  'runner': target.matrix_entry()['os'], 'runner_image': os.environ.get('ImageVersion'),
                   'source_archive_bytes': archive.stat().st_size,
                   report_image + '_url': image['url'],
                   report_image + '_' + target.digest_algorithm: image[target.digest_algorithm]}
@@ -832,7 +863,11 @@ def vm_test(package_run_id, target):
                 python = download(value['python'], tools_directory()/'python.tar.gz')
                 timings['original_downloads'] = round(time.monotonic() - phase_started, 3)
                 stage = 'guest_boot'
-                guest = VmGuest(base, directory, 'official-image', target)
+                phase_started = time.monotonic()
+                kvm = kvm_available()
+                result['acceleration'] = 'kvm' if kvm else 'tcg'
+                guest = VmGuest(base, directory, 'official-image', target, kvm=kvm)
+                timings['final_guest_boot'] = guest.boot_seconds
                 stage = 'guest_source_transfer'
                 guest.stage(archive, python)
                 stage = 'guest_dependencies'
@@ -847,29 +882,32 @@ def vm_test(package_run_id, target):
                           'official image with current signed indexes: ' + type(error).__name__, flush=True)
                     guest.close()
                     guest = None
+                    frozen = None
                     stage = 'guest_boot'
-                    guest = VmGuest(base, directory, 'official-image-fresh-apt', target)
+                    phase_started = time.monotonic()
+                    guest = VmGuest(base, directory, 'official-image-fresh-apt', target, kvm=kvm)
+                    timings['final_guest_boot'] = guest.boot_seconds
                     stage = 'guest_source_transfer'
                     guest.stage(archive, python)
-                    frozen = None
                     stage = 'guest_dependencies'
                     phase_started = time.monotonic()
                     prepare_vm_guest(guest, directory)
                 timings['dependency_preparation'] = round(time.monotonic() - phase_started, 3)
-                timings['final_guest_boot'] = guest.boot_seconds
                 timings['source_transfer'] = guest.stage_seconds
                 stage = 'installed_candidate'
                 verify_vm_package(guest, directory, package_run_id, frozen=bool(frozen), timings=timings,
                                   package_future=package_future)
                 result['success'] = True
             except Exception:
+                if stage == 'guest_boot':
+                    timings['failed_guest_boot'] = round(time.monotonic() - phase_started, 3)
                 result['failed_stage'] = stage
                 print(f'Linux compatibility failed at {stage}.', flush=True)
                 raise
             finally:
                 try:
                     if guest:
-                        result.update(kernel=guest.kernel, acceleration='kvm' if guest.kvm else 'tcg')
+                        result['kernel'] = guest.kernel
                         try:
                             guest.preserve()
                         finally:

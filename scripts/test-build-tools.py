@@ -361,21 +361,45 @@ class UbuntuVmTests(unittest.TestCase):
                 linux_ci.wait_vm_ssh(process, ['ssh', 'guest'])
             self.assertEqual(commands.call_count, 1)
 
+    def test_vm_ssh_detects_terminal_boot_failure_only_in_current_console_output(self):
+        process = MagicMock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as temporary:
+            console = Path(temporary)/'serial.log'
+            old_boot = b'You are in emergency mode.\r\n'
+            console.write_bytes(old_boot + b'Booting Fedora Linux')
+            with patch.object(linux_ci.subprocess, 'run',
+                              return_value=subprocess.CompletedProcess(['ssh'], 0)) as attempt:
+                with self.assertRaisesRegex(RuntimeError, 'entered emergency mode'):
+                    linux_ci.wait_vm_ssh(process, ['ssh'], console=console)
+                attempt.assert_not_called()
+                linux_ci.wait_vm_ssh(process, ['ssh'], console=console, console_offset=len(old_boot))
+                attempt.assert_called_once()
+                with console.open('ab') as stream:
+                    stream.write(b'\nKernel panic - not syncing: fixture')
+                with self.assertRaisesRegex(RuntimeError, 'reported a kernel panic'):
+                    linux_ci.wait_vm_ssh(process, ['ssh'], console=console, console_offset=len(old_boot))
+                self.assertEqual(attempt.call_count, 1)
+
     def test_vm_reboot_checks_a_fresh_ssh_connection_and_rejects_the_previous_boot(self):
         guest = object.__new__(linux_ci.VmGuest)
         guest.target = linux_ci.target_for('debian', '13', 'x64')
         guest.ssh = ['ssh', '-o', 'ControlPath=existing', 'guest']
         guest.process = MagicMock()
-        with patch.object(guest, 'output', return_value='previous-boot\n'), \
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(guest, 'output', return_value='previous-boot\n'), \
                 patch.object(guest, 'remote') as remote, \
                 patch.object(guest, 'close_ssh') as close, \
                 patch.object(linux_ci, 'wait_vm_ssh') as ready, \
                 patch.object(guest, 'wait_cloud_init') as cloud_init:
+            guest.console_path = Path(temporary)/'serial.log'
+            guest.console_path.write_bytes(b'earlier boot')
             guest.reboot()
         close.assert_called_once_with()
         self.assertEqual(ready.call_args.args, (
             guest.process, ['ssh', '-o', 'ControlPath=none', '-o', 'ControlPath=existing', 'guest']))
         self.assertIn('test "$boot_id" != previous-boot', ready.call_args.kwargs['ready_command'])
+        self.assertEqual(ready.call_args.kwargs['console_offset'], len(b'earlier boot'))
         self.assertIn('systemctl reboot', remote.call_args_list[0].args[0])
         cloud_init.assert_called_once_with()
 
@@ -439,7 +463,6 @@ class UbuntuVmTests(unittest.TestCase):
 
                 with patch.object(linux_ci, 'REPORT', directory), \
                         patch.object(linux_ci, 'host_arch', return_value='arm64'), \
-                        patch.object(linux_ci, 'kvm_available', return_value=kvm), \
                         patch.object(linux_ci.os, 'sched_getaffinity', return_value={0, 1, 2, 3}), \
                         patch.object(linux_ci, 'run', side_effect=create_key), \
                         patch.object(linux_ci.socket, 'socket') as socket, \
@@ -451,7 +474,7 @@ class UbuntuVmTests(unittest.TestCase):
                             'aarch64\n', f'{target.os_release_id}\n{target.os_release_version}\n',
                             '5.4.0-fixture\n']):
                     socket.return_value.__enter__.return_value.getsockname.return_value = ('127.0.0.1', 4321)
-                    guest = linux_ci.VmGuest(directory/'base.qcow2', directory, 'fixture', target)
+                    guest = linux_ci.VmGuest(directory/'base.qcow2', directory, 'fixture', target, kvm=kvm)
                     guest.console.close()
                 command = boot.call_args.args[0]
                 machine = 'virt,gic-version=host,accel=kvm' if kvm else 'virt,accel=tcg'
@@ -1082,11 +1105,33 @@ class UbuntuVmTests(unittest.TestCase):
             archive.touch()
             guest = MagicMock(target=linux_ci.target_for('debian', '13', 'arm64'),
                               environment='guest ', architecture='aarch64', kvm=False)
+            timings = {}
             with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
-                linux_ci.verify_vm_package(guest, directory, 123)
+                linux_ci.verify_vm_package(guest, directory, 123, timings=timings)
             timeouts = [call.kwargs.get('timeout') for call in guest.remote.call_args_list]
             self.assertIn(3600, timeouts)
             self.assertIn(1800, timeouts)
+            self.assertGreaterEqual(timings['installed_candidate'], 0)
+            self.assertGreaterEqual(timings['package_lifecycle'], 0)
+
+    def test_candidate_timeout_captures_desktop_before_propagating_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory/'package.tar.gz'
+            archive.touch()
+            guest = MagicMock(target=linux_ci.target_for('debian', '13', 'arm64'),
+                              environment='guest ', architecture='aarch64', kvm=False)
+            failure = subprocess.TimeoutExpired(['ssh'], 3600)
+            guest.remote.side_effect = [None, failure]
+            timings = {}
+            with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                    linux_ci.verify_vm_package(guest, directory, 123, timings=timings)
+            self.assertIs(raised.exception, failure)
+            guest.capture_desktop_failure.assert_called_once_with('installed-candidate')
+            guest.reboot.assert_not_called()
+            self.assertGreaterEqual(timings['installed_candidate'], 0)
+            self.assertNotIn('package_lifecycle', timings)
 
     def test_mint_package_runs_native_x11_and_wayland_before_upgrade_and_uninstall(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1117,7 +1162,7 @@ class UbuntuVmTests(unittest.TestCase):
             linux = {'architectures': {'arm64': {'cloud': public_image, 'python': {'sha256': 'b'*64}}}}
             frozen = {'status': 'frozen'}
             snapshot = {'ubuntu_vm_environments': {'arm64': frozen, 'x64': {'status': 'disabled'}}}
-            original = MagicMock()
+            original = MagicMock(boot_seconds=2)
             retry = MagicMock(kernel='5.4.0-216-generic', kvm=False, boot_seconds=1, stage_seconds=1)
             with patch.dict(os.environ, {'RUNNER_TEMP': temporary}), \
                     patch.object(build_inputs, 'manifest', return_value=snapshot), \
@@ -1125,6 +1170,7 @@ class UbuntuVmTests(unittest.TestCase):
                     patch.object(linux_ci, 'REPORT', root/'report'), \
                     patch.object(linux_ci, 'inputs', return_value=linux), \
                     patch.object(linux_ci, 'host_arch', return_value='arm64'), \
+                    patch.object(linux_ci, 'kvm_available', return_value=False) as accelerator, \
                     patch.object(linux_ci, 'tools_directory', return_value=root), \
                     patch.object(linux_ci, 'vm_source_archive', return_value=archive), \
                     patch.object(linux_ci, 'download', side_effect=[base, python]) as download, \
@@ -1137,6 +1183,8 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertEqual(download.call_args_list[0], call(public_image, base))
             self.assertEqual(download.call_count, 2)
             self.assertEqual([attempt.args[0] for attempt in boot.call_args_list], [base, base])
+            self.assertEqual([attempt.kwargs['kvm'] for attempt in boot.call_args_list], [False, False])
+            accelerator.assert_called_once_with()
             self.assertEqual(prepare.call_args_list[0].args[2], frozen)
             self.assertEqual(prepare.call_args_list[1].args[:1], (retry,))
             original.close.assert_called_once()
@@ -1146,8 +1194,38 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertFalse(application.call_args.kwargs['frozen'])
             report = json.loads((root/'report/linux-vm.json').read_text())
             self.assertEqual(report['apt_inputs'], 'current')
+            self.assertEqual(report['acceleration'], 'tcg')
+            self.assertEqual(report['timings_seconds']['final_guest_boot'], 1)
             self.assertEqual(report['cloud_sha256'], public_image['sha256'])
             self.assertTrue(report['success'])
+
+    def test_vm_boot_failure_report_keeps_runner_and_acceleration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root/'source.tar.gz'
+            archive.touch()
+            target = linux_ci.target_for('fedora', '45', 'arm64')
+            linux = {'architectures': {'arm64': {'python': {}}}}
+            with patch.dict(os.environ, {'RUNNER_TEMP': temporary, 'ImageVersion': '20261119.1'}), \
+                    patch.object(linux_ci, 'REPORT', root/'report'), \
+                    patch.object(linux_ci, 'inputs', return_value=linux), \
+                    patch.object(linux_ci, 'tools_directory', return_value=root), \
+                    patch.object(linux_ci, 'vm_source_archive', return_value=archive), \
+                    patch.object(linux_ci, 'download'), \
+                    patch.object(linux_ci, 'fetch_vm_package'), \
+                    patch.object(linux_ci, 'kvm_available', return_value=False), \
+                    patch.object(linux_ci, 'VmGuest', side_effect=RuntimeError('emergency mode')) as boot:
+                with self.assertRaisesRegex(RuntimeError, 'emergency mode'):
+                    linux_ci.vm_test(123, target)
+            self.assertFalse(boot.call_args.kwargs['kvm'])
+            report = json.loads((root/'report/linux-vm.json').read_text())
+            self.assertEqual(report['failed_stage'], 'guest_boot')
+            self.assertEqual(report['runner'], 'ubuntu-24.04-arm')
+            self.assertEqual(report['runner_image'], '20261119.1')
+            self.assertEqual(report['acceleration'], 'tcg')
+            self.assertGreaterEqual(report['timings_seconds']['failed_guest_boot'], 0)
+            self.assertFalse(report['success'])
+            self.assertNotIn('kernel', report)
 
     def test_vm_archive_omits_git_history_builds_and_other_architecture_indexes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3304,6 +3382,20 @@ class BuildTests(unittest.TestCase):
             public_log = (directory/'authentication.log').read_text()
             self.assertIn('/usr/libexec/xfce-polkit', public_log)
             self.assertNotIn('Request: Password:', public_log)
+
+    def test_fedora_arm64_desktop_dependency_install_has_a_separate_deadline(self):
+        import linux_native_guest
+
+        for distro, machine, flags, timeout in (
+                ('fedora', 'aarch64', (), 1200),
+                ('fedora', 'x86_64', (), 900),
+                ('opensuse-leap', 'aarch64', ('--no-recommends',), 900)):
+            with self.subTest(distro=distro, machine=machine), \
+                    patch.object(linux_native_guest, 'distribution', return_value=distro), \
+                    patch.object(platform, 'machine', return_value=machine), \
+                    patch.object(linux_native_guest, 'privileged') as install:
+                linux_native_guest.install_dependencies(('gdm', 'gnome-shell'))
+                install.assert_called_once_with('install', *flags, 'gdm', 'gnome-shell', timeout=timeout)
 
     def test_linux_gui_requires_a_registered_tray_host_before_launch(self):
         with patch.object(linux_gui, 'dbus', side_effect=[
