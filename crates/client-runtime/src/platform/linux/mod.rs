@@ -70,6 +70,19 @@ pub fn description() -> &'static str {
     "Linux GNOME / KDE 原生系统代理"
 }
 
+fn cosmic_desktop(value: &str) -> bool {
+    value
+        .split(':')
+        .any(|desktop| desktop.eq_ignore_ascii_case("cosmic"))
+}
+
+pub(super) fn ensure_system_proxy_supported() -> Result<()> {
+    if std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|value| cosmic_desktop(&value)) {
+        bail!("COSMIC 桌面暂不支持系统代理，请使用 TUN 或在应用中配置代理");
+    }
+    Ok(())
+}
+
 fn keys() -> [&'static str; 9] {
     [
         "org.gnome.system.proxy|mode",
@@ -164,6 +177,14 @@ pub fn write(state: &ProxyState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cosmic_desktop_is_distinct_from_pop_gnome() {
+        assert!(cosmic_desktop("COSMIC"));
+        assert!(cosmic_desktop("pop:cosmic"));
+        assert!(!cosmic_desktop("pop:GNOME"));
+        assert!(!cosmic_desktop(""));
+    }
 
     #[test]
     fn legacy_gnome_ownership_ignores_only_previously_unmanaged_socks() {

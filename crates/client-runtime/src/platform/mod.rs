@@ -285,6 +285,12 @@ pub fn show_requested() -> bool {
     false
 }
 
+pub(crate) fn ensure_system_proxy_supported() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    native::ensure_system_proxy_supported()?;
+    Ok(())
+}
+
 pub fn enable(journal_path: &Path, port: u16) -> Result<()> {
     if port == 0 {
         bail!("代理端口无效");
@@ -292,6 +298,7 @@ pub fn enable(journal_path: &Path, port: u16) -> Result<()> {
     if journal_path.exists() {
         bail!("存在未恢复的系统代理，请先关闭系统代理或重新启动客户端");
     }
+    ensure_system_proxy_supported()?;
     let original = native::read()?;
     #[cfg(target_os = "macos")]
     let owned = native::desired(&original, port)?;

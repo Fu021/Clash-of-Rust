@@ -360,7 +360,8 @@ def wait_vm_ssh(process, command, timeout=600, ready_command='true', console=Non
                 end = stream.seek(0, os.SEEK_END)
                 stream.seek(max(console_offset, end - 64 * 1024))
                 tail = stream.read(64 * 1024)
-            if b'You are in emergency mode.' in tail:
+            if (b'You are in emergency mode.' in tail
+                    or b'Entering emergency mode. Exit the shell to continue.' in tail):
                 raise RuntimeError('Linux VM entered emergency mode before SSH was ready')
             if b'Kernel panic - not syncing:' in tail:
                 raise RuntimeError('Linux VM reported a kernel panic before SSH was ready')
@@ -393,7 +394,7 @@ def kvm_available():
 
 
 class VmGuest:
-    def __init__(self, base, directory, label, target, *, kvm, timings):
+    def __init__(self, base, directory, label, target, *, kvm, timings, prepared=False):
         self.target = target
         self.directory = Path(directory) / label
         self.directory.mkdir()
@@ -490,7 +491,7 @@ class VmGuest:
                 timings['iso_install'] = round(boot_started - install_started, 3)
                 ready_command = INSTALLED_READY
             else:
-                seed = self.cloud_disk(base, public)
+                seed = self.cloud_disk(base, public, prepared=prepared)
                 command.extend(['-drive', f'file={seed},if=virtio,format=raw,readonly=on'])
             command.extend(['-netdev', f'user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22',
                             '-device', 'virtio-net-pci,netdev=net0'])
@@ -533,7 +534,7 @@ class VmGuest:
             self.close()
             raise
 
-    def cloud_disk(self, base, public):
+    def cloud_disk(self, base, public, *, prepared=False):
         directory = self.directory
         user_data = {'ssh_genkeytypes': ['ed25519'],
                      'users': [{'name': 'ubuntu',
@@ -542,12 +543,18 @@ class VmGuest:
                      'ssh_pwauth': False, 'package_update': False, 'package_upgrade': False}
         if self.target.package_format == 'deb':
             user_data['users'][0]['groups'] = 'adm,sudo'
+        if self.target.writable_arm_uefi:
+            user_data['growpart'] = {'mode': 'off'}
+            user_data['resize_rootfs'] = False
         (directory/'user-data').write_text('#cloud-config\n'+json.dumps(user_data))
         (directory/'meta-data').write_text(
             'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
         seed = directory/'seed.img'
         run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
-        run(['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk, '24G'])
+        command = ['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk]
+        if not (self.target.writable_arm_uefi or prepared):
+            command.append('24G')
+        run(command)
         return seed
 
     def wait_cloud_init(self):
@@ -832,6 +839,46 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
 
+def open_test_guest(base, directory, target, archive, python, kvm, timings, report):
+    from linux_vm_cache import export, restore, supported
+
+    cache = os.environ.get('COR_LINUX_PREPARED_DISK')
+    if cache and supported(target) and not kvm:
+        cache = Path(cache)
+        prepared = restore(cache, timings)
+        source = 'restored' if prepared else 'generated'
+        started = time.monotonic()
+        builder = None
+        guest = None
+        try:
+            if not prepared:
+                builder = VmGuest(base, directory, 'prepare-debian', target, kvm=kvm, timings={})
+                builder.stage(archive, python)
+                prepare_vm_guest(builder, directory)
+                prepared = export(builder, cache)
+                builder.close()
+                builder = None
+                timings['prepared_disk_build'] = round(time.monotonic() - started, 3)
+            print(f'Debian ARM64 prepared guest: {source}, {prepared.stat().st_size} bytes', flush=True)
+            guest = VmGuest(prepared, directory, 'prepared-image', target,
+                            kvm=kvm, timings=timings, prepared=True)
+            report['prepared_disk'] = {'source': source, 'bytes': prepared.stat().st_size}
+            if source == 'generated' and (output := os.environ.get('GITHUB_OUTPUT')):
+                with Path(output).open('a', encoding='utf-8') as stream:
+                    stream.write('prepared_disk=true\n')
+            return guest
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            if guest:
+                guest.close()
+            timings['prepared_disk_fallback'] = round(time.monotonic() - started, 3)
+            report['prepared_disk'] = {'source': 'fallback'}
+            print(f'::warning::Prepared guest unavailable, using the official image: {error}', flush=True)
+        finally:
+            if builder:
+                builder.close()
+    return VmGuest(base, directory, 'official-image', target, kvm=kvm, timings=timings)
+
+
 def vm_test(package_run_id, target):
     overall_started = time.monotonic()
     timings = {}
@@ -890,7 +937,7 @@ def vm_test(package_run_id, target):
                 phase_started = time.monotonic()
                 kvm = kvm_available()
                 result['acceleration'] = 'kvm' if kvm else 'tcg'
-                guest = VmGuest(base, directory, 'official-image', target, kvm=kvm, timings=timings)
+                guest = open_test_guest(base, directory, target, archive, python, kvm, timings, result)
                 timings['final_guest_boot'] = guest.boot_seconds
                 stage = 'guest_source_transfer'
                 guest.stage(archive, python)

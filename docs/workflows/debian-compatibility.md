@@ -9,7 +9,7 @@
 | 12 Bookworm | x64、ARM64 | `20261117-2665` |
 | 13 Trixie | x64、ARM64 | `20261116-2664` |
 
-下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证实际安装后的系统代理、TUN、DNS 和关闭恢复。ARM64 在 `ubuntu-24.04-arm` runner 上运行，来宾使用 Virtio GPU；无 KVM 时，桌面来宾按宿主可用核数分配至多四个 TCG vCPU。报告记录 KVM 或 TCG 和阶段耗时。TCG 下依赖安装和完整应用测试使用更长的有界等待。镜像与写入层留在当次 runner。
+下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证实际安装后的系统代理、TUN、DNS 和关闭恢复。ARM64 在 `ubuntu-24.04-arm` runner 上运行，来宾使用 Virtio GPU；无 KVM 时，桌面来宾按宿主可用核数分配至多四个 TCG vCPU。报告记录 KVM 或 TCG 和阶段耗时。TCG 下依赖安装和完整应用测试使用更长的有界等待。Debian 12 ARM64 TCG 可复用[预配置依赖盘](cache-coverage.md#下载与产物)，报告记录其大小、来源、恢复校验和构建或回退用时。
 
 启动前通过 `/dev/kvm` [创建并关闭空虚拟机](https://docs.kernel.org/virt/kvm/api.html#kvm-create-vm)。探测成功时通过 KVM 启动同架构来宾，ARM64 来宾采用宿主支持的 [GIC](https://www.qemu.org/docs/master/system/arm/virt.html)。探测失败时记录原因并使用 TCG。本项目的 GitHub 托管 x64 作业已用过 KVM，`ubuntu-24.04-arm` 的已核验运行使用 TCG。[GitHub Actions 团队](https://github.com/orgs/community/discussions/160591)计划随 Cobalt 200 迁移开放 ARM64 嵌套虚拟化，迁移期间取决于实际分配的宿主。支持 KVM 的 ARM64 裸机或提供嵌套虚拟化的 ARM64 自托管 runner 也可提供该设备。
 

@@ -4,7 +4,7 @@
 
 | 手动入口 | 固定来宾及架构 | 安装与桌面 |
 | --- | --- | --- |
-| Pop!_OS Compatibility | System76 22.04 build 58、24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动；DEB；分别验证 Pop GNOME 和 COSMIC |
+| Pop!_OS Compatibility | System76 22.04 build 58、24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，分别验证 Pop GNOME 和 COSMIC。COSMIC 保留 TUN 与应用代理，系统代理请求返回明确错误并保留原有路由 |
 | Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity；DEB；Zorin GNOME 与发行版原生托盘 |
 | Fedora Compatibility | Fedora Cloud Base 44-1.7、45-1.4（x64、ARM64） | 45 ARM64 使用 UEFI-UKI，其余使用 Generic；DNF 安装同源 RPM；GNOME Wayland |
 | openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18（x64、ARM64）；Tumbleweed 20261118（x64）、20261117（ARM64） | 可写 Cloud VM，Zypper 安装同架构的同源 RPM；GNOME Wayland |

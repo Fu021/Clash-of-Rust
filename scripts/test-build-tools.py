@@ -394,6 +394,11 @@ class UbuntuVmTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'reported a kernel panic'):
                     linux_ci.wait_vm_ssh(process, ['ssh'], console=console, console_offset=len(old_boot))
                 self.assertEqual(attempt.call_count, 1)
+                console.write_bytes(b'Generating "/run/initramfs/rdsosreport.txt"\r\n'
+                                    b'Entering emergency mode. Exit the shell to continue.\r\n')
+                with self.assertRaisesRegex(RuntimeError, 'entered emergency mode'):
+                    linux_ci.wait_vm_ssh(process, ['ssh'], console=console)
+                self.assertEqual(attempt.call_count, 1)
 
     def test_vm_reboot_checks_a_fresh_ssh_connection_and_rejects_the_previous_boot(self):
         guest = object.__new__(linux_ci.VmGuest)
@@ -416,6 +421,39 @@ class UbuntuVmTests(unittest.TestCase):
         self.assertEqual(ready.call_args.kwargs['console_offset'], len(b'earlier boot'))
         self.assertIn('systemctl reboot', remote.call_args_list[0].args[0])
         cloud_init.assert_called_once_with()
+
+    def test_fedora_uki_retains_the_official_gpt_geometry(self):
+        guest = object.__new__(linux_ci.VmGuest)
+        guest.target = linux_ci.target_for('fedora', '45', 'arm64')
+        with tempfile.TemporaryDirectory() as temporary, patch.object(linux_ci, 'run') as command:
+            guest.directory = Path(temporary)
+            guest.disk = guest.directory/'disk.qcow2'
+            guest.cloud_disk(guest.directory/'upstream.qcow2', 'ssh-ed25519 fixture')
+            self.assertEqual(command.call_args.args[0][-1], guest.disk)
+            user = json.loads((guest.directory/'user-data').read_text().split('\n', 1)[1])
+            self.assertEqual(user['growpart'], {'mode': 'off'})
+            self.assertIs(user['resize_rootfs'], False)
+
+    def test_prepared_guest_rejects_backing_file_and_mismatched_digest(self):
+        import linux_vm_cache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            disk = directory/linux_vm_cache.IMAGE
+            disk.write_bytes(b'fixture')
+            checksum = directory/linux_vm_cache.CHECKSUM
+            checksum.write_text(hashlib.sha256(b'fixture').hexdigest()+'\n')
+            metadata = {'format': 'qcow2', 'virtual-size': 24*1024**3}
+            with patch.object(linux_vm_cache.subprocess, 'check_output') as info:
+                info.return_value = json.dumps(metadata).encode()
+                timings = {}
+                self.assertEqual(linux_vm_cache.restore(directory, timings), disk)
+                self.assertIn('prepared_disk_verify', timings)
+                disk.write_bytes(b'changed')
+                self.assertIsNone(linux_vm_cache.restore(directory, {}))
+                disk.write_bytes(b'fixture')
+                info.return_value = json.dumps(dict(metadata, **{'backing-filename': 'other'})).encode()
+                self.assertIsNone(linux_vm_cache.restore(directory, {}))
 
     def test_vm_accepts_cloud_init_recoverable_errors_only_after_completion(self):
         for code, status, fatal in ((2, 'done', False), (2, 'error', True),
@@ -6732,6 +6770,8 @@ runpy.run_path(str(script), run_name='__main__')
         for older,newer in (
                 ('linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261110.1.0',
                  'linux-host-apt-v1-ubuntu-24.04-arm-'+'a'*16+'-20261117.1.0'),
+                ('linux-prepared-v1-debian-12-arm64-2026-46-'+'a'*64,
+                 'linux-prepared-v1-debian-12-arm64-2026-47-'+'b'*64),
                 ('linux-python-ubuntu20-v1-x64-'+'a'*64, 'linux-python-ubuntu20-v1-x64-'+'b'*64),
                 ('linux-cloud-ubuntu20-v1-arm64-'+'a'*64, 'linux-cloud-ubuntu20-v1-arm64-'+'b'*64),
                 ('linux-apt-ubuntu20-v1-x64-100-1', 'linux-apt-ubuntu20-v1-x64-101-1'),

@@ -107,7 +107,27 @@ jobs:
         with:
           path: ${{ runner.temp }}/cor-host-apt
           key: ${{ steps.vm-tools.outputs.key }}
+      - name: Identify the Debian ARM64 prepared guest
+        if: inputs.suite == 'debian' && matrix.release == '12' && matrix.arch == 'arm64' && github.ref == 'refs/heads/main'
+        id: guest-image
+        shell: python
+        run: |
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from linux_compatibility_targets import target_for
+          from linux_vm_cache import key
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"key={key(target_for('debian', '12', 'arm64'))}\n")
+      - name: Restore the Debian ARM64 prepared guest
+        if: steps.guest-image.outputs.key != ''
+        id: guest-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/cor-prepared-debian
+          key: ${{ steps.guest-image.outputs.key }}
       - name: Verify the installed CI candidate on the target distribution
+        id: verify
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ needs.resolve.outputs.ci_run_id }}
@@ -115,6 +135,7 @@ jobs:
           RELEASE: ${{ matrix.release }}
           EXPECTED_ARCH: ${{ matrix.arch }}
           COR_LINUX_TOOLS_DIR: ${{ runner.temp }}/cor-linux-tools
+          COR_LINUX_PREPARED_DISK: ${{ steps.guest-image.outputs.key != '' && format('{0}/cor-prepared-debian', runner.temp) || '' }}
         run: >
           python3 scripts/linux_ci.py verify --package-run-id "$SOURCE_RUN"
           --suite "$SUITE" --release "$RELEASE" --expect-arch "$EXPECTED_ARCH"
@@ -125,6 +146,24 @@ jobs:
           path: target/linux-report
           if-no-files-found: warn
           retention-days: 3
+      - name: Check space for the prepared guest cache
+        if: ${{ !cancelled() && steps.verify.outputs.prepared_disk == 'true' && steps.guest-cache.outputs.cache-hit != 'true' }}
+        id: guest-cache-space
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          used=$(gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" --jq .active_caches_size_in_bytes)
+          if [[ $used =~ ^[0-9]+$ ]] && (( used <= 30 * 1024 ** 3 )); then
+            echo "save=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save the Debian ARM64 prepared guest
+        if: ${{ !cancelled() && steps.guest-cache-space.outputs.save == 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/cor-prepared-debian
+          key: ${{ steps.guest-image.outputs.key }}
   record:
     name: Record compatibility
     needs: [resolve, installed]

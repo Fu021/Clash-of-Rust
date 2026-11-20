@@ -35,6 +35,9 @@ def lineage(key):
     if key.startswith('linux-host-apt-'):
         return re.sub(r'^(linux-host-apt-v\d+-ubuntu-\d+\.\d+(?:-arm)?-[a-f0-9]{16})-.+$',
                       r'\1', key)
+    if key.startswith('linux-prepared-'):
+        return re.sub(r'^linux-prepared-v\d+-(debian-\d+-arm64)-\d{4}-\d{2}-[0-9a-f]{64}$',
+                      r'linux-prepared-\1', key)
     if key.startswith('android-go-build-v1-'):
         return re.sub(r'-[0-9a-f]{64}$', '', key)
     if key.startswith(('linux-python-ubuntu20-', 'linux-cloud-ubuntu20-', 'linux-apt-ubuntu20-', 'linux-image-ubuntu20-')):

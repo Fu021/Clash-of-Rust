@@ -4,10 +4,11 @@ import json
 import os
 from pathlib import Path
 import platform
+import subprocess
 
 from build_support import write_json
 from linux_cosmic_windows import close, windows
-from linux_gui import cli, gui, output, tun_permissions, verify_authorization, wait_for
+from linux_gui import APP, gui, output, tun_permissions, verify_authorization, wait_for
 
 AUTH_MARKER = '.cor-cosmic-authorization'
 AUTH_PASSWORD = '.cor-cosmic-password'
@@ -45,7 +46,7 @@ def authorize(home):
         write_json(home/AUTH_RESULT, result)
 
 
-def verify_system_proxy(mixed_port):
+def verify_system_proxy(_mixed_port):
     program = (
         'import json; from gi.repository import Gio; '
         'resolver = Gio.ProxyResolver.get_default(); '
@@ -56,22 +57,25 @@ def verify_system_proxy(mixed_port):
     def resolve():
         return json.loads(output(['/usr/bin/python3', '-c', program]))
 
-    result = {'desktop': os.environ.get('XDG_CURRENT_DESKTOP'),
-              'expected_proxy': f'http://127.0.0.1:{mixed_port}'}
+    data = Path(os.environ['CLASH_OF_RUST_DATA_DIR'])
+    settings = data/'settings.json'
+    journal = data/'system-proxy.json'
+    result = {'desktop': os.environ.get('XDG_CURRENT_DESKTOP')}
     try:
         result['before'] = resolve()
-        try:
-            cli('proxy', 'system')
-            result['enabled'] = resolve()
-        finally:
-            cli('proxy', 'off')
-            result['after'] = resolve()
-        if result['after'] != result['before']:
-            raise RuntimeError('The native GIO proxy resolver did not return to its previous routing')
-        if result['expected_proxy'] not in result['enabled']['routes']:
-            raise RuntimeError('The native GIO proxy resolver did not select the installed proxy')
+        original = settings.read_bytes()
+        command = subprocess.run([APP/'cor', 'proxy', 'system'], text=True, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, timeout=30)
+        result['after'] = resolve()
+        result['refused'] = bool(command.returncode and 'COSMIC 桌面暂不支持系统代理' in command.stdout)
+        result['settings_unchanged'] = original == settings.read_bytes()
+        result['journal_absent'] = not journal.exists()
+        if (not all(result[key] for key in ('refused', 'settings_unchanged', 'journal_absent'))
+                or result['after'] != result['before']):
+            raise RuntimeError('COSMIC system proxy rejection changed the installed routing or settings')
     finally:
         write_json(Path(os.environ['COR_GUI_REPORT'])/PROXY_RESULT, result)
+    return {'desktop_system_proxy_refused': True}
 
 
 def main():

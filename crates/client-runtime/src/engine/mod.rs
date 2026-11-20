@@ -1944,6 +1944,9 @@ impl Engine {
     }
 
     pub async fn select_proxy_mode(&mut self, mode: ProxyMode) -> Result<()> {
+        if mode == ProxyMode::System {
+            platform::ensure_system_proxy_supported()?;
+        }
         if self.remote.is_some() {
             self.remote_mutate(ControlCommand::Proxy { mode }).await?;
             return Ok(());

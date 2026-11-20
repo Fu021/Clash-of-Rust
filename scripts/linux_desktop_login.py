@@ -77,20 +77,25 @@ def configure_tumbleweed_autologin():
     run(['sudo', 'tee', DISPLAYMANAGER_SYSCONFIG], input=config, text=True, stdout=subprocess.DEVNULL)
 
 
-def prepare(report, desktop, release):
+def install_login_dependencies(desktop, release):
     distribution = release['ID']
     packages = ['dbus-user-session', 'libgtk-3-bin', 'wmctrl']
     if distribution == 'debian':
         packages.extend(['gdm3', 'gnome-session', 'gnome-screenshot', 'xserver-xorg'])
         if release['VERSION_ID'] == '13':
             packages.append('gnome-session-xsession')
-    elif desktop == CINNAMON and not Path('/usr/share/xsessions/cinnamon.desktop').is_file():
-        raise RuntimeError('The installed Mint guest lacks the Cinnamon X11 session')
     elif desktop == COSMIC:
         packages.extend(['gcc', 'libc6-dev', 'libwayland-dev', 'libwayland-bin', 'wayland-protocols',
                          'python3-gi', 'glib-networking'])
     if desktop != GNOME_WAYLAND:
         install(packages, timeout=guest_budget(600, 1800), no_recommends=True)
+
+
+def prepare(report, desktop, release):
+    distribution = release['ID']
+    if desktop == CINNAMON and not Path('/usr/share/xsessions/cinnamon.desktop').is_file():
+        raise RuntimeError('The installed Mint guest lacks the Cinnamon X11 session')
+    install_login_dependencies(desktop, release)
     run(['sudo', 'systemctl', 'stop', desktop.service])
     groups = ['--groups', 'sudo'] if desktop in (CINNAMON, COSMIC) else []
     run(['sudo', 'useradd', '--create-home', '--shell', '/bin/bash', *groups, USER])

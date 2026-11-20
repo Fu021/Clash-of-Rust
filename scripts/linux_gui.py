@@ -453,8 +453,9 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
             raise RuntimeError('GUI and CLI did not share exactly one GUI-owned core: '
                                f'GUI PID {owner.pid}, core processes {processes}, '
                                f'CLI owner {before.get("owner")}, running {before.get("running")}')
+        proxy_result = {}
         if verify_proxy:
-            verify_proxy(mixed_port)
+            proxy_result = verify_proxy(mixed_port) or {'desktop_system_proxy_restored': True}
         with Session([APP/'cor', 'ui'], env=env) as terminal:
             terminal.wait('CLASH OF RUST')
             terminal.send(terminal.page_key('订阅'))
@@ -493,8 +494,7 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
         cli('stop')
         return {'windows': windows, 'tray': True, 'graceful_close': True, 'renderer_crash': True,
                 'core_pid_preserved': True, 'cli_state_preserved': True,
-                'tui_reads_gui_profiles': True,
-                **({'desktop_system_proxy_restored': True} if verify_proxy else {})}
+                'tui_reads_gui_profiles': True, **proxy_result}
 
 
 def _renderer(path, owner):
