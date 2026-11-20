@@ -9032,14 +9032,28 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
         import linux_desktop_login
 
         display = SimpleNamespace(environment={})
+        unregistered = ('Unregistered Authentication Agent for unix-session:1 '
+                        '(system bus name :1.47, object path /com/system76/CosmicOsd)')
+        registered = ('Registered Authentication Agent for unix-session:1 '
+                      '(system bus name :1.51 [/usr/bin/cosmic-osd], '
+                      'object path /com/system76/CosmicOsd, locale en_US)')
         guest = SimpleNamespace(monitor_path=Path('/fixture/qmp.sock'), display=display,
-                                output=MagicMock(side_effect=['', 'cancel', '', 'accept', 'a'*48]))
+                                remote=MagicMock(), output=MagicMock(side_effect=[
+                                    '', 'login 1', unregistered, '', 'login 1', registered,
+                                    '', 'cancel', '', 'accept', 'a'*48,
+                                ]))
         report = Path('/fixture/reports')
         with patch.object(linux_cosmic_authorization, 'Monitor') as monitor, \
                 patch.object(linux_cosmic_authorization, 'answer_dialog') as answer, \
+                patch.object(linux_cosmic_authorization.time, 'sleep'), \
                 patch.object(linux_desktop_login, 'HOME', Path('/home/test fixture')):
             linux_cosmic_authorization.verify_dialogs(guest, report)
         self.assertIn("'/home/test fixture/cosmic-authorization.json'", guest.output.call_args_list[0].args[0])
+        journal_calls = [entry.args[0] for entry in guest.output.call_args_list if 'journalctl' in entry.args[0]]
+        self.assertEqual(len(journal_calls), 2)
+        self.assertTrue(all('unix-session:1' in command for command in journal_calls))
+        self.assertIn("'/home/test fixture/.cor-cosmic-authorization'", guest.remote.call_args.args[0])
+        guest.remote.assert_called_once()
         self.assertEqual(answer.call_args_list, [
             call(monitor.return_value, report/'cosmic-authorization-cancel.png', {}, None),
             call(monitor.return_value, report/'cosmic-authorization-accept.png', {}, 'a'*48),
@@ -9053,8 +9067,15 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             home = Path(temporary)
             password = home/linux_cosmic_desktop.AUTH_PASSWORD
             password.touch(mode=0o600)
+            marker = home/linux_cosmic_desktop.AUTH_MARKER
+
+            def acknowledge(_delay):
+                if marker.is_file():
+                    self.assertEqual(marker.read_text(), 'login 1')
+                    marker.write_text('ready')
+
             with patch.object(linux_cosmic_desktop, 'output', side_effect=['', '1', 'no', '1', 'yes']) as output, \
-                    patch.object(linux_gui.time, 'sleep'), \
+                    patch.object(linux_gui.time, 'sleep', side_effect=acknowledge), \
                     patch.object(linux_cosmic_desktop, 'tun_permissions', return_value=('', 0o755)), \
                     patch.object(linux_cosmic_desktop, 'verify_authorization', return_value={'fixture': True}):
                 linux_cosmic_desktop.authorize(home)
@@ -9067,16 +9088,18 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
         import linux_cosmic_authorization
 
         result = {'error': 'The COSMIC user has no real display login'}
+        log = 'Error executing command as another user: Not authorized'
         guest = SimpleNamespace(monitor_path=Path('/fixture/qmp.sock'),
-                                output=MagicMock(return_value=json.dumps(result)))
+                                output=MagicMock(side_effect=[json.dumps(result), log]))
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary)
             with patch.object(linux_cosmic_authorization, 'Monitor') as monitor, \
                     patch.object(linux_cosmic_authorization, 'answer_dialog') as answer, \
-                    self.assertRaisesRegex(RuntimeError, 'before the expected cancel dialog'):
+                    self.assertRaisesRegex(RuntimeError, 'before agent registration'):
                 linux_cosmic_authorization.verify_dialogs(guest, report)
             self.assertEqual(json.loads((report/'cosmic-authorization-early-result.json').read_text()),
-                             {'expected_phase': 'cancel', 'guest_result': result})
+                             {'expected_phase': 'agent registration', 'guest_result': result,
+                              'authorization_log': log})
             answer.assert_not_called()
             monitor.return_value.close.assert_called_once()
 

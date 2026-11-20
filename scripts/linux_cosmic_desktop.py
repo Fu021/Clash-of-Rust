@@ -13,6 +13,7 @@ from linux_gui import APP, gui, output, tun_permissions, verify_authorization, w
 AUTH_MARKER = '.cor-cosmic-authorization'
 AUTH_PASSWORD = '.cor-cosmic-password'
 AUTH_RESULT = 'cosmic-authorization.json'
+AUTH_LOG = 'cosmic-authorization.log'
 PROXY_RESULT = 'system-proxy.json'
 
 
@@ -33,10 +34,15 @@ def authorize(home):
         if tun_permissions() != ('', 0o755):
             raise RuntimeError('COSMIC authorization requires an unprivileged installed helper')
 
-        def request_input(allow):
-            (home/AUTH_MARKER).write_text('accept' if allow else 'cancel')
+        marker = home/AUTH_MARKER
+        marker.write_text(f'login {result["session"]}')
+        wait_for('COSMIC authorization agent was not ready for the display login',
+                 lambda: marker.read_text() == 'ready', timeout=120)
 
-        with (home/'cosmic-authorization.log').open('w') as log:
+        def request_input(allow):
+            marker.write_text('accept' if allow else 'cancel')
+
+        with (home/AUTH_LOG).open('w') as log:
             result.update(verify_authorization(log, password, lambda: '', respond=request_input))
     except Exception as error:
         result['error'] = str(error)

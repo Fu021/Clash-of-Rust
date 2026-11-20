@@ -129,16 +129,31 @@ def answer_dialog(monitor, screenshot, environment, password=None, timeout=90):
 
 
 def verify_dialogs(guest, report):
-    from linux_cosmic_desktop import AUTH_MARKER, AUTH_PASSWORD, AUTH_RESULT
+    from linux_cosmic_desktop import AUTH_LOG, AUTH_MARKER, AUTH_PASSWORD, AUTH_RESULT
     from linux_desktop_login import HOME, USER
 
     def read(path):
         command = shlex.join(['sudo', '-u', USER, '--', 'head', '-c', '4096', '--', str(HOME/path)])
         return guest.output(f'{command} 2>/dev/null || true', timeout=15).strip()
 
+    def agent_ready(state):
+        session = re.fullmatch(r'login ([a-zA-Z0-9]+)', state)
+        if session is None:
+            return False
+        pattern = rf'^(Registered|Unregistered) Authentication Agent for unix-session:{session[1]} \('
+        command = shlex.join(['sudo', '-n', 'journalctl', '--boot', '--unit=polkit.service',
+                              '--lines=1', '--output=cat', '--no-pager', '--grep', pattern])
+        registration = guest.output(f'{command} || test $? -eq 1', timeout=15).strip()
+        if not (registration.startswith('Registered Authentication Agent for ')
+                and re.search(r'\[(?:[^ \]]*/)?cosmic-osd(?:[ \]])', registration)):
+            return False
+        command = shlex.join(['sudo', '-u', USER, '--', 'tee', str(HOME/AUTH_MARKER)])
+        guest.remote(f'printf %s ready | {command} >/dev/null', timeout=15)
+        return True
+
     monitor = Monitor(guest.monitor_path)
     try:
-        for phase in ('cancel', 'accept'):
+        for phase in ('agent registration', 'cancel', 'accept'):
             deadline = time.monotonic() + 150
             while time.monotonic() < deadline:
                 result = read(AUTH_RESULT)
@@ -149,13 +164,18 @@ def verify_dialogs(guest, report):
                 if isinstance(result, dict):
                     write_json(report/'cosmic-authorization-early-result.json', {
                         'expected_phase': phase, 'guest_result': result,
+                        'authorization_log': read(AUTH_LOG),
                     })
-                    raise RuntimeError('COSMIC authorization exited before the expected '+phase+' dialog')
-                if read(AUTH_MARKER) == phase:
+                    raise RuntimeError(f'COSMIC authorization exited before {phase}')
+                state = read(AUTH_MARKER)
+                ready = agent_ready(state) if phase == 'agent registration' else state == phase
+                if ready:
                     break
                 time.sleep(1)
             else:
-                raise TimeoutError('COSMIC authorization did not request '+phase)
+                raise TimeoutError(f'COSMIC authorization did not reach {phase}')
+            if phase == 'agent registration':
+                continue
             password = None if phase == 'cancel' else read(AUTH_PASSWORD)
             answer_dialog(monitor, report/f'cosmic-authorization-{phase}.png', guest.display.environment, password)
     finally:

@@ -28,7 +28,7 @@ Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`。该代
 
 Debian、openSUSE 和 Arch 的隔离 X11 探针使用 MATE 授权代理。在可见窗体和 [polkit 的隐藏输入请求](https://github.com/polkit-org/polkit/blob/127/src/polkitagent/polkitagentsession.c)都就绪后才发送操作；每次重启代理同时清空私有探测输出。报告记录验收结果，原始认证调试流只在探针运行期间使用。
 
-COSMIC 登录探针等待 logind 标记本次桌面会话为活动状态后发起授权。宿主依次用原图、去黑边灰度图和全幅灰度图定位实际授权对话框。取消阶段点击 `Cancel`，接受阶段点击 `Password` 输入框，再用 [COSMIC 密码框的回车提交](https://github.com/pop-os/cosmic-osd/blob/master/src/components/polkit_dialog.rs)完成图形授权。两阶段均匹配应用授权文本，验收确认取消保留原权限、接受后安装助手取得预期权限。实际登录通过窗口列表和托盘注册确认应用状态。关闭操作要求窗口列表中恰有一个匹配项且合成器声明支持关闭，随后确认窗口消失、原 PID 仍在。原生 Wayland GUI 阶段单独检查窗口尺寸。宿主捕获授权取证和失败画面，探针在预期弹窗前终止时另存来宾结果。
+COSMIC 登录探针在 logind 标记桌面会话为活动状态后，等待[来宾的 polkit 日志](https://github.com/polkit-org/polkit/blob/124/src/polkitbackend/polkitbackendinteractiveauthority.c#L2424-L2442)确认 `cosmic-osd` 已为同一次登录注册认证代理，再发起授权。宿主依次用原图、去黑边灰度图和全幅灰度图定位实际授权对话框。取消阶段点击 `Cancel`，接受阶段点击 `Password` 输入框，再用 [COSMIC 密码框的回车提交](https://github.com/pop-os/cosmic-osd/blob/master/src/components/polkit_dialog.rs)完成图形授权。两阶段均匹配应用授权文本，验收确认取消保留原权限、接受后安装助手取得预期权限。实际登录通过窗口列表和托盘注册确认应用状态。关闭操作要求窗口列表中恰有一个匹配项且合成器声明支持关闭，随后确认窗口消失、原 PID 仍在。原生 Wayland GUI 阶段单独检查窗口尺寸。宿主捕获授权取证和失败画面，探针提前退出时另存来宾结果及有限长度的 `pkexec` 输出。
 
 COSMIC 的[合成器刷新](https://github.com/pop-os/cosmic-comp/blob/master/src/wayland/protocols/toplevel_info.rs)异步发送几何事件。探针识别出目标窗口后最多等待一秒接收几何，原生 Wayland 验收仍检查 800×450 的最低尺寸。
 
