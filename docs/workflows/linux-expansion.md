@@ -12,7 +12,7 @@
 | openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.18、Tumbleweed 20261118（x64） | 可写 Cloud VM，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
-镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照。这里的 QEMU 来宾统一用 x64 `ubuntu-24.04` runner。COSMIC 的登录和窗口问题按需运行 [live ISO 启动诊断](cosmic-startup.md)。
+镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Tumbleweed 镜像直接从 openSUSE 官方内容源取固定快照。这里的 QEMU 来宾统一用 x64 `ubuntu-24.04` runner。
 
 新增或替换目标时核对发行版的维护期限和镜像来源。上游宣布停止维护后，复查本项目是否仍需该目标作为明确的兼容基线。替换受支持目标须先验证替代版本，再同步目标矩阵、公开支持范围和发布门禁。滚动版每次更换快照都记录日期与摘要，使用配套的软件源并完整复验。Ubuntu 的最低内核基线见 [Ubuntu 兼容验证](ubuntu-compatibility.md)。
 
@@ -25,6 +25,8 @@
 ## 完整验收与诊断
 
 首轮完整验收覆盖普通用户 GUI/TUI/CLI、共享后台、代理/TUN/DNS、图形授权拒绝与允许、登录自启动迁移、托盘与菜单恢复同一进程、原生包升级及卸载后的数据保留。COSMIC 保留 TUN 与应用代理，系统代理请求返回明确错误并保留原有路由。Fedora、openSUSE、Arch 在 GNOME 使用 AppIndicator 扩展验证托盘。RPM 和 Arch 的首个升级夹具使用经 SHA256 校验的公开旧 DEB 重新封装。
+
+复查 COSMIC 登录、旧自启动入口迁移和窗口恢复时，在 Pop!_OS 24.04 目标启用 `full_desktop` 并运行 Pop!_OS Compatibility。现场日志可按[桌面启动诊断](../diagnostics.md#桌面启动与托盘)核对。
 
 Fedora 的隔离 X11 授权探针使用发行版提供的 `xfce-polkit`。该代理可在收到 [PAM 密码请求](https://github.com/ncopa/xfce-polkit/blob/6d3282cc1734c305850d48f5bf4b4d94e88885e9/src/xfce-polkit-listener.c)前显示窗体。验收同时等待可见窗体和本次会话的密码请求，取消后重新注册代理，原始代理调试输出只用于探测。来宾先从 Fedora 官方仓库更新 `pam`、`liblastlog2` 和 `selinux-policy-targeted`。后两者分别包含 [Fedora 44 PAM 模块加载修复](https://bugzilla.redhat.com/show_bug.cgi?id=2453457)及 [polkit socket 助手域转换修复](https://github.com/fedora-selinux/selinux-policy/commit/8ad5d5112fa8b47426e0e6674616d5577f825fde)。失败报告记录已装版本和相关审核事件。
 

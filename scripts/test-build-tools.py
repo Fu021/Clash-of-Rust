@@ -85,17 +85,6 @@ _linux_tun_spec = importlib.util.spec_from_file_location(
 linux_tun_test = importlib.util.module_from_spec(_linux_tun_spec)
 _linux_tun_spec.loader.exec_module(linux_tun_test)
 
-_cosmic_startup_guest_spec = importlib.util.spec_from_file_location(
-    'cosmic_startup_guest', build.ROOT/'scripts/cosmic_startup_guest.py')
-cosmic_startup_guest = importlib.util.module_from_spec(_cosmic_startup_guest_spec)
-_cosmic_startup_guest_spec.loader.exec_module(cosmic_startup_guest)
-
-_cosmic_startup_host_spec = importlib.util.spec_from_file_location(
-    'cosmic_startup_host', build.ROOT/'scripts/investigate-cosmic-startup.py')
-cosmic_startup_host = importlib.util.module_from_spec(_cosmic_startup_host_spec)
-_cosmic_startup_host_spec.loader.exec_module(cosmic_startup_host)
-
-
 class TunDnsFixtureTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == 'linux', 'Linux namespace signal handling')
     def test_tun_namespace_children_can_terminate_when_unshare_ignores_signals(self):
@@ -7936,10 +7925,9 @@ success="$1"
         self.assertIn('lsblk --raw --noheadings --nodeps --output RO "$disk"', INSTALL)
         subprocess.run(['sh', '-n'], input=INSTALL, text=True, check=True)
 
-    def test_pop_install_and_cosmic_diagnostic_share_live_boot_files(self):
+    def test_pop_install_extracts_kernel_and_initrd_from_the_same_live_media(self):
         from pop_live_install import extract_casper_boot
 
-        self.assertIs(cosmic_startup_host.extract_casper_boot, extract_casper_boot)
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             for suite in ('22.04', '24.04'):
@@ -9036,7 +9024,7 @@ class AptCacheTests(unittest.TestCase):
                 self.assertEqual(failure.exception.returncode, 101)
 
 
-class CosmicStartupInvestigationTests(unittest.TestCase):
+class CosmicDesktopCompatibilityTests(unittest.TestCase):
     def test_compatibility_authorization_retries_ocr_timeout_without_clicking(self):
         import linux_cosmic_authorization
 
@@ -9202,11 +9190,8 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             answer.assert_not_called()
             monitor.return_value.close.assert_called_once()
 
-    def test_diagnostic_workflow_cannot_restore_or_save_build_caches(self):
-        workflow = (build.ROOT/'.github/workflows/cosmic-startup-investigation.yml').read_text()
-        self.assertNotRegex(workflow, r'uses:\s*(?:actions/cache|Swatinem/rust-cache)')
-        self.assertNotRegex(workflow, r'uses:\s*\./\.github/actions/linux-build-cache')
-        self.assertNotRegex(workflow, r'\b(?:gh cache|saveCache|restoreCache)\b')
+
+class LinuxVmConsoleTests(unittest.TestCase):
 
     def test_monitor_negotiates_before_using_the_short_command_timeout(self):
         import linux_vm_monitor
@@ -9216,7 +9201,7 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
         connection = MagicMock()
         connection.makefile.return_value = stream
         with patch.object(linux_vm_monitor.socket, 'socket', return_value=connection):
-            monitor = cosmic_startup_host.ScreenshotMonitor(Path('/fixture/qmp.sock'), ':93')
+            monitor = linux_vm_monitor.Monitor(Path('/fixture/qmp.sock'))
         self.assertEqual(connection.settimeout.call_args_list, [call(60), call(10)])
         request = json.loads(connection.sendall.call_args.args[0])
         self.assertEqual(request['execute'], 'qmp_capabilities')
@@ -9239,76 +9224,14 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
                 stream.readline.side_effect = [greeting, failure] if failure else [greeting]
                 with patch.object(linux_vm_monitor.socket, 'socket', return_value=connection):
                     with self.assertRaises((TimeoutError, RuntimeError)):
-                        cosmic_startup_host.ScreenshotMonitor(Path('/fixture/qmp.sock'), ':93')
+                        linux_vm_monitor.Monitor(Path('/fixture/qmp.sock'))
                 stream.close.assert_called_once()
                 connection.close.assert_called_once()
                 self.assertEqual(connection.settimeout.call_args_list, [call(60)])
 
-    def test_login_requires_a_new_user_manager_as_well_as_a_new_compositor(self):
-        account = SimpleNamespace(pw_uid=1000)
-        state = {'active': 'active', 'manager': 'previous', 'pid': '11', 'environment': None}
-        expected = {'WAYLAND_DISPLAY': 'wayland-1'}
-
-        def command(*arguments):
-            if arguments[0] == 'pgrep':
-                return '11\n'
-            return state['active'] if '--property=ActiveState' in arguments else state['manager']
-
-        def run(arguments, **options):
-            if arguments[0] == 'pgrep':
-                return subprocess.CompletedProcess(arguments, 0, state['pid'] + '\n', '')
-            return subprocess.CompletedProcess(arguments, 0, '', '')
-
-        def wait(read, **options):
-            if read.__name__ != 'new_session':
-                self.assertFalse(read())
-                state['active'] = 'inactive'
-                return read()
-            self.assertFalse(read())
-            state['pid'] = '22'
-            self.assertFalse(read())
-            state['manager'] = 'current'
-            self.assertFalse(read())
-            state['environment'] = expected
-            return read()
-
-        with patch.object(cosmic_startup_guest, 'command', side_effect=command), \
-                patch.object(cosmic_startup_guest.subprocess, 'run', side_effect=run) as invoke, \
-                patch.object(cosmic_startup_guest, 'wait_for', side_effect=wait), \
-                patch.object(cosmic_startup_guest, 'session_environment',
-                             side_effect=lambda account: state['environment']):
-            result = cosmic_startup_guest.restart_login(account)
-        self.assertEqual(result, {'previous_manager': 'previous', 'current_manager': 'current'})
-        lifecycle = [call.args[0] for call in invoke.call_args_list if call.args[0][0] == 'systemctl']
-        self.assertEqual(lifecycle, [
-            ['systemctl', 'stop', 'display-manager'],
-            ['systemctl', 'stop', 'user@1000.service'],
-            ['systemctl', 'start', 'display-manager'],
-        ])
-
-    def test_login_without_an_identifiable_manager_does_not_stop_the_session(self):
-        with patch.object(cosmic_startup_guest, 'command', side_effect=['11\n', '']), \
-                patch.object(cosmic_startup_guest.subprocess, 'run') as invoke:
-            with self.assertRaisesRegex(RuntimeError, 'no identifiable user manager'):
-                cosmic_startup_guest.restart_login(SimpleNamespace(pw_uid=1000))
-        invoke.assert_not_called()
-
-    def test_failed_stage_preserves_startup_records_and_missing_entry_errors(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            account = SimpleNamespace(pw_uid=1000, pw_name='example', pw_dir=temporary)
-            record = {'session_id': 'observed', 'status': {'tray_state': 'pending'}}
-            missing = subprocess.CompletedProcess([], 1, '', 'User bus is unavailable')
-            with patch.object(cosmic_startup_guest, 'startup_traces', return_value=iter([record])), \
-                    patch.object(cosmic_startup_guest.subprocess, 'run', return_value=missing):
-                evidence = cosmic_startup_guest.failure_evidence(account)
-            self.assertEqual(evidence['startup_records'], [record])
-            self.assertEqual(evidence['autostart']['error'], 'FileNotFoundError')
-            for field in ('manager', 'autostart_units', 'application_journal'):
-                self.assertEqual(evidence[field]['exit_code'], 1)
-                self.assertEqual(evidence[field]['stderr'], 'User bus is unavailable')
-
     @unittest.skipUnless(sys.platform.startswith('linux'), 'Requires a Linux terminal')
     def test_serial_probe_recovers_from_an_incomplete_command_in_a_real_terminal(self):
+        import linux_vm_console
         import pty
         import select
         import signal
@@ -9338,12 +9261,12 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             expect(b'fixture-ready> ')
             os.write(terminal, b"printf '\n")
             expect(b'fixture-incomplete> ')
-            console = object.__new__(cosmic_startup_host.Console)
+            console = object.__new__(linux_vm_console.Console)
             console.connection = SimpleNamespace(sendall=lambda payload: os.write(terminal, payload))
             console.receive = receive
             real_clock = time.monotonic
             started = real_clock()
-            with patch.object(cosmic_startup_host.time, 'monotonic',
+            with patch.object(linux_vm_console.time, 'monotonic',
                               side_effect=lambda: started + (real_clock() - started) * 200):
                 console.wait_shell(SimpleNamespace(poll=lambda: None))
         finally:
@@ -9353,111 +9276,6 @@ class CosmicStartupInvestigationTests(unittest.TestCase):
             except ProcessLookupError:
                 pass
             os.waitpid(child, 0)
-
-    def test_package_manager_lock_wait_is_bounded_and_does_not_hide_dependency_errors(self):
-        lock = 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1254 (apt-get)\n'
-        clock = [0]
-        results = [
-            subprocess.CompletedProcess(['apt-get'], 100, lock),
-            subprocess.CompletedProcess(['apt-get'], 0, 'Fetched package lists\n'),
-        ]
-        with patch.object(cosmic_startup_guest.subprocess, 'run', side_effect=results) as invoke, \
-                patch.object(cosmic_startup_guest.time, 'monotonic', side_effect=lambda: clock[0]), \
-                patch.object(cosmic_startup_guest.time, 'sleep',
-                             side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)), \
-                contextlib.redirect_stdout(io.StringIO()):
-            cosmic_startup_guest.apt('update', timeout=30)
-        self.assertEqual(invoke.call_count, 2)
-        command = invoke.call_args.args[0]
-        self.assertEqual(command[:2], ['apt-get', '-o'])
-        self.assertEqual(command[-1], 'update')
-        self.assertEqual(invoke.call_args.kwargs['env']['LC_ALL'], 'C')
-        failure = subprocess.CompletedProcess(['apt-get'], 100, 'E: Unmet dependencies\n')
-        with patch.object(cosmic_startup_guest.subprocess, 'run', return_value=failure) as invoke, \
-                patch.object(cosmic_startup_guest.time, 'sleep') as pause, \
-                contextlib.redirect_stdout(io.StringIO()):
-            with self.assertRaises(subprocess.CalledProcessError):
-                cosmic_startup_guest.apt('install', 'missing')
-        self.assertEqual(invoke.call_count, 1)
-        pause.assert_not_called()
-        clock[0] = 0
-        with patch.object(cosmic_startup_guest.subprocess, 'run', return_value=results[0]) as invoke, \
-                patch.object(cosmic_startup_guest.time, 'monotonic', side_effect=lambda: clock[0]), \
-                patch.object(cosmic_startup_guest.time, 'sleep',
-                             side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)), \
-                contextlib.redirect_stdout(io.StringIO()):
-            with self.assertRaises(TimeoutError):
-                cosmic_startup_guest.apt('update', timeout=10)
-        self.assertEqual(invoke.call_count, 2)
-        self.assertEqual(clock[0], 10)
-
-    def test_session_environment_uses_a_real_compositor_process(self):
-        account = SimpleNamespace(pw_uid=os.getuid(), pw_dir='/home/example', pw_name='example')
-        with tempfile.TemporaryDirectory() as temporary:
-            processes = Path(temporary)
-
-            def process(pid, command, environment):
-                directory = processes/str(pid)
-                directory.mkdir()
-                (directory/'comm').write_text(command+'\n')
-                (directory/'environ').write_text(
-                    '\0'.join(key+'='+value for key, value in environment.items()))
-
-            process(10, 'cosmic-session', {})
-            process(20, 'cosmic-panel', {
-                'DISPLAY': ':1', 'WAYLAND_DISPLAY': 'wayland-1', 'PASSWORD': 'not-exported',
-            })
-            with patch.object(Path, 'is_socket', return_value=True):
-                environment = cosmic_startup_guest.session_environment(account, processes)
-            self.assertEqual(environment['DISPLAY'], ':1')
-            self.assertEqual(environment['WAYLAND_DISPLAY'], 'wayland-1')
-            self.assertEqual(environment['XDG_RUNTIME_DIR'], f'/run/user/{account.pw_uid}')
-            self.assertNotIn('PASSWORD', environment)
-            with patch.object(Path, 'is_socket', return_value=False):
-                self.assertIsNone(cosmic_startup_guest.session_environment(account, processes))
-            account.pw_uid += 1
-            with patch.object(Path, 'is_socket', return_value=True):
-                self.assertIsNone(cosmic_startup_guest.session_environment(account, processes))
-            account.pw_uid -= 1
-            shutil.rmtree(processes/'10')
-            shutil.rmtree(processes/'20')
-            process(30, 'browser', {'DISPLAY': ':1', 'WAYLAND_DISPLAY': 'wayland-1'})
-            with patch.object(Path, 'is_socket', return_value=True):
-                self.assertIsNone(cosmic_startup_guest.session_environment(account, processes))
-
-    def test_startup_record_requires_a_new_live_session_and_reused_manual_process(self):
-        account = SimpleNamespace(pw_uid=os.getuid())
-
-        def record(session, *, background=True, visible=True, pid=None):
-            return {
-                'schema': 1, 'kind': 'desktop_startup', 'session_id': session,
-                'pid': os.getpid() if pid is None else pid,
-                'background_requested': background,
-                'status': {'window_visible': visible, 'tray_state': 'created'},
-            }
-
-        def trace(records, **arguments):
-            with patch.object(cosmic_startup_guest, 'startup_traces',
-                              return_value=iter(records)):
-                return cosmic_startup_guest.trace(account, **arguments)
-
-        old = record('old')
-        new = record('new', visible=False)
-        self.assertIs(trace([old, new], background=True, visible=False,
-                            excluded={'old'}), new)
-        self.assertIsNone(trace([old], background=True, visible=False, excluded={'old'}))
-        background = record('background', visible=False)
-        manual = record('background', visible=True)
-        self.assertIs(trace([manual], background=True, visible=True,
-                            session='background'), manual)
-        self.assertIsNone(trace([manual], background=True, visible=True, session='other'))
-        self.assertIsNone(trace([record('dead', pid=999999999)],
-                                background=True, visible=True))
-        missing = record('missing')
-        missing['status']['tray_state'] = 'failed'
-        self.assertIsNone(trace([missing], background=True, visible=True))
-        with self.assertRaises(RuntimeError):
-            trace([record('one'), record('two')], background=True, visible=True)
 
 
 if __name__ == '__main__':

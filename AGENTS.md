@@ -41,7 +41,7 @@
 - 按[改动范围](docs/development.md#按改动选择验证)选择验证，推送后跟进最终提交的相关 CI；失败则定位并修复。网站独立改版不派发客户端兼容、内存或不发布核验；客户端改动按受影响平台验证，公开发布前完成[发布范围所需的同提交兼容与发行核验](docs/workflows/release.md#兼容性发布门禁)。正式版发布流程完成同提交验证后，不再重复不发布打包。不以相关验证运行中收尾，按[历史耗时](docs/workflows.md#actions-跟进节奏)低频查询：CI 约 10 分钟首查、之后 5 分钟；打包约 7 分钟首查、之后 2～3 分钟，排队或长步骤延长。runner 未分配导致相关验证失败时自动重试失败 job，无需再次确认。
 - 最终合并前按[脚本说明](scripts/README.md)核对全仓调用关系，合并重复入口、删除弃用脚本并同步调用者。
 - [Publish Release](docs/workflows/release.md)默认用 `check_only=true`，复用同提交成功 CI 与依赖快照，核验附件及 Release 未变；流程结束前不推进来源分支。公开发布、签名、额外工作流及版本调整须用户明确授权。
-- 常驻 **CI、Publish Release、Memory Benchmark**；维护者另已授权[工作流索引](docs/workflows.md)中的手动兼容验证及 COSMIC 启动诊断。兼容验证复用同提交成功 CI 产物，门禁按[发布范围](docs/workflows/release.md#兼容性发布门禁)执行。Android 截图和诊断为可选扩展。Linux 每个受验发行版使用独立入口和固定版本。新增其他含临时工作流仍须维护者同意。源码与候选包归 CI；发布复用验收结果，仅保留发行签名后的必要验证与公开发布。
+- 常驻 **CI、Publish Release、Memory Benchmark**；维护者另已授权[工作流索引](docs/workflows.md)中的手动兼容验证。兼容验证复用同提交成功 CI 产物，门禁按[发布范围](docs/workflows/release.md#兼容性发布门禁)执行。Android 截图和诊断为可选扩展。Linux 每个受验发行版使用独立入口和固定版本。新增其他含临时工作流仍须维护者同意。源码与候选包归 CI；发布复用验收结果，仅保留发行签名后的必要验证与公开发布。
 - `.github/` 变更及外部 fork 每次运行须维护者审核；遵守隔离、网络和 Secrets 限制，不擅自取消他人运行、删除历史或附件。弃用工作流须删除文件并由维护者在 GitHub 禁用。
 - 工作流的跨运行缓存使用 [GitHub Actions Cache](docs/workflows/cache-coverage.md)，源码、工具与镜像来自公开上游。同提交的快照、候选包与验收报告通过 Actions artifact 分发。
 
