@@ -155,7 +155,7 @@ TARGETS = {
     'opensuse': (
         leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
         leap_target('16.1', '3.18', 'x64', '2cbf0121ccb8eef5452b43e14685715452ffa049e6a618bb165382aa1f2aab3b'),
-        tumbleweed_target('20261118', 'x64', 'c1cb4f8eb3dd0b86d496ba78f10dc35fdfe062aab642b32ea0421b447e6ee1fb'),
+        tumbleweed_target('20261119', 'x64', '941eafeafc2361d7097652ff86e2f06ebb6ef654566687d0759af530fb53af5a'),
     ),
     'arch': (
         Target('arch', '20261115.625457', 'x64',

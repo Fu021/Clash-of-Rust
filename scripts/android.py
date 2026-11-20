@@ -1,6 +1,7 @@
 """Build Android on Actions and package the exact APK tested by its CI."""
 import argparse
 from collections import deque
+from contextlib import ExitStack, contextmanager
 import io
 import json
 import math
@@ -231,7 +232,35 @@ def prepare_emulator(sdk, manager, device_root, *, legacy=False, api=None):
             run(['unzip', '-q', archive, '-d', runtime], timeout=120)
         emulator = runtime/'emulator'
     verify_emulator_versions(sdk, legacy, api, emulator=emulator)
+    if archived:
+        major, minor, micro = version.split('.')
+        (emulator/'package.xml').write_text(
+            '<sdk:repository xmlns:sdk="http://schemas.android.com/repository/android/common/02" '
+            'xmlns:generic="http://schemas.android.com/repository/android/generic/02" '
+            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
+            '  <localPackage path="emulator" obsolete="false">\n'
+            '    <type-details xsi:type="generic:genericDetailsType"/>\n'
+            f'    <revision><major>{major}</major><minor>{minor}</minor><micro>{micro}</micro></revision>\n'
+            '    <display-name>Android Emulator</display-name>\n'
+            '  </localPackage>\n'
+            '</sdk:repository>\n', encoding='utf-8')
     return emulator/'emulator', image
+
+
+@contextmanager
+def sdk_emulator_for_avd(sdk, emulator):
+    sdk_emulator = sdk/'emulator'
+    if sdk_emulator == emulator.parent:
+        yield
+        return
+    with ExitStack() as cleanup:
+        if sdk_emulator.exists() or sdk_emulator.is_symlink():
+            backup = emulator.parent.with_name('original-sdk-emulator')
+            saved = shutil.move(sdk_emulator, backup)
+            cleanup.callback(shutil.move, saved, sdk_emulator)
+        sdk_emulator.symlink_to(emulator.parent.resolve(), target_is_directory=True)
+        cleanup.callback(sdk_emulator.unlink)
+        yield
 
 
 def configure_emulator_storage(avd, report):
@@ -1487,8 +1516,9 @@ def main():
         avds.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ANDROID_SDK_ROOT=str(sdk),ANDROID_USER_HOME=str(user_home),
                  ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
-        run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
-             '--device','pixel_6','--package',image],input='no\n',text=True,env=env)
+        with sdk_emulator_for_avd(sdk, emulator):
+            run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
+                 '--device','pixel_6','--package',image],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
         if args.legacy or args.api is not None:
             report=report/(('ime-api-' if args.legacy else 'api-')+image.split(';')[1].removeprefix('android-'))

@@ -5322,6 +5322,21 @@ runpy.run_path(str(script), run_name='__main__')
             self.assertTrue(binary.is_file())
             self.assertTrue(binary.is_relative_to(device_root))
             self.assertFalse((sdk/'emulator').exists())
+            sdk_emulator = sdk/'emulator'
+            with android_build.sdk_emulator_for_avd(sdk, binary):
+                self.assertTrue((sdk_emulator/'emulator').samefile(binary))
+                metadata = (sdk_emulator/'package.xml').read_text()
+                self.assertIn('<localPackage path="emulator"', metadata)
+                self.assertIn('<major>37</major><minor>2</minor><micro>13</micro>', metadata)
+            self.assertFalse(sdk_emulator.is_symlink())
+            sdk_emulator.mkdir()
+            (sdk_emulator/'source.properties').write_text('Pkg.Revision=99.0.0')
+            with self.assertRaisesRegex(RuntimeError, 'AVD creation failed'):
+                with android_build.sdk_emulator_for_avd(sdk, binary):
+                    self.assertTrue((sdk_emulator/'emulator').samefile(binary))
+                    raise RuntimeError('AVD creation failed')
+            self.assertFalse(sdk_emulator.is_symlink())
+            self.assertEqual((sdk_emulator/'source.properties').read_text(), 'Pkg.Revision=99.0.0')
             packages = install.call_args.args[0]
             self.assertFalse(any(str(package).startswith('emulator@') for package in packages))
             self.assertIn(image.replace(';', '/')+'@'+revision, packages)
