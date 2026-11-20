@@ -3,6 +3,19 @@ use crate::claude_check::protection::{Previous, Protection};
 use crate::config::Store;
 
 #[tokio::test]
+async fn protection_transition_cannot_overlap_a_login_service_change() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::at(root.path().into()).unwrap();
+    let mut engine = crate::engine::test_support::fixture(store.clone());
+    let service = store.protection_transition_lock().unwrap();
+    let error = engine.claude_protection(true).await.unwrap_err();
+    assert!(error.to_string().contains("登录自启动"));
+    assert!(engine.settings.claude_protection.is_none());
+    drop(service);
+    assert!(store.protection_transition_lock().is_ok());
+}
+
+#[tokio::test]
 async fn protected_measurement_cannot_start_a_stopped_core() {
     let root = tempfile::tempdir().unwrap();
     let mut engine = crate::engine::test_support::fixture(Store::at(root.path().into()).unwrap());

@@ -193,7 +193,7 @@ pub async fn live(args: &Args) -> Result<Meta> {
 }
 pub async fn prepare_start(args: &Args) -> Result<()> {
     let state = meta(args).await?;
-    if start_requires_authorization(state.running, args.path == "restart", &state.settings) {
+    if start_requires_authorization(state.running, args.path == "restart", &state.settings)? {
         authorize_tun(args).await?;
     }
     Ok(())
@@ -203,10 +203,13 @@ fn start_requires_authorization(
     running: bool,
     restarting: bool,
     settings: &clash_client_runtime::config::Settings,
-) -> bool {
-    (!running || restarting)
+) -> Result<bool> {
+    if restarting {
+        settings.require_mutable()?;
+    }
+    Ok((!running || restarting)
         && (settings.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
-            || settings.claude_protection.is_some())
+            || settings.claude_protection.is_some()))
 }
 pub async fn authorize_tun(args: &Args) -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -391,11 +394,36 @@ mod tests {
                 [(false, false), (false, true), (true, false), (true, true)]
             {
                 assert_eq!(
-                    start_requires_authorization(running, restarting, &settings),
+                    start_requires_authorization(running, restarting, &settings).unwrap(),
                     mode == ProxyMode::Tun && (!running || restarting),
                     "{mode:?}, running={running}, restarting={restarting}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn protected_restart_is_rejected_before_authorization_but_start_can_recover() {
+        use clash_client_core::claude_check::protection::{Previous, Protection};
+        let settings = Settings {
+            claude_protection: Some(Arc::new(Protection::new(
+                uuid::Uuid::new_v4().to_string(),
+                "protected".into(),
+                Previous {
+                    mode: "rule".into(),
+                    proxy_mode: ProxyMode::Off,
+                    selectors: Default::default(),
+                },
+            ))),
+            ..Default::default()
+        };
+        for running in [false, true] {
+            let error = start_requires_authorization(running, true, &settings).unwrap_err();
+            assert!(error.to_string().contains("Claude 保护"));
+            assert_eq!(
+                start_requires_authorization(running, false, &settings).unwrap(),
+                !running
+            );
         }
     }
 }

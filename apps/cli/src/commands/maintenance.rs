@@ -70,8 +70,9 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             output::emit(args, json!({"sent":true}))
         }
         path if path.starts_with("service ") => {
-            if path != "service status" {
-                backend::store(args)?.load_settings()?.require_mutable()?;
+            let _transition = if path != "service status" {
+                let store = backend::store(args)?;
+                store.load_settings()?.require_mutable()?;
                 output::confirm(
                     args,
                     if path == "service install" {
@@ -81,7 +82,10 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                     },
                 )
                 .await?;
-            }
+                Some(crate::service::lock_for_change(&store)?)
+            } else {
+                None
+            };
             crate::service::execute(args).await
         }
         path if path.starts_with("update ") => update(args).await,

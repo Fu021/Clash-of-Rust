@@ -378,6 +378,7 @@ struct App {
     notice_critical: bool,
     notice_network_recovery: bool,
     notice_update_failure: bool,
+    update_check_notice_revision: Option<u64>,
     pending_update_failure: Option<String>,
     installation_root: Option<std::path::PathBuf>,
     installation_notice: Option<(std::path::PathBuf, update::InstallationStatus)>,
@@ -579,6 +580,7 @@ impl App {
             notice_critical: core_failure.is_some(),
             notice_network_recovery: false,
             notice_update_failure: false,
+            update_check_notice_revision: None,
             pending_update_failure: None,
             installation_root: None,
             installation_notice: None,
@@ -664,8 +666,8 @@ impl App {
         if self.update_schedule.due(
             self.settings.update_check_interval_minutes,
             std::time::Instant::now(),
-        ) && !self.busy
-            && !self.working
+        ) && !self.working
+            && self.queued_actions.is_empty()
         {
             self.check_update()
         } else {
@@ -1131,8 +1133,24 @@ impl App {
             Message::CheckUpdate => return self.check_update(),
             Message::UpdateChecked(id, result) => {
                 if id == self.updates.check_id && self.updates.checking {
-                    if let Err(reason) = &result {
-                        self.show_notice(format!("检查更新失败：{reason}"), true);
+                    match &result {
+                        Err(reason) => {
+                            let previous = self.notice_revision;
+                            self.show_notice(format!("检查更新失败：{reason}"), true);
+                            self.update_check_notice_revision =
+                                (self.notice_revision != previous).then_some(self.notice_revision);
+                        }
+                        Ok(_) => {
+                            if self
+                                .update_check_notice_revision
+                                .take()
+                                .is_some_and(|revision| {
+                                    self.notice_visible && self.notice_revision == revision
+                                })
+                            {
+                                self.dismiss_notice();
+                            }
+                        }
                     }
                     self.updates.finish(result);
                 }

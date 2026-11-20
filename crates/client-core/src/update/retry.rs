@@ -105,6 +105,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_exhausted_check_does_not_prevent_the_next_scheduled_check() {
+        use crate::update::schedule::Schedule;
+        use std::time::Instant;
+
+        let start = Instant::now();
+        let mut schedule = Schedule::default();
+        let count = AtomicUsize::new(0);
+        assert!(schedule.due(5, start));
+        schedule.checked(start);
+        let result: Result<()> = run(
+            || {
+                count.fetch_add(1, Ordering::Relaxed);
+                async { Err(anyhow!("网络连接失败")) }
+            },
+            &[Duration::from_millis(1); 3],
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(count.load(Ordering::Relaxed), 4);
+        assert!(!schedule.due(5, start + Duration::from_secs(299)));
+
+        let retry = start + Duration::from_secs(300);
+        assert!(schedule.due(5, retry));
+        schedule.checked(retry);
+        let result = run(
+            || {
+                count.fetch_add(1, Ordering::Relaxed);
+                async { Ok("恢复联网") }
+            },
+            &[Duration::from_millis(1); 3],
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, "恢复联网");
+        assert_eq!(count.load(Ordering::Relaxed), 5);
+        assert!(!schedule.due(5, retry + Duration::from_secs(299)));
+        assert!(schedule.due(5, retry + Duration::from_secs(300)));
+    }
+
+    #[tokio::test]
     async fn total_deadline_bounds_a_stalled_request() {
         let error = run::<(), _, _>(
             std::future::pending::<Result<()>>,

@@ -3129,6 +3129,160 @@ fn disabling_automatic_update_checks_keeps_manual_checks_available() {
 }
 
 #[test]
+fn automatic_update_checks_are_not_starved_by_read_only_refreshes() {
+    let mut app = fixture(Page::Settings);
+    app.settings.update_check_interval_minutes = 5;
+    app.updates.started = true;
+    app.update_schedule
+        .checked(std::time::Instant::now() - Duration::from_secs(300));
+    app.busy = true;
+    app.working = false;
+
+    let _ = app.auto_check_update();
+    assert!(app.updates.checking);
+    let check_id = app.updates.check_id;
+    let _ = app.auto_check_update();
+    assert_eq!(app.updates.check_id, check_id);
+
+    let _ = app.update(Message::UpdateChecked(
+        check_id,
+        Err("GitHub temporarily unreachable".into()),
+    ));
+    assert!(
+        app.updates
+            .status
+            .contains("GitHub temporarily unreachable")
+    );
+    assert!(app.notice_visible && app.notice.contains("GitHub temporarily unreachable"));
+    let _ = app.auto_check_update();
+    assert_eq!(app.updates.check_id, check_id);
+
+    app.update_schedule
+        .checked(std::time::Instant::now() - Duration::from_secs(300));
+    let _ = app.auto_check_update();
+    assert_eq!(app.updates.check_id, check_id + 1);
+    let _ = app.update(Message::UpdateChecked(app.updates.check_id, Ok(None)));
+    assert!(app.updates.status.contains("未发现新版本"));
+    assert!(
+        !app.updates
+            .status
+            .contains("GitHub temporarily unreachable")
+    );
+    assert!(!app.notice_visible);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn automatic_update_checks_follow_the_host_tick_and_refresh_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let resources = directory.path().join("resources");
+    std::fs::create_dir(&resources).unwrap();
+    std::fs::write(resources.join("mihomo"), b"fixture").unwrap();
+    std::fs::write(
+        resources.join("default.yaml"),
+        b"proxies: []\nrules: [MATCH,DIRECT]\n",
+    )
+    .unwrap();
+    let files = clash_of_rust::assets::GEO_FILES
+        .iter()
+        .map(|name| {
+            let path = resources.join(name);
+            std::fs::write(&path, b"fixture").unwrap();
+            let (sha256, size) = clash_of_rust::assets::hash_file(&path).unwrap();
+            clash_of_rust::assets::GeoFile {
+                name: (*name).into(),
+                source: String::new(),
+                sha256,
+                size,
+            }
+        })
+        .collect();
+    let manifest = clash_of_rust::assets::GeoManifest {
+        version: "fixture".into(),
+        updated: 0,
+        installed_at: None,
+        files,
+    };
+    std::fs::write(
+        resources.join(clash_of_rust::assets::MANIFEST),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let store = Store::at(directory.path().join("data")).unwrap();
+    let engine = Engine::with_resources(store, resources).unwrap();
+    let mut app = fixture(Page::Settings);
+    app.engine = Some(Arc::new(Mutex::new(engine)));
+    app.visible = true;
+    app.settings.update_check_interval_minutes = 5;
+    app.updates.started = true;
+    app.update_schedule
+        .checked(std::time::Instant::now() - Duration::from_secs(300));
+
+    let _ = app.update(Message::Tick);
+    assert!(app.busy && !app.working);
+    let _ = app.auto_check_update();
+    assert!(app.updates.checking);
+}
+
+#[test]
+fn automatic_update_checks_wait_for_mutating_or_queued_actions() {
+    let mut app = fixture(Page::Settings);
+    app.settings.update_check_interval_minutes = 5;
+    app.busy = true;
+    app.working = true;
+    let _ = app.auto_check_update();
+    assert!(!app.updates.started);
+
+    app.working = false;
+    app.queued_actions.push_back(Action::UpdateInterval(10));
+    let _ = app.auto_check_update();
+    assert!(!app.updates.started);
+
+    app.queued_actions.clear();
+    let _ = app.auto_check_update();
+    assert!(app.updates.checking);
+}
+
+#[test]
+fn automatic_update_checks_coalesce_while_a_slow_check_is_running() {
+    let mut app = fixture(Page::Settings);
+    app.settings.update_check_interval_minutes = 1;
+    let _ = app.auto_check_update();
+    let check_id = app.updates.check_id;
+    assert!(app.updates.checking);
+    app.update_schedule
+        .checked(std::time::Instant::now() - Duration::from_secs(60));
+    let _ = app.auto_check_update();
+    assert_eq!(app.updates.check_id, check_id);
+
+    let _ = app.update(Message::UpdateChecked(check_id, Err("断网".into())));
+    let _ = app.auto_check_update();
+    assert!(app.updates.checking);
+    assert_eq!(app.updates.check_id, check_id + 1);
+    let _ = app.auto_check_update();
+    assert_eq!(app.updates.check_id, check_id + 1);
+}
+
+#[test]
+fn automatic_update_success_does_not_dismiss_a_newer_unrelated_failure() {
+    let mut app = fixture(Page::Settings);
+    let _ = app.auto_check_update();
+    let failed = app.updates.check_id;
+    let _ = app.update(Message::UpdateChecked(failed, Err("断网".into())));
+    assert!(app.notice_visible && app.notice.contains("断网"));
+
+    app.update_schedule
+        .checked(std::time::Instant::now() - Duration::from_secs(360 * 60));
+    let _ = app.auto_check_update();
+    let retry = app.updates.check_id;
+    app.show_critical("内核故障".into());
+    let _ = app.update(Message::UpdateChecked(retry, Ok(None)));
+    assert!(app.notice_visible && app.notice_critical);
+    assert_eq!(app.notice, "内核故障");
+    assert!(app.updates.status.contains("未发现新版本"));
+}
+
+#[test]
 fn console_changes_refresh_profiles_and_clean_inputs_but_preserve_typed_drafts() {
     let mut app = fixture(Page::Settings);
     let mut reply = synchronized_reply(&app);

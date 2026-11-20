@@ -554,6 +554,17 @@ impl Store {
             .context("已有客户端使用这个数据目录，请关闭另一个实例")?;
         Ok(file)
     }
+    pub fn protection_transition_lock(&self) -> Result<std::fs::File> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.root.join("protection-transition.lock"))?;
+        file.try_lock()
+            .context("Claude 保护或登录自启动正在切换，请稍后重试")?;
+        Ok(file)
+    }
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
         let mut settings = settings.clone();
         settings.normalize();

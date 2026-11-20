@@ -180,6 +180,7 @@ pub(super) fn open(state: &mut State) -> Action {
             return Action::None;
         }
         if let Some(poll) = &state.poll
+            && poll.snapshot.running
             && let Err(error) = poll.meta.settings.require_mutable()
         {
             state.message = Some(format!("{error:#}"));

@@ -1388,6 +1388,7 @@ impl Engine {
         if enabled == self.settings.claude_protection.is_some() {
             return Ok(());
         }
+        let _transition = self.store.protection_transition_lock()?;
         if !enabled {
             self.apply_claude_protection(None, None).await?;
             return Ok(());

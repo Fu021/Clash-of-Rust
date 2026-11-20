@@ -8,6 +8,14 @@ use serde_json::json;
 use std::path::PathBuf;
 mod status;
 
+pub(crate) fn lock_for_change(
+    store: &clash_client_runtime::config::Store,
+) -> Result<std::fs::File> {
+    let lock = store.protection_transition_lock()?;
+    store.load_settings()?.require_mutable()?;
+    Ok(lock)
+}
+
 pub async fn execute(args: &Args) -> Result<()> {
     #[cfg(windows)]
     {
@@ -145,5 +153,46 @@ fn definition(args: &Args) -> Result<(PathBuf, String)> {
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Label</key><string>org.clash-of-rust.cli</string><key>ProgramArguments</key><array>{arguments}</array><key>RunAtLoad</key><true/><key>ProcessType</key><string>Background</string></dict></plist>\n"
             ),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clash_client_core::claude_check::protection::{Previous, Protection};
+    use clash_client_runtime::{config::Store, engine::ProxyMode};
+    use std::sync::Arc;
+
+    #[test]
+    fn service_change_rechecks_protection_and_excludes_transitions() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned()).unwrap();
+        let guard = lock_for_change(&store).unwrap();
+        assert!(store.protection_transition_lock().is_err());
+        drop(guard);
+
+        let transition = store.protection_transition_lock().unwrap();
+        assert!(lock_for_change(&store).is_err());
+        drop(transition);
+
+        let profile = uuid::Uuid::new_v4().to_string();
+        let mut settings = store.load_settings().unwrap();
+        settings.active_profile = Some(profile.clone());
+        settings.claude_protection = Some(Arc::new(Protection::new(
+            profile,
+            "protected".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        store.save_settings(&settings).unwrap();
+        assert!(
+            lock_for_change(&store)
+                .unwrap_err()
+                .to_string()
+                .contains("Claude 保护")
+        );
     }
 }

@@ -175,6 +175,42 @@ fn update_checking_obeys_schedule_and_does_not_duplicate_the_gui_owner() {
 }
 
 #[test]
+fn automatic_update_checks_resume_after_repeated_connection_failures() {
+    let mut state = state();
+    state
+        .poll
+        .as_mut()
+        .unwrap()
+        .meta
+        .settings
+        .update_check_interval_minutes = 5;
+    let start = Instant::now();
+    assert!(home::due(&mut state, start));
+    home::begin_check(&mut state, start).unwrap();
+    assert!(!home::due(&mut state, start + Duration::from_secs(300)));
+    home::accept(&mut state, Err("网络连接失败".into()));
+    assert!(content(&state, 120, 40).contains("检查失败：网络连接失败"));
+    assert!(!home::due(&mut state, start + Duration::from_secs(299)));
+
+    let retry = start + Duration::from_secs(300);
+    assert!(home::due(&mut state, retry));
+    home::begin_check(&mut state, retry).unwrap();
+    home::accept(&mut state, Err("GitHub 暂不可达".into()));
+    assert!(content(&state, 120, 40).contains("检查失败：GitHub 暂不可达"));
+    assert!(!home::due(&mut state, start + Duration::from_secs(599)));
+
+    let recovered = start + Duration::from_secs(600);
+    assert!(home::due(&mut state, recovered));
+    home::begin_check(&mut state, recovered).unwrap();
+    home::accept(&mut state, Ok(None));
+    let rendered = content(&state, 120, 40);
+    assert!(rendered.contains("当前通道已是最新版本"));
+    assert!(!rendered.contains("GitHub 暂不可达"));
+    assert!(!home::due(&mut state, start + Duration::from_secs(899)));
+    assert!(home::due(&mut state, start + Duration::from_secs(900)));
+}
+
+#[test]
 fn channel_changes_and_owner_loss_cancel_old_update_requests_and_confirmations() {
     let mut state = state();
     let now = Instant::now();
@@ -236,6 +272,48 @@ fn protection_blocks_home_mutations_and_updates_but_keeps_the_unlock_entry() {
     assert_eq!(state.form.as_ref().unwrap().spec.path, "claude protect");
     state.poll.as_mut().unwrap().meta.settings.claude_protection = None;
     assert!(home::items(&state).contains(&"update_install"));
+}
+
+#[test]
+fn protection_allows_stopped_core_recovery_but_rejects_stop_and_stale_state() {
+    use clash_client_core::claude_check::protection::{Previous, Protection};
+    let mut state = state();
+    let protection = std::sync::Arc::new(Protection::new(
+        uuid::Uuid::new_v4().to_string(),
+        "protected".into(),
+        Previous {
+            mode: "rule".into(),
+            proxy_mode: clash_client_runtime::engine::ProxyMode::Off,
+            selectors: Default::default(),
+        },
+    ));
+    state.poll.as_mut().unwrap().meta.settings.claude_protection = Some(protection.clone());
+
+    select(&mut state, "core");
+    state.key(Key::Enter);
+    assert!(state.form.is_none());
+    assert!(state.message.as_deref().unwrap().contains("Claude 保护"));
+
+    state.poll.as_mut().unwrap().snapshot.running = false;
+    state.key(Key::Enter);
+    assert_eq!(state.form.as_ref().unwrap().spec.path, "start");
+    assert!(matches!(state.key(Key::Enter), Action::ReviewForm));
+    let context = crate::args::parse(["ui"].into_iter().map(str::to_owned)).unwrap();
+    state.execution = Some(state.form.as_ref().unwrap().args(&context).unwrap());
+    let Action::Execute(operation) = state.key(Key::Enter) else {
+        panic!("protected recovery must use the normal start command");
+    };
+    assert_eq!(operation.path, "start");
+    assert_eq!(
+        state.poll.as_ref().unwrap().meta.settings.claude_protection,
+        Some(protection)
+    );
+
+    state.form = None;
+    state.failure("后台读取失败".into());
+    state.key(Key::Enter);
+    assert!(state.form.is_none());
+    assert!(state.message.as_deref().unwrap().contains("后台状态过期"));
 }
 
 #[test]
