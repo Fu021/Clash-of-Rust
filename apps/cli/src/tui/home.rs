@@ -253,20 +253,19 @@ fn update_status(state: &State) -> String {
         return "Claude 保护中，检查已暂停".into();
     }
     match &state.updates.result {
-        Some(Ok(Some(update))) => format!(
-            "发现 {} {}{}",
-            if update.preview {
+        Some(Ok(Some(update))) => {
+            let release = if update.preview {
                 "预发布版"
             } else {
                 "正式版"
-            },
-            update.version,
-            if update.package.is_none() {
-                " · 当前平台无自动安装包"
-            } else {
-                ""
-            },
-        ),
+            };
+            let offer = format!("发现 {release} {}", update.version);
+            match update.package_manager_hint() {
+                Some(hint) => format!("{offer} · {hint}"),
+                None if update.package.is_none() => format!("{offer} · 当前平台无自动安装包"),
+                None => offer,
+            }
+        }
         Some(Ok(None)) => "当前通道已是最新版本".into(),
         Some(Err(error)) => format!("检查失败：{error}"),
         None => {

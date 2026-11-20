@@ -44,8 +44,27 @@ RPM 与 Arch 安装由各自包管理器更新，应用不调用 DEB 安装器�
 
 原生包的预发布版本字段使用 RPM 的 `~` 或 pacman 的 `pre.` 标记，版本后缀中的连字符转换为 `+`。RPM 发行附件名使用原始发行版本，Arch 候选包名使用原生 `pkgver`。兼容来宾用原生比较器校验预发布编号递增及正式版顺序。隔离 DNS 夹具按来宾实际存在的系统 CA 文件装载临时测试根，并在同一挂载命名空间中恢复。夹具仅给节点引导的正向解析结果 30 秒 TTL，以减少 ARM64 TCG 上重复的加密握手。测试仍要求每次冷启动重新解析节点，并验证 UDP、TCP 和 DNS 未旁路。
 
-提交 `a433d221` 使用 CI `44670222142` 完成 Pop!_OS 22.04/24.04、Zorin 17.3/18.1 及 Arch 的 x64 验收，来宾均使用 KVM。提交 `280d5679` 使用 CI `44639212301` 完成 openSUSE Leap 16.0/16.1 及 Tumbleweed 的 x64 和 ARM64 验收，分别使用 KVM 和 TCG。回执均经发布门禁复核，来宾报告记录真实登录与托盘、三端、原生升级及卸载后保留数据。新提交仍按实际发布范围取得同源回执。[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672608619) · [Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672632359) · [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672635871) · [openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/44642538483)
+提交 `0ccca669` 使用 CI `44696750124` 完整验收当前矩阵中的 Ubuntu、Debian、Linux Mint、Zorin OS、Fedora、openSUSE 和 Arch Linux。Pop!_OS 24.04 的 COSMIC 授权探针提前退出，补上认证代理就绪检查后用 `8999697d` 的 CI `44705538634` 复验。Pop!_OS 22.04 GNOME 和 24.04 COSMIC 均通过，并核对真实登录、图形授权、托盘及菜单复用、23 项 TUI PTY、原生升级和卸载保留数据。两轮合计覆盖当前 21 个目标。新发布按实际范围取得对应提交的回执。[首轮 CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/44696750124) · [Pop!_OS 完整复验](https://github.com/Fu021/Clash-of-Rust/actions/runs/44709399603)
+
+更早的完整验证中，`a433d221` 使用 CI `44670222142` 完成 Pop!_OS、Zorin OS 和 Arch Linux 的 x64 目标，均使用 KVM。`280d5679` 使用 CI `44639212301` 完成 openSUSE 两版 Leap 和 Tumbleweed 的 x64、ARM64 目标，分别使用 KVM 和 TCG。历史回执用于追溯相应候选与镜像的验证结果。[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672608619) · [Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672632359) · [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/44672635871) · [openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/44642538483)
 
 提交 `3b62e2ef` 使用 CI `44625972854` 完成 [Fedora 44/45 x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/44628532038)的完整兼容验收，覆盖图形授权、真实登录与托盘、三端和 RPM 升级及卸载。该历史回执只覆盖 x64。
 
 提交 `0f48d91d` 使用 CI `44580277926` 完成 [openSUSE 三个 x64 目标](https://github.com/Fu021/Clash-of-Rust/actions/runs/44584087058) 的完整兼容验收，回执经发布门禁复核。Tumbleweed 的实际 GNOME 登录、托盘和菜单复用、23 项真实 PTY 与 RPM 升级和卸载均通过。
+
+## 精简验收耗时
+
+`37f4f2e3` 的 [CI 44712218319](https://github.com/Fu021/Clash-of-Rust/actions/runs/44712218319) 通过 13 个 job。以下八套验收共 21 个目标通过，逐一核对安装报告和绑定该 CI 的回执。环境准备合计来宾初始索引与候选所需依赖，ISO 安装另计。目标 job 从作业开始计时，整套从派发计至记录回执。VM 目标均使用 KVM，Ubuntu 22.04、24.04、26.04 的 x64 和 ARM64 直接使用托管 runner。
+
+| 发行版 | 镜像下载与校验 | ISO 安装 | 环境准备 | 目标 job | 整套 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| [Ubuntu](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714877856) | 20.04 为 5.6 秒 | — | 20.04 为 39.1 秒，托管 8.8–28.5 秒 | x64 1:20–2:16，ARM64 1:14–1:53 | 3:41 |
+| [Debian](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714874913) | 5.2–8.4 秒 | — | 4.7–34.9 秒 | 1:51–3:23 | 3:49 |
+| [Linux Mint](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714880381) | 31.1–61.8 秒 | 6:43–6:59 | 5.2–7.2 秒 | 9:23–10:10 | 10:40 |
+| [Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714878105) | 10.1–11.4 秒 | 3:01–3:43 | 6.5–11.4 秒 | 5:12–6:13 | 6:38 |
+| [Zorin OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714882847) | 11:28–12:08 | 4:14–4:49 | 两版 10.6 秒 | 18:35–19:35 | 20:02 |
+| [Fedora](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714882642) | 75.8–98.6 秒 | — | 12.7–13.1 秒 | 2:57–3:31 | 4:11 |
+| [openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714883479) | 4.1–7.9 秒 | — | 8.6–15.8 秒 | 2:05–2:40 | 3:19 |
+| [Arch Linux](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714880300) | 5.6 秒 | — | 3.8 秒 | 2:32 | 2:54 |
+
+本轮 Mint 的主要耗时是实际 ISO 安装，Zorin 两版的主要耗时是 ISO 传输。ISO 传输速率随上游镜像和 runner 变化。

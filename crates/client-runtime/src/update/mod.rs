@@ -91,9 +91,15 @@ pub struct Available {
     pub url: String,
     pub preview: bool,
     pub package: Option<Package>,
+    pub package_manager: Option<&'static str>,
 }
 
 impl Available {
+    pub fn package_manager_hint(&self) -> Option<String> {
+        self.package_manager
+            .map(|manager| format!("请使用 {manager} 更新此版本的客户端"))
+    }
+
     pub(crate) fn require_selected(&self, expected: Option<&(String, bool)>) -> Result<()> {
         anyhow::ensure!(
             expected.is_none_or(|(version, preview)| {
@@ -260,7 +266,12 @@ impl State {
                 self.available = available;
                 match &self.available {
                     Some(update) => {
-                        channel::description(&update.version, update.preview, crate::VERSION)
+                        let version =
+                            channel::description(&update.version, update.preview, crate::VERSION);
+                        match update.package_manager_hint() {
+                            Some(hint) => format!("{version} · {hint}"),
+                            None => version,
+                        }
                     }
                     None => "未发现新版本".into(),
                 }
@@ -353,15 +364,39 @@ fn external_linux_package_manager_at(executable: &Path) -> Option<&'static str> 
         return None;
     }
     match std::fs::read_to_string(marker).ok()?.as_str() {
-        "rpm\n" => Some("dnf / zypper"),
+        "rpm\n" => {
+            let release = std::fs::read_to_string("/etc/os-release")
+                .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+                .unwrap_or_default();
+            Some(rpm_package_manager(&release))
+        }
         "pacman\n" => Some("pacman"),
         _ => None,
     }
 }
 
 #[cfg(target_os = "linux")]
+fn rpm_package_manager(release: &str) -> &'static str {
+    let distribution = release
+        .lines()
+        .find_map(|line| line.strip_prefix("ID="))
+        .map(|id| id.trim_matches(['"', '\'']));
+    match distribution {
+        Some("fedora") => "dnf",
+        Some("opensuse" | "opensuse-leap" | "opensuse-tumbleweed") => "zypper",
+        _ => "dnf / zypper",
+    }
+}
+
 fn external_linux_package_manager() -> Option<&'static str> {
-    external_linux_package_manager_at(&std::env::current_exe().ok()?)
+    #[cfg(target_os = "linux")]
+    {
+        external_linux_package_manager_at(&std::env::current_exe().ok()?)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -384,16 +419,9 @@ fn newest_channel(
             .expect("GitHub URL has a path")
             .push("tag")
             .push(&release.tag_name);
-        #[cfg(target_os = "linux")]
-        let external_manager = external_linux_package_manager().is_some();
-        #[cfg(not(target_os = "linux"))]
-        let external_manager = false;
         Available {
-            package: if external_manager {
-                None
-            } else {
-                package(&release, &version.to_string())
-            },
+            package: package(&release, &version.to_string()),
+            package_manager: None,
             version: version.to_string(),
             url: url.into(),
             preview: release.prerelease || !version.pre.is_empty(),
@@ -746,6 +774,7 @@ mod tests {
             url: RELEASES_URL.into(),
             preview: false,
             package: None,
+            package_manager: None,
         };
         let selected = (available.version.clone(), available.preview);
         assert!(available.require_selected(Some(&selected)).is_ok());
@@ -755,6 +784,15 @@ mod tests {
         available.version = "0.7.2".into();
         assert!(available.require_selected(Some(&selected)).is_err());
         assert!(available.require_selected(None).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rpm_update_manager_uses_the_operating_system_id() {
+        assert_eq!(rpm_package_manager("ID=fedora\n"), "dnf");
+        assert_eq!(rpm_package_manager("ID=\"opensuse-leap\"\n"), "zypper");
+        assert_eq!(rpm_package_manager("ID=opensuse-tumbleweed\n"), "zypper");
+        assert_eq!(rpm_package_manager("ID_LIKE=fedora\n"), "dnf / zypper");
     }
 
     #[test]
@@ -1207,6 +1245,7 @@ mod tests {
                 version: "0.7.1".into(),
                 url: format!("{RELEASES_URL}/tag/v0.7.1"),
                 preview: false,
+                package_manager: None,
                 package: Some(Package {
                     asset: Asset {
                         name: package_name("0.7.1").unwrap(),
@@ -1267,6 +1306,7 @@ mod tests {
             version: "0.4.8".into(),
             url: format!("{RELEASES_URL}/tag/v0.4.8"),
             preview: false,
+            package_manager: None,
             package: Some(Package {
                 asset: Asset {
                     name: package_name("0.4.8").unwrap(),

@@ -27,6 +27,7 @@ pub(super) async fn check(
     // Reading settings does not change the desktop proxy, and an unavailable
     // desktop settings service must not prevent the other routes from working.
     let routes = available_routes(port, "https");
+    let package_manager = external_linux_package_manager();
     clash_client_core::update::retry_check(|| {
         check_once_channel(
             &routes,
@@ -34,6 +35,7 @@ pub(super) async fn check(
             LATEST_URL,
             crate::VERSION,
             include_prereleases,
+            package_manager,
         )
     })
     .await
@@ -46,7 +48,7 @@ async fn check_once(
     latest: &str,
     current: &str,
 ) -> Result<Option<Available>> {
-    check_once_channel(routes, api, latest, current, false).await
+    check_once_channel(routes, api, latest, current, false, None).await
 }
 async fn check_once_channel(
     routes: &[Route],
@@ -54,32 +56,38 @@ async fn check_once_channel(
     latest: &str,
     current: &str,
     include_prereleases: bool,
+    package_manager: Option<&'static str>,
 ) -> Result<Option<Available>> {
-    let (mut available, latest_route) = tokio::time::timeout(
+    let (available, latest_route) = tokio::time::timeout(
         Duration::from_secs(60),
         discover_channel(routes, api, latest, current, include_prereleases),
     )
     .await
     .context("更新检查超时，请检查代理或稍后重试")??;
-    if let (Some(available), Some(route)) = (&mut available, latest_route) {
+    let Some(mut available) = available else {
+        return Ok(None);
+    };
+    if let Some(manager) = package_manager {
+        available.package_manager = Some(manager);
+        available.package = None;
+        return Ok(Some(available));
+    }
+    if let Some(route) = latest_route {
         // A redirect only identifies the version. Probe both required assets
         // before publishing a downloadable update to the UI.
         available.package =
-            tokio::time::timeout(REQUEST_TIMEOUT, latest_package(available, &route))
+            tokio::time::timeout(REQUEST_TIMEOUT, latest_package(&available, &route))
                 .await
                 .context("安装包信息查询超时")??;
     }
-    if let Some(available) = &available
-        && package_name(&available.version).is_some()
-        && available.package.is_none()
-    {
+    if package_name(&available.version).is_some() && available.package.is_none() {
         bail!(
             "版本 {} 缺少本平台安装包或校验文件，请稍后重试或访问 {}",
             available.version,
             available.url
         );
     }
-    Ok(available)
+    Ok(Some(available))
 }
 
 #[cfg(test)]
@@ -247,9 +255,22 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/releases", listener.local_addr().unwrap());
         let name = package_name("0.6.3").expect("CI desktop platform");
-        let package = serde_json::json!({"name":name,"size":42});
-        let sidecar = serde_json::json!({"name":format!("{name}.sha256"),"size":64});
-        let bodies = [vec![], vec![package.clone()], vec![package, sidecar]].map(|assets| {
+        let mut assets = ["linux-amd64.deb", "linux-arm64.deb", "linux-x86_64.rpm"]
+            .into_iter()
+            .map(|suffix| format!("Clash-of-Rust-0.6.3-{suffix}"))
+            .filter(|candidate| candidate != &name)
+            .flat_map(|candidate| {
+                [
+                    serde_json::json!({"name":candidate,"size":42}),
+                    serde_json::json!({"name":format!("{candidate}.sha256"),"size":64}),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let missing_package = assets.clone();
+        assets.push(serde_json::json!({"name":name,"size":42}));
+        let missing_checksum = assets.clone();
+        assets.push(serde_json::json!({"name":format!("{name}.sha256"),"size":64}));
+        let bodies = [missing_package, missing_checksum, assets].map(|assets| {
             serde_json::json!([
                 {"tag_name":"v0.6.3","draft":false,"prerelease":false,"assets":assets}
             ])
@@ -316,6 +337,88 @@ mod tests {
             String::from_utf8_lossy(&request[..count]).into_owned()
         });
         (address, task)
+    }
+
+    #[tokio::test]
+    async fn managed_install_discovers_versions_independently_of_assets() {
+        let name = package_name("0.8.0").expect("CI desktop platform");
+        let releases = serde_json::json!([
+            {"tag_name":"v0.8.0","draft":false,"prerelease":false,"assets":[
+                {"name":name,"size":42},
+                {"name":format!("{name}.sha256"),"size":64}
+            ]},
+            {"tag_name":"v0.9.0-dev.1","draft":false,"prerelease":true}
+        ])
+        .to_string();
+        for (manager, preview, version) in [
+            ("dnf", false, "0.8.0"),
+            ("zypper", true, "0.9.0-dev.1"),
+            ("pacman", false, "0.8.0"),
+        ] {
+            let (api, task) = server("200 OK", releases.as_bytes(), "").await;
+            let offer = check_once_channel(
+                &routes(None, None),
+                &api,
+                &api,
+                "0.7.0",
+                preview,
+                Some(manager),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(offer.version, version);
+            assert_eq!(offer.preview, preview);
+            assert_eq!(offer.package_manager, Some(manager));
+            assert!(offer.package.is_none());
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_install_fallback_only_requests_the_release_version() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let routes = [Route {
+            label: "fixture",
+            proxy: Some(format!("http://{}", listener.local_addr().unwrap())),
+        }];
+        let task = tokio::spawn(async move {
+            let redirect = format!("Location: {RELEASES_URL}/tag/v0.8.0\r\n");
+            for (path, status, headers) in [
+                ("releases", "403 Forbidden", ""),
+                ("latest", "302 Found", &redirect),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192];
+                let count = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                assert!(
+                    request.starts_with(&format!("GET http://fixture.invalid/{path} HTTP/1.1"))
+                );
+                socket
+                    .write_all(
+                        format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n{headers}\r\n")
+                            .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let offer = check_once_channel(
+            &routes,
+            "http://fixture.invalid/releases",
+            "http://fixture.invalid/latest",
+            "0.7.0",
+            false,
+            Some("dnf"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(offer.version, "0.8.0");
+        assert_eq!(offer.package_manager, Some("dnf"));
+        assert!(offer.package.is_none());
+        task.await.unwrap();
     }
 
     #[test]

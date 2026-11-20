@@ -143,7 +143,7 @@ export component SettingsPage inherits PageSurface {
                         Divider { }
                         FormRow { title: "安装包";
                             ActionButton { text: "查看 Release"; compact: true; quiet: true; clicked => { UiActions.dispatch(Intent.open-release, "", ""); } }
-                            if UiData.update-available: ActionButton { text: "下载安装"; compact: true; primary: true; enabled: !UiData.update-busy && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
+                            if UiData.update-installable: ActionButton { text: "下载安装"; compact: true; primary: true; enabled: !UiData.update-busy && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
                         }
                         Divider { }
                         FormRow { title: "Geo 数据"; hint: UiData.geo-status;

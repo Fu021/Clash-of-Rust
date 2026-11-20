@@ -519,6 +519,14 @@ impl App {
             set_update_available,
             self.updates.available.is_some()
         );
+        set!(
+            get_update_installable,
+            set_update_installable,
+            self.updates
+                .available
+                .as_ref()
+                .is_some_and(|update| update.package.is_some())
+        );
         set!(get_update_busy, set_update_busy, self.updates.busy());
         set!(
             get_update_downloading,

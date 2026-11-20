@@ -28,6 +28,7 @@ fn available(package: bool) -> Available {
         version: "99.0.0".into(),
         url: "https://example.test/release".into(),
         preview: false,
+        package_manager: None,
         package: package.then(|| Package {
             asset: Asset {
                 name: "clash-of-rust.deb".into(),
@@ -91,6 +92,11 @@ fn home_update_states_never_invent_an_installable_package() {
     home::accept(&mut state, Ok(Some(available(false))));
     assert!(!home::items(&state).contains(&"update_install"));
     assert!(content(&state, 120, 40).contains("当前平台无自动安装包"));
+    let mut managed = available(false);
+    managed.package_manager = Some("pacman");
+    home::accept(&mut state, Ok(Some(managed)));
+    assert!(!home::items(&state).contains(&"update_install"));
+    assert!(content(&state, 120, 40).contains("请使用 pacman 更新"));
     home::accept(&mut state, Ok(Some(available(true))));
     assert!(home::items(&state).contains(&"update_install"));
     assert!(content(&state, 100, 30).contains("安装更新 · 99.0.0"));

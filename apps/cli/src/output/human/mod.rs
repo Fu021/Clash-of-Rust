@@ -285,16 +285,20 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
         "notify" => message(out, "系统通知已发送"),
         "update check" => {
             if value["available"] == true {
+                let manager = value["package_manager"].as_str();
                 field(
                     out,
-                    if value["preview"] == true {
-                        "可安装预发布版"
-                    } else {
-                        "可安装正式版"
+                    match (value["preview"] == true, manager.is_some()) {
+                        (true, true) => "发现预发布版",
+                        (false, true) => "发现正式版",
+                        (true, false) => "可安装预发布版",
+                        (false, false) => "可安装正式版",
                     },
                     &text(value, "version"),
                 )?;
-                if !value["package"].is_null() {
+                if let Some(manager) = manager {
+                    field(out, "更新方式", manager)?;
+                } else if !value["package"].is_null() {
                     field(out, "安装包", &text(value, "package"))?;
                 }
                 field(out, "发布页面", &text(value, "url"))

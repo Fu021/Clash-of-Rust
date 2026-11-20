@@ -223,6 +223,24 @@ mod tests {
     }
 
     #[test]
+    fn update_check_reports_the_package_manager_for_native_installs() {
+        let text = render(
+            &["update", "check"],
+            json!({
+                "available": true,
+                "version": "0.8.0",
+                "preview": false,
+                "package": null,
+                "package_manager": "dnf",
+                "url": "https://example.test/release"
+            }),
+        );
+        assert!(text.contains("发现正式版"));
+        assert!(text.contains("dnf"));
+        assert!(!text.contains("安装包"));
+    }
+
+    #[test]
     fn update_interval_output_uses_minutes_or_disabled_while_json_keeps_the_number() {
         for (minutes, expected) in [(0, "已关闭"), (360, "360 分钟")] {
             let value = json!({"update_check_interval_minutes": minutes});

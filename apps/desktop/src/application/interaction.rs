@@ -591,6 +591,7 @@ mod tests {
             url: update::RELEASES_URL.into(),
             preview: true,
             package: None,
+            package_manager: None,
         });
         let _ = app.update(Message::InstallUpdate);
         assert_eq!(app.confirmation.as_ref().unwrap().wait(), 3);
@@ -611,6 +612,26 @@ mod tests {
     }
 
     #[test]
+    fn update_managed_by_a_package_manager_never_prompts_for_installation() {
+        let mut app = app();
+        assert!(app.updates.begin());
+        let _ = app.update(Message::UpdateChecked(
+            app.updates.check_id,
+            Ok(Some(update::Available {
+                version: "99.0.0".into(),
+                url: update::RELEASES_URL.into(),
+                preview: false,
+                package: None,
+                package_manager: Some("zypper"),
+            })),
+        ));
+        assert!(app.updates.status.contains("请使用 zypper 更新"));
+        let _ = app.update(Message::InstallUpdate);
+        assert!(app.confirmation.is_none());
+        assert!(!app.updates.busy());
+    }
+
+    #[test]
     fn a_late_update_check_from_the_previous_channel_cannot_replace_the_current_check() {
         let mut app = app();
         assert!(app.updates.begin());
@@ -624,6 +645,7 @@ mod tests {
                 url: update::RELEASES_URL.into(),
                 preview: true,
                 package: None,
+                package_manager: None,
             })
         };
         let _ = app.update(Message::UpdateChecked(previous, Ok(offer())));

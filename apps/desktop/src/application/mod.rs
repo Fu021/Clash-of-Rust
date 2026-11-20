@@ -1149,6 +1149,9 @@ impl App {
                 let Some(available) = self.updates.available.clone() else {
                     return Task::none();
                 };
+                if available.package_manager.is_some() {
+                    return Task::none();
+                }
                 if available.preview {
                     if !self.settings.update_prereleases {
                         return Task::none();

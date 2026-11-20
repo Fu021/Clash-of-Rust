@@ -206,8 +206,18 @@ async fn update(args: &Args) -> Result<()> {
         return output::emit(
             args,
             match available {
-                Some(a) => {
-                    json!({"available":true,"version":a.version,"preview":a.preview,"url":a.url,"package":a.package.map(|p|p.asset.name)})
+                Some(update) => {
+                    let mut result = json!({
+                        "available": true,
+                        "version": update.version,
+                        "preview": update.preview,
+                        "url": update.url,
+                        "package": update.package.map(|package| package.asset.name)
+                    });
+                    if let Some(manager) = update.package_manager {
+                        result["package_manager"] = json!(manager);
+                    }
+                    result
                 }
                 None => json!({"available":false}),
             },
@@ -275,6 +285,9 @@ pub(crate) async fn install_selected_update(
         !available.preview || settings.update_prereleases,
         "更新通道已变化，请重新检查并选择版本"
     );
+    if let Some(hint) = available.package_manager_hint() {
+        bail!("{hint}");
+    }
     let terminal = terminal_install_mode(args)?;
     let mut prompt = update_install_prompt(&available);
     if terminal && !args.flag("no-start") {
@@ -351,6 +364,7 @@ mod tests {
                 preview,
                 url: clash_client_runtime::update::RELEASES_URL.into(),
                 package: None,
+                package_manager: None,
             };
             let prompt = update_install_prompt(&available);
             assert!(prompt.contains(version));
