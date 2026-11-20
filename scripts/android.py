@@ -51,17 +51,17 @@ def streamed_command(command, **kwargs):
     return status, ''.join(tail)
 
 
-def cargo_build(command, *, restored_target=None, **kwargs):
+def cargo_build(command, *, restored_profile=None, **kwargs):
     """Retry dependency downloads and recover once from a missing cached Slint crate."""
     transient = re.compile(r'(?:HTTP(?:/[0-9.]+)?\s+|returned error:\s*)(?:429|50[0234])\b'
                            r'|Could not resolve host|Failed to connect to|Connection timed out', re.I)
     for attempt in range(3):
         status, tail = streamed_command(command, **kwargs)
-        if status and restored_target and re.search(r"\[E0463\].*can't find crate for `slint`", tail):
-            print(f'::warning::Restored Android {restored_target} objects could not supply Slint; '
+        if status and restored_profile and re.search(r"\[E0463\].*can't find crate for `slint`", tail):
+            print(f'::warning::Restored Android {restored_profile.parent.name} objects could not supply Slint; '
                   'rebuilding that release target once', flush=True)
-            run(['cargo', 'clean', '--release', '--target', restored_target, '--locked'], **kwargs)
-            restored_target = None
+            shutil.rmtree(restored_profile)
+            restored_profile = None
             status, tail = streamed_command(command, **kwargs)
         if status == 0:
             return
@@ -453,10 +453,13 @@ def build(arch, gradle_offline=False):
         'CXXSTDLIB':'c++_static',
         'RUSTFLAGS':'-C link-arg=-Wl,-z,max-page-size=16384',
     })
-    restored_target = target if (os.environ.get('GITHUB_ACTIONS') == 'true'
-                                 and (ROOT/'target'/target/'release').is_dir()) else None
+    target_profile = ROOT/'target'/target/'release'
+    restored_profile = target_profile if (
+        os.environ.get('GITHUB_ACTIONS') == 'true' and target_profile.is_dir()
+        and target_profile.resolve() == target_profile
+    ) else None
     cargo_build(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked',
-                 '--', '-D', 'warnings'], cwd=ROOT, env=env, restored_target=restored_target)
+                 '--', '-D', 'warnings'], cwd=ROOT, env=env, restored_profile=restored_profile)
     cargo_build(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
     workspace_sources(ROOT, save=True)
     compiler_cache_checkpoint(ROOT)

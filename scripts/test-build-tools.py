@@ -6821,30 +6821,34 @@ runpy.run_path(str(script), run_name='__main__')
         target = 'x86_64-linux-android'
         command = ['cargo', 'clippy', '--target', target, '--release', '--locked']
         missing_slint = "error[E0463]\x1b[0m: can't find crate for `slint`\n"
-        for restored_target, failure, retry_status, expected_clean in (
-            (target, missing_slint, 0, True),
-            (target, missing_slint, 101, True),
-            (None, missing_slint, 101, False),
-            (target, "error[E0463]: can't find crate for `std`\n", 101, False),
+        for restored, failure, retry_status, expected_clean in (
+            (True, missing_slint, 0, True),
+            (True, missing_slint, 101, True),
+            (False, missing_slint, 101, False),
+            (True, "error[E0463]: can't find crate for `std`\n", 101, False),
         ):
-            with self.subTest(restored_target=restored_target, failure=failure, retry_status=retry_status), \
+            with self.subTest(restored=restored, failure=failure, retry_status=retry_status), \
+                 tempfile.TemporaryDirectory() as temporary, \
                  patch.object(android_build, 'streamed_command',
-                              side_effect=[(101, failure), (retry_status, failure)]) as compile, \
-                 patch.object(android_build, 'run') as clean:
-                kwargs = {'restored_target': restored_target, 'cwd': android_build.ROOT}
+                              side_effect=[(101, failure), (retry_status, failure)]) as build_command:
+                root = Path(temporary)
+                profile = root/'target'/target/'release'
+                host_profile = root/'target/release'
+                other_abi = root/'target/aarch64-linux-android/release'
+                for directory in (profile, host_profile, other_abi):
+                    directory.mkdir(parents=True)
+                    (directory/'object.rmeta').write_bytes(b'artifact')
+                kwargs = {'restored_profile': profile if restored else None, 'cwd': root}
                 if retry_status == 0:
                     android_build.cargo_build(command, **kwargs)
                 else:
                     with self.assertRaises(subprocess.CalledProcessError):
                         android_build.cargo_build(command, **kwargs)
-                if expected_clean:
-                    clean.assert_called_once_with(
-                        ['cargo', 'clean', '--release', '--target', target, '--locked'],
-                        cwd=android_build.ROOT)
-                    self.assertEqual(compile.call_count, 2)
-                else:
-                    clean.assert_not_called()
-                    compile.assert_called_once_with(command, cwd=android_build.ROOT)
+                self.assertEqual(profile.exists(), not expected_clean)
+                self.assertTrue((host_profile/'object.rmeta').is_file())
+                self.assertTrue((other_abi/'object.rmeta').is_file())
+                self.assertEqual(build_command.call_args_list,
+                                 [call(command, cwd=root)] * (2 if expected_clean else 1))
 
     def test_android_sdk_retries_closed_downloads_without_retrying_package_errors(self):
         for detail, retries in (
