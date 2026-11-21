@@ -8165,24 +8165,54 @@ class CompatibilityTests(unittest.TestCase):
                 patch.object(Path, 'is_file', return_value=False), \
                 patch.object(linux_native_guest, 'privileged', side_effect=[
                     subprocess.CalledProcessError(1, ['pacman']), None]) as pacman, \
-                patch.object(linux_native_guest, 'run', side_effect=[output, None]) as command, \
+                patch.object(linux_native_guest, 'run', side_effect=[output, None, None]) as command, \
                 patch.object(linux_native_guest, 'download') as download:
             linux_native_guest.install_dependencies(('fakeroot',))
 
         self.assertEqual(pacman.call_args_list, [
             call(*arguments, '--downloadonly'), call(*arguments),
         ])
-        staged = download.call_args.args[1]
+        staged_signature = download.call_args_list[0].args[1]
+        staged = download.call_args_list[1].args[1]
         self.assertEqual(staged.name, filename)
-        download.assert_called_once_with(
-            'https://umea.archive.pkgbuild.com/packages/f/fakeroot/fakeroot-2%3A1.37.2-1-x86_64.pkg.tar.zst',
-            staged, digest=digest)
+        self.assertEqual(staged_signature, staged.with_suffix('.zst.sig'))
+        url = 'https://umea.archive.pkgbuild.com/packages/f/fakeroot/fakeroot-2%3A1.37.2-1-x86_64.pkg.tar.zst'
+        self.assertEqual(download.call_args_list, [
+            call(url + '.sig', staged_signature),
+            call(url, staged, digest=digest),
+        ])
+        cached = Path('/var/cache/pacman/pkg')/filename
         self.assertEqual(command.call_args_list, [
             call(['pacman', '--noconfirm', *arguments, '--print', '--print-format', '%n\t%f\t%h'],
                  capture_output=True, text=True, timeout=60),
-            call(['sudo', 'install', '-m', '0644', staged, Path('/var/cache/pacman/pkg')/filename],
+            call(['sudo', 'install', '-m', '0644', staged, cached], timeout=60),
+            call(['sudo', 'install', '-m', '0644', staged_signature, cached.with_suffix('.zst.sig')],
                  timeout=60),
         ])
+
+    def test_arch_fallback_repairs_a_missing_signature_without_redownloading_the_package(self):
+        import linux_native_guest
+
+        digest = 'a'*64
+        filename = 'polkit-128-1-x86_64.pkg.tar.zst'
+        cached = Path('/var/cache/pacman/pkg')/filename
+        signature = cached.with_suffix('.zst.sig')
+        transaction = subprocess.CompletedProcess([], 0, stdout=f'polkit\t{filename}\t{digest}\n')
+        with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
+                patch.object(Path, 'is_file', autospec=True, side_effect=lambda path: path == cached), \
+                patch.object(linux_native_guest, 'sha256', return_value=digest), \
+                patch.object(linux_native_guest, 'privileged', side_effect=[
+                    subprocess.CalledProcessError(1, ['pacman']), None]), \
+                patch.object(linux_native_guest, 'run', side_effect=[transaction, None]) as command, \
+                patch.object(linux_native_guest, 'download') as download:
+            linux_native_guest.install_dependencies(('polkit',))
+
+        staged_signature = download.call_args.args[1]
+        download.assert_called_once_with(
+            f'https://umea.archive.pkgbuild.com/packages/p/polkit/{signature.name}', staged_signature)
+        self.assertEqual(staged_signature.name, signature.name)
+        self.assertEqual(command.call_args,
+                         call(['sudo', 'install', '-m', '0644', staged_signature, signature], timeout=60))
 
     def test_arch_fallback_rejects_invalid_package_metadata(self):
         import linux_native_guest

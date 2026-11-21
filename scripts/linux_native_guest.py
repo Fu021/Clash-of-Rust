@@ -112,12 +112,19 @@ def arch_sync(*arguments):
                         or not re.fullmatch(r'[a-f0-9]{64}', digest)):
                     raise ValueError(f'Invalid package metadata from pacman: {name}')
                 cached = cache/filename
-                if cached.is_file() and sha256(cached) == digest:
+                signature = cached.with_suffix(cached.suffix + '.sig')
+                package_cached = cached.is_file() and sha256(cached) == digest
+                if package_cached and signature.is_file():
                     continue
                 url = f'{ARCH_ARCHIVE_MIRROR}/packages/{quote(name[0])}/{quote(name)}/{quote(filename)}'
-                staged = Path(temporary)/filename
-                download(url, staged, digest=digest)
-                run(['sudo', 'install', '-m', '0644', staged, cached], timeout=60)
+                print(f'Arch archive fallback: {filename} and signature', flush=True)
+                staged_signature = Path(temporary)/signature.name
+                download(url + '.sig', staged_signature)
+                if not package_cached:
+                    staged = Path(temporary)/filename
+                    download(url, staged, digest=digest)
+                    run(['sudo', 'install', '-m', '0644', staged, cached], timeout=60)
+                run(['sudo', 'install', '-m', '0644', staged_signature, signature], timeout=60)
     privileged(*arguments)
 
 
