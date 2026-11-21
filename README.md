@@ -24,27 +24,31 @@
 </p>
 <p align="center">
   <a href="#界面预览">界面预览</a> ·
-  <a href="#命令行">命令行</a> ·
-  <a href="docs/README.md">使用与开发文档</a>
+  <a href="#命令行">命令行</a>
 </p>
 
-基于 **Rust + Slint + mihomo** 的原生代理客户端，无需 WebView。一个后台连接桌面界面与 `cor` 命令行，Android 使用独立移动宿主。
+Clash of Rust 是基于 **Rust + Slint + mihomo** 的原生代理客户端。桌面 GUI、TUI 和 `cor` 命令行共用后台，Android 提供独立客户端。
 
-支持 **Windows（x64 / ARM64）**、**Debian/Ubuntu（amd64 / ARM64，Ubuntu 最低 20.04）**、**macOS 14+（Intel / Apple Silicon）** 和 **Android 8.0+（ARM64 / ARMv7 / x86_64）**。Android 各版本和厂商 ROM 的验证范围见[兼容性说明](apps/android/README.md#兼容性与验证范围)。
+**正式版 0.7.2** 已在以下环境通过代理与 TUN 测试。
 
-当前正式版：**0.7.2**，见[更新内容](docs/releases/0.7.2.md)。
+| 平台 | 安装支持 | 0.7.2 实测环境 |
+| --- | --- | --- |
+| Windows | x64 / ARM64 | Windows Server 2025（x64）、Windows 11（ARM64） |
+| Linux | Debian 或 Ubuntu 20.04+，amd64 / ARM64 | Ubuntu 20.04 LTS（x64 / ARM64）、Ubuntu 26.04 LTS（x64） |
+| macOS | 14+，Intel / Apple Silicon | macOS 15.7.9（Intel）、26.7.2（Apple Silicon） |
+| Android | 8.0+，ARM64 / ARMv7 / x86_64 | Android 8.0 至 16 共 11 个 x86_64 模拟器版本。ARM64、ARMv7 已通过构建与安装包校验。 |
 
 ## 功能一览
 
 | 功能 | 能做什么 |
 | --- | --- |
-| 🖥️ 原生界面 | 浅色与深色主题、强调色、宫格与列表、手机与平板布局；页面数据按需加载。 |
-| ⌨️ 命令行 | Windows、Linux、macOS 无界面运行，与窗口共用后台和内核，适用于服务器与 SSH。[使用文档](docs/cli.md) |
-| 📱 应用分流 | Android 全部、仅选中或排除应用；Android 10+ 可按应用指定直连、策略组或节点。[配置说明](docs/android-application-routing.md) |
-| 🌐 网络检测 | 出口 IP、GitHub、AI 服务与流媒体访问检测，分类报告、筛选与重测；可导出诊断。[诊断说明](docs/diagnostics.md) |
-| 🛡️ Claude 保护 | A÷检测汇总地区、DNS、WebRTC 与项目配置线索；保护启用 TUN、加密 DNS 与异常连接拦截，锁定节点及网络修改，关闭后恢复设置。[检测与保护](docs/claude-region-detection.md) |
-| 📦 内置资源与更新 | 内置 mihomo 与 Geo 数据；支持 Geo 更新、正式版与预发布版更新、进度与取消，校验安装包 SHA256；桌面可从预发布版切回正式版，Android 安装由系统确认。 |
-| ⚙️ 日常使用 | 托盘切换节点与速度显示、后台自启动、单实例、窗口位置记忆；关闭窗口释放界面进程。DNS 覆盖下可独立管理 Fake-IP 及排除项。[界面说明](crates/client-ui/README.md) |
+| 🖥️ 原生界面 | 深浅主题、强调色、宫格与列表，适配手机和平板。 |
+| ⌨️ 命令行 | 支持 Windows、Linux、macOS 无界面运行，可通过 SSH 操作。 |
+| 📱 应用分流 | Android 可纳入或排除应用。Android 10+ 可为单个应用指定直连、策略组或节点。 |
+| 🌐 网络检测 | 检查出口 IP 及 GitHub、AI 和流媒体连通性，支持筛选、重测和导出报告。 |
+| 🛡️ Claude 保护 | 检查地区、DNS、WebRTC 和项目配置。开启保护后锁定节点和网络修改，启用 TUN、加密 DNS 与异常连接拦截，关闭后恢复设置。 |
+| 📦 内置资源与更新 | 内置 mihomo 与 Geo 数据。支持 Geo 和客户端更新、下载进度与取消，并校验安装包 SHA256。桌面可切回正式版，Android 安装需系统确认。 |
+| ⚙️ 日常使用 | 托盘切换节点和显示速度，支持后台自启动、单实例及窗口位置记忆。关窗释放界面进程，可在 DNS 覆盖中管理 Fake-IP 和排除项。 |
 
 ## 界面预览
 
@@ -58,7 +62,7 @@
 
 ## 安装与使用
 
-从[网站下载页](https://clash-of-rust.fu021.shop/download)或 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases) 下载对应系统和架构的安装包，附带 `.sha256` 校验文件。下表为 0.7.2 正式版链接。
+下表提供 0.7.2 正式版安装包。`.sha256` 校验文件和其他版本见[下载页](https://clash-of-rust.fu021.shop/download)及 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases)。
 
 | 平台 | 安装包与下载次数 |
 | --- | --- |
@@ -67,19 +71,19 @@
 | macOS | [![macOS DMG Apple Silicon](https://img.shields.io/badge/DMG-Apple_Silicon-555555?logo=apple&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg) [![macOS Apple Silicon downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg)<br>[![macOS DMG Intel](https://img.shields.io/badge/DMG-Intel_x64-555555?logo=apple&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg) [![macOS Intel downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg) |
 | Android | [![Android APK ARM64](https://img.shields.io/badge/APK-ARM64-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk) [![Android ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk) （多数手机和平板）<br>[![Android APK ARMv7](https://img.shields.io/badge/APK-ARMv7-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk) [![Android ARMv7 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk)<br>[![Android APK x64](https://img.shields.io/badge/APK-x64-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk) [![Android x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk) |
 
-Windows 运行安装程序；Debian/Ubuntu（Ubuntu 仅支持 20.04 及以上）使用 `sudo apt install ./安装包文件名.deb`。升级保留订阅和个人设置；Windows 卸载可选删除全部配置和数据，默认不勾选。
+Windows 运行安装程序。Debian/Ubuntu 运行 `sudo apt install ./安装包文件名.deb`。macOS 将 DMG 内的应用拖入「应用程序」。Android 安装 APK 后，在首次连接时允许 VPN 授权，可在系统快捷设置中添加开关磁贴。
 
-macOS 打开 DMG，将 **Clash of Rust.app** 拖入 **Applications（应用程序）** 后启动。Android 安装对应架构的 APK，首次连接允许 VPN 授权；可在系统快捷设置中添加开关磁贴。
+打开应用后，在「订阅」页导入订阅，在「代理」页选择节点，再从首页启用系统代理或 TUN。Android 从首页连接 VPN。
 
-Windows Defender 若出现告警，请先核对下载文件及 SHA256；扫描记录和微软误报提交入口见 [Defender 告警处理](docs/workflows/release.md#windows-defender-告警)。未知告警不能直接认定为误报。
+升级保留订阅和设置。Windows 卸载时默认保留数据，可主动勾选删除。如遇 Defender 告警，用 PowerShell 的 `Get-FileHash` 核对安装包和发布附带的 SHA256。若摘要不匹配或告警未核实，先暂停安装。
 
 ## 命令行
 
-Windows、Linux、macOS 安装包均附带无界面的 `cor`，与窗口共用后台和内核。运行 `cor start` 启动后台；服务器可启用 TUN 接管流量。运行 `cor help` 查看命令，安装、参数和示例见 [CLI 使用文档](docs/cli.md)。
+桌面安装包均附带 `cor`。运行 `cor start` 启动后台，`cor ui` 打开终端界面，`cor help` 查看命令。在服务器上可运行 `cor proxy tun` 启用 TUN，首次开启可能需要系统授权。
 
 ## 内存占用
 
-实测 **0.7.2**（`141e1cb`），Ubuntu 22.04 x64、Release 软件渲染；100 节点、5 个策略组、1,000 条规则，无业务流量。每场景采样 10 秒，下表均为峰值（MiB）。
+**0.7.2** 在 Ubuntu 22.04 x64 的 Release 软件渲染实测，配置含 100 个节点、5 个策略组、1,000 条规则，无业务流量。每个场景采样 10 秒，表中为峰值（MiB）。
 
 | 场景 | 客户端 RSS | 客户端 PSS | 客户端与内核合计 PSS |
 | --- | ---: | ---: | ---: |
@@ -91,7 +95,7 @@ Windows、Linux、macOS 安装包均附带无界面的 `cor`，与窗口共用�
 | 再次关闭 TUI | 18.31 | 14.59 | 61.27 |
 | 纯 CLI 后台运行 | 15.65 | 11.93 | 54.68 |
 
-客户端含后台及当前 GUI/TUI 进程，不含内核。GUI 关窗和 TUI 退出均已确认前端进程结束；后台与内核继续运行，TUI 退出后合计内存未完全回到初始值。
+客户端列统计后台和当前 GUI/TUI，合计列纳入内核。关窗或退出 TUI 后界面进程结束，后台与内核继续运行。
 
 其他页面与快捷规则场景：
 
@@ -102,56 +106,31 @@ Windows、Linux、macOS 安装包均附带无界面的 `cor`，与窗口共用�
 | 搜索后返回首页 | 58.01 | 48.28 | 100.70 |
 | 五项快捷规则全开：首页 | 55.18 | 45.33 | 109.68 |
 
-RSS 含共享页，PSS 按比例分摊；实际占用随设备、配置和流量变化。本次仅 Linux 短时基准，不代表其他平台或长期表现。[完整基准与原始数据](https://github.com/Fu021/Clash-of-Rust/actions/runs/44103803255) · [方法与版本对照](docs/workflows/memory-current.md)。
+RSS 完整计入共享页，PSS 按比例分摊。实际占用随设备、配置和流量变化。[原始基准数据](https://github.com/Fu021/Clash-of-Rust/actions/runs/44103803255)。
 
 ## 编译与打包
 
-可选择本地工具链或 GitHub Actions。**本地开发与验证不要求推送代码或触发工作流**；正式发布使用经过 CI 验证的产物。
+### 本地编译
 
-### 选项一：本地编译与打包
-
-准备 Rust stable、Python 3.11+ 和当前平台的原生工具链：Windows 使用 MSVC；Linux 安装 C/C++、pkg-config、GLib、Fontconfig/FreeType、XKB、Wayland/X11 开发库；macOS 安装 Xcode Command Line Tools。从仓库根目录执行：
+准备 Rust stable、Python 3.11+ 和原生工具链。Windows 使用 MSVC，macOS 使用 Xcode Command Line Tools，Linux 需要 C/C++、pkg-config 及 GLib、Fontconfig/FreeType、XKB、Wayland/X11 开发库。在仓库根目录运行以下命令。
 
 ```sh
 python3 scripts/prepare-resources.py
 cargo build --target-dir target/desktop -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 ```
 
-桌面宿主、界面程序、`cor` 命令行和网络助手生成在 `target/desktop/debug/`，内核与 Geo 资源生成在 `bundle/`。桌面宿主与界面程序需放在同一目录。Windows 可用 `python` 替代 `python3`。Windows EXE、Linux DEB 和 macOS DMG 见[本地打包步骤](docs/workflows/local-development.md#本地打包)，Android 工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
+桌面程序生成在 `target/desktop/debug/`，内核与 Geo 资源在 `bundle/`。桌面宿主与界面程序需放在同一目录。Windows 可用 `python` 运行第一条命令。
 
-### 选项二：GitHub Actions
+### GitHub Actions
 
-[CI](https://github.com/Fu021/Clash-of-Rust/actions/workflows/ci.yml) 在提交 PR 或推送 main 后，完成六种桌面平台及三种 Android ABI 的编译、检查、单元测试与代理/TUN 测试。
-
-测试安装包：对应提交的 CI 会生成并验收九组 `package-*` 安装包及 SHA256，保存在 CI 的 Actions 附件中。手动运行 **Publish Release** 并勾选 `check_only` 可再次核对候选包与安装收据，不重新编译或重复安装矩阵；公开发布复用桌面候选包，并对 Android 重新签名和验证。流程见[工作流说明](docs/workflows.md)。
-
-## 开发与发布
-
-按任务查阅[文档导航](docs/README.md)，或从[仓库目录与职责](docs/development.md#目录与职责)定位代码。
-
-共享业务、桌面宿主、独立窗口、CLI 与移动桥接的模块职责和验证要求见 [开发与验证](docs/development.md)；Android 工具链与原生宿主见 [Android 开发说明](apps/android/README.md)，iOS 保留独立界面与宿主占位。
-
-历史提交与 GitHub Actions 常见失败模式按主题整理在 [Agent 失败复盘目录](docs/agent-failures/README.md)。按任务查相关主题，结束时更新[最近复盘](docs/agent-failures/reviews.md)。
-
-构建、验证、缓存和打包脚本的入口与合并规则见 [脚本维护说明](scripts/README.md)；不要为单次操作复制新的包装脚本。
-
-安装 Slint Viewer 后可独立预览界面。资源受限时只做静态检查或最小单页预览，并把输出放到工作区外：
-
-```sh
-python3 scripts/preview-slint.py --check
-python3 scripts/preview-slint.py --page settings --theme light --output /tmp/clash-slint-preview
-```
-
-测试、内存基准与发布流程见 [工作流文档](docs/workflows.md)。
+[CI](https://github.com/Fu021/Clash-of-Rust/actions/workflows/ci.yml) 编译并验证六个桌面目标及三个 Android ABI。通过后打开该次运行的 **Artifacts**，下载对应平台的 `package-*`，内含安装包和 `.sha256`。**Publish Release** 的 `check_only` 模式可复用同提交产物核验安装包。
 
 ## 参与贡献
 
-问题与建议可从 [Issue 表单](https://github.com/Fu021/Clash-of-Rust/issues/new/choose)提交。故障报告可附上[检查过的诊断 JSON](docs/cli/runtime.md#故障反馈与诊断报告)。
+通过 [Issue 表单](https://github.com/Fu021/Clash-of-Rust/issues/new/choose)提交问题或建议。遇到故障，可从报错通知或日志页选择「导出诊断」，也可运行 `cor diagnose --output cor-diagnose.json`。确认 JSON 可分享后，将它附到问题表单。欢迎 AI 辅助的 PR，提交前请完成适用的本地验证。
 
-欢迎 AI 辅助的 PR。请先完成适用的本地验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解资源受限环境、CI、缓存与工作流变更约定。
+详细使用和开发资料集中在[文档导航](docs/README.md)。
 
 ## License
 
-Rust 界面及原创通用代码采用 **GPL-3.0-only**，见 [LICENSE](LICENSE)。IP 检测复用的 RegionRestrictionCheck 源码及派生逻辑保留 **AGPL-3.0-only**，见 [授权及修改说明](resources/ip-check/SOURCE.md)；组合发行遵守 GPLv3/AGPLv3 第 13 条，包括适用时向远程网络用户提供完整对应源码。
-
-mihomo 采用 GPL-3.0，Slint 按 GPL-3.0 使用。第三方软件与数据来源见 [THIRD-PARTY-NOTICES.txt](resources/THIRD-PARTY-NOTICES.txt)。
+原创代码采用 [GPL-3.0-only](LICENSE)，复用及派生的 RegionRestrictionCheck IP 检测代码保留 [AGPL-3.0-only](resources/ip-check/SOURCE.md)。组合发行遵守 GPLv3/AGPLv3 第 13 条，包括适用时向远程网络用户提供完整对应源码。mihomo 与 Slint 按 GPL-3.0 使用，其他来源见[第三方声明](resources/THIRD-PARTY-NOTICES.txt)。

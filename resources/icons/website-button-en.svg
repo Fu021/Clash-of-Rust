@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="176" height="44" viewBox="0 0 176 44" role="img" aria-labelledby="title description" xml:lang="en">
+  <title id="title">Project website</title>
+  <desc id="description">Features and software downloads</desc>
+  <rect x="0.5" y="0.5" width="175" height="43" rx="10" fill="#ad5539" stroke="#cf896e"/>
+  <g fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="25" cy="22" r="8"/>
+    <ellipse cx="25" cy="22" rx="3.5" ry="8"/>
+    <path d="M17 22h16M18.5 18h13M18.5 26h13M145 26l8-8M145 18h8v8"/>
+  </g>
+  <text x="44" y="27" font-family="Arial, sans-serif" fill="#ffffff" font-size="14" font-weight="600">Project website</text>
+</svg>

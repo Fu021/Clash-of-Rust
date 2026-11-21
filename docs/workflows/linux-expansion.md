@@ -46,6 +46,8 @@ Tumbleweed 在来宾关闭预设仓库，只启用 openSUSE 历史目录中与�
 
 ### Arch Linux 原生包
 
+来宾的 pacman 按镜像日期使用固定的官方归档。主站不可达时回退到同日快照，继续使用来宾的包签名校验。[Arch 官方归档镜像](https://github.com/archlinux/infrastructure/blob/main/docs/servers.md#archive-mirrors)。
+
 发布范围包含 Arch Linux x86_64 时，Release 将提供原生二进制包。首次安装时从包含该包的版本下载 `Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst` 及 `.sha256`，核对摘要后执行 `sudo pacman -U ./Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst`，其中 `<版本>` 替换为实际版本。包名是 `clash-of-rust`，配方保留 `/opt/clash-of-rust`、随包内核和固定的 polkit 助手路径，并写入 `pacman-release` 标识。
 
 Arch 工作流使用 CI 的 x64 DEB 在 Arch 来宾内重封装，检查安装后的包身份、实际终端更新助手、基础系统代理和 TUN。来宾完成后回收安装过的原包与收据。记录作业绑定实际执行验收的 attempt 与归档摘要，发布阶段用同一字节生成校验文件并加入 Release。应用内更新见[版本与更新通道](versions.md#版本与更新通道)。

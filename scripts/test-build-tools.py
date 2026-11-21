@@ -8136,6 +8136,22 @@ class CompatibilityTests(unittest.TestCase):
                 appindicator.assert_not_called()
                 privileged.assert_not_called()
 
+    def test_arch_archive_mirror_uses_the_same_snapshot_as_the_primary(self):
+        import linux_native_guest
+
+        target = SimpleNamespace(release='20261115.625457')
+        with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
+                patch.dict(linux_native_guest.TARGETS, {'arch': (target,)}), \
+                patch.object(linux_native_guest, 'run') as write, \
+                patch.object(linux_native_guest, 'privileged') as pacman:
+            linux_native_guest.refresh()
+        write.assert_called_once_with(
+            ['sudo', 'tee', '/etc/pacman.d/mirrorlist'],
+            input=('Server = https://archive.archlinux.org/repos/2026/11/15/$repo/os/$arch\n'
+                   'Server = https://umea.archive.pkgbuild.com/repos/2026/11/15/$repo/os/$arch\n'),
+            text=True, stdout=subprocess.DEVNULL)
+        pacman.assert_called_once_with('-Syyu')
+
     def test_tumbleweed_only_enables_the_signed_repository_for_the_guest_snapshot(self):
         import linux_native_guest
         from linux_compatibility_targets import tumbleweed_target

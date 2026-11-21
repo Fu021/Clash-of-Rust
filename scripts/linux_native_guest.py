@@ -82,9 +82,13 @@ def refresh():
     else:
         mirrorlist = '/etc/pacman.d/mirrorlist'
         snapshot = datetime.strptime(TARGETS['arch'][0].release.split('.')[0], '%Y%m%d')
+        archive_hosts = ('archive.archlinux.org', 'umea.archive.pkgbuild.com')
+        servers = ''.join(
+            f'Server = https://{host}/repos/{snapshot:%Y/%m/%d}/$repo/os/$arch\n'
+            for host in archive_hosts
+        )
         run(['sudo', 'tee', mirrorlist],
-            input=f'Server = https://archive.archlinux.org/repos/{snapshot:%Y/%m/%d}/$repo/os/$arch\n',
-            text=True, stdout=subprocess.DEVNULL)
+            input=servers, text=True, stdout=subprocess.DEVNULL)
         privileged('-Syyu')
 
 

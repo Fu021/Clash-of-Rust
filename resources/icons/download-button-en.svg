@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="136" height="44" viewBox="0 0 136 44" role="img" aria-labelledby="title description" xml:lang="en">
+  <title id="title">Download</title>
+  <desc id="description">Choose an installer for your platform and architecture</desc>
+  <rect x="0.5" y="0.5" width="135" height="43" rx="10" fill="#30302e" stroke="#60605b"/>
+  <path d="M25 14v13m-5-5 5 5 5-5M17 28v3h16v-3" fill="none" stroke="#f0efec" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="48" y="27" font-family="Arial, sans-serif" fill="#f0efec" font-size="14" font-weight="600">Download</text>
+</svg>
