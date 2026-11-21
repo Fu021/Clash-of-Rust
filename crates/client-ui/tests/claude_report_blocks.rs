@@ -15,6 +15,7 @@ use std::{
 slint::slint! {
     #[edition = "1.19"]
     import { MobileReportBlocks } from "../ui/mobile/shared/reports.slint";
+    import { PreviewReports } from "../ui/preview-reports.slint";
     import { ReportItem } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
     export { ReportItem } from "../ui/state.slint";
@@ -22,6 +23,7 @@ slint::slint! {
     export component ReportBlocksProbe inherits Window {
         preferred-width: 393px; preferred-height: 852px;
         in-out property <[ReportItem]> reports;
+        out property <[ReportItem]> preview-blocks: PreviewReports.blocks;
         in-out property <float> text-scale <=> Theme.text-scale;
         MobileReportBlocks { width: parent.width; items: root.reports; }
     }
@@ -75,6 +77,12 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
     slint::platform::set_platform(Box::new(Headless(adapter.clone(), clock.clone()))).unwrap();
     adapter.set_size(slint::PhysicalSize::new(393, 852));
     let probe = ReportBlocksProbe::new().unwrap();
+    assert!(
+        probe
+            .get_preview_blocks()
+            .iter()
+            .any(|row| row.tone == 0 && row.title == "实时保护与异常拦截")
+    );
     let targets = Rc::new(RefCell::new(BTreeMap::<String, Vec<f32>>::new()));
     let observed = targets.clone();
     probe
@@ -129,6 +137,33 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
             },
         ]));
     probe.set_reports(reports.clone().into());
+    let guard_reports = Rc::new(slint::VecModel::from(vec![
+        ReportItem {
+            id: "实时保护与异常拦截".into(),
+            title: "实时保护与异常拦截".into(),
+            value: "已关闭 1 条异常连接".into(),
+            tone: 0,
+            delay_tone: 3,
+            block_items: 2,
+            ..Default::default()
+        },
+        ReportItem {
+            id: "实时保护与异常拦截".into(),
+            title: "实时保护与异常拦截".into(),
+            value: "已观察 8 次请求".into(),
+            detail: "说明：只处理保护范围内偏离指定节点的连接。".into(),
+            source: "内核事件与连接控制接口".into(),
+            tone: 3,
+            ..Default::default()
+        },
+        ReportItem {
+            id: "实时保护与异常拦截".into(),
+            title: "closed.example".into(),
+            value: "异常连接已关闭".into(),
+            tone: 3,
+            ..Default::default()
+        },
+    ]));
     probe.show().unwrap();
     let render = |width, height| {
         frame(&adapter, &clock, width, height);
@@ -217,6 +252,33 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
         );
         let button = targets.borrow()["claude-block:routes"].clone();
         click(probe.window(), &button);
+        render(width, height);
+        probe.set_reports(guard_reports.clone().into());
+        render(width, height);
+        let button = targets.borrow()["claude-block:实时保护与异常拦截"].clone();
+        click(probe.window(), &button);
+        render(width, height);
+        let item_key = "claude-block-item:实时保护与异常拦截:1";
+        let collapsed_height = targets.borrow()[item_key][3];
+        let button = targets.borrow()["claude-block-detail:实时保护与异常拦截:1"].clone();
+        click(probe.window(), &button);
+        render(width, height);
+        let expanded_height = targets.borrow()[item_key][3];
+        assert!(expanded_height > collapsed_height);
+        let mut status = guard_reports.row_data(1).unwrap();
+        status.value = "已观察 9 次请求".into();
+        guard_reports.set_row_data(1, status);
+        render(width, height);
+        assert_eq!(targets.borrow()[item_key][3], expanded_height);
+        let mut replacement = guard_reports.row_data(1).unwrap();
+        replacement.title = "其他状态".into();
+        guard_reports.set_row_data(1, replacement);
+        render(width, height);
+        assert!(targets.borrow()[item_key][3] < expanded_height);
+        let mut status = guard_reports.row_data(1).unwrap();
+        status.title = "实时保护与异常拦截".into();
+        guard_reports.set_row_data(1, status);
+        probe.set_reports(reports.clone().into());
         render(width, height);
     }
     probe.hide().unwrap();

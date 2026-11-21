@@ -3023,17 +3023,35 @@ fn project(state: &State) -> Projection {
             });
         }
     }
-    let guard_order = core::claude_check::summary_order(None, true);
-    for route in &state.guard_snapshot.routes {
-        claude_counts.1 += 1;
-        let section = "Claude 域名选路";
+    let guard = &state.guard_snapshot;
+    let guard_enabled = s.settings.claude_protection.is_some();
+    if guard_enabled || guard.blocked > 0 || !guard.routes.is_empty() || !guard.error.is_empty() {
+        let mut signal = core::claude_check::guard::report_signal(guard);
+        if !guard_enabled
+            || !state.protection_observed
+            || !s.running
+            || !s.vpn
+            || !s.platform["protection"]["enabled"]
+                .as_bool()
+                .unwrap_or(false)
+        {
+            core::claude_check::guard::mark_report_history(&mut signal);
+        }
+        let tone = if signal.risk {
+            claude_counts.1 += 1;
+            3
+        } else {
+            claude_counts.2 += 1;
+            2
+        };
+        let section = core::claude_check::guard::REPORT_SECTION;
         let row = ReportRow {
             id: section.into(),
-            title: route.display_title().into(),
-            value: route.display_outcome(),
-            detail: route.explanation(),
-            source: "实时拦截 · 内核连接记录".into(),
-            tone: 3,
+            title: signal.display_title().into(),
+            value: signal.display_value().into(),
+            detail: signal.explanation(),
+            source: signal.source.clone(),
+            tone,
             country: String::new(),
             country_label: String::new(),
             millis: None,
@@ -3044,21 +3062,22 @@ fn project(state: &State) -> Projection {
             section,
             title: row.title.clone(),
             value: row.value.clone(),
-            priority: guard_order,
-            tone: 3,
+            priority: core::claude_check::summary_order(Some(&signal), tone == 3),
+            tone,
             summary_hint: false,
             item: row,
         });
     }
-    if !state.guard_snapshot.error.is_empty() {
+    let guard_order = core::claude_check::summary_order(None, true);
+    for route in &state.guard_snapshot.routes {
         claude_counts.1 += 1;
-        let section = "实时保护";
+        let section = core::claude_check::guard::REPORT_SECTION;
         let row = ReportRow {
             id: section.into(),
-            title: "实时保护状态".into(),
-            value: state.guard_snapshot.error.clone(),
-            detail: state.guard_snapshot.error.clone(),
-            source: "Android 后台保护服务".into(),
+            title: route.display_title().into(),
+            value: route.display_outcome(),
+            detail: route.explanation(),
+            source: "实时拦截 · 内核连接记录".into(),
             tone: 3,
             country: String::new(),
             country_label: String::new(),

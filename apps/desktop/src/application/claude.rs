@@ -68,13 +68,21 @@ pub(super) enum Entry<'a> {
     Clean(&'a str),
     Signal(&'a Report, &'a Signal),
     Route(&'a check::Route),
+    GuardRoute(&'a check::Route),
     Routes(Vec<&'a check::Route>),
 }
 impl Entry<'_> {
     pub(super) fn section(&self) -> &'static str {
         match self {
             Self::Config(_) | Self::Clean(_) => "Claude 项目配置",
+            Self::Signal(report, signal)
+                if report.environment == Environment::Desktop
+                    && signal.title == check::guard::REPORT_SECTION =>
+            {
+                check::guard::REPORT_SECTION
+            }
             Self::Signal(_, signal) => signal.group.name(),
+            Self::GuardRoute(_) => check::guard::REPORT_SECTION,
             Self::Route(_) | Self::Routes(_) => "Claude 域名选路",
         }
     }
@@ -101,7 +109,9 @@ impl Entry<'_> {
                     signal.display_value().into()
                 },
             ),
-            Self::Route(route) => (route.display_title().into(), route.display_outcome()),
+            Self::Route(route) | Self::GuardRoute(route) => {
+                (route.display_title().into(), route.display_outcome())
+            }
             Self::Routes(routes) => ("Claude 域名选路".into(), check::route_group_value(routes)),
         }
     }
@@ -123,6 +133,14 @@ impl State {
     }
     pub(crate) fn clear_guard(&mut self) {
         self.guard_status.clear();
+        if let Some(report) = &mut self.reports[index(Environment::Desktop)]
+            && let Some(signal) = report
+                .signals
+                .iter_mut()
+                .find(|signal| signal.title == check::guard::REPORT_SECTION)
+        {
+            check::guard::mark_report_history(signal);
+        }
     }
     pub(crate) fn guard_report(&mut self, snapshot: &check::guard::Snapshot) {
         self.guard_status = format!(
@@ -139,26 +157,7 @@ impl State {
             "Claude 保护的后台监测与拦截记录；共享服务无法按进程归属",
         );
         report.routes = snapshot.routes.iter().cloned().collect();
-        let mut signal = Signal::new(
-            Group::Desktop,
-            "实时保护与异常拦截",
-            format!(
-                "已观察 {} 次请求 · 已关闭 {} 条异常连接 · 系统提示请求 {} 次",
-                snapshot.total, snapshot.blocked, snapshot.alerts
-            ),
-            "内核事件与连接控制接口",
-            if snapshot.connected {
-                Evidence::Measured
-            } else {
-                Evidence::Unknown
-            },
-            "持续在后台运行；只处理 Claude 和保护规则关联的服务，偏离指定节点的存续连接会被关闭。未经过内核、已结束的请求及 HTTPS 内容无法据此检查。",
-        );
-        signal.risk = snapshot.blocked > 0 || !snapshot.error.is_empty();
-        if !snapshot.error.is_empty() {
-            signal.detail.push_str(&format!(" {}", snapshot.error));
-        }
-        report.signals.push(signal);
+        report.signals.push(check::guard::report_signal(snapshot));
         let current = self.reports[index(Environment::Desktop)]
             .get_or_insert_with(|| Report::new(Environment::Desktop, "本机环境与实时保护"));
         current.routes = report.routes;
@@ -172,15 +171,19 @@ impl State {
             entries.extend(audit.clean_files.iter().map(|path| Entry::Clean(path)));
         }
         entries.extend(
-            check::group_routes(self.selected().flat_map(|report| report.routes.iter()))
-                .into_iter()
-                .map(|group| {
-                    if group.len() == 1 {
-                        Entry::Route(group[0])
-                    } else {
-                        Entry::Routes(group)
-                    }
-                }),
+            check::group_routes(
+                self.selected()
+                    .filter(|report| report.environment != Environment::Desktop)
+                    .flat_map(|report| report.routes.iter()),
+            )
+            .into_iter()
+            .map(|group| {
+                if group.len() == 1 {
+                    Entry::Route(group[0])
+                } else {
+                    Entry::Routes(group)
+                }
+            }),
         );
         let mut signals: Vec<_> = self
             .selected()
@@ -196,6 +199,9 @@ impl State {
             }
         });
         entries.extend(signals.into_iter().map(|(r, s)| Entry::Signal(r, s)));
+        if let Some(report) = &self.reports[index(Environment::Desktop)] {
+            entries.extend(report.routes.iter().map(Entry::GuardRoute));
+        }
         entries
     }
     pub(super) fn kind(&self, entry: &Entry<'_>) -> ResultKind {
@@ -233,6 +239,7 @@ impl State {
                     ResultKind::Unknown
                 }
             }
+            Entry::GuardRoute(_) => ResultKind::Risk,
             Entry::Routes(_) => ResultKind::Unknown,
         }
     }

@@ -53,6 +53,9 @@ fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32) -> ReportItem {
         claude_view::Entry::Clean(path) => (String::new(), path.into()),
         claude_view::Entry::Signal(_, signal) => (signal.explanation(), signal.source.clone()),
         claude_view::Entry::Route(route) => (route.explanation(), "内核连接记录".into()),
+        claude_view::Entry::GuardRoute(route) => {
+            (route.explanation(), "实时拦截 · 内核连接记录".into())
+        }
         claude_view::Entry::Routes(routes) => (
             clash_of_rust::claude_check::route_group_detail(&routes),
             "内核连接记录".into(),

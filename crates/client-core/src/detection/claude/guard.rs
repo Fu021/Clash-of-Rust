@@ -1,5 +1,5 @@
 //! Background enforcement of the pinned Claude route. Bounded state, no processes.
-use super::{Route, observe, protection};
+use super::{Evidence, Group, Route, Signal, observe, protection};
 use crate::api::Api;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -11,6 +11,7 @@ use std::{
 const CONTROLLER_UNAVAILABLE: &str = "控制接口暂不可用，实时拦截未确认；保护规则仍保留。";
 const GUARD_STOPPED: &str = "实时拦截已停止，请重新开启 Claude 保护。";
 const CONTROLLER_FAILURE_DELAY: Duration = Duration::from_secs(3);
+pub const REPORT_SECTION: &str = "实时保护与异常拦截";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -23,6 +24,43 @@ pub struct Snapshot {
     pub error: String,
     pub routes: VecDeque<Route>,
 }
+
+pub fn report_signal(snapshot: &Snapshot) -> Signal {
+    let counts = format!(
+        "已观察 {} 次请求 · 已关闭 {} 条异常连接 · 系统提示请求 {} 次",
+        snapshot.total, snapshot.blocked, snapshot.alerts
+    );
+    let value = if snapshot.error.is_empty() {
+        counts
+    } else {
+        format!("{} · {counts}", snapshot.error)
+    };
+    let mut signal = Signal::new(
+        Group::Desktop,
+        REPORT_SECTION,
+        value,
+        "内核事件与连接控制接口",
+        if snapshot.connected {
+            Evidence::Measured
+        } else {
+            Evidence::Unknown
+        },
+        "保护运行期间持续在后台监测；只处理 Claude 和保护规则关联的服务，偏离指定节点的存续连接会被关闭。未经过内核、已结束的请求及 HTTPS 内容无法据此检查。",
+    );
+    signal.risk = snapshot.blocked > 0 || !snapshot.error.is_empty();
+    if !snapshot.error.is_empty() {
+        signal.detail.push_str(&format!(" {}", snapshot.error));
+    }
+    signal
+}
+
+pub fn mark_report_history(signal: &mut Signal) {
+    signal.evidence = Evidence::Unknown;
+    if !signal.value.starts_with("上次保护记录 · ") {
+        signal.value = format!("上次保护记录 · {}", signal.value);
+    }
+}
+
 #[derive(Default)]
 struct ControllerHealth {
     unavailable_since: Option<Instant>,
@@ -441,6 +479,43 @@ pub(crate) fn decode(reader: impl std::io::Read, node: &str) -> serde_json::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_summary_keeps_counts_and_errors_visible() {
+        let mut snapshot = Snapshot {
+            total: 8,
+            blocked: 1,
+            alerts: 2,
+            connected: true,
+            ..Default::default()
+        };
+        let signal = report_signal(&snapshot);
+        assert_eq!(signal.title, REPORT_SECTION);
+        assert!(signal.value.contains("已观察 8 次请求"));
+        assert!(signal.value.contains("已关闭 1 条异常连接"));
+        assert!(signal.risk);
+        assert_eq!(signal.evidence, Evidence::Measured);
+
+        snapshot.error = "异常连接关闭失败".into();
+        snapshot.connected = false;
+        let signal = report_signal(&snapshot);
+        assert!(signal.value.starts_with("异常连接关闭失败"));
+        assert!(signal.explanation().contains("异常连接关闭失败"));
+        assert_eq!(signal.evidence, Evidence::Unknown);
+
+        snapshot.error.clear();
+        snapshot.blocked = 0;
+        assert!(!report_signal(&snapshot).risk);
+
+        snapshot.connected = true;
+        let mut signal = report_signal(&snapshot);
+        mark_report_history(&mut signal);
+        mark_report_history(&mut signal);
+        assert_eq!(signal.evidence, Evidence::Unknown);
+        assert!(signal.value.starts_with("上次保护记录 · 已观察 8 次请求"));
+        assert_eq!(signal.value.matches("上次保护记录").count(), 1);
+    }
+
     #[test]
     fn transient_controller_outages_stay_checking_and_recovery_resets_the_deadline() {
         use crate::protection::status::{State, Status};

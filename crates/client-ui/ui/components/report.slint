@@ -12,7 +12,13 @@ component FindingRow inherits Rectangle {
     in property <string> detail-key;
     in property <bool> show-details;
     property <bool> expanded;
-    changed item => { root.expanded = false; }
+    property <string> item-identity: root.item.id + "\n" + root.item.title + "\n" + root.item.source;
+    changed item-identity => { root.expanded = false; }
+    changed item => {
+        if root.item.id != "实时保护与异常拦截" || root.item.title != "实时保护与异常拦截" {
+            root.expanded = false;
+        }
+    }
     height: content.preferred-height;
     content := HorizontalLayout {
         padding: 16px; spacing: 12px; cross-axis-alignment: start;

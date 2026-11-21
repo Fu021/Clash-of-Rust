@@ -2316,6 +2316,128 @@ fn claude_route_block_expands_and_keeps_each_domain_and_failure() {
 }
 
 #[test]
+fn claude_guard_block_keeps_status_and_interceptions_together() {
+    use clash_of_rust::claude_check::{Environment, Evidence, Report, Route, guard};
+
+    ui_testing::initialize(1100, 1000);
+    let mut app = fixture(Page::Claude);
+    let mut report = Report::new(Environment::Core, "fixture");
+    report.routes = ["api.anthropic.com", "claude.ai"]
+        .into_iter()
+        .map(|host| Route {
+            host: host.into(),
+            chain: "演示节点".into(),
+            ..Default::default()
+        })
+        .collect();
+    report.routes.push(Route {
+        host: "observed.example".into(),
+        chain: "DIRECT".into(),
+        outcome: "内核已选路".into(),
+        ..Default::default()
+    });
+    app.claude.reports[0] = Some(report);
+    let mut snapshot = guard::Snapshot {
+        total: 8,
+        blocked: 1,
+        alerts: 2,
+        connected: true,
+        error: "异常连接关闭失败".into(),
+        routes: vec![
+            Route {
+                host: "closed.example".into(),
+                chain: "DIRECT".into(),
+                outcome: "异常连接已关闭".into(),
+                ..Default::default()
+            },
+            Route {
+                host: "failed.example".into(),
+                chain: "DIRECT".into(),
+                outcome: "异常连接关闭失败".into(),
+                ..Default::default()
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    app.claude.guard_report(&snapshot);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let rows = data.get_claude_results();
+    let guard_header = rows
+        .iter()
+        .find(|row| row.tone == 0 && row.title == guard::REPORT_SECTION)
+        .unwrap();
+    assert_eq!(guard_header.block_items, 3);
+    assert!(guard_header.value.contains("异常连接关闭失败"));
+    assert!(guard_header.value.contains("已关闭 1 条异常连接"));
+    for (host, outcome) in [
+        ("closed.example", "异常连接已关闭"),
+        ("failed.example", "异常连接关闭失败"),
+    ] {
+        let row = rows.iter().find(|row| row.title == host).unwrap();
+        assert_eq!(row.id, guard::REPORT_SECTION);
+        assert_eq!(row.value, outcome);
+        assert_eq!(row.source, "实时拦截 · 内核连接记录");
+        assert_eq!(row.tone, 3);
+    }
+    let observed = rows
+        .iter()
+        .find(|row| row.title == "observed.example")
+        .unwrap();
+    assert_eq!(observed.id, "Claude 域名选路");
+    let signal_index = rows
+        .iter()
+        .position(|row| row.title == guard::REPORT_SECTION && row.tone == 3)
+        .unwrap();
+    track_targets(&window);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    click_target(&window, &format!("claude-block:{}", guard::REPORT_SECTION));
+    motion_frame(&window, 50);
+    let item_key = format!("claude-block-item:{}:{signal_index}", guard::REPORT_SECTION);
+    let collapsed_height = target_bounds(&item_key)[3];
+    click_target(
+        &window,
+        &format!(
+            "claude-block-detail:{}:{signal_index}",
+            guard::REPORT_SECTION
+        ),
+    );
+    motion_frame(&window, 50);
+    assert!(target_bounds(&item_key)[3] > collapsed_height);
+    snapshot.total += 1;
+    app.claude.guard_report(&snapshot);
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 50);
+    assert!(
+        target_bounds(&item_key)[3] > collapsed_height,
+        "refreshing live protection counts closed the expanded explanation"
+    );
+    app.claude.clear_guard();
+    app.present_slint(&data, &mut models);
+    let rows = data.get_claude_results();
+    let guard_header = rows
+        .iter()
+        .find(|row| row.tone == 0 && row.title == guard::REPORT_SECTION)
+        .unwrap();
+    assert!(guard_header.value.contains("上次保护记录"));
+    assert!(rows.iter().any(|row| row.title == "closed.example"));
+    let signal = app.claude.reports[2]
+        .as_ref()
+        .unwrap()
+        .signals
+        .iter()
+        .find(|signal| signal.title == guard::REPORT_SECTION)
+        .unwrap();
+    assert_eq!(signal.evidence, Evidence::Unknown);
+    window.hide().unwrap();
+}
+
+#[test]
 fn claude_summary_keeps_quality_disagreements_visible_with_many_risks() {
     use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Signal};
 
