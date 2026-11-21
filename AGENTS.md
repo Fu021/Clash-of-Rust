@@ -25,7 +25,8 @@
 ## 资源受限环境
 
 - 仅有 1 核、约 1 GiB 内存或资源明显不足时，不做本地 Cargo/Gradle/Go 构建、Clippy、测试、打包，不运行下载依赖或生成安装包的脚本；授权后使用现有 Actions。
-- 本地仅静态检查及基本 UI 预览，优先 `python3 scripts/preview-slint.py --check`；按[代表尺寸](docs/loop-workflow.md#多尺寸-ui-检查)串行检查相关页面的一种主题，不生成全量页面/对话框/主题矩阵。
+- 资源充足时优先在本地定位、修复和验证，并按[磁盘管理](docs/workflows/local-development.md#本地-rust-构建与磁盘管理)跟踪 Rust `target` 增长。提交后仍按改动和发布范围完成同提交 CI、平台与发行版兼容验证。
+- 资源受限时本地仅做静态检查及基本 UI 预览，优先 `python3 scripts/preview-slint.py --check`；按[代表尺寸](docs/loop-workflow.md#多尺寸-ui-检查)串行检查相关页面的一种主题，不生成全量页面/对话框/主题矩阵。
 - 预览 `--output` 写到 `/tmp` 等工作区外，不改动用户已有文件。
 
 ## 任务收尾与失败复盘

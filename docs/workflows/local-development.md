@@ -2,6 +2,15 @@
 
 [工作流索引](../workflows.md)。按需读取本页，不必加载全部工作流文档。
 
+## 本地 Rust 构建与磁盘管理
+
+构建前同时检查会话实际可用的 CPU、内存和磁盘。Linux 容器还要核对 cgroup 的 CPU 配额和内存上限。资源充足时复用持久安装的 Rust 工具链，先在本机运行对应包的检查、测试或构建，再按[改动范围](../development.md#按改动选择验证)使用同提交 CI 和适用的兼容矩阵。资源受限时按 [Agent 开发指南](../../AGENTS.md#资源受限环境)执行。
+
+- 首次构建、切换 Rust 版本或目标架构、连续多轮测试前后，检查产物体积和剩余空间。从 `cargo metadata --no-deps --format-version 1` 读取实际的 `target_directory`，兼顾 `CARGO_TARGET_DIR` 等设置。用 `du -sh`、`du -h --max-depth=2` 和 `df -h` 定位增长，并在任务收尾复查。
+- 优先用 `cargo check -p <包名> --locked` 验证类型与依赖，按需要运行该包的测试或编译实际二进制。复用当前活跃配置的增量产物，避免无故重复构建多个架构或 profile。
+- 构建产物持续增长或开始挤占后续构建空间时，停止追加构建，先确认哪些历史 profile、测试产物或独立 `CARGO_TARGET_DIR` 已经用完。确认没有并行任务使用它们并保留所需的验收产物，再按范围处理。可先用 `cargo clean --profile <名称> --dry-run` 核对范围。整目录清理和共享缓存维护遵循[占用锁协议](../development.md#仓库占用锁)。
+- `target` 产物、Cargo 的依赖下载缓存与 Rust 工具链有独立的生命周期。对构建产物的清理只处理已确认的生成目录，保留工具链和仍有复用价值的下载缓存。
+
 ## 本地打包
 
 桌面打包须在与目标系统、架构一致的机器上进行。除 README 中的原生编译依赖外，Linux 打包需 `dpkg-dev`，macOS 需系统 `hdiutil`、`codesign`，Windows 的 NSIS 由脚本下载并校验。Android 所需的 Go 和 SDK 另见[Android 构建说明](../../apps/android/README.md#本地构建)。
@@ -57,3 +66,25 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 使用仓库期间遵循[占用锁协议](../development.md#仓库占用锁)。静态检查与预览不等于编译、测试或真实交互验证。
 
 图标、字体、国家名称及许可证属于必要资源；日常构建使用仓库成品。仅在维护资源时使用 `scripts/prepare-assets.py icons` / `countries`，不再生成国旗图集。图标源图保留于 `resources/icon-concepts`，Android 自适应图标使用生成后的 432px 前景图，第三方来源见各资源目录的说明。平台检测直接维护 Rust，必要的公开检测数据与 AGPL 来源说明统一位于 `resources/ip-check`，不再保留旧平台检测 `vendor` 或 Shell 生成工具。
+
+## Markdown 与网页截图
+
+`scripts/preview-page.py` 用无头 Chromium 把一个 Markdown 文档、本地 HTML 或指定网页导出为 PNG。首次在用户目录安装 Playwright、markdown-it-py 和浏览器，后续直接复用。Linux 主机还需 Chromium 系统库及能覆盖正文的字体，例如 Ubuntu 的 `fonts-noto-cjk`。
+
+```sh
+python3 -m venv ~/.local/share/clash-of-rust/preview
+~/.local/share/clash-of-rust/preview/bin/python -m pip install 'playwright==1.65.0' 'markdown-it-py==4.3.0'
+~/.local/share/clash-of-rust/preview/bin/python -m playwright install chromium --only-shell
+```
+
+从仓库根目录运行。网页示例使用现有网站构建入口生成的 `website/dist/`。
+
+```sh
+~/.local/share/clash-of-rust/preview/bin/python scripts/preview-page.py \
+  docs/workflows/local-development.md --root . --full-page --output /tmp/cor-doc.png
+python3 -B website/build.py
+~/.local/share/clash-of-rust/preview/bin/python scripts/preview-page.py \
+  website/dist/index.html --width 1280 --height 900 --output /tmp/cor-home.png
+```
+
+网页默认截取整页长图，`--viewport-only` 只截首屏。Markdown 默认截首屏，使用 `--full-page` 可生成长图。`--theme dark` 设置浏览器深色偏好。Markdown 支持表格、代码块和本地图片。预览本地文件时，只加载 `--root` 范围内的文件，默认范围是输入文件所在目录。打开 `https://` 或 `http://` 网页时按正常网页方式加载资源。截图输出为新文件，可直接发送给维护者审阅。

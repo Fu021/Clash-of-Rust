@@ -51,6 +51,7 @@
 | `memory_desktop.py` | 模块 / 子进程 | 托盘宿主与窗口夹具；测量进程外运行，不能并入基准入口。 |
 | `memory_lifecycle.py`、`memory_shards.py` | 模块 | 分析生命周期与分页结果，校验输入及分片完整性。 |
 | `preview-slint.py` | CLI | 使用依赖版本一致的 Viewer 与 edition 1.19 检查和渲染正式组件，沿用随包字体；拒绝旧工具输出缺字截图，不调用 Cargo。 |
+| `preview-page.py` | CLI | 单个 Markdown、HTML 或网页的 PNG 截图，网页默认生成整页长图。见[本地截图说明](../docs/workflows/local-development.md#markdown-与网页截图)。 |
 | `test-build-tools.py` | 离线测试 | 构建输入、缓存、打包、Windows/macOS 辅助逻辑的单元测试。 |
 | `test-workflow-artifacts.py` | 离线测试 | 不可变产物、安装包和内存工作流的离线回归测试。 |
 
