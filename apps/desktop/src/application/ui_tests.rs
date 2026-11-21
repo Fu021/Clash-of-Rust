@@ -56,6 +56,408 @@ fn network_report_is_replaced_and_late_results_cannot_reappear_after_navigation(
 }
 
 #[test]
+fn network_tools_remain_reachable_after_scrolling_other_pages() {
+    use slint::platform::WindowEvent;
+
+    let adapter = ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let groups: clash_desktop_protocol::List<_> = (0..100)
+        .map(|index| clash_desktop_protocol::GroupItem {
+            id: format!("group-{index}").into(),
+            title: format!("Group {index}").into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let profiles: clash_desktop_protocol::List<_> = (0..100)
+        .map(|index| clash_desktop_protocol::ProfileItem {
+            id: format!("profile-{index}").into(),
+            name: format!("Profile {index}").into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let frame = |page, text_scale| clash_desktop_protocol::Frame {
+        page,
+        text_scale,
+        ready: true,
+        running: true,
+        groups: if page == 1 {
+            groups.clone()
+        } else {
+            Default::default()
+        },
+        profiles: if page == 2 {
+            profiles.clone()
+        } else {
+            Default::default()
+        },
+        ..Default::default()
+    };
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    for (width, height, text_scale) in [(800, 450, 100), (950, 700, 100), (1280, 800, 130)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        for page in [1, 2] {
+            let mut previous_network = frame(6, text_scale);
+            previous_network.network_results = (0..100)
+                .map(|index| format!("Previous diagnostic result {index}").into())
+                .collect::<Vec<_>>()
+                .into();
+            clash_desktop_ui::apply(&previous_network, &data, &mut models);
+            data.set_scroll_network(0.);
+            motion_frame(&window, 0);
+            let viewport = target_bounds("network-detail-viewport");
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        viewport[0] + viewport[2] / 2.,
+                        viewport[1] + viewport[3] / 2.,
+                    ),
+                    delta_x: 0.,
+                    delta_y: -100_000.,
+                });
+            motion_frame(&window, 50);
+            assert!(
+                data.get_scroll_network() < 0.,
+                "{width}x{height}: previous network results must scroll"
+            );
+
+            clash_desktop_ui::apply(&frame(page, text_scale), &data, &mut models);
+            motion_frame(&window, 0);
+            let content = target_bounds("content");
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        content[0] + content[2] / 2.,
+                        content[1] + content[3] / 2.,
+                    ),
+                    delta_x: 0.,
+                    delta_y: -100_000.,
+                });
+            motion_frame(&window, 50);
+            let offset = if page == 1 {
+                data.get_scroll_proxies()
+            } else {
+                data.get_scroll_profiles()
+            };
+            assert!(offset < 0., "{width}x{height} page {page}: {offset}");
+
+            clash_desktop_ui::apply(&frame(6, text_scale), &data, &mut models);
+            TARGETS.with(|targets| targets.borrow_mut().clear());
+            motion_frame(&window, 0);
+            let geometry = window.global::<UiGeometry>();
+            geometry.set_revision(geometry.get_revision().wrapping_add(1));
+            motion_frame(&window, 5);
+            let content = target_bounds("content");
+            let first = target_bounds("network-tool:0");
+            let viewport = target_bounds("network-detail-viewport");
+            let action = target_bounds("button:检查");
+            assert!(
+                action[1] >= viewport[1] && action[1] + action[3] <= viewport[1] + viewport[3],
+                "{width}x{height} from page {page}: action {action:?}, viewport {viewport:?}"
+            );
+            assert_eq!(
+                data.get_scroll_network(),
+                0.,
+                "{width}x{height} from page {page}: stale detail offset"
+            );
+            assert!(
+                first[1] >= content[1] && first[1] + first[3] <= content[1] + content[3],
+                "{width}x{height} from page {page}: tool {first:?}, content {content:?}"
+            );
+            events.borrow_mut().clear();
+            click_target(&window, "network-tool:0");
+            assert_eq!(
+                events.borrow().last(),
+                Some(&(Intent::NetworkTool, "0".into(), "".into()))
+            );
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        first[0] + first[2] / 2.,
+                        first[1] + first[3] / 2.,
+                    ),
+                    delta_x: 0.,
+                    delta_y: -100_000.,
+                });
+            motion_frame(&window, 50);
+            let last = target_bounds("network-tool:11");
+            assert!(
+                last[1] >= content[1] && last[1] + last[3] <= content[1] + content[3],
+                "{width}x{height} from page {page}: tool {last:?}, content {content:?}"
+            );
+            events.borrow_mut().clear();
+            click_target(&window, "network-tool:11");
+            assert_eq!(
+                events.borrow().last(),
+                Some(&(Intent::NetworkTool, "11".into(), "".into()))
+            );
+            clash_desktop_ui::apply(&frame(page, text_scale), &data, &mut models);
+            motion_frame(&window, 0);
+            clash_desktop_ui::apply(&frame(6, text_scale), &data, &mut models);
+            motion_frame(&window, 0);
+            let reopened = target_bounds("network-tool:0");
+            assert!(
+                reopened[1] >= content[1] && reopened[1] + reopened[3] <= content[1] + content[3],
+                "{width}x{height} return from page {page}: tool {reopened:?}, content {content:?}"
+            );
+        }
+    }
+    window.hide().unwrap();
+}
+
+#[test]
+fn remounted_subscription_list_clamps_a_stale_scroll_position() {
+    use slint::platform::WindowEvent;
+
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    pointer_events(&window);
+    let profiles = (0..100)
+        .map(|index| clash_desktop_protocol::ProfileItem {
+            id: format!("profile-{index}").into(),
+            name: format!("Profile {index}").into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let mut profile_frame = clash_desktop_protocol::Frame {
+        page: 2,
+        text_scale: 100,
+        ready: true,
+        profiles: profiles.clone().into(),
+        ..Default::default()
+    };
+    clash_desktop_ui::apply(&profile_frame, &data, &mut models);
+    window.show().unwrap();
+    motion_frame(&window, 0);
+    let content = target_bounds("content");
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(
+                content[0] + content[2] / 2.,
+                content[1] + content[3] / 2.,
+            ),
+            delta_x: 0.,
+            delta_y: -100_000.,
+        });
+    motion_frame(&window, 50);
+    assert!(data.get_scroll_profiles() < 0.);
+    let network = clash_desktop_protocol::Frame {
+        page: 6,
+        text_scale: 100,
+        ..Default::default()
+    };
+    clash_desktop_ui::apply(&network, &data, &mut models);
+    motion_frame(&window, 0);
+    profile_frame.profiles = profiles[..12].to_vec().into();
+    clash_desktop_ui::apply(&profile_frame, &data, &mut models);
+    TARGETS.with(|targets| targets.borrow_mut().clear());
+    motion_frame(&window, 0);
+    let geometry = window.global::<UiGeometry>();
+    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+    motion_frame(&window, 5);
+    let last = target_bounds("profile:profile-11");
+    let content = target_bounds("content");
+    assert!(
+        last[1] >= content[1] && last[1] + last[3] <= content[1] + content[3],
+        "last profile {last:?} is outside {content:?}"
+    );
+    assert!(data.get_scroll_profiles() < 0.);
+    clash_desktop_ui::apply(&network, &data, &mut models);
+    motion_frame(&window, 0);
+    profile_frame.profiles = vec![profiles[0].clone()].into();
+    clash_desktop_ui::apply(&profile_frame, &data, &mut models);
+    TARGETS.with(|targets| targets.borrow_mut().clear());
+    motion_frame(&window, 0);
+    let geometry = window.global::<UiGeometry>();
+    geometry.set_revision(geometry.get_revision().wrapping_add(1));
+    motion_frame(&window, 5);
+    let profile = target_bounds("profile:profile-0");
+    let content = target_bounds("content");
+    assert!(
+        profile[1] >= content[1] && profile[1] + profile[3] <= content[1] + content[3],
+        "profile {profile:?} is outside {content:?}"
+    );
+    assert_eq!(data.get_scroll_profiles(), 0.);
+    window.hide().unwrap();
+}
+
+#[test]
+fn remounted_long_pages_preserve_valid_scroll_positions() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    pointer_events(&window);
+    let mut network = clash_desktop_protocol::Frame {
+        page: 6,
+        text_scale: 100,
+        ready: true,
+        ..Default::default()
+    };
+    network.network_results = (0..100)
+        .map(|index| format!("Diagnostic result {index}").into())
+        .collect::<Vec<_>>()
+        .into();
+    let profiles = clash_desktop_protocol::Frame {
+        page: 2,
+        text_scale: 100,
+        ready: true,
+        profiles: (0..100)
+            .map(|index| clash_desktop_protocol::ProfileItem {
+                id: format!("profile-{index}").into(),
+                name: format!("Profile {index}").into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    };
+    let home = clash_desktop_protocol::Frame {
+        text_scale: 100,
+        ready: true,
+        ..Default::default()
+    };
+    window.show().unwrap();
+    for (page, network_page) in [(&network, true), (&profiles, false)] {
+        clash_desktop_ui::apply(page, &data, &mut models);
+        motion_frame(&window, 5);
+        if network_page {
+            data.set_scroll_network(-100.);
+        } else {
+            data.set_scroll_profiles(-100.);
+        }
+        motion_frame(&window, 5);
+        let offset = if network_page {
+            data.get_scroll_network()
+        } else {
+            data.get_scroll_profiles()
+        };
+        assert_eq!(offset, -100.);
+        clash_desktop_ui::apply(&home, &data, &mut models);
+        motion_frame(&window, 5);
+        clash_desktop_ui::apply(page, &data, &mut models);
+        motion_frame(&window, 5);
+        let restored = if network_page {
+            data.get_scroll_network()
+        } else {
+            data.get_scroll_profiles()
+        };
+        assert_eq!(restored, offset, "page {}", page.page);
+    }
+    window.hide().unwrap();
+}
+
+#[test]
+fn window_controls_remain_available_during_subscription_and_proxy_updates() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    pointer_events(&window);
+    let closed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let requests = closed.clone();
+    window.window().on_close_requested(move || {
+        requests.set(requests.get() + 1);
+        slint::CloseRequestResponse::KeepWindowShown
+    });
+    window.window().set_maximized(false);
+    window.window().set_minimized(false);
+    window.show().unwrap();
+    let profiles: clash_desktop_protocol::List<_> = ["original", "temporary"]
+        .into_iter()
+        .map(|name| clash_desktop_protocol::ProfileItem {
+            id: name.into(),
+            name: name.into(),
+            source: "https://example.test/subscription".into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let nodes = (0..4)
+        .map(|index| clash_desktop_protocol::NodePair {
+            left: clash_desktop_protocol::NodeItem {
+                name: format!("fixture-node-{index}").into(),
+                valid: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let groups: clash_desktop_protocol::List<_> = (0..4)
+        .map(|index| clash_desktop_protocol::GroupItem {
+            id: format!("group-{index}").into(),
+            title: format!("Group {index}").into(),
+            expanded: true,
+            nodes: nodes.clone().into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    for (index, (page, working, modal)) in [
+        (2, true, 0),
+        (1, false, 0),
+        (2, true, 1),
+        (1, true, 0),
+        (2, false, 0),
+        (1, false, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let frame = clash_desktop_protocol::Frame {
+            page,
+            working,
+            modal,
+            text_scale: 100,
+            ready: true,
+            running: true,
+            profiles: if page == 2 {
+                profiles.clone()
+            } else {
+                Default::default()
+            },
+            groups: if page == 1 {
+                groups.clone()
+            } else {
+                Default::default()
+            },
+            ..Default::default()
+        };
+        clash_desktop_ui::apply(&frame, &data, &mut models);
+        motion_frame(&window, 0);
+        click_target(&window, "window-minimize");
+        assert!(
+            window.window().is_minimized(),
+            "minimize during update {index}"
+        );
+        window.window().set_minimized(false);
+        click_target(&window, "window-maximize");
+        assert!(
+            window.window().is_maximized(),
+            "maximize during update {index}"
+        );
+        window.window().set_maximized(false);
+        click_target(&window, "window-close");
+        assert_eq!(closed.get(), index + 1, "close during update {index}");
+    }
+    window.hide().unwrap();
+}
+
+#[test]
 fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
     use clash_of_rust::overview::{Health, Status, TARGETS};
     ui_testing::initialize(950, 700);

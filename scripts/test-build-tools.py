@@ -2960,10 +2960,16 @@ class BuildTests(unittest.TestCase):
                             for command in ui_checks))
         self.assertTrue(any('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes'
                             in command for command in ui_checks))
+        self.assertTrue(any('scroll_remount' in command and '--no-run' not in command
+                            for command in ui_checks))
         focused = [command for command in ui_checks if
                    command[command.index('-p')+1] == 'clash-of-rust'
                    or 'mobile_lists' in command]
         for case in (
+                'application::ui_tests::network_tools_remain_reachable_after_scrolling_other_pages',
+                'application::ui_tests::remounted_subscription_list_clamps_a_stale_scroll_position',
+                'application::ui_tests::remounted_long_pages_preserve_valid_scroll_positions',
+                'application::ui_tests::window_controls_remain_available_during_subscription_and_proxy_updates',
                 'application::ui_tests::claude_report_rows_keep_titles_and_labeled_explanations',
                 'application::ui_tests::claude_route_block_expands_and_keeps_each_domain_and_failure',
                 'application::ui_tests::claude_summary_keeps_quality_disagreements_visible_with_many_risks',

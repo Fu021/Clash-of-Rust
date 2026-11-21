@@ -8,6 +8,8 @@ export component ListView inherits SlintListView {
     property <length> bottom: min(0px, self.visible-height - self.content-height);
     changed content-key => { self.content-y = 0px; }
     changed bottom => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
+    changed visible-height => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
+    changed content-height => { self.content-y = clamp(self.content-y, self.bottom, 0px); }
     changed content-y => {
         if self.content-y < self.bottom || self.content-y > 0px {
             self.content-y = clamp(self.content-y, self.bottom, 0px);

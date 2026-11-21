@@ -74,6 +74,10 @@ def main():
                      case, '--', '--test-threads=1', '--show-output'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for case in ('application::ui_tests::network_report_is_replaced_and_late_results_cannot_reappear_after_navigation',
+                     'application::ui_tests::network_tools_remain_reachable_after_scrolling_other_pages',
+                     'application::ui_tests::remounted_subscription_list_clamps_a_stale_scroll_position',
+                     'application::ui_tests::remounted_long_pages_preserve_valid_scroll_positions',
+                     'application::ui_tests::window_controls_remain_available_during_subscription_and_proxy_updates',
                      'application::ui_tests::claude_report_rows_keep_titles_and_labeled_explanations',
                      'application::ui_tests::claude_route_block_expands_and_keeps_each_domain_and_failure',
                      'application::ui_tests::claude_summary_keeps_quality_disagreements_visible_with_many_risks',
@@ -124,6 +128,7 @@ def main():
         for package, target, cases in (
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
                 ('clash-client-ui', ['--test', 'emoji'], ['']),
+                ('clash-client-ui', ['--test', 'scroll_remount'], ['']),
                 ('clash-client-ui', ['--test', 'claude_report_blocks'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),

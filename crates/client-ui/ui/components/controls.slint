@@ -22,6 +22,11 @@ export component PageScroll inherits Flickable {
             self.content-y = clamp(self.content-y, self.bottom, 0px);
         }
     }
+    Timer {
+        interval: 1ms;
+        running: root.visible-height > 0px;
+        triggered => { self.stop(); root.content-y = clamp(root.content-y, root.bottom, 0px); }
+    }
     content := VerticalLayout {
         x: 0px; y: 0px; width: root.width; height: self.preferred-height;
         vertical-stretch: 0; alignment: start; spacing: 0px;
