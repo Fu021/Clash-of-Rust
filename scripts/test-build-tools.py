@@ -4545,7 +4545,7 @@ Private_Clean: 2 kB
             source = root/'crates/client/src/lib.rs'
             source.parent.mkdir(parents=True)
             source.write_text('first')
-            arguments = (root, 'native-main-v4-macos-x64', root/'receipt/source.json')
+            arguments = (root, 'native-main-v4-macos-x64', root/'receipt')
             environment = {'CARGO_HOME': str(root/'cargo')}
             first = local_cache.workspace_restore_identity(
                 *arguments, compiler=b'compiler one', environment=environment)
@@ -4578,16 +4578,25 @@ Private_Clean: 2 kB
             for family in ('native-main-v4-linux-x64', 'native-main-v4-windows-arm64',
                            'android-main-v4-arm64'):
                 different = local_cache.workspace_restore_identity(
-                    root, family, root/'receipt/source.json', compiler=b'compiler one',
+                    root, family, root/'receipt', compiler=b'compiler one',
                     environment=environment)
                 self.assertNotEqual(first['prefix'], different['prefix'])
             with self.assertRaises(ValueError):
                 local_cache.workspace_restore_identity(
-                    root, 'native-main-v4-linux-x64\nunsafe', root/'receipt/source.json')
+                    root, 'native-main-v4-linux-x64\nunsafe', root/'receipt')
             for obsolete in ('native-main-v3-linux-x64', 'android-main-v3-x64'):
                 with self.subTest(obsolete=obsolete), self.assertRaises(ValueError):
                     local_cache.workspace_restore_identity(
-                        root, obsolete, root/'receipt/source.json')
+                        root, obsolete, root/'receipt')
+
+    def test_windows_cache_preserves_the_receipt_directory_spelling_used_to_save(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'Cargo.toml').write_text('[workspace]\nmembers=[]\n')
+            directory = r'D:\a\_temp/workspace-sources'
+            identity = local_cache.workspace_restore_identity(
+                root, 'native-main-v4-windows-x64', directory, compiler=b'rustc', environment={})
+            self.assertEqual(identity['paths'][-1], directory)
 
     def test_compiler_fallback_reuses_objects_across_dependency_and_feature_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4596,7 +4605,7 @@ Private_Clean: 2 kB
             manifest.write_text('[workspace]\nmembers=[]\n')
             lockfile = root/'Cargo.lock'
             lockfile.write_text('version=4\n')
-            arguments = (root, 'native-main-v4-macos-x64', root/'receipt/source.json')
+            arguments = (root, 'native-main-v4-macos-x64', root/'receipt')
             initial = local_cache.workspace_restore_identity(*arguments, compiler=b'rustc', environment={})
             exact = local_cache.rust_keys(root, b'rustc', {})[0]
             for manifest_text, lock_text in (
@@ -4628,7 +4637,7 @@ Private_Clean: 2 kB
             versions.write_text(json.dumps(baseline))
             def identity(family):
                 return local_cache.workspace_restore_identity(
-                    root, family, root/'receipt/source.json', compiler=b'rustc', environment={})
+                    root, family, root/'receipt', compiler=b'rustc', environment={})
             macos = identity('native-main-v4-macos-x64')
             android = identity('android-main-v4-arm64')
             linux = identity('native-main-v4-linux-x64')
@@ -8144,7 +8153,7 @@ class CompatibilityTests(unittest.TestCase):
                 patch.dict(linux_native_guest.TARGETS, {'arch': (target,)}), \
                 patch.object(linux_native_guest, 'run') as write, \
                 patch.object(linux_native_guest, 'privileged') as pacman, \
-                patch.object(linux_native_guest, 'arch_sync') as sync:
+                patch.object(linux_native_guest, 'arch_transaction') as sync:
             linux_native_guest.refresh()
         write.assert_called_once_with(
             ['sudo', 'tee', '/etc/pacman.d/mirrorlist'],
@@ -8160,7 +8169,7 @@ class CompatibilityTests(unittest.TestCase):
         digest = 'a'*64
         filename = 'fakeroot-2:1.37.2-1-x86_64.pkg.tar.zst'
         arguments = ('-S', '--needed', 'fakeroot')
-        output = subprocess.CompletedProcess([], 0, stdout=f'fakeroot\t{filename}\t{digest}\n')
+        output = subprocess.CompletedProcess([], 0, stdout=f'core\tfakeroot\t{filename}\t{digest}\n')
         with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
                 patch.object(Path, 'is_file', return_value=False), \
                 patch.object(linux_native_guest, 'privileged', side_effect=[
@@ -8183,7 +8192,7 @@ class CompatibilityTests(unittest.TestCase):
         ])
         cached = Path('/var/cache/pacman/pkg')/filename
         self.assertEqual(command.call_args_list, [
-            call(['pacman', '--noconfirm', *arguments, '--print', '--print-format', '%n\t%f\t%h'],
+            call(['pacman', '--noconfirm', *arguments, '--print', '--print-format', '%r\t%n\t%f\t%h'],
                  capture_output=True, text=True, timeout=60),
             call(['sudo', 'install', '-m', '0644', staged, cached], timeout=60),
             call(['sudo', 'install', '-m', '0644', staged_signature, cached.with_suffix('.zst.sig')],
@@ -8197,7 +8206,7 @@ class CompatibilityTests(unittest.TestCase):
         filename = 'polkit-128-1-x86_64.pkg.tar.zst'
         cached = Path('/var/cache/pacman/pkg')/filename
         signature = cached.with_suffix('.zst.sig')
-        transaction = subprocess.CompletedProcess([], 0, stdout=f'polkit\t{filename}\t{digest}\n')
+        transaction = subprocess.CompletedProcess([], 0, stdout=f'extra\tpolkit\t{filename}\t{digest}\n')
         with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
                 patch.object(Path, 'is_file', autospec=True, side_effect=lambda path: path == cached), \
                 patch.object(linux_native_guest, 'sha256', return_value=digest), \
@@ -8217,7 +8226,7 @@ class CompatibilityTests(unittest.TestCase):
     def test_arch_fallback_rejects_invalid_package_metadata(self):
         import linux_native_guest
 
-        output = subprocess.CompletedProcess([], 0, stdout='fakeroot\tfakeroot-../bad.pkg.tar.zst\t'+'a'*64+'\n')
+        output = subprocess.CompletedProcess([], 0, stdout='core\tfakeroot\tfakeroot-../bad.pkg.tar.zst\t'+'a'*64+'\n')
         with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
                 patch.object(linux_native_guest, 'privileged',
                              side_effect=subprocess.CalledProcessError(1, ['pacman'])) as pacman, \
@@ -8228,6 +8237,36 @@ class CompatibilityTests(unittest.TestCase):
         pacman.assert_called_once_with('-S', '--needed', 'fakeroot', '--downloadonly')
         command.assert_called_once()
         download.assert_not_called()
+
+    def test_arch_local_candidate_download_fallback_only_fetches_repository_dependencies(self):
+        import linux_native_guest
+
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary)/'Clash-of-Rust-test.pkg.tar.zst'
+            candidate.touch()
+            filename = 'libx11-1.8.14-1-x86_64.pkg.tar.zst'
+            digest = 'a'*64
+            output = subprocess.CompletedProcess([], 0, stdout=(
+                f'extra\tlibx11\t{filename}\t{digest}\n'
+                f'local\tclash-of-rust\t{candidate}\t\n'
+            ))
+            arguments = ('-U', candidate)
+            with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
+                    patch.object(linux_native_guest, 'privileged', side_effect=[
+                        subprocess.CalledProcessError(1, ['pacman']), None]) as pacman, \
+                    patch.object(linux_native_guest, 'run', side_effect=[output, None, None]) as command, \
+                    patch.object(linux_native_guest, 'download') as download:
+                linux_native_guest.install_package(candidate)
+
+            self.assertEqual(pacman.call_args_list, [
+                call(*arguments, '--downloadonly'), call(*arguments),
+            ])
+            self.assertEqual(command.call_args_list[0],
+                             call(['pacman', '--noconfirm', *arguments, '--print', '--print-format', '%r\t%n\t%f\t%h'],
+                                  capture_output=True, text=True, timeout=60))
+            url = f'https://umea.archive.pkgbuild.com/packages/l/libx11/{filename}'
+            self.assertEqual([request.args[0] for request in download.call_args_list], [url + '.sig', url])
+            self.assertEqual(download.call_args.kwargs, {'digest': digest})
 
     def test_tumbleweed_only_enables_the_signed_repository_for_the_guest_snapshot(self):
         import linux_native_guest

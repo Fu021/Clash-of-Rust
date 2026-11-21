@@ -10,6 +10,8 @@ CI 与 Memory Benchmark 使用 GitHub Actions Cache。`main` 每个用途及目�
 
 CI 的桌面和 Android 编译缓存先查询当前源码对应的缓存，再回退到兼容缓存，只下载选中的一份；Android Maven/Go 缓存及 Linux 编译容器也先查询再恢复。临时查询或恢复故障最多尝试 100 次，超过 20 分钟后不再发起新一轮；正在进行的下载仍受缓存组件的分段超时及步骤、作业时限约束。恢复失败后清理该用途的部分数据，真正未命中时才冷构建；权限或配置错误以及重试耗尽会使作业失败，避免把故障当作未命中。Memory Benchmark 沿用自身缓存入口。
 
+桌面源码回执的缓存目录在保存、查询和恢复时使用同一字符串。GitHub Actions 将原始路径字符串纳入缓存版本计算，Windows 上同一路径的正反斜杠写法会产生不同版本。
+
 Android 恢复了旧编译对象且交叉 Clippy 报 Slint 或 `slint_macros` 缺失时，清理该作业的宿主和当前 ABI 两个 Release 目录并重跑一次 Clippy。交叉编译同时加载宿主生成的过程宏，仅重建 ABI 仍可能遇到旧宏。通过目录控制清理范围，规避 [`cargo clean` 无 `--package` 时忽略 `--target`](https://github.com/rust-lang/cargo/issues/17311) 的行为。重建成功后继续生成 APK、测试 APK 并运行 Lint；仍失败则保留编译错误。
 
 | 工作流 | GitHub Actions Cache | 同次 CI 附件与公开下载 |

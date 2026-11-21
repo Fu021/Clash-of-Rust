@@ -46,7 +46,7 @@ Tumbleweed 在来宾关闭预设仓库，只启用 openSUSE 历史目录中与�
 
 ### Arch Linux 原生包
 
-来宾的 pacman 按镜像日期使用固定的官方归档。主站不可达时从同日镜像同步数据库。快照包路径下载失败时，根据 pacman 解析出的事务，从镜像的按包名归档补齐软件包及其 `.sig` 文件。逐包核对数据库中的 SHA256，再由 pacman 校验签名并安装。[Arch 官方归档镜像](https://github.com/archlinux/infrastructure/blob/main/docs/servers.md#archive-mirrors)。
+来宾的 pacman 按镜像日期使用固定的官方归档。主站不可达时从同日镜像同步数据库。更新来宾、安装测试工具和安装本地候选包共用归档回退。快照包路径下载失败时，根据 pacman 解析出的事务，从镜像的按包名归档补齐仓库依赖及其 `.sig` 文件。逐包核对数据库中的 SHA256，再由 pacman 校验签名并安装。[Arch 官方归档镜像](https://github.com/archlinux/infrastructure/blob/main/docs/servers.md#archive-mirrors)。
 
 发布范围包含 Arch Linux x86_64 时，Release 将提供原生二进制包。首次安装时从包含该包的版本下载 `Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst` 及 `.sha256`，核对摘要后执行 `sudo pacman -U ./Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst`，其中 `<版本>` 替换为实际版本。包名是 `clash-of-rust`，配方保留 `/opt/clash-of-rust`、随包内核和固定的 polkit 助手路径，并写入 `pacman-release` 标识。
 

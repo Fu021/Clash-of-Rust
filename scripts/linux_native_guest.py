@@ -93,20 +93,25 @@ def refresh():
         run(['sudo', 'tee', mirrorlist],
             input=servers, text=True, stdout=subprocess.DEVNULL)
         privileged('-Syy')
-        arch_sync('-Su')
+        arch_transaction('-Su')
 
 
-def arch_sync(*arguments):
+def arch_transaction(*arguments, local_package=None):
+    if local_package is not None:
+        arguments = (*arguments, local_package)
     try:
         privileged(*arguments, '--downloadonly')
     except subprocess.CalledProcessError:
-        transaction = run([*manager(), *arguments, '--print', '--print-format', '%n\t%f\t%h'],
+        transaction = run([*manager(), *arguments, '--print', '--print-format', '%r\t%n\t%f\t%h'],
                           capture_output=True, text=True, timeout=60).stdout
         cache = Path('/var/cache/pacman/pkg')
         with tempfile.TemporaryDirectory(prefix='cor-arch-archive-') as temporary:
             for package in transaction.splitlines():
-                name, filename, digest = package.split('\t')
-                if (not re.fullmatch(r'[a-z0-9_@+][a-z0-9_+.@-]*', name)
+                repository, name, filename, digest = package.split('\t')
+                if repository == 'local' and local_package is not None and filename == str(local_package):
+                    continue
+                if (repository == 'local'
+                        or not re.fullmatch(r'[a-z0-9_@+][a-z0-9_+.@-]*', name)
                         or not filename.startswith(name + '-')
                         or not re.fullmatch(r'[a-zA-Z0-9_+.:@-]+\.pkg\.tar(?:\.[a-z0-9]+)?', filename)
                         or not re.fullmatch(r'[a-f0-9]{64}', digest)):
@@ -131,7 +136,7 @@ def arch_sync(*arguments):
 def install_dependencies(packages):
     distro = distribution()
     if distro == 'arch':
-        arch_sync('-S', '--needed', *packages)
+        arch_transaction('-S', '--needed', *packages)
     else:
         flags = ('--no-recommends',) if distro.startswith('opensuse-') else ()
         timeout = 1200 if distro == 'fedora' and platform.machine() == 'aarch64' else 900
@@ -216,7 +221,7 @@ def install_package(package):
         raise ValueError('Expected a verified local native package')
     distro = distribution()
     if distro == 'arch':
-        privileged('-U', package)
+        arch_transaction('-U', local_package=package)
     else:
         flags = ('--allow-unsigned-rpm', '--no-recommends') if distro.startswith('opensuse-') else ()
         privileged('install', *flags, package)

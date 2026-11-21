@@ -340,11 +340,11 @@ jobs:
         id: rust_identity
         shell: python
         run: |
-          import os, sys
+          import os, pathlib, sys
           sys.path.insert(0, 'scripts')
           from action_cache import workspace_restore_identity
           identity = workspace_restore_identity('.', 'android-main-v4-${{ matrix.arch }}',
-              os.environ['WORKSPACE_SOURCE_CACHE'])
+              pathlib.Path(os.environ['WORKSPACE_SOURCE_CACHE']).resolve().parent)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('prefix=' + identity['prefix'] + '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
                   '\n'.join(identity['paths']) + '\nCACHE_PATHS\n')
@@ -601,21 +601,22 @@ jobs:
         with:
           toolchain: ${{ env.COR_RUST }}-${{ matrix.target }}
           components: rustfmt, clippy
-      - name: Configure verified workspace source receipts
-        run: |
-          import os, pathlib
-          with open(os.environ['GITHUB_ENV'], 'a') as environment:
-              environment.write('WORKSPACE_SOURCE_CACHE=' + str(pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json') + '\n')
       - name: Identify compatible native compiler objects
         id: rust_identity
+        env:
+          WORKSPACE_RECEIPT_DIRECTORY: ${{ runner.temp }}/workspace-sources
         run: |
           import os, pathlib, sys
           sys.path.insert(0, 'scripts')
           from action_cache import workspace_restore_identity
+          directory = os.environ['WORKSPACE_RECEIPT_DIRECTORY']
           identity = workspace_restore_identity('.', 'native-main-v4-${{ matrix.system }}-${{ matrix.arch }}',
-              pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json')
+              directory)
+          with open(os.environ['GITHUB_ENV'], 'a') as environment:
+              environment.write('WORKSPACE_SOURCE_CACHE=' + str(pathlib.Path(directory)/'source.json') + '\n')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('prefix=' + identity['prefix'] + '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
+              output.write('receipt_directory=' + directory + '\nprefix=' + identity['prefix'] +
+                  '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
                   '\n'.join(identity['paths']) + '\nCACHE_PATHS\n')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         timeout-minutes: 5
@@ -629,7 +630,7 @@ jobs:
           # Source hashes are checked before restoring workspace mtimes; changed
           # crates are invalidated explicitly, even for an older source branch.
           cache-workspace-crates: ${{ matrix.os != 'windows-11-arm' }}
-          cache-directories: ${{ runner.temp }}/workspace-sources
+          cache-directories: ${{ steps.rust_identity.outputs.receipt_directory }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           lookup-only: true
       - name: Look up compatible native workspace objects

@@ -263,11 +263,10 @@ def workspace_sources(source, save=False):
         print('Workspace cache: invalidated crates: ' + ', '.join(sorted(invalid)), flush=True)
 
 
-def workspace_restore_identity(source, family, receipt, compiler=None, environment=None):
+def workspace_restore_identity(source, family, receipt_directory, compiler=None, environment=None):
     if not re.fullmatch(r'(?:native-main-v4-(?:linux|macos|windows)|android-main-v4)-(?:x64|arm64|armv7)', family):
         raise ValueError('Invalid compiler cache family')
     source = Path(source).resolve()
-    receipt = Path(receipt).resolve()
     environment = dict(os.environ if environment is None else environment)
     compiler = subprocess.check_output(['rustc', '-vV']) if compiler is None else compiler
     legacy = rust_keys(source, compiler, environment)[1].rstrip('-')
@@ -299,7 +298,7 @@ def workspace_restore_identity(source, family, receipt, compiler=None, environme
     return {
         'prefix': family+'--'+compatible,
         'legacy_prefix': family+'--'+legacy,
-        'paths': [str(cargo/'registry'), str(cargo/'git'), str(source/'target'), str(receipt.parent)],
+        'paths': [str(cargo/'registry'), str(cargo/'git'), str(source/'target'), str(receipt_directory)],
     }
 
 
