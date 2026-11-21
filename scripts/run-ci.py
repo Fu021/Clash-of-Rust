@@ -78,8 +78,10 @@ def main():
                      'application::ui_tests::remounted_subscription_list_clamps_a_stale_scroll_position',
                      'application::ui_tests::remounted_long_pages_preserve_valid_scroll_positions',
                      'application::ui_tests::window_controls_remain_available_during_subscription_and_proxy_updates',
+                     'application::ui_tests::ip_report_shows_each_target_exit_and_its_measurement_state',
                      'application::ui_tests::claude_report_rows_keep_titles_and_labeled_explanations',
-                     'application::ui_tests::claude_route_block_expands_and_keeps_each_domain_and_failure',
+                     'application::ui_tests::claude_route_section_keeps_each_domain_and_failure',
+                     'application::ui_tests::claude_guard_block_keeps_status_and_interceptions_together',
                      'application::ui_tests::claude_summary_keeps_quality_disagreements_visible_with_many_risks',
                      'application::ui_tests::recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals',
                      'application::ui_tests::startup_install_failure_reaches_the_visible_recoverable_notice_and_close_action',
@@ -99,6 +101,7 @@ def main():
                      'application::ui_tests::all_proxy_groups_are_scrollable_without_mounting_every_group',
                      'application::ui_tests::subscription_pagination_preserves_access_to_the_last_profile_in_both_views',
                      'application::dev2_tests::old_settings_receive_default_sort_and_new_preferences_round_trip',
+                     'application::dev2_tests::retesting_a_target_exit_does_not_show_its_previous_measurement',
                      'application::commands::synchronization_tests::protection_allows_observation_and_disable_but_rejects_mutations'):
             run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])
@@ -121,7 +124,8 @@ def main():
                      'protected_mobile_core_recovery_is_reachable_and_respects_pending_operations',
                      'mobile_appearance_settings_reopen_with_geometry_and_protection',
                      'mobile_connections_keep_actions_reachable_and_scroll_with_long_names',
-                     'report_categories_share_one_panel_without_gaps_from_hidden_rows',
+                     'report_sections_share_one_panel_without_gaps_from_hidden_rows',
+                     'android_report_card_opens_its_section',
                      'mobile_rules_drag_real_rows_at_phone_pad_and_large_text_sizes'):
             run(['cargo', 'test', '-p', 'clash-client-ui', '--test', 'mobile_lists', '--release',
                  '--locked', case, '--', '--exact', '--test-threads=1'])

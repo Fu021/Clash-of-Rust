@@ -11,7 +11,8 @@ mod quality;
 mod report_view;
 pub use crate::protection;
 pub use report_view::{
-    BlockRow, ReportBlock, group_blocks, group_routes, route_group_detail, route_group_value,
+    BlockRow, REPORT_SECTIONS, ReportBlock, group_blocks, group_routes, report_blocks,
+    report_section, route_group_detail, route_group_value,
 };
 
 use crate::{api, probe::country_name};
@@ -203,14 +204,30 @@ impl Signal {
 
 pub fn summary_order(signal: Option<&Signal>, risk: bool) -> u8 {
     match signal {
-        Some(signal) if signal.group == Group::Quality => {
-            if signal.value.contains(quality::SOURCE_DISAGREEMENT) {
-                0
-            } else {
-                2
-            }
+        Some(signal)
+            if signal.group == Group::Quality
+                && signal.value.contains(quality::SOURCE_DISAGREEMENT) =>
+        {
+            0
         }
         _ if risk => 1,
+        Some(signal)
+            if matches!(
+                signal.title.as_str(),
+                "IP 注册信息"
+                    | "全球连通性"
+                    | "Cloudflare 网络环境"
+                    | "可识别字体"
+                    | "Emoji 渲染"
+                    | "Canvas 指纹摘要"
+                    | "WebGL 厂商"
+                    | "WebGL 渲染器"
+                    | "浏览器 Cookie 功能"
+            ) =>
+        {
+            4
+        }
+        Some(signal) if signal.group == Group::Quality => 2,
         _ => 3,
     }
 }
@@ -603,7 +620,7 @@ async fn exit_signal(client: &Client, url: &str, title: &str, source: &str, v6: 
                 title,
                 &ip,
                 source,
-                "此测试域名看到的出口；不代表 Claude 目标域名出口。",
+                "此测试域名的出口。",
                 Evidence::Measured,
             )
             .await
@@ -612,7 +629,7 @@ async fn exit_signal(client: &Client, url: &str, title: &str, source: &str, v6: 
             Group::Exit,
             title,
             source,
-            "未获得有效结果；可能是未启用该协议或请求被阻止，不能据此判断地区。",
+            "未获得有效结果；请检查协议和连接状态。",
         ),
     }
 }
@@ -681,7 +698,7 @@ pub async fn network(client: &Client, report: &mut Report, source: &str) {
                 format!("{ip} · {}", country_name(&code).unwrap()),
                 source,
                 Evidence::Measured,
-                "地区来自此目标域名的 Cloudflare trace；未验证账号的服务资格。",
+                "地区来自目标域名的 Cloudflare trace。",
             );
             signal.ip = ip;
             signal.country = code;
@@ -760,7 +777,7 @@ fn parse_dns(bytes: &[u8], source: &str) -> Result<Vec<Signal>> {
             ip.to_string(),
             source,
             Evidence::Measured,
-            "递归服务器 IP 来自 bash.ws 权威 DNS 观测；国家来自 IP 位置数据，与出口国家不同属于风险线索，但不单独证明 DNS 泄漏或 Claude 拒绝服务。",
+            "递归服务器 IP 来自 bash.ws 权威 DNS 观测；地区来自 IP 位置数据。",
         );
         signal.ip = ip.to_string();
         if let Some(name) = country_name(&code) {
@@ -770,16 +787,14 @@ fn parse_dns(bytes: &[u8], source: &str) -> Result<Vec<Signal>> {
             signal.evidence = Evidence::Unknown;
             signal.detail.push_str(" bash.ws 未提供有效国家。");
         }
-        signal.advice =
-            "结合浏览器独立 DoH、系统 DNS、TUN 接管与实际连接线路核验；地区相同也不能证明没有泄漏。"
-                .into();
+        signal.advice = "对照浏览器 DoH、系统 DNS、TUN 与实际连接线路。".into();
         signals.push(signal);
         if signals.len() == 12 {
             break;
         }
     }
     if signals.is_empty() {
-        bail!("权威 DNS 未返回递归服务器，不能判断是否存在泄漏");
+        bail!("权威 DNS 未返回递归服务器");
     }
     Ok(signals)
 }

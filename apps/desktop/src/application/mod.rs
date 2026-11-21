@@ -1985,6 +1985,16 @@ impl App {
                 {
                     return Task::none();
                 }
+                if ip_check::SPLIT_EXIT_TARGETS
+                    .iter()
+                    .any(|(id, _, _)| *id == url)
+                    && let Some(index) = ip_check::services()
+                        .iter()
+                        .position(|service| service.id == url)
+                    && let Some(result) = self.site_results.get_mut(index)
+                {
+                    *result = None;
+                }
                 let port = self.settings.mixed_port;
                 let label = url.clone();
                 let generation = self.site_generation;
@@ -3619,7 +3629,26 @@ mod dev2_tests {
             country: country.into(),
             millis: 20,
             detail: "test evidence".into(),
+            target_exit: None,
         })
+    }
+
+    #[test]
+    fn retesting_a_target_exit_does_not_show_its_previous_measurement() {
+        let mut app = app();
+        app.snapshot.running = true;
+        app.site_results
+            .resize_with(ip_check::services().len(), || None);
+        let target = ip_check::services()
+            .iter()
+            .position(|service| service.id == "AIUnlockTest_Claude")
+            .unwrap();
+        app.site_results[target] = Some(result(ip_check::State::Reachable, "香港"));
+        app.site_results[0] = Some(result(ip_check::State::Identified, "美国"));
+        let _ = app.update(Message::SiteProbe("AIUnlockTest_Claude".into()));
+        assert!(app.site_results[target].is_none());
+        assert!(app.site_results[0].is_some());
+        assert!(app.site_busy.contains("AIUnlockTest_Claude"));
     }
 
     #[test]
@@ -3653,7 +3682,8 @@ mod dev2_tests {
     #[test]
     fn combined_filters_use_actual_region_and_summary_click_resets_other_filters() {
         let mut app = app();
-        app.site_results.resize_with(183, || None);
+        app.site_results
+            .resize_with(ip_check::services().len(), || None);
         app.site_results[1] = Some(result(ip_check::State::Confirmed, "🇯🇵 日本"));
         app.site_results[2] = Some(result(ip_check::State::Restricted, "美国"));
         app.site_category = CategoryFilter::Group("AI");

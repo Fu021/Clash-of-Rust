@@ -30,12 +30,6 @@
     "url": "https://copilot.microsoft.com/"
   },
   {
-    "id": "MediaUnlockTest_Sora",
-    "name": "Sora",
-    "group": "AI",
-    "url": "https://sora.com"
-  },
-  {
     "id": "MediaUnlockTest_PrimeVideo_Region",
     "name": "Amazon Prime Video",
     "group": "全球",

@@ -1,7 +1,7 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, CategoryItem } from "../state.slint";
-import { PageScroll, Label, Caption, Heading, Panel, ContentPanel, ActionButton, Field, Select, Badge, Paragraph } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, Panel, ContentPanel, ActionButton, Field, Select, Badge } from "../components/controls.slint";
 
 component CategoryCard inherits ContentPanel {
     in property <CategoryItem> item;
@@ -88,6 +88,7 @@ export component IpCheckPage inherits PageSurface {
                             min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; spacing: 4px;
                             Label { text: result.title; }
                             Caption { text: result.value; color: result.tone == 3 ? Theme.danger : result.tone == 2 ? Theme.warning : result.tone == 1 ? Theme.success : Theme.secondary; }
+                            if result.detail != "": Caption { text: result.detail; wrap: word-wrap; }
                         }
                         HorizontalLayout {
                             col: root.compact-results ? 0 : 1; row: root.compact-results ? 1 : 0;

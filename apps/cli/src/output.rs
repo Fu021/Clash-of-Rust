@@ -163,7 +163,7 @@ mod tests {
         ));
         let exported = json!({"normal":0,"risk":1,"clues":1,"report":report});
         let summary = render(&["claude", "check"], exported.clone());
-        assert!(summary.contains("正常项目 0 · 风险项目 1 · 线索 1"));
+        assert!(summary.contains("Claude 检测 · 1 项需关注"));
         assert!(summary.contains("出口 IP 质量：机房来源不一致"));
         assert!(summary.find("出口 IP 质量").unwrap() < summary.find("DNS 地区").unwrap());
         assert!(!summary.contains("逐来源证据"));
@@ -193,7 +193,7 @@ mod tests {
         });
         let exported = json!({"report":report});
         let summary = render(&["claude", "check"], exported.clone());
-        assert!(summary.contains("正常项目 0 · 风险项目 1 · 线索 3"));
+        assert!(summary.contains("Claude 检测 · 1 项需关注"));
         assert!(summary.contains("Claude 域名选路：3 个域名 · 仅记录选路"));
         assert!(summary.contains("选路异常 · failed.example：异常线路 · 线路：DIRECT"));
         let details = render(&["claude", "check", "--details"], exported);
@@ -646,5 +646,20 @@ mod tests {
             ]}),
         );
         assert!(report.contains("检测失败") && report.contains("DNS 查询超时"));
+    }
+
+    #[test]
+    fn ip_report_displays_measured_and_unconfirmed_target_exits() {
+        let report = render(
+            &["ip-check"],
+            json!({"total":2,"confirmed_available":0,"non_red":1,"results":[
+                {"name":"Claude","state":"Reachable","summary":"网页可达",
+                 "target_exit":{"host":"claude.ai","ip":"8.8.8.8","country":"美国"}},
+                {"name":"ChatGPT","state":"Failed","detail":"连接失败","target_exit":null}
+            ]}),
+        );
+        assert!(report.contains("同域探针"));
+        assert!(report.contains("Claude：8.8.8.8"));
+        assert!(report.contains("ChatGPT：未确认"));
     }
 }

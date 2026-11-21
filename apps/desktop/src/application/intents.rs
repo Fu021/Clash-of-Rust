@@ -283,12 +283,11 @@ impl App {
             Intent::ClaudeCancel => Message::Claude(C::Cancel),
             Intent::ClaudeProtection => Message::Claude(C::Protection(boolean(a))),
             Intent::ClaudeConfirmProtection => Message::Claude(C::ConfirmProtection),
-            Intent::ClaudeFilter => Message::Claude(C::ResultsFilter(match a {
-                "0" => Some(claude_view::ResultKind::Normal),
-                "1" => Some(claude_view::ResultKind::Risk),
-                "2" => Some(claude_view::ResultKind::Unknown),
-                _ => None,
-            })),
+            Intent::ClaudeFilter => Message::Claude(C::ResultsFilter(
+                clash_of_rust::claude_check::REPORT_SECTIONS
+                    .iter()
+                    .position(|section| *section == a),
+            )),
             Intent::ClaudePage => Message::Claude(C::ResultsPage(a.parse().unwrap_or(0))),
             Intent::ClaudeGuide => Message::Claude(C::Guide(match a {
                 "supplement" => Some(claude_view::Guide::Supplement),

@@ -10,7 +10,6 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"AIUnlockTest_Claude"# => aiunlocktest_claude(ctx).await,
         r#"AIUnlockTest_Gemini_location"# => aiunlocktest_gemini_location(ctx).await,
         r#"AIUnlockTest_Copilot"# => aiunlocktest_copilot(ctx).await,
-        r#"MediaUnlockTest_Sora"# => mediaunlocktest_sora(ctx).await,
         r#"MediaUnlockTest_PrimeVideo_Region"# => mediaunlocktest_primevideo_region(ctx).await,
         r#"MediaUnlockTest_BilibiliAnimeNew"# => mediaunlocktest_bilibilianimenew(ctx).await,
         r#"MediaUnlockTest_Dazn"# => mediaunlocktest_dazn(ctx).await,
@@ -694,108 +693,6 @@ async fn aiunlocktest_copilot(ctx: &mut Context) -> Result<String> {
                 v.get(r#"Font_Red"#),
                 r#"No  (Region: "#.to_owned(),
                 v.get(r#"region"#).to_uppercase(),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_sora(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(
-        r#"tmpresult"#,
-        ctx.request(Request {
-            url: r#"https://sora.com"#.to_owned(),
-            method: r#"HEAD"#.to_owned(),
-            headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]],
-            body: None,
-            follow: true,
-            headers_only: true,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Sora:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result1"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"-i"#.to_owned(), r#"^location:"#.to_owned()],
-        )?,
-    );
-    if (!(!(v.get(r#"result1"#)).is_empty())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Sora:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else {
-        v.set(
-            r#"region1"#,
-            select_fields(
-                &select_lines(
-                    &ctx.request(Request {
-                        url: r#"https://sora.com/cdn-cgi/trace"#.to_owned(),
-                        method: r#"GET"#.to_owned(),
-                        headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]],
-                        body: None,
-                        follow: true,
-                        headers_only: false,
-                        include_headers: false,
-                        fail_status: false,
-                        discard_body: false,
-                        timeout: 10,
-                        writeout: String::new(),
-                        cookie_store: false,
-                        cookie_load: false,
-                        retries: 0,
-                        tls13: false,
-                    })
-                    .await?,
-                    &[r#"loc="#.to_owned()],
-                )?,
-                &[r#"-F="#.to_owned(), r#"{print $2}"#.to_owned()],
-            )?,
-        );
-        output = decode_escapes(
-            &[[
-                r#"\r Sora:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes (Region: "#.to_owned(),
-                v.get(r#"region1"#),
                 r#")"#.to_owned(),
                 v.get(r#"Font_Suffix"#),
                 r#"\n"#.to_owned(),

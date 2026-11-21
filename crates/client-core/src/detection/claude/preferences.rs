@@ -87,14 +87,13 @@ pub fn preference(
         bounded(value),
         source,
         Evidence::Measured,
-        "这是当前环境的设置值，不代表物理所在地，也未确认 Claude 是否使用这一项进行地区判断。",
+        "当前环境的设置值。",
     );
     // The value is measured; attributing a region to it is an inference.
     if let Some(code) = country {
         signal.country = code.into();
         signal.evidence = Evidence::Inferred;
     }
-    signal.advice =
-        "如与预期环境不同，检查此环境的地区、语言或时区设置；无需仅因使用中文而调整。".into();
+    signal.advice = "如与预期不同，检查当前环境的地区、语言或时区设置。".into();
     signal
 }

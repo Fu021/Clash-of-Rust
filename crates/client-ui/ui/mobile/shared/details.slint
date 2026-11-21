@@ -31,7 +31,7 @@ export component MobileDetails inherits PageSurface {
     if MobileView.detail == 6: MobileSiteResults { }
     if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6: VerticalLayout { spacing: MobileTypography.gap;
         details-scroll := MScroll {
-            content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.site-status + "/" + MobileView.log-message;
+            content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.claude-section + "/" + MobileView.site-status + "/" + MobileView.log-message;
             property <[length]> viewport: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
             changed viewport => { MobileView.profile-editor-viewport = self.viewport; }
             init => { MobileView.profile-editor-viewport = self.viewport; }
@@ -125,9 +125,9 @@ export component MobileDetails inherits PageSurface {
                     if index + 1 < MobileData.site-details.length: MDivider { }
                 }
             }
-            if MobileView.detail == 1 || MobileView.detail == 7 || MobileView.detail == 9: MobileReport {
+            if MobileView.detail == 1: MobileReport {
                 items: MobileData.claude-results;
-                tone: MobileView.detail == 1 ? 3 : MobileView.detail == 7 ? 1 : 2;
+                section: MobileView.claude-section;
             }
             if root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         } }

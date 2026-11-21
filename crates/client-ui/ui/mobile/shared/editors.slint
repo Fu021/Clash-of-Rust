@@ -98,7 +98,7 @@ export component MobileSiteResults inherits VerticalLayout {
         }
     }
     if MobileView.site-filters: MCard {
-        MSelect { options: ["全部结果", "确认可用", "仅网页可达", "不可用或受限"]; value: MobileView.site-status;
+        MSelect { options: ["全部结果", "确认可用", "部分可用", "仅网页可达", "信息已识别", "不可用或受限", "结果未确认", "超时或失败", "未检测"]; value: MobileView.site-status;
             selected(index, value) => { MobileView.site-status = value; MobileActions.request(MobileIntent.site-filter, value, "status"); }
         }
         MSelect { options: MobileData.site-regions; value: MobileView.site-region;
@@ -124,14 +124,15 @@ export component MobileSiteResults inherits VerticalLayout {
                 }
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                     MHeading { text: result.title; }
-                    MTag { text: result.tone == 3 ? "受限" : result.tone == 2 ? "网页可达" : result.tone == 1 ? "确认可用" : "待检测"; tone: result.tone; }
+                    MTag { text: result.status-label; tone: result.tone; }
                 }
                 MParagraph { text: result.value; font-size: MobileTypography.font-size(14); }
+                if result.detail != "": MSmall { text: result.detail; wrap: word-wrap; }
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                     Rectangle { width: 24px; height: 24px; horizontal-stretch: 0;
                         if result.flagged: Text { text: result.flag; width: parent.width; height: parent.height; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
                     }
-                    MSmall { text: result.country == "" ? result.source : result.country; min-width: 0px; preferred-width: 0px; }
+                    MSmall { text: result.country == "" ? result.source : "地区：" + result.country; min-width: 0px; preferred-width: 0px; }
                     MSmall { text: result.delay; width: 76px * Theme.text-scale; color: Theme.tone-color(result.delay-tone); horizontal-alignment: right; horizontal-stretch: 0; }
                 }
             }

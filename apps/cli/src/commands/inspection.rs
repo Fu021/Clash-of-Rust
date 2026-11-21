@@ -730,13 +730,22 @@ async fn ip(args: &Args) -> Result<()> {
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let status = Status::of(Some(&outcome));
+                if ip_check::SPLIT_EXIT_TARGETS
+                    .iter()
+                    .any(|(id, _, _)| *id == service.id)
+                {
+                    row["target_exit"] = Value::Null;
+                }
                 match outcome {
                     Ok(result) => {
+                        row["millis"] = json!(result.response_millis());
                         row["state"] = json!(format!("{:?}", result.state));
                         row["summary"] = json!(result.summary);
                         row["country"] = json!(result.country);
-                        row["millis"] = json!(result.millis);
                         row["detail"] = json!(result.detail);
+                        if row.get("target_exit").is_some() {
+                            row["target_exit"] = json!(result.target_exit);
+                        }
                     }
                     Err(error) => {
                         row["state"] = json!("Failed");

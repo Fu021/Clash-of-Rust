@@ -487,6 +487,7 @@ fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
             country: "🇩🇪 德国".into(),
             millis: 188,
             detail: String::new(),
+            target_exit: None,
         }),
     ));
     for (index, (health, status, millis)) in [
@@ -1228,6 +1229,7 @@ fn ip_response_times_preserve_availability_and_use_independent_latency_tones() {
             country: String::new(),
             detail: String::new(),
             millis,
+            target_exit: None,
         })));
     }
     let window = AppWindow::new().unwrap();
@@ -2411,6 +2413,7 @@ fn ip_report_uses_emoji_in_summary_rows_and_details() {
         country: "🇩🇪 德国".into(),
         millis: 4,
         detail: String::new(),
+        target_exit: None,
     })));
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
@@ -2430,6 +2433,102 @@ fn ip_report_uses_emoji_in_summary_rows_and_details() {
 }
 
 #[test]
+fn ip_report_shows_each_target_exit_and_its_measurement_state() {
+    let preview = std::env::var_os("COR_IP_DESKTOP_PREVIEW");
+    ui_testing::initialize(1100, if preview.is_some() { 1800 } else { 900 });
+    let mut app = fixture(Page::Websites);
+    app.site_has_run = true;
+    app.site_show_results = true;
+    app.site_category = CategoryFilter::Group("AI");
+    app.site_results
+        .resize_with(ip_check::services().len(), || None);
+    app.site_results[0] = Some(Ok(ip_check::CheckResult {
+        state: ip_check::State::Identified,
+        summary: "203.0.113.42".into(),
+        country: "香港".into(),
+        millis: 4,
+        detail: String::new(),
+        target_exit: None,
+    }));
+    let index = |id| {
+        ip_check::services()
+            .iter()
+            .position(|service| service.id == id)
+            .unwrap()
+    };
+    let claude = ip_check::CheckResult {
+        state: ip_check::State::Reachable,
+        summary: "网页可达".into(),
+        country: String::new(),
+        millis: 12,
+        detail: String::new(),
+        target_exit: Some(ip_check::TargetExit {
+            host: "claude.ai",
+            ip: "203.0.113.12".parse().unwrap(),
+            country: Some("香港".into()),
+        }),
+    };
+    let chatgpt = ip_check::CheckResult {
+        state: ip_check::State::Confirmed,
+        summary: "确认可用".into(),
+        country: "美国".into(),
+        millis: 218,
+        detail: String::new(),
+        target_exit: Some(ip_check::TargetExit {
+            host: "chatgpt.com",
+            ip: "203.0.113.13".parse().unwrap(),
+            country: Some("美国".into()),
+        }),
+    };
+    app.site_results[index("AIUnlockTest_Claude")] = Some(Ok(claude.clone()));
+    app.site_results[index("MediaUnlockTest_ChatGPT")] = Some(Ok(chatgpt.clone()));
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let summary = data.get_site_summary();
+    assert!(summary.contains("Cloudflare 探针出口：203.0.113.42"));
+    let rows = data.get_site_results().iter().collect::<Vec<_>>();
+    let row = |id: &str| rows.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(row("AIUnlockTest_Claude").value, "仅网页可达");
+    assert_eq!(row("MediaUnlockTest_ChatGPT").value, "确认可用");
+    assert_eq!(
+        row("AIUnlockTest_Claude").detail,
+        "同域出口：203.0.113.12 · 香港"
+    );
+    assert_eq!(
+        row("MediaUnlockTest_ChatGPT").detail,
+        "同域出口：203.0.113.13 · 美国"
+    );
+    assert!(row("AIUnlockTest_Gemini_location").detail.is_empty());
+    app.site_results[index("AIUnlockTest_Claude")] = None;
+    app.site_results[index("MediaUnlockTest_ChatGPT")] = Some(Err("请求失败".into()));
+    app.present_slint(&data, &mut models);
+    let rows = data.get_site_results().iter().collect::<Vec<_>>();
+    let row = |id: &str| rows.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(row("AIUnlockTest_Claude").detail, "同域出口：待检测");
+    assert_eq!(row("MediaUnlockTest_ChatGPT").detail, "同域出口：未确认");
+    assert_eq!(row("AIUnlockTest_Claude").status_label, "未检测");
+    assert_eq!(row("MediaUnlockTest_ChatGPT").status_label, "超时或失败");
+    if let Some(path) = preview {
+        app.site_results[index("AIUnlockTest_Claude")] = Some(Ok(claude));
+        app.site_results[index("MediaUnlockTest_ChatGPT")] = Some(Ok(chatgpt));
+        app.present_slint(&data, &mut models);
+        window.show().unwrap();
+        motion_frame(&window, 250);
+        let image = window.window().take_snapshot().unwrap();
+        let size = window.window().size();
+        let mut bytes = format!("P6\n{} {}\n255\n", size.width, size.height).into_bytes();
+        for pixel in image.as_bytes().as_chunks::<4>().0 {
+            bytes.extend_from_slice(&pixel[..3]);
+        }
+        std::fs::write(path, bytes).unwrap();
+        window.hide().unwrap();
+    }
+}
+
+#[test]
 fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
     ui_testing::initialize(950, 700);
     for (country, expected) in [
@@ -2444,6 +2543,7 @@ fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
             country: country.into(),
             millis: 4,
             detail: String::new(),
+            target_exit: None,
         })));
         let window = AppWindow::new().unwrap();
         let data = window.global::<UiData>();
@@ -2548,7 +2648,7 @@ fn claude_report_rows_keep_titles_and_labeled_explanations() {
     app.claude.reports[0] = Some(report);
     app.present_slint(&data, &mut models);
     let rows = data.get_claude_results();
-    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 2);
+    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 5);
     let route = rows.iter().find(|row| row.title == "连接检查").unwrap();
     assert_eq!(route.title, "连接检查");
     assert_eq!(route.value, "仅记录选路");
@@ -2571,7 +2671,7 @@ fn claude_report_rows_keep_titles_and_labeled_explanations() {
 }
 
 #[test]
-fn claude_route_block_expands_and_keeps_each_domain_and_failure() {
+fn claude_route_section_keeps_each_domain_and_failure() {
     use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Route, Signal};
 
     let preview = std::env::var_os("COR_CLAUDE_REPORT_PREVIEW");
@@ -2627,12 +2727,11 @@ fn claude_route_block_expands_and_keeps_each_domain_and_failure() {
     let rows = data.get_claude_results();
     let header = rows
         .iter()
-        .find(|row| row.tone == 0 && row.title == "Claude 域名选路")
+        .find(|row| row.tone == 0 && row.title == "Claude 连接与选路")
         .unwrap();
-    assert_eq!(header.title, "Claude 域名选路");
-    assert!(header.value.contains("1 项风险"));
+    assert_eq!(header.detail, "1 项需关注");
     assert!(header.value.contains("failed.example"));
-    assert!(header.value.contains("其他：3 个域名 · 仅记录选路"));
+    assert!(header.value.contains("3 个域名 · 仅记录选路"));
     let grouped = rows
         .iter()
         .find(|row| row.title == "Claude 域名选路" && row.tone == 2)
@@ -2652,22 +2751,48 @@ fn claude_route_block_expands_and_keeps_each_domain_and_failure() {
         rows.iter()
             .any(|row| row.title == "failed.example" && row.tone == 3)
     );
-    let grouped_index = rows
-        .iter()
-        .position(|row| row.title == "Claude 域名选路" && row.tone == 2)
-        .unwrap();
-    let quality_index = rows
-        .iter()
-        .position(|row| row.title == "出口 IP 质量 · 203.0.113.12" && row.tone == 2)
-        .unwrap();
     assert_eq!(
         rows.iter()
-            .find(|row| row.title == "IP 归属与信誉" && row.tone == 0)
+            .find(|row| row.title == "出口与 IP 属性" && row.tone == 0)
             .unwrap()
-            .block_items,
-        1
+            .detail,
+        "1 项来源不一致"
     );
-    track_targets(&window);
+    if preview.is_some() {
+        let mut guard = Report::new(Environment::Desktop, "演示数据");
+        let route = Route {
+            host: "api.anthropic.com".into(),
+            chain: "DIRECT".into(),
+            outcome: "异常连接已关闭".into(),
+            ..Default::default()
+        };
+        let snapshot = clash_of_rust::claude_check::guard::Snapshot {
+            total: 8,
+            blocked: 1,
+            connected: true,
+            routes: [route.clone()].into(),
+            ..Default::default()
+        };
+        guard
+            .signals
+            .push(clash_of_rust::claude_check::guard::report_signal(&snapshot));
+        guard.routes.push(route);
+        app.claude.reports[2] = Some(guard);
+        app.claude.reports[0]
+            .as_mut()
+            .unwrap()
+            .signals
+            .push(Signal::new(
+                Group::Browser,
+                "浏览器语言",
+                "zh-CN",
+                "演示数据",
+                Evidence::Measured,
+                "仅用于报告预览",
+            ));
+        app.present_slint(&data, &mut models);
+    }
+    let events = pointer_events(&window);
     window.show().unwrap();
     motion_frame(&window, 250);
     let capture = |stage: &str| {
@@ -2688,32 +2813,39 @@ fn claude_route_block_expands_and_keeps_each_domain_and_failure() {
             .set_size(slint::PhysicalSize::new(1100, 2200));
         motion_frame(&window, 50);
     }
-    click_target(&window, "claude-block:Claude 域名选路");
+    click_target(&window, "claude-block:Claude 连接与选路");
     motion_frame(&window, 50);
-    let grouped_key = format!("claude-block-item:Claude 域名选路:{grouped_index}");
-    let grouped_height = target_bounds(&grouped_key)[3];
-    click_target(
-        &window,
-        &format!("claude-block-detail:Claude 域名选路:{grouped_index}"),
+    assert_eq!(
+        events.borrow().last(),
+        Some(&(Intent::ClaudeFilter, "Claude 连接与选路".into(), "".into()))
     );
+    let _ = app.claude_event(claude_view::Event::ResultsFilter(Some(1)));
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 50);
+    let routes = data.get_claude_results();
+    let grouped_index = routes
+        .iter()
+        .position(|row| row.title == "Claude 域名选路")
+        .unwrap();
+    assert!(
+        routes
+            .iter()
+            .any(|row| row.title == "failed.example" && row.tone == 3)
+    );
+    let grouped_key = format!("claude-result:{grouped_index}");
+    let grouped_height = target_bounds(&grouped_key)[3];
+    click_target(&window, &format!("claude-result-detail:{grouped_index}"));
     motion_frame(&window, 50);
     assert!(target_bounds(&grouped_key)[3] > grouped_height);
-    capture("expanded");
-    click_target(&window, "claude-block:IP 归属与信誉");
-    motion_frame(&window, 50);
-    let quality_key = format!("claude-block-item:IP 归属与信誉:{quality_index}");
-    assert!(target_bounds(&quality_key)[3] > 150.);
     capture("details");
-    app.claude.results_filter = Some(claude_view::ResultKind::Unknown);
+    let _ = app.claude_event(claude_view::Event::ResultsFilter(Some(2)));
     app.present_slint(&data, &mut models);
-    let clues = data.get_claude_results();
-    assert_eq!(clues.row_count(), 2);
-    assert!(clues.iter().any(|row| row.value == "3 个域名 · 仅记录选路"));
-    app.claude.results_filter = Some(claude_view::ResultKind::Risk);
-    app.present_slint(&data, &mut models);
-    let risks = data.get_claude_results();
-    assert_eq!(risks.row_count(), 1);
-    assert_eq!(risks.row_data(0).unwrap().title, "failed.example");
+    let exit = data.get_claude_results();
+    assert!(
+        exit.iter()
+            .any(|row| row.detail.contains("IPQuery 是、IPLogs 否"))
+    );
+    assert!(!exit.iter().any(|row| row.title == "failed.example"));
     window.hide().unwrap();
 }
 
@@ -2790,25 +2922,21 @@ fn claude_guard_block_keeps_status_and_interceptions_together() {
         .iter()
         .find(|row| row.title == "observed.example")
         .unwrap();
-    assert_eq!(observed.id, "Claude 域名选路");
-    let signal_index = rows
-        .iter()
-        .position(|row| row.title == guard::REPORT_SECTION && row.tone == 3)
-        .unwrap();
+    assert_eq!(observed.id, "Claude 连接与选路");
     track_targets(&window);
     window.show().unwrap();
     motion_frame(&window, 250);
-    click_target(&window, &format!("claude-block:{}", guard::REPORT_SECTION));
+    let _ = app.claude_event(claude_view::Event::ResultsFilter(Some(0)));
+    app.present_slint(&data, &mut models);
     motion_frame(&window, 50);
-    let item_key = format!("claude-block-item:{}:{signal_index}", guard::REPORT_SECTION);
+    let signal_index = data
+        .get_claude_results()
+        .iter()
+        .position(|row| row.title == guard::REPORT_SECTION)
+        .unwrap();
+    let item_key = format!("claude-result:{signal_index}");
     let collapsed_height = target_bounds(&item_key)[3];
-    click_target(
-        &window,
-        &format!(
-            "claude-block-detail:{}:{signal_index}",
-            guard::REPORT_SECTION
-        ),
-    );
+    click_target(&window, &format!("claude-result-detail:{signal_index}"));
     motion_frame(&window, 50);
     assert!(target_bounds(&item_key)[3] > collapsed_height);
     snapshot.total += 1;
@@ -2820,6 +2948,7 @@ fn claude_guard_block_keeps_status_and_interceptions_together() {
         "refreshing live protection counts closed the expanded explanation"
     );
     app.claude.clear_guard();
+    let _ = app.claude_event(claude_view::Event::ResultsFilter(None));
     app.present_slint(&data, &mut models);
     let rows = data.get_claude_results();
     let guard_header = rows
@@ -2874,7 +3003,7 @@ fn claude_summary_keeps_quality_disagreements_visible_with_many_risks() {
     app.present_slint(&data, &mut models);
 
     let rows = data.get_claude_results();
-    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 2);
+    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 5);
     assert_eq!(data.get_claude_risk(), "7");
     assert_eq!(data.get_claude_clues(), "1");
     let disagreement = rows
@@ -2898,7 +3027,7 @@ fn claude_summary_keeps_quality_disagreements_visible_with_many_risks() {
     }));
     app.present_slint(&data, &mut models);
     let rows = data.get_claude_results();
-    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 2);
+    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 5);
     assert!(
         rows.iter().any(|row| row.tone == 0 && row.delay_tone == 3),
         "the overview also includes risks when many sources disagree"
@@ -3691,6 +3820,7 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
         country: String::new(),
         millis: 4,
         detail: String::new(),
+        target_exit: None,
     })));
     app.claude.reports[0] = Some(Report::new(Environment::Core, "saved report"));
     let before = serde_json::to_value(&app.profiles).unwrap();

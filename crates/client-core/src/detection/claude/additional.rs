@@ -44,7 +44,7 @@ pub async fn extend(client: &Client, report: &mut Report) {
                 Group::Quality,
                 "IP 注册信息",
                 "RDAP",
-                "注册服务超时、拒绝请求或未返回有效记录；不影响其他检测结果。",
+                "注册服务超时、拒绝请求或未返回有效记录。",
             )]
         }));
     report
@@ -54,7 +54,7 @@ pub async fn extend(client: &Client, report: &mut Report) {
                 Group::Connectivity,
                 "全球连通性",
                 "Globalping 远端探针",
-                "远端探测超时、额度不足或服务不可用；不能据此判定出口故障。",
+                "远端探测超时、额度不足或服务不可用。",
             )]
         }));
 }
@@ -151,7 +151,7 @@ fn registration_record(record: &Value, ip: &str, source: &str) -> Result<Vec<Sig
         format!("{name} · {start}–{end} · 注册地区 {country}"),
         source,
         Evidence::Measured,
-        &format!("RDAP 注册信息；注册地区不代表出口物理位置。{events}"),
+        &format!("RDAP 注册信息。{events}"),
     )])
 }
 pub async fn global_ping(client: &Client, ip: &str) -> Result<Vec<Signal>> {
@@ -210,7 +210,7 @@ fn ping_results(record: &Value, ip: &str) -> Vec<Signal> {
             Group::Connectivity,
             "全球连通性",
             "Globalping 远端探针",
-            "未取得有效 ICMP 响应；可能受出口防火墙、探针或服务可用性影响，不能据此判定出口故障。",
+            "未取得有效 ICMP 响应；请检查防火墙或探针服务状态。",
         )];
     }
     delays.sort_by(f64::total_cmp);
@@ -226,7 +226,7 @@ fn ping_results(record: &Value, ip: &str) -> Vec<Signal> {
         "Globalping 远端探针",
         Evidence::Measured,
         &format!(
-            "远端探针到出口 IP {ip} 的 ICMP 测量，不是本机到 Claude 的延迟。有效探针平均延迟范围 {:.1}–{:.1} ms；其余探针未取得有效响应，可能受防火墙或探针可用性影响。",
+            "远端探针到出口 IP {ip} 的 ICMP 测量；有效探针平均延迟范围 {:.1}–{:.1} ms。",
             delays[0],
             delays[delays.len() - 1],
         ),

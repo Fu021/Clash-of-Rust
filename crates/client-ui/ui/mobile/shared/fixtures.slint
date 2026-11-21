@@ -135,11 +135,11 @@ export component MobileFixture inherits Rectangle {
             {time: "10:31:24", level: "WARN", message: "[DNS] query example.invalid: temporary failure; retrying with the configured resolver. 演示长日志，可点击查看并复制全文。", tone: 2},
             {time: "10:31:28", level: "DEBUG", message: "配置已更新，规则与 DNS 覆盖已生效。", tone: 4}
         ];
-        MobileData.site-progress = "完成 183 / 183";
+        MobileData.site-progress = "完成 182 / 182";
         MobileData.exit-ip = "203.0.113.42"; MobileData.exit-country = "香港";
         MobileData.exit-flag = "🇨🇳";
         MobileData.categories = [
-            {left: {id: "AI", title: "AI", count: "4 / 5", detail: "确认可用 3 · 网页可达 1 · 受限 1", tone: 2},
+            {left: {id: "AI", title: "AI", count: "3 / 4", detail: "确认可用 2 · 网页可达 1 · 受限 1", tone: 2},
              right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
             {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2},
              right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
@@ -147,16 +147,15 @@ export component MobileFixture inherits Rectangle {
              right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}
         ];
         MobileData.site-results = [
-            {id: "netflix", title: "Netflix", value: "可用 · 识别地区：香港", country: "香港", flag: "🇨🇳", flagged: true, source: "服务响应", tone: 1, delay: "128 ms", delay-tone: 1},
-            {id: "chatgpt", title: "ChatGPT", value: "可用 · 识别地区：台湾", country: "台湾", flag: "🇨🇳", flagged: true, source: "服务响应", tone: 1, delay: "420 ms", delay-tone: 2},
-            {id: "claude", title: "Claude", value: "可用 · 识别地区：德国", country: "德国", flag: "🇩🇪", flagged: true, source: "服务响应", tone: 1, delay: "925 ms", delay-tone: 3},
-            {id: "gemini", title: "Gemini", value: "网页可达，登录后可用情况待确认", source: "网页响应", tone: 2},
-            {id: "copilot", title: "Copilot", value: "可用 · 识别地区：德国", country: "德国", flag: "🇩🇪", flagged: true, source: "服务响应", delay: "218 ms", delay-tone: 1, tone: 1},
-            {id: "other", title: "其他 AI 服务", value: "当前地区不可用", source: "服务响应", tone: 3}
+            {id: "chatgpt", title: "ChatGPT", value: "可用", detail: "同域出口：203.0.113.13 · 美国", country: "美国", flag: "🇺🇸", flagged: true, source: "服务响应", status-label: "确认可用", tone: 1, delay: "420 ms", delay-tone: 2},
+            {id: "claude", title: "Claude", value: "可用", detail: "同域出口：203.0.113.12 · 香港", country: "香港", flag: "🇨🇳", flagged: true, source: "服务响应", status-label: "确认可用", tone: 1, delay: "925 ms", delay-tone: 3},
+            {id: "gemini", title: "Gemini", value: "网页可达", source: "网页响应", status-label: "仅网页可达", tone: 2},
+            {id: "copilot", title: "Copilot", value: "当前地区不可用", source: "服务响应", status-label: "不可用或受限", tone: 3}
         ];
-        MobileData.claude-normal = "" + PreviewReports.normal.length; MobileData.claude-risk = "" + PreviewReports.risk.length; MobileData.claude-clues = "" + PreviewReports.clues.length;
+        MobileData.claude-normal = "5"; MobileData.claude-risk = "3"; MobileData.claude-clues = "5";
         MobileData.claude-status = "检测完成 · 浏览器采样已回传";
         MobileData.claude-results = PreviewReports.blocks;
+        MobileView.claude-section = "Claude 连接与选路";
         MobileData.geo-status = "数据版本：2026-10-15\n本机上次更新：2026-10-16 12:30:00";
         MobileView.profile-name = "我的订阅"; MobileView.profile-source = "https://example.com/subscription";
         MobileView.rule-payload = "google.com"; MobileView.rule-raw = "DOMAIN-SUFFIX,google.com,DIRECT";

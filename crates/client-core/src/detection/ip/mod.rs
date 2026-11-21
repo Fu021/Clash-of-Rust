@@ -5,10 +5,16 @@ use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     net::IpAddr,
     sync::OnceLock,
     time::{Duration, Instant},
 };
+
+pub const SPLIT_EXIT_TARGETS: [(&str, &str, &str); 2] = [
+    ("AIUnlockTest_Claude", "claude.ai", "Claude"),
+    ("MediaUnlockTest_ChatGPT", "chatgpt.com", "ChatGPT"),
+];
 
 #[derive(Debug, Deserialize)]
 pub struct Service {
@@ -61,14 +67,94 @@ pub struct CheckResult {
     pub country: String,
     pub millis: u128,
     pub detail: String,
+    pub target_exit: Option<TargetExit>,
+}
+
+impl CheckResult {
+    pub fn response_millis(&self) -> Option<u128> {
+        (self.state != State::Failed || self.millis > 0).then_some(self.millis)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TargetExit {
+    pub host: &'static str,
+    pub ip: IpAddr,
+    pub country: Option<String>,
 }
 
 fn client(port: u16) -> Result<Client> {
+    client_with_redirect(port, reqwest::redirect::Policy::limited(5))
+}
+
+fn client_with_redirect(port: u16, redirect: reqwest::redirect::Policy) -> Result<Client> {
     Ok(crate::network::client_builder().no_proxy()
         .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
         .connect_timeout(Duration::from_secs(5)).timeout(Duration::from_secs(12))
-        .redirect(reqwest::redirect::Policy::limited(5)).build()?)
+        .redirect(redirect).build()?)
+}
+
+fn parse_target_exit(text: &str, host: &'static str) -> Option<TargetExit> {
+    let fields: BTreeMap<_, _> = text
+        .lines()
+        .filter_map(|line| line.trim().split_once('='))
+        .collect();
+    if fields.get("h").copied()? != host {
+        return None;
+    }
+    let ip: IpAddr = fields.get("ip")?.parse().ok()?;
+    if !crate::claude_check::public_ip(ip) {
+        return None;
+    }
+    Some(TargetExit {
+        host,
+        ip,
+        country: fields.get("loc").and_then(|code| country_name(code)),
+    })
+}
+
+async fn target_exit(client: &Client, url: Url, host: &'static str) -> Option<TargetExit> {
+    if url.host_str() != Some(host) || url.path() != "/cdn-cgi/trace" {
+        return None;
+    }
+    let mut response = client.get(url.clone()).send().await.ok()?;
+    if !response.status().is_success() || response.url() != &url {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if chunk.len() > 8192usize.saturating_sub(bytes.len()) {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    parse_target_exit(std::str::from_utf8(&bytes).ok()?, host)
+}
+
+fn combine_target_exit(
+    result: Result<CheckResult>,
+    observed: Option<TargetExit>,
+    host: &str,
+) -> Result<CheckResult> {
+    let mut result = match result {
+        Ok(result) => result,
+        Err(error) if observed.is_some() => CheckResult {
+            state: State::Failed,
+            summary: "检测失败，未确认".into(),
+            country: String::new(),
+            millis: 0,
+            detail: format!("{error:#}"),
+            target_exit: None,
+        },
+        Err(error) => return Err(error),
+    };
+    result.detail.push_str(&match &observed {
+        Some(exit) => format!("；{} 同域探针出口：{}", exit.host, exit.ip),
+        None => format!("；{host} 同域探针出口未确认"),
+    });
+    result.target_exit = observed;
+    Ok(result)
 }
 
 async fn body(mut response: reqwest::Response) -> Result<String> {
@@ -90,10 +176,22 @@ pub async fn check(id: &str, port: u16) -> Result<CheckResult> {
         .context("检测项目不存在")?;
     tokio::time::timeout(Duration::from_secs(120), async {
         if matches!(id, "exit-ip" | "github") {
-            check_with_client(service, &client(port)?).await
-        } else {
-            crate::region_check::check(service, port).await
+            return check_with_client(service, &client(port)?).await;
         }
+        let Some((_, host, _)) = SPLIT_EXIT_TARGETS
+            .iter()
+            .find(|(target, _, _)| *target == id)
+        else {
+            return crate::region_check::check(service, port).await;
+        };
+        let trace = async {
+            let trace_client =
+                client_with_redirect(port, reqwest::redirect::Policy::none()).ok()?;
+            let url = Url::parse(&format!("https://{host}/cdn-cgi/trace")).ok()?;
+            target_exit(&trace_client, url, host).await
+        };
+        let (result, observed) = tokio::join!(crate::region_check::check(service, port), trace);
+        combine_target_exit(result, observed, host)
     })
     .await
     .context("检测超时")?
@@ -133,7 +231,7 @@ async fn check_with_client(service: &Service, client: &Client) -> Result<CheckRe
         result.country = trace_country(&text, original.host_str().unwrap_or_default())
             .unwrap_or_else(|| "未提供".into());
         result.detail = format!(
-            "Cloudflare 返回的当前出口 IP；{} · HTTP {status}",
+            "内核访问 Cloudflare 的出口 IP · {} · HTTP {status}",
             if ip.is_ipv4() { "IPv4" } else { "IPv6" }
         );
         result.country = decorate_country(result.country);
@@ -153,7 +251,7 @@ async fn check_with_client(service: &Service, client: &Client) -> Result<CheckRe
             result.country = country;
             result
                 .detail
-                .push_str("；地区来自该域名的 Cloudflare trace，未验证账号或播放地区");
+                .push_str("；地区来自该域名的 Cloudflare trace");
         }
     }
     result.country = decorate_country(result.country);
@@ -216,15 +314,109 @@ fn classify(service: &Service, status: u16, final_url: &Url, text: &str) -> Chec
             if regional_error {
                 "平台明确返回地区限制"
             } else {
-                "基础 HTTP 检测；未验证登录、订阅或播放，不能视为原脚本完整解锁结果"
+                "基础 HTTP 响应检测"
             }
         ),
+        target_exit: None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_exit_requires_the_same_host_and_a_public_address() {
+        let observed = parse_target_exit("h=claude.ai\nip=8.8.8.8\nloc=US\n", "claude.ai").unwrap();
+        assert_eq!(observed.host, "claude.ai");
+        assert_eq!(observed.ip.to_string(), "8.8.8.8");
+        assert_eq!(observed.country.as_deref(), Some("美国"));
+        let observed = parse_target_exit(
+            "h=claude.ai\nip=2606:4700:4700::1111\nloc=XX\n",
+            "claude.ai",
+        )
+        .unwrap();
+        assert!(observed.ip.is_ipv6());
+        assert!(observed.country.is_none());
+        for text in [
+            "h=other.example\nip=8.8.8.8\nloc=US",
+            "h=claude.ai\nip=127.0.0.1\nloc=US",
+            "h=claude.ai\nip=invalid\nloc=US",
+            "h=claude.ai\nloc=US",
+        ] {
+            assert!(parse_target_exit(text, "claude.ai").is_none(), "{text}");
+        }
+    }
+
+    #[test]
+    fn measured_target_exit_survives_an_independent_platform_error() {
+        let observed = parse_target_exit("h=chatgpt.com\nip=8.8.8.8\n", "chatgpt.com").unwrap();
+        let result = combine_target_exit(
+            Err(anyhow::anyhow!("检测响应不是有效 JSON")),
+            Some(observed),
+            "chatgpt.com",
+        )
+        .unwrap();
+        assert_eq!(result.state, State::Failed);
+        assert_eq!(result.response_millis(), None);
+        assert!(result.detail.contains("检测响应不是有效 JSON"));
+        assert!(result.detail.contains("chatgpt.com 同域探针出口：8.8.8.8"));
+        assert_eq!(result.target_exit.unwrap().ip.to_string(), "8.8.8.8");
+        assert!(
+            combine_target_exit(Err(anyhow::anyhow!("检测失败")), None, "chatgpt.com").is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn target_exit_rejects_redirects_errors_and_oversized_responses() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        for (status, body, expected) in [
+            (
+                "200 OK",
+                "h=claude.ai\nip=8.8.8.8\nloc=US\n".to_owned(),
+                true,
+            ),
+            (
+                "403 Forbidden",
+                "h=claude.ai\nip=8.8.8.8\nloc=US\n".to_owned(),
+                false,
+            ),
+            (
+                "302 Found",
+                "h=claude.ai\nip=8.8.8.8\nloc=US\n".to_owned(),
+                false,
+            ),
+            (
+                "200 OK",
+                format!("h=claude.ai\nip=8.8.8.8\n{}", "x".repeat(8192)),
+                false,
+            ),
+        ] {
+            let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = proxy.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = proxy.accept().await.unwrap();
+                let mut request = [0; 2048];
+                let count = socket.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count])
+                        .starts_with("GET http://claude.ai/cdn-cgi/trace HTTP/")
+                );
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nLocation: http://other.example/\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let client = client_with_redirect(port, reqwest::redirect::Policy::none()).unwrap();
+            let url = Url::parse("http://claude.ai/cdn-cgi/trace").unwrap();
+            assert_eq!(
+                target_exit(&client, url, "claude.ai").await.is_some(),
+                expected
+            );
+            server.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn requests_use_proxy_and_target_country_evidence() {
         use tokio::{
@@ -276,7 +468,12 @@ mod tests {
 
     #[test]
     fn catalog_is_complete_unique_and_only_http() {
-        assert_eq!(services().len(), 183);
+        assert_eq!(services().len(), 182);
+        assert!(
+            !services()
+                .iter()
+                .any(|item| item.id == "MediaUnlockTest_Sora")
+        );
         let mut ids = std::collections::HashSet::new();
         for item in services() {
             assert!(ids.insert(&item.id));

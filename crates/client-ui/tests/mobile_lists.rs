@@ -27,6 +27,7 @@ slint::slint! {
     import { MobileModal } from "../ui/mobile/shared/details.slint";
     import { AppearanceSettings } from "../ui/mobile/shared/settings.slint";
     import { AndroidSurface } from "../ui/mobile/android/app.slint";
+    export { AndroidPreview } from "../ui/mobile/android/preview.slint";
     import { AndroidApplications } from "../ui/mobile/android/applications.slint";
     import { AndroidApplicationPolicies } from "../ui/mobile/android/application-policies.slint";
     import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
@@ -38,7 +39,7 @@ slint::slint! {
     export { ProfileItem } from "../ui/state.slint";
     export { ConnectionItem } from "../ui/state.slint";
     export { ReportItem } from "../ui/state.slint";
-    export { MobileActions, MobileIntent } from "../ui/mobile/shared/state.slint";
+    export { MobileActions, MobileIntent, MobileView } from "../ui/mobile/shared/state.slint";
     import { SettingsPage, SettingsNavigation } from "../ui/pages/settings.slint";
     import { NetworkPage } from "../ui/pages/network.slint";
     import { UiData, ProfileItem, ConnectionItem, ReportItem } from "../ui/state.slint";
@@ -293,6 +294,7 @@ slint::slint! {
         in-out property <int> page <=> MobileView.page;
         out property <[length]> close-target <=> surface.notice-close-target;
         in-out property <int> detail <=> MobileView.detail;
+        in-out property <string> claude-section <=> MobileView.claude-section;
         in-out property <[ReportItem]> reports <=> MobileData.claude-results;
         in-out property <string> draft <=> MobileView.profile-name;
         public function notify(message: string) { MobileView.notify(message); }
@@ -816,7 +818,7 @@ fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
 }
 
 #[test]
-fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
+fn report_sections_share_one_panel_without_gaps_from_hidden_rows() {
     let (adapter, clock) = headless(393, 852);
     let probe = MobileNoticeProbe::new().unwrap();
     let targets = Rc::new(RefCell::new(
@@ -833,11 +835,14 @@ fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
     probe.global::<UiGeometry>().set_enabled(true);
     probe.set_page(8);
     let tones = [0, 1, 3, 2, 3, 1];
+    let sections = ["a", "a", "b", "a", "b", "c"];
     probe.set_reports(
         Rc::new(slint::VecModel::from(
             tones
                 .iter()
-                .map(|tone| ReportItem {
+                .zip(sections)
+                .map(|(tone, section)| ReportItem {
+                    id: section.into(),
                     title: "检测项目".into(),
                     value: "2001:db8:1234:5678:abcd:ef01:2345:6789".into(),
                     country: "香港".into(),
@@ -857,9 +862,10 @@ fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
     probe.show().unwrap();
     for (width, height) in [(393, 852), (800, 1280), (1280, 800)] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
-        for (detail, tone) in [(7, 1), (1, 3), (9, 2)] {
+        for section in ["a", "b", "c"] {
             targets.borrow_mut().clear();
-            probe.set_detail(detail);
+            probe.set_claude_section(section.into());
+            probe.set_detail(1);
             advance(&clock, Duration::from_millis(300));
             frame(&adapter, width as usize, height as usize);
             let geometry = probe.global::<UiGeometry>();
@@ -871,7 +877,7 @@ fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
             let mut previous_bottom: Option<f32> = None;
             for (index, item_tone) in tones.iter().enumerate() {
                 let bounds = &measured[&format!("claude-result:{index}")];
-                if *item_tone != tone {
+                if *item_tone == 0 || sections[index] != section {
                     assert!(bounds[3] < 1., "filtered records must occupy no space");
                     continue;
                 }
@@ -907,6 +913,101 @@ fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
         targets.borrow()["claude-report"][3] < 1.,
         "clearing results must not leave an empty report card"
     );
+    probe.hide().unwrap();
+}
+
+#[test]
+fn android_report_card_opens_its_section() {
+    let (adapter, clock) = headless(393, 1800);
+    let probe = AndroidPreview::new().unwrap();
+    probe.set_preview_page(8);
+    probe.set_preview_dark(true);
+    let targets = Rc::new(RefCell::new(
+        std::collections::BTreeMap::<String, Vec<f32>>::new(),
+    ));
+    let observed = targets.clone();
+    probe
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            observed
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect());
+        });
+    probe.global::<UiGeometry>().set_enabled(true);
+    probe.show().unwrap();
+    advance(&clock, Duration::from_millis(300));
+    let pixels = frame(&adapter, 393, 1800);
+    let save = |path: std::ffi::OsString, pixels: &[slint::Rgb8Pixel]| {
+        let mut bytes = b"P6\n393 1800\n255\n".to_vec();
+        for pixel in pixels {
+            bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
+        }
+        std::fs::write(path, bytes).unwrap();
+    };
+    if let Some(path) = std::env::var_os("COR_CLAUDE_MOBILE_PREVIEW") {
+        save(path, &pixels);
+    }
+    let bounds = targets.borrow()["claude-block:实时保护与异常拦截"].clone();
+    let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+    for event in [
+        WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        },
+        WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        },
+    ] {
+        probe.window().dispatch_event(event);
+    }
+    advance(&clock, Duration::from_millis(300));
+    let pixels = frame(&adapter, 393, 1800);
+    assert_eq!(probe.get_preview_detail(), 1);
+    assert!(targets.borrow()["claude-result:5"][3] > 0.);
+    assert!(targets.borrow()["claude-result:7"][3] < 1.);
+    if let Some(path) = std::env::var_os("COR_CLAUDE_MOBILE_DETAIL_PREVIEW") {
+        save(path, &pixels);
+    }
+    probe
+        .global::<MobileView>()
+        .set_claude_section("出口与 IP 属性".into());
+    advance(&clock, Duration::from_millis(300));
+    frame(&adapter, 393, 1800);
+    let original_height = targets.borrow()["claude-result:10"][3];
+    let bounds = targets.borrow()["claude-result-detail:10"].clone();
+    let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+    for event in [
+        WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        },
+        WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        },
+    ] {
+        probe.window().dispatch_event(event);
+    }
+    advance(&clock, Duration::from_millis(300));
+    let pixels = frame(&adapter, 393, 1800);
+    assert!(targets.borrow()["claude-result:10"][3] > original_height + 30.);
+    if let Some(path) = std::env::var_os("COR_CLAUDE_IP_DETAIL_PREVIEW") {
+        save(path, &pixels);
+    }
+    if let Some(path) = std::env::var_os("COR_IP_MOBILE_PREVIEW") {
+        probe.set_preview_detail(0);
+        probe.set_preview_page(7);
+        advance(&clock, Duration::from_millis(300));
+        save(path, &frame(&adapter, 393, 1800));
+    }
+    if let Some(path) = std::env::var_os("COR_IP_MOBILE_DETAIL_PREVIEW") {
+        probe.set_preview_page(7);
+        probe.global::<MobileView>().set_category("AI".into());
+        probe.set_preview_detail(6);
+        advance(&clock, Duration::from_millis(300));
+        save(path, &frame(&adapter, 393, 1800));
+    }
     probe.hide().unwrap();
 }
 

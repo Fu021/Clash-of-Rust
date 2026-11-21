@@ -917,6 +917,11 @@ async fn run_loop(
                             || (intent == MobileIntent::SiteProbe && service.id == request.a)
                             || (intent == MobileIntent::SiteRetest && (request.a == "all" || service.group == request.a)))
                         .map(|(index,service)|(index,service.id.clone())).collect::<Vec<_>>();
+                    for (index, id) in &targets {
+                        if core::ip_check::SPLIT_EXIT_TARGETS.iter().any(|(target, _, _)| *target == id.as_str()) {
+                            state.ip_results[*index] = None;
+                        }
+                    }
                     checks = Some(tokio::spawn(async move {
                         let mut jobs = stream::iter(targets)
                             .map(move |(index,id)|async move {(index,core::ip_check::check(&id,port).await.map_err(|e|e.to_string()))})
@@ -2683,6 +2688,7 @@ struct ReportRow {
     value: String,
     detail: String,
     source: String,
+    status_label: String,
     tone: i32,
     country: String,
     country_label: String,
@@ -2897,12 +2903,8 @@ fn project(state: &State) -> Projection {
         if state.category != "all" && service.group != state.category {
             continue;
         }
-        let status_matches = match state.site_status.as_str() {
-            "确认可用" => tone == 1,
-            "仅网页可达" => tone == 2,
-            "不可用或受限" => tone == 3,
-            _ => true,
-        };
+        let status = core::ip_report::Status::of(slot).to_string();
+        let status_matches = state.site_status == "全部结果" || state.site_status == status;
         if !status_matches
             || (state.site_region != "全部地区" && country != state.site_region)
             || (!state.site_query.trim().is_empty()
@@ -2916,14 +2918,15 @@ fn project(state: &State) -> Projection {
             id: service.id.clone(),
             title: service.name.clone(),
             value,
-            detail,
+            detail: core::ip_report::target_exit_detail(&service.id, slot).unwrap_or_default(),
             source: service.group.clone(),
+            status_label: status,
             tone,
             country_label: core::probe::country_name(&country).unwrap_or_else(|| country.clone()),
             country,
             millis: slot
                 .and_then(|result| result.as_ref().ok())
-                .map(|result| result.millis),
+                .and_then(core::ip_check::CheckResult::response_millis),
             block_tone: 0,
             block_items: 0,
         });
@@ -2949,7 +2952,7 @@ fn project(state: &State) -> Projection {
                 2
             };
             let order = core::claude_check::summary_order(Some(signal), tone == 3);
-            let section = signal.group.name();
+            let section = core::claude_check::report_section(signal.group);
             let row = ReportRow {
                 id: section.into(),
                 title: signal.display_title().into(),
@@ -2960,6 +2963,7 @@ fn project(state: &State) -> Projection {
                 },
                 detail: signal.explanation(),
                 source: signal.source.clone(),
+                status_label: String::new(),
                 tone,
                 country: signal.country.clone(),
                 country_label,
@@ -2986,7 +2990,7 @@ fn project(state: &State) -> Projection {
             } else {
                 claude_counts.2 += routes.len();
             }
-            let section = "Claude 域名选路";
+            let section = core::claude_check::REPORT_SECTIONS[1];
             let row = ReportRow {
                 id: section.into(),
                 title: if grouped {
@@ -3005,6 +3009,7 @@ fn project(state: &State) -> Projection {
                     route.explanation()
                 },
                 source: "内核连接记录".into(),
+                status_label: String::new(),
                 tone,
                 country: String::new(),
                 country_label: String::new(),
@@ -3051,6 +3056,7 @@ fn project(state: &State) -> Projection {
             value: signal.display_value().into(),
             detail: signal.explanation(),
             source: signal.source.clone(),
+            status_label: String::new(),
             tone,
             country: String::new(),
             country_label: String::new(),
@@ -3078,6 +3084,7 @@ fn project(state: &State) -> Projection {
             value: route.display_outcome(),
             detail: route.explanation(),
             source: "实时拦截 · 内核连接记录".into(),
+            status_label: String::new(),
             tone: 3,
             country: String::new(),
             country_label: String::new(),
@@ -3095,15 +3102,17 @@ fn project(state: &State) -> Projection {
             item: row,
         });
     }
+    let mut claude_headers = Vec::new();
     let mut claude_rows = Vec::new();
-    for block in core::claude_check::group_blocks(claude) {
+    for block in core::claude_check::report_blocks(claude) {
         let block_items = block.rows.len() as i32;
-        claude_rows.push(ReportRow {
+        claude_headers.push(ReportRow {
             id: block.section.into(),
             title: block.section.into(),
-            value: block.summary,
-            detail: String::new(),
+            value: block.overview,
+            detail: block.attention,
             source: String::new(),
+            status_label: String::new(),
             tone: 0,
             country: String::new(),
             country_label: String::new(),
@@ -3113,6 +3122,7 @@ fn project(state: &State) -> Projection {
         });
         claude_rows.extend(block.rows);
     }
+    claude_headers.extend(claude_rows);
     Projection {
         application_policies: state.application_policies.view(s),
         overview: state.overview.present(s.running),
@@ -3153,7 +3163,7 @@ fn project(state: &State) -> Projection {
             .collect(),
         site_details,
         claude_busy: state.claude_busy,
-        claude: claude_rows,
+        claude: claude_headers,
         claude_counts,
         progress: (report.totals.completed(), report.totals.total()),
         detecting: state.detecting,
@@ -3559,6 +3569,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             country: r.country_label.into(),
             detail: r.detail.into(),
             source: r.source.into(),
+            status_label: r.status_label.into(),
             tone: r.tone,
             flagged: flag.is_some(),
             flag: flag.unwrap_or_default().into(),

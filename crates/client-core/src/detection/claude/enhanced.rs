@@ -46,7 +46,7 @@ pub fn supported_region(code: &str, ip: &str) -> Signal {
         &regions.source,
         Evidence::Inferred,
         &format!(
-            "依据目标域名实测的出口地区与官方列表对照；列表日期 {}，核对日期 {}。不读取账号，也不保证账号资格。",
+            "目标域名出口地区与官方列表对照 · 列表日期 {} · 核对日期 {}",
             regions.source_date, regions.reviewed_at
         ),
     );
@@ -64,7 +64,7 @@ pub fn cloudflare_trace(body: &str, host: &str, source: &str) -> Signal {
             Group::Cloudflare,
             "Cloudflare 网络环境",
             source,
-            "未取得有效同域 trace，不能判断边缘节点或 WARP 状态。",
+            "未取得有效同域 trace。",
         );
     }
     let fields: std::collections::BTreeMap<_, _> =
@@ -85,7 +85,7 @@ pub fn cloudflare_trace(body: &str, host: &str, source: &str) -> Signal {
         value,
         source,
         Evidence::Measured,
-        "边缘机房代码不代表出口 IP 的国家，也不是 Claude 或 Cloudflare 的官方风控评分。",
+        "目标域名的 Cloudflare trace。",
     )
 }
 
@@ -145,7 +145,7 @@ pub async fn extend(client: &Client, report: &mut Report) {
             Group::Cloudflare,
             "Cloudflare 网络环境",
             "Cloudflare trace",
-            "未得到有效结果，不能确认。",
+            "未得到有效结果。",
         )
     }));
     let (web, console, api) = tokio::join!(
@@ -208,7 +208,7 @@ async fn connectivity_at(client: &Client, host: &str, url: &str) -> Signal {
             Group::Connectivity,
             &format!("{host} 连通性"),
             "通过内核发起轻量 HTTPS 请求",
-            "三次请求均未取得响应，不能确认原因。",
+            "三次请求均未取得响应。",
         )
     } else {
         Signal::new(
@@ -222,13 +222,13 @@ async fn connectivity_at(client: &Client, host: &str, url: &str) -> Signal {
             ),
             "通过内核发起轻量 HTTPS 请求",
             Evidence::Measured,
-            "测量包含连接、TLS 与服务器响应，不是 ICMP Ping；收到 HTTP 响应不等于可登录、可对话或验证码通过。",
+            "HTTPS 请求耗时，包含连接、TLS 和服务器响应。",
         )
     };
     if challenge {
         signal.challenged = true;
         signal.value.push_str(" · 需要浏览器验证");
-        signal.detail.push_str(" 服务器要求 Cloudflare 人机验证；此响应不能证明地区或线路存在风险。检测未自动完成验证码，也没有提交账号信息。");
+        signal.detail.push_str(" 服务器要求 Cloudflare 人机验证。");
         signal.advice = "可用浏览器打开 Claude，确认是否需要验证及能否正常使用。".into();
     }
     signal
@@ -264,13 +264,13 @@ pub async fn configuration(
                 Group::Dns,
                 title,
                 "内核当前配置接口",
-                "接口未返回字段或无法连接，不能按保存的设置代替实际状态。",
+                "接口未返回字段或连接失败。",
             )
         };
         signal.risk = value.is_some_and(|v| *v != expected);
         signals.push(signal);
     }
-    signals.push(Signal::new(Group::Dns,"公网 DNS 保护策略",format!("DoH 经 {}",protection.node),"保护运行时配置",Evidence::Inferred,"公网解析指定保护节点；节点引导解析使用直连加密 DNS，局域网名称保留本地解析。浏览器独立 DoH 不由这个配置直接控制。"));
+    signals.push(Signal::new(Group::Dns,"公网 DNS 保护策略",format!("DoH 经 {}",protection.node),"保护运行时配置",Evidence::Inferred,"公网解析经保护节点，节点引导使用直连加密 DNS，局域网名称使用本地解析；浏览器独立 DoH 单独设置。"));
     signals
 }
 

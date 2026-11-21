@@ -4,6 +4,31 @@ use std::fmt;
 
 pub type ResultSlot = Option<Result<CheckResult, String>>;
 
+pub fn target_exit_detail(
+    id: &str,
+    result: Option<&Result<CheckResult, String>>,
+) -> Option<String> {
+    let (_, host, _) = ip_check::SPLIT_EXIT_TARGETS
+        .iter()
+        .find(|(target, _, _)| *target == id)?;
+    let value = match result {
+        None => "待检测".to_owned(),
+        Some(Ok(result)) => result
+            .target_exit
+            .as_ref()
+            .filter(|exit| exit.host == *host)
+            .map_or_else(
+                || "未确认".to_owned(),
+                |exit| match &exit.country {
+                    Some(country) => format!("{} · {country}", exit.ip),
+                    None => exit.ip.to_string(),
+                },
+            ),
+        Some(Err(_)) => "未确认".to_owned(),
+    };
+    Some(format!("同域出口：{value}"))
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CategoryFilter {
     #[default]
@@ -193,7 +218,72 @@ mod tests {
             country: String::new(),
             millis: 1,
             detail: String::new(),
+            target_exit: None,
         }))
+    }
+
+    #[test]
+    fn target_exit_detail_keeps_targets_pending_failures_and_addresses_distinct() {
+        let mut results: Vec<ResultSlot> = std::iter::repeat_with(|| None)
+            .take(ip_check::services().len())
+            .collect();
+        let index = |id| {
+            ip_check::services()
+                .iter()
+                .position(|service| service.id == id)
+                .unwrap()
+        };
+        let claude = index("AIUnlockTest_Claude");
+        let chatgpt = index("MediaUnlockTest_ChatGPT");
+        let mut measured = result(State::Reachable);
+        measured.as_mut().unwrap().as_mut().unwrap().target_exit = Some(ip_check::TargetExit {
+            host: "claude.ai",
+            ip: "8.8.8.8".parse().unwrap(),
+            country: Some("美国".into()),
+        });
+        results[claude] = measured;
+        results[chatgpt] = Some(Err("timeout".into()));
+        assert_eq!(
+            target_exit_detail("AIUnlockTest_Claude", results[claude].as_ref()).as_deref(),
+            Some("同域出口：8.8.8.8 · 美国")
+        );
+        assert_eq!(
+            target_exit_detail("MediaUnlockTest_ChatGPT", results[chatgpt].as_ref()).as_deref(),
+            Some("同域出口：未确认")
+        );
+        assert_eq!(
+            target_exit_detail("MediaUnlockTest_ChatGPT", None).as_deref(),
+            Some("同域出口：待检测")
+        );
+        results[chatgpt] = result(State::Reachable);
+        assert_eq!(
+            target_exit_detail("MediaUnlockTest_ChatGPT", results[chatgpt].as_ref()).as_deref(),
+            Some("同域出口：未确认")
+        );
+        let claude_result = results[claude].as_mut().unwrap().as_mut().unwrap();
+        claude_result.target_exit = Some(ip_check::TargetExit {
+            host: "chatgpt.com",
+            ip: "1.1.1.1".parse().unwrap(),
+            country: None,
+        });
+        assert_eq!(
+            target_exit_detail("AIUnlockTest_Claude", results[claude].as_ref()).as_deref(),
+            Some("同域出口：未确认")
+        );
+        assert!(target_exit_detail("AIUnlockTest_Gemini_location", None).is_none());
+    }
+
+    #[test]
+    fn status_labels_distinguish_failures_from_restrictions_and_unknown_results() {
+        for (slot, label) in [
+            (result(State::Restricted), "不可用或受限"),
+            (result(State::Unknown), "结果未确认"),
+            (result(State::Failed), "超时或失败"),
+            (Some(Err("timeout".into())), "超时或失败"),
+            (None, "未检测"),
+        ] {
+            assert_eq!(Status::of(slot.as_ref()).to_string(), label);
+        }
     }
 
     #[test]
@@ -209,15 +299,15 @@ mod tests {
         results[5] = result(State::Restricted);
         results[6] = result(State::Unknown);
         let report = Report::from_results(&results);
-        assert_eq!(report.totals.total(), 183);
+        assert_eq!(report.totals.total(), 182);
         assert_eq!(report.totals.completed(), 7);
         assert_eq!(report.totals.count(Status::Available), 1);
         assert_eq!(report.totals.count(Status::Identified), 1);
-        assert_eq!(report.totals.count(Status::Untested), 176);
+        assert_eq!(report.totals.count(Status::Untested), 175);
         assert_eq!(report.categories.len(), 15);
         let ai = report.categories.iter().find(|c| c.name == "AI").unwrap();
-        assert_eq!(ai.counts.total(), 5);
-        assert_eq!(ai.counts.completed(), 5);
+        assert_eq!(ai.counts.total(), 4);
+        assert_eq!(ai.counts.completed(), 4);
         assert_eq!(ai.counts.count(Status::Failed), 1);
         for status in Status::ALL {
             assert_eq!(
@@ -247,23 +337,22 @@ mod tests {
         let mut results: Vec<ResultSlot> = std::iter::repeat_with(|| None)
             .take(ip_check::services().len())
             .collect();
-        for (index, state) in [
-            State::Confirmed,
-            State::Reachable,
-            State::Identified,
-            State::Restricted,
-            State::Unknown,
-        ]
-        .into_iter()
-        .enumerate()
+        for (index, state) in [State::Confirmed, State::Reachable, State::Identified]
+            .into_iter()
+            .enumerate()
         {
             results[index + 1] = result(state);
         }
         let report = Report::from_results(&results);
         let ai = report.categories.iter().find(|c| c.name == "AI").unwrap();
-        assert_eq!(ai.counts.non_red(), 4);
-        assert_eq!(ai.counts.total(), 5);
-        assert_eq!(ai.counts.completed(), 5);
+        assert_eq!(ai.counts.non_red(), 3);
+        assert_eq!(ai.counts.total(), 4);
+        assert_eq!(ai.counts.completed(), 3);
+        results[4] = result(State::Restricted);
+        let report = Report::from_results(&results);
+        let ai = report.categories.iter().find(|c| c.name == "AI").unwrap();
+        assert_eq!(ai.counts.non_red(), 3);
+        assert_eq!(ai.counts.completed(), 4);
         let counts = Counts([1; 8]);
         assert_eq!(counts.non_red(), 5);
         assert_eq!(counts.completed(), 7);

@@ -157,7 +157,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
     let source = if actual_site.is_some() {
         "用户在 Claude 页面运行的浏览器采样"
     } else {
-        "浏览器本地检测页；Claude 站点单独设置未确认"
+        "浏览器本地检测页 · Claude 站点设置待确认"
     };
     let mut report = Report::new(Environment::Web, source);
     for (ip, title) in [
@@ -169,7 +169,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
                 Group::Exit,
                 title,
                 "浏览器直接访问 ipify；遵循浏览器代理与规则",
-                "没有获得有效公网 IP，不能判断地区。",
+                "未取得有效公网 IP。",
             )
         } else {
             ip_signal(
@@ -178,7 +178,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
                 title,
                 ip,
                 "浏览器直接访问 ipify；遵循浏览器代理与规则",
-                "仅此测试域名的出口，不代替 Claude 目标出口。",
+                "浏览器访问 ipify 的出口。",
                 Evidence::Measured,
             )
             .await
@@ -188,7 +188,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         Group::Exit,
         "Claude 网页实际出口",
         source,
-        "本地检测页不能跨域读取 Claude 的 trace；可在 Claude 页面执行专用采样脚本并导入结果。没有用 GUI 探测代替浏览器实际请求。",
+        "可在 Claude 页面运行采样脚本并导入结果。",
     );
     if let Some(url) = actual_site
         && let Some(host) = url.host_str()
@@ -200,7 +200,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
             format!("{ip} · {}", country_name(&code).unwrap()),
             source,
             Evidence::Measured,
-            "采样脚本读取当前 Claude 页面同域 trace；来源为用户提供的页面采样结果，未验证账号资格。",
+            "用户在 Claude 页面采集的同域 trace。",
         );
         target.ip = ip;
         target.country = code;
@@ -232,12 +232,24 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         format!("{} · {}", data.locale, data.date_format),
         source,
         Evidence::Measured,
-        "Intl 的地区格式与日期示例；不从数字或日期格式推断物理所在地。",
+        "浏览器 Intl 地区格式与日期示例。",
     ));
     report.signals.push(if data.accept_language.is_empty() {
-        Signal::unknown(Group::Browser, "Accept-Language 请求头", source, "页面脚本无法读取浏览器自动发送的请求头；本地回传入口能记录发送给检测页的值，但不能代表 Claude 站点的单独设置。")
+        Signal::unknown(
+            Group::Browser,
+            "Accept-Language 请求头",
+            source,
+            "浏览器本地回传入口可记录检测页请求头。",
+        )
     } else {
-        Signal::new(Group::Browser, "Accept-Language 请求头", data.accept_language, "浏览器发给本机检测入口的 HTTP 请求头", Evidence::Measured, "与 navigator.languages 分别记录；Claude 站点的扩展或单独覆盖仍需确认。")
+        Signal::new(
+            Group::Browser,
+            "Accept-Language 请求头",
+            data.accept_language,
+            "浏览器发给本机检测入口的 HTTP 请求头",
+            Evidence::Measured,
+            "与 navigator.languages 分别记录；Claude 站点的扩展或单独覆盖仍需确认。",
+        )
     });
     report.signals.push(Signal::new(
         Group::Browser,
@@ -245,7 +257,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         format!("{} · {}", data.platform, data.user_agent),
         source,
         Evidence::Measured,
-        "浏览器实际返回的字段，不使用 GUI 的请求头或操作系统代替。",
+        "浏览器返回的平台与 User-Agent。",
     ));
     let font_source = "浏览器 Canvas 字形宽度比较";
     report.signals.push(if data.fonts.is_empty() {
@@ -271,7 +283,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         data.emoji.join("；"),
         "浏览器 Canvas 实际渲染",
         Evidence::Inferred,
-        "记录国旗字形渲染特征，不将渲染能力、操作系统或字体推断为所在国家。",
+        "浏览器渲染的国旗字形。",
     ));
     for (title, value) in [
         ("Canvas 指纹摘要", data.canvas_hash.as_str()),
@@ -292,7 +304,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
                 value,
                 source,
                 Evidence::Inferred,
-                "本地采样的浏览器特征；不会上传原始图像，也不据此判断所在国家或账号风险。",
+                "本地采样的浏览器特征。",
             )
         });
     }
@@ -338,7 +350,15 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         }
     }
     if public.is_empty() {
-        report.signals.push(Signal::unknown(Group::WebRtc, "WebRTC 公网地址", source, format!("支持={}，收集完成={}；公网候选为空，私网或 mDNS 候选 {hidden} 项。浏览器策略、STUN 不可达或超时均可能导致此结果，不能据此确认没有泄漏。{}", data.webrtc.supported, data.webrtc.completed, data.webrtc.error)));
+        report.signals.push(Signal::unknown(
+            Group::WebRtc,
+            "WebRTC 公网地址",
+            source,
+            format!(
+                "支持={} · 收集完成={} · 公网候选为空 · 私网或 mDNS 候选 {hidden} 项。{}",
+                data.webrtc.supported, data.webrtc.completed, data.webrtc.error
+            ),
+        ));
     } else {
         for ip in public.into_iter().take(4) {
             let mut signal = ip_signal(
@@ -347,7 +367,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
                 "WebRTC 公网候选",
                 &ip.to_string(),
                 "浏览器 ICE 候选；Cloudflare 与 Google STUN",
-                "公网候选可能揭示另一条网络路径；私网和 mDNS 地址没有当作公网泄漏。",
+                "公网候选可能揭示另一条网络路径。",
                 Evidence::Measured,
             )
             .await;
@@ -383,7 +403,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         } else {
             Evidence::Measured
         },
-        "权限属于当前检测来源；本地页面的权限不能代表 Claude 网站。默认不请求定位。",
+        "当前检测页面的定位权限；默认未请求定位。",
     ));
     if let (Some(latitude), Some(longitude)) =
         (data.geolocation.latitude, data.geolocation.longitude)
@@ -421,7 +441,7 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
                     Group::Dns,
                     "浏览器递归 DNS",
                     source,
-                    "未获得有效 DNS 记录，不能判断是否泄漏。",
+                    "未取得有效 DNS 记录。",
                 )]
             }),
         )

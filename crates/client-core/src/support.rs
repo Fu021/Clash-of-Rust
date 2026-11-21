@@ -28,7 +28,7 @@ pub fn ip_results(results: &[crate::ip_report::ResultSlot]) -> Value {
                 let mut row = match result {
                     Some(Ok(result)) => json!({
                         "state":format!("{:?}",result.state),"summary":result.summary,
-                        "country":result.country,"millis":result.millis,"detail":result.detail
+                        "country":result.country,"millis":result.response_millis(),"detail":result.detail
                     }),
                     Some(Err(error)) => json!({"state":"failed","error":error}),
                     None => json!({"state":"pending"}),
@@ -548,6 +548,7 @@ mod tests {
                 country: String::new(),
                 millis: 12,
                 detail: "sampling incomplete".into(),
+                target_exit: None,
             })),
             Some(Err("connection timed out".into())),
             None,

@@ -376,7 +376,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                     path,
                     &key,
                     redact_url(&value),
-                    "Claude Code 不保证使用 ALL_PROXY；仅设置此变量可能无法代理其请求。",
+                    "仅设置 ALL_PROXY 时，Claude Code 请求可能未使用代理。",
                     "核对 HTTPS_PROXY 或 HTTP_PROXY，并观察实际线路。",
                 );
             } else if valid.is_none() {
@@ -402,7 +402,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                         &key,
                         redact_url(&value),
                         "代理地址与本应用的混合端口不同，实际出口可能使用另一条线路。",
-                        "核对是否为有意设置；本项不证明该代理不可用。",
+                        "核对该代理地址是否符合预期。",
                     );
                 }
             }
@@ -421,7 +421,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                     path,
                     &key,
                     redact_url(&value),
-                    "API 地址被覆盖；本机官方域名的出口检测不能代表中转服务的远端出口。",
+                    "API 地址已覆盖；请核对中转服务的出口。",
                     "确认目标地址是预期服务，并在实际会话中核对来源。",
                 );
             }
@@ -440,7 +440,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                 path,
                 &key,
                 "已启用".into(),
-                "会话可能使用云平台提供方，官方域名探测不能代表该提供方的实际出口。",
+                "会话可能使用云平台提供方；请核对该提供方的出口。",
                 "核对提供方、区域和实际会话配置。",
             );
         } else if matches!(

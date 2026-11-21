@@ -45,9 +45,10 @@ pub fn report_signal(snapshot: &Snapshot) -> Signal {
         } else {
             Evidence::Unknown
         },
-        "保护运行期间持续在后台监测；只处理 Claude 和保护规则关联的服务，偏离指定节点的存续连接会被关闭。未经过内核、已结束的请求及 HTTPS 内容无法据此检查。",
+        "运行时监测 Claude 及关联服务的连接，关闭偏离指定节点的存续连接。",
     );
-    signal.risk = snapshot.blocked > 0 || !snapshot.error.is_empty();
+    signal.risk =
+        !snapshot.error.is_empty() || (snapshot.blocked > 0 && snapshot.routes.is_empty());
     if !snapshot.error.is_empty() {
         signal.detail.push_str(&format!(" {}", snapshot.error));
     }
@@ -228,8 +229,7 @@ impl Guard {
                                 );
                             }
                         } else {
-                            state.error =
-                                "异常连接关闭失败，请检查内核状态；不能确认拦截完成。".into();
+                            state.error = "异常连接关闭失败，请检查内核状态。".into();
                             alert_hosts.insert(connection.host.clone());
                             retain_route(
                                 &mut state,
@@ -496,11 +496,17 @@ mod tests {
         assert!(signal.risk);
         assert_eq!(signal.evidence, Evidence::Measured);
 
+        snapshot.routes.push_back(Route {
+            outcome: "异常连接已关闭".into(),
+            ..Default::default()
+        });
+        assert!(!report_signal(&snapshot).risk);
         snapshot.error = "异常连接关闭失败".into();
         snapshot.connected = false;
         let signal = report_signal(&snapshot);
         assert!(signal.value.starts_with("异常连接关闭失败"));
         assert!(signal.explanation().contains("异常连接关闭失败"));
+        assert!(signal.risk);
         assert_eq!(signal.evidence, Evidence::Unknown);
 
         snapshot.error.clear();

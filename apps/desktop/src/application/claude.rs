@@ -22,7 +22,7 @@ pub enum Event {
     ConfirmProtection,
     Cancel,
     ResultsPage(usize),
-    ResultsFilter(Option<ResultKind>),
+    ResultsFilter(Option<usize>),
     Guide(Option<Guide>),
     Browser,
     BrowserOpened(u64, Result<(), String>),
@@ -44,7 +44,7 @@ pub enum Event {
 pub struct State {
     pub protection_pending: Option<bool>,
     pub results_page: usize,
-    pub results_filter: Option<ResultKind>,
+    pub results_filter: Option<usize>,
     pub audit: Option<check::audit::Audit>,
     pub(super) audit_busy: bool,
     pub(super) scan: Option<check::audit::Scan>,
@@ -74,16 +74,16 @@ pub(super) enum Entry<'a> {
 impl Entry<'_> {
     pub(super) fn section(&self) -> &'static str {
         match self {
-            Self::Config(_) | Self::Clean(_) => "Claude 项目配置",
+            Self::Config(_) | Self::Clean(_) => check::REPORT_SECTIONS[4],
             Self::Signal(report, signal)
                 if report.environment == Environment::Desktop
                     && signal.title == check::guard::REPORT_SECTION =>
             {
                 check::guard::REPORT_SECTION
             }
-            Self::Signal(_, signal) => signal.group.name(),
+            Self::Signal(_, signal) => check::report_section(signal.group),
             Self::GuardRoute(_) => check::guard::REPORT_SECTION,
-            Self::Route(_) | Self::Routes(_) => "Claude 域名选路",
+            Self::Route(_) | Self::Routes(_) => check::REPORT_SECTIONS[1],
         }
     }
 
@@ -154,7 +154,7 @@ impl State {
         );
         let mut report = Report::new(
             Environment::Desktop,
-            "Claude 保护的后台监测与拦截记录；共享服务无法按进程归属",
+            "Claude 保护的后台监测与拦截记录，按服务域名匹配",
         );
         report.routes = snapshot.routes.iter().cloned().collect();
         report.signals.push(check::guard::report_signal(snapshot));
@@ -171,19 +171,16 @@ impl State {
             entries.extend(audit.clean_files.iter().map(|path| Entry::Clean(path)));
         }
         entries.extend(
-            check::group_routes(
-                self.selected()
-                    .filter(|report| report.environment != Environment::Desktop)
-                    .flat_map(|report| report.routes.iter()),
-            )
-            .into_iter()
-            .map(|group| {
-                if group.len() == 1 {
-                    Entry::Route(group[0])
-                } else {
-                    Entry::Routes(group)
-                }
-            }),
+            self.selected()
+                .filter(|report| report.environment != Environment::Desktop)
+                .flat_map(|report| check::group_routes(&report.routes))
+                .map(|group| {
+                    if group.len() == 1 {
+                        Entry::Route(group[0])
+                    } else {
+                        Entry::Routes(group)
+                    }
+                }),
         );
         let mut signals: Vec<_> = self
             .selected()
@@ -412,17 +409,17 @@ impl App {
                 let network = Task::perform(
                     async move {
                         Abortable::new(async move {
-                        let mut report = Report::new(Environment::Core, "显式通过本应用内核探测；不代表浏览器或其他客户端实际出口");
+                        let mut report = Report::new(Environment::Core, "通过本应用内核探测");
                         report.signals.push(Signal::new(Group::Dns, "保存的网络偏好", format!("DNS 覆盖{} · IPv6 {} · UDP {}", if dns_override { "开启" } else { "关闭" }, if ipv6 { "开启" } else { "关闭" }, if udp { "开启" } else { "关闭" }), "本应用设置", Evidence::Measured, "这些是保留的用户偏好；Claude 保护使用临时覆盖，实际状态见内核与网络实测。"));
                         if let Some(port) = port {
                             let client = check::client(Some(port)).map_err(|e| e.to_string())?;
-                            check::network(&client, &mut report, "通过内核混合端口的探测请求；不会回退到直连").await;
+                            check::network(&client, &mut report, "通过内核混合端口的探测请求").await;
                             report.signals.extend(check::enhanced::configuration(&clash_of_rust::api::Api::new(&detection_settings).map_err(|e|e.to_string())?, &detection_settings).await);
                             if let Ok(routes)=clash_of_rust::api::Api::new(&detection_settings).map_err(|e|e.to_string())?.get::<check::ObservedConnections>("connections").await {report.routes=routes.connections;}
                             report.signals.extend(check::system_dns(&client, "本机系统解析器；结果查询通过内核").await);
                             check::enhanced::extend(&client,&mut report).await;
                         } else {
-                            report.signals.push(Signal::unknown(Group::Exit, "内核出口", "内核探测", "内核未运行，没有回退到直连；仍可检测浏览器和 Code 的实际环境。"));
+                            report.signals.push(Signal::unknown(Group::Exit, "内核出口", "内核探测", "内核未运行；浏览器和 Code 环境仍可检测。"));
                         }
                         Ok::<_, String>(report)
                     }, registration).await.unwrap_or_else(|_| Err("检测已取消".into()))
@@ -454,7 +451,8 @@ impl App {
             }
             Event::ResultsPage(page) => self.claude.results_page = page,
             Event::ResultsFilter(filter) => {
-                self.claude.results_filter = filter;
+                self.claude.results_filter =
+                    filter.filter(|index| *index < check::REPORT_SECTIONS.len());
                 self.claude.results_page = 0;
             }
             Event::Guide(guide) => self.claude.guide = guide,
@@ -787,6 +785,31 @@ mod tests {
         assert_eq!(app.claude.status, status);
     }
     #[test]
+    fn route_groups_keep_different_reports_separate() {
+        let mut state = State::default();
+        for environment in [Environment::Core, Environment::Web] {
+            let mut report = Report::new(environment, "fixture");
+            report.routes = ["claude.ai", "claude.com"]
+                .into_iter()
+                .map(|host| check::Route {
+                    host: host.into(),
+                    chain: "节点 A".into(),
+                    ..Default::default()
+                })
+                .collect();
+            state.reports[index(environment)] = Some(report);
+        }
+        let entries = state.entries();
+        let groups = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Routes(routes) => Some(routes.len()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(groups, [2, 2]);
+    }
+    #[test]
     fn failed_browser_receiver_does_not_hide_config_results_or_stick_progress() {
         let mut app = app();
         let _ = app.claude_event(Event::Start);
@@ -943,9 +966,9 @@ mod tests {
         });
         assert_eq!(app.claude.counts(&app.claude.entries()), [700, 1000, 0]);
         let _ = app.claude_event(Event::ResultsPage(4));
-        let _ = app.claude_event(Event::ResultsFilter(Some(ResultKind::Risk)));
+        let _ = app.claude_event(Event::ResultsFilter(Some(4)));
         assert_eq!(app.claude.results_page, 0);
-        assert_eq!(app.claude.results_filter, Some(ResultKind::Risk));
+        assert_eq!(app.claude.results_filter, Some(4));
         assert!(app.claude.entries().is_empty());
         let _ = app.claude_event(Event::ResultsFilter(None));
         assert!(app.claude.results_filter.is_none());

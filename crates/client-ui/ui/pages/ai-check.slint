@@ -4,7 +4,7 @@ import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { FindingBlocks, FindingList } from "../components/report.slint";
 import { PageScroll, Caption, Heading, Panel, ContentPanel, RowPanel, ActionButton, Toggle, Paragraph } from "../components/controls.slint";
-import { ToolHeading, SummaryMetric } from "../components/sections.slint";
+import { ToolHeading } from "../components/sections.slint";
 export component AiCheckPage inherits PageSurface {
     motion-revision: UiData.claude-filter + 1;
     PageScroll {
@@ -37,18 +37,16 @@ export component AiCheckPage inherits PageSurface {
                 Caption { text: "浏览器正在自动采样；离开此页会关闭回传入口。"; }
                 ActionButton { text: "关闭入口"; clicked => { UiActions.dispatch(Intent.claude-close-session, "", ""); } }
             }
-            Panel {
-                height: metrics.preferred-height;
-                metrics := HorizontalLayout { spacing: 1px;
-                    SummaryMetric { title: "正常项目"; value: UiData.claude-normal; tone: 1; selected: UiData.claude-filter == 0; clicked => { UiActions.dispatch(Intent.claude-filter, "0", ""); } }
-                    SummaryMetric { title: "风险项目"; value: UiData.claude-risk; tone: 3; selected: UiData.claude-filter == 1; clicked => { UiActions.dispatch(Intent.claude-filter, "1", ""); } }
-                    SummaryMetric { title: "线索"; value: UiData.claude-clues; tone: 2; selected: UiData.claude-filter == 2; clicked => { UiActions.dispatch(Intent.claude-filter, "2", ""); } }
-                }
-            }
             if UiData.claude-filter < 0 && UiData.claude-results.length > 0: VerticalLayout {
                 spacing: 8px;
-                Heading { text: "报告摘要"; }
-                FindingBlocks { items: UiData.claude-results; }
+                HorizontalLayout { cross-axis-alignment: center;
+                    Heading { text: "报告摘要"; }
+                    Caption { text: UiData.claude-normal == "0" && UiData.claude-risk == "0" && UiData.claude-clues == "0" ? "暂无检测结果" : UiData.claude-risk + " 项需关注"; horizontal-alignment: right; color: UiData.claude-risk == "0" ? Theme.secondary : Theme.danger; }
+                }
+                FindingBlocks {
+                    items: UiData.claude-results;
+                    show-details(section) => { UiActions.dispatch(Intent.claude-filter, section, ""); }
+                }
             }
             if UiData.claude-filter >= 0: VerticalLayout {
                 spacing: Theme.page-gap;
@@ -56,6 +54,7 @@ export component AiCheckPage inherits PageSurface {
                     ActionButton { text: "← 返回报告"; clicked => { UiActions.dispatch(Intent.claude-filter, "-1", ""); } }
                     Caption { text: UiData.claude-result-status; horizontal-alignment: right; }
                 }
+                Heading { text: ["实时保护与异常拦截", "Claude 连接与选路", "出口与 IP 属性", "DNS 与 WebRTC", "浏览器与配置"][UiData.claude-filter]; }
                 FindingList { items: UiData.claude-results; }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Caption { text: UiData.claude-result-status; }

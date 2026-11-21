@@ -61,7 +61,20 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value) -> Result<()> {
         &["项目", "状态", "结果", "地区", "耗时"],
         &cells,
         table::width(),
-    )
+    )?;
+    let exits = rows(&value["results"])
+        .iter()
+        .filter(|row| row.get("target_exit").is_some())
+        .collect::<Vec<_>>();
+    if !exits.is_empty() {
+        writeln!(out, "\n分流出口 · 同域探针（本应用内核的本次请求）")?;
+        for row in exits {
+            let exit = &row["target_exit"];
+            let address = exit["ip"].as_str().unwrap_or("未确认");
+            writeln!(out, "{}：{}", text(row, "name"), clean(address))?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn nodes(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {

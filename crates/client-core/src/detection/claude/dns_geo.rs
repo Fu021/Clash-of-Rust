@@ -35,7 +35,7 @@ async fn enrich_at(client: &Client, signals: &mut [Signal], url: &str) {
             let name = country_name(&code).expect("validated country");
             signal.value = format!("{ip} · {name}");
             signal.detail.push_str(&format!(
-                " 地区采用 Google Public DNS 官方 geofeed：{GOOGLE_FEED}；官方标签为{name}，bash.ws 原标签为{original}。官方位置数据也不能证明客户端的解析路径。"
+                " Google Public DNS geofeed：{name}；bash.ws：{original}。来源：{GOOGLE_FEED}"
             ));
             signal.country = code;
             signal.evidence = Evidence::Measured;
@@ -249,7 +249,7 @@ mod tests {
                 },
             );
             if expected == "DE" {
-                assert!(signals[0].detail.contains("bash.ws 原标签为美国"));
+                assert!(signals[0].detail.contains("bash.ws：美国"));
             }
         }
     }

@@ -1,8 +1,25 @@
-use super::Route;
+use super::{Group, Route};
 use std::collections::BTreeSet;
 
 const ROUTES_PER_GROUP: usize = 8;
 const ROUTE_GROUP_BYTES: usize = 12 * 1024;
+
+pub const REPORT_SECTIONS: [&str; 5] = [
+    super::guard::REPORT_SECTION,
+    "Claude 连接与选路",
+    "出口与 IP 属性",
+    "DNS 与 WebRTC",
+    "浏览器与配置",
+];
+
+pub fn report_section(group: Group) -> &'static str {
+    match group {
+        Group::Exit | Group::Quality | Group::Cloudflare => REPORT_SECTIONS[2],
+        Group::Connectivity => REPORT_SECTIONS[1],
+        Group::WebRtc | Group::Dns => REPORT_SECTIONS[3],
+        Group::Browser | Group::Desktop | Group::Code => REPORT_SECTIONS[4],
+    }
+}
 
 pub struct BlockRow<T> {
     pub section: &'static str,
@@ -17,8 +34,33 @@ pub struct BlockRow<T> {
 pub struct ReportBlock<T> {
     pub section: &'static str,
     pub summary: String,
+    pub overview: String,
+    pub attention: String,
     pub tone: i32,
     pub rows: Vec<T>,
+}
+
+pub fn report_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
+    let mut blocks = group_blocks(rows);
+    for section in REPORT_SECTIONS {
+        if !blocks.iter().any(|block| block.section == section) {
+            blocks.push(ReportBlock {
+                section,
+                summary: String::new(),
+                overview: "暂无结果".into(),
+                attention: String::new(),
+                tone: 0,
+                rows: Vec::new(),
+            });
+        }
+    }
+    blocks.sort_by_key(|block| {
+        REPORT_SECTIONS
+            .iter()
+            .position(|section| *section == block.section)
+            .unwrap_or(REPORT_SECTIONS.len())
+    });
+    blocks
 }
 
 pub fn group_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
@@ -33,8 +75,11 @@ pub fn group_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
             sections.push(vec![row]);
         }
     }
-    super::order_summary(&mut sections, |section| {
-        section.iter().map(|row| row.priority).min().unwrap_or(3)
+    sections.sort_by_key(|section| {
+        REPORT_SECTIONS
+            .iter()
+            .position(|name| *name == section[0].section)
+            .unwrap_or(REPORT_SECTIONS.len())
     });
     sections
         .into_iter()
@@ -87,9 +132,44 @@ pub fn group_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
                     summary.push(format!("其他：{short}"));
                 }
             }
+            let overview = section
+                .iter()
+                .filter(|row| row.priority < 4)
+                .take(3)
+                .map(|row| {
+                    let title = row.title.trim();
+                    let value = row.value.trim();
+                    let text = if title.is_empty() || title == row.section {
+                        value.to_owned()
+                    } else {
+                        format!("{title}：{value}")
+                    };
+                    let mut shortened = text.chars().take(64).collect::<String>();
+                    if text.chars().count() > 64 {
+                        shortened.push('…');
+                    }
+                    shortened
+                })
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let overview = if overview.is_empty() {
+                format!("{} 项结果，点击查看详情", section.len())
+            } else {
+                overview
+            };
+            let mut attention = Vec::new();
+            if risks > 0 {
+                attention.push(format!("{risks} 项需关注"));
+            }
+            if disagreements > 0 {
+                attention.push(format!("{disagreements} 项来源不一致"));
+            }
             ReportBlock {
                 section: primary.section,
                 summary: summary.join(" · "),
+                overview,
+                attention: attention.join(" · "),
                 tone,
                 rows: section.into_iter().map(|row| row.item).collect(),
             }
@@ -117,9 +197,11 @@ pub fn group_routes<'a>(routes: impl IntoIterator<Item = &'a Route>) -> Vec<Vec<
     let mut groups: Vec<Vec<&Route>> = Vec::new();
     for route in routes {
         if !route.risky()
+            && !route.chain.trim().is_empty()
             && let Some(group) = groups.iter_mut().find(|group| {
                 !group[0].risky()
                     && outcome(group[0]) == outcome(route)
+                    && group[0].chain.trim() == route.chain.trim()
                     && group.len() < ROUTES_PER_GROUP
                     && group.iter().map(|item| route_size(item)).sum::<usize>() + route_size(route)
                         <= ROUTE_GROUP_BYTES
@@ -191,10 +273,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn report_has_fixed_sections_and_distinguishes_absent_results() {
+        let blocks = report_blocks(vec![BlockRow {
+            section: REPORT_SECTIONS[2],
+            title: "出口 IP 质量".into(),
+            value: "机房来源不一致".into(),
+            priority: 0,
+            tone: 2,
+            summary_hint: false,
+            item: 7,
+        }]);
+        assert_eq!(
+            blocks.iter().map(|block| block.section).collect::<Vec<_>>(),
+            REPORT_SECTIONS
+        );
+        assert_eq!(blocks[0].overview, "暂无结果");
+        assert!(blocks[0].rows.is_empty());
+        assert_eq!(blocks[2].attention, "1 项来源不一致");
+        assert_eq!(blocks[2].rows, [7]);
+    }
+
+    #[test]
     fn blocks_keep_risks_and_source_disagreements_visible() {
         let rows = vec![
             BlockRow {
-                section: "网络出口",
+                section: REPORT_SECTIONS[3],
                 title: "IPv4".into(),
                 value: "正常".into(),
                 priority: 3,
@@ -203,7 +306,7 @@ mod tests {
                 item: 1,
             },
             BlockRow {
-                section: "IP 质量",
+                section: REPORT_SECTIONS[2],
                 title: "出口 IP".into(),
                 value: "机房来源不一致".into(),
                 priority: 0,
@@ -212,7 +315,7 @@ mod tests {
                 item: 2,
             },
             BlockRow {
-                section: "网络出口",
+                section: REPORT_SECTIONS[3],
                 title: "WebRTC".into(),
                 value: "出口不同".into(),
                 priority: 1,
@@ -223,13 +326,28 @@ mod tests {
         ];
         let blocks = group_blocks(rows);
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].section, "IP 质量");
+        assert_eq!(blocks[0].section, REPORT_SECTIONS[2]);
         assert!(blocks[0].summary.contains("1 项来源不一致"));
         assert!(blocks[0].summary.contains("机房来源不一致"));
-        assert_eq!(blocks[1].section, "网络出口");
+        assert_eq!(blocks[1].section, REPORT_SECTIONS[3]);
         assert!(blocks[1].summary.contains("1 项风险"));
         assert!(blocks[1].summary.contains("WebRTC：出口不同"));
         assert_eq!(blocks[1].rows, [3, 1]);
+    }
+
+    #[test]
+    fn low_priority_fields_stay_in_details_but_not_in_the_overview() {
+        let blocks = report_blocks(vec![BlockRow {
+            section: REPORT_SECTIONS[4],
+            title: "Canvas 指纹摘要".into(),
+            value: "演示结果".into(),
+            priority: 4,
+            tone: 2,
+            summary_hint: false,
+            item: 1,
+        }]);
+        assert_eq!(blocks[4].overview, "1 项结果，点击查看详情");
+        assert_eq!(blocks[4].rows, [1]);
     }
 
     #[test]
@@ -262,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn groups_matching_outcomes_without_hiding_failures_or_route_details() {
+    fn groups_matching_routes_without_hiding_different_lines_or_failures() {
         let routes = [
             Route {
                 host: "api.anthropic.com".into(),
@@ -283,6 +401,13 @@ mod tests {
                 ..Default::default()
             },
             Route {
+                host: "same.example".into(),
+                rule: "DOMAIN-SUFFIX".into(),
+                chain: "节点 A".into(),
+                time: "08:02".into(),
+                ..Default::default()
+            },
+            Route {
                 host: "failed.example".into(),
                 outcome: "连接失败".into(),
                 ..Default::default()
@@ -295,28 +420,26 @@ mod tests {
         ];
         let mut report = super::super::Report::new(super::super::Environment::Core, "fixture");
         report.routes = routes.to_vec();
-        assert_eq!(report.counts(), (0, 2, 3));
+        assert_eq!(report.counts(), (0, 2, 4));
         let groups = group_routes(&routes);
-        assert_eq!(groups.len(), 3);
-        assert_eq!(
-            route_group_value(&groups[0]),
-            "3 个域名 · 仅记录选路 · 线路不同 · 部分线路未记录"
-        );
+        assert_eq!(groups.len(), 5);
+        assert_eq!(route_group_value(&groups[0]), "2 个域名 · 仅记录选路");
         let detail = route_group_detail(&groups[0]);
         for value in [
             "api.anthropic.com",
-            "claude.ai",
-            "claude.com",
+            "same.example",
             "规则：DOMAIN",
             "线路：节点 A",
-            "线路：节点 B",
-            "时间：08:01",
+            "时间：08:02",
         ] {
             assert!(detail.contains(value), "{value}");
         }
-        assert_eq!(groups[1][0].host, "failed.example");
-        assert_eq!(groups[2][0].host, "direct.example");
-        assert!(groups[1][0].risky() && groups[2][0].risky());
+        assert!(!detail.contains("节点 B"));
+        assert_eq!(groups[1][0].host, "claude.ai");
+        assert_eq!(groups[2][0].host, "claude.com");
+        assert_eq!(groups[3][0].host, "failed.example");
+        assert_eq!(groups[4][0].host, "direct.example");
+        assert!(groups[3][0].risky() && groups[4][0].risky());
     }
 
     #[test]
@@ -343,6 +466,7 @@ mod tests {
             .take(2)
             .map(|route| Route {
                 host: route.host.clone(),
+                chain: "节点 A".into(),
                 ..Default::default()
             })
             .collect::<Vec<_>>();
@@ -352,6 +476,24 @@ mod tests {
             "1 个域名 · 2 条记录 · 仅记录选路"
         );
         assert_eq!(route_group_detail(&groups[0]).matches("结果：").count(), 2);
+    }
+
+    #[test]
+    fn unrecorded_routes_are_not_assumed_to_use_the_same_line() {
+        let routes = [
+            Route {
+                host: "claude.ai".into(),
+                ..Default::default()
+            },
+            Route {
+                host: "api.anthropic.com".into(),
+                chain: " ".into(),
+                ..Default::default()
+            },
+        ];
+        let groups = group_routes(&routes);
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|group| group.len() == 1));
     }
 
     #[test]

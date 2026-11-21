@@ -14,7 +14,7 @@ use std::{
 
 slint::slint! {
     #[edition = "1.19"]
-    import { MobileReportBlocks } from "../ui/mobile/shared/reports.slint";
+    import { MobileReportBlocks, MobileReport } from "../ui/mobile/shared/reports.slint";
     import { PreviewReports } from "../ui/preview-reports.slint";
     import { ReportItem } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
@@ -23,9 +23,16 @@ slint::slint! {
     export component ReportBlocksProbe inherits Window {
         preferred-width: 393px; preferred-height: 852px;
         in-out property <[ReportItem]> reports;
+        in-out property <string> section;
         out property <[ReportItem]> preview-blocks: PreviewReports.blocks;
         in-out property <float> text-scale <=> Theme.text-scale;
-        MobileReportBlocks { width: parent.width; items: root.reports; }
+        if root.section == "": MobileReportBlocks {
+            width: parent.width; items: root.reports;
+            show-details(section) => { root.section = section; }
+        }
+        if root.section != "": MobileReport {
+            width: parent.width; items: root.reports; section: root.section;
+        }
     }
 }
 
@@ -71,18 +78,26 @@ fn click(window: &slint::Window, bounds: &[f32]) {
 }
 
 #[test]
-fn blocks_and_details_expand_without_exposing_other_sections() {
+fn report_cards_open_only_the_selected_section_at_representative_sizes() {
     let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let clock = Rc::new(Cell::new(Duration::ZERO));
     slint::platform::set_platform(Box::new(Headless(adapter.clone(), clock.clone()))).unwrap();
     adapter.set_size(slint::PhysicalSize::new(393, 852));
     let probe = ReportBlocksProbe::new().unwrap();
-    assert!(
-        probe
-            .get_preview_blocks()
-            .iter()
-            .any(|row| row.tone == 0 && row.title == "实时保护与异常拦截")
-    );
+    let mut rows = probe.get_preview_blocks().iter().collect::<Vec<_>>();
+    assert_eq!(rows.iter().take(5).filter(|row| row.tone == 0).count(), 5);
+    for index in 0..15 {
+        rows.push(ReportItem {
+            id: "Claude 连接与选路".into(),
+            title: format!("额外连接 {index}").into(),
+            value: "仅记录选路".into(),
+            tone: 2,
+            ..Default::default()
+        });
+    }
+    rows[1].block_items += 15;
+    let reports = Rc::new(slint::VecModel::from(rows));
+    probe.set_reports(reports.clone().into());
     let targets = Rc::new(RefCell::new(BTreeMap::<String, Vec<f32>>::new()));
     let observed = targets.clone();
     probe
@@ -93,77 +108,6 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
                 .insert(key.to_string(), bounds.iter().collect());
         });
     probe.global::<UiGeometry>().set_enabled(true);
-    let reports = Rc::new(slint::VecModel::from(vec![
-            ReportItem {
-                id: "quality".into(),
-                title: "IP 归属与信誉".into(),
-                value: "1 项来源不一致 · 机房或托管网络".into(),
-                tone: 0,
-                delay_tone: 2,
-                block_items: 1,
-                ..Default::default()
-            },
-            ReportItem {
-                id: "quality".into(),
-                title: "出口 IP 质量".into(),
-                value: "机房或托管网络来源不一致".into(),
-                detail: "来源不一致\nIPQuery 是，IPLogs 否。\n尚未确认\n爬虫地址：未提供\n查询未完成\nLayer3 Intel：请求超时".into(),
-                tone: 2,
-                ..Default::default()
-            },
-            ReportItem {
-                id: "routes".into(),
-                title: "Claude 域名选路".into(),
-                value: "3 个域名 · 仅记录选路".into(),
-                tone: 0,
-                delay_tone: 2,
-                block_items: 2,
-                ..Default::default()
-            },
-            ReportItem {
-                id: "routes".into(),
-                title: "Claude 域名选路".into(),
-                value: "3 个域名 · 仅记录选路".into(),
-                detail: "api.anthropic.com\nclaude.ai\nclaude.com".into(),
-                tone: 2,
-                ..Default::default()
-            },
-            ReportItem {
-                id: "routes".into(),
-                title: "failed.example".into(),
-                value: "连接失败".into(),
-                tone: 3,
-                ..Default::default()
-            },
-        ]));
-    probe.set_reports(reports.clone().into());
-    let guard_reports = Rc::new(slint::VecModel::from(vec![
-        ReportItem {
-            id: "实时保护与异常拦截".into(),
-            title: "实时保护与异常拦截".into(),
-            value: "已关闭 1 条异常连接".into(),
-            tone: 0,
-            delay_tone: 3,
-            block_items: 2,
-            ..Default::default()
-        },
-        ReportItem {
-            id: "实时保护与异常拦截".into(),
-            title: "实时保护与异常拦截".into(),
-            value: "已观察 8 次请求".into(),
-            detail: "说明：只处理保护范围内偏离指定节点的连接。".into(),
-            source: "内核事件与连接控制接口".into(),
-            tone: 3,
-            ..Default::default()
-        },
-        ReportItem {
-            id: "实时保护与异常拦截".into(),
-            title: "closed.example".into(),
-            value: "异常连接已关闭".into(),
-            tone: 3,
-            ..Default::default()
-        },
-    ]));
     probe.show().unwrap();
     let render = |width, height| {
         frame(&adapter, &clock, width, height);
@@ -182,104 +126,45 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
     ] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
         probe.set_text_scale(scale);
-        render(width, height);
-        let button = targets.borrow()["claude-block:quality"].clone();
-        assert!(button[3] >= 48. && button[0] + button[2] <= width as f32);
-        click(probe.window(), &button);
-        render(width, height);
-        let bounds = targets.borrow();
-        let row = bounds
-            .get("claude-block-item:quality:1")
-            .unwrap_or_else(|| {
-                panic!("quality block did not expand at {width}x{height}: {bounds:?}")
-            });
-        assert!(row[3] > 130.);
-        assert!(bounds["claude-block-item:quality:3"][3] < 1.);
-        assert!(!bounds.contains_key("claude-block-detail:quality:1"));
-        drop(bounds);
-        let mut header = reports.row_data(0).unwrap();
-        header.value = format!("摘要已更新 {width}×{height} {scale}").into();
-        reports.set_row_data(0, header);
-        render(width, height);
-        assert!(
-            targets.borrow().contains_key("claude-block-item:quality:1"),
-            "updating a section summary closed the expanded details"
-        );
-        let mut item = reports.row_data(1).unwrap();
-        item.id = "replacement".into();
-        reports.set_row_data(1, item);
-        let mut header = reports.row_data(0).unwrap();
-        header.id = "replacement".into();
-        reports.set_row_data(0, header);
-        render(width, height);
-        assert!(
-            !targets
-                .borrow()
-                .contains_key("claude-block-item:replacement:1"),
-            "a replacement section inherited the previous section's expanded state"
-        );
-        let mut item = reports.row_data(1).unwrap();
-        item.id = "quality".into();
-        reports.set_row_data(1, item);
-        let mut header = reports.row_data(0).unwrap();
-        header.id = "quality".into();
-        reports.set_row_data(0, header);
-        render(width, height);
-        let button = targets.borrow()["claude-block:quality"].clone();
-        click(probe.window(), &button);
-        render(width, height);
-        assert!(targets.borrow().contains_key("claude-block-item:quality:1"));
-        let button = targets.borrow()["claude-block:quality"].clone();
-        click(probe.window(), &button);
-        render(width, height);
-        assert!(!targets.borrow().contains_key("claude-block-item:quality:1"));
-        let button = targets.borrow()["claude-block:routes"].clone();
-        click(probe.window(), &button);
-        render(width, height);
-        let row_height = targets.borrow()["claude-block-item:routes:3"][3];
-        let detail = targets.borrow()["claude-block-detail:routes:3"].clone();
-        assert!(detail[3] >= 48. && detail[0] + detail[2] <= width as f32);
-        click(probe.window(), &detail);
-        render(width, height);
-        assert!(targets.borrow()["claude-block-item:routes:3"][3] > row_height);
-        let mut header = reports.row_data(2).unwrap();
-        header.value = format!("选路已更新 {width}×{height} {scale}").into();
-        reports.set_row_data(2, header);
-        render(width, height);
-        assert!(
-            targets.borrow()["claude-block-item:routes:3"][3] > row_height,
-            "updating a section summary closed the nested details"
-        );
-        let button = targets.borrow()["claude-block:routes"].clone();
-        click(probe.window(), &button);
-        render(width, height);
-        probe.set_reports(guard_reports.clone().into());
+        probe.set_section("".into());
         render(width, height);
         let button = targets.borrow()["claude-block:实时保护与异常拦截"].clone();
-        click(probe.window(), &button);
+        assert!(button[3] >= 48. && button[0] + button[2] <= width as f32);
+        let card = targets.borrow()["claude-card:实时保护与异常拦截"].clone();
+        click(probe.window(), &[card[0] + 12., card[1] + 12., 1., 1.]);
         render(width, height);
-        let item_key = "claude-block-item:实时保护与异常拦截:1";
-        let collapsed_height = targets.borrow()[item_key][3];
-        let button = targets.borrow()["claude-block-detail:实时保护与异常拦截:1"].clone();
-        click(probe.window(), &button);
+        assert_eq!(probe.get_section(), "实时保护与异常拦截");
+        let bounds = targets.borrow();
+        assert!(bounds["claude-result:5"][3] > 0.);
+        assert!(bounds["claude-result:6"][3] > 0.);
+        assert!(bounds["claude-result:7"][3] < 1.);
+        drop(bounds);
+        let collapsed_height = targets.borrow()["claude-result:5"][3];
+        let detail = targets.borrow()["claude-result-detail:5"].clone();
+        click(probe.window(), &detail);
         render(width, height);
-        let expanded_height = targets.borrow()[item_key][3];
+        let expanded_height = targets.borrow()["claude-result:5"][3];
         assert!(expanded_height > collapsed_height);
-        let mut status = guard_reports.row_data(1).unwrap();
-        status.value = "已观察 9 次请求".into();
-        guard_reports.set_row_data(1, status);
+        let original = reports.row_data(5).unwrap();
+        let mut updated = original.clone();
+        updated.value = "已观察 9 次请求".into();
+        reports.set_row_data(5, updated.clone());
         render(width, height);
-        assert_eq!(targets.borrow()[item_key][3], expanded_height);
-        let mut replacement = guard_reports.row_data(1).unwrap();
-        replacement.title = "其他状态".into();
-        guard_reports.set_row_data(1, replacement);
+        let updated_height = targets.borrow()["claude-result:5"][3];
+        assert!(updated_height > collapsed_height);
+        updated.title = "其他状态".into();
+        reports.set_row_data(5, updated);
         render(width, height);
-        assert!(targets.borrow()[item_key][3] < expanded_height);
-        let mut status = guard_reports.row_data(1).unwrap();
-        status.title = "实时保护与异常拦截".into();
-        guard_reports.set_row_data(1, status);
-        probe.set_reports(reports.clone().into());
+        assert!(targets.borrow()["claude-result:5"][3] < updated_height);
+        reports.set_row_data(5, original);
+
+        probe.set_section("Claude 连接与选路".into());
         render(width, height);
+        let bounds = targets.borrow();
+        assert!(bounds["claude-result:7"][3] > 0.);
+        assert!(bounds["claude-result:8"][3] > 0.);
+        assert!(bounds["claude-result:10"][3] < 1.);
+        assert!(bounds[&format!("claude-result:{}", reports.row_count() - 1)][3] > 0.);
     }
     probe.hide().unwrap();
 }

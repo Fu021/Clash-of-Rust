@@ -368,11 +368,8 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
 
 fn claude_summary(out: &mut dyn Write, command: &str, value: &Value) -> Result<()> {
     let report = Report::deserialize(value.get("report").unwrap_or(value))?;
-    let (normal, risk, clues) = report.counts();
-    writeln!(
-        out,
-        "Claude 检测 · 正常项目 {normal} · 风险项目 {risk} · 线索 {clues}"
-    )?;
+    let (_, risk, _) = report.counts();
+    writeln!(out, "Claude 检测 · {risk} 项需关注")?;
     let mut entries: Vec<_> = report
         .signals
         .iter()
@@ -385,10 +382,14 @@ fn claude_summary(out: &mut dyn Write, command: &str, value: &Value) -> Result<(
         summary_order(Some(signal), *risk)
     });
     for (signal, risk) in entries {
-        let label = if risk { "风险" } else { "线索" };
+        let title = clean(signal.display_title());
         field(
             out,
-            &format!("{label} · {}", clean(signal.display_title())),
+            &if risk {
+                format!("需关注 · {title}")
+            } else {
+                title
+            },
             &clean(signal.display_value()),
         )?;
     }

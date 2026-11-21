@@ -244,7 +244,6 @@ fn summarize(ip: IpAddr, lookups: &[(Provider, Result<Observation, LookupFailure
     if !failures.is_empty() {
         details.push(format!("查询未完成\n{}", failures.join("\n")));
     }
-    details.push("口径说明：未提供不等于否。各家名单和定义可能不同；托管网络可能包含 CDN，VPN 标记可能包含 Tor 或隐私中继。爬虫和移动网络按地址归属识别，不代表实际请求或设备；未命中滥用名单不能排除历史滥用。".into());
     let mut highlights = disagreements
         .iter()
         .take(2)

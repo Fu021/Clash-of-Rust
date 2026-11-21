@@ -39,9 +39,7 @@ pub async fn check(service: &Service, port: u16) -> Result<CheckResult> {
     if ctx.challenged {
         result.state = State::Unknown;
         result.summary = "验证拦截，未确认".into();
-        result
-            .detail
-            .push_str("；响应包含浏览器验证，不能据此判断地区限制");
+        result.detail.push_str("；响应包含浏览器验证");
     } else if ctx.failed || result.millis == 0 {
         result.state = State::Failed;
         result.summary = "请求失败，未确认".into();
@@ -50,10 +48,7 @@ pub async fn check(service: &Service, port: u16) -> Result<CheckResult> {
         result.summary = "请求被拒绝，未确认".into();
     } else if result.state == State::Restricted
         && result.summary == "不可用或受限"
-        && matches!(
-            service.id.as_str(),
-            "MediaUnlockTest_ChatGPT" | "MediaUnlockTest_Sora"
-        )
+        && service.id == "MediaUnlockTest_ChatGPT"
     {
         result.state = State::Unknown;
         result.summary = "未确认可用性".into();

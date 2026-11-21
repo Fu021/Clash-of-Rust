@@ -2,7 +2,7 @@
 
 | 工作流 | 触发与职责 | 产物 |
 | --- | --- | --- |
-| [CI](workflows/ci.md) | main push、PR；源码检查、编译及九组候选包的安装回归 | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
+| [CI](workflows/ci.md) | main push、PR 或手动；源码检查、编译、九组候选包验收与网站验证 | 九组 `build-*`、九组 `package-*`、SHA256 和收据，保留 3 天 |
 | [Publish Release](workflows/release.md) | 手动；核验同提交 CI 及发布范围所需的兼容回执；公开模式另验 Android 发行签名并发布 | 桌面复用 CI 附件；公开模式追加三组发行签名 APK，保留 3 天 |
 | [Memory Benchmark](workflows/memory.md) | 手动；指定提交的轻负载或压力内存采样 | 原始数据、报告和日志，保留 3 天 |
 | [Android Compatibility](workflows/android-compatibility.md) | 手动；复用成功 CI 的 x64 APK，Android 8.0～16 基础代理/TUN，截图与诊断可选 | 状态和日志保留 7 天，发布回执保留 3 天 |
@@ -11,17 +11,19 @@
 | [Linux Mint Compatibility](workflows/linuxmint-compatibility.md) | 手动；Linux Mint 21.3 和 22.3 Cinnamon x64 的官方 ISO VM，安装同提交 DEB 并验证系统代理与 TUN | 小型报告及兼容回执保留 3 天 |
 | [Pop!_OS、Zorin OS、Fedora、openSUSE、Arch Linux Compatibility](workflows/linux-expansion.md) | 每个发行版独立手动入口，复用同提交成功 CI，在固定版本的 x64 来宾安装原生包并验证系统代理与 TUN | 小型报告及兼容回执保留 3 天 |
 
-普通 CI 共 13 个必需 job（共享输入 1、桌面 6、Android Maven 准备 1、Android ABI 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布所需矩阵见[兼容性发布门禁](workflows/release.md#兼容性发布门禁)。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 执行采样与缓存预算两个 job。依赖维护模式不作为发布来源。
+普通 CI 共 13 个必需 job（共享输入 1、桌面 6、Android Maven 准备 1、Android ABI 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布所需矩阵见[兼容性发布门禁](workflows/release.md#兼容性发布门禁)。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 包含构建与 API 基准、按场景分片采样、汇总及缓存预算。依赖维护模式不作为发布来源。
 
 `Verify a Linux Compatibility Matrix` 是各 Linux 发行版入口的共用实现，不是独立派发入口。它解析同提交 CI 输入，在固定目标上安装测试并生成回执。各入口的测试范围见上表链接。
 
-COSMIC 诊断按需手动执行一个 VM job，保留供后续桌面启动排障复用，不加入常规 CI 或发布必需门禁。
+COSMIC 桌面启动、授权和窗口恢复的复查走 [Pop!_OS 24.04 完整兼容验收](workflows/linux-expansion.md#完整验收与诊断)。
 
 桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。Linux 构建基线为 Ubuntu 20.04，安装目标见各发行版工作流。iOS 仅有宿主占位与 UI 原型，不参与构建。
 
 新工作流和 `.github/` 变更按[贡献要求](../.github/CONTRIBUTING.md)审核；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。
 
 ## Actions 跟进节奏
+
+优先沿用 GitHub CLI 当前登录。沙箱限制网络或读取凭据时，先在环境允许联网且可读取现有凭据的执行上下文运行 `gh api user --jq .login`。只有 GitHub 明确返回认证失败，才处理登录。若只有特定操作被拒，先核对该操作需要的权限和仓库规则。
 
 先确认一次运行编号、来源提交和启动状态，再参考同工作流近期耗时低频查询。候选包和安装验证前移、常规测试精简后的实测见[CI 耗时记录](workflows/ci.md#测试精简后的耗时)。迁移前的 CI `41966802804` 用时 24 分 17 秒、Memory `41966849950` 用时 8 分 46 秒、Publish Release `41969428145` 用时 31 分 50 秒；范围不同，不能直接与现在的工作流比较。CI 建议 10 分钟首查、此后约 5 分钟；发布 7 分钟首查、临近完成每 2～3 分钟，纯 `check_only` 可在已启动且完成后立即核对。排队和长步骤延长间隔；失败后才读取必要日志，不反复下载整份日志。
 

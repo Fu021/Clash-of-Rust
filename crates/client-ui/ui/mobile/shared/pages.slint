@@ -739,12 +739,13 @@ export component MobileIpCheck inherits PageSurface {
         }
         MCard {
             MSmall { text: MobileData.site-progress; }
+            MSmall { text: "Cloudflare 探针出口"; }
             HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                 if MobileData.exit-flag != "": Text { text: MobileData.exit-flag; width: 24px; height: 24px; font-size: 20px; }
                 MSmall { text: MobileData.exit-country; }
             }
             MHeading { text: MobileData.exit-ip == "" ? "等待检测" : MobileData.exit-ip; font-size: MobileTypography.font-size(24); }
-            MSmall { text: MobileData.site-summary; wrap: word-wrap; color: Theme.success; }
+            MSmall { text: MobileData.site-summary; wrap: word-wrap; }
             MProgress { value: MobileData.progress; }
         }
         for pair in MobileData.categories: VerticalLayout { spacing: MobileTypography.gap;
@@ -786,22 +787,15 @@ export component MobileAiCheck inherits PageSurface {
             }
         }
         MSmall { text: MobileData.claude-status; wrap: word-wrap; }
-        MCard { vertical-padding: 0px; horizontal-padding: 0px;
-            GridLayout { spacing: 0px;
-                for title[index] in ["正常项目", "风险项目", "线索"]: Rectangle {
-                    col: Theme.text-scale > 1.25 ? 0 : index; row: Theme.text-scale > 1.25 ? index : 0;
-                    height: metric.preferred-height; min-width: 0px;
-                    metric := VerticalLayout { padding: 12px; spacing: 6px;
-                        MSmall { text: title; font-size: MobileTypography.font-size(12); }
-                        MHeading { text: [MobileData.claude-normal, MobileData.claude-risk, MobileData.claude-clues][index]; color: index == 0 ? Theme.success : index == 1 ? Theme.danger : Theme.warning; font-size: MobileTypography.font-size(26); }
-                    }
-                    TouchArea { enabled: !MobileView.modal && !MobileView.notice-modal; mouse-cursor: pointer; clicked => { MobileView.detail = [7, 1, 9][index]; } }
-                }
-            }
-        }
         if MobileData.claude-results.length > 0: VerticalLayout { spacing: 8px;
-            MSmall { text: "报告摘要"; font-weight: 600; }
-            MobileReportBlocks { items: MobileData.claude-results; }
+            HorizontalLayout { cross-axis-alignment: center;
+                MSmall { text: "报告摘要"; font-weight: 600; }
+                MSmall { text: MobileData.claude-normal == "0" && MobileData.claude-risk == "0" && MobileData.claude-clues == "0" ? "暂无检测结果" : MobileData.claude-risk + " 项需关注"; horizontal-alignment: right; color: MobileData.claude-risk == "0" ? Theme.secondary : Theme.danger; }
+            }
+            MobileReportBlocks {
+                items: MobileData.claude-results;
+                show-details(section) => { MobileView.claude-section = section; MobileView.detail = 1; }
+            }
         }
     } }
 }

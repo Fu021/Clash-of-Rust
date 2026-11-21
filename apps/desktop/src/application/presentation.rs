@@ -70,6 +70,7 @@ fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32) -> ReportItem {
         value: value.into(),
         detail: detail.into(),
         source: source.into(),
+        status_label: "".into(),
         tone,
         delay: "".into(),
         delay_tone: 4,
@@ -917,18 +918,16 @@ impl App {
                 .collect(),
         ));
         let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
-        data.set_site_summary(
-            exit.map_or_else(
-                || "完成检测后显示出口与各类平台结果".into(),
-                |exit| {
-                    format!(
-                        "出口 IP：{} · 各平台识别到 {} 个地区",
-                        exit.summary, region_count
-                    )
-                },
-            )
-            .into(),
+        let summary = exit.map_or_else(
+            || "完成检测后显示出口与各类平台结果".into(),
+            |exit| {
+                format!(
+                    "Cloudflare 探针出口：{} · 各平台识别到 {} 个地区",
+                    exit.summary, region_count
+                )
+            },
         );
+        data.set_site_summary(summary.into());
         let (country, flag) =
             clash_of_rust::flags::label(exit.map_or("", |exit| exit.country.as_str()));
         data.set_site_exit_country(country.into());
@@ -996,27 +995,36 @@ impl App {
                         id: service.id.as_str().into(),
                         title: service.name.as_str().into(),
                         value: match result {
-                            Some(Ok(result)) => format!("{} · {}", status, result.summary),
+                            Some(Ok(result))
+                                if result.summary == status.to_string()
+                                    || (status == Status::Reachable
+                                        && result.summary == "网页可达") =>
+                            {
+                                status.to_string()
+                            }
+                            Some(Ok(result)) => format!("{status} · {}", result.summary),
                             Some(Err(error)) => error.clone(),
                             None => status.to_string(),
                         }
                         .into(),
-                        detail: result
-                            .and_then(|result| result.as_ref().ok())
-                            .map_or("", |result| result.detail.as_str())
+                        detail: ip_report::target_exit_detail(&service.id, result)
+                            .unwrap_or_default()
                             .into(),
                         source: result
                             .and_then(|result| result.as_ref().ok())
                             .map_or("", |_| country)
                             .into(),
+                        status_label: status.to_string().into(),
                         tone: tone(status),
                         delay: result
                             .and_then(|result| result.as_ref().ok())
-                            .map_or(String::new(), |result| format!("{} ms", result.millis))
+                            .and_then(ip_check::CheckResult::response_millis)
+                            .map_or(String::new(), |millis| format!("{millis} ms"))
                             .into(),
                         delay_tone: result
                             .and_then(|result| result.as_ref().ok())
-                            .map_or(4, |result| proxy_order::response_tone(result.millis)),
+                            .and_then(ip_check::CheckResult::response_millis)
+                            .map_or(4, proxy_order::response_tone),
                         block_items: 0,
                     }
                 })
@@ -1094,7 +1102,7 @@ impl App {
                             String::new()
                         },
                         if audit.incomplete {
-                            " · 扫描未完成，详见线索"
+                            " · 扫描未完成，详见浏览器与配置"
                         } else {
                             ""
                         }
@@ -1102,13 +1110,13 @@ impl App {
                 })
                 .into(),
         );
-        data.set_claude_filter(self.claude.results_filter.map_or(-1, |kind| kind as i32));
+        data.set_claude_filter(self.claude.results_filter.map_or(-1, |index| index as i32));
         let mut entries: Vec<_> = entries
             .into_iter()
             .filter(|entry| {
-                self.claude
-                    .results_filter
-                    .is_none_or(|kind| self.claude.kind(entry) == kind)
+                self.claude.results_filter.is_none_or(|index| {
+                    entry.section() == clash_of_rust::claude_check::REPORT_SECTIONS[index]
+                })
             })
             .collect();
         let summary = self.claude.results_filter.is_none();
@@ -1178,13 +1186,15 @@ impl App {
                 })
                 .collect::<Vec<_>>();
             if summary {
+                let mut headers = Vec::new();
                 let mut items = Vec::new();
-                for block in clash_of_rust::claude_check::group_blocks(rows) {
+                for block in clash_of_rust::claude_check::report_blocks(rows) {
                     let total = block.rows.len();
-                    items.push(ReportItem {
+                    headers.push(ReportItem {
                         id: block.section.into(),
                         title: block.section.into(),
-                        value: block.summary.into(),
+                        value: block.overview.into(),
+                        detail: block.attention.into(),
                         tone: 0,
                         delay_tone: block.tone,
                         block_items: total as i32,
@@ -1197,17 +1207,9 @@ impl App {
                             .take(12)
                             .map(|(entry, tone)| claude_report_item(entry, tone)),
                     );
-                    if total > 12 {
-                        items.push(ReportItem {
-                            id: block.section.into(),
-                            title: "更多项目".into(),
-                            value: format!("另有 {} 项，请点击上方分类查看。", total - 12).into(),
-                            tone: 2,
-                            ..Default::default()
-                        });
-                    }
                 }
-                items
+                headers.extend(items);
+                headers
             } else {
                 rows.into_iter()
                     .map(|row| claude_report_item(row.item.0, row.item.1))
@@ -1353,10 +1355,10 @@ impl App {
                         data.set_modal_country(country.into());
                         data.set_modal_flagged(flag.is_some());
                         data.set_modal_flag(flag.unwrap_or_default().into());
-                        format!(
-                            "{}\n{} ms\n\n{}",
-                            result.summary, result.millis, result.detail
-                        )
+                        let latency = result
+                            .response_millis()
+                            .map_or(String::new(), |millis| format!("\n{millis} ms"));
+                        format!("{}{}\n\n{}", result.summary, latency, result.detail)
                     }
                     Some(Err(error)) => error.clone(),
                     None => "尚未完成检测".into(),

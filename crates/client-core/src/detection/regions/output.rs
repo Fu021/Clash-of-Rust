@@ -78,6 +78,7 @@ pub(super) fn parse_output(text: &str) -> CheckResult {
         country,
         millis: 0,
         detail: format!("原生地区检测结果：{value}"),
+        target_exit: None,
     }
 }
 
