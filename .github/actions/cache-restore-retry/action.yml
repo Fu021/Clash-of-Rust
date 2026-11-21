@@ -1,0 +1,25 @@
+name: Restore an Actions cache with retries
+description: Retry transient cache lookup and restore errors without treating them as misses
+inputs:
+  path:
+    required: true
+    description: Cache paths in the same order used when saving
+  key:
+    required: true
+    description: Primary cache key
+  restore-keys:
+    required: false
+    description: Compatible cache key prefixes
+  cleanup:
+    required: true
+    description: Interrupted restore cleanup scope
+outputs:
+  cache-hit:
+    description: Whether the primary key was restored exactly
+  cache-primary-key:
+    description: Primary key for a subsequent save
+  cache-matched-key:
+    description: Key restored successfully
+runs:
+  using: node24
+  main: index.js

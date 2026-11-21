@@ -67,9 +67,13 @@ def desktop_cargo_scope(source=ROOT):
     source = Path(source)
     manifest = tomllib.loads((source/'Cargo.toml').read_text(encoding='utf-8'))
     members = manifest.get('workspace', {}).get('members', [])
+    desktop_and_shared = {
+        'crates/client-core', 'crates/client-runtime', 'apps/cli', 'crates/client-ui',
+        'apps/desktop', 'apps/desktop-ui', 'crates/desktop-shell', 'crates/desktop-protocol',
+    }
     scope = ['--workspace']
-    for relative in ('crates/mobile-ffi', 'apps/android/native'):
-        if relative in members:
+    for relative in members:
+        if relative not in desktop_and_shared:
             package = tomllib.loads((source/relative/'Cargo.toml').read_text(encoding='utf-8'))
             scope.extend(['--exclude', package['package']['name']])
     return scope

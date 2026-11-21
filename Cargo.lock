@@ -672,6 +672,7 @@ dependencies = [
  "anyhow",
  "clash-mobile-runtime",
  "futures-util",
+ "i-slint-core",
  "jni 0.22.4",
  "log",
  "serde",

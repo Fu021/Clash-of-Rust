@@ -2,9 +2,11 @@ mod schema;
 use schema::{rust_name, variant, wire_type};
 use std::{env, fs, path::PathBuf};
 fn main() {
-    let path = "../client-ui/ui/state.slint";
-    println!("cargo:rerun-if-changed={path}");
-    let schema = schema::read(path);
+    let state = "../client-ui/ui/state.slint";
+    let models = "../client-ui/ui/models.slint";
+    println!("cargo:rerun-if-changed={state}");
+    println!("cargo:rerun-if-changed={models}");
+    let schema = schema::read(state, models);
     let derive = "#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n";
     let mut code = format!("{derive}#[derive(Copy)] pub enum Intent {{");
     for intent in schema.intents {

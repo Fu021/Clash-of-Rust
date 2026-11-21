@@ -1,6 +1,7 @@
 // Mobile presentation contract. Native hosts supply data and execute requests.
 // Only domain row types are reused; mobile views never read desktop UiData.
-import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem, OverviewItem } from "../../state.slint";
+import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem, OverviewItem } from "../../models.slint";
+import { ControlAccess } from "../../components/control-access.slint";
 
 export enum MobileIntent {
     navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
@@ -105,6 +106,10 @@ export global MobileData {
 
 // Navigation and editing state is separate from both domain and platform state.
 export global MobileView {
+    pure callback controls-modal-blocked <=> ControlAccess.modal-blocked;
+    controls-modal-blocked => { self.modal }
+    pure callback controls-notice-blocked <=> ControlAccess.notice-blocked;
+    controls-notice-blocked => { self.notice-modal }
     in-out property <int> page;
     in-out property <bool> network-open;
     // 1 risks, 2 rule editor, 3 profile editor, 4 delete, 5 connection,

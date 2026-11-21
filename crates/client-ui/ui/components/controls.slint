@@ -1,6 +1,6 @@
-import { Motion, Entrance, ProgressTrack, CopyFeedback } from "motion.slint";
+import { Motion, Entrance, ProgressTrack } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData, UiActions, Intent } from "../state.slint";
+import { ControlAccess } from "control-access.slint";
 import { GeometryTarget, UiGeometry } from "geometry.slint";
 
 // Reset on navigation, not on each model refresh. Clamp after content shrinks
@@ -183,7 +183,7 @@ export component ActionButton inherits Rectangle {
     in property <bool> compact;
     in property <length> touch-height;
     in property <color> text-color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
-    property <bool> interactive: root.enabled && !root.busy && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && (!UiData.notice-modal || root.notice-control);
+    property <bool> interactive: root.enabled && !root.busy && (!ControlAccess.modal-blocked() || root.modal-control) && (!ControlAccess.notice-blocked() || root.notice-control);
     // Mouse activation must not leave a focus highlight that resembles selection.
     property <bool> keyboard-focus: false;
     property <bool> pressed: root.interactive && area.pressed;
@@ -292,12 +292,12 @@ export component Field inherits Rectangle {
     in property <bool> secret: false;
     in property <string> focus-id;
     GeometryTarget { key: root.focus-id == "" ? "" : "field:" + root.focus-id; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
-    in property <int> focus-revision: UiData.focus-revision;
+    in property <int> focus-revision: ControlAccess.focus-revision();
     callback edited(string);
     callback accepted();
     forward-focus: input;
     changed focus-revision => {
-        if root.focus-id != "" && UiData.focus-target == root.focus-id { input.focus(); }
+        if root.focus-id != "" && ControlAccess.focus-target() == root.focus-id { input.focus(); }
     }
     height: Theme.control-height;
     min-width: 100px;
@@ -316,7 +316,7 @@ export component Field inherits Rectangle {
         width: parent.width - 24px;
         height: self.preferred-height;
         text <=> root.text;
-        enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
+        enabled: root.enabled && (!ControlAccess.modal-blocked() || root.modal-control) && !ControlAccess.notice-blocked();
         single-line: true;
         input-type: root.secret ? InputType.password : InputType.text;
         font-size: Theme.body-size;
@@ -340,7 +340,7 @@ export component Field inherits Rectangle {
 export component Select inherits Rectangle {
     in property <string> geometry-key: "select:" + root.value;
     in property <bool> enabled: true;
-    property <bool> error-active: UiData.notice-modal;
+    property <bool> error-active: ControlAccess.notice-blocked();
     changed enabled => { if !root.enabled { popup.close(); } }
     changed error-active => { if root.error-active { popup.close(); } }
     in property <bool> modal-control: false;
@@ -423,14 +423,14 @@ export component Toggle inherits Rectangle {
         background: #ffffff;
     }
     toggle-focus := FocusScope {
-        enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
+        enabled: root.enabled && (!ControlAccess.modal-blocked() || root.modal-control) && !ControlAccess.notice-blocked();
         key-pressed(event) => {
             if event.text == " " || event.text == "\n" { root.toggled(!root.checked); return accept; }
             return reject;
         }
     }
     TouchArea {
-        enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
+        enabled: root.enabled && (!ControlAccess.modal-blocked() || root.modal-control) && !ControlAccess.notice-blocked();
         mouse-cursor: pointer;
         clicked => { toggle-focus.focus(); root.toggled(!root.checked); }
     }
@@ -454,7 +454,7 @@ export component SettingRow inherits Rectangle {
         }
         Toggle {
             modal-control: root.modal-control;
-            enabled: root.enabled && (UiData.modal == 0 || UiData.modal == 10 || root.modal-control) && !UiData.notice-modal;
+            enabled: root.enabled && (!ControlAccess.modal-blocked() || root.modal-control) && !ControlAccess.notice-blocked();
             checked: root.checked;
             toggled(value) => { root.toggled(value); }
         }
@@ -493,16 +493,4 @@ export component ListPanel inherits ContentPanel {
 export component Divider inherits Rectangle {
     height: 1px;
     background: Theme.subtle-line;
-}
-
-export component CopyButton inherits ActionButton {
-    in property <string> value;
-    in property <string> label: "复制";
-    in property <Intent> intent: Intent.copy;
-    width: max(88px, measure.preferred-width + 28px);
-    measure := Label { visible: false; text: root.label; }
-    feedback := CopyFeedback { revision: UiData.copy-revision; acknowledged: UiData.copy-value; value: root.value; any-value: root.intent != Intent.copy; }
-    text: feedback.copied ? "已复制" : root.label;
-    success: feedback.copied;
-    clicked => { feedback.requested(); UiActions.dispatch(root.intent, root.value, ""); }
 }

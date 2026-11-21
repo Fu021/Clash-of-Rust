@@ -30,15 +30,59 @@ pub fn wire_type(value: &str) -> String {
         _ => panic!("Unsupported desktop contract type: {value}"),
     }
 }
-pub fn read(path: &str) -> Schema {
-    let source = fs::read_to_string(path).unwrap();
-    let body = source
-        .split_once("export enum Intent {")
-        .unwrap()
-        .1
-        .split_once('}')
-        .unwrap()
-        .0;
+fn block<'a>(source: &'a str, declaration: &str) -> &'a str {
+    let body = source.split_once(declaration).unwrap().1;
+    let mut chars = body.char_indices().peekable();
+    let mut depth = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    while let Some((index, character)) = chars.next() {
+        if line_comment {
+            line_comment = character != '\n';
+        } else if block_comment {
+            if character == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                chars.next();
+                block_comment = false;
+            }
+        } else if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+        } else {
+            match character {
+                '"' => quoted = true,
+                '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
+                    chars.next();
+                    line_comment = true;
+                }
+                '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+                    chars.next();
+                    block_comment = true;
+                }
+                '{' => depth += 1,
+                '}' if depth == 0 => return &body[..index],
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+    }
+    panic!("Unclosed desktop contract declaration: {declaration}");
+}
+
+pub fn read(state_path: &str, models_path: &str) -> Schema {
+    let state = fs::read_to_string(state_path).unwrap();
+    let models = fs::read_to_string(models_path).unwrap();
+    parse(&state, &models)
+}
+
+pub fn parse(source: &str, models: &str) -> Schema {
+    let body = block(source, "export enum Intent {");
     let intents = body
         .split(',')
         .map(str::trim)
@@ -46,7 +90,10 @@ pub fn read(path: &str) -> Schema {
         .map(str::to_owned)
         .collect();
     let mut structs = Vec::new();
-    for part in source.split("export struct ").skip(1) {
+    for part in [source, models]
+        .into_iter()
+        .flat_map(|declarations| declarations.split("export struct ").skip(1))
+    {
         let (name, body) = part.split_once('{').unwrap();
         let fields = body
             .split_once('}')
@@ -62,13 +109,7 @@ pub fn read(path: &str) -> Schema {
             .collect();
         structs.push((name.trim().into(), fields));
     }
-    let body = source
-        .split_once("export global UiData {")
-        .unwrap()
-        .1
-        .split_once('}')
-        .unwrap()
-        .0;
+    let body = block(source, "export global UiData {");
     let properties = body
         .lines()
         .filter_map(|line| {

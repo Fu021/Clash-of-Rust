@@ -1,3 +1,7 @@
+import { ControlAccess } from "components/control-access.slint";
+import { DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, OverviewItem, CategoryItem, CategoryPair } from "models.slint";
+export { DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, OverviewItem, CategoryItem, CategoryPair } from "models.slint";
+
 // Presentation values only. Rust owns validation, effects and saved settings.
 export enum Intent {
     navigate, query, dismiss-notice, system-notification, restart-core, mode, proxy-mode,
@@ -28,23 +32,17 @@ export enum Intent {
     overview-refresh, overview-privacy, group-pagination, profile-pagination,
 }
 export struct Choice { id: string, label: string }
-export struct DetailItem { label: string, value: string }
-export struct FakeIpExclusionItem { domain: string, source: string }
-export struct NodeItem { group: string, name: string, kind: string, delay: string, tone: int, selected: bool, valid: bool, details: string }
-export struct NodePair { left: NodeItem, right: NodeItem }
-export struct GroupItem { id: string, title: string, detail: string, current: string, expanded: bool, testing: bool, page: string, previous: bool, next: bool, nodes: [NodePair] }
-export struct ProfileItem { id: string, name: string, source: string, detail: string, active: bool, local: bool, builtin: bool }
-export struct ConnectionItem { id: string, host: string, detail: string, rule: string, route: string, up: string, down: string, upload: string, download: string }
-export struct RuleItem { id: string, position: string, kind: string, value: string, policy: string, source: string, selected: bool, enabled: bool, raw: string }
-export struct LogItem { time: string, level: string, message: string, tone: int }
-export struct ReportItem { id: string, title: string, value: string, country: string, detail: string, source: string, status-label: string, tone: int, flag: string, flagged: bool, delay: string, delay-tone: int, block-items: int }
-export struct OverviewItem { id: string, title: string, value: string, detail: string, tone: int, flag: string, flagged: bool, fogged: bool, delay: string, delay-tone: int }
-export struct CategoryItem { id: string, title: string, count: string, detail: string, tone: int }
-
-export struct CategoryPair { left: CategoryItem, right: CategoryItem }
 
 export global UiActions { callback dispatch(Intent, string, string); }
 export global UiData {
+    pure callback controls-modal-blocked <=> ControlAccess.modal-blocked;
+    controls-modal-blocked => { self.modal != 0 && self.modal != 10 }
+    pure callback controls-notice-blocked <=> ControlAccess.notice-blocked;
+    controls-notice-blocked => { self.notice-modal }
+    pure callback controls-focus-revision <=> ControlAccess.focus-revision;
+    controls-focus-revision => { self.focus-revision }
+    pure callback controls-focus-target <=> ControlAccess.focus-target;
+    controls-focus-target => { self.focus-target }
     in-out property <bool> groups-paginated;
     in-out property <bool> profiles-paginated;
     in-out property <length> scroll-home;

@@ -40,6 +40,10 @@ def desktop_ui_tests():
     return extended_tests() or enabled('COR_CI_DESKTOP_UI_TESTS')
 
 
+def mobile_ui_tests():
+    return extended_tests() or enabled('COR_CI_MOBILE_UI_TESTS')
+
+
 def update_tests():
     return extended_tests() or enabled('COR_CI_UPDATE_TESTS')
 
@@ -96,17 +100,31 @@ def select(paths, extended=False):
                       or path in ('scripts/android.py', 'scripts/ci_test_policy.py')
                       for path in paths)
     desktop_ui = any(
-        path.startswith(('crates/client-ui/', 'apps/desktop-ui/src/', 'vendor/winit/',
+        (path.startswith('crates/client-ui/') and not path.startswith('crates/client-ui/ui/mobile/'))
+        or path.startswith(('apps/desktop-ui/', 'crates/desktop-protocol/', 'vendor/winit/',
                          'apps/desktop/src/application/', 'crates/client-core/src/config/',
                          'crates/client-core/src/protection/', 'crates/client-runtime/src/control/',
                          'crates/client-core/src/detection/',
-                         'crates/mobile-ffi/src/', 'apps/android/native/src/',
+                         'resources/fonts/',
                          'crates/client-core/src/application_rules.rs',
-                         'crates/client-core/src/application_rules/',
-                         'apps/android/core/application_rules'))
+                         'crates/client-core/src/application_rules/'))
         or path in ('Cargo.toml', 'Cargo.lock', 'apps/desktop/Cargo.toml',
                     'apps/desktop-ui/Cargo.toml', 'crates/desktop-shell/Cargo.toml',
                     'scripts/run-ci.py', 'scripts/macos_ci.py', 'scripts/ci_test_policy.py')
+        for path in paths
+    )
+    mobile_ui = any(
+        (path.startswith('crates/client-ui/ui/components/')
+         and not path.startswith('crates/client-ui/ui/components/desktop-'))
+        or path.startswith(('crates/client-ui/ui/mobile/', 'crates/client-ui/ui/theme/',
+                         'crates/client-ui/ui/icons/', 'apps/android/native/', 'resources/fonts/',
+                         'crates/mobile-ffi/src/', 'crates/client-core/src/config/',
+                         'crates/client-core/src/protection/', 'crates/client-core/src/detection/',
+                         'crates/client-core/src/application_rules.rs',
+                         'crates/client-core/src/application_rules/'))
+        or path in ('crates/client-ui/ui/models.slint', 'crates/client-ui/ui/preview-reports.slint',
+                    'crates/client-ui/ui/preview-network.slint',
+                    'Cargo.toml', 'Cargo.lock', 'scripts/android.py', 'scripts/ci_test_policy.py')
         for path in paths
     )
     benchmark = any(
@@ -142,6 +160,7 @@ def select(paths, extended=False):
     return {'extended_tests': extended, 'android_routing_tests': extended or android,
             'android_diagnostics_tests': extended or diagnostics,
             'linux_user_tests': extended or linux, 'desktop_ui_tests': extended or desktop_ui,
+            'mobile_ui_tests': extended or mobile_ui,
             'proxy_benchmark': benchmark, 'update_tests': extended or update}
 
 
@@ -167,7 +186,7 @@ def main():
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             for key in ('extended_tests', 'android_routing_tests', 'android_diagnostics_tests', 'linux_user_tests',
-                        'desktop_ui_tests', 'proxy_benchmark', 'update_tests'):
+                        'desktop_ui_tests', 'mobile_ui_tests', 'proxy_benchmark', 'update_tests'):
                 stream.write(f'{key}={str(plan[key]).lower()}\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a') as stream:

@@ -4,13 +4,11 @@
 
 ## 当前上限与保留预算
 
-维护者于 2026-11-18 将 GitHub Actions 月预算设为 **2 美元**。Linux 兼容扩展期间，缓存上限临时提高到 34 GiB。八套兼容验收结束后，于 2026-11-20 将 `max_cache_size_gb` 调回 **24**，已用 GitHub API 读回。GitHub 的缓存容量按 GiB 计算，每仓库含 10 GiB，超额每 GiB 月 0.07 美元。账户预算需计入适用的其他 Actions 用量。见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
+维护者于 2026-11-21 同意增加 GitHub Actions 缓存，费用保持低于 **2 美元/月**。仓库 `max_cache_size_gb` 从 24 提高到 **34 GB**，已用 GitHub API 读回。GitHub 每仓库含 10 GB 缓存，超额每 GB 月 0.07 美元；账户预算还需计入适用的其他 Actions 用量。见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
 
-缓存按每小时占用峰值累计，不按配置上限包月。以 30 天、720 小时计算，费用为 `Σ max(每小时峰值 GiB − 10, 0) × 0.07 ÷ 720`。24 GiB 只出现一个计费小时约 0.00136 美元；每天一个小时、其余时间不超过 10 GiB，整月约 0.041 美元。若常驻 10.91 GiB、每天一个小时升到 24 GiB，约 0.102 美元。短于一小时也按该小时峰值计，跨两个计费小时可能同时计入；这些是假设估算，实际以账单为准。
+缓存按每小时占用峰值累计，不按配置上限包月。以 30 天、720 小时计算，费用为 `Σ max(每小时峰值 GB − 10, 0) × 0.07 ÷ 720`。34 GB 整月占满约 **1.68 美元**；短于一小时也按该小时峰值计，跨两个计费小时可能同时计入。这只是缓存费估算，实际以账单为准，不能视为账户总费用的硬上限。
 
-精简矩阵的 [CI 44712218319](https://github.com/Fu021/Clash-of-Rust/actions/runs/44712218319) 收尾从 22.40 降到 17.25 GiB。之后八套兼容作业产生的四条旧代 VM 宿主工具缓存已清理，仓库保留 `main` 的 19 条缓存、合计 17.25 GiB。24 GiB 覆盖此轮换代样本，早期多平台同时换代曾达到 31.85 GiB。若后续换代出现频繁逐出和重编译，结合恢复与保存耗时再评估上限。
-
-17.25 GiB 常驻一整月的缓存费约 **0.51 美元**，24 GiB 满额整月约 **0.98 美元**。保留 **2 美元/月**可给适用的其他 Actions 用量留出余量。当前凭据无法读取账户账单，以上金额按费率和仓库占用估算。
+精简矩阵的 [CI 44712218319](https://github.com/Fu021/Clash-of-Rust/actions/runs/44712218319) 收尾从 22.40 降到 17.25 GiB；更早的多平台同时换代峰值曾达到 31.85 GiB。GitHub 计费中的 GB 定义为 2³⁰ 字节，与日志和脚本使用的 GiB 相同。继续观察缓存逐出、恢复耗时和账单，容量增加不能代替浪费排查。
 
 ## 近期 CI 耗时依据
 

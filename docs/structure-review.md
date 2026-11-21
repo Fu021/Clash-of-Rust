@@ -51,15 +51,17 @@ Clash-of-Rust/
 │   ├── cli/                       cor 命令行、终端交互/设置投影与后台入口
 │   │   └── src/tui/               页面状态、首页操作与更新、参数表单、按需详情与规则编辑；管理操作复用 CLI 分发
 │   ├── android/
-│   │   ├── native/                Rust / Slint / JNI 宿主
+│   │   ├── native/                Rust / Slint / JNI 宿主及移动界面测试
 │   │   ├── app/                   Java 生命周期、VPN、通知与系统交互
 │   │   └── core/                  Go / mihomo 移动桥接
 │   └── ios/                       宿主占位，尚无可用 VPN 客户端
 ├── crates/                        共享模块
 │   ├── client-core/               配置、存储、订阅、规则、控制器、DNS、检测与诊断
 │   ├── client-runtime/            桌面 / CLI 内核生命周期、平台网络、更新与控制服务
-│   ├── client-ui/                 正式 Slint 组件、界面数据与列表模型
-│   │   └── ui/mobile/             Android 共享界面与 iOS 原型
+│   ├── client-ui/                 桌面界面、共享 Slint 组件与界面模型
+│   │   ├── ui/models.slint        两端共享数据类型
+│   │   ├── ui/state.slint         桌面状态和动作
+│   │   └── ui/mobile/             移动端状态、界面与 iOS 原型
 │   ├── desktop-protocol/          桌面宿主与窗口间的消息协议
 │   ├── desktop-shell/             托盘等桌面原生集成
 │   └── mobile-ffi/                共享移动会话与 NativeHost 原生能力接口

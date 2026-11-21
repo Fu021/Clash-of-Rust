@@ -6,6 +6,28 @@
 
 [全仓职责树](structure-review.md#目录与职责)集中说明各端宿主、共享模块、脚本和资源入口；文档冲突、大文件拆分和整体重构按[结构复查](structure-review.md)执行。GUI/CLI 共用运行时，平台权限、文件访问和网络请求保留在宿主/共享业务层。
 
+## 平台编译边界
+
+桌面端的构建、Clippy 和测试不得编译移动端专属宿主、界面或任何移动端测试；移动端的构建、Clippy 和测试也不得编译桌面端专属宿主、界面或任何桌面端测试。该规则包括本地开发、普通及扩展 CI、基准和打包前的编译；测试使用什么操作系统运行不改变测试归属。格式检查不编译代码。
+
+共享业务、数据模型和不依赖特定平台状态的通用界面组件可以被两端各自编译；组件可以维护自己的交互状态，通过属性、回调或轻量接口接入宿主能力，不引用某一端的状态、动作、页面或宿主。跨端通用的业务逻辑留在共享层；平台状态、权限、动作及其适配留在所属端，只有一端使用的代码也留在该端。修改共享接口时同步两端调用者，不能为了复用模型而导入另一端的完整状态。
+
+桌面消息协议与渲染桥都由共享模型和桌面状态生成；调整声明位置或内容时同步两个生成入口及其 Cargo 变更追踪，并验证消息往返和实际界面桥接。
+
+测试由所属宿主包编译，不能借用另一端的宿主或将两端专属界面混入一个测试夹具。桌面 UI 测试放在 `crates/client-ui/tests/`，移动 UI 测试放在 `apps/android/native/tests/`；同一行为需要覆盖两端时分别建立测试。调整共享组件时分别在两端的任务中验证，不能将其中一端的测试塞进另一端。脚本回归检查两端的 workspace 依赖方向和 Slint 导入图，并核对共享改动触发两端各自的回归。
+
+桌面构建通过 `desktop_cargo_scope` 限定已确认的桌面和共享包，新的 workspace 成员默认排除，确认职责后才可加入；Android 只选择移动宿主和移动运行时及其共享依赖。不得直接用未限定范围的 `cargo build/test/clippy --workspace` 代替平台构建。桌面和移动编译目录、CI 缓存族彼此独立；发现混入对方产物时清理受影响缓存，并用新的缓存版本分别重建，不能回退到旧缓存。缓存处理见[缓存分工](workflows/cache-coverage.md)。
+
+本地分别运行界面回归的示例：
+
+```sh
+CARGO_TARGET_DIR=target/desktop cargo test -p clash-client-ui --test desktop_lists --release --locked -- --test-threads=1
+CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --test mobile_lists --test scroll_remount --test claude_report_blocks --release --locked -- --test-threads=1
+```
+
+本地 `target` 体积和可回收构建产物按[磁盘管理](workflows/local-development.md#本地-rust-构建与磁盘管理)检查；不能把另一端已有的构建结果当作当前端的验证。
+本地 `scripts/android.py build` 默认使用 `target/mobile`，也可指定其他独立的 `CARGO_TARGET_DIR`；手工执行 Cargo 时同样显式选择所属端的目录。
+
 ## 仓库占用锁
 
 Linux 本地磁盘上的开发、预览和构建会话在整个使用期间持有共享 `flock`。锁文件固定为 `git rev-parse --path-format=absolute --git-common-dir` 返回目录中的 `repo-usage.lock`，关联 worktree 共用同一把锁；不提交到仓库。文件内容为空，是否占用只看内核锁，不能按文件存在、PID 或时间判断。
@@ -84,7 +106,7 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 | 客户端运行库、渲染器或平台依赖升级 | 受影响平台的编译、渲染及宿主生命周期；影响旧系统支持时增加对应兼容验证，影响资源使用时安排有对照的内存基准。 |
 | 安装、更新、打包或公开发布 | 按受影响安装合同核验；公开发布按[发布门禁](workflows/release.md#兼容性发布门禁)完成同提交所需兼容及发行核验。 |
 
-只有任务确实需要核对候选安装包或发行合同才派发不发布核验。测试选择不改变已有工作流、审核或发布权限；调整 `.github/` 仍须维护者审核。缺少相关验证时记录具体缺口，不用无关测试的成功补齐。
+只有任务确实需要核对候选安装包或发行合同才派发不发布核验。工作流变更、审核和发布权限按 [Agent 提交规则](../AGENTS.md#actions提交与发布)执行。缺少相关验证时记录具体缺口，不用无关测试的成功补齐。
 
 ## 本地验证与 UI 预览
 

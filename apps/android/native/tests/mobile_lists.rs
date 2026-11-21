@@ -15,36 +15,32 @@ use std::{
 
 slint::slint! {
     #[edition = "1.19"]
-    import { ListView, ListHeader, MField, MDragHandle, MButton } from "../ui/mobile/shared/controls.slint";
-    import { Field, PageScroll } from "../ui/components/controls.slint";
-    import { RuleDragHandle } from "../ui/components/rule-drag.slint";
-    import { ListReorderGesture, ListReorderPreview } from "../ui/components/list-reorder.slint";
-    import { PageSurface } from "../ui/components/motion.slint";
-    import { MobileFrame } from "../ui/mobile/shared/frame.slint";
-    import { MobileView } from "../ui/mobile/shared/state.slint";
-    import { MobileData } from "../ui/mobile/shared/state.slint";
-    import { MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow } from "../ui/mobile/shared/pages.slint";
-    import { MobileModal } from "../ui/mobile/shared/details.slint";
-    import { AppearanceSettings } from "../ui/mobile/shared/settings.slint";
-    import { AndroidSurface } from "../ui/mobile/android/app.slint";
-    export { AndroidPreview } from "../ui/mobile/android/preview.slint";
-    import { AndroidApplications } from "../ui/mobile/android/applications.slint";
-    import { AndroidApplicationPolicies } from "../ui/mobile/android/application-policies.slint";
-    import { AndroidData, ApplicationItem } from "../ui/mobile/android/state.slint";
-    export { ApplicationItem, ApplicationPolicyApp } from "../ui/mobile/android/state.slint";
-    export { AndroidData, AndroidActions, AndroidIntent } from "../ui/mobile/android/state.slint";
-    import { IosSurface } from "../ui/mobile/ios/app.slint";
-    import { PageViews } from "../ui/components/view-toggle.slint";
-    import { NoticeCountdown } from "../ui/components/motion.slint";
-    export { ProfileItem } from "../ui/state.slint";
-    export { ConnectionItem } from "../ui/state.slint";
-    export { ReportItem } from "../ui/state.slint";
-    export { MobileActions, MobileIntent, MobileView } from "../ui/mobile/shared/state.slint";
-    import { SettingsPage, SettingsNavigation } from "../ui/pages/settings.slint";
-    import { NetworkPage } from "../ui/pages/network.slint";
-    import { UiData, ProfileItem, ConnectionItem, ReportItem } from "../ui/state.slint";
-    import { Theme } from "../ui/theme/palette.slint";
-    export { UiGeometry } from "../ui/components/geometry.slint";
+    import { ListView, ListHeader, MField, MDragHandle, MButton } from "../../../../crates/client-ui/ui/mobile/shared/controls.slint";
+    import { ListReorderGesture, ListReorderPreview } from "../../../../crates/client-ui/ui/components/list-reorder.slint";
+    import { PageSurface } from "../../../../crates/client-ui/ui/components/motion.slint";
+    import { MobileFrame } from "../../../../crates/client-ui/ui/mobile/shared/frame.slint";
+    import { MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
+    import { MobileData } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
+    import { MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow } from "../../../../crates/client-ui/ui/mobile/shared/pages.slint";
+    import { MobileModal } from "../../../../crates/client-ui/ui/mobile/shared/details.slint";
+    import { AppearanceSettings } from "../../../../crates/client-ui/ui/mobile/shared/settings.slint";
+    import { AndroidSurface } from "../../../../crates/client-ui/ui/mobile/android/app.slint";
+    export { AndroidPreview } from "../../../../crates/client-ui/ui/mobile/android/preview.slint";
+    import { AndroidApplications } from "../../../../crates/client-ui/ui/mobile/android/applications.slint";
+    import { AndroidApplicationPolicies } from "../../../../crates/client-ui/ui/mobile/android/application-policies.slint";
+    import { AndroidData, ApplicationItem } from "../../../../crates/client-ui/ui/mobile/android/state.slint";
+    export { ApplicationItem, ApplicationPolicyApp } from "../../../../crates/client-ui/ui/mobile/android/state.slint";
+    export { AndroidData, AndroidActions, AndroidIntent } from "../../../../crates/client-ui/ui/mobile/android/state.slint";
+    import { IosSurface } from "../../../../crates/client-ui/ui/mobile/ios/app.slint";
+    import { PageViews } from "../../../../crates/client-ui/ui/components/view-toggle.slint";
+    import { NoticeCountdown } from "../../../../crates/client-ui/ui/components/motion.slint";
+    export { ProfileItem } from "../../../../crates/client-ui/ui/models.slint";
+    export { ConnectionItem } from "../../../../crates/client-ui/ui/models.slint";
+    export { ReportItem } from "../../../../crates/client-ui/ui/models.slint";
+    export { MobileActions, MobileIntent, MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
+    import { ProfileItem, ConnectionItem, ReportItem } from "../../../../crates/client-ui/ui/models.slint";
+    import { Theme } from "../../../../crates/client-ui/ui/theme/palette.slint";
+    export { UiGeometry } from "../../../../crates/client-ui/ui/components/geometry.slint";
 
     export component CompactButtonProbe inherits Window {
         preferred-width: 200px; preferred-height: 100px;
@@ -68,14 +64,6 @@ slint::slint! {
         in-out property <bool> busy <=> MobileData.probe-busy;
         in-out property <[string]> results <=> MobileData.probe-results;
         MobileNetwork { width: parent.width; height: parent.height; }
-    }
-
-    export component DesktopNetworkToolboxProbe inherits Window {
-        preferred-width: 950px; preferred-height: 700px;
-        in-out property <float> text-scale <=> Theme.text-scale;
-        in-out property <int> tool <=> UiData.network-tool;
-        in-out property <[string]> results <=> UiData.network-results;
-        NetworkPage { width: parent.width; height: parent.height; }
     }
 
     export component CountdownProbe inherits Window {
@@ -239,42 +227,6 @@ slint::slint! {
         }
     }
 
-    export component SettingsScrollProbe inherits Window {
-        title: "SettingsScrollProbe";
-        preferred-width: 740px; preferred-height: 360px;
-        in-out property <length> offset <=> UiData.scroll-settings;
-        in-out property <string> draft <=> UiData.mixed-port;
-        out property <color> selected-color: Theme.accent-wash;
-        property <int> navigation-request: -1;
-        VerticalLayout {
-            SettingsNavigation {
-                active-section: settings.active-section;
-                chosen(index) => { root.navigation-request = index; }
-            }
-            settings := SettingsPage {
-                navigation-request <=> root.navigation-request;
-            }
-        }
-    }
-
-    export component DesktopScrollProbe inherits Window {
-        preferred-width: 500px; preferred-height: 240px;
-        in property <int> rows: 20;
-        out property <length> offset <=> list.content-y;
-        out property <length> extent: list.content-height;
-        list := PageScroll {
-            width: parent.width; height: parent.height;
-            VerticalLayout {
-                alignment: start; spacing: 0px;
-                if root.rows > 0: VerticalLayout {
-                    spacing: 0px;
-                    for index in root.rows: Rectangle { height: 48px; }
-                }
-                Rectangle { height: 40px; }
-            }
-        }
-    }
-
     export component MobileNoticeProbe inherits Window {
         preferred-width: 393px; preferred-height: 852px;
         forward-focus: surface;
@@ -306,22 +258,15 @@ slint::slint! {
         }
     }
 
-    export component InputFieldsProbe inherits Window {
+    export component MobileInputProbe inherits Window {
         preferred-width: 320px; preferred-height: 160px;
-        in-out property <string> mobile-text <=> mobile.text;
-        in-out property <string> desktop-text <=> desktop.text;
-        out property <bool> mobile-placeholder: mobile.placeholder-visible;
-        out property <bool> desktop-placeholder: desktop.placeholder-visible;
-        public function focus-field(use-mobile: bool) {
-            if use-mobile { mobile.focus(); } else { desktop.focus(); }
-        }
-        mobile := MField {
+        in-out property <string> text <=> field.text;
+        out property <bool> placeholder: field.placeholder-visible;
+        out property <image> test-icon: @image-url("../../../../crates/client-ui/ui/icons/proxies.svg");
+        public function focus-field() { field.focus(); }
+        field := MField {
             x: 0px; y: 0px; width: parent.width;
             placeholder: "Mobile placeholder";
-        }
-        desktop := Field {
-            x: 0px; y: 80px; width: parent.width;
-            placeholder: "Desktop placeholder";
         }
     }
 
@@ -372,21 +317,6 @@ slint::slint! {
                     dropped(delta) => { root.delta = delta; }
                 }
             }
-        }
-    }
-    export component DesktopDragProbe inherits Window {
-        preferred-width: 300px; preferred-height: 240px;
-        in property <bool> handle-enabled: true;
-        in property <string> context;
-        out property <bool> started;
-        out property <bool> cancelled;
-        in-out property <int> delta: 99;
-        RuleDragHandle {
-            x: 0px; y: 0px; row-height: 80px; enabled: root.handle-enabled;
-            context: root.context;
-            started => { root.started = true; }
-            dropped(delta) => { root.delta = delta; }
-            cancelled => { root.cancelled = true; }
         }
     }
     export component ReorderScrollProbe inherits Window {
@@ -654,39 +584,6 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
         );
     }
     probe.hide().unwrap();
-    drop(probe);
-    let desktop = DesktopNetworkToolboxProbe::new().unwrap();
-    let observed = targets.clone();
-    desktop
-        .global::<UiGeometry>()
-        .on_measured(move |key, bounds| {
-            observed
-                .borrow_mut()
-                .insert(key.to_string(), bounds.iter().collect());
-        });
-    desktop.global::<UiGeometry>().set_enabled(true);
-    desktop.set_results(Rc::new(slint::VecModel::from(vec!["结果 · 示例".into()])).into());
-    desktop.show().unwrap();
-    for (width, height, scale) in [(800, 450, 1.3), (950, 700, 1.), (1280, 800, 1.)] {
-        adapter.set_size(slint::PhysicalSize::new(width, height));
-        desktop.set_text_scale(scale);
-        let mut baseline = None;
-        for tool in [0, 4, 9, 10, 11] {
-            desktop.set_tool(tool);
-            advance(&clock, Duration::from_millis(300));
-            frame(&adapter, width as usize, height as usize);
-            targets.borrow_mut().clear();
-            let geometry = desktop.global::<UiGeometry>();
-            geometry.set_revision(geometry.get_revision().wrapping_add(1));
-            frame(&adapter, width as usize, height as usize);
-            let bounds = targets.borrow();
-            let viewport = &bounds["network-detail-viewport"];
-            let expected_width = *baseline.get_or_insert(viewport[2]);
-            assert!((viewport[2] - expected_width).abs() < 2., "{viewport:?}");
-            assert!(viewport[2] > width as f32 / 2., "{viewport:?}");
-            assert!((viewport[0] + viewport[2] - width as f32).abs() < 2.);
-        }
-    }
 }
 
 #[test]
@@ -1951,67 +1848,6 @@ fn mobile_drag_waits_for_long_press_and_cancels_a_short_tap() {
 }
 
 #[test]
-fn desktop_drag_starts_immediately_and_respects_busy_state() {
-    let (adapter, _clock) = headless(300, 240);
-    let desktop = DesktopDragProbe::new().unwrap();
-    desktop.show().unwrap();
-    frame(&adapter, 300, 240);
-    let press = || {
-        desktop
-            .window()
-            .dispatch_event(WindowEvent::PointerPressed {
-                position: LogicalPosition::new(12., 24.),
-                button: PointerEventButton::Left,
-            })
-    };
-    let release = || {
-        desktop
-            .window()
-            .dispatch_event(WindowEvent::PointerReleased {
-                position: LogicalPosition::new(12., 184.),
-                button: PointerEventButton::Left,
-            })
-    };
-    press();
-    assert!(
-        desktop.get_started(),
-        "desktop dragging must not require a long press"
-    );
-    desktop.window().dispatch_event(WindowEvent::PointerMoved {
-        position: LogicalPosition::new(12., 184.),
-    });
-    release();
-    assert_eq!(desktop.get_delta(), 2);
-    desktop.set_delta(99);
-    press();
-    desktop.window().dispatch_event(WindowEvent::KeyPressed {
-        text: slint::platform::Key::Escape.into(),
-    });
-    release();
-    assert!(desktop.get_cancelled());
-    assert_eq!(
-        desktop.get_delta(),
-        99,
-        "Escape must cancel rather than drop"
-    );
-    press();
-    desktop.set_context("filtered".into());
-    release();
-    assert_eq!(
-        desktop.get_delta(),
-        99,
-        "filtering during a desktop drag must not reorder a replacement row"
-    );
-    desktop.set_handle_enabled(false);
-    frame(&adapter, 300, 240);
-    press();
-    release();
-    assert_eq!(desktop.get_delta(), 99, "a busy handle must not reorder");
-    desktop.hide().unwrap();
-    drop(desktop);
-}
-
-#[test]
 fn reorder_scroll_preserves_the_lifted_row_and_cancels_stale_content() {
     let (adapter, clock) = headless(300, 240);
     for hold_millis in [550, 0] {
@@ -2383,69 +2219,44 @@ fn locked_pages_block_clicks_and_scrolling() {
 }
 
 #[test]
-fn input_composition_hides_placeholders_on_mobile_and_desktop() {
+fn mobile_input_composition_hides_placeholder() {
     let (adapter, _clock) = headless(320, 160);
-    let fields = InputFieldsProbe::new().unwrap();
-    fields.show().unwrap();
-    for mobile in [true, false] {
-        fields.invoke_focus_field(mobile);
-        let placeholder = || {
-            if mobile {
-                fields.get_mobile_placeholder()
-            } else {
-                fields.get_desktop_placeholder()
-            }
-        };
-        let text = || {
-            if mobile {
-                fields.get_mobile_text()
-            } else {
-                fields.get_desktop_text()
-            }
-        };
-        let composition = |preedit: &str, committed: &str, commit: bool| {
-            let mut key_event = i_slint_core::input::KeyEvent::default();
-            key_event.text = committed.into();
-            fields.window().dispatch_event(WindowEvent::internal(
-                i_slint_core::input::InternalKeyEvent {
-                    event_type: if commit {
-                        i_slint_core::input::KeyEventType::CommitComposition
-                    } else {
-                        i_slint_core::input::KeyEventType::UpdateComposition
-                    },
-                    preedit_text: preedit.into(),
-                    key_event,
-                    ..Default::default()
+    let field = MobileInputProbe::new().unwrap();
+    field.show().unwrap();
+    assert!(field.get_test_icon().size().width > 0);
+    field.invoke_focus_field();
+    let composition = |preedit: &str, committed: &str, commit: bool| {
+        let mut key_event = i_slint_core::input::KeyEvent::default();
+        key_event.text = committed.into();
+        field.window().dispatch_event(WindowEvent::internal(
+            i_slint_core::input::InternalKeyEvent {
+                event_type: if commit {
+                    i_slint_core::input::KeyEventType::CommitComposition
+                } else {
+                    i_slint_core::input::KeyEventType::UpdateComposition
                 },
-            ));
-            frame(&adapter, 320, 160);
-        };
-        assert!(placeholder());
-        composition("pin", "", false);
-        assert_eq!(text(), "");
-        assert!(
-            !placeholder(),
-            "uncommitted IME text must hide the placeholder on both hosts"
-        );
-        composition("", "", false);
-        assert!(placeholder(), "cancelled composition must restore the hint");
-        composition("拼", "", false);
-        assert!(!placeholder());
-        composition("", "拼音 🙂", true);
-        assert_eq!(text(), "拼音 🙂");
-        assert!(!placeholder());
-        if mobile {
-            fields.set_mobile_text("".into());
-        } else {
-            fields.set_desktop_text("".into());
-        }
+                preedit_text: preedit.into(),
+                key_event,
+                ..Default::default()
+            },
+        ));
         frame(&adapter, 320, 160);
-        assert!(
-            placeholder(),
-            "clearing committed text must restore the hint"
-        );
-    }
-    fields.hide().unwrap();
+    };
+    assert!(field.get_placeholder());
+    composition("pin", "", false);
+    assert_eq!(field.get_text(), "");
+    assert!(!field.get_placeholder());
+    composition("", "", false);
+    assert!(field.get_placeholder());
+    composition("拼", "", false);
+    assert!(!field.get_placeholder());
+    composition("", "拼音 🙂", true);
+    assert_eq!(field.get_text(), "拼音 🙂");
+    assert!(!field.get_placeholder());
+    field.set_text("".into());
+    frame(&adapter, 320, 160);
+    assert!(field.get_placeholder());
+    field.hide().unwrap();
 }
 
 #[test]
@@ -2731,139 +2542,6 @@ fn mobile_notices_reflow_and_preserve_the_underlying_draft() {
     }
     notice.hide().unwrap();
     drop(notice);
-}
-
-#[test]
-fn desktop_scroll_clamps_after_content_and_viewport_changes() {
-    let (adapter, clock) = headless(500, 240);
-    let desktop = DesktopScrollProbe::new().unwrap();
-    desktop.show().unwrap();
-    frame(&adapter, 500, 240);
-    assert!(desktop.get_extent() >= 1000.);
-    let wheel = |delta_y| {
-        desktop
-            .window()
-            .dispatch_event(WindowEvent::PointerScrolled {
-                position: LogicalPosition::new(100., 100.),
-                delta_x: 0.,
-                delta_y,
-            });
-    };
-    wheel(-10000.);
-    advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 500, 240);
-    assert_eq!(desktop.get_offset(), 240. - desktop.get_extent());
-    wheel(10000.);
-    advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 500, 240);
-    assert_eq!(desktop.get_offset(), 0.);
-    wheel(-200.);
-    advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 500, 240);
-    desktop.set_rows(0);
-    frame(&adapter, 500, 240);
-    assert_eq!(desktop.get_extent(), 240.);
-    assert_eq!(desktop.get_offset(), 0.);
-    desktop.set_rows(20);
-    frame(&adapter, 500, 240);
-    wheel(-200.);
-    advance(&clock, Duration::from_secs(1));
-    frame(&adapter, 500, 240);
-    assert!(desktop.get_offset() < 0.);
-    adapter.set_size(slint::PhysicalSize::new(500, 1400));
-    frame(&adapter, 500, 1400);
-    assert_eq!(desktop.get_offset(), 0.);
-    desktop.hide().unwrap();
-    drop(desktop);
-}
-
-#[test]
-fn settings_navigation_tracks_scroll_and_preserves_drafts() {
-    let (adapter, clock) = headless(740, 360);
-    let settings = SettingsScrollProbe::new().unwrap();
-    settings.set_draft("7897".into());
-    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
-    let measured_targets = targets.clone();
-    settings
-        .global::<UiGeometry>()
-        .on_measured(move |key, bounds| {
-            measured_targets
-                .borrow_mut()
-                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
-        });
-    let geometry = settings.global::<UiGeometry>();
-    geometry.set_enabled(true);
-    geometry.set_revision(geometry.get_revision().wrapping_add(1));
-    settings.show().unwrap();
-    frame(&adapter, 740, 360);
-    advance(&clock, Duration::from_secs(1));
-    let active_section = |pixels: &[slint::Rgb8Pixel]| {
-        let selected = settings.get_selected_color();
-        let selected = slint::Rgb8Pixel::new(selected.red(), selected.green(), selected.blue());
-        let bounds = targets.borrow();
-        let highlighted: Vec<_> = ["常规", "网络", "外观", "更新", "计划任务"]
-            .iter()
-            .enumerate()
-            .filter_map(|(index, _)| {
-                let target = &bounds[&format!("settings-section:{index}")];
-                let horizontal = (target[0] + 5.) as usize;
-                let vertical = (target[1] + target[3] / 2.) as usize;
-                (pixels[vertical * 740 + horizontal] == selected).then_some(index)
-            })
-            .collect();
-        assert_eq!(highlighted.len(), 1);
-        highlighted[0]
-    };
-    assert_eq!(active_section(&frame(&adapter, 740, 360)), 0);
-    for (delta_y, expected) in [(-48., vec![0, 1, 2, 3, 4]), (48., vec![4, 3, 2, 1, 0])] {
-        let mut visited = vec![active_section(&frame(&adapter, 740, 360))];
-        for _ in 0..80 {
-            let previous = settings.get_offset();
-            settings
-                .window()
-                .dispatch_event(WindowEvent::PointerScrolled {
-                    position: LogicalPosition::new(600., 180.),
-                    delta_x: 0.,
-                    delta_y,
-                });
-            advance(&clock, Duration::from_secs(1));
-            let active = active_section(&frame(&adapter, 740, 360));
-            if active != *visited.last().unwrap() {
-                visited.push(active);
-            }
-            if settings.get_offset() == previous {
-                break;
-            }
-        }
-        assert_eq!(visited, expected);
-    }
-    for expected in [0, 1, 2] {
-        let bounds = targets.borrow()[&format!("settings-section:{expected}")].clone();
-        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
-        for event in [
-            WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            },
-            WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            },
-        ] {
-            settings.window().dispatch_event(event);
-        }
-        advance(&clock, Duration::from_secs(1));
-        assert_eq!(active_section(&frame(&adapter, 740, 360)), expected);
-    }
-    adapter.set_size(slint::PhysicalSize::new(740, 2400));
-    frame(&adapter, 740, 2400);
-    advance(&clock, Duration::from_secs(1));
-    let pixels = frame(&adapter, 740, 2400);
-    assert_eq!(settings.get_offset(), 0.);
-    assert_eq!(active_section(&pixels), 0);
-    assert_eq!(settings.get_draft(), "7897");
-    settings.hide().unwrap();
-    drop(settings);
 }
 
 #[test]

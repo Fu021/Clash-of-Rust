@@ -19,7 +19,7 @@ COSMIC 桌面启动、授权和窗口恢复的复查走 [Pop!_OS 24.04 完整兼
 
 桌面平台为 Windows x64/ARM64、Linux x64/ARM64、macOS Intel/Apple Silicon。Linux 构建基线为 Ubuntu 20.04，安装目标见各发行版工作流。iOS 仅有宿主占位与 UI 原型，不参与构建。
 
-新工作流和 `.github/` 变更按[贡献要求](../.github/CONTRIBUTING.md)审核；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。
+工作流变更按[贡献要求](../.github/CONTRIBUTING.md)和 [Agent 提交规则](../AGENTS.md#actions提交与发布)执行；弃用工作流删除文件后还需在 GitHub 禁用。脚本职责与合并/删除依据见[脚本维护](../scripts/README.md)。受限执行环境遵守 [AGENTS](../AGENTS.md#资源受限环境)，本地不编译、测试或打包。
 
 ## Actions 跟进节奏
 

@@ -264,7 +264,7 @@ def workspace_sources(source, save=False):
 
 
 def workspace_restore_identity(source, family, receipt, compiler=None, environment=None):
-    if not re.fullmatch(r'(?:native-main-v3-(?:linux|macos|windows)|android-main-v3)-(?:x64|arm64|armv7)', family):
+    if not re.fullmatch(r'(?:native-main-v4-(?:linux|macos|windows)|android-main-v4)-(?:x64|arm64|armv7)', family):
         raise ValueError('Invalid compiler cache family')
     source = Path(source).resolve()
     receipt = Path(receipt).resolve()

@@ -95,6 +95,7 @@ jobs:
       android_diagnostics_tests: ${{ steps.test_policy.outputs.android_diagnostics_tests }}
       linux_user_tests: ${{ steps.test_policy.outputs.linux_user_tests }}
       desktop_ui_tests: ${{ steps.test_policy.outputs.desktop_ui_tests }}
+      mobile_ui_tests: ${{ steps.test_policy.outputs.mobile_ui_tests }}
       proxy_benchmark: ${{ steps.test_policy.outputs.proxy_benchmark }}
       update_tests: ${{ steps.test_policy.outputs.update_tests }}
     steps:
@@ -103,6 +104,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Test cache restore retry behavior
+        run: node --test scripts/test-cache-restore.cjs
       - name: Select optional regression tests
         id: test_policy
         env:
@@ -171,7 +174,7 @@ jobs:
     name: Prepare Android Maven dependencies
     needs: inputs
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 55
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       ANDROID_CI_TEST: '1'
@@ -182,8 +185,7 @@ jobs:
           persist-credentials: false
       - name: Set the isolated Gradle home
         run: printf 'GRADLE_USER_HOME=%s/cor-android-gradle\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - name: Restore the exact Android Maven dependency cache
-        id: maven_cache
+      - name: Look up Android Maven dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         continue-on-error: true
         timeout-minutes: 5
@@ -195,6 +197,20 @@ jobs:
             'apps/android/**/gradle.properties', 'apps/android/**/gradle/*.toml',
             'apps/android/**/gradle/verification-metadata.xml',
             'apps/android/**/gradle.lockfile', 'apps/android/**/dependency-locks/*.lockfile') }}
+          lookup-only: true
+      - name: Restore Android Maven dependencies with retries
+        id: maven_cache
+        uses: ./.github/actions/cache-restore-retry
+        timeout-minutes: 25
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}/caches/modules-2
+          key: >-
+            android-maven-v1-ubuntu-24.04-x64-${{ hashFiles('.github/build-versions.json',
+            'apps/android/**/*.gradle', 'apps/android/**/*.gradle.kts',
+            'apps/android/**/gradle.properties', 'apps/android/**/gradle/*.toml',
+            'apps/android/**/gradle/verification-metadata.xml',
+            'apps/android/**/gradle.lockfile', 'apps/android/**/dependency-locks/*.lockfile') }}
+          cleanup: maven
       - name: Load approved tool versions
         if: steps.maven_cache.outputs.cache-hit != 'true'
         run: python3 scripts/build_inputs.py versions
@@ -272,7 +288,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -291,6 +307,7 @@ jobs:
       COR_CI_EXTENDED_TESTS: ${{ needs.inputs.outputs.extended_tests }}
       COR_CI_ANDROID_ROUTING_TESTS: ${{ needs.inputs.outputs.android_routing_tests }}
       COR_CI_ANDROID_DIAGNOSTICS_TESTS: ${{ needs.inputs.outputs.android_diagnostics_tests }}
+      COR_CI_MOBILE_UI_TESTS: ${{ needs.inputs.outputs.mobile_ui_tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -326,7 +343,7 @@ jobs:
           import os, sys
           sys.path.insert(0, 'scripts')
           from action_cache import workspace_restore_identity
-          identity = workspace_restore_identity('.', 'android-main-v3-${{ matrix.arch }}',
+          identity = workspace_restore_identity('.', 'android-main-v4-${{ matrix.arch }}',
               os.environ['WORKSPACE_SOURCE_CACHE'])
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('prefix=' + identity['prefix'] + '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
@@ -343,9 +360,8 @@ jobs:
           cache-workspace-crates: true
           cache-directories: ${{ github.workspace }}/.workspace-sources
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Restore compatible Android workspace from an earlier source revision
-        if: steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit != 'true'
-        id: rust_fallback
+          lookup-only: true
+      - name: Look up compatible Android workspace objects
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         timeout-minutes: 5
         continue-on-error: true
@@ -355,29 +371,33 @@ jobs:
           restore-keys: |
             ${{ steps.rust_identity.outputs.prefix }}-
             ${{ steps.rust_identity.outputs.legacy_prefix }}-
-      - name: Discard interrupted GitHub compiler restore
-        if: steps.rust_github.outcome == 'failure' || steps.rust_fallback.outcome == 'failure'
-        shell: python
-        run: |
-          import sys
-          sys.path.insert(0, 'scripts')
-          from action_cache import discard_restore
-          discard_restore('.')
+          lookup-only: true
+      - name: Restore Android workspace with retries
+        id: rust_fallback
+        uses: ./.github/actions/cache-restore-retry
+        timeout-minutes: 25
+        with:
+          path: ${{ steps.rust_identity.outputs.paths }}
+          key: ${{ steps.rust_identity.outputs.prefix }}-workspace-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**') }}
+          restore-keys: |
+            ${{ steps.rust_identity.outputs.prefix }}-
+            ${{ steps.rust_identity.outputs.legacy_prefix }}-
+          cleanup: compiler
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: android-shared-dependencies
           path: target/shared-go
       - name: Restore verified shared source downloads
         run: python3 scripts/build_inputs.py restore-go --directory target/shared-go
-      - name: Reuse Android Go compilation
+      - name: Restore Android Go compilation with retries
         id: go_cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        continue-on-error: true
-        timeout-minutes: 3
+        uses: ./.github/actions/cache-restore-retry
+        timeout-minutes: 25
         with:
           path: ${{ env.GOCACHE }}
           key: android-go-build-v1-${{ matrix.arch }}-${{ hashFiles('.github/build-versions.json', 'apps/android/core/go.mod', 'apps/android/core/go.sum', 'apps/android/core/**/*.go') }}
           restore-keys: android-go-build-v1-${{ matrix.arch }}-
+          cleanup: go
       - name: Prepare Gradle from a verified distribution
         run: python3 scripts/build_inputs.py prepare-gradle --directory '${{ runner.temp }}/cor-gradle'
       - name: Set the isolated Gradle home
@@ -499,7 +519,7 @@ jobs:
     if: ${{ !inputs.refresh_dependencies }}
     name: ${{ matrix.system }}-${{ matrix.arch }}
     needs: inputs
-    timeout-minutes: 90
+    timeout-minutes: 150
     permissions:
       contents: read
     strategy:
@@ -576,13 +596,18 @@ jobs:
         with:
           toolchain: ${{ env.COR_RUST }}-${{ matrix.target }}
           components: rustfmt, clippy
+      - name: Configure verified workspace source receipts
+        run: |
+          import os, pathlib
+          with open(os.environ['GITHUB_ENV'], 'a') as environment:
+              environment.write('WORKSPACE_SOURCE_CACHE=' + str(pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json') + '\n')
       - name: Identify compatible native compiler objects
         id: rust_identity
         run: |
           import os, pathlib, sys
           sys.path.insert(0, 'scripts')
           from action_cache import workspace_restore_identity
-          identity = workspace_restore_identity('.', 'native-main-v3-${{ matrix.system }}-${{ matrix.arch }}',
+          identity = workspace_restore_identity('.', 'native-main-v4-${{ matrix.system }}-${{ matrix.arch }}',
               pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('prefix=' + identity['prefix'] + '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
@@ -601,9 +626,8 @@ jobs:
           cache-workspace-crates: ${{ matrix.os != 'windows-11-arm' }}
           cache-directories: ${{ runner.temp }}/workspace-sources
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Restore compatible native workspace from an earlier source revision
-        if: steps.rust_github.outcome == 'success' && steps.rust_github.outputs.cache-hit != 'true'
-        id: rust_fallback
+          lookup-only: true
+      - name: Look up compatible native workspace objects
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         timeout-minutes: 5
         continue-on-error: true
@@ -613,18 +637,18 @@ jobs:
           restore-keys: |
             ${{ steps.rust_identity.outputs.prefix }}-
             ${{ steps.rust_identity.outputs.legacy_prefix }}-
-      - name: Discard interrupted GitHub compiler restore
-        if: steps.rust_github.outcome == 'failure' || steps.rust_fallback.outcome == 'failure'
-        run: |
-          import sys
-          sys.path.insert(0, 'scripts')
-          from action_cache import discard_restore
-          discard_restore('.')
-      - name: Configure verified workspace source receipts
-        run: |
-          import os, pathlib
-          with open(os.environ['GITHUB_ENV'], 'a') as environment:
-              environment.write('WORKSPACE_SOURCE_CACHE=' + str(pathlib.Path(os.environ['RUNNER_TEMP'])/'workspace-sources/source.json') + '\n')
+          lookup-only: true
+      - name: Restore compatible native workspace with retries
+        id: rust_fallback
+        uses: ./.github/actions/cache-restore-retry
+        timeout-minutes: 25
+        with:
+          path: ${{ steps.rust_identity.outputs.paths }}
+          key: ${{ steps.rust_identity.outputs.prefix }}-${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
+          restore-keys: |
+            ${{ steps.rust_identity.outputs.prefix }}-
+            ${{ steps.rust_identity.outputs.legacy_prefix }}-
+          cleanup: compiler
       - name: Verify native architecture
         run: |
           import subprocess, sys
@@ -640,7 +664,7 @@ jobs:
       - name: Prepare cached Ubuntu compiler environment
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-build-cache
-        timeout-minutes: 20
+        timeout-minutes: 35
       - name: Prepare frozen native resources on the host
         env:
           GH_TOKEN: ${{ github.token }}

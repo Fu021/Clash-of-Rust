@@ -53,9 +53,11 @@ fn convert_row(kind: &str) -> String {
     }
 }
 fn main() {
-    let path = "../../crates/client-ui/ui/state.slint";
-    println!("cargo:rerun-if-changed={path}");
-    let schema = schema::read(path);
+    let state = "../../crates/client-ui/ui/state.slint";
+    let models = "../../crates/client-ui/ui/models.slint";
+    println!("cargo:rerun-if-changed={state}");
+    println!("cargo:rerun-if-changed={models}");
+    let schema = schema::read(state, models);
     let mut code = String::new();
     for (struct_name, fields) in &schema.structs {
         code += &format!(

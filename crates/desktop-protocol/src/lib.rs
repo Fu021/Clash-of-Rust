@@ -284,6 +284,8 @@ mod tests {
         models.attach(&data);
         data.set_edit_name("未保存订阅".into());
         data.set_rule_payload("google.com".into());
+        data.set_focus_target("profile-name".into());
+        data.set_focus_revision(7);
         data.set_fake_ip_exclusions(
             vec![FakeIpExclusionItem {
                 domain: "localhost".into(),
@@ -329,6 +331,8 @@ mod tests {
         assert_eq!(accepted, 8);
         assert_eq!(decoded.edit_name, "未保存订阅");
         assert_eq!(decoded.rule_payload, "google.com");
+        assert_eq!(decoded.focus_target, "profile-name");
+        assert_eq!(decoded.focus_revision, 7);
         assert_eq!(decoded.site_exit_flag, "🇩🇪");
         assert_eq!(decoded.node, "🚀 🇯🇵 日本 01");
         let group = decoded.groups.row_data(0).unwrap();

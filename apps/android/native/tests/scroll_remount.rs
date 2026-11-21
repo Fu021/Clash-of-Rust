@@ -9,7 +9,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
     #[edition = "1.19"]
-    import { ListView, MScroll } from "../ui/mobile/shared/controls.slint";
+    import { ListView, MScroll } from "../../../../crates/client-ui/ui/mobile/shared/controls.slint";
 
     export component MobileScrollProbe inherits Window {
         in property <bool> mounted: true;

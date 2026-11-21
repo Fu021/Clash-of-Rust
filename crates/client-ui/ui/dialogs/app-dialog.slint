@@ -3,7 +3,8 @@ import { DiagnosticActions } from "../components/notice.slint";
 import { Theme, AccentPalette } from "../theme/palette.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { PageScroll, Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, CopyButton, Divider } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, Divider } from "../components/controls.slint";
+import { CopyButton } from "../components/desktop-copy.slint";
 export component AppDialog inherits Rectangle {
     property <length> action-width: max(88px, Theme.body-size * 4 + 28px);
     in-out property <int> selected-accent: UiData.accent;

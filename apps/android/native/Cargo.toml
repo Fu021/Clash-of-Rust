@@ -27,3 +27,5 @@ slint-build.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+i-slint-core = { version = "=1.19.0", default-features = false, features = ["std", "image-decoders", "svg"] }
+slint = { version = "=1.19.0", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-path", "unstable-fontique-012"] }

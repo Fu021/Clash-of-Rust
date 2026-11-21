@@ -440,28 +440,50 @@ def prepare_maven_cache():
             path.unlink()
 
 
+def cargo_target_directory():
+    ci = os.environ.get('GITHUB_ACTIONS') == 'true'
+    configured = os.environ.get('CARGO_TARGET_DIR')
+    directory = Path(configured) if configured else ROOT/'target' if ci else ROOT/'target/mobile'
+    directory = (ROOT/directory).resolve() if not directory.is_absolute() else directory.resolve()
+    default = (ROOT/'target').resolve()
+    if ci and directory != default:
+        raise ValueError('Android CI requires the runner target directory')
+    if not ci and directory == default:
+        raise ValueError('Android builds require a target directory separate from desktop')
+    return directory
+
+
 def build(arch, gradle_offline=False):
     from action_cache import compiler_cache_checkpoint, workspace_sources
-    from ci_test_policy import enabled, extended_tests
+    from ci_test_policy import enabled, extended_tests, mobile_ui_tests
     abi, target, clang_target, _ = ABIS[arch]
-    workspace_sources(ROOT)
-    profiles = (ROOT/'target/release', ROOT/'target'/target/'release')
+    ci = os.environ.get('GITHUB_ACTIONS') == 'true'
+    cargo_output = cargo_target_directory()
+    build_env = dict(os.environ, CARGO_TARGET_DIR=str(cargo_output))
+    if ci:
+        workspace_sources(ROOT)
+    profiles = (cargo_output/'release', cargo_output/target/'release')
     restored_profiles = profiles if (
-        os.environ.get('GITHUB_ACTIONS') == 'true' and any(profile.is_dir() for profile in profiles)
+        ci and any(profile.is_dir() for profile in profiles)
     ) else ()
     packages = ['-p', 'clash-mobile-runtime', '-p', 'clash-android']
-    targets = ['--all-targets'] if extended_tests() else ['--lib']
-    cargo_build(['cargo', 'clippy', *packages, '--release', *targets, '--locked', '--', '-D', 'warnings'], cwd=ROOT)
+    targets = ['--all-targets'] if arch == 'x64' and mobile_ui_tests() else ['--lib']
+    cargo_build(['cargo', 'clippy', *packages, '--release', *targets, '--locked', '--', '-D', 'warnings'],
+                cwd=ROOT, env=build_env)
     if extended_tests() or enabled('COR_CI_ANDROID_ROUTING_TESTS'):
         run(['cargo', 'test', *packages, '--release', '--locked', '--lib',
-             '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT)
+             '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT, env=build_env)
     else:
         run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--lib',
-             '--', '--test-threads=1'], cwd=ROOT)
+             '--', '--test-threads=1'], cwd=ROOT, env=build_env)
+    if arch == 'x64' and mobile_ui_tests():
+        run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked',
+             '--test', 'mobile_lists', '--test', 'scroll_remount', '--test', 'claude_report_blocks',
+             '--', '--test-threads=1'], cwd=ROOT, env=build_env)
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
     clang = toolchain/(clang_target+'26-clang')
-    env = dict(os.environ)
+    env = dict(build_env)
     # Fetch Skia's pinned HarfBuzz commit from the official upstream. The
     # Googlesource mirror has returned 503; git-sync-deps still verifies the
     # exact DEPS commit. Scope the rewrite to this build, not global Git config.
@@ -492,11 +514,12 @@ def build(arch, gradle_offline=False):
     cargo_build(['cargo', 'clippy', '-p', 'clash-android', '--target', target, '--release', '--locked',
                  '--', '-D', 'warnings'], cwd=ROOT, env=env, restored_profiles=restored_profiles)
     cargo_build(['cargo', 'build', '-p', 'clash-android', '--target', target, '--release', '--locked'], cwd=ROOT, env=env)
-    workspace_sources(ROOT, save=True)
+    if ci:
+        workspace_sources(ROOT, save=True)
     compiler_cache_checkpoint(ROOT)
     destination = ANDROID/'app/native-libs'/abi
     destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT/'target'/target/'release/libclash_mobile.so', destination)
+    shutil.copy2(cargo_output/target/'release/libclash_mobile.so', destination)
     # Android's supported backend is Skia, not the desktop software renderer.
     core = ANDROID/'core'
     run(['go', 'mod', 'tidy', '-diff'], cwd=core, env=env)
@@ -519,7 +542,8 @@ def build(arch, gradle_offline=False):
               'compression': compression, **sizes}
     write_json(ROOT/'target/android-report'/arch/'build.json', report)
     print(json.dumps(report), flush=True)
-    workspace_sources(ROOT, save=True)
+    if ci:
+        workspace_sources(ROOT, save=True)
 
 
 def export_build(arch):

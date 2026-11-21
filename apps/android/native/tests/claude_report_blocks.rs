@@ -14,12 +14,14 @@ use std::{
 
 slint::slint! {
     #[edition = "1.19"]
-    import { MobileReportBlocks, MobileReport } from "../ui/mobile/shared/reports.slint";
-    import { PreviewReports } from "../ui/preview-reports.slint";
-    import { ReportItem } from "../ui/state.slint";
-    import { Theme } from "../ui/theme/palette.slint";
-    export { ReportItem } from "../ui/state.slint";
-    export { UiGeometry } from "../ui/components/geometry.slint";
+    import { MobileReportBlocks, MobileReport } from "../../../../crates/client-ui/ui/mobile/shared/reports.slint";
+    import { MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
+    import { ActionButton } from "../../../../crates/client-ui/ui/components/controls.slint";
+    import { PreviewReports } from "../../../../crates/client-ui/ui/preview-reports.slint";
+    import { ReportItem } from "../../../../crates/client-ui/ui/models.slint";
+    import { Theme } from "../../../../crates/client-ui/ui/theme/palette.slint";
+    export { ReportItem } from "../../../../crates/client-ui/ui/models.slint";
+    export { UiGeometry } from "../../../../crates/client-ui/ui/components/geometry.slint";
     export component ReportBlocksProbe inherits Window {
         preferred-width: 393px; preferred-height: 852px;
         in-out property <[ReportItem]> reports;
@@ -32,6 +34,18 @@ slint::slint! {
         }
         if root.section != "": MobileReport {
             width: parent.width; items: root.reports; section: root.section;
+        }
+    }
+
+    export component MobileControlAccessProbe inherits Window {
+        preferred-width: 320px; preferred-height: 160px;
+        in-out property <int> detail <=> MobileView.detail;
+        in-out property <string> notice <=> MobileView.notice;
+        in-out property <bool> notice-critical <=> MobileView.notice-critical;
+        out property <int> clicks;
+        ActionButton {
+            x: 10px; y: 10px; width: 100px; text: "Test";
+            clicked => { root.clicks += 1; }
         }
     }
 }
@@ -75,6 +89,38 @@ fn click(window: &slint::Window, bounds: &[f32]) {
     ] {
         window.dispatch_event(event);
     }
+}
+
+#[test]
+fn mobile_shared_controls_follow_modal_and_notice() {
+    let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    let clock = Rc::new(Cell::new(Duration::ZERO));
+    slint::platform::set_platform(Box::new(Headless(adapter.clone(), clock.clone()))).unwrap();
+    adapter.set_size(slint::PhysicalSize::new(320, 160));
+    let probe = MobileControlAccessProbe::new().unwrap();
+    probe.show().unwrap();
+    frame(&adapter, &clock, 320, 160);
+    let tap = || click(probe.window(), &[10., 10., 100., 40.]);
+    tap();
+    assert_eq!(probe.get_clicks(), 1);
+    probe.set_detail(4);
+    frame(&adapter, &clock, 320, 160);
+    tap();
+    assert_eq!(probe.get_clicks(), 1);
+    probe.set_detail(0);
+    frame(&adapter, &clock, 320, 160);
+    tap();
+    assert_eq!(probe.get_clicks(), 2);
+    probe.set_notice("critical".into());
+    probe.set_notice_critical(true);
+    frame(&adapter, &clock, 320, 160);
+    tap();
+    assert_eq!(probe.get_clicks(), 2);
+    probe.set_notice_critical(false);
+    frame(&adapter, &clock, 320, 160);
+    tap();
+    assert_eq!(probe.get_clicks(), 3);
+    probe.hide().unwrap();
 }
 
 #[test]

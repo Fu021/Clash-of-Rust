@@ -17,7 +17,7 @@
 - `core`：按 CI 依赖快照锁定的 mihomo Go 模块及 gomobile 桥接；使用上游 `cmfa,with_gvisor` 构建标签，路由与应用分流交给 `VpnService`，出站套接字经 `protect` 排除，避免进入自身 TUN。
 - `crates/mobile-ffi`：不依赖 Slint、JNI 或 Android SDK 的共享会话、配置、订阅、规则和控制器操作。原生能力由 `NativeHost` 注入，iOS 可以另接宿主。
 
-移动会话及请求门禁的 Clippy/宿主单元测试由三个 Android ABI job 自行执行，不再由桌面矩阵代跑；之后分别检查、编译实际 Android target。x64 继续运行模拟器集成，ARM64/ARMv7 的宿主测试不代表真机运行通过，见[CI 覆盖](../../docs/workflows/ci.md#测试覆盖)。
+移动会话及请求门禁的 Clippy/宿主单元测试由 Android ABI job 自行执行，不再由桌面矩阵代跑；选中移动界面回归时，只有 x64 编译并运行完整宿主测试目标，三个作业仍分别检查自己的 Android target。x64 继续运行模拟器集成，ARM64/ARMv7 的宿主测试不代表真机运行通过，见[CI 覆盖](../../docs/workflows/ci.md#测试覆盖)。
 
 Activity 退出会取消其 Rust 会话并等待运行时清理完成，之后才允许下一份界面初始化；下载、查询及迟到结果不能跨会话写回。VPN 服务与该线程独立，销毁界面不会主动断开 VPN。后台无界面时的订阅调度边界见[自动更新](../../docs/subscriptions.md#自动更新)。
 
@@ -66,7 +66,7 @@ rustup target add aarch64-linux-android
 python3 scripts/android.py build --arch arm64
 ```
 
-APK 输出到 `apps/android/app/build/outputs/apk/release/`；其他架构使用 `armv7` / `x64` 并安装相应 Rust target。本地构建可通过 `ANDROID_KEYSTORE_PATH`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 指定自己的 PKCS12 签名；未签名的 Release APK 不能直接安装。密钥与密码不应提交到仓库。
+本地 Android Rust 产物默认写入 `target/mobile`，与桌面目录分离；可设置 `CARGO_TARGET_DIR` 指向其他独立目录。APK 输出到 `apps/android/app/build/outputs/apk/release/`；其他架构使用 `armv7` / `x64` 并安装相应 Rust target。本地构建可通过 `ANDROID_KEYSTORE_PATH`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 指定自己的 PKCS12 签名；未签名的 Release APK 不能直接安装。密钥与密码不应提交到仓库。
 
 ## CI 与打包
 

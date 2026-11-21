@@ -111,29 +111,11 @@ def main():
                  '--locked', case, '--', '--test-threads=1'])
         run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust', '--release',
              '--locked', 'application::network_watch::tests::', '--', '--test-threads=1'])
-        for case in ('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes',
-                     'network_toolbox_keeps_menu_input_cancel_and_export_reachable',
-                     'notice_countdown_restarts_and_expires_after_five_seconds',
-                     'application_controls_distinguish_scope_filter_save_and_protection',
-                     'applications_reopen_with_active_geometry_observers_across_modes_and_sizes',
-                     'applications_scroll_across_phone_and_tablet_viewports',
-                     'application_rule_entry_remains_reachable_in_landscape',
-                     'application_policy_form_respects_platform_protection_and_scrolls',
-                     'application_policy_picker_keeps_the_form_and_rejects_locked_selection',
-                     'mobile_accent_picker_remains_usable_while_protected',
-                     'protected_mobile_core_recovery_is_reachable_and_respects_pending_operations',
-                     'mobile_appearance_settings_reopen_with_geometry_and_protection',
-                     'mobile_connections_keep_actions_reachable_and_scroll_with_long_names',
-                     'report_sections_share_one_panel_without_gaps_from_hidden_rows',
-                     'android_report_card_opens_its_section',
-                     'mobile_rules_drag_real_rows_at_phone_pad_and_large_text_sizes'):
-            run(['cargo', 'test', '-p', 'clash-client-ui', '--test', 'mobile_lists', '--release',
-                 '--locked', case, '--', '--exact', '--test-threads=1'])
         for package, target, cases in (
                 ('clash-client-ui', ['--test', 'ui_models'], ['']),
                 ('clash-client-ui', ['--test', 'emoji'], ['']),
-                ('clash-client-ui', ['--test', 'scroll_remount'], ['']),
-                ('clash-client-ui', ['--test', 'claude_report_blocks'], ['']),
+                ('clash-client-ui', ['--test', 'desktop_lists'], ['']),
+                ('clash-desktop-protocol', ['--test', 'schema'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),
                 ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::']),

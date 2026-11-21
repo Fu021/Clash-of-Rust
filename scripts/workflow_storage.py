@@ -9,7 +9,7 @@ import urllib.error
 from linux_compatibility_targets import TARGETS
 from workflow_artifacts import release_module
 
-BUDGET = 20 * 1024**3
+BUDGET = 30 * 1024**3
 VM_TOOL_CACHE_PREFIXES = tuple(sorted({
     entry['vm_cache_prefix'] for targets in TARGETS.values()
     for target in targets if (entry := target.matrix_entry())['qemu']

@@ -79,6 +79,70 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
+    fn generated_bridge_projects_shared_models_and_desktop_state() {
+        use slint::ComponentHandle;
+        use std::rc::Rc;
+
+        struct Headless;
+        impl slint::platform::Platform for Headless {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::platform::PlatformError>
+            {
+                Ok(
+                    slint::platform::software_renderer::MinimalSoftwareWindow::new(
+                        slint::platform::software_renderer::RepaintBufferType::NewBuffer,
+                    ),
+                )
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        let window = ui::AppWindow::new().unwrap();
+        let data = window.global::<ui::UiData>();
+        let mut models = ui::models::ViewModels::default();
+        models.attach(&data);
+        let mut frame = wire::Frame {
+            version: "test-version".into(),
+            focus_target: "profile-name".into(),
+            focus_revision: 7,
+            groups: vec![wire::GroupItem {
+                id: "group".into(),
+                nodes: vec![wire::NodePair {
+                    left: wire::NodeItem {
+                        name: "node".into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }]
+                .into(),
+                ..Default::default()
+            }]
+            .into(),
+            site_results: vec![wire::ReportItem {
+                id: "service".into(),
+                value: "available".into(),
+                ..Default::default()
+            }]
+            .into(),
+            ..Default::default()
+        };
+        assert!(apply_if_current(&frame, &data, &mut models, 2, 2));
+        assert_eq!(data.get_version(), "test-version");
+        assert_eq!(data.get_focus_target(), "profile-name");
+        assert_eq!(data.get_focus_revision(), 7);
+        let group = data.get_groups().row_data(0).unwrap();
+        assert_eq!(group.id, "group");
+        assert_eq!(group.nodes.row_data(0).unwrap().left.name, "node");
+        assert_eq!(
+            data.get_site_results().row_data(0).unwrap().value,
+            "available"
+        );
+        frame.version = "stale".into();
+        assert!(!apply_if_current(&frame, &data, &mut models, 1, 2));
+        assert_eq!(data.get_version(), "test-version");
+    }
+
+    #[test]
     fn unchanged_lists_skip_conversion_and_new_content_replaces_the_model() {
         let converted = Cell::new(0);
         let convert = |source: &&str| {

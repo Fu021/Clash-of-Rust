@@ -13,6 +13,7 @@
 | `dependency_audit.py` | 模块 | 只读探查升级、撤回和替换信号；由 `build_inputs.py audit` 调用，实际变更遵循维护者的 loop 更新授权并验证。 |
 | `workflow_artifacts.py` | CLI / 模块 | 导出、就地暂存、下载和校验不可变 CI 产物；就地暂存绑定实际上传 id/digest，避免同 runner 再下载；同 CI 的 Linux 包就绪后启动兼容验证。 |
 | `action_cache.py` | 共享模块 | GitHub 编译缓存兼容身份、工作区源码回执、不完整恢复清理和同次 CI 共享的 Go 源码归档。 |
+| `test-cache-restore.cjs` | 离线测试 | 验证 CI 缓存恢复的未命中、临时故障、清理和重试上限。 |
 | `workflow_storage.py` | CLI | main 每个目标只留最新缓存，清除其他 ref 缓存；`--dry-run` 预览删除计划。 |
 | `prepare-resources.py` | CLI | 校验并准备 mihomo、Geo 和桌面共享资源。 |
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |

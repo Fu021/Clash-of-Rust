@@ -4,7 +4,8 @@ import { UiData, UiActions, Intent, RuleItem } from "../state.slint";
 import { RuleDragHandle } from "../components/rule-drag.slint";
 import { ListReorderGesture, ListReorderPreview } from "../components/list-reorder.slint";
 import { GeometryTarget } from "../components/geometry.slint";
-import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph, CopyButton } from "../components/controls.slint";
+import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
+import { CopyButton } from "../components/desktop-copy.slint";
 component RulesRow inherits Rectangle {
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
     property <bool> protection-locked: UiData.protected || UiData.protection-pending;

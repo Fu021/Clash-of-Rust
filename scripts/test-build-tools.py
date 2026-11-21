@@ -2517,15 +2517,18 @@ class BuildTests(unittest.TestCase):
                                      'COR_CI_ANDROID_DIAGNOSTICS_TESTS': 'false',
                                      'COR_CI_LINUX_USER_TESTS': 'false',
                                      'COR_CI_UPDATE_TESTS': 'false',
-                                     'COR_CI_DESKTOP_UI_TESTS': 'false'}):
+                                     'COR_CI_DESKTOP_UI_TESTS': 'false',
+                                     'COR_CI_MOBILE_UI_TESTS': 'false'}):
             self.assertEqual(ci_test_policy.android_cases(), (basic,))
             self.assertFalse(ci_test_policy.linux_user_tests())
             self.assertFalse(ci_test_policy.desktop_ui_tests())
+            self.assertFalse(ci_test_policy.mobile_ui_tests())
             self.assertFalse(ci_test_policy.update_tests())
             self.assertEqual(ci_test_policy.select([]), {
                 'extended_tests': False, 'android_routing_tests': False, 'android_diagnostics_tests': False,
                 'linux_user_tests': False,
-                'desktop_ui_tests': False, 'proxy_benchmark': False, 'update_tests': False})
+                'desktop_ui_tests': False, 'mobile_ui_tests': False,
+                'proxy_benchmark': False, 'update_tests': False})
             self.assertTrue(ci_test_policy.select([
                 'apps/android/app/src/main/java/org/clashofrust/android/ApplicationRouting.java'
             ])['android_routing_tests'])
@@ -2557,19 +2560,41 @@ class BuildTests(unittest.TestCase):
                          'crates/client-core/src/detection/tools/transport.rs',
                          'crates/client-core/src/detection/tools/tests.rs',
                          'crates/client-core/src/detection/probe.rs',
-                         'crates/mobile-ffi/src/lib.rs',
-                         'apps/android/native/src/android.rs',
                          'crates/client-core/src/application_rules/groups.rs',
-                         'apps/android/core/application_rules.go',
                          'Cargo.toml',
                          'Cargo.lock',
                          'apps/desktop/Cargo.toml',
                          'apps/desktop-ui/Cargo.toml',
+                         'apps/desktop-ui/build.rs',
                          'crates/desktop-shell/Cargo.toml',
+                         'crates/desktop-protocol/schema.rs',
                          'scripts/run-ci.py',
                          'scripts/macos_ci.py',
                          'scripts/ci_test_policy.py'):
                 self.assertTrue(ci_test_policy.select([path])['desktop_ui_tests'], path)
+            for path in ('crates/client-ui/ui/mobile/shared/pages.slint',
+                         'apps/android/native/src/android.rs',
+                         'apps/android/native/tests/mobile_lists.rs',
+                         'crates/mobile-ffi/src/lib.rs'):
+                selected = ci_test_policy.select([path])
+                self.assertTrue(selected['mobile_ui_tests'], path)
+                self.assertFalse(selected['desktop_ui_tests'], path)
+            for path in ('crates/client-ui/ui/pages/proxies.slint',
+                         'crates/client-ui/ui/state.slint',
+                         'crates/client-ui/ui/components/desktop-copy.slint',
+                         'apps/desktop/src/application/ui_tests.rs'):
+                selected = ci_test_policy.select([path])
+                self.assertTrue(selected['desktop_ui_tests'], path)
+                self.assertFalse(selected['mobile_ui_tests'], path)
+            for path in ('crates/client-ui/ui/components/controls.slint',
+                         'crates/client-ui/ui/icons/network.svg',
+                         'crates/client-ui/ui/models.slint',
+                         'crates/client-ui/ui/preview-network.slint',
+                         'resources/fonts/SourceHanSansCN-Regular.otf',
+                         'crates/client-core/src/detection/ip/mod.rs'):
+                selected = ci_test_policy.select([path])
+                self.assertTrue(selected['desktop_ui_tests'], path)
+                self.assertTrue(selected['mobile_ui_tests'], path)
             for path in ('crates/client-core/src/config/mod.rs',
                          'crates/client-core/src/protection/mod.rs',
                          'crates/mobile-ffi/src/lib.rs',
@@ -2607,31 +2632,28 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(ci_test_policy.android_cases(), (lifecycle, routing, tile, diagnostic))
             self.assertTrue(ci_test_policy.linux_user_tests())
             self.assertTrue(ci_test_policy.desktop_ui_tests())
+            self.assertTrue(ci_test_policy.mobile_ui_tests())
             self.assertTrue(ci_test_policy.update_tests())
 
-    def test_ci_mobile_ui_filters_name_existing_tests(self):
-        source = (build.ROOT/'scripts/run-ci.py').read_text()
-        loops = []
-        for node in ast.walk(ast.parse(source)):
-            if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
-                continue
-            for call in ast.walk(node):
-                if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
-                    continue
-                if call.func.id != 'run' or not call.args or not isinstance(call.args[0], ast.List):
-                    continue
-                if any(isinstance(item, ast.Constant) and item.value == 'mobile_lists'
-                       for item in call.args[0].elts):
-                    loops.append(node)
-        self.assertEqual(len(loops), 1)
-        cases = [ast.literal_eval(item) for item in loops[0].iter.elts]
-        self.assertTrue(cases)
-        self.assertEqual(len(cases), len(set(cases)))
-        tests = re.findall(r'#\[test\]\s*fn\s+([A-Za-z_][A-Za-z_0-9]*)',
-                           (build.ROOT/'crates/client-ui/tests/mobile_lists.rs').read_text())
-        for case in cases:
-            with self.subTest(case=case):
-                self.assertEqual(tests.count(case), 1)
+    def test_ci_mobile_ui_targets_exist_and_run_only_in_android_job(self):
+        source = (build.ROOT/'scripts/android.py').read_text()
+        calls = [
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == 'run' and node.args and isinstance(node.args[0], ast.List)
+            and any(isinstance(item, ast.Constant) and item.value == 'mobile_lists'
+                    for item in node.args[0].elts)
+        ]
+        self.assertEqual(len(calls), 1)
+        command = [item.value for item in calls[0].args[0].elts if isinstance(item, ast.Constant)]
+        self.assertIn('clash-android', command)
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+            self.assertIn(target, command)
+            path = build.ROOT/'apps/android/native/tests'/(target+'.rs')
+            self.assertRegex(path.read_text(), r'#\[test\]\s*fn\s+')
+        desktop = (build.ROOT/'scripts/run-ci.py').read_text()
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+            self.assertNotIn("'"+target+"'", desktop)
 
     def test_linux_network_selection_survives_sudo(self):
         specification = importlib.util.spec_from_file_location(
@@ -2827,6 +2849,13 @@ class BuildTests(unittest.TestCase):
             (native/'Cargo.toml').write_text('[package]\nname="legacy-android-host"\n')
             (root/'Cargo.toml').write_text('[workspace]\nmembers=["apps/desktop","apps/android/native"]\n')
             self.assertEqual(build.desktop_cargo_scope(root), ['--workspace', '--exclude', 'legacy-android-host'])
+            future = root/'apps/new-mobile'
+            future.mkdir(parents=True)
+            (future/'Cargo.toml').write_text('[package]\nname="new-mobile"\n')
+            (root/'Cargo.toml').write_text(
+                '[workspace]\nmembers=["apps/desktop","apps/android/native","apps/new-mobile"]\n')
+            self.assertEqual(build.desktop_cargo_scope(root),
+                             ['--workspace', '--exclude', 'legacy-android-host', '--exclude', 'new-mobile'])
 
     def test_desktop_pipeline_excludes_mobile_without_dropping_shared_sources(self):
         specification = importlib.util.spec_from_file_location('native_ci', build.ROOT/'scripts/run-ci.py')
@@ -2857,6 +2886,92 @@ class BuildTests(unittest.TestCase):
         self.assertEqual([command[1] for command in commands], ['fmt', 'clippy', 'build', 'test'])
         self.assertEqual(commands[-1][2:6], ['-p', 'clash-of-rust', '--test', 'core_integration'])
         self.assertIn('--no-run', commands[-1])
+
+    def test_platform_workspace_dependencies_do_not_cross_hosts(self):
+        root = build.ROOT
+        workspace = tomllib.loads((root/'Cargo.toml').read_text())['workspace']
+        manifests = {}
+        for member in workspace['members']:
+            manifest = tomllib.loads((root/member/'Cargo.toml').read_text())
+            manifests[manifest['package']['name']] = manifest
+        desktop = {'clash-of-rust', 'clash-desktop-ui', 'clash-desktop-shell',
+                   'clash-desktop-protocol', 'clash-client-ui', 'clash-client-runtime', 'clash-cli'}
+        mobile = {'clash-android', 'clash-mobile-runtime'}
+
+        def reachable(roots, packages=manifests, inherited=workspace.get('dependencies', {})):
+            pending = list(roots)
+            seen = set()
+            while pending:
+                package = pending.pop()
+                if package in seen:
+                    continue
+                seen.add(package)
+                manifest = packages[package]
+                sections = [manifest, *manifest.get('target', {}).values()]
+                for section in sections:
+                    for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+                        for alias, specification in section.get(kind, {}).items():
+                            if isinstance(specification, dict) and specification.get('workspace'):
+                                specification = inherited.get(alias, specification)
+                            name = specification.get('package', alias) if isinstance(specification, dict) else alias
+                            if name in packages:
+                                pending.append(name)
+            return seen
+
+        self.assertFalse(reachable(desktop) & mobile)
+        self.assertFalse(reachable(mobile) & desktop)
+        self.assertIn('clash-android', reachable(
+            {'fixture-desktop'},
+            {'fixture-desktop': {'dev-dependencies': {'renamed': {'workspace': True}}},
+             'clash-android': {}},
+            {'renamed': {'package': 'clash-android', 'path': 'apps/android/native'}}))
+
+    def test_slint_platform_import_graphs_do_not_cross_hosts(self):
+        root = build.ROOT
+        ui = (root/'crates/client-ui/ui').resolve()
+        imports = re.compile(
+            r'\b(?:(?:import|export)\s*\{[^}]*\}\s*from\s*|import\s*)"([^"]+\.slint)"', re.S)
+
+        def visit(roots, forbidden):
+            pending = list(roots)
+            seen = set()
+            while pending:
+                source = pending.pop().resolve()
+                if source in seen:
+                    continue
+                seen.add(source)
+                self.assertFalse(forbidden(source), str(source))
+                for imported in imports.findall(source.read_text()):
+                    if imported == 'std-widgets.slint':
+                        continue
+                    target = (source.parent/imported).resolve()
+                    self.assertTrue(target.is_file(), (source, imported))
+                    pending.append(target)
+            return seen
+
+        desktop_roots = [
+            ui/'app.slint', ui/'preview.slint',
+            *(ui/'pages').rglob('*.slint'), *(ui/'dialogs').rglob('*.slint'),
+            *(ui/'components').glob('desktop-*.slint'),
+            *(root/'crates/client-ui/tests').glob('*.rs'),
+        ]
+        mobile_roots = [
+            *(ui/'mobile').rglob('*.slint'),
+            *(root/'apps/android/native/tests').glob('*.rs'),
+        ]
+        def desktop_only(path):
+            return (path in (ui/'app.slint', ui/'state.slint', ui/'preview.slint')
+                    or path.is_relative_to(ui/'pages') or path.is_relative_to(ui/'dialogs')
+                    or path.parent == ui/'components' and path.name.startswith('desktop-'))
+
+        desktop = visit(desktop_roots, lambda path: path.is_relative_to(ui/'mobile'))
+        mobile = visit(mobile_roots, desktop_only)
+        shared = desktop & mobile
+        for source in shared:
+            self.assertFalse(desktop_only(source), str(source))
+            self.assertFalse(source.is_relative_to(ui/'mobile'), str(source))
+        self.assertIn(ui/'components/controls.slint', desktop & mobile)
+        self.assertIn(ui/'models.slint', desktop & mobile)
 
     def test_macos_proxy_investigation_runs_the_actual_child_readiness_regressions(self):
         specification = importlib.util.spec_from_file_location('native_macos_ci', build.ROOT/'scripts/run-ci.py')
@@ -2936,18 +3051,6 @@ class BuildTests(unittest.TestCase):
                             in command for command in ui_checks))
         self.assertTrue(any('application::ui_tests::appearance_remains_interactive_while_geo_owns_the_engine_and_late_reply_cannot_undo_it'
                             in command for command in ui_checks))
-        self.assertTrue(any('notice_countdown_restarts_and_expires_after_five_seconds'
-                            in command for command in ui_checks))
-        self.assertTrue(any('applications_scroll_across_phone_and_tablet_viewports'
-                            in command for command in ui_checks))
-        self.assertTrue(any('application_rule_entry_remains_reachable_in_landscape'
-                            in command for command in ui_checks))
-        self.assertTrue(any('mobile_accent_picker_remains_usable_while_protected'
-                            in command for command in ui_checks))
-        self.assertTrue(any('application_controls_distinguish_scope_filter_save_and_protection'
-                            in command for command in ui_checks))
-        self.assertTrue(any('mobile_appearance_settings_reopen_with_geometry_and_protection'
-                            in command for command in ui_checks))
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
                             and 'control::tests::' in command for command in ui_checks))
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-client-runtime'
@@ -2958,13 +3061,9 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-cli'
                             and 'args::tests::' in command and '--no-run' not in command
                             for command in ui_checks))
-        self.assertTrue(any('mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes'
-                            in command for command in ui_checks))
-        self.assertTrue(any('scroll_remount' in command and '--no-run' not in command
-                            for command in ui_checks))
-        focused = [command for command in ui_checks if
-                   command[command.index('-p')+1] == 'clash-of-rust'
-                   or 'mobile_lists' in command]
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+            self.assertFalse(any(target in command for command in ui_checks))
+        focused = [command for command in ui_checks if command[command.index('-p')+1] == 'clash-of-rust']
         for case in (
                 'application::ui_tests::network_tools_remain_reachable_after_scrolling_other_pages',
                 'application::ui_tests::remounted_subscription_list_clamps_a_stale_scroll_position',
@@ -3002,12 +3101,7 @@ class BuildTests(unittest.TestCase):
             if not path.is_file():
                 path = build.ROOT/'apps/desktop/src/application/mod.rs'
             self.assertEqual(len(re.findall(r'\bfn\s+' + re.escape(name) + r'\s*\(', path.read_text())), 1, case)
-        self.assertTrue(any('application_policy_form_respects_platform_protection_and_scrolls'
-                            in command for command in focused))
         self.assertTrue(any('application::network_watch::tests::' in command for command in focused))
-        self.assertTrue(any('protected_mobile_core_recovery_is_reachable_and_respects_pending_operations'
-                            in command for command in focused))
-        self.assertTrue(any('android_report_card_opens_its_section' in command for command in focused))
         prefixes = ('application::network_watch::tests::', 'application::notice::tests::',
                     'application::claude::tests::', 'application::memory_tests::',
                     'application::window_state::tests::')
@@ -3017,7 +3111,8 @@ class BuildTests(unittest.TestCase):
                             for command in focused))
         for package, target in (('clash-client-ui', 'ui_models'),
                                 ('clash-client-ui', 'emoji'),
-                                ('clash-client-ui', 'claude_report_blocks'),
+                                ('clash-client-ui', 'desktop_lists'),
+                                ('clash-desktop-protocol', 'schema'),
                                 ('clash-desktop-ui', '--lib'),
                                 ('clash-client-core', '--lib')):
             self.assertTrue(any(command[command.index('-p')+1] == package and target in command
@@ -3090,19 +3185,74 @@ class BuildTests(unittest.TestCase):
             'crates/client-runtime/src/platform/linux/tun/terminal_agent.rs'
         ])['linux_user_tests'])
 
+    def test_android_build_uses_a_separate_local_cargo_directory(self):
+        local_target = build.ROOT/'target/mobile'
+        with patch.dict(os.environ, {'ANDROID_NDK_ROOT': '/tmp/ndk'}, clear=True), \
+                patch.object(local_cache, 'workspace_sources') as receipts, \
+                patch.object(local_cache, 'compiler_cache_checkpoint'), \
+                patch.object(android_build, 'cargo_build') as cargo, \
+                patch.object(android_build, 'run') as invoke, \
+                patch.object(android_build, 'android_versions',
+                             return_value={'platform': '36', 'build_tools': '36.0.0'}), \
+                patch.object(android_build.Path, 'mkdir'), \
+                patch.object(android_build.shutil, 'copy2', side_effect=RuntimeError('native artifact')) as copy:
+            with self.assertRaisesRegex(RuntimeError, 'native artifact'):
+                android_build.build('arm64')
+        receipts.assert_not_called()
+        self.assertTrue(cargo.call_args_list)
+        for call in cargo.call_args_list:
+            self.assertEqual(call.kwargs['env']['CARGO_TARGET_DIR'], str(local_target))
+        self.assertEqual(invoke.call_args.kwargs['env']['CARGO_TARGET_DIR'], str(local_target))
+        self.assertEqual(copy.call_args.args[0],
+                         local_target/'aarch64-linux-android/release/libclash_mobile.so')
+        with patch.dict(os.environ, {'CARGO_TARGET_DIR': 'target'}, clear=True):
+            with self.assertRaisesRegex(ValueError, 'separate from desktop'):
+                android_build.cargo_target_directory()
+        with patch.dict(os.environ, {'CARGO_TARGET_DIR': 'target/other-mobile'}, clear=True):
+            self.assertEqual(android_build.cargo_target_directory(), build.ROOT/'target/other-mobile')
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}, clear=True):
+            self.assertEqual(android_build.cargo_target_directory(), build.ROOT/'target')
+
     def test_android_build_runs_mobile_unit_tests_before_preparing_target_tools(self):
-        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
+        for arch in ('arm64', 'armv7'):
+            with self.subTest(arch=arch), \
+                    patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'true'}), \
+                    patch.object(local_cache, 'workspace_sources'), \
+                    patch.object(android_build, 'cargo_build') as clippy, \
+                    patch.object(android_build, 'run', side_effect=RuntimeError('mobile tests executed')) as tests:
+                with self.assertRaisesRegex(RuntimeError, 'mobile tests executed'):
+                    android_build.build(arch)
+                for command in (clippy.call_args.args[0], tests.call_args.args[0]):
+                    packages = [command[index + 1] for index, value in enumerate(command) if value == '-p']
+                    self.assertEqual(packages, ['clash-mobile-runtime', 'clash-android'])
+                    self.assertNotIn('--workspace', command)
+                    self.assertIn('--locked', command)
+                    self.assertIn('--lib', command)
+                    self.assertNotIn('--all-targets', command)
+
+    def test_android_mobile_ui_regressions_run_once_in_x64_job(self):
+        commands = []
+
+        def capture(command, **kwargs):
+            commands.append(command)
+            if 'mobile_lists' in command:
+                raise RuntimeError('mobile UI tests selected')
+
+        with patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                     'COR_CI_ANDROID_ROUTING_TESTS': 'false',
+                                     'COR_CI_MOBILE_UI_TESTS': 'true'}), \
                 patch.object(local_cache, 'workspace_sources'), \
                 patch.object(android_build, 'cargo_build') as clippy, \
-                patch.object(android_build, 'run', side_effect=RuntimeError('mobile tests executed')) as tests:
-            with self.assertRaisesRegex(RuntimeError, 'mobile tests executed'):
-                android_build.build('arm64')
-        for command in (clippy.call_args.args[0], tests.call_args.args[0]):
-            packages = [command[index + 1] for index, value in enumerate(command) if value == '-p']
-            self.assertEqual(packages, ['clash-mobile-runtime', 'clash-android'])
-            self.assertNotIn('--workspace', command)
-            self.assertIn('--locked', command)
-        self.assertIn('--lib', tests.call_args.args[0])
+                patch.object(android_build, 'run', side_effect=capture):
+            with self.assertRaisesRegex(RuntimeError, 'mobile UI tests selected'):
+                android_build.build('x64')
+        self.assertIn('--all-targets', clippy.call_args.args[0])
+        self.assertEqual(len(commands), 2)
+        self.assertIn('--lib', commands[0])
+        self.assertEqual(commands[1][commands[1].index('-p')+1], 'clash-android')
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+            self.assertIn(target, commands[1])
+        self.assertNotIn('--no-run', commands[1])
 
     def test_linux_ci_prepares_resources_on_host_before_entering_container(self):
         with patch.object(sys, 'argv', ['linux_ci.py', 'ci']), \
@@ -4392,7 +4542,7 @@ Private_Clean: 2 kB
             source = root/'crates/client/src/lib.rs'
             source.parent.mkdir(parents=True)
             source.write_text('first')
-            arguments = (root, 'native-main-v3-macos-x64', root/'receipt/source.json')
+            arguments = (root, 'native-main-v4-macos-x64', root/'receipt/source.json')
             environment = {'CARGO_HOME': str(root/'cargo')}
             first = local_cache.workspace_restore_identity(
                 *arguments, compiler=b'compiler one', environment=environment)
@@ -4422,15 +4572,19 @@ Private_Clean: 2 kB
             changed_tool = local_cache.workspace_restore_identity(
                 *arguments, compiler=b'compiler one', environment=environment)
             self.assertNotEqual(different['prefix'], changed_tool['prefix'])
-            for family in ('native-main-v3-linux-x64', 'native-main-v3-windows-arm64',
-                           'android-main-v3-arm64'):
+            for family in ('native-main-v4-linux-x64', 'native-main-v4-windows-arm64',
+                           'android-main-v4-arm64'):
                 different = local_cache.workspace_restore_identity(
                     root, family, root/'receipt/source.json', compiler=b'compiler one',
                     environment=environment)
                 self.assertNotEqual(first['prefix'], different['prefix'])
             with self.assertRaises(ValueError):
                 local_cache.workspace_restore_identity(
-                    root, 'native-main-v3-linux-x64\nunsafe', root/'receipt/source.json')
+                    root, 'native-main-v4-linux-x64\nunsafe', root/'receipt/source.json')
+            for obsolete in ('native-main-v3-linux-x64', 'android-main-v3-x64'):
+                with self.subTest(obsolete=obsolete), self.assertRaises(ValueError):
+                    local_cache.workspace_restore_identity(
+                        root, obsolete, root/'receipt/source.json')
 
     def test_compiler_fallback_reuses_objects_across_dependency_and_feature_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4439,7 +4593,7 @@ Private_Clean: 2 kB
             manifest.write_text('[workspace]\nmembers=[]\n')
             lockfile = root/'Cargo.lock'
             lockfile.write_text('version=4\n')
-            arguments = (root, 'native-main-v3-macos-x64', root/'receipt/source.json')
+            arguments = (root, 'native-main-v4-macos-x64', root/'receipt/source.json')
             initial = local_cache.workspace_restore_identity(*arguments, compiler=b'rustc', environment={})
             exact = local_cache.rust_keys(root, b'rustc', {})[0]
             for manifest_text, lock_text in (
@@ -4472,28 +4626,28 @@ Private_Clean: 2 kB
             def identity(family):
                 return local_cache.workspace_restore_identity(
                     root, family, root/'receipt/source.json', compiler=b'rustc', environment={})
-            macos = identity('native-main-v3-macos-x64')
-            android = identity('android-main-v3-arm64')
-            linux = identity('native-main-v3-linux-x64')
+            macos = identity('native-main-v4-macos-x64')
+            android = identity('android-main-v4-arm64')
+            linux = identity('native-main-v4-linux-x64')
             legacy = local_cache.rust_keys(root, b'rustc', {})[1].rstrip('-')
             expected = local_cache.rust_environment_key(b'rustc', {}) + hashlib.sha256(
                 (legacy+hashlib.sha256(versions.read_bytes()).hexdigest()).encode()).hexdigest()
-            self.assertEqual(macos['legacy_prefix'], 'native-main-v3-macos-x64--'+expected)
+            self.assertEqual(macos['legacy_prefix'], 'native-main-v4-macos-x64--'+expected)
             baseline['tools']['gradle'] = '2'
             baseline['upstream']['android']['system_image'] = 'two'
             versions.write_text(json.dumps(baseline))
-            for family, original in (('native-main-v3-macos-x64', macos), ('android-main-v3-arm64', android)):
+            for family, original in (('native-main-v4-macos-x64', macos), ('android-main-v4-arm64', android)):
                 self.assertEqual(original['prefix'], identity(family)['prefix'])
             baseline['upstream']['android']['ndk'] = '2'
             versions.write_text(json.dumps(baseline))
-            self.assertEqual(macos['prefix'], identity('native-main-v3-macos-x64')['prefix'])
-            self.assertNotEqual(android['prefix'], identity('android-main-v3-arm64')['prefix'])
+            self.assertEqual(macos['prefix'], identity('native-main-v4-macos-x64')['prefix'])
+            self.assertNotEqual(android['prefix'], identity('android-main-v4-arm64')['prefix'])
             baseline['upstream']['linux']['image'] = 'ubuntu@sha256:second'
             versions.write_text(json.dumps(baseline))
-            self.assertNotEqual(linux['prefix'], identity('native-main-v3-linux-x64')['prefix'])
+            self.assertNotEqual(linux['prefix'], identity('native-main-v4-linux-x64')['prefix'])
             baseline['tools']['python_macos'] = '4'
             versions.write_text(json.dumps(baseline))
-            self.assertNotEqual(macos['prefix'], identity('native-main-v3-macos-x64')['prefix'])
+            self.assertNotEqual(macos['prefix'], identity('native-main-v4-macos-x64')['prefix'])
 
     def test_only_current_successful_compiler_checkpoint_allows_failure_save(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4525,7 +4679,7 @@ Private_Clean: 2 kB
     def test_compiler_fallback_generations_share_the_existing_retention_family(self):
         suffix = '-workspace-'+'a'*64+'-local-deps-v1-check-Darwin-x64-'+'b'*16+'-'+'c'*16
         legacy = 'native-main-v2-macos-x64--'+suffix
-        current = 'native-main-v3-macos-x64--v1-'+'d'*64+'-'+'e'*64+suffix
+        current = 'native-main-v4-macos-x64--v1-'+'d'*64+'-'+'e'*64+suffix
         self.assertEqual(storage.lineage(legacy), storage.lineage(current))
         newer = current.replace('d'*64, 'f'*64).replace('a'*64, '0'*64)
         self.assertEqual(storage.lineage(current), storage.lineage(newer))

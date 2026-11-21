@@ -7,13 +7,13 @@ runs:
       id: identity
       shell: bash
       run: python3 scripts/linux_ci.py cache-keys
-    - name: Restore compiler container
+    - name: Restore compiler container with retries
       id: restore
-      continue-on-error: true
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      uses: ./.github/actions/cache-restore-retry
       with:
         path: ${{ runner.temp }}/cor-linux-build-cache
         key: linux-build-${{ steps.identity.outputs.image }}
+        cleanup: container
     - name: Verify or prepare compiler container
       id: prepare
       shell: bash

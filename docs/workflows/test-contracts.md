@@ -8,8 +8,8 @@
 
 | 范围 | 权威入口 | 修改时核对 |
 | --- | --- | --- |
-| 桌面界面与后台 | [桌面 UI 回归](../../apps/desktop/src/application/ui_tests.rs)、[集成测试](../../apps/desktop/tests/core_integration.rs) | 正式消息投影、真实指针回调、长名称、通知分级、保护门禁、后台状态与草稿保留。 |
-| 共享与移动界面 | [软件窗口测试](../../crates/client-ui/tests/mobile_lists.rs)、[滚动重建](../../crates/client-ui/tests/scroll_remount.rs)、[emoji](../../crates/client-ui/tests/emoji.rs)、[模型](../../crates/client-ui/tests/models.rs) | Android/iOS 原型完整入口、手机/Pad、列表/宫格、字号、滚动与重建后的有效位置、触控区域、计时器与模型替换。iOS 原型不等于原生宿主。 |
+| 桌面界面与后台 | [桌面 UI 回归](../../apps/desktop/src/application/ui_tests.rs)、[组件回归](../../crates/client-ui/tests/desktop_lists.rs)、[emoji](../../crates/client-ui/tests/emoji.rs)、[模型](../../crates/client-ui/tests/models.rs)、[协议模型](../../crates/desktop-protocol/tests/schema.rs)、[集成测试](../../apps/desktop/tests/core_integration.rs) | 正式消息投影、真实指针回调、长名称、通知分级、保护门禁、后台状态与草稿保留。桌面协议从共享模型和桌面状态生成，检查嵌套回调后的属性也能进入协议。 |
+| 移动界面 | [移动软件窗口测试](../../apps/android/native/tests/mobile_lists.rs)、[移动滚动重建](../../apps/android/native/tests/scroll_remount.rs)、[报告组件](../../apps/android/native/tests/claude_report_blocks.rs) | Android/iOS 原型完整入口、手机/Pad、列表/宫格、字号、滚动与重建后的有效位置、触控区域、计时器与模型替换。iOS 原型不等于原生宿主；测试由移动宿主编译。 |
 | 原生窗口 | [Windows 窗口测试](../../apps/desktop-ui/tests/window_reopen.rs)、[macOS 入口](../../scripts/macos_ci.py)、[Linux 入口](../../scripts/linux_gui.py) | 首次显示、隐藏、重建、缩放、托盘和关闭策略；源码软件窗口不替代安装后原生窗口。 |
 | Android 生命周期与网络 | [instrumentation](../../apps/android/app/src/androidTest/java/org/clashofrust/android/ProxyTunTest.java)、[会话退出](../../apps/android/native/src/session_worker.rs)、[运行脚本](../../scripts/android.py) | 常规 CI 执行真实授权、代理/TUN 流量、DNS 和恢复，并保留轻量宿主取消回归；应用分流随相关改动执行，设备生命周期和冷磁贴在扩展模式运行。 |
 | 业务、持久化与协议 | [共享业务](../../crates/client-core/src/lib.rs)、[桌面运行时](../../crates/client-runtime/src/lib.rs)、[移动会话](../../crates/mobile-ffi/src/lib.rs)、[CLI](../../apps/cli/src/main.rs) | 输入校验、序列化及所有构造点、读取/写入失败、取消、恢复、保护态、凭据脱敏。UI 变化不得使宿主或协议只在预览中可用。 |

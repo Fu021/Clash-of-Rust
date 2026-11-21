@@ -1,0 +1,16 @@
+import { UiData, UiActions, Intent } from "../state.slint";
+import { Theme } from "../theme/palette.slint";
+import { NetworkInfo, ServiceStatus } from "overview.slint";
+
+export component NetworkOverview inherits VerticalLayout {
+    in property <length> available-width;
+    spacing: Theme.page-gap; alignment: start;
+    NetworkInfo {
+        available-width: root.available-width; items: UiData.overview-network;
+        hidden: UiData.privacy-hidden; busy: UiData.overview-busy;
+        enabled: !UiData.working && UiData.modal == 0 && !UiData.notice-modal;
+        privacy-requested => { UiActions.dispatch(Intent.overview-privacy, "", ""); }
+        refresh-requested => { UiActions.dispatch(Intent.overview-refresh, "", ""); }
+    }
+    ServiceStatus { available-width: root.available-width; items: UiData.overview-services; status: UiData.overview-status; }
+}
