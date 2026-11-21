@@ -149,8 +149,8 @@ export component MobileFixture inherits Rectangle {
         MobileData.site-results = [
             {id: "chatgpt", title: "ChatGPT", value: "可用", detail: "同域出口：203.0.113.13 · 美国", country: "美国", flag: "🇺🇸", flagged: true, source: "服务响应", status-label: "确认可用", tone: 1, delay: "420 ms", delay-tone: 2},
             {id: "claude", title: "Claude", value: "可用", detail: "同域出口：203.0.113.12 · 香港", country: "香港", flag: "🇨🇳", flagged: true, source: "服务响应", status-label: "确认可用", tone: 1, delay: "925 ms", delay-tone: 3},
-            {id: "gemini", title: "Gemini", value: "网页可达", source: "网页响应", status-label: "仅网页可达", tone: 2},
-            {id: "copilot", title: "Copilot", value: "当前地区不可用", source: "服务响应", status-label: "不可用或受限", tone: 3}
+            {id: "gemini", title: "Gemini", value: "网页可达", detail: "同域出口：未确认", source: "网页响应", status-label: "仅网页可达", tone: 2},
+            {id: "copilot", title: "Copilot", value: "当前地区不可用", detail: "同域出口：未确认", source: "服务响应", status-label: "不可用或受限", tone: 3}
         ];
         MobileData.claude-normal = "5"; MobileData.claude-risk = "3"; MobileData.claude-clues = "5";
         MobileData.claude-status = "检测完成 · 浏览器采样已回传";

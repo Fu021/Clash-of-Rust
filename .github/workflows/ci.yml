@@ -445,6 +445,11 @@ jobs:
           sys.path.insert(0, 'scripts')
           from android import prepare_sdk
           prepare_sdk()
+      - name: Install dependencies for mobile software-renderer tests
+        if: matrix.arch == 'x64' && needs.inputs.outputs.mobile_ui_tests == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig-dev libfreetype-dev
       - name: Compile Android application and embedded core
         env:
           GH_TOKEN: ${{ github.token }}

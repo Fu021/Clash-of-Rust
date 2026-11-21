@@ -2463,7 +2463,7 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         millis: 12,
         detail: String::new(),
         target_exit: Some(ip_check::TargetExit {
-            host: "claude.ai",
+            host: "claude.ai".into(),
             ip: "203.0.113.12".parse().unwrap(),
             country: Some("香港".into()),
         }),
@@ -2475,7 +2475,7 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         millis: 218,
         detail: String::new(),
         target_exit: Some(ip_check::TargetExit {
-            host: "chatgpt.com",
+            host: "chatgpt.com".into(),
             ip: "203.0.113.13".parse().unwrap(),
             country: Some("美国".into()),
         }),
@@ -2501,7 +2501,10 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         row("MediaUnlockTest_ChatGPT").detail,
         "同域出口：203.0.113.13 · 美国"
     );
-    assert!(row("AIUnlockTest_Gemini_location").detail.is_empty());
+    assert_eq!(
+        row("AIUnlockTest_Gemini_location").detail,
+        "同域出口：待检测"
+    );
     app.site_results[index("AIUnlockTest_Claude")] = None;
     app.site_results[index("MediaUnlockTest_ChatGPT")] = Some(Err("请求失败".into()));
     app.present_slint(&data, &mut models);
@@ -2511,6 +2514,30 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
     assert_eq!(row("MediaUnlockTest_ChatGPT").detail, "同域出口：未确认");
     assert_eq!(row("AIUnlockTest_Claude").status_label, "未检测");
     assert_eq!(row("MediaUnlockTest_ChatGPT").status_label, "超时或失败");
+    let netflix = index("MediaUnlockTest_Netflix");
+    app.site_results[netflix] = Some(Ok(ip_check::CheckResult {
+        state: ip_check::State::Confirmed,
+        summary: "确认可用".into(),
+        country: "美国".into(),
+        millis: 150,
+        detail: String::new(),
+        target_exit: Some(ip_check::TargetExit {
+            host: "www.netflix.com".into(),
+            ip: "203.0.113.14".parse().unwrap(),
+            country: Some("美国".into()),
+        }),
+    }));
+    app.site_category = CategoryFilter::Group("全球");
+    app.present_slint(&data, &mut models);
+    let rows = data.get_site_results().iter().collect::<Vec<_>>();
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.id == "MediaUnlockTest_Netflix")
+            .unwrap()
+            .detail,
+        "同域出口：203.0.113.14 · 美国"
+    );
+    app.site_category = CategoryFilter::Group("AI");
     if let Some(path) = preview {
         app.site_results[index("AIUnlockTest_Claude")] = Some(Ok(claude));
         app.site_results[index("MediaUnlockTest_ChatGPT")] = Some(Ok(chatgpt));

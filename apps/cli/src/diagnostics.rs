@@ -19,7 +19,10 @@ pub(crate) fn failure_hint(args: Option<&Args>) {
             "沿用原用户及 --user / --data-dir / --resources 参数。提交 issue 时附上报告、操作步骤和发生时间。"
         );
     }
-    eprintln!("Issue：https://github.com/Fu021/Clash-of-Rust/issues；分享前检查报告中的敏感信息。");
+    eprintln!(
+        "问题反馈：{}。附加前请检查报告中的敏感信息。",
+        clash_client_core::support::BUG_REPORT_URL
+    );
 }
 
 pub(crate) fn core_logs(lines: Vec<String>, meta: &clash_client_runtime::control::Meta) -> Value {

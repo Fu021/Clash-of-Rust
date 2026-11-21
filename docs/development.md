@@ -22,7 +22,7 @@
 
 ```sh
 CARGO_TARGET_DIR=target/desktop cargo test -p clash-client-ui --test desktop_lists --release --locked -- --test-threads=1
-CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --test mobile_lists --test scroll_remount --test claude_report_blocks --release --locked -- --test-threads=1
+CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --features mobile-ui-tests --test mobile_lists --test scroll_remount --test claude_report_blocks --release --locked -- --test-threads=1
 ```
 
 本地 `target` 体积和可回收构建产物按[磁盘管理](workflows/local-development.md#本地-rust-构建与磁盘管理)检查；不能把另一端已有的构建结果当作当前端的验证。

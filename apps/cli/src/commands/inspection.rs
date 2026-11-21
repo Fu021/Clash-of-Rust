@@ -730,10 +730,7 @@ async fn ip(args: &Args) -> Result<()> {
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let status = Status::of(Some(&outcome));
-                if ip_check::SPLIT_EXIT_TARGETS
-                    .iter()
-                    .any(|(id, _, _)| *id == service.id)
-                {
+                if ip_check::target_host(service).is_some() {
                     row["target_exit"] = Value::Null;
                 }
                 match outcome {

@@ -9,6 +9,21 @@ description = "Android NativeActivity and Slint host"
 name = "clash_mobile"
 crate-type = ["cdylib"]
 
+[features]
+mobile-ui-tests = ["dep:i-slint-core", "dep:slint"]
+
+[[test]]
+name = "mobile_lists"
+required-features = ["mobile-ui-tests"]
+
+[[test]]
+name = "scroll_remount"
+required-features = ["mobile-ui-tests"]
+
+[[test]]
+name = "claude_report_blocks"
+required-features = ["mobile-ui-tests"]
+
 [target.'cfg(target_os = "android")'.dependencies]
 clash-mobile-runtime = { path = "../../../crates/mobile-ffi" }
 slint = { version = "=1.19.0", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-skia-opengl", "unstable-fontique-012"] }
@@ -22,10 +37,12 @@ jni = "0.22"
 log = "0.4"
 android_logger = "0.15"
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+i-slint-core = { version = "=1.19.0", optional = true, default-features = false, features = ["std", "image-decoders", "svg"] }
+slint = { version = "=1.19.0", optional = true, default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-path", "unstable-fontique-012"] }
+
 [build-dependencies]
 slint-build.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-i-slint-core = { version = "=1.19.0", default-features = false, features = ["std", "image-decoders", "svg"] }
-slint = { version = "=1.19.0", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-path", "unstable-fontique-012"] }

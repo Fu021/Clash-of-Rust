@@ -166,7 +166,6 @@ fn summarize(ip: IpAddr, lookups: &[(Provider, Result<Observation, LookupFailure
         "滥用记录",
         "移动网络",
     ];
-    let mut disagreements = Vec::new();
     let mut marked = Vec::new();
     let mut clear = Vec::new();
     let mut unknown = Vec::new();
@@ -197,8 +196,7 @@ fn summarize(ip: IpAddr, lookups: &[(Provider, Result<Observation, LookupFailure
         };
         let line = format!("{title}：{values}");
         match (yes, no) {
-            (true, true) => disagreements.push((*title, line)),
-            (true, false) => marked.push((*title, line)),
+            (true, _) => marked.push((*title, line)),
             (false, true) => clear.push(line),
             (false, false) => unknown.push(line),
         }
@@ -206,14 +204,7 @@ fn summarize(ip: IpAddr, lookups: &[(Provider, Result<Observation, LookupFailure
     let mut details = Vec::new();
     for (heading, lines) in [
         (
-            "来源不一致",
-            disagreements
-                .iter()
-                .map(|(_, line)| line.as_str())
-                .collect::<Vec<_>>(),
-        ),
-        (
-            "有来源标记",
+            "已标记",
             marked
                 .iter()
                 .map(|(_, line)| line.as_str())
@@ -244,24 +235,10 @@ fn summarize(ip: IpAddr, lookups: &[(Provider, Result<Observation, LookupFailure
     if !failures.is_empty() {
         details.push(format!("查询未完成\n{}", failures.join("\n")));
     }
-    let mut highlights = disagreements
+    let mut highlights = marked
         .iter()
-        .take(2)
-        .map(|(title, _)| format!("{title}{SOURCE_DISAGREEMENT}"))
+        .map(|(title, _)| format!("{title}：是"))
         .collect::<Vec<_>>();
-    if disagreements.len() > 2 {
-        highlights.push(format!("另有 {} 项来源分歧", disagreements.len() - 2));
-    }
-    let visible_marked = 2usize.saturating_sub(disagreements.len());
-    highlights.extend(
-        marked
-            .iter()
-            .take(visible_marked)
-            .map(|(title, _)| format!("有来源标记{title}")),
-    );
-    if marked.len() > visible_marked {
-        highlights.push(format!("另有 {} 项被标记", marked.len() - visible_marked));
-    }
     let evidence = if unknown.len() == fields.len() {
         highlights.push("各项均待确认".into());
         Evidence::Unknown
@@ -345,12 +322,13 @@ mod tests {
         });
         let mut report = Report::new(Environment::Core, "test");
         let signal = summarize(ip, &lookups);
-        assert!(signal.value.contains("机房或托管网络来源不一致"));
-        assert!(signal.value.contains("代理地址来源不一致"));
-        assert!(signal.value.contains("另有 1 项被标记"));
+        assert!(signal.value.contains("机房或托管网络：是"));
+        assert!(signal.value.contains("代理地址：是"));
+        assert!(signal.value.contains("Tor 地址：是"));
         assert!(signal.value.contains("4 项待确认"));
-        assert!(signal.detail.contains("来源不一致\n机房或托管网络："));
-        assert!(signal.detail.contains("有来源标记\nTor 地址："));
+        assert!(!signal.value.contains("来源不一致"));
+        assert!(signal.detail.contains("已标记\n机房或托管网络："));
+        assert!(signal.detail.contains("Tor 地址："));
         assert!(signal.detail.contains("尚未确认\nVPN 地址："));
         assert!(
             signal
@@ -414,7 +392,7 @@ mod tests {
         assert_eq!(observation.flags[4], Some(false));
         assert_eq!(observation.flags[5], Some(true));
         let report = summarize(ip, &[(Provider::IpLogs, Ok(observation))]);
-        assert!(report.value.contains("有来源标记滥用记录"));
+        assert!(report.value.contains("滥用记录：是"));
         assert!(report.detail.contains("爬虫地址：IPLogs 否"));
         assert!(report.detail.contains("IPLogs 信誉：阻止名单"));
         assert!(!report.risk);
@@ -452,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn many_marked_fields_do_not_hide_a_later_disagreement() {
+    fn many_marked_fields_preserve_each_provider_in_detail() {
         let ip = "1.1.1.1".parse().unwrap();
         let signal = summarize(
             ip,
@@ -481,8 +459,8 @@ mod tests {
                 ),
             ],
         );
-        assert!(signal.value.starts_with("移动网络来源不一致"));
-        assert!(signal.value.contains("另有 5 项被标记"));
+        assert!(signal.value.starts_with("机房或托管网络：是"));
+        assert!(signal.value.contains("移动网络：是"));
         assert!(signal.detail.contains("移动网络：IPQuery 是、IPLogs 否"));
         assert!(signal.detail.contains("IPLogs 信誉：灰名单"));
         let mut report = Report::new(Environment::Core, "fixture");

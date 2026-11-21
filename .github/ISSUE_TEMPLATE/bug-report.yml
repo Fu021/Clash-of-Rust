@@ -1,0 +1,49 @@
+name: 问题反馈 / Bug report
+description: 报告软件故障、安装或更新异常 / Report an app, installation, or update problem
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先[搜索已有 Issue](https://github.com/Fu021/Clash-of-Rust/issues)。标题写明出问题的功能和现象。
+        [Search existing issues](https://github.com/Fu021/Clash-of-Rust/issues) first. Name the affected feature and symptom in the title.
+
+        Issue 和附件均为公开内容。附加文件前，请检查并移除订阅链接、凭据、个人路径、IP 和其他私密信息。
+        Issues and attachments are public. Remove subscription links, credentials, personal paths, IP addresses, and other private details before attaching files.
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题现象 / What happened?
+      description: |
+        写明实际结果、预期结果、发生时间与时区。有报错时可贴出脱敏内容。
+        Include the actual and expected results, the time and time zone, and any redacted error message.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: |
+        按顺序写下操作。偶发问题请说明发生频率。
+        List your steps in order. If the problem is intermittent, say how often it occurs.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境 / Environment
+      description: |
+        填写客户端版本、操作系统及版本、架构和安装包格式。软件内打开时会预填基础环境。
+        Include the app version, OS and OS version, architecture, and package format. Opening the form from the app pre-fills basic environment details.
+    validations:
+      required: true
+  - type: upload
+    id: diagnostics
+    attributes:
+      label: 诊断报告 / Diagnostic report
+      description: |
+        桌面点击「新建 Issue」后会保存报告。Android 请从报错窗口或日志页导出，也可运行 `cor diagnose --output cor-diagnose.json`。检查后附上 JSON。如果无法导出，请在问题现象中说明。
+        On desktop, New Issue saves a report. On Android, export it from the error dialog or Logs. You can also run `cor diagnose --output cor-diagnose.json`. Attach the reviewed JSON, or explain above if export is unavailable.
+    validations:
+      required: false
+      accept: ".json"

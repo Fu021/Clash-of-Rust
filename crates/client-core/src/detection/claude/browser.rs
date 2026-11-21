@@ -217,15 +217,9 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
         source,
         preferences::timezone_country(&data.timezone),
     ));
-    for (index, language) in data.languages.iter().take(6).enumerate() {
-        report.signals.push(preferences::preference(
-            Group::Browser,
-            &format!("语言偏好 {}", index + 1),
-            language,
-            source,
-            preferences::region_tag(language).as_deref(),
-        ));
-    }
+    report
+        .signals
+        .push(language_preferences(&data.languages, source));
     report.signals.push(Signal::new(
         Group::Browser,
         "地区格式",
@@ -448,6 +442,26 @@ pub async fn report(data: BrowserData, client: &Client) -> Result<Report> {
     }
     report.validate()?;
     Ok(report)
+}
+
+fn language_preferences(languages: &[String], source: &str) -> Signal {
+    let values = languages
+        .iter()
+        .take(24)
+        .map(|language| preferences::bounded(language))
+        .filter(|language| !language.is_empty())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Signal::unknown(Group::Browser, "语言偏好", source, "未读取到语言偏好。");
+    }
+    Signal::new(
+        Group::Browser,
+        "语言偏好",
+        preferences::bounded(&values.join("、")),
+        source,
+        Evidence::Measured,
+        "按浏览器返回的优先顺序排列。",
+    )
 }
 
 struct Inner {
@@ -819,5 +833,18 @@ mod tests {
         data.geolocation.latitude = None;
         data.languages = vec!["en".into(); 25];
         assert!(data.validate().is_err());
+    }
+
+    #[test]
+    fn language_preferences_share_one_row_and_preserve_order() {
+        let languages = ["zh-CN", "zh", "en-US", "en"].map(str::to_owned);
+        let signal = language_preferences(&languages, "fixture");
+        assert_eq!(signal.title, "语言偏好");
+        assert_eq!(signal.value, "zh-CN、zh、en-US、en");
+        assert_eq!(signal.evidence, Evidence::Measured);
+        assert_eq!(
+            language_preferences(&[], "fixture").evidence,
+            Evidence::Unknown
+        );
     }
 }

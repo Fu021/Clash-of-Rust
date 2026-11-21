@@ -467,7 +467,8 @@ def build(arch, gradle_offline=False):
         ci and any(profile.is_dir() for profile in profiles)
     ) else ()
     packages = ['-p', 'clash-mobile-runtime', '-p', 'clash-android']
-    targets = ['--all-targets'] if arch == 'x64' and mobile_ui_tests() else ['--lib']
+    ui_tests = arch == 'x64' and mobile_ui_tests()
+    targets = ['--all-targets', '--features', 'clash-android/mobile-ui-tests'] if ui_tests else ['--lib']
     cargo_build(['cargo', 'clippy', *packages, '--release', *targets, '--locked', '--', '-D', 'warnings'],
                 cwd=ROOT, env=build_env)
     if extended_tests() or enabled('COR_CI_ANDROID_ROUTING_TESTS'):
@@ -476,8 +477,8 @@ def build(arch, gradle_offline=False):
     else:
         run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--lib',
              '--', '--test-threads=1'], cwd=ROOT, env=build_env)
-    if arch == 'x64' and mobile_ui_tests():
-        run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked',
+    if ui_tests:
+        run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--features', 'mobile-ui-tests',
              '--test', 'mobile_lists', '--test', 'scroll_remount', '--test', 'claude_report_blocks',
              '--', '--test-threads=1'], cwd=ROOT, env=build_env)
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])

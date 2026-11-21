@@ -11,11 +11,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const SPLIT_EXIT_TARGETS: [(&str, &str, &str); 2] = [
-    ("AIUnlockTest_Claude", "claude.ai", "Claude"),
-    ("MediaUnlockTest_ChatGPT", "chatgpt.com", "ChatGPT"),
-];
-
 #[derive(Debug, Deserialize)]
 pub struct Service {
     pub id: String,
@@ -78,7 +73,7 @@ impl CheckResult {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TargetExit {
-    pub host: &'static str,
+    pub host: String,
     pub ip: IpAddr,
     pub country: Option<String>,
 }
@@ -95,7 +90,22 @@ fn client_with_redirect(port: u16, redirect: reqwest::redirect::Policy) -> Resul
         .redirect(redirect).build()?)
 }
 
-fn parse_target_exit(text: &str, host: &'static str) -> Option<TargetExit> {
+pub fn target_host(service: &Service) -> Option<String> {
+    if service.id == "exit-ip" {
+        return None;
+    }
+    let url = validate_url(&service.url).ok()?;
+    url.host_str().map(str::to_owned)
+}
+
+fn target_trace_url(mut url: Url) -> Url {
+    url.set_path("/cdn-cgi/trace");
+    url.set_query(None);
+    url.set_fragment(None);
+    url
+}
+
+fn parse_target_exit(text: &str, host: &str) -> Option<TargetExit> {
     let fields: BTreeMap<_, _> = text
         .lines()
         .filter_map(|line| line.trim().split_once('='))
@@ -108,17 +118,22 @@ fn parse_target_exit(text: &str, host: &'static str) -> Option<TargetExit> {
         return None;
     }
     Some(TargetExit {
-        host,
+        host: host.into(),
         ip,
         country: fields.get("loc").and_then(|code| country_name(code)),
     })
 }
 
-async fn target_exit(client: &Client, url: Url, host: &'static str) -> Option<TargetExit> {
+async fn target_exit(client: &Client, url: Url, host: &str) -> Option<TargetExit> {
     if url.host_str() != Some(host) || url.path() != "/cdn-cgi/trace" {
         return None;
     }
-    let mut response = client.get(url.clone()).send().await.ok()?;
+    let mut response = client
+        .get(url.clone())
+        .timeout(Duration::from_secs(4))
+        .send()
+        .await
+        .ok()?;
     if !response.status().is_success() || response.url() != &url {
         return None;
     }
@@ -174,27 +189,36 @@ pub async fn check(id: &str, port: u16) -> Result<CheckResult> {
         .iter()
         .find(|item| item.id == id)
         .context("检测项目不存在")?;
-    tokio::time::timeout(Duration::from_secs(120), async {
-        if matches!(id, "exit-ip" | "github") {
-            return check_with_client(service, &client(port)?).await;
+    tokio::time::timeout(Duration::from_secs(120), check_service(service, port))
+        .await
+        .context("检测超时")?
+}
+
+async fn check_service(service: &Service, port: u16) -> Result<CheckResult> {
+    if service.id == "exit-ip" {
+        return check_with_client(service, &client(port)?).await;
+    }
+    let original = validate_url(&service.url)?;
+    let host = original.host_str().context("检测项目缺少有效域名")?;
+    let trace = async {
+        let trace_client = client_with_redirect(port, reqwest::redirect::Policy::none()).ok()?;
+        target_exit(&trace_client, target_trace_url(original.clone()), host).await
+    };
+    let platform = async {
+        if service.id == "github" {
+            check_with_client(service, &client(port)?).await
+        } else {
+            crate::region_check::check(service, port).await
         }
-        let Some((_, host, _)) = SPLIT_EXIT_TARGETS
-            .iter()
-            .find(|(target, _, _)| *target == id)
-        else {
-            return crate::region_check::check(service, port).await;
-        };
-        let trace = async {
-            let trace_client =
-                client_with_redirect(port, reqwest::redirect::Policy::none()).ok()?;
-            let url = Url::parse(&format!("https://{host}/cdn-cgi/trace")).ok()?;
-            target_exit(&trace_client, url, host).await
-        };
-        let (result, observed) = tokio::join!(crate::region_check::check(service, port), trace);
-        combine_target_exit(result, observed, host)
-    })
-    .await
-    .context("检测超时")?
+    };
+    let (mut result, observed) = tokio::join!(platform, trace);
+    if service.id == "github"
+        && let Ok(result) = &mut result
+        && let Some(country) = observed.as_ref().and_then(|exit| exit.country.clone())
+    {
+        result.country = decorate_country(country);
+    }
+    combine_target_exit(result, observed, host)
 }
 
 async fn check_with_client(service: &Service, client: &Client) -> Result<CheckResult> {
@@ -208,12 +232,6 @@ async fn check_with_client(service: &Service, client: &Client) -> Result<CheckRe
     let millis = started.elapsed().as_millis();
     let status = response.status().as_u16();
     let final_url = response.url().clone();
-    let cloudflare = response.headers().contains_key("cf-ray")
-        || response
-            .headers()
-            .get("server")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.eq_ignore_ascii_case("cloudflare"));
     let text = body(response).await?;
     let mut result = classify(service, status, &final_url, &text);
     result.millis = millis;
@@ -237,24 +255,6 @@ async fn check_with_client(service: &Service, client: &Client) -> Result<CheckRe
         result.country = decorate_country(result.country);
         return Ok(result);
     }
-    if result.country == "未提供" && cloudflare && final_url.host_str() == original.host_str() {
-        let mut trace = original.clone();
-        trace.set_path("/cdn-cgi/trace");
-        trace.set_query(None);
-        trace.set_fragment(None);
-        if let Ok(response) = client.get(trace.clone()).send().await
-            && response.status().is_success()
-            && response.url().host_str() == trace.host_str()
-            && let Ok(text) = body(response).await
-            && let Some(country) = trace_country(&text, trace.host_str().unwrap_or_default())
-        {
-            result.country = country;
-            result
-                .detail
-                .push_str("；地区来自该域名的 Cloudflare trace");
-        }
-    }
-    result.country = decorate_country(result.country);
     Ok(result)
 }
 
@@ -418,7 +418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn requests_use_proxy_and_target_country_evidence() {
+    async fn github_uses_one_proxied_trace_for_the_address_and_country() {
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
             net::TcpListener,
@@ -426,10 +426,8 @@ mod tests {
         let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = proxy.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
-            for (path, text) in [
-                ("/", "hello"),
-                ("/cdn-cgi/trace", "h=site.example\nloc=JP\nip=1.2.3.4\n"),
-            ] {
+            let mut paths = std::collections::BTreeSet::new();
+            for _ in 0..2 {
                 let (mut socket, _) = proxy.accept().await.unwrap();
                 let mut request = Vec::new();
                 loop {
@@ -441,28 +439,34 @@ mod tests {
                         break;
                     }
                 }
-                assert!(
-                    String::from_utf8_lossy(&request)
-                        .starts_with(&format!("GET http://site.example{path} HTTP"))
-                );
+                let request = String::from_utf8(request).unwrap();
+                let url = request.lines().next().unwrap().split(' ').nth(1).unwrap();
+                assert!(paths.insert(url.to_owned()));
+                let text = match url {
+                    "http://site.example:8080/?fixture=1" => "hello",
+                    "http://site.example:8080/cdn-cgi/trace" => {
+                        "h=site.example\nloc=JP\nip=1.2.3.4\n"
+                    }
+                    _ => panic!("Unexpected proxy request: {url}"),
+                };
                 socket.write_all(format!("HTTP/1.1 200 OK\r\nServer: cloudflare\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len()).as_bytes()).await.unwrap();
             }
         });
         let service = Service {
-            id: "test".into(),
+            id: "github".into(),
             name: "test".into(),
             group: "test".into(),
-            url: "http://site.example/".into(),
+            url: "http://site.example:8080/?fixture=1".into(),
         };
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            check_with_client(&service, &client(port).unwrap()),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), check_service(&service, port))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(result.state, State::Reachable);
         assert_eq!(result.country, "🇯🇵 日本");
+        let exit = result.target_exit.unwrap();
+        assert_eq!(exit.country.as_deref(), Some("日本"));
+        assert_eq!(exit.ip, "1.2.3.4".parse::<IpAddr>().unwrap());
         server.await.unwrap();
     }
 
@@ -478,6 +482,10 @@ mod tests {
         for item in services() {
             assert!(ids.insert(&item.id));
             let url = validate_url(&item.url).unwrap();
+            assert_eq!(
+                target_host(item).as_deref(),
+                (item.id != "exit-ip").then(|| url.host_str().unwrap())
+            );
             assert!(url.host_str().is_some());
             assert!(!item.name.is_empty() && !item.group.is_empty());
             assert!(!item.url.contains('$'));

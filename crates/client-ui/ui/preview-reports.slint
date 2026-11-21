@@ -11,7 +11,7 @@ export global PreviewReports {
         {id: "route", title: "关联服务直连", value: "assets-proxy.anthropic.com", detail: "说明：发现 DIRECT 连接，尚未启用保护。", source: "内核连接记录 · 固定演示结果", tone: 3}
     ];
     out property <[ReportItem]> clues: [
-        {id: "quality", title: "出口 IP 质量 · 203.0.113.12", value: "机房或托管网络来源不一致 · 2 项待确认", detail: "说明：IPQuery 标记为托管网络，IPLogs 未标记。此处为固定演示结果。", source: "IPQuery、IPLogs、Layer3 Intel", tone: 2},
+        {id: "quality", title: "出口 IP 质量 · 203.0.113.12", value: "机房或托管网络：是 · 代理地址：是 · 2 项待确认", detail: "说明：IPQuery 标记为托管网络，IPLogs 未标记。此处为固定演示结果。", source: "IPQuery、IPLogs、Layer3 Intel", tone: 2},
         {id: "registration", title: "IP 注册信息", value: "Example Network · 注册地区 AU", detail: "说明：固定演示结果。", source: "RDAP", tone: 2},
         {id: "ping", title: "全球连通性", value: "未确认", detail: "说明：远端探测超时或额度不足。", source: "Globalping 远端探针", tone: 2},
         {id: "shared", title: "共享服务域名", value: "Cloudflare 等服务也被其他应用使用", detail: "说明：广泛规则可能影响这些应用的连接。", source: "规则与网络线索", tone: 2}
@@ -23,21 +23,21 @@ export global PreviewReports {
     out property <[ReportItem]> blocks: [
         {id: "实时保护与异常拦截", title: "实时保护与异常拦截", value: "已观察 8 次请求 · 已关闭 1 条异常连接\napi.anthropic.com：异常连接已关闭", detail: "1 项需关注", tone: 0, delay-tone: 3, block-items: 2},
         {id: "Claude 连接与选路", title: "Claude 连接与选路", value: "关联服务直连：assets-proxy.anthropic.com\n3 个域名 · 仅记录选路\nClaude 网页：可达", detail: "1 项需关注", tone: 0, delay-tone: 3, block-items: 3},
-        {id: "出口与 IP 属性", title: "出口与 IP 属性", value: "出口 IP 质量：机房或托管网络来源不一致\nClaude 出口：203.0.113.12 · 香港", detail: "1 项来源不一致", tone: 0, delay-tone: 2, block-items: 3},
+        {id: "出口与 IP 属性", title: "出口与 IP 属性", value: "出口 IP 质量：机房或托管网络：是 · 代理地址：是\nClaude 出口：203.0.113.12 · 香港", tone: 0, delay-tone: 2, block-items: 3},
         {id: "DNS 与 WebRTC", title: "DNS 与 WebRTC", value: "实际递归 DNS：2001:db8:1234:5678::1 · 台湾\nWebRTC：未确认", detail: "1 项需关注", tone: 0, delay-tone: 3, block-items: 3},
-        {id: "浏览器与配置", title: "浏览器与配置", value: "浏览器时区：Asia/Hong_Kong\n浏览器语言：zh-CN", tone: 0, delay-tone: 1, block-items: 2},
+        {id: "浏览器与配置", title: "浏览器与配置", value: "浏览器时区：Asia/Hong_Kong\n语言偏好：zh-CN、zh、en-US、en", tone: 0, delay-tone: 1, block-items: 2},
         {id: "实时保护与异常拦截", title: "实时保护与异常拦截", value: "已观察 8 次请求 · 已关闭 1 条异常连接 · 系统提示请求 1 次", detail: "说明：固定演示结果，仅处理保护范围内偏离指定节点的连接。", source: "内核事件与连接控制接口", tone: 2},
         {id: "实时保护与异常拦截", title: "api.anthropic.com", value: "异常连接已关闭", detail: "说明：固定演示结果。\n线路：DIRECT", source: "实时拦截 · 内核连接记录", tone: 3},
         {id: "Claude 连接与选路", title: "关联服务直连", value: "assets-proxy.anthropic.com", detail: "说明：发现 DIRECT 连接。", source: "内核连接记录", tone: 3},
         {id: "Claude 连接与选路", title: "Claude 域名选路", value: "3 个域名 · 仅记录选路", detail: "api.anthropic.com\n线路：演示节点\n\nclaude.ai\n线路：演示节点\n\nclaude.com\n线路：演示节点", source: "内核连接记录", tone: 2},
         {id: "Claude 连接与选路", title: "Claude 网页", value: "可达", detail: "说明：未携带账户 Cookie。", source: "匿名服务响应", tone: 1},
-        {id: "出口与 IP 属性", title: "出口 IP 质量 · 203.0.113.12", value: "机房或托管网络来源不一致 · 2 项待确认", detail: "说明：来源不一致\n机房或托管网络：IPQuery 是、IPLogs 否\n\n尚未确认\n爬虫地址：未提供", source: "IPQuery、IPLogs、Layer3 Intel", tone: 2},
+        {id: "出口与 IP 属性", title: "出口 IP 质量 · 203.0.113.12", value: "机房或托管网络：是 · 代理地址：是 · 2 项待确认", detail: "说明：已标记\n机房或托管网络：IPQuery 是、IPLogs 否\n代理地址：IPQuery 否、IPLogs 是\n\n尚未确认\n爬虫地址：未提供", source: "IPQuery、IPLogs、Layer3 Intel", tone: 2},
         {id: "出口与 IP 属性", title: "Claude 出口", value: "203.0.113.12 · 香港", detail: "说明：仅用于布局预览。", source: "服务响应", tone: 1},
         {id: "出口与 IP 属性", title: "IP 注册信息", value: "Example Network · 注册地区 AU", detail: "说明：RDAP 注册信息。", source: "RDAP", tone: 2},
         {id: "DNS 与 WebRTC", title: "实际递归 DNS", value: "2001:db8:1234:5678::1", country: "台湾", flag: "🇨🇳", flagged: true, detail: "说明：此演示国家与香港出口不同。\n建议：核对浏览器独立 DoH 与系统 DNS。", source: "系统 DNS", tone: 3},
         {id: "DNS 与 WebRTC", title: "实际递归 DNS", value: "203.0.113.53", country: "香港", flag: "🇨🇳", flagged: true, detail: "说明：固定演示结果。", source: "浏览器采样", tone: 1},
         {id: "DNS 与 WebRTC", title: "WebRTC", value: "未确认", detail: "说明：未取得候选地址。", source: "浏览器采样", tone: 2},
         {id: "浏览器与配置", title: "浏览器时区", value: "Asia/Hong_Kong", source: "浏览器采样", tone: 1},
-        {id: "浏览器与配置", title: "浏览器语言", value: "zh-CN", source: "浏览器采样", tone: 1}
+        {id: "浏览器与配置", title: "语言偏好", value: "zh-CN、zh、en-US、en", source: "浏览器采样", tone: 1}
     ];
 }

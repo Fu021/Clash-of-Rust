@@ -1985,9 +1985,7 @@ impl App {
                 {
                     return Task::none();
                 }
-                if ip_check::SPLIT_EXIT_TARGETS
-                    .iter()
-                    .any(|(id, _, _)| *id == url)
+                if url != "exit-ip"
                     && let Some(index) = ip_check::services()
                         .iter()
                         .position(|service| service.id == url)

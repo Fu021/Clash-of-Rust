@@ -1,0 +1,23 @@
+name: 功能建议 / Feature request
+description: 提议新功能或改进现有功能 / Suggest a new feature or improvement
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先[搜索已有 Issue](https://github.com/Fu021/Clash-of-Rust/issues)。软件故障请使用「问题反馈」。
+        [Search existing issues](https://github.com/Fu021/Clash-of-Rust/issues) first. Use Bug report for software problems.
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 使用场景 / Use case
+      description: 描述你想完成的事，以及目前遇到的麻烦。 / What are you trying to do, and what gets in your way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望的改进 / Proposed change
+      description: 说明期望的行为。仅涉及某些平台时，请写出对应平台。 / Describe the behavior you want and which platforms it affects.
+    validations:
+      required: true

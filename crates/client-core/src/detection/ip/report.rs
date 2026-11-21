@@ -5,18 +5,16 @@ use std::fmt;
 pub type ResultSlot = Option<Result<CheckResult, String>>;
 
 pub fn target_exit_detail(
-    id: &str,
+    service: &ip_check::Service,
     result: Option<&Result<CheckResult, String>>,
 ) -> Option<String> {
-    let (_, host, _) = ip_check::SPLIT_EXIT_TARGETS
-        .iter()
-        .find(|(target, _, _)| *target == id)?;
+    let host = ip_check::target_host(service)?;
     let value = match result {
         None => "待检测".to_owned(),
         Some(Ok(result)) => result
             .target_exit
             .as_ref()
-            .filter(|exit| exit.host == *host)
+            .filter(|exit| exit.host == host)
             .map_or_else(
                 || "未确认".to_owned(),
                 |exit| match &exit.country {
@@ -237,40 +235,50 @@ mod tests {
         let chatgpt = index("MediaUnlockTest_ChatGPT");
         let mut measured = result(State::Reachable);
         measured.as_mut().unwrap().as_mut().unwrap().target_exit = Some(ip_check::TargetExit {
-            host: "claude.ai",
+            host: "claude.ai".into(),
             ip: "8.8.8.8".parse().unwrap(),
             country: Some("美国".into()),
         });
         results[claude] = measured;
         results[chatgpt] = Some(Err("timeout".into()));
         assert_eq!(
-            target_exit_detail("AIUnlockTest_Claude", results[claude].as_ref()).as_deref(),
+            target_exit_detail(&ip_check::services()[claude], results[claude].as_ref()).as_deref(),
             Some("同域出口：8.8.8.8 · 美国")
         );
         assert_eq!(
-            target_exit_detail("MediaUnlockTest_ChatGPT", results[chatgpt].as_ref()).as_deref(),
+            target_exit_detail(&ip_check::services()[chatgpt], results[chatgpt].as_ref())
+                .as_deref(),
             Some("同域出口：未确认")
         );
         assert_eq!(
-            target_exit_detail("MediaUnlockTest_ChatGPT", None).as_deref(),
+            target_exit_detail(&ip_check::services()[chatgpt], None).as_deref(),
             Some("同域出口：待检测")
         );
         results[chatgpt] = result(State::Reachable);
         assert_eq!(
-            target_exit_detail("MediaUnlockTest_ChatGPT", results[chatgpt].as_ref()).as_deref(),
+            target_exit_detail(&ip_check::services()[chatgpt], results[chatgpt].as_ref())
+                .as_deref(),
             Some("同域出口：未确认")
         );
         let claude_result = results[claude].as_mut().unwrap().as_mut().unwrap();
         claude_result.target_exit = Some(ip_check::TargetExit {
-            host: "chatgpt.com",
+            host: "chatgpt.com".into(),
             ip: "1.1.1.1".parse().unwrap(),
             country: None,
         });
         assert_eq!(
-            target_exit_detail("AIUnlockTest_Claude", results[claude].as_ref()).as_deref(),
+            target_exit_detail(&ip_check::services()[claude], results[claude].as_ref()).as_deref(),
             Some("同域出口：未确认")
         );
-        assert!(target_exit_detail("AIUnlockTest_Gemini_location", None).is_none());
+        assert_eq!(
+            target_exit_detail(
+                &ip_check::services()[index("AIUnlockTest_Gemini_location")],
+                None
+            )
+            .as_deref(),
+            Some("同域出口：待检测")
+        );
+        assert!(target_exit_detail(&ip_check::services()[index("exit-ip")], None).is_none());
     }
 
     #[test]

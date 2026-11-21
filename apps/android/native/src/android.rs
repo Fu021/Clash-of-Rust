@@ -918,7 +918,7 @@ async fn run_loop(
                             || (intent == MobileIntent::SiteRetest && (request.a == "all" || service.group == request.a)))
                         .map(|(index,service)|(index,service.id.clone())).collect::<Vec<_>>();
                     for (index, id) in &targets {
-                        if core::ip_check::SPLIT_EXIT_TARGETS.iter().any(|(target, _, _)| *target == id.as_str()) {
+                        if id != "exit-ip" {
                             state.ip_results[*index] = None;
                         }
                     }
@@ -2918,7 +2918,7 @@ fn project(state: &State) -> Projection {
             id: service.id.clone(),
             title: service.name.clone(),
             value,
-            detail: core::ip_report::target_exit_detail(&service.id, slot).unwrap_or_default(),
+            detail: core::ip_report::target_exit_detail(service, slot).unwrap_or_default(),
             source: service.group.clone(),
             status_label: status,
             tone,

@@ -106,7 +106,7 @@ DEB 安装验收前，编译容器与 Linux 兼容 runner 共用签名 APT 索�
 - main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
 - 桌面后台、界面程序、`cor` 和网络助手一起导出，并在同一 runner 生成安装包，执行[安装验收](install-validation.md)。构建附件上传后用实际 id/digest 和本地归档校验暂存，不再次下载，也不额外申请 macOS runner。Android 在候选 APK 上执行代理/TUN 集成，不对同一开发签名包重复测试。九组候选包、SHA256、安装收据与源码附件保留 3 天，全部必需 job 成功才能发布。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带必要的 `core_integration` 测试程序，不上传源码单元测试程序。桌面构建产物采用 schema 3，只与同一提交配套使用。
 
-Android x86_64 使用 Android 16（API 36）模拟器验证真实 VPN 授权、代理请求、TUN 流量、DNS 和断开恢复。[应用分流](../android-application-routing.md#范围与验证)相关变化或扩展模式会追加三种分流模式；完整授权取消、Activity 重建与冷磁贴归扩展模式。选中移动界面回归时，x64 作业对宿主测试目标执行 Clippy 和测试；三个作业均分别对自己的 Android 目标执行 Clippy 和编译。ARM64/ARMv7 完成 Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
+Android x86_64 使用 Android 16（API 36）模拟器验证真实 VPN 授权、代理请求、TUN 流量、DNS 和断开恢复。[应用分流](../android-application-routing.md#范围与验证)相关变化或扩展模式会追加三种分流模式；完整授权取消、Activity 重建与冷磁贴归扩展模式。选中移动界面回归时，x64 作业安装软件渲染测试所需的字体开发库，并启用 `mobile-ui-tests` 执行宿主界面 Clippy 和测试。三个作业分别对各自 Android 目标执行 Clippy 和编译。ARM64/ARMv7 完成 Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
 
 常规测试、输入法专项及打包共用模拟器准备入口。当前[模拟器实现](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)会将首次启动的 API 24+ userdata 提高到至少 6 GiB，并要求分区大小的 1.2 倍空闲；因此配置显式使用 6144 MiB，再为测试留出 1 GiB，启动前合计要求约 8.2 GiB。此前 3072 MiB / 4 GiB 的预检遗漏了这一最低值，`1139dcc` 的 x64 仍在约 5255 MiB 空闲时被模拟器要求 7372.8 MiB 而拒绝，不能把配置写入或较宽裕 runner 的偶然成功当作修复。
 

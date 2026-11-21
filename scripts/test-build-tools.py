@@ -3229,6 +3229,7 @@ class BuildTests(unittest.TestCase):
                     self.assertIn('--locked', command)
                     self.assertIn('--lib', command)
                     self.assertNotIn('--all-targets', command)
+                    self.assertNotIn('--features', command)
 
     def test_android_mobile_ui_regressions_run_once_in_x64_job(self):
         commands = []
@@ -3247,9 +3248,11 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'mobile UI tests selected'):
                 android_build.build('x64')
         self.assertIn('--all-targets', clippy.call_args.args[0])
+        self.assertIn('clash-android/mobile-ui-tests', clippy.call_args.args[0])
         self.assertEqual(len(commands), 2)
         self.assertIn('--lib', commands[0])
         self.assertEqual(commands[1][commands[1].index('-p')+1], 'clash-android')
+        self.assertIn('mobile-ui-tests', commands[1])
         for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
             self.assertIn(target, commands[1])
         self.assertNotIn('--no-run', commands[1])

@@ -9,6 +9,8 @@ use std::{
 
 const JSON_LIMIT: u64 = 1024 * 1024;
 const LOG_LIMIT: u64 = 64 * 1024;
+pub const BUG_REPORT_URL: &str =
+    "https://github.com/Fu021/Clash-of-Rust/issues/new?template=bug-report.yml";
 
 pub fn timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
@@ -405,8 +407,8 @@ pub fn issue_report(root: &Path, context: Value, lines: Vec<String>) -> Value {
         report["core_logs"] = core_logs(lines, &credentials);
     }
     report["sharing"] = json!({
-        "issue_url":"https://github.com/Fu021/Clash-of-Rust/issues",
-        "instructions":"附上报告、操作步骤和发生时间；分享前检查域名、IP、路径及第三方内容。",
+        "issue_url":BUG_REPORT_URL,
+        "instructions":"填写问题反馈表，附上操作步骤、发生时间和检查过的诊断 JSON。附加前请检查域名、IP、路径及第三方内容。",
         "scope":"本地有界快照；不含完整历史日志，未自动上传或尝试修复故障。"
     });
     json!({"schema":1,"command":"diagnose","data":report})
@@ -415,45 +417,33 @@ pub fn issue_report(root: &Path, context: Value, lines: Vec<String>) -> Value {
 pub fn issue_draft_url(report: &Value) -> String {
     let data = &report["data"];
     let context = &data["context"];
-    let original_error = context["error"]
-        .as_str()
-        .unwrap_or("See the exported diagnostic report.");
-    let mut original_error = original_error.to_owned();
-    for (field, replacement) in [
-        ("data_directory", "<data-dir>"),
-        ("executable", "<executable>"),
-    ] {
-        if let Some(path) = data[field].as_str().filter(|path| !path.is_empty()) {
-            original_error = original_error.replace(path, replacement);
-        }
-    }
-    let original_length = original_error.chars().count();
-    let mut error: String = original_error.chars().take(500).collect();
-    loop {
-        let summary = json!({
-            "version":data["version"].as_str().map(|text|text.chars().take(80).collect::<String>()),
-            "os":data["os"].as_str().map(|text|text.chars().take(40).collect::<String>()),
-            "arch":data["arch"].as_str().map(|text|text.chars().take(40).collect::<String>()),
-            "captured_at":data["captured_at"].as_str().map(|text|text.chars().take(80).collect::<String>()),
-            "error":error,
-            "error_truncated":error.chars().count()<original_length,
-            "running":context["running"].as_bool().or(context["core_running"].as_bool()),
-            "context_state":context["state"].as_str().map(|text|text.chars().take(80).collect::<String>()),
-        });
-        let body = format!(
-            "## What happened?\n\n\n## Steps to reproduce\n\n1. \n\n\
-             ## Automatic diagnostic summary\n\n```json\n{summary:#}\n```\n\n\
-             Review this summary before submitting. Attach the full JSON from Export diagnostics \
-             if needed; check it for sensitive data first.\n"
-        );
-        let mut url =
-            reqwest::Url::parse("https://github.com/Fu021/Clash-of-Rust/issues/new").unwrap();
-        url.query_pairs_mut().append_pair("body", &body);
-        if url.as_str().len() <= 6500 || error.is_empty() {
-            return url.to_string();
-        }
-        error.pop();
-    }
+    let metadata = |key: &str| {
+        data[key]
+            .as_str()
+            .unwrap_or("Unknown")
+            .chars()
+            .take(80)
+            .collect::<String>()
+    };
+    let running = match context["running"]
+        .as_bool()
+        .or(context["core_running"].as_bool())
+    {
+        Some(true) => "Running",
+        Some(false) => "Stopped",
+        None => "Unknown",
+    };
+    let environment = format!(
+        "Version / 版本: {}\nOS and architecture / 系统与架构: {} {}\nCore status / 内核状态: {running}\nCaptured at / 采集时间: {}",
+        metadata("version"),
+        metadata("os"),
+        metadata("arch"),
+        metadata("captured_at"),
+    );
+    let mut url = reqwest::Url::parse(BUG_REPORT_URL).unwrap();
+    url.query_pairs_mut()
+        .append_pair("environment", &environment);
+    url.to_string()
 }
 
 fn sanitize_value(value: Value, secrets: &[String]) -> Value {
@@ -697,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_drafts_carry_a_redacted_summary_without_uploading_the_full_report() {
+    fn issue_drafts_open_the_bug_form_with_only_public_environment_fields() {
         let temporary = tempfile::tempdir().unwrap();
         std::fs::write(
             temporary.path().join("settings.json"),
@@ -713,26 +703,41 @@ mod tests {
         assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("github.com"));
         assert_eq!(url.path(), "/Fu021/Clash-of-Rust/issues/new");
-        let body = url.query_pairs().find(|(key, _)| key == "body").unwrap().1;
-        assert!(body.contains(crate::VERSION));
-        assert!(body.contains("connect"));
-        assert!(body.contains("已隐藏含凭据的日志行"));
-        assert!(!body.contains("controller-credential"));
-        assert!(!body.contains("token=private"));
-        assert!(!body.contains("private full log entry"));
-        assert!(!body.contains(temporary.path().to_string_lossy().as_ref()));
+        let pairs: Vec<_> = url.query_pairs().collect();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0], ("template".into(), "bug-report.yml".into()));
+        let (key, environment) = &pairs[1];
+        assert_eq!(key, "environment");
+        assert!(environment.contains(crate::VERSION));
+        assert!(environment.contains("Core status / 内核状态: Stopped"));
+        for private in [
+            "connect",
+            "controller-credential",
+            "example.test",
+            "token=private",
+            "private full log entry",
+            temporary.path().to_str().unwrap(),
+        ] {
+            assert!(!environment.contains(private), "{private}");
+        }
     }
 
     #[test]
     fn issue_drafts_bound_the_encoded_url_and_keep_unicode_valid() {
-        let report = json!({"data":{"version":crate::VERSION,"os":"android","arch":"x86_64",
-            "context":{"error":"网络连接超时😀".repeat(5000)}}});
+        let report = json!({"data":{"version":"测试版本😀".repeat(5000),"os":"android",
+            "arch":"aarch64","context":{"core_running":true,"error":"网络连接超时"}}});
         let text = issue_draft_url(&report);
         assert!(text.len() <= 6500);
         let url = reqwest::Url::parse(&text).unwrap();
-        let body = url.query_pairs().find(|(key, _)| key == "body").unwrap().1;
-        assert!(!body.contains('\u{fffd}'));
-        assert!(body.contains("网络连接超时"));
+        let environment = url
+            .query_pairs()
+            .find(|(key, _)| key == "environment")
+            .unwrap()
+            .1;
+        assert!(!environment.contains('\u{fffd}'));
+        assert!(environment.contains("测试版本😀"));
+        assert!(environment.contains("Core status / 内核状态: Running"));
+        assert!(!environment.contains("网络连接超时"));
     }
 
     #[test]

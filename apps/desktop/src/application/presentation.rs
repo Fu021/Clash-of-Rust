@@ -1007,7 +1007,7 @@ impl App {
                             None => status.to_string(),
                         }
                         .into(),
-                        detail: ip_report::target_exit_detail(&service.id, result)
+                        detail: ip_report::target_exit_detail(service, result)
                             .unwrap_or_default()
                             .into(),
                         source: result

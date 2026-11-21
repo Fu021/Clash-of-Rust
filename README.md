@@ -9,8 +9,9 @@
 </h1>
 
 <p align="center">
-  原生界面 · 命令行 · 应用分流 · 网络诊断
+  <a href="README.en.md" lang="en">English</a>
 </p>
+<p align="center">原生界面 · 命令行 · 应用分流 · 网络诊断</p>
 <p align="center">
   <a href="https://github.com/Fu021/Clash-of-Rust/releases/latest"><img src="https://img.shields.io/github/v/release/Fu021/Clash-of-Rust?label=stable&amp;color=2b9b78" alt="最新正式版"></a>
   <a href="https://github.com/Fu021/Clash-of-Rust/releases"><img src="https://img.shields.io/github/v/release/Fu021/Clash-of-Rust?include_prereleases&amp;sort=date&amp;label=latest&amp;color=c77d45" alt="最新发布（含预发布）"></a>
@@ -113,10 +114,10 @@ RSS 含共享页，PSS 按比例分摊；实际占用随设备、配置和流量
 
 ```sh
 python3 scripts/prepare-resources.py
-cargo build -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
+cargo build --target-dir target/desktop -p clash-of-rust -p clash-desktop-ui -p clash-cli --bins --locked
 ```
 
-桌面宿主、界面程序、`cor` 命令行和网络助手生成在 `target/debug/`，内核与 Geo 资源生成在 `bundle/`；桌面宿主与界面程序需放在同一目录。Windows 可用 `python` 替代 `python3`。需要 Windows EXE、Linux DEB 或 macOS DMG 时，按 [本地打包步骤](docs/workflows/local-development.md#本地打包)生成；Android 本地工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
+桌面宿主、界面程序、`cor` 命令行和网络助手生成在 `target/desktop/debug/`，内核与 Geo 资源生成在 `bundle/`。桌面宿主与界面程序需放在同一目录。Windows 可用 `python` 替代 `python3`。Windows EXE、Linux DEB 和 macOS DMG 见[本地打包步骤](docs/workflows/local-development.md#本地打包)，Android 工具链与 APK 构建见 [Android 开发说明](apps/android/README.md#本地构建)。
 
 ### 选项二：GitHub Actions
 
@@ -144,6 +145,8 @@ python3 scripts/preview-slint.py --page settings --theme light --output /tmp/cla
 测试、内存基准与发布流程见 [工作流文档](docs/workflows.md)。
 
 ## 参与贡献
+
+问题与建议可从 [Issue 表单](https://github.com/Fu021/Clash-of-Rust/issues/new/choose)提交。故障报告可附上[检查过的诊断 JSON](docs/cli/runtime.md#故障反馈与诊断报告)。
 
 欢迎 AI 辅助的 PR。请先完成适用的本地验证，并阅读[贡献者须知](.github/CONTRIBUTING.md)，了解资源受限环境、CI、缓存与工作流变更约定。
 
