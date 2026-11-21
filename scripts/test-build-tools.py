@@ -8143,14 +8143,61 @@ class CompatibilityTests(unittest.TestCase):
         with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
                 patch.dict(linux_native_guest.TARGETS, {'arch': (target,)}), \
                 patch.object(linux_native_guest, 'run') as write, \
-                patch.object(linux_native_guest, 'privileged') as pacman:
+                patch.object(linux_native_guest, 'privileged') as pacman, \
+                patch.object(linux_native_guest, 'arch_sync') as sync:
             linux_native_guest.refresh()
         write.assert_called_once_with(
             ['sudo', 'tee', '/etc/pacman.d/mirrorlist'],
             input=('Server = https://archive.archlinux.org/repos/2026/11/15/$repo/os/$arch\n'
                    'Server = https://umea.archive.pkgbuild.com/repos/2026/11/15/$repo/os/$arch\n'),
             text=True, stdout=subprocess.DEVNULL)
-        pacman.assert_called_once_with('-Syyu')
+        pacman.assert_called_once_with('-Syy')
+        sync.assert_called_once_with('-Su')
+
+    def test_arch_uses_direct_archive_for_packages_missing_from_snapshot_downloads(self):
+        import linux_native_guest
+
+        digest = 'a'*64
+        filename = 'fakeroot-2:1.37.2-1-x86_64.pkg.tar.zst'
+        arguments = ('-S', '--needed', 'fakeroot')
+        output = subprocess.CompletedProcess([], 0, stdout=f'fakeroot\t{filename}\t{digest}\n')
+        with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
+                patch.object(Path, 'is_file', return_value=False), \
+                patch.object(linux_native_guest, 'privileged', side_effect=[
+                    subprocess.CalledProcessError(1, ['pacman']), None]) as pacman, \
+                patch.object(linux_native_guest, 'run', side_effect=[output, None]) as command, \
+                patch.object(linux_native_guest, 'download') as download:
+            linux_native_guest.install_dependencies(('fakeroot',))
+
+        self.assertEqual(pacman.call_args_list, [
+            call(*arguments, '--downloadonly'), call(*arguments),
+        ])
+        staged = download.call_args.args[1]
+        self.assertEqual(staged.name, filename)
+        download.assert_called_once_with(
+            'https://umea.archive.pkgbuild.com/packages/f/fakeroot/fakeroot-2%3A1.37.2-1-x86_64.pkg.tar.zst',
+            staged, digest=digest)
+        self.assertEqual(command.call_args_list, [
+            call(['pacman', '--noconfirm', *arguments, '--print', '--print-format', '%n\t%f\t%h'],
+                 capture_output=True, text=True, timeout=60),
+            call(['sudo', 'install', '-m', '0644', staged, Path('/var/cache/pacman/pkg')/filename],
+                 timeout=60),
+        ])
+
+    def test_arch_fallback_rejects_invalid_package_metadata(self):
+        import linux_native_guest
+
+        output = subprocess.CompletedProcess([], 0, stdout='fakeroot\tfakeroot-../bad.pkg.tar.zst\t'+'a'*64+'\n')
+        with patch.object(linux_native_guest, 'distribution', return_value='arch'), \
+                patch.object(linux_native_guest, 'privileged',
+                             side_effect=subprocess.CalledProcessError(1, ['pacman'])) as pacman, \
+                patch.object(linux_native_guest, 'run', return_value=output) as command, \
+                patch.object(linux_native_guest, 'download') as download:
+            with self.assertRaisesRegex(ValueError, 'Invalid package metadata'):
+                linux_native_guest.install_dependencies(('fakeroot',))
+        pacman.assert_called_once_with('-S', '--needed', 'fakeroot', '--downloadonly')
+        command.assert_called_once()
+        download.assert_not_called()
 
     def test_tumbleweed_only_enables_the_signed_repository_for_the_guest_snapshot(self):
         import linux_native_guest

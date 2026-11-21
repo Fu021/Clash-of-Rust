@@ -7,5 +7,5 @@
     <ellipse cx="25" cy="22" rx="3.5" ry="8"/>
     <path d="M17 22h16M18.5 18h13M18.5 26h13M145 26l8-8M145 18h8v8"/>
   </g>
-  <text x="44" y="27" font-family="Arial, sans-serif" fill="#ffffff" font-size="14" font-weight="600">Project website</text>
+  <text x="44" y="27" font-family="Arial, sans-serif" fill="#ffffff" font-size="14" font-weight="600">Project site</text>
 </svg>

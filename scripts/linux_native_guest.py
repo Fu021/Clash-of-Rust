@@ -4,9 +4,11 @@ import hashlib
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
+from urllib.parse import quote
 from urllib.request import urlopen
 import zipfile
 
@@ -19,6 +21,7 @@ APPINDICATOR = 'appindicatorsupport@rgcjonas.gmail.com'
 APPINDICATOR_URL = ('https://github.com/ubuntu/gnome-shell-extension-appindicator/releases/download/'
                     'v66/appindicatorsupport%40rgcjonas.gmail.com.zip')
 APPINDICATOR_SHA256 = 'f2b17c7c5590f729853cd353f20a9e59b6e0c32e9c0a561976e09f5a97487730'
+ARCH_ARCHIVE_MIRROR = 'https://umea.archive.pkgbuild.com'
 
 
 def distribution():
@@ -82,20 +85,46 @@ def refresh():
     else:
         mirrorlist = '/etc/pacman.d/mirrorlist'
         snapshot = datetime.strptime(TARGETS['arch'][0].release.split('.')[0], '%Y%m%d')
-        archive_hosts = ('archive.archlinux.org', 'umea.archive.pkgbuild.com')
+        archives = ('https://archive.archlinux.org', ARCH_ARCHIVE_MIRROR)
         servers = ''.join(
-            f'Server = https://{host}/repos/{snapshot:%Y/%m/%d}/$repo/os/$arch\n'
-            for host in archive_hosts
+            f'Server = {archive}/repos/{snapshot:%Y/%m/%d}/$repo/os/$arch\n'
+            for archive in archives
         )
         run(['sudo', 'tee', mirrorlist],
             input=servers, text=True, stdout=subprocess.DEVNULL)
-        privileged('-Syyu')
+        privileged('-Syy')
+        arch_sync('-Su')
+
+
+def arch_sync(*arguments):
+    try:
+        privileged(*arguments, '--downloadonly')
+    except subprocess.CalledProcessError:
+        transaction = run([*manager(), *arguments, '--print', '--print-format', '%n\t%f\t%h'],
+                          capture_output=True, text=True, timeout=60).stdout
+        cache = Path('/var/cache/pacman/pkg')
+        with tempfile.TemporaryDirectory(prefix='cor-arch-archive-') as temporary:
+            for package in transaction.splitlines():
+                name, filename, digest = package.split('\t')
+                if (not re.fullmatch(r'[a-z0-9_@+][a-z0-9_+.@-]*', name)
+                        or not filename.startswith(name + '-')
+                        or not re.fullmatch(r'[a-zA-Z0-9_+.:@-]+\.pkg\.tar(?:\.[a-z0-9]+)?', filename)
+                        or not re.fullmatch(r'[a-f0-9]{64}', digest)):
+                    raise ValueError(f'Invalid package metadata from pacman: {name}')
+                cached = cache/filename
+                if cached.is_file() and sha256(cached) == digest:
+                    continue
+                url = f'{ARCH_ARCHIVE_MIRROR}/packages/{quote(name[0])}/{quote(name)}/{quote(filename)}'
+                staged = Path(temporary)/filename
+                download(url, staged, digest=digest)
+                run(['sudo', 'install', '-m', '0644', staged, cached], timeout=60)
+    privileged(*arguments)
 
 
 def install_dependencies(packages):
     distro = distribution()
     if distro == 'arch':
-        privileged('-S', '--needed', *packages)
+        arch_sync('-S', '--needed', *packages)
     else:
         flags = ('--no-recommends',) if distro.startswith('opensuse-') else ()
         timeout = 1200 if distro == 'fedora' and platform.machine() == 'aarch64' else 900

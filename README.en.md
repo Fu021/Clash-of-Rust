@@ -29,14 +29,14 @@
 
 Clash of Rust is a native proxy client built with **Rust + Slint + mihomo**. The desktop GUI, TUI, and `cor` command line share a backend. Android has a dedicated client.
 
-**Stable release 0.7.2** passed proxy and TUN tests in the environments below.
+The table lists supported installs and tested environments for **stable release 0.7.2**.
 
-| Platform | Supported installs | Tested with 0.7.2 |
+| Platform | Supported installs | Tested environments |
 | --- | --- | --- |
-| Windows | x64 / ARM64 | Windows Server 2025 (x64), Windows 11 (ARM64) |
-| Linux | Debian or Ubuntu 20.04+, amd64 / ARM64 | Ubuntu 20.04 LTS (x64 / ARM64), Ubuntu 26.04 LTS (x64) |
+| Windows | x64 / ARM64 | Windows desktop (x64), Windows 11 (ARM64), Windows Server 2025 (x64) |
+| Linux | Debian or Ubuntu 20.04+, amd64 / ARM64 | Ubuntu 20.04 and 22.04 (x64 / ARM64), 24.04 and 26.04 (x64) |
 | macOS | 14+, Intel / Apple Silicon | macOS 15.7.9 (Intel), 26.7.2 (Apple Silicon) |
-| Android | 8.0+, ARM64 / ARMv7 / x86_64 | 11 x86_64 emulator versions from Android 8.0 through 16. ARM64 and ARMv7 passed build and package checks. |
+| Android | 8.0+, ARM64 / ARMv7 / x86_64 | Android 8.0 through 16 (11 x86_64 emulator versions) |
 
 ## Features
 

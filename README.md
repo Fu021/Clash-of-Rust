@@ -29,14 +29,14 @@
 
 Clash of Rust 是基于 **Rust + Slint + mihomo** 的原生代理客户端。桌面 GUI、TUI 和 `cor` 命令行共用后台，Android 提供独立客户端。
 
-**正式版 0.7.2** 已在以下环境通过代理与 TUN 测试。
+下表列出 **0.7.2 正式版**的安装范围和实测环境。
 
-| 平台 | 安装支持 | 0.7.2 实测环境 |
+| 平台 | 安装支持 | 实测环境 |
 | --- | --- | --- |
-| Windows | x64 / ARM64 | Windows Server 2025（x64）、Windows 11（ARM64） |
-| Linux | Debian 或 Ubuntu 20.04+，amd64 / ARM64 | Ubuntu 20.04 LTS（x64 / ARM64）、Ubuntu 26.04 LTS（x64） |
+| Windows | x64 / ARM64 | Windows 桌面版（x64）、Windows 11（ARM64）、Windows Server 2025（x64） |
+| Linux | Debian 或 Ubuntu 20.04+，amd64 / ARM64 | Ubuntu 20.04 和 22.04（x64 / ARM64）、24.04 和 26.04（x64） |
 | macOS | 14+，Intel / Apple Silicon | macOS 15.7.9（Intel）、26.7.2（Apple Silicon） |
-| Android | 8.0+，ARM64 / ARMv7 / x86_64 | Android 8.0 至 16 共 11 个 x86_64 模拟器版本。ARM64、ARMv7 已通过构建与安装包校验。 |
+| Android | 8.0+，ARM64 / ARMv7 / x86_64 | Android 8.0 至 16（11 个 x86_64 模拟器版本） |
 
 ## 功能一览
 

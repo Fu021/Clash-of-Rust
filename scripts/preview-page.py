@@ -33,7 +33,7 @@ code { padding: .1em .32em; border-radius: 4px; background: light-dark(#eff2f6, 
 pre { padding: 14px 18px; border-radius: 6px; background: light-dark(#eff2f6, #303645); }
 pre code { padding: 0; white-space: pre-wrap; }
 blockquote { margin-inline: 0; padding-inline: 1em; border-left: 4px solid #8294aa; }
-table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; overflow-wrap: break-word; }
 th, td { padding: .45em .75em; border: 1px solid light-dark(#d7e0ea, #424a59); }
 th { background: light-dark(#eff2f6, #303645); }
 li + li { margin-top: .25em; }
