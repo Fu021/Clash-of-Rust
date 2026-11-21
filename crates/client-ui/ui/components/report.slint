@@ -52,7 +52,8 @@ component FindingBlock inherits Panel {
     in property <length> caption-size;
     in property <length> detail-touch-height;
     property <bool> expanded;
-    changed section => { root.expanded = false; }
+    property <string> section-id: root.section.id;
+    changed section-id => { root.expanded = false; }
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
     height: block-content.preferred-height; clip: true;
     block-content := VerticalLayout {

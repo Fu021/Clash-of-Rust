@@ -85,8 +85,7 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
                 .insert(key.to_string(), bounds.iter().collect());
         });
     probe.global::<UiGeometry>().set_enabled(true);
-    probe.set_reports(
-        Rc::new(slint::VecModel::from(vec![
+    let reports = Rc::new(slint::VecModel::from(vec![
             ReportItem {
                 id: "quality".into(),
                 title: "IP 归属与信誉".into(),
@@ -128,9 +127,8 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
                 tone: 3,
                 ..Default::default()
             },
-        ]))
-        .into(),
-    );
+        ]));
+    probe.set_reports(reports.clone().into());
     probe.show().unwrap();
     let render = |width, height| {
         frame(&adapter, &clock, width, height);
@@ -164,6 +162,38 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
         assert!(bounds["claude-block-item:quality:3"][3] < 1.);
         assert!(!bounds.contains_key("claude-block-detail:quality:1"));
         drop(bounds);
+        let mut header = reports.row_data(0).unwrap();
+        header.value = format!("摘要已更新 {width}×{height} {scale}").into();
+        reports.set_row_data(0, header);
+        render(width, height);
+        assert!(
+            targets.borrow().contains_key("claude-block-item:quality:1"),
+            "updating a section summary closed the expanded details"
+        );
+        let mut item = reports.row_data(1).unwrap();
+        item.id = "replacement".into();
+        reports.set_row_data(1, item);
+        let mut header = reports.row_data(0).unwrap();
+        header.id = "replacement".into();
+        reports.set_row_data(0, header);
+        render(width, height);
+        assert!(
+            !targets
+                .borrow()
+                .contains_key("claude-block-item:replacement:1"),
+            "a replacement section inherited the previous section's expanded state"
+        );
+        let mut item = reports.row_data(1).unwrap();
+        item.id = "quality".into();
+        reports.set_row_data(1, item);
+        let mut header = reports.row_data(0).unwrap();
+        header.id = "quality".into();
+        reports.set_row_data(0, header);
+        render(width, height);
+        let button = targets.borrow()["claude-block:quality"].clone();
+        click(probe.window(), &button);
+        render(width, height);
+        assert!(targets.borrow().contains_key("claude-block-item:quality:1"));
         let button = targets.borrow()["claude-block:quality"].clone();
         click(probe.window(), &button);
         render(width, height);
@@ -177,6 +207,14 @@ fn blocks_and_details_expand_without_exposing_other_sections() {
         click(probe.window(), &detail);
         render(width, height);
         assert!(targets.borrow()["claude-block-item:routes:3"][3] > row_height);
+        let mut header = reports.row_data(2).unwrap();
+        header.value = format!("选路已更新 {width}×{height} {scale}").into();
+        reports.set_row_data(2, header);
+        render(width, height);
+        assert!(
+            targets.borrow()["claude-block-item:routes:3"][3] > row_height,
+            "updating a section summary closed the nested details"
+        );
         let button = targets.borrow()["claude-block:routes"].clone();
         click(probe.window(), &button);
         render(width, height);
