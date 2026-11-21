@@ -11,9 +11,9 @@
 在 Actions 中选择 **Publish Release → Run workflow**：
 
 - `ci_run_id`：成功的当前提交 CI 编号；留空选择当前提交的 main push CI。不发布核验也接受显式指定的 main 手动 CI，仍要求全部必需 job 和所需兼容回执通过；公开发布不接受手动 CI。开发分支测试包必须填写当前分支、当前提交成功的 PR CI 编号。
-- `check_only`：默认勾选，核验同提交 CI 的候选包、SHA256 和收据，包括九组标准安装包及发布范围需要的 RPM。标准包保存在 `package-{system}-{arch}` 附件，RPM 保存在 `linux-rpm-{arch}` 附件。工作流直接复用这些产物，Release 保持原样。
+- `check_only`：默认勾选，核验同提交的候选包、SHA256 和收据，包括九组标准安装包及发布范围需要的 RPM、Arch 原生包。标准包保存在 CI 的 `package-{system}-{arch}` 附件，RPM 保存在 CI 的 `linux-rpm-{arch}` 附件，Arch 原包由兼容验收回执指向。工作流直接复用这些产物，Release 保持原样。
 - `prerelease`：经维护者确认后显式发布预发布版，须关闭 `check_only`。可在开发/修复分支上运行，必须指定同仓库、同分支头成功的 PR CI，源码使用合法预发布版本，并提交 `docs/releases/<完整版本>.md`。不能用此开关发布无后缀的正式版本；两种模式同时勾选会在前置校验失败。
-- `linux_scope`：通用发布使用默认的 `supported`，覆盖 Ubuntu 和 Debian。专项发布填实际面向的 Linux 套件，用逗号分隔（如 `debian,linuxmint,pop,zorin`）。Android 和 Ubuntu 始终验收。纳入 `fedora` 或 `opensuse` 时，按所选套件的 x64 矩阵核验并加入同源 RPM 及其 SHA256，RPM 绑定 x64 DEB 的摘要。`arch` 核对原生包管理验收，不发布 Arch 二进制包或写入 AUR。新增发行版须先通过完整验收，再按实际发布范围列明。
+- `linux_scope`：通用发布使用默认的 `supported`，覆盖 Ubuntu、Debian 和 Arch Linux x86_64。专项发布填实际面向的 Linux 套件，用逗号分隔（如 `debian,linuxmint,pop,zorin`）。Android 和 Ubuntu 始终验收。纳入 `fedora` 或 `opensuse` 时加入对应 x64 RPM 及其 SHA256。纳入 `arch` 时，在 Release 附件加入 Arch 兼容验收使用的 `.pkg.tar.zst` 原件及其 SHA256。两种原生格式的收据均绑定 CI 的 x64 DEB 摘要。
 
 正式版还须同步[网站版本介绍](../../website/README.md)：在 `website/src/content/releases.json` 维护发布日期、中英文亮点、必要限制和九组安装包数据，保留历次正式版入口；预发布不单独更新网站内容或版本记录。以同版发布文案为依据，执行 `python website/build.py`，检查两种语言的版本页、下载及 SHA256 入口；发布后核对公开标签、日期和附件，不把未发布版本写成已发布。网页维护和验收细节只在网站说明中维护。
 
@@ -32,7 +32,7 @@
 1. 前置解析要求同提交 CI 及所需兼容性检查成功，九组候选包和九组构建附件唯一、未过期，冻结来源与依赖快照。
 2. 不发布模式直接校验 CI 候选包。不需要重新申请各目标平台的 runner 或启动虚拟机。
 3. 公开模式复用六组桌面候选包；三个 Android job 取得独立发行签名凭据，重新签名 CI 的实际 APK 与 instrumentation，核对签名、架构、16 KiB 对齐，并在 x64 最终签名包执行基础代理/TUN 验证。开发签名候选包不能作为发行签名证据；不运行生命周期、键盘或截图专项。
-4. 最终 job 核对外层 artifact digest、安装收据、来源构建身份及包摘要，输出九份标准安装包、发布范围需要的 RPM 及每个包的 SHA256。公开模式创建 Release，开发版本标记为 prerelease 并保留稳定版 latest。
+4. 最终 job 核对外层 artifact digest、安装收据、来源构建身份及包摘要，输出九份标准安装包、发布范围需要的 RPM 或 Arch 包和各包的 SHA256。公开模式创建 Release，开发版本标记为 prerelease 并保留稳定版 latest。
 
 Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果推断其受支持。
 
@@ -50,7 +50,7 @@ Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果
 
 ### 兼容性发布门禁
 
-普通 CI 成功后，以同一 `ci_run_id` 并行运行 [Android Compatibility](android-compatibility.md)、[Ubuntu Compatibility](ubuntu-compatibility.md) 和本次发布所涉及的其他发行版工作流。默认范围也需要 [Debian Compatibility](debian-compatibility.md)。Linux 各套常规门禁安装同源候选包并执行基础系统代理与 TUN 检查。每套矩阵的所有目标及最终回执 job 均须成功。
+普通 CI 成功后，以同一 `ci_run_id` 并行运行 [Android Compatibility](android-compatibility.md)、[Ubuntu Compatibility](ubuntu-compatibility.md) 和本次发布所涉及的其他发行版工作流。默认范围也需要 [Debian Compatibility](debian-compatibility.md) 和 [Arch Linux Compatibility](linux-expansion.md#arch-linux-原生包)。Linux 各套常规门禁安装同源候选包并执行基础系统代理与 TUN 检查。每套矩阵的所有目标及最终回执 job 均须成功。
 
 `scripts/compatibility.py` 自动查找同提交最新的兼容运行，并核对 workflow 路径、同仓库、成功终态、所有必需 job、attempt 及回执 ZIP 的 digest。回执必须精确绑定所选 CI 的输入 artifact id/name/digest；只检查分支名、工作流绿色、旧运行成功或过期附件均不够。最新兼容运行尚未完成或失败时阻止发布，不静默退回旧结果。前置解析和最终核验都执行门禁，`check_only`、正式版与预发布一视同仁。
 

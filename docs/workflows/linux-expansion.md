@@ -42,9 +42,13 @@ Tumbleweed 在来宾关闭预设仓库，只启用 openSUSE 历史目录中与�
 
 真实 GNOME Wayland 登录前，探针通过短生命周期的 D-Bus 会话写入扩展设置，指定 GIO 的本地文件实现以免启动 GVfs。若 SSH 阶段超时而 `desktop-login/prepare.json` 已写入成功结果，核对该命令是否启动了仍持有 SSH 输出的进程。真实 X11 登录中，窗口枚举遇到已销毁的 X11 客户窗口时短暂重试，成功读取窗口列表后再判断是否前台显示。
 
-RPM 与 Arch 安装由各自包管理器更新，应用不调用 DEB 安装器覆盖其文件。Arch 配方和 `.SRCINFO` 使用本次已验证的候选，未提交 AUR，也不接管第三方包。
+原生包的预发布版本字段使用 RPM 的 `~` 或 pacman 的 `pre.` 标记，版本后缀中的连字符转换为 `+`。发布附件名使用原始发行版本。兼容来宾用原生比较器校验预发布编号递增及正式版顺序。隔离 DNS 夹具按来宾实际存在的系统 CA 文件装载临时测试根，并在同一挂载命名空间中恢复。夹具仅给节点引导的正向解析结果 30 秒 TTL，以减少 ARM64 TCG 上重复的加密握手。测试仍要求每次冷启动重新解析节点，并验证 UDP、TCP 和 DNS 未旁路。
 
-原生包的预发布版本字段使用 RPM 的 `~` 或 pacman 的 `pre.` 标记，版本后缀中的连字符转换为 `+`。RPM 发行附件名使用原始发行版本，Arch 候选包名使用原生 `pkgver`。兼容来宾用原生比较器校验预发布编号递增及正式版顺序。隔离 DNS 夹具按来宾实际存在的系统 CA 文件装载临时测试根，并在同一挂载命名空间中恢复。夹具仅给节点引导的正向解析结果 30 秒 TTL，以减少 ARM64 TCG 上重复的加密握手。测试仍要求每次冷启动重新解析节点，并验证 UDP、TCP 和 DNS 未旁路。
+### Arch Linux 原生包
+
+发布范围包含 Arch Linux x86_64 时，Release 将提供原生二进制包。首次安装时从包含该包的版本下载 `Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst` 及 `.sha256`，核对摘要后执行 `sudo pacman -U ./Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst`，其中 `<版本>` 替换为实际版本。包名是 `clash-of-rust`，配方保留 `/opt/clash-of-rust`、随包内核和固定的 polkit 助手路径，并写入 `pacman-release` 标识。
+
+Arch 工作流使用 CI 的 x64 DEB 在 Arch 来宾内重封装，检查安装后的包身份、实际终端更新助手、基础系统代理和 TUN。来宾完成后回收安装过的原包与收据。记录作业绑定实际执行验收的 attempt 与归档摘要，发布阶段用同一字节生成校验文件并加入 Release。应用内更新见[版本与更新通道](versions.md#版本与更新通道)。
 
 提交 `0ccca669` 使用 CI `44696750124` 完整验收当前矩阵中的 Ubuntu、Debian、Linux Mint、Zorin OS、Fedora、openSUSE 和 Arch Linux。Pop!_OS 24.04 的 COSMIC 授权探针提前退出，补上认证代理就绪检查后用 `8999697d` 的 CI `44705538634` 复验。Pop!_OS 22.04 GNOME 和 24.04 COSMIC 均通过，并核对真实登录、图形授权、托盘及菜单复用、23 项 TUI PTY、原生升级和卸载保留数据。两轮合计覆盖当前 21 个目标。新发布按实际范围取得对应提交的回执。[首轮 CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/44696750124) · [Pop!_OS 完整复验](https://github.com/Fu021/Clash-of-Rust/actions/runs/44709399603)
 

@@ -374,7 +374,7 @@ def native_upgrade_and_uninstall(deb):
 
 def native_package_tests(deb, receipt, binary):
     from ci_test_policy import extended_tests
-    from linux_native_guest import RPM, distribution, install_package
+    from linux_native_guest import RPM, distribution, install_package, package_version
     from linux_native_package import build_arch, verify_rpm
 
     distro = distribution()
@@ -383,15 +383,27 @@ def native_package_tests(deb, receipt, binary):
     run(['sudo', 'chown', 'root:root', '/opt'])
     run(['sudo', 'chmod', '0755', '/opt'])
     install_package(package)
+    if distro == 'arch' and package_version() != package_version(package):
+        raise ValueError('Installed Arch version differs from the verified package')
+    if distro == 'arch':
+        run([sys.executable, ROOT/'scripts/test-cli-update.py', '--package', package,
+             '--arch-version', receipt['version'], '--report', ROOT/'target/linux-report'],
+            timeout=300)
     require_linux_polkit_tools()
     if extended_tests():
         from linux_gui import installed_tests
         installed_tests()
     run([sys.executable, ROOT/'scripts/test-proxy-modes.py',
          '--test-binary', binary, '--bundle', '/opt/clash-of-rust'])
+    digest = sha256(package)
     write_json(ROOT/'target/linux-report/native-package.json',
-               {'candidate': package.name, 'sha256': sha256(package),
+               {'candidate': package.name, 'sha256': digest,
                 'source_deb_sha256': receipt['sha256']})
+    if distro == 'arch':
+        write_json(package.parent/'arch-receipt.json', {
+            'schema': 1, 'commit': receipt['commit'], 'ci_run_id': receipt['ci_run_id'],
+            'source_sha256': receipt['sha256'], 'package': package.name, 'sha256': digest,
+        })
 
 
 def run_compatibility(distribution, version, arch):

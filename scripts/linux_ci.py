@@ -777,6 +777,25 @@ def fetch_vm_package(directory, package_run_id, timings, *, rpm=False):
         timings['package_download_and_archive'] = round(time.monotonic() - started, 3)
 
 
+def collect_arch_package(guest, directory, ci_run_id):
+    from linux_native_package import arch_filename
+
+    source = json.loads((ROOT/'dist/package-receipt.json').read_text())
+    name = arch_filename(source['version'])
+    work = directory/'linux-arch'
+    work.mkdir()
+    for filename in ('arch-receipt.json', name):
+        path = work/filename
+        with path.open('wb') as output:
+            guest.remote('cat -- ' + shlex.quote(f'cor-source/dist/linux-arch/{filename}'),
+                         stdout=output, timeout=120)
+    receipt = json.loads((work/'arch-receipt.json').read_text())
+    if receipt != {'schema': 1, 'commit': source['commit'], 'ci_run_id': ci_run_id,
+                   'source_sha256': source['sha256'], 'package': name, 'sha256': sha256(work/name)}:
+        raise ValueError('Recovered Arch package differs from the installed candidate')
+    shutil.copytree(work, ROOT/'dist/linux-arch')
+
+
 def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=None,
                       package_future=None):
     timings = timings if timings is not None else {}
@@ -860,6 +879,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                 raise
             finally:
                 timings['package_lifecycle'] = round(time.monotonic() - phase_started, 3)
+        if guest.target.family == 'arch':
+            collect_arch_package(guest, directory, package_run_id)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
 

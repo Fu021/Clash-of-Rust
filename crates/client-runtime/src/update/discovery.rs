@@ -27,7 +27,7 @@ pub(super) async fn check(
     // Reading settings does not change the desktop proxy, and an unavailable
     // desktop settings service must not prevent the other routes from working.
     let routes = available_routes(port, "https");
-    let package_manager = external_linux_package_manager();
+    let source = UpdateSource::installed();
     clash_client_core::update::retry_check(|| {
         check_once_channel(
             &routes,
@@ -35,7 +35,7 @@ pub(super) async fn check(
             LATEST_URL,
             crate::VERSION,
             include_prereleases,
-            package_manager,
+            source,
         )
     })
     .await
@@ -48,7 +48,7 @@ async fn check_once(
     latest: &str,
     current: &str,
 ) -> Result<Option<Available>> {
-    check_once_channel(routes, api, latest, current, false, None).await
+    check_once_channel(routes, api, latest, current, false, UpdateSource::Standard).await
 }
 async fn check_once_channel(
     routes: &[Route],
@@ -56,18 +56,18 @@ async fn check_once_channel(
     latest: &str,
     current: &str,
     include_prereleases: bool,
-    package_manager: Option<&'static str>,
+    source: UpdateSource,
 ) -> Result<Option<Available>> {
     let (available, latest_route) = tokio::time::timeout(
         Duration::from_secs(60),
-        discover_channel(routes, api, latest, current, include_prereleases),
+        discover_channel(routes, api, latest, current, include_prereleases, source),
     )
     .await
     .context("更新检查超时，请检查代理或稍后重试")??;
     let Some(mut available) = available else {
         return Ok(None);
     };
-    if let Some(manager) = package_manager {
+    if let UpdateSource::External(manager) = source {
         available.package_manager = Some(manager);
         available.package = None;
         return Ok(Some(available));
@@ -76,11 +76,14 @@ async fn check_once_channel(
         // A redirect only identifies the version. Probe both required assets
         // before publishing a downloadable update to the UI.
         available.package =
-            tokio::time::timeout(REQUEST_TIMEOUT, latest_package(&available, &route))
+            tokio::time::timeout(REQUEST_TIMEOUT, latest_package(&available, &route, source))
                 .await
                 .context("安装包信息查询超时")??;
     }
-    if package_name(&available.version).is_some() && available.package.is_none() {
+    if source == UpdateSource::ArchRelease && available.package.is_none() {
+        return Ok(None);
+    }
+    if source.package_name(&available.version).is_some() && available.package.is_none() {
         bail!(
             "版本 {} 缺少本平台安装包或校验文件，请稍后重试或访问 {}",
             available.version,
@@ -97,7 +100,7 @@ async fn discover(
     latest: &str,
     current: &str,
 ) -> Result<(Option<Available>, Option<Route>)> {
-    discover_channel(routes, api, latest, current, false).await
+    discover_channel(routes, api, latest, current, false, UpdateSource::Standard).await
 }
 async fn discover_channel(
     routes: &[Route],
@@ -105,11 +108,12 @@ async fn discover_channel(
     latest: &str,
     current: &str,
     include_prereleases: bool,
+    source: UpdateSource,
 ) -> Result<(Option<Available>, Option<Route>)> {
     let mut api_error = None;
     for route in routes {
         let result = match client(route) {
-            Ok(client) => fetch_channel(&client, api, current, include_prereleases).await,
+            Ok(client) => fetch_channel(&client, api, current, include_prereleases, source).await,
             Err(error) => Err(error),
         };
         match result {
@@ -191,11 +195,16 @@ fn latest_release(location: &str, current: &str) -> Result<Option<Available>> {
         }],
         current,
         false,
+        UpdateSource::Standard,
     )
 }
 
-async fn latest_package(available: &Available, route: &Route) -> Result<Option<Package>> {
-    let Some(name) = package_name(&available.version) else {
+async fn latest_package(
+    available: &Available,
+    route: &Route,
+    source: UpdateSource,
+) -> Result<Option<Package>> {
+    let Some(name) = source.package_name(&available.version) else {
         return Ok(None);
     };
     let tag = available
@@ -204,9 +213,17 @@ async fn latest_package(available: &Available, route: &Route) -> Result<Option<P
         .context("Release 地址无效")?;
     let base = format!("{RELEASES_URL}/download/{tag}/{name}");
     let client = download_client_via(route.proxy.as_deref(), REQUEST_TIMEOUT)?;
-    let size = asset_size(&client, &base, PACKAGE_LIMIT).await?;
+    let optional = source == UpdateSource::ArchRelease;
     let sidecar = format!("{base}.sha256");
-    asset_size(&client, &sidecar, 1024).await?;
+    let Some(size) = asset_size(&client, &base, PACKAGE_LIMIT, optional).await? else {
+        return Ok(None);
+    };
+    if asset_size(&client, &sidecar, 1024, optional)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
     Ok(Some(Package {
         asset: Asset {
             name,
@@ -218,7 +235,7 @@ async fn latest_package(available: &Available, route: &Route) -> Result<Option<P
     }))
 }
 
-async fn asset_size(client: &Client, url: &str, limit: u64) -> Result<u64> {
+async fn asset_size(client: &Client, url: &str, limit: u64, optional: bool) -> Result<Option<u64>> {
     // Read one byte (or only headers when a server ignores Range), never the
     // installer body. Redirects retain the download client's host restrictions.
     let response = client
@@ -229,6 +246,7 @@ async fn asset_size(client: &Client, url: &str, limit: u64) -> Result<u64> {
         .await
         .map_err(|error| request_error(error, "安装包信息"))?;
     let size = match response.status() {
+        StatusCode::NOT_FOUND if optional => return Ok(None),
         StatusCode::OK => response.content_length(),
         StatusCode::PARTIAL_CONTENT => response
             .headers()
@@ -242,7 +260,7 @@ async fn asset_size(client: &Client, url: &str, limit: u64) -> Result<u64> {
     if size == 0 || size > limit {
         bail!("安装包大小无效");
     }
-    Ok(size)
+    Ok(Some(size))
 }
 
 #[cfg(test)]
@@ -362,7 +380,7 @@ mod tests {
                 &api,
                 "0.7.0",
                 preview,
-                Some(manager),
+                UpdateSource::External(manager),
             )
             .await
             .unwrap()
@@ -373,6 +391,41 @@ mod tests {
             assert!(offer.package.is_none());
             task.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn official_arch_checks_only_releases_with_a_native_package_and_checksum() {
+        let name = "Clash-of-Rust-0.8.0-linux-x86_64.pkg.tar.zst";
+        let releases = serde_json::json!([
+            {"tag_name":"v0.8.2","draft":false,"prerelease":false,"assets":[
+                {"name":"Clash-of-Rust-0.8.2-linux-x86_64.pkg.tar.zst","size":42}
+            ]},
+            {"tag_name":"v0.8.1","draft":false,"prerelease":false,"assets":[
+                {"name":"Clash-of-Rust-0.8.1-linux-amd64.deb","size":42},
+                {"name":"Clash-of-Rust-0.8.1-linux-amd64.deb.sha256","size":64}
+            ]},
+            {"tag_name":"v0.8.0","draft":false,"prerelease":false,"assets":[
+                {"name":name,"size":42},
+                {"name":format!("{name}.sha256"),"size":64}
+            ]}
+        ])
+        .to_string();
+        let (api, task) = server("200 OK", releases.as_bytes(), "").await;
+        let offer = check_once_channel(
+            &routes(None, None),
+            &api,
+            &api,
+            "0.7.0",
+            false,
+            UpdateSource::ArchRelease,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(offer.version, "0.8.0");
+        assert!(offer.package_manager.is_none());
+        assert_eq!(offer.package.unwrap().asset.name, name);
+        task.await.unwrap();
     }
 
     #[tokio::test]
@@ -410,7 +463,7 @@ mod tests {
             "http://fixture.invalid/latest",
             "0.7.0",
             false,
-            Some("dnf"),
+            UpdateSource::External("dnf"),
         )
         .await
         .unwrap()
@@ -562,9 +615,9 @@ mod tests {
             ("404 Not Found", "", None),
         ] {
             let (url, task) = server(status, b"x", extra).await;
-            let result = asset_size(&client, &url, PACKAGE_LIMIT).await;
+            let result = asset_size(&client, &url, PACKAGE_LIMIT, false).await;
             match expected {
-                Some(size) => assert_eq!(result.unwrap(), size),
+                Some(size) => assert_eq!(result.unwrap(), Some(size)),
                 None => assert!(result.is_err()),
             }
             assert!(
@@ -574,6 +627,14 @@ mod tests {
                     .contains("range: bytes=0-0")
             );
         }
+        let (url, task) = server("404 Not Found", b"", "").await;
+        assert!(
+            asset_size(&client, &url, PACKAGE_LIMIT, true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        task.await.unwrap();
     }
 
     #[tokio::test]

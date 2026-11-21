@@ -32,6 +32,10 @@ def rpm_filename(version, arch):
     return f'Clash-of-Rust-{version}-linux-{RPM_ARCHITECTURES[arch]}.rpm'
 
 
+def arch_filename(version):
+    return f'Clash-of-Rust-{validate_version(version)}-linux-x86_64.pkg.tar.zst'
+
+
 def build_rpm(deb, version, output, arch):
     rpm_arch = RPM_ARCHITECTURES[arch]
     with tempfile.TemporaryDirectory(prefix='cor-rpm-') as temporary:
@@ -98,7 +102,7 @@ def build_arch(deb, version, output, expected_digest):
         if len(packages) != 1:
             raise ValueError('Expected a single native Arch package')
         output.mkdir(parents=True, exist_ok=True)
-        result = output/packages[0].name
+        result = output/arch_filename(version)
         shutil.copyfile(packages[0], result)
         return result
 

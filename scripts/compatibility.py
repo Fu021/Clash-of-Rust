@@ -14,11 +14,13 @@ from linux_compatibility_targets import TARGETS
 from workflow_artifacts import commit, current_ci_artifacts, release_module
 
 RELEASE_SUITES = ('android', 'ubuntu')
-SUPPORTED_LINUX_RELEASE_SUITES = ('debian',)
+SUPPORTED_LINUX_RELEASE_SUITES = ('debian', 'arch')
+ARCH_PACKAGE_LIMIT = 512 * 1024**2
 WORKFLOWS = {suite: f'{suite}-compatibility.yml' for suite in ('android', *TARGETS)}
 REPORT_JOBS = {suite: 'Linux / Record compatibility' for suite in TARGETS}
 REPORT_JOBS['android'] = 'Record Android compatibility'
 CHECKS = {suite: ['system_proxy', 'tun'] for suite in WORKFLOWS}
+CHECKS['arch'].append('terminal_update')
 for suite, targets in TARGETS.items():
     if all(target.full_desktop for target in targets):
         CHECKS[suite] += ['desktop_gui', 'tui', 'cli', 'desktop_login', 'package_lifecycle']
@@ -159,12 +161,44 @@ def check_jobs(client, run, suite, include_report):
             or not all(job['status'] == 'completed' and job['conclusion'] == 'success'
                        for job in jobs)):
         raise ValueError(suite + ' compatibility jobs are missing, skipped or unsuccessful')
+    return jobs
 
 
 def report_name(suite, attempt):
     if type(attempt) is not int or not 1 <= attempt <= 100:
         raise ValueError('Invalid compatibility attempt')
     return f'{suite}-compatibility-attempt-{attempt}'
+
+
+def run_artifacts(client, run_id):
+    artifacts = []
+    for page in range(1, 101):
+        batch = client(f'/actions/runs/{run_id}/artifacts?per_page=100&page={page}')['artifacts']
+        artifacts.extend(batch)
+        if len(batch) < 100:
+            return artifacts
+    raise ValueError('Too many compatibility artifact pages')
+
+
+def arch_package_artifact(run, jobs, artifacts):
+    target, = TARGETS['arch']
+    job, = (job for job in jobs if job['name'].startswith(f'Linux / {target.distribution} '))
+    attempt = job.get('run_attempt')
+    if type(attempt) is not int or not 1 <= attempt <= run['run_attempt']:
+        raise ValueError('Arch package producer attempt is invalid')
+    name = f'linux-arch-x64-attempt-{attempt}'
+    matches = [artifact for artifact in artifacts if artifact.get('name') == name]
+    if len(matches) != 1:
+        raise ValueError('Tested Arch package artifact is missing or duplicated')
+    artifact = matches[0]
+    source = artifact.get('workflow_run', {})
+    if (artifact.get('expired') is not False
+            or type(artifact.get('id')) is not int or artifact['id'] <= 0
+            or source.get('id') != run['id'] or source.get('head_sha') != run['head_sha']
+            or not 0 < artifact.get('size_in_bytes', 0) <= ARCH_PACKAGE_LIMIT + 128 * 1024
+            or not re.fullmatch(r'sha256:[a-f0-9]{64}', artifact.get('digest', ''))):
+        raise ValueError('Tested Arch package artifact identity is invalid')
+    return {key: artifact[key] for key in ('id', 'name', 'digest')}
 
 
 def record(client, suite, ci_run_id, output):
@@ -182,10 +216,12 @@ def record(client, suite, ci_run_id, output):
     report_name(suite, attempt)
     if os.environ.get('GITHUB_RUN_ATTEMPT') and attempt != int(os.environ['GITHUB_RUN_ATTEMPT']):
         raise ValueError('Compatibility workflow attempt mismatch')
-    check_jobs(client, run, suite, include_report=False)
+    jobs = check_jobs(client, run, suite, include_report=False)
     value = {'schema': 1, 'suite': suite, 'commit': source['commit'],
              'ci_run_id': ci_run_id, 'run_id': run_id, 'run_attempt': attempt,
              'checks': CHECKS[suite], 'inputs': source['inputs'], **iso_targets(suite)}
+    if suite == 'arch':
+        value['arch_package'] = arch_package_artifact(run, jobs, run_artifacts(client, run_id))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(value, indent=2) + '\n')
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
@@ -214,16 +250,10 @@ def verified_suite(client, source_ci, suite, run_id=None):
             or run.get('event') != 'workflow_dispatch'
             or run.get('status') != 'completed' or run.get('conclusion') != 'success'):
         raise ValueError(suite + ' compatibility has not passed for the selected CI source')
-    check_jobs(client, run, suite, include_report=True)
+    jobs = check_jobs(client, run, suite, include_report=True)
     name = report_name(suite, run.get('run_attempt', 1))
-    reports = []
-    for page in range(1, 101):
-        batch = client(f'/actions/runs/{run_id}/artifacts?per_page=100&page={page}')['artifacts']
-        reports.extend(item for item in batch if item.get('name') == name)
-        if len(batch) < 100:
-            break
-    else:
-        raise ValueError('Too many compatibility receipt pages')
+    artifacts = run_artifacts(client, run_id)
+    reports = [artifact for artifact in artifacts if artifact.get('name') == name]
     if len(reports) != 1 or reports[0].get('expired') is not False:
         raise ValueError(suite + ' compatibility receipt missing, duplicated or expired')
     artifact = reports[0]
@@ -246,12 +276,14 @@ def verified_suite(client, source_ci, suite, run_id=None):
                 'ci_run_id': source_ci['id'], 'run_id': run_id,
                 'run_attempt': run.get('run_attempt', 1),
                 'checks': CHECKS[suite], 'inputs': source['inputs'], **iso_targets(suite)}
+    if suite == 'arch':
+        expected['arch_package'] = arch_package_artifact(run, jobs, artifacts)
     if (not isinstance(receipt, dict)
             or any(type(receipt.get(key)) is not int
                    for key in ('schema', 'ci_run_id', 'run_id', 'run_attempt'))
             or receipt != expected):
         raise ValueError('Compatibility receipt differs from the selected CI artifacts or checks')
-    return run_id
+    return receipt
 
 
 def main():

@@ -301,8 +301,35 @@ struct Release {
     assets: Vec<Asset>,
 }
 
-fn package_name(version: &str) -> Option<String> {
-    let suffix = if cfg!(all(windows, target_arch = "x86_64")) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UpdateSource {
+    Standard,
+    ArchRelease,
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    External(&'static str),
+}
+
+impl UpdateSource {
+    fn installed() -> Self {
+        #[cfg(target_os = "linux")]
+        if let Ok(executable) = std::env::current_exe() {
+            return Self::at(&executable);
+        }
+        Self::Standard
+    }
+
+    fn package_name(self, version: &str) -> Option<String> {
+        let suffix = match self {
+            Self::Standard => standard_suffix()?,
+            Self::ArchRelease => "linux-x86_64.pkg.tar.zst",
+            Self::External(_) => return None,
+        };
+        Some(format!("Clash-of-Rust-{version}-{suffix}"))
+    }
+}
+
+fn standard_suffix() -> Option<&'static str> {
+    Some(if cfg!(all(windows, target_arch = "x86_64")) {
         "windows-x64-setup.exe"
     } else if cfg!(all(windows, target_arch = "aarch64")) {
         "windows-arm64-setup.exe"
@@ -316,12 +343,16 @@ fn package_name(version: &str) -> Option<String> {
         "macos-arm64.dmg"
     } else {
         return None;
-    };
-    Some(format!("Clash-of-Rust-{version}-{suffix}"))
+    })
 }
 
-fn package(release: &Release, version: &str) -> Option<Package> {
-    let name = package_name(version)?;
+#[cfg(test)]
+fn package_name(version: &str) -> Option<String> {
+    UpdateSource::Standard.package_name(version)
+}
+
+fn package(release: &Release, version: &str, source: UpdateSource) -> Option<Package> {
+    let name = source.package_name(version)?;
     let mut matches = release.assets.iter().filter(|asset| asset.name == name);
     let asset = matches.next()?.clone();
     if matches.next().is_some() || asset.size == 0 || asset.size > PACKAGE_LIMIT {
@@ -358,26 +389,34 @@ fn package(release: &Release, version: &str) -> Option<Package> {
 }
 
 #[cfg(target_os = "linux")]
-fn external_linux_package_manager_at(executable: &Path) -> Option<&'static str> {
-    let executable = executable.canonicalize().ok()?;
-    let directory = executable.parent()?;
-    if directory != Path::new("/opt/clash-of-rust") {
-        return None;
-    }
-    let marker = directory.join("package-manager");
-    let metadata = std::fs::symlink_metadata(&marker).ok()?;
-    if !metadata.is_file() || metadata.len() > 16 {
-        return None;
-    }
-    match std::fs::read_to_string(marker).ok()?.as_str() {
-        "rpm\n" => {
-            let release = std::fs::read_to_string("/etc/os-release")
-                .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
-                .unwrap_or_default();
-            Some(rpm_package_manager(&release))
+impl UpdateSource {
+    fn at(executable: &Path) -> Self {
+        let Ok(executable) = executable.canonicalize() else {
+            return Self::Standard;
+        };
+        let Some(directory) = executable.parent() else {
+            return Self::Standard;
+        };
+        if directory != Path::new("/opt/clash-of-rust") {
+            return Self::Standard;
         }
-        "pacman\n" => Some("pacman"),
-        _ => None,
+        let marker = directory.join("package-manager");
+        if !std::fs::symlink_metadata(&marker)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 16)
+        {
+            return Self::Standard;
+        }
+        match std::fs::read_to_string(marker).as_deref() {
+            Ok("rpm\n") => {
+                let release = std::fs::read_to_string("/etc/os-release")
+                    .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+                    .unwrap_or_default();
+                Self::External(rpm_package_manager(&release))
+            }
+            Ok("pacman-release\n") if cfg!(target_arch = "x86_64") => Self::ArchRelease,
+            Ok("pacman\n" | "pacman-release\n") => Self::External("pacman"),
+            _ => Self::Standard,
+        }
     }
 }
 
@@ -394,27 +433,29 @@ fn rpm_package_manager(release: &str) -> &'static str {
     }
 }
 
-fn external_linux_package_manager() -> Option<&'static str> {
-    #[cfg(target_os = "linux")]
-    {
-        external_linux_package_manager_at(&std::env::current_exe().ok()?)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        None
-    }
-}
-
 #[cfg(test)]
 fn newest(releases: Vec<Release>, current: &str) -> Result<Option<Available>> {
-    newest_channel(releases, current, false)
+    newest_channel(releases, current, false, UpdateSource::Standard)
 }
 fn newest_channel(
     releases: Vec<Release>,
     current: &str,
     include_prereleases: bool,
+    source: UpdateSource,
 ) -> Result<Option<Available>> {
     let current = Version::parse(current).context("当前客户端版本号无效")?;
+    let releases = releases.into_iter().filter(|release| {
+        source != UpdateSource::ArchRelease
+            || Version::parse(
+                release
+                    .tag_name
+                    .strip_prefix('v')
+                    .unwrap_or(&release.tag_name),
+            )
+            .ok()
+            .and_then(|version| package(release, &version.to_string(), source))
+            .is_some()
+    });
     let selected = channel::select(releases, &current, include_prereleases, |release| {
         (&release.tag_name, release.draft, release.prerelease)
     });
@@ -426,8 +467,11 @@ fn newest_channel(
             .push("tag")
             .push(&release.tag_name);
         Available {
-            package: package(&release, &version.to_string()),
-            package_manager: None,
+            package: package(&release, &version.to_string(), source),
+            package_manager: match source {
+                UpdateSource::External(manager) => Some(manager),
+                _ => None,
+            },
             version: version.to_string(),
             url: url.into(),
             preview: release.prerelease || !version.pre.is_empty(),
@@ -492,9 +536,14 @@ pub async fn download(
     api: Option<crate::api::Api>,
     report: impl FnMut(Progress),
 ) -> Result<Downloaded> {
-    #[cfg(target_os = "linux")]
-    if let Some(manager) = external_linux_package_manager() {
-        bail!("{}", package_manager_update_hint(manager));
+    match UpdateSource::installed() {
+        UpdateSource::External(manager) => bail!("{}", package_manager_update_hint(manager)),
+        source @ UpdateSource::ArchRelease => anyhow::ensure!(
+            available.package.as_ref().map(|pkg| &pkg.asset.name)
+                == source.package_name(&available.version).as_ref(),
+            "该版本缺少官方 Arch 安装包"
+        ),
+        UpdateSource::Standard => {}
     }
     if cfg!(windows)
         && Version::parse(&available.version)
@@ -706,13 +755,14 @@ pub async fn check_with_prereleases(
 
 #[cfg(test)]
 async fn fetch(client: &Client, endpoint: &str, current: &str) -> Result<Option<Available>> {
-    fetch_channel(client, endpoint, current, false).await
+    fetch_channel(client, endpoint, current, false, UpdateSource::Standard).await
 }
 async fn fetch_channel(
     client: &Client,
     endpoint: &str,
     current: &str,
     include_prereleases: bool,
+    source: UpdateSource,
 ) -> Result<Option<Available>> {
     let response = client
         .get(endpoint)
@@ -721,17 +771,18 @@ async fn fetch_channel(
         .send()
         .await
         .map_err(|error| crate::network::request_error(error, "GitHub API"))?;
-    decode_channel(response, current, include_prereleases).await
+    decode_channel(response, current, include_prereleases, source).await
 }
 
 async fn decode_channel(
     response: reqwest::Response,
     current: &str,
     include_prereleases: bool,
+    source: UpdateSource,
 ) -> Result<Option<Available>> {
     let bytes = release_bytes(response).await?;
     let releases = serde_json::from_slice(&bytes).context("Release 信息格式无效")?;
-    newest_channel(releases, current, include_prereleases)
+    newest_channel(releases, current, include_prereleases, source)
 }
 
 async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
@@ -916,21 +967,21 @@ mod tests {
                 digest: None,
             },
         ];
-        let selected = package(&release, "0.4.6").unwrap();
+        let selected = package(&release, "0.4.6", UpdateSource::Standard).unwrap();
         assert_eq!(selected.asset.name, name);
         assert_eq!(
             selected.url,
             format!("{RELEASES_URL}/download/v0.4.6/{name}")
         );
         release.assets.remove(1);
-        assert!(package(&release, "0.4.6").is_none());
+        assert!(package(&release, "0.4.6", UpdateSource::Standard).is_none());
         release.assets.push(Asset {
             name: format!("{name}.sha256"),
             size: 65,
             digest: None,
         });
         release.assets[0].size = PACKAGE_LIMIT + 1;
-        assert!(package(&release, "0.4.6").is_none());
+        assert!(package(&release, "0.4.6", UpdateSource::Standard).is_none());
     }
 
     #[test]
@@ -1447,19 +1498,27 @@ mod tests {
                 release("v0.6.3", false),
             ]
         };
-        let preview = newest_channel(releases(), "0.6.3", true).unwrap().unwrap();
+        let preview = newest_channel(releases(), "0.6.3", true, UpdateSource::Standard)
+            .unwrap()
+            .unwrap();
         assert_eq!(preview.version, "0.6.4-dev.2");
         assert!(preview.preview);
         for current in ["0.6.4-dev.1", "0.999.0", "0.999.0-fix.1.local"] {
-            let stable = newest_channel(releases(), current, false).unwrap().unwrap();
+            let stable = newest_channel(releases(), current, false, UpdateSource::Standard)
+                .unwrap()
+                .unwrap();
             assert_eq!(stable.version, "0.6.3");
             assert!(!stable.preview);
         }
         for current in ["0.999.0", "0.999.0-fix.1.local"] {
-            assert!(newest_channel(releases(), current, true).unwrap().is_none());
+            assert!(
+                newest_channel(releases(), current, true, UpdateSource::Standard)
+                    .unwrap()
+                    .is_none()
+            );
         }
         assert!(
-            newest_channel(releases(), "0.6.3", false)
+            newest_channel(releases(), "0.6.3", false, UpdateSource::Standard)
                 .unwrap()
                 .is_none()
         );
@@ -1474,6 +1533,7 @@ mod tests {
             vec![release("v0.6.4-dev.2", true)],
             "0.6.3",
             true,
+            UpdateSource::Standard,
         )
         .unwrap()));
         let (download, _) = state.begin_download(42);

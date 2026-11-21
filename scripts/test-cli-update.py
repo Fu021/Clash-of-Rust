@@ -51,14 +51,14 @@ def endpoint(data):
     return json.loads(path.read_text()) if path.exists() else None
 
 
-def stage(package, data, running, user_service=None, start_after_install=None):
+def stage(package, data, running, user_service=None, start_after_install=None, *, arch_version=None):
     directory = Path(tempfile.mkdtemp(prefix='clash-of-rust-update-'))
-    staged = directory/'package.deb'
+    staged = directory/(package.name if arch_version else 'package.deb')
     shutil.copy2(package, staged)
     shutil.copy2(CLI, directory/'update-helper')
     settings = json.loads((data/'settings.json').read_text())
     settings_bytes = json.dumps(settings, ensure_ascii=False, separators=(',', ':')).encode()
-    version = invoke(['dpkg-deb', '-f', package, 'Version']).stdout.strip()
+    version = arch_version or invoke(['dpkg-deb', '-f', package, 'Version']).stdout.strip()
     plan = {
         'package': str(staged), 'executable': str(APP/'clash-of-rust'),
         'sha256': sha256(staged), 'version': version, 'parent': endpoint(data)['pid'],
@@ -371,15 +371,54 @@ def exercise_service(package, report):
             shutil.rmtree(directory, ignore_errors=True)
 
 
+def exercise_arch(package, version, report):
+    require(os.geteuid() != 0, 'Arch update must be tested as an ordinary user')
+    report.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='cor-arch-update-') as temporary:
+        data = Path(temporary)/'profile'
+        log_path = report/'arch-update-daemon.log'
+        with log_path.open('w') as log:
+            daemon = subprocess.Popen(
+                [CLI, '--data-dir', data, '--resources', APP/'resources', 'run', '--no-core', '--quiet'],
+                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            directory = None
+            try:
+                original = wait_for(lambda: endpoint(data), 'Arch update daemon did not start')['pid']
+                cli(data, 'config', 'set', 'update_prereleases', 'true')
+                settings = (data/'settings.json').read_bytes()
+                directory = stage(package, data, False, arch_version=version)
+                result = run_helper(directory, data)
+                require(result['state'] == 'succeeded' and not result['error'],
+                        'Arch terminal handoff failed: '+result['message'])
+                require(endpoint(data)['pid'] != original, 'Arch update did not restore the daemon')
+                require(not cli(data, 'status')['running'], 'Arch update started the stopped core')
+                require((data/'settings.json').read_bytes() == settings, 'Arch update changed settings')
+                write_json(report/'arch-update.json', {'status': 'passed', 'version': version})
+            finally:
+                current = endpoint(data)
+                if current:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(current['pid'], signal.SIGTERM)
+                if daemon.poll() is None:
+                    daemon.terminate()
+                daemon.wait(timeout=30)
+                if directory:
+                    shutil.rmtree(directory)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--package', required=True, type=Path)
     parser.add_argument('--phase', choices=('denied', 'allowed', 'service'))
+    parser.add_argument('--arch-version')
     parser.add_argument('--report', type=Path, default=REPORT/'terminal-update')
     args = parser.parse_args()
     if os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'linux':
         raise RuntimeError('Terminal installation tests require a disposable Actions Linux runner')
     package = args.package.resolve(strict=True)
+    if args.arch_version:
+        exercise_arch(package, args.arch_version, args.report.resolve())
+        return
     if args.phase:
         require(os.geteuid() != 0, 'Terminal update must be tested as an ordinary user')
         if args.phase == 'service':

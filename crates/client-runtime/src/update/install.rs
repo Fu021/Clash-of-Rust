@@ -12,6 +12,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
+mod linux;
 mod package;
 mod windows;
 
@@ -415,11 +417,9 @@ pub fn ensure_installable() -> Result<PathBuf> {
     {
         anyhow::ensure!(
             executable == Path::new("/opt/clash-of-rust/clash-of-rust"),
-            "请先使用 DEB 安装客户端，再使用自动更新"
+            "请先安装官方 Linux 软件包，再使用自动更新"
         );
-        if let Some(manager) = super::external_linux_package_manager_at(&executable) {
-            bail!("{}", super::package_manager_update_hint(manager));
-        }
+        linux::Installer::for_executable(&executable)?;
     }
     #[cfg(target_os = "macos")]
     macos::ensure_installable(&executable)?;
@@ -601,37 +601,35 @@ fn install(plan: &Plan, directory: &Path, verified: &package::Verified) -> Resul
 }
 
 #[cfg(target_os = "linux")]
-fn install(_plan: &Plan, directory: &Path, verified: &package::Verified) -> Result<()> {
-    if let Some(manager) =
-        super::external_linux_package_manager_at(Path::new("/opt/clash-of-rust/clash-of-rust"))
-    {
-        bail!("{}", super::package_manager_update_hint(manager));
-    }
-    if !Path::new("/usr/bin/dpkg").is_file() {
-        bail!("当前系统没有 dpkg，无法安装 DEB");
-    }
+fn install(plan: &Plan, directory: &Path, verified: &package::Verified) -> Result<()> {
+    let installer =
+        linux::Installer::for_executable(Path::new("/opt/clash-of-rust/clash-of-rust"))?;
+    installer.validate(plan, verified)?;
     let elevated = crate::platform::is_elevated();
     if !elevated && !Path::new("/usr/bin/pkexec").is_file() {
         bail!("缺少 pkexec，无法请求安装授权");
     }
     let mut install = if elevated {
-        command(Path::new("/usr/bin/dpkg"))
+        command(Path::new(installer.tool()))
     } else {
         let mut command = command(Path::new("/usr/bin/pkexec"));
-        command.args(["--disable-internal-agent", "/usr/bin/dpkg"]);
+        command.args(["--disable-internal-agent", installer.tool()]);
         command
     };
     let mut child = install
-        .arg("-i")
+        .args(installer.arguments())
         .arg(&verified.path)
         .spawn()
-        .context("无法启动 DEB 安装程序")?;
+        .with_context(|| format!("无法启动 {} 安装程序", installer.format()))?;
     fs::write(directory.join("ready"), b"")?;
     match child.wait()?.code() {
         Some(0) => Ok(()),
         Some(126) => bail!("安装授权已取消"),
         Some(127) => bail!("无法获得安装授权，请检查桌面授权服务"),
-        _ => bail!("DEB 安装失败，请检查包管理器占用、依赖与磁盘空间"),
+        _ => bail!(
+            "{} 安装失败，请检查包管理器占用、依赖与磁盘空间",
+            installer.format()
+        ),
     }
 }
 

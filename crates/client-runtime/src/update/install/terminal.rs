@@ -1,3 +1,4 @@
+use super::linux::Installer;
 use super::*;
 use crate::{
     config::Store,
@@ -14,8 +15,8 @@ use std::{
 mod service;
 use service::UserService;
 
-const DPKG: &str = "/usr/bin/dpkg";
 const SUDO: &str = "/usr/bin/sudo";
+const SUDO_REQUIRED: &str = "纯终端安装需要 sudo；可使用 cor update download 下载，再由管理员安装";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Recovery {
@@ -55,12 +56,11 @@ pub(crate) fn prepare_terminal_install(
     start_after_install: bool,
 ) -> Result<PathBuf> {
     let _lock = session_lock(&engine.store.root)?;
-    if let Some(manager) = super::super::external_linux_package_manager() {
-        bail!("{}", super::super::package_manager_update_hint(manager));
-    }
+    let executable = std::env::current_exe()?.canonicalize()?;
+    Installer::for_executable(&executable)?;
     anyhow::ensure!(
         crate::platform::is_elevated() || Path::new(SUDO).is_file(),
-        "纯终端安装需要 sudo；请用 cor update download --output cor-update.deb 下载，再由管理员安装"
+        SUDO_REQUIRED
     );
     anyhow::ensure!(
         control::gui_pid(&engine.store)?.is_none(),
@@ -73,10 +73,9 @@ pub(crate) fn prepare_terminal_install(
         true,
         Some(engine.store.root.clone()),
     )?;
-    let executable = std::env::current_exe()?.canonicalize()?;
     anyhow::ensure!(
         executable == Path::new("/opt/clash-of-rust/cor"),
-        "终端自动安装仅支持 DEB 安装的 cor"
+        "终端自动安装需要通过官方 Linux 软件包安装的 cor"
     );
     let user_service = UserService::capture(engine, &executable)?;
     plan.terminal = Some(Recovery {
@@ -214,19 +213,11 @@ fn sudo(interactive: bool) -> Result<Command> {
     Ok(command)
 }
 
-fn authorize(path: &Path, interactive: bool) -> Result<()> {
-    if let Some(manager) =
-        super::super::external_linux_package_manager_at(Path::new("/opt/clash-of-rust/cor"))
-    {
-        bail!("{}", super::super::package_manager_update_hint(manager));
-    }
+fn authorize(installer: Installer, path: &Path, interactive: bool) -> Result<()> {
     if crate::platform::is_elevated() {
         return Ok(());
     }
-    anyhow::ensure!(
-        Path::new(SUDO).is_file(),
-        "纯终端安装需要 sudo；请用 cor update download --output cor-update.deb 下载，再由管理员安装"
-    );
+    anyhow::ensure!(Path::new(SUDO).is_file(), SUDO_REQUIRED);
     let status = sudo(interactive)?
         .arg("-v")
         .status()
@@ -236,29 +227,38 @@ fn authorize(path: &Path, interactive: bool) -> Result<()> {
         "未获得安装授权，未执行停止后台；请在交互终端重试，或由管理员手动安装"
     );
     let status = sudo(interactive)?
-        .args(["-l", "--", DPKG, "-i"])
+        .args(["-l", "--", installer.tool()])
+        .args(installer.arguments())
         .arg(path)
         .stdout(Stdio::null())
         .status()
-        .context("无法核对 DEB 安装授权")?;
+        .context("无法核对软件包安装授权")?;
     anyhow::ensure!(
         status.success(),
-        "未获得安装授权，未执行停止后台；当前账户无权通过 sudo 安装此 DEB"
+        "未获得安装授权，未执行停止后台；当前账户无权通过 sudo 安装此软件包"
     );
     Ok(())
 }
 
-fn install_package(verified: package::Verified, interactive: bool) -> Result<()> {
+fn install_package(
+    installer: Installer,
+    verified: package::Verified,
+    interactive: bool,
+) -> Result<()> {
     let mut command = if crate::platform::is_elevated() {
-        foreground(Path::new(DPKG))?
+        foreground(Path::new(installer.tool()))?
     } else {
         let mut command = sudo(interactive)?;
-        command.args(["--", DPKG]);
+        command.args(["--", installer.tool()]);
         command
     };
-    command.arg("-i").arg(&verified.path);
+    command.args(installer.arguments()).arg(&verified.path);
     let (status, detail) = wait_installer(&mut command)?;
-    anyhow::ensure!(status.success(), "DEB 安装失败（{status}）：{detail}");
+    anyhow::ensure!(
+        status.success(),
+        "{} 安装失败（{status}）：{detail}",
+        installer.format()
+    );
     Ok(())
 }
 
@@ -267,7 +267,7 @@ fn wait_installer(command: &mut Command) -> Result<(std::process::ExitStatus, St
     let mut child = command
         .stderr(Stdio::piped())
         .spawn()
-        .context("无法启动 DEB 安装程序")?;
+        .context("无法启动软件包安装程序")?;
     let mut output = child.stderr.take().context("无法读取安装错误输出")?;
     let mut tail = Vec::new();
     let mut buffer = [0; 1024];
@@ -285,7 +285,7 @@ fn wait_installer(command: &mut Command) -> Result<(std::process::ExitStatus, St
             Err(_) => break,
         }
     }
-    let status = child.wait().context("等待 DEB 安装结束失败")?;
+    let status = child.wait().context("等待软件包安装结束失败")?;
     let detail = String::from_utf8_lossy(&tail)
         .chars()
         .rev()
@@ -517,10 +517,12 @@ pub(super) fn helper(directory: &Path) {
             .as_ref()
             .is_some_and(|recovery| recovery.running || recovery.start_after_install),
         || {
+            let installer = Installer::for_executable(Path::new("/opt/clash-of-rust/cor"))?;
             let verified = verify(&plan, directory)?;
-            authorize(&verified.path, interactive)?;
+            installer.validate(&plan, &verified)?;
+            authorize(installer, &verified.path, interactive)?;
             check_interrupted()?;
-            Ok(verified)
+            Ok((installer, verified))
         },
         || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -528,8 +530,11 @@ pub(super) fn helper(directory: &Path) {
                 .build()?;
             runtime.block_on(stop_owner(&plan, directory))
         },
-        |verified| {
+        |(installer, verified)| {
             check_interrupted()?;
+            if matches!(installer, Installer::Arch) {
+                installer.validate(&plan, &verified)?;
+            }
             record_installation(
                 &plan,
                 directory,
@@ -537,7 +542,7 @@ pub(super) fn helper(directory: &Path) {
                 "正在安装，后台已暂停",
                 false,
             )?;
-            install_package(verified, interactive)
+            install_package(installer, verified, interactive)
         },
         || directory.join("commit").exists(),
         |installed| restore_owner(&plan, installed),

@@ -21,7 +21,7 @@ import zipfile
 
 from build_support import ROOT, opener, sha256, validate_version, manifest_version
 import compatibility
-from linux_native_package import rpm_filename
+from linux_native_package import arch_filename, rpm_filename
 
 CI_JOBS = {
     'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64',
@@ -212,7 +212,7 @@ def release_metadata(commit, tag=None, notes_path=None, check_only=False, prerel
     return version, expected_tag, notes
 
 
-def release_notes_with_downloads(notes, repo, version, tag, *, rpm_arches=()):
+def release_notes_with_downloads(notes, repo, version, tag, *, rpm_arches=(), include_arch=False):
     require(bool(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo)), 'Invalid repository path')
     require(validate_version(version) == version and tag == 'v' + version, 'Invalid release identity')
     require({item[1] for item in DOWNLOAD_BUTTONS} == set(PACKAGES)
@@ -222,13 +222,19 @@ def release_notes_with_downloads(notes, repo, version, tag, *, rpm_arches=()):
     buttons = (*DOWNLOAD_BUTTONS,
                *(('Linux', f'linux-rpm-{arch}', 'RPM', {'x64': 'x64', 'arm64': 'ARM64'}[arch],
                   'E95420', 'linux') for arch in rpm_arches))
+    if include_arch:
+        buttons += (('Linux', 'linux-arch-x64', 'Arch pkg', 'x64', '1793D1', 'archlinux'),)
     for system, key, kind, architecture, color, logo in buttons:
-        name = (rpm_filename(version, key.removeprefix('linux-rpm-')) if kind == 'RPM'
-                else f'Clash-of-Rust-{version}-{PACKAGES[key]}')
+        if key == 'linux-arch-x64':
+            name = arch_filename(version)
+        elif kind == 'RPM':
+            name = rpm_filename(version, key.removeprefix('linux-rpm-'))
+        else:
+            name = f'Clash-of-Rust-{version}-{PACKAGES[key]}'
         asset = urllib.parse.quote(name, safe='')
         download = f'https://github.com/{repo}/releases/download/{release_tag}/{asset}'
         query = urllib.parse.urlencode({'logo': logo, 'logoColor': 'white'}) if logo else ''
-        badge = f'https://img.shields.io/badge/{kind}-{architecture}-{color}'
+        badge = f'https://img.shields.io/badge/{urllib.parse.quote(kind)}-{architecture}-{color}'
         if query:
             badge += '?' + query
         count = (f'https://img.shields.io/github/downloads/{repo}/{release_tag}/{asset}'
@@ -248,15 +254,18 @@ def release_notes_with_downloads(notes, repo, version, tag, *, rpm_arches=()):
     return result + '\n'
 
 
-def filenames(version, *, rpm_arches=()):
+def filenames(version, *, rpm_arches=(), include_arch=False):
     names = {f'Clash-of-Rust-{version}-{suffix}' for suffix in PACKAGES.values()}
     names.update(rpm_filename(version, arch) for arch in rpm_arches)
+    if include_arch:
+        names.add(arch_filename(version))
     return names | {name + '.sha256' for name in names}
 
 
-def validate_files(paths, version, *, rpm_arches=()):
+def validate_files(paths, version, *, rpm_arches=(), include_arch=False):
     files = {p.name: p for p in paths}
-    require(len(files) == len(paths) and set(files) == filenames(version, rpm_arches=rpm_arches),
+    require(len(files) == len(paths) and set(files) == filenames(
+        version, rpm_arches=rpm_arches, include_arch=include_arch),
             'Expected the complete installer/APK and checksum set')
     for name, path in files.items():
         require(path.is_file() and not path.is_symlink(), 'Release asset must be a regular file: ' + name)
@@ -351,7 +360,37 @@ def download_release_rpm(client, ci_run_id, commit, version, directory, arch):
             path.write_bytes(contents)
 
 
-def download_package_files(client, run_id, ci_run_id, commit, version, directory, check_only=False, *, rpm_arches=()):
+def download_release_arch(client, artifact, ci_run_id, commit, version, directory):
+    limit = compatibility.ARCH_PACKAGE_LIMIT
+    archive = client(f"/actions/artifacts/{artifact['id']}/zip", raw=True)
+    require(len(archive) <= limit + 128 * 1024
+            and artifact['digest'] == 'sha256:' + hashlib.sha256(archive).hexdigest(),
+            'Arch artifact archive checksum mismatch')
+    name = arch_filename(version)
+    with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+        entries = zipped.infolist()
+        require(len(entries) == 2 and {entry.filename for entry in entries} == {name, 'arch-receipt.json'}
+                and 0 < zipped.getinfo(name).file_size <= limit
+                and 0 < zipped.getinfo('arch-receipt.json').file_size <= 16 * 1024,
+                'Unexpected Arch artifact contents')
+        receipt = json.loads(zipped.read('arch-receipt.json'))
+        data = zipped.read(name)
+    digest = hashlib.sha256(data).hexdigest()
+    deb = directory/f'Clash-of-Rust-{version}-{PACKAGES["package-linux-x64"]}'
+    require(receipt == {'schema': 1, 'commit': commit, 'ci_run_id': ci_run_id,
+                        'source_sha256': sha256(deb), 'package': name, 'sha256': digest},
+            'Arch receipt differs from the selected CI build')
+    for filename, contents in ((name, data), (name+'.sha256', (digest+'\n').encode('ascii'))):
+        path = directory/filename
+        require(not path.is_symlink(), 'Output path is a symbolic link')
+        if path.exists():
+            require(path.is_file() and path.read_bytes() == contents, 'Existing output differs from verified Arch package')
+        else:
+            path.write_bytes(contents)
+
+
+def download_package_files(client, run_id, ci_run_id, commit, version, directory, check_only=False, *,
+                           rpm_arches=(), arch_package=None):
     builds = build_artifacts(client, ci_run_id)
     candidates = candidate_artifacts(client, ci_run_id)
     if check_only:
@@ -364,7 +403,9 @@ def download_package_files(client, run_id, ci_run_id, commit, version, directory
                 'Distribution-signed Android packages are incomplete or duplicated')
         packages = [artifact for artifact in candidates if artifact['name'] not in PACKAGE_JOBS] + signed
     directory.mkdir(parents=True, exist_ok=True)
-    require({p.name for p in directory.iterdir()} <= filenames(version, rpm_arches=rpm_arches),
+    include_arch = arch_package is not None
+    require({p.name for p in directory.iterdir()} <= filenames(
+        version, rpm_arches=rpm_arches, include_arch=include_arch),
             'Output directory contains unexpected files')
     for artifact in packages:
         require(not artifact['expired'], 'Release artifact expired: ' + artifact['name'])
@@ -398,7 +439,9 @@ def download_package_files(client, run_id, ci_run_id, commit, version, directory
                     destination.write_bytes(data)
     for arch in rpm_arches:
         download_release_rpm(client, ci_run_id, commit, version, directory, arch)
-    return validate_files(list(directory.iterdir()), version, rpm_arches=rpm_arches)
+    if include_arch:
+        download_release_arch(client, arch_package, ci_run_id, commit, version, directory)
+    return validate_files(list(directory.iterdir()), version, rpm_arches=rpm_arches, include_arch=include_arch)
 
 
 def find_release(client, tag):
@@ -500,9 +543,12 @@ def main():
     client = GitHub(repo, credential(repo), args.proxy)
     commit = git('rev-parse', 'HEAD')
     run = verified_run(client, commit, args.run_id, check_only=args.check, prerelease=args.prerelease)
+    arch_package = None
     for suite in suites:
-        receipt_run_id = compatibility.verified_suite(client, run, suite)
-        print(f'Verified {suite} compatibility: run {receipt_run_id}')
+        receipt = compatibility.verified_suite(client, run, suite)
+        if suite == 'arch':
+            arch_package = receipt['arch_package']
+        print(f'Verified {suite} compatibility: run {receipt["run_id"]}')
     version, tag, notes = release_metadata(commit, args.tag, args.notes, check_only=args.check, prerelease=args.prerelease)
     if args.resolve:
         build_artifacts(client, run['id'])
@@ -518,16 +564,17 @@ def main():
                          prerelease=args.prerelease, source_branch=run['head_branch'])
     directory = args.output_dir or ROOT / f"dist/release-{version}-run-{package_run_id}"
     files = download_package_files(client, package_run_id, run['id'], commit, version, directory,
-                                   check_only=args.check, rpm_arches=rpm_arches)
+                                   check_only=args.check, rpm_arches=rpm_arches, arch_package=arch_package)
     if args.asset:
-        local = validate_files(args.asset, version, rpm_arches=rpm_arches)
+        local = validate_files(args.asset, version, rpm_arches=rpm_arches, include_arch=arch_package is not None)
         require(all(sha256(local[name]) == sha256(path) for name, path in files.items()), 'Local assets differ from selected CI')
     print('Verified CI:', run['html_url'])
     print(f'Verified version and all {len(files)} attachments:', tag)
     if args.check:
         print('Check complete; no release changes made')
         return
-    notes = release_notes_with_downloads(notes, repo, version, tag, rpm_arches=rpm_arches)
+    notes = release_notes_with_downloads(notes, repo, version, tag, rpm_arches=rpm_arches,
+                                         include_arch=arch_package is not None)
     url = publish(client, commit, tag, notes, files, source_branch=run['head_branch'], prerelease=args.prerelease)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as summary:

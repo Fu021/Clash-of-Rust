@@ -1157,15 +1157,61 @@ class UbuntuVmTests(unittest.TestCase):
                 if suite == 'ubuntu':
                     continue
                 with self.subTest(suite=suite), \
-                        patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                        patch.object(linux_ci, 'fetch_vm_package', return_value=archive), \
+                        patch.object(linux_ci, 'collect_arch_package') as collect:
                     guest = MagicMock(target=targets[0], environment='guest ', architecture='x86_64', kvm=True)
                     timings = {}
                     linux_ci.verify_vm_package(guest, directory, 123, timings=timings)
                     self.assertEqual(guest.remote.call_count, 2)
                     self.assertIn('--linux-compat', guest.remote.call_args.args[0])
+                    if suite == 'arch':
+                        collect.assert_called_once_with(guest, directory, 123)
+                    else:
+                        collect.assert_not_called()
                     self.assertNotIn('package_lifecycle', timings)
                     guest.reboot.assert_not_called()
                     guest.python.assert_not_called()
+
+    def test_arch_package_collection_requires_the_tested_candidate_and_receipt(self):
+        name = 'Clash-of-Rust-0.7.3-linux-x86_64.pkg.tar.zst'
+        source = {'version': '0.7.3', 'commit': 'a' * 40, 'sha256': 'b' * 64}
+        candidate = b'verified Arch package'
+        receipt = {'schema': 1, 'commit': source['commit'], 'ci_run_id': 123,
+                   'source_sha256': source['sha256'], 'package': name,
+                   'sha256': hashlib.sha256(candidate).hexdigest()}
+        for change, payload, valid in (
+                ({}, candidate, True),
+                ({'commit': 'c' * 40}, candidate, False),
+                ({'ci_run_id': 124}, candidate, False),
+                ({'source_sha256': 'd' * 64}, candidate, False),
+                ({'package': 'other.pkg.tar.zst'}, candidate, False),
+                ({}, b'modified Arch package', False)):
+            with self.subTest(change=change, valid=valid), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                dist = root/'dist'
+                dist.mkdir()
+                (dist/'package-receipt.json').write_text(json.dumps(source))
+                directory = root/'work'
+                directory.mkdir()
+                files = {'arch-receipt.json': json.dumps(receipt | change).encode(), name: payload}
+                guest = MagicMock()
+
+                def transfer(command, *, stdout, timeout):
+                    filename = command.rsplit('/', 1)[-1]
+                    stdout.write(files[filename])
+
+                guest.remote.side_effect = transfer
+                with patch.object(linux_ci, 'ROOT', root):
+                    if valid:
+                        linux_ci.collect_arch_package(guest, directory, 123)
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'differs from the installed candidate'):
+                            linux_ci.collect_arch_package(guest, directory, 123)
+                self.assertEqual((dist/'linux-arch').exists(), valid)
+                if valid:
+                    self.assertEqual((dist/'linux-arch'/name).read_bytes(), candidate)
+                    self.assertEqual(json.loads((dist/'linux-arch'/'arch-receipt.json').read_text()),
+                                     receipt)
 
     def test_only_debian_arm64_tcg_guests_use_fast_initramfs_compression(self):
         for suite, release, arch, kvm in (
@@ -7809,7 +7855,7 @@ class CompatibilityTests(unittest.TestCase):
     repository = 'example/project'
 
     def test_release_scope_keeps_baseline_and_selects_linux_suites(self):
-        self.assertEqual(compatibility.release_suites('supported'), ('android', 'ubuntu', 'debian'))
+        self.assertEqual(compatibility.release_suites('supported'), ('android', 'ubuntu', 'debian', 'arch'))
         self.assertEqual(compatibility.release_suites('ubuntu'), ('android', 'ubuntu'))
         self.assertEqual(compatibility.release_suites('debian, linuxmint'),
                          ('android', 'ubuntu', 'debian', 'linuxmint'))
@@ -7838,7 +7884,7 @@ class CompatibilityTests(unittest.TestCase):
                     self.assertNotIn('xvfb', entry['qemu'].split())
                 self.assertIn(suite, compatibility.release_suites(suite))
                 client, source, receipt = self.client(suite)
-                self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
+                self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
                 if suite != 'debian':
                     key = 'iso_targets' if targets[0].image_format == 'iso' else 'cloud_targets'
                     client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
@@ -8095,7 +8141,7 @@ success="$1"
             with patch.object(subprocess, 'run', side_effect=makepkg) as commands:
                 result = build_arch(deb, '0.7.3-dev.1.tui-and-lists', root/'output', digest)
             self.assertEqual(commands.call_count, 2)
-            self.assertEqual(result, root/'output'/package_name)
+            self.assertEqual(result, root/'output'/'Clash-of-Rust-0.7.3-dev.1.tui-and-lists-linux-x86_64.pkg.tar.zst')
             self.assertEqual(result.read_bytes(), b'arch package')
 
     def client(self, suite, run_changes=None, jobs=None, receipt_changes=None,
@@ -8121,6 +8167,9 @@ success="$1"
             receipt[source_kind+'_targets'] = [
                 {'release': target.release, 'arch': target.arch, 'url': target.image_url,
                  'sha256': target.image_digest} for target in linux_ci.TARGETS[suite]]
+        candidate = {'id': 321, 'name': 'linux-arch-x64-attempt-1', 'digest': 'sha256:' + 'a' * 64}
+        if suite == 'arch':
+            receipt['arch_package'] = candidate.copy()
         receipt.update(receipt_changes or {})
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, 'w') as archive:
@@ -8131,7 +8180,7 @@ success="$1"
                     'digest': 'sha256:' + ('0' * 64 if bad_digest else hashlib.sha256(blob).hexdigest()),
                     'workflow_run': {'id': 456, 'head_sha': self.source_commit}}
         records = jobs if jobs is not None else [
-            {'name': name, 'status': 'completed', 'conclusion': 'success'}
+            {'name': name, 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
             for name in compatibility.required_jobs(suite) | {compatibility.REPORT_JOBS[suite]}]
 
         def request(path, raw=False):
@@ -8144,7 +8193,10 @@ success="$1"
             if path.startswith('/actions/runs/123/artifacts?'):
                 return {'artifacts': inputs[:-1] if missing_input else inputs}
             if path.startswith('/actions/runs/456/artifacts?'):
-                return {'artifacts': [artifact]}
+                return {'artifacts': [artifact, candidate | {
+                    'expired': False, 'size_in_bytes': 42,
+                    'workflow_run': {'id': 456, 'head_sha': self.source_commit},
+                }] if suite == 'arch' else [artifact]}
             if '/jobs?' in path:
                 return {'jobs': records, 'total_count': len(records)}
             if path == '/actions/artifacts/789/zip' and raw:
@@ -8155,8 +8207,8 @@ success="$1"
 
     def test_release_accepts_only_complete_same_source_compatibility_receipts(self):
         for suite in compatibility.WORKFLOWS:
-            client, source, _ = self.client(suite)
-            self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
+            client, source, receipt = self.client(suite)
+            self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
             for change in ({'status': 'in_progress'}, {'conclusion': 'failure'},
                            {'head_sha': 'b' * 40}, {'event': 'pull_request'},
                            {'head_repository': {'full_name': 'external/fork'}}):
@@ -8193,12 +8245,40 @@ success="$1"
         for suite in linux_ci.TARGETS:
             with self.subTest(suite=suite):
                 client, source, receipt = self.client(suite)
-                self.assertEqual(receipt['checks'], ['system_proxy', 'tun'])
-                self.assertEqual(compatibility.verified_suite(client, source, suite), 456)
+                self.assertEqual(receipt['checks'], ['system_proxy', 'tun', 'terminal_update']
+                                 if suite == 'arch' else ['system_proxy', 'tun'])
+                self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
                 for checks in (['system_proxy'], ['system_proxy', 'tun', 'desktop_login']):
                     client, source, _ = self.client(suite, receipt_changes={'checks': checks})
                     with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
                         compatibility.verified_suite(client, source, suite)
+
+    def test_arch_artifact_binds_the_actual_producing_attempt_and_identity(self):
+        target, = linux_ci.TARGETS['arch']
+        run = {'id': 456, 'run_attempt': 2, 'head_sha': self.source_commit}
+        jobs = [{'name': f'Linux / {target.distribution} verified package', 'run_attempt': 1}]
+        artifact = {'id': 321, 'name': 'linux-arch-x64-attempt-1', 'digest': 'sha256:' + 'a' * 64,
+                    'expired': False, 'size_in_bytes': 42,
+                    'workflow_run': {'id': 456, 'head_sha': self.source_commit}}
+        expected = {key: artifact[key] for key in ('id', 'name', 'digest')}
+        self.assertEqual(compatibility.arch_package_artifact(run, jobs, [artifact]), expected)
+        for change in (
+                {'name': 'linux-arch-x64-attempt-2'},
+                {'id': True},
+                {'digest': 'sha256:' + 'z' * 64},
+                {'expired': True},
+                {'size_in_bytes': 0},
+                {'size_in_bytes': compatibility.ARCH_PACKAGE_LIMIT + 128 * 1024 + 1},
+                {'workflow_run': {'id': 999, 'head_sha': self.source_commit}},
+                {'workflow_run': {'id': 456, 'head_sha': 'b' * 40}},
+        ):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                compatibility.arch_package_artifact(run, jobs, [artifact | change])
+        with self.assertRaises(ValueError):
+            compatibility.arch_package_artifact(run, jobs, [artifact, artifact])
+        for attempt in (None, 0, 3, True):
+            with self.subTest(attempt=attempt), self.assertRaises(ValueError):
+                compatibility.arch_package_artifact(run, [jobs[0] | {'run_attempt': attempt}], [artifact])
 
     def test_mint_receipt_requires_both_pinned_iso_digests(self):
         _, _, receipt = self.client('linuxmint')
@@ -8214,7 +8294,7 @@ success="$1"
 
     def test_record_accepts_its_own_running_job_and_binds_exact_ci_inputs(self):
         for suite in compatibility.WORKFLOWS:
-            jobs = [{'name': name, 'status': 'completed', 'conclusion': 'success'}
+            jobs = [{'name': name, 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
                     for name in compatibility.required_jobs(suite)]
             jobs.append({'name': compatibility.REPORT_JOBS[suite],
                          'status': 'in_progress', 'conclusion': None})
@@ -8337,6 +8417,42 @@ class ReleaseTests(unittest.TestCase):
             deb.write_bytes(b'wrong DEB')
             with self.assertRaisesRegex(ValueError, 'RPM receipt differs'):
                 release.download_release_rpm(client, 77, self.commit, self.version, directory, 'arm64')
+
+    def test_arch_release_requires_the_tested_package_and_source_deb(self):
+        name = f'Clash-of-Rust-{self.version}-linux-x86_64.pkg.tar.zst'
+        self.assertEqual(release.filenames(self.version, include_arch=True) - release.filenames(self.version),
+                         {name, name+'.sha256'})
+        self.assertIn(name, release.release_notes_with_downloads(
+            self.notes, 'example/project', self.version, self.tag, include_arch=True))
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            deb = directory/f'Clash-of-Rust-{self.version}-linux-amd64.deb'
+            deb.write_bytes(b'tested DEB bytes')
+            binary = b'arch candidate'
+            receipt = {'schema': 1, 'commit': self.commit, 'ci_run_id': 77,
+                       'source_sha256': build.sha256(deb), 'package': name,
+                       'sha256': hashlib.sha256(binary).hexdigest()}
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w') as archive:
+                archive.writestr(name, binary)
+                archive.writestr('arch-receipt.json', json.dumps(receipt))
+            payload = stream.getvalue()
+            record = {'id': 55, 'digest': 'sha256:' + hashlib.sha256(payload).hexdigest()}
+
+            def client(path, raw=False):
+                self.assertEqual(path, '/actions/artifacts/55/zip')
+                self.assertTrue(raw)
+                return payload
+
+            release.download_release_arch(client, record, 77, self.commit, self.version, directory)
+            self.assertEqual((directory/name).read_bytes(), binary)
+            self.assertEqual((directory/(name+'.sha256')).read_text(), receipt['sha256']+'\n')
+            with self.assertRaisesRegex(ValueError, 'archive checksum mismatch'):
+                release.download_release_arch(client, record | {'digest': 'sha256:' + '0'*64},
+                                              77, self.commit, self.version, directory)
+            deb.write_bytes(b'wrong DEB')
+            with self.assertRaisesRegex(ValueError, 'Arch receipt differs'):
+                release.download_release_arch(client, record, 77, self.commit, self.version, directory)
 
     def client(self, run_changes=None, jobs=None, main=None):
         run = {'id':77, 'path':'.github/workflows/ci.yml@main', 'event':'push', 'head_branch':'main',
@@ -8845,13 +8961,14 @@ class ReleaseTests(unittest.TestCase):
                  patch.object(release,'verified_run',return_value={'id':77}), \
                  patch.object(release,'release_metadata',return_value=(self.version,self.tag,self.notes)), \
                  patch.object(release,'build_artifacts'),patch.object(release,'candidate_artifacts'), \
-                 patch.object(compatibility,'verified_suite') as verify_compatibility, \
+                 patch.object(compatibility,'verified_suite', return_value={
+                     'run_id': 456, 'arch_package': {'id': 321}}) as verify_compatibility, \
                  patch.object(release,'download_package_files') as download, \
                  patch.object(release,'publish') as publishing,patch.dict(build.os.environ,{'GITHUB_OUTPUT':str(output)}):
                 release.main()
                 download.assert_not_called();publishing.assert_not_called()
                 self.assertEqual([call.args[2] for call in verify_compatibility.call_args_list],
-                                 ['android', 'ubuntu', 'debian'])
+                                 ['android', 'ubuntu', 'debian', 'arch'])
             self.assertIn('commit='+self.commit,output.read_text())
             self.assertIn('ci_run_id=77',output.read_text())
 

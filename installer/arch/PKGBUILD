@@ -19,5 +19,5 @@ package() {
     archive=$(ar t "$srcdir/candidate.deb" | awk '/^data\.tar([.]|$)/ {print}')
     [[ $archive =~ ^data\.tar(\.(xz|zst|gz))?$ ]] || return 1
     ar p "$srcdir/candidate.deb" "$archive" | bsdtar -xf - -C "$pkgdir"
-    printf 'pacman\n' > "$pkgdir/opt/clash-of-rust/package-manager"
+    printf 'pacman-release\n' > "$pkgdir/opt/clash-of-rust/package-manager"
 }
