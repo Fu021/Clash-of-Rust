@@ -175,6 +175,12 @@ pub fn run() -> anyhow::Result<()> {
         }
     });
     let window = AppWindow::new()?;
+    let weak = window.as_weak();
+    window.on_minimize_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            window.window().set_minimized(true);
+        }
+    });
     crate::motion::refresh(&window);
     window.set_app_title(clash_client_core::WINDOW_TITLE.into());
     let mut models = ViewModels::default();

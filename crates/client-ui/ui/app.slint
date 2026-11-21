@@ -71,6 +71,8 @@ export component AppWindow inherits Window {
         if root.previous-rule-profile != "" { root.rule-shortcuts-open = false; }
         root.previous-rule-profile = root.rule-profile;
     }
+    callback minimize-requested();
+    minimize-requested => { root.minimized = true; }
     function toggle-window-maximized() {
         if root.full-screen { root.full-screen = false; }
         else { root.maximized = !root.maximized; }
@@ -297,7 +299,7 @@ export component AppWindow inherits Window {
         }
         HorizontalLayout {
             x: parent.width - 132px; y: 6px; width: 124px; height: 32px; spacing: 2px;
-            WindowControl { action: 0; clicked => { root.minimized = true; } }
+            WindowControl { action: 0; clicked => { root.minimize-requested(); } }
             WindowControl {
                 action: 1; restored: root.maximized || root.full-screen;
                 clicked => { root.toggle-window-maximized(); }

@@ -332,6 +332,20 @@ def wait_for_usable_window(backend, probe, timeout=45):
         ) from error
 
 
+def verify_x11_minimize(window):
+    target = window['id']
+
+    def minimized():
+        return '_NET_WM_STATE_HIDDEN' in output(['xprop', '-id', target, '_NET_WM_STATE'])
+
+    run(['xdotool', 'windowactivate', '--sync', target], timeout=5)
+    run(['xdotool', 'mousemove', '--window', target, str(window['width']-112),
+         '22', 'sleep', '.03', 'click', '1'], timeout=5)
+    wait_for('X11 title-bar button did not minimize the window', minimized, timeout=5)
+    run(['xdotool', 'windowactivate', target], timeout=5)
+    wait_for('The X11 window did not restore after minimizing', lambda: not minimized(), timeout=5)
+
+
 def gnome_command(help_text, major):
     command = ['gnome-shell', '--wayland']
     if '--wayland-display' in help_text:
@@ -462,6 +476,9 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
             terminal.wait('GUI fixture')
             if core_processes() != processes:
                 raise RuntimeError('TUI did not share the existing GUI-owned core')
+        if backend == 'x11':
+            verify_x11_minimize(windows[0])
+            proxy_result['title_bar_minimize'] = True
         # One graceful close and one renderer loss exercise different lifecycle
         # paths without repeating the proxy/TUN traffic suite.
         for crash in (False, True):
