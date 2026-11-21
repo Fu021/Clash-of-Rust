@@ -4,7 +4,9 @@ mod lists;
 mod table;
 use crate::args::Args;
 use anyhow::Result;
-use clash_client_core::claude_check::{Group, Report, order_summary, summary_order};
+use clash_client_core::claude_check::{
+    Group, Report, group_routes, order_summary, route_group_value, summary_order,
+};
 use fields::{clean, label, scalar, text};
 use serde::Deserialize;
 use serde_json::Value;
@@ -389,6 +391,32 @@ fn claude_summary(out: &mut dyn Write, command: &str, value: &Value) -> Result<(
             &format!("{label} · {}", clean(signal.display_title())),
             &clean(signal.display_value()),
         )?;
+    }
+    let mut route_groups = group_routes(&report.routes);
+    route_groups.sort_by_key(|routes| !routes[0].risky());
+    for routes in route_groups {
+        let route = routes[0];
+        if route.risky() {
+            let outcome = route.display_outcome();
+            let value = if route.chain.trim().is_empty() {
+                outcome
+            } else {
+                format!("{outcome} · 线路：{}", route.chain.trim())
+            };
+            field(
+                out,
+                &format!("选路异常 · {}", clean(route.display_title())),
+                &clean(&value),
+            )?;
+        } else if routes.len() > 1 {
+            field(out, "Claude 域名选路", &clean(&route_group_value(&routes)))?;
+        } else {
+            field(
+                out,
+                &format!("Claude 选路 · {}", clean(route.display_title())),
+                &clean(&route.display_outcome()),
+            )?;
+        }
     }
     writeln!(out, "查看完整报告：cor {command} --details")?;
     Ok(())

@@ -2,7 +2,7 @@ import { PageSurface, ProgressTrack } from "../components/motion.slint";
 import { DiagnosticActions } from "../components/notice.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
-import { FindingList } from "../components/report.slint";
+import { FindingBlocks, FindingList } from "../components/report.slint";
 import { PageScroll, Caption, Heading, Panel, ContentPanel, RowPanel, ActionButton, Toggle, Paragraph } from "../components/controls.slint";
 import { ToolHeading, SummaryMetric } from "../components/sections.slint";
 export component AiCheckPage inherits PageSurface {
@@ -48,7 +48,7 @@ export component AiCheckPage inherits PageSurface {
             if UiData.claude-filter < 0 && UiData.claude-results.length > 0: VerticalLayout {
                 spacing: 8px;
                 Heading { text: "报告摘要"; }
-                FindingList { items: UiData.claude-results; summary-limit: 6; }
+                FindingBlocks { items: UiData.claude-results; }
             }
             if UiData.claude-filter >= 0: VerticalLayout {
                 spacing: Theme.page-gap;

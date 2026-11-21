@@ -2134,22 +2134,185 @@ fn claude_report_rows_keep_titles_and_labeled_explanations() {
         chain: "节点 A".into(),
         rule: "DOMAIN".into(),
         time: "2026-11-12T08:00:00Z".into(),
+        outcome: " ".into(),
+        ..Default::default()
+    });
+    report.routes.push(Route {
+        host: "direct.example".into(),
+        chain: "DIRECT".into(),
+        outcome: "内核已选路".into(),
         ..Default::default()
     });
     app.claude.reports[0] = Some(report);
     app.present_slint(&data, &mut models);
     let rows = data.get_claude_results();
-    assert_eq!(rows.row_count(), 2);
-    let route = rows.row_data(0).unwrap();
+    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 2);
+    let route = rows.iter().find(|row| row.title == "连接检查").unwrap();
     assert_eq!(route.title, "连接检查");
     assert_eq!(route.value, "仅记录选路");
     assert!(route.detail.contains("线路：节点 A"));
     assert!(route.detail.contains("时间：2026-11-12T08:00:00Z"));
     assert_eq!(route.source, "内核连接记录");
-    let signal = rows.row_data(1).unwrap();
+    let direct = rows
+        .iter()
+        .find(|row| row.title == "direct.example")
+        .unwrap();
+    assert_eq!(direct.value, "异常线路 · 内核已选路");
+    assert_eq!(direct.tone, 3);
+    let signal = rows
+        .iter()
+        .find(|row| row.title == "DNS 地区" && row.tone != 0)
+        .unwrap();
     assert_eq!(signal.title, "DNS 地区");
     assert_eq!(signal.value, "未确认");
     assert_eq!(signal.detail, "说明：未取得结果\n建议：稍后重新检测");
+}
+
+#[test]
+fn claude_route_block_expands_and_keeps_each_domain_and_failure() {
+    use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Route, Signal};
+
+    let preview = std::env::var_os("COR_CLAUDE_REPORT_PREVIEW");
+    ui_testing::initialize(1100, if preview.is_some() { 1200 } else { 1000 });
+    let mut app = fixture(Page::Claude);
+    let mut report = Report::new(Environment::Core, "fixture");
+    report.routes = ["api.anthropic.com", "claude.ai", "claude.com"]
+        .into_iter()
+        .map(|host| Route {
+            host: host.into(),
+            rule: "DOMAIN".into(),
+            chain: "演示节点".into(),
+            time: "08:00".into(),
+            ..Default::default()
+        })
+        .collect();
+    report.routes.push(Route {
+        host: "failed.example".into(),
+        outcome: "连接失败".into(),
+        ..Default::default()
+    });
+    report.signals.push(Signal::new(
+        Group::Quality,
+        "出口 IP 质量 · 203.0.113.12",
+        "机房或托管网络来源不一致 · 2 项待确认 · 1 个来源查询未完成",
+        "IPQuery、IPLogs、Layer3 Intel",
+        Evidence::Inferred,
+        "来源不一致\n机房或托管网络：IPQuery 是、IPLogs 否\n\n已有结果未标记\nVPN 地址：IPQuery 否、IPLogs 否\n\n尚未确认\n爬虫地址：未提供\n\n查询未完成\nLayer3 Intel：请求超时",
+    ));
+    for (group, title, value) in [
+        (Group::Exit, "Claude 出口", "美国 · 203.0.113.12"),
+        (Group::Dns, "递归 DNS", "美国"),
+        (Group::Connectivity, "Claude 连通性", "连接成功"),
+    ] {
+        report.signals.push(Signal::new(
+            group,
+            title,
+            value,
+            "演示数据",
+            Evidence::Measured,
+            "仅用于报告预览",
+        ));
+    }
+    app.claude.reports[0] = Some(report);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_claude_normal(), "3");
+    assert_eq!(data.get_claude_risk(), "1");
+    assert_eq!(data.get_claude_clues(), "4");
+    let rows = data.get_claude_results();
+    let header = rows
+        .iter()
+        .find(|row| row.tone == 0 && row.title == "Claude 域名选路")
+        .unwrap();
+    assert_eq!(header.title, "Claude 域名选路");
+    assert!(header.value.contains("1 项风险"));
+    assert!(header.value.contains("failed.example"));
+    assert!(header.value.contains("其他：3 个域名 · 仅记录选路"));
+    let grouped = rows
+        .iter()
+        .find(|row| row.title == "Claude 域名选路" && row.tone == 2)
+        .unwrap();
+    assert_eq!(grouped.value, "3 个域名 · 仅记录选路");
+    for expected in [
+        "api.anthropic.com",
+        "claude.ai",
+        "claude.com",
+        "规则：DOMAIN",
+        "线路：演示节点",
+        "时间：08:00",
+    ] {
+        assert!(grouped.detail.contains(expected), "{expected}");
+    }
+    assert!(
+        rows.iter()
+            .any(|row| row.title == "failed.example" && row.tone == 3)
+    );
+    let grouped_index = rows
+        .iter()
+        .position(|row| row.title == "Claude 域名选路" && row.tone == 2)
+        .unwrap();
+    let quality_index = rows
+        .iter()
+        .position(|row| row.title == "出口 IP 质量 · 203.0.113.12" && row.tone == 2)
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.title == "IP 归属与信誉" && row.tone == 0)
+            .unwrap()
+            .block_items,
+        1
+    );
+    track_targets(&window);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    let capture = |stage: &str| {
+        if let Some(prefix) = &preview {
+            let image = window.window().take_snapshot().unwrap();
+            let size = window.window().size();
+            let mut bytes = format!("P6\n{} {}\n255\n", size.width, size.height).into_bytes();
+            for pixel in image.as_bytes().as_chunks::<4>().0 {
+                bytes.extend_from_slice(&pixel[..3]);
+            }
+            std::fs::write(format!("{}-{stage}.ppm", prefix.to_string_lossy()), bytes).unwrap();
+        }
+    };
+    capture("overview");
+    if preview.is_some() {
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1100, 2200));
+        motion_frame(&window, 50);
+    }
+    click_target(&window, "claude-block:Claude 域名选路");
+    motion_frame(&window, 50);
+    let grouped_key = format!("claude-block-item:Claude 域名选路:{grouped_index}");
+    let grouped_height = target_bounds(&grouped_key)[3];
+    click_target(
+        &window,
+        &format!("claude-block-detail:Claude 域名选路:{grouped_index}"),
+    );
+    motion_frame(&window, 50);
+    assert!(target_bounds(&grouped_key)[3] > grouped_height);
+    capture("expanded");
+    click_target(&window, "claude-block:IP 归属与信誉");
+    motion_frame(&window, 50);
+    let quality_key = format!("claude-block-item:IP 归属与信誉:{quality_index}");
+    assert!(target_bounds(&quality_key)[3] > 150.);
+    capture("details");
+    app.claude.results_filter = Some(claude_view::ResultKind::Unknown);
+    app.present_slint(&data, &mut models);
+    let clues = data.get_claude_results();
+    assert_eq!(clues.row_count(), 2);
+    assert!(clues.iter().any(|row| row.value == "3 个域名 · 仅记录选路"));
+    app.claude.results_filter = Some(claude_view::ResultKind::Risk);
+    app.present_slint(&data, &mut models);
+    let risks = data.get_claude_results();
+    assert_eq!(risks.row_count(), 1);
+    assert_eq!(risks.row_data(0).unwrap().title, "failed.example");
+    window.hide().unwrap();
 }
 
 #[test]
@@ -2187,12 +2350,12 @@ fn claude_summary_keeps_quality_disagreements_visible_with_many_risks() {
     app.present_slint(&data, &mut models);
 
     let rows = data.get_claude_results();
-    assert_eq!(rows.row_count(), 6);
+    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 2);
     assert_eq!(data.get_claude_risk(), "7");
     assert_eq!(data.get_claude_clues(), "1");
     let disagreement = rows
         .iter()
-        .find(|row| row.value.contains("来源不一致"))
+        .find(|row| row.tone == 2 && row.value.contains("来源不一致"))
         .expect("the overview includes the source disagreement");
     assert_eq!(disagreement.tone, 2);
     assert_eq!(disagreement.source, "IPQuery、IPLogs");
@@ -2211,12 +2374,15 @@ fn claude_summary_keeps_quality_disagreements_visible_with_many_risks() {
     }));
     app.present_slint(&data, &mut models);
     let rows = data.get_claude_results();
-    assert_eq!(rows.row_count(), 6);
+    assert_eq!(rows.iter().filter(|row| row.tone == 0).count(), 2);
     assert!(
-        rows.iter().any(|row| row.tone == 3),
+        rows.iter().any(|row| row.tone == 0 && row.delay_tone == 3),
         "the overview also includes risks when many sources disagree"
     );
-    assert!(rows.iter().any(|row| row.value.contains("来源不一致")));
+    assert!(
+        rows.iter()
+            .any(|row| row.tone == 0 && row.value.contains("来源不一致"))
+    );
 }
 
 #[test]
@@ -2266,7 +2432,10 @@ fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals
         app.claude.reports[0] = Some(report);
         app.present_slint(&data, &mut models);
         let rows = data.get_claude_results();
-        let dns = rows.row_data(0).unwrap();
+        let dns = rows
+            .iter()
+            .find(|row| row.title == "实际递归 DNS" && row.tone != 0)
+            .unwrap();
         assert_eq!(dns.country, label, "{code}");
         assert_eq!(dns.flagged, !emoji.is_empty(), "{code}");
         assert_eq!(dns.flag, emoji, "{code}");
@@ -2280,7 +2449,10 @@ fn recursive_dns_flags_follow_the_country_without_changing_risk_or_other_signals
             },
             "{code}"
         );
-        let exit = rows.row_data(1).unwrap();
+        let exit = rows
+            .iter()
+            .find(|row| row.title == "出口" && row.tone != 0)
+            .unwrap();
         assert!(exit.country.is_empty());
         assert!(!exit.flagged);
         assert_eq!(exit.value, "unchanged exit");

@@ -8,7 +8,7 @@ import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
 import { ConnectionPower } from "../../components/brand.slint";
 import { MobileNetworkInfo, MobileServices } from "overview.slint";
-import { MobileReport } from "reports.slint";
+import { MobileReportBlocks } from "reports.slint";
 import { HomeConnections } from "../../components/home-section.slint";
 import { NodeItem, ProfileItem, CategoryItem, ConnectionItem, RuleItem, LogItem } from "../../state.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
@@ -801,7 +801,7 @@ export component MobileAiCheck inherits PageSurface {
         }
         if MobileData.claude-results.length > 0: VerticalLayout { spacing: 8px;
             MSmall { text: "报告摘要"; font-weight: 600; }
-            MobileReport { items: MobileData.claude-results; summary-limit: 6; }
+            MobileReportBlocks { items: MobileData.claude-results; }
         }
     } }
 }

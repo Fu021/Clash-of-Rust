@@ -68,6 +68,43 @@ pub(super) enum Entry<'a> {
     Clean(&'a str),
     Signal(&'a Report, &'a Signal),
     Route(&'a check::Route),
+    Routes(Vec<&'a check::Route>),
+}
+impl Entry<'_> {
+    pub(super) fn section(&self) -> &'static str {
+        match self {
+            Self::Config(_) | Self::Clean(_) => "Claude 项目配置",
+            Self::Signal(_, signal) => signal.group.name(),
+            Self::Route(_) | Self::Routes(_) => "Claude 域名选路",
+        }
+    }
+
+    pub(super) fn title_value(&self) -> (String, String) {
+        match self {
+            Self::Config(finding) => (
+                finding.display_title().to_owned(),
+                if finding.value.trim().is_empty() {
+                    "未提供".into()
+                } else {
+                    finding.value.clone()
+                },
+            ),
+            Self::Clean(_) => ("项目配置".into(), "未发现额外代理或地区覆盖".into()),
+            Self::Signal(_, signal) => (
+                signal.display_title().into(),
+                if signal.group == Group::Dns
+                    && !signal.ip.is_empty()
+                    && clash_of_rust::probe::country_name(&signal.country).is_some()
+                {
+                    signal.ip.clone()
+                } else {
+                    signal.display_value().into()
+                },
+            ),
+            Self::Route(route) => (route.display_title().into(), route.display_outcome()),
+            Self::Routes(routes) => ("Claude 域名选路".into(), check::route_group_value(routes)),
+        }
+    }
 }
 fn index(environment: Environment) -> usize {
     match environment {
@@ -135,8 +172,15 @@ impl State {
             entries.extend(audit.clean_files.iter().map(|path| Entry::Clean(path)));
         }
         entries.extend(
-            self.selected()
-                .flat_map(|r| r.routes.iter().map(Entry::Route)),
+            check::group_routes(self.selected().flat_map(|report| report.routes.iter()))
+                .into_iter()
+                .map(|group| {
+                    if group.len() == 1 {
+                        Entry::Route(group[0])
+                    } else {
+                        Entry::Routes(group)
+                    }
+                }),
         );
         let mut signals: Vec<_> = self
             .selected()
@@ -189,12 +233,16 @@ impl State {
                     ResultKind::Unknown
                 }
             }
+            Entry::Routes(_) => ResultKind::Unknown,
         }
     }
     pub(super) fn counts(&self, entries: &[Entry<'_>]) -> [usize; 3] {
         let mut counts = [0; 3];
         for entry in entries {
-            counts[self.kind(entry) as usize] += 1;
+            counts[self.kind(entry) as usize] += match entry {
+                Entry::Routes(routes) => routes.len(),
+                _ => 1,
+            };
         }
         if let Some(audit) = &self.audit {
             counts[0] += audit.clean_count.saturating_sub(audit.clean_files.len());

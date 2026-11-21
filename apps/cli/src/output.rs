@@ -174,6 +174,35 @@ mod tests {
     }
 
     #[test]
+    fn claude_route_summary_groups_domains_and_keeps_failures_visible() {
+        use clash_client_core::claude_check::{Environment, Report, Route};
+
+        let mut report = Report::new(Environment::Core, "test");
+        report.routes = ["api.anthropic.com", "claude.ai", "claude.com"]
+            .into_iter()
+            .map(|host| Route {
+                host: host.into(),
+                chain: "节点 A".into(),
+                ..Default::default()
+            })
+            .collect();
+        report.routes.push(Route {
+            host: "failed.example".into(),
+            chain: "DIRECT".into(),
+            ..Default::default()
+        });
+        let exported = json!({"report":report});
+        let summary = render(&["claude", "check"], exported.clone());
+        assert!(summary.contains("正常项目 0 · 风险项目 1 · 线索 3"));
+        assert!(summary.contains("Claude 域名选路：3 个域名 · 仅记录选路"));
+        assert!(summary.contains("选路异常 · failed.example：异常线路 · 线路：DIRECT"));
+        let details = render(&["claude", "check", "--details"], exported);
+        for host in ["api.anthropic.com", "claude.ai", "claude.com"] {
+            assert!(details.contains(host), "{host}");
+        }
+    }
+
+    #[test]
     fn service_output_separates_enabled_from_running_and_owner() {
         let value = json!({
             "installed":true,"enabled":true,"active":false,"main_pid":0,

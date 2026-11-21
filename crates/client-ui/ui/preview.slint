@@ -61,7 +61,7 @@ export component Preview inherits AppWindow {
     function refresh-report() {
         UiData.claude-results = root.preview-claude-filter == 0 ? PreviewReports.normal
             : root.preview-claude-filter == 1 ? PreviewReports.risk
-            : root.preview-claude-filter == 2 ? PreviewReports.clues : PreviewReports.all;
+            : root.preview-claude-filter == 2 ? PreviewReports.clues : PreviewReports.blocks;
         UiData.claude-result-status = "列出 " + UiData.claude-results.length + " 项 · 第 1 / 1 页";
     }
     changed preview-claude-filter => { root.refresh-report(); }

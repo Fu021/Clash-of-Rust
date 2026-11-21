@@ -1777,6 +1777,7 @@ fn start_claude_check(
     let generation = state.claude_generation;
     state.claude_status = "正在检测，浏览器将自动采样…".into();
     let port = state.session.settings.mixed_port;
+    let api = state.session.api.clone();
     let host = state.session.native.clone();
     *job = Some(tokio::spawn(async move {
         let result = async {
@@ -1788,6 +1789,12 @@ fn start_claude_check(
                 "Android 网络环境",
             );
             core::claude_check::network(&client, &mut report, "内核代理").await;
+            if let Ok(routes) = api
+                .get::<core::claude_check::ObservedConnections>("connections")
+                .await
+            {
+                report.routes = routes.connections;
+            }
             core::claude_check::enhanced::extend(&client, &mut report).await;
             report
                 .signals
@@ -2680,6 +2687,8 @@ struct ReportRow {
     country: String,
     country_label: String,
     millis: Option<u128>,
+    block_tone: i32,
+    block_items: i32,
 }
 fn project(state: &State) -> Projection {
     let s = &state.session;
@@ -2915,12 +2924,14 @@ fn project(state: &State) -> Projection {
             millis: slot
                 .and_then(|result| result.as_ref().ok())
                 .map(|result| result.millis),
+            block_tone: 0,
+            block_items: 0,
         });
     }
     let mut claude = vec![];
     let mut claude_counts = (0, 0, 0);
     if let Some(report) = &state.claude {
-        for (index, signal) in report.signals.iter().enumerate() {
+        for signal in &report.signals {
             let country_label =
                 if signal.group == core::claude_check::Group::Dns && !signal.ip.is_empty() {
                     core::probe::country_name(&signal.country).unwrap_or_default()
@@ -2938,66 +2949,151 @@ fn project(state: &State) -> Projection {
                 2
             };
             let order = core::claude_check::summary_order(Some(signal), tone == 3);
-            claude.push((
-                order,
-                ReportRow {
-                    id: index.to_string(),
-                    title: signal.display_title().into(),
-                    value: if country_label.is_empty() {
-                        signal.display_value().into()
-                    } else {
-                        signal.ip.clone()
-                    },
-                    detail: signal.explanation(),
-                    source: signal.source.clone(),
-                    tone,
-                    country: signal.country.clone(),
-                    country_label,
-                    millis: None,
+            let section = signal.group.name();
+            let row = ReportRow {
+                id: section.into(),
+                title: signal.display_title().into(),
+                value: if country_label.is_empty() {
+                    signal.display_value().into()
+                } else {
+                    signal.ip.clone()
                 },
-            ));
+                detail: signal.explanation(),
+                source: signal.source.clone(),
+                tone,
+                country: signal.country.clone(),
+                country_label,
+                millis: None,
+                block_tone: 0,
+                block_items: 0,
+            };
+            claude.push(core::claude_check::BlockRow {
+                section,
+                title: row.title.clone(),
+                value: row.value.clone(),
+                priority: order,
+                tone,
+                summary_hint: false,
+                item: row,
+            });
+        }
+        for routes in core::claude_check::group_routes(&report.routes) {
+            let route = routes[0];
+            let grouped = routes.len() > 1;
+            let tone = if route.risky() { 3 } else { 2 };
+            if tone == 3 {
+                claude_counts.1 += routes.len();
+            } else {
+                claude_counts.2 += routes.len();
+            }
+            let section = "Claude 域名选路";
+            let row = ReportRow {
+                id: section.into(),
+                title: if grouped {
+                    section.into()
+                } else {
+                    route.display_title().into()
+                },
+                value: if grouped {
+                    core::claude_check::route_group_value(&routes)
+                } else {
+                    route.display_outcome()
+                },
+                detail: if grouped {
+                    core::claude_check::route_group_detail(&routes)
+                } else {
+                    route.explanation()
+                },
+                source: "内核连接记录".into(),
+                tone,
+                country: String::new(),
+                country_label: String::new(),
+                millis: None,
+                block_tone: 0,
+                block_items: 0,
+            };
+            claude.push(core::claude_check::BlockRow {
+                section,
+                title: row.title.clone(),
+                value: row.value.clone(),
+                priority: core::claude_check::summary_order(None, tone == 3),
+                tone,
+                summary_hint: grouped,
+                item: row,
+            });
         }
     }
     let guard_order = core::claude_check::summary_order(None, true);
-    for (index, route) in state.guard_snapshot.routes.iter().enumerate() {
+    for route in &state.guard_snapshot.routes {
         claude_counts.1 += 1;
-        claude.push((
-            guard_order,
-            ReportRow {
-                id: format!("guard-{index}"),
-                title: route.display_title().into(),
-                value: if route.outcome.is_empty() {
-                    "仅记录选路".into()
-                } else {
-                    route.outcome.clone()
-                },
-                detail: route.explanation(),
-                source: "实时拦截 · 内核连接记录".into(),
-                tone: 3,
-                country: String::new(),
-                country_label: String::new(),
-                millis: None,
-            },
-        ));
+        let section = "Claude 域名选路";
+        let row = ReportRow {
+            id: section.into(),
+            title: route.display_title().into(),
+            value: route.display_outcome(),
+            detail: route.explanation(),
+            source: "实时拦截 · 内核连接记录".into(),
+            tone: 3,
+            country: String::new(),
+            country_label: String::new(),
+            millis: None,
+            block_tone: 0,
+            block_items: 0,
+        };
+        claude.push(core::claude_check::BlockRow {
+            section,
+            title: row.title.clone(),
+            value: row.value.clone(),
+            priority: guard_order,
+            tone: 3,
+            summary_hint: false,
+            item: row,
+        });
     }
     if !state.guard_snapshot.error.is_empty() {
         claude_counts.1 += 1;
-        claude.push((
-            guard_order,
-            ReportRow {
-                id: "guard-status".into(),
-                title: "实时保护状态".into(),
-                value: state.guard_snapshot.error.clone(),
-                detail: state.guard_snapshot.error.clone(),
-                source: "Android 后台保护服务".into(),
-                tone: 3,
-                country: String::new(),
-                country_label: String::new(),
-                millis: None,
-            },
-        ));
+        let section = "实时保护";
+        let row = ReportRow {
+            id: section.into(),
+            title: "实时保护状态".into(),
+            value: state.guard_snapshot.error.clone(),
+            detail: state.guard_snapshot.error.clone(),
+            source: "Android 后台保护服务".into(),
+            tone: 3,
+            country: String::new(),
+            country_label: String::new(),
+            millis: None,
+            block_tone: 0,
+            block_items: 0,
+        };
+        claude.push(core::claude_check::BlockRow {
+            section,
+            title: row.title.clone(),
+            value: row.value.clone(),
+            priority: guard_order,
+            tone: 3,
+            summary_hint: false,
+            item: row,
+        });
     }
-    core::claude_check::order_summary(&mut claude, |(order, _)| *order);
+    let mut claude_rows = Vec::new();
+    for block in core::claude_check::group_blocks(claude) {
+        let block_items = block.rows.len() as i32;
+        claude_rows.push(ReportRow {
+            id: block.section.into(),
+            title: block.section.into(),
+            value: block.summary,
+            detail: String::new(),
+            source: String::new(),
+            tone: 0,
+            country: String::new(),
+            country_label: String::new(),
+            millis: None,
+            block_tone: block.tone,
+            block_items,
+        });
+        claude_rows.extend(block.rows);
+    }
     Projection {
         application_policies: state.application_policies.view(s),
         overview: state.overview.present(s.running),
@@ -3038,7 +3134,7 @@ fn project(state: &State) -> Projection {
             .collect(),
         site_details,
         claude_busy: state.claude_busy,
-        claude: claude.into_iter().map(|(_, row)| row).collect(),
+        claude: claude_rows,
         claude_counts,
         progress: (report.totals.completed(), report.totals.total()),
         detecting: state.detecting,
@@ -3451,7 +3547,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                 .millis
                 .map_or(String::new(), |millis| format!("{millis} ms"))
                 .into(),
-            delay_tone: r.millis.map_or(4, proxy_order::response_tone),
+            delay_tone: if r.tone == 0 {
+                r.block_tone
+            } else {
+                r.millis.map_or(4, proxy_order::response_tone)
+            },
+            block_items: r.block_items,
         }
     };
     data.set_site_results(stable(

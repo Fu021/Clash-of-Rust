@@ -832,7 +832,7 @@ fn report_categories_share_one_panel_without_gaps_from_hidden_rows() {
         });
     probe.global::<UiGeometry>().set_enabled(true);
     probe.set_page(8);
-    let tones = [1, 3, 2, 3, 1];
+    let tones = [0, 1, 3, 2, 3, 1];
     probe.set_reports(
         Rc::new(slint::VecModel::from(
             tones

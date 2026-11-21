@@ -9,6 +9,8 @@ component FindingRow inherits Rectangle {
     in property <length> detail-size;
     in property <length> caption-size;
     in property <length> detail-touch-height;
+    in property <string> detail-key;
+    in property <bool> show-details;
     property <bool> expanded;
     changed item => { root.expanded = false; }
     height: content.preferred-height;
@@ -24,21 +26,93 @@ component FindingRow inherits Rectangle {
             Label { text: root.item.title; font-weight: 600; font-size: root.title-size; wrap: word-wrap; }
             Paragraph { text: root.item.value; font-size: root.detail-size; }
             if root.item.country != "": Caption { text: "地区：" + root.item.country; font-size: root.caption-size; wrap: word-wrap; }
-            if root.item.detail != "" || root.item.source != "" || root.item.delay != "": HorizontalLayout {
+            if !root.show-details && (root.item.detail != "" || root.item.source != "" || root.item.delay != ""): HorizontalLayout {
                 ActionButton {
+                    geometry-key: root.detail-key;
                     text: root.expanded ? "收起详情" : "查看详情"; quiet: true; compact: true;
                     touch-height: root.detail-touch-height;
                     clicked => { root.expanded = !root.expanded; }
                 }
                 Rectangle { horizontal-stretch: 1; }
             }
-            if root.expanded && root.item.detail != "": Paragraph { text: root.item.detail; color: Theme.secondary; font-size: root.detail-size; }
-            if root.expanded && root.item.source != "": Caption { text: "来源：" + root.item.source; wrap: word-wrap; color: Theme.muted; font-size: root.caption-size; }
-            if root.expanded && root.item.delay != "": Caption { text: root.item.delay; color: Theme.tone-color(root.item.delay-tone); font-size: root.caption-size; }
+            if (root.expanded || root.show-details) && root.item.detail != "": Paragraph { text: root.item.detail; color: Theme.secondary; font-size: root.detail-size; }
+            if (root.expanded || root.show-details) && root.item.source != "": Caption { text: "来源：" + root.item.source; wrap: word-wrap; color: Theme.muted; font-size: root.caption-size; }
+            if (root.expanded || root.show-details) && root.item.delay != "": Caption { text: root.item.delay; color: Theme.tone-color(root.item.delay-tone); font-size: root.caption-size; }
         }
         Badge { text: root.item.tone == 3 ? "风险" : root.item.tone == 1 ? "正常" : "线索"; tone: root.item.tone; font-size: root.caption-size; }
     }
     Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.subtle-line; }
+}
+
+component FindingBlock inherits Panel {
+    in property <ReportItem> section;
+    in property <[ReportItem]> items;
+    in property <length> title-size;
+    in property <length> detail-size;
+    in property <length> caption-size;
+    in property <length> detail-touch-height;
+    property <bool> expanded;
+    changed section => { root.expanded = false; }
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
+    height: block-content.preferred-height; clip: true;
+    block-content := VerticalLayout {
+        spacing: 0px;
+        VerticalLayout {
+            padding: 16px; spacing: 6px;
+            HorizontalLayout {
+                cross-axis-alignment: start; spacing: 8px;
+                Label { text: root.section.title; font-weight: 600; font-size: root.title-size; wrap: word-wrap; horizontal-stretch: 1; }
+                Badge {
+                    text: root.section.delay-tone == 3 ? "风险" : root.section.delay-tone == 1 ? "正常" : "线索";
+                    tone: root.section.delay-tone; font-size: root.caption-size;
+                }
+            }
+            Paragraph { text: root.section.value; font-size: root.detail-size; }
+            HorizontalLayout {
+                ActionButton {
+                    geometry-key: "claude-block:" + root.section.id;
+                    text: root.expanded ? "收起详情" : "查看详情"; quiet: true; compact: true;
+                    touch-height: root.detail-touch-height;
+                    clicked => { root.expanded = !root.expanded; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+        if root.expanded: VerticalLayout {
+            spacing: 0px;
+            for result[index] in root.items: row := VerticalLayout {
+                spacing: 0px; vertical-stretch: 0;
+                GeometryTarget { key: "claude-block-item:" + root.section.id + ":" + index; bounds: [row.absolute-position.x, row.absolute-position.y, row.width, row.height]; }
+                if result.tone > 0 && result.id == root.section.id: FindingRow {
+                    item: result;
+                    detail-key: "claude-block-detail:" + root.section.id + ":" + index;
+                    show-details: root.section.block-items == 1;
+                    title-size: root.title-size; detail-size: root.detail-size; caption-size: root.caption-size; detail-touch-height: root.detail-touch-height;
+                }
+            }
+        }
+    }
+}
+
+export component FindingBlocks inherits Rectangle {
+    in property <[ReportItem]> items;
+    in property <length> title-size: Theme.body-size;
+    in property <length> detail-size: Theme.detail-size;
+    in property <length> caption-size: Theme.detail-size;
+    in property <length> detail-touch-height: 0px;
+    min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
+    height: blocks.preferred-height;
+    blocks := VerticalLayout {
+        spacing: 0px;
+        for group in root.items: VerticalLayout {
+            spacing: 0px; vertical-stretch: 0;
+            if group.tone == 0: FindingBlock {
+                section: group; items: root.items;
+                title-size: root.title-size; detail-size: root.detail-size; caption-size: root.caption-size; detail-touch-height: root.detail-touch-height;
+            }
+            if group.tone == 0: Rectangle { height: 8px; }
+        }
+    }
 }
 
 export component FindingList inherits Panel {
@@ -60,6 +134,7 @@ export component FindingList inherits Panel {
             GeometryTarget { key: "claude-result:" + index; bounds: [result-row.absolute-position.x, result-row.absolute-position.y, result-row.width, result-row.height]; }
             if (root.summary-limit < 0 || index < root.summary-limit) && (root.tone == 0 || result.tone == root.tone): FindingRow {
                 item: result;
+                detail-key: "claude-result-detail:" + index;
                 title-size: root.title-size; detail-size: root.detail-size; caption-size: root.caption-size; detail-touch-height: root.detail-touch-height;
             }
         }

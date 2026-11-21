@@ -36,6 +36,44 @@ fn tone(status: Status) -> i32 {
     }
 }
 
+fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32) -> ReportItem {
+    let section = entry.section();
+    let (title, value) = entry.title_value();
+    let country = match &entry {
+        claude_view::Entry::Signal(_, signal)
+            if signal.group == clash_of_rust::claude_check::Group::Dns && !signal.ip.is_empty() =>
+        {
+            clash_of_rust::probe::country_name(&signal.country).unwrap_or_default()
+        }
+        _ => String::new(),
+    };
+    let (_, flag) = clash_of_rust::flags::label(&country);
+    let (detail, source) = match entry {
+        claude_view::Entry::Config(finding) => (finding.explanation(), finding.path.clone()),
+        claude_view::Entry::Clean(path) => (String::new(), path.into()),
+        claude_view::Entry::Signal(_, signal) => (signal.explanation(), signal.source.clone()),
+        claude_view::Entry::Route(route) => (route.explanation(), "内核连接记录".into()),
+        claude_view::Entry::Routes(routes) => (
+            clash_of_rust::claude_check::route_group_detail(&routes),
+            "内核连接记录".into(),
+        ),
+    };
+    ReportItem {
+        country: country.into(),
+        flagged: flag.is_some(),
+        flag: flag.unwrap_or_default().into(),
+        id: section.into(),
+        title: title.into(),
+        value: value.into(),
+        detail: detail.into(),
+        source: source.into(),
+        tone,
+        delay: "".into(),
+        delay_tone: 4,
+        block_items: 0,
+    }
+}
+
 fn connection_details(
     connection: &clash_of_rust::api::Connection,
     resolved: &str,
@@ -976,6 +1014,7 @@ impl App {
                         delay_tone: result
                             .and_then(|result| result.as_ref().ok())
                             .map_or(4, |result| proxy_order::response_tone(result.millis)),
+                        block_items: 0,
                     }
                 })
                 .collect(),
@@ -1102,12 +1141,11 @@ impl App {
             )
             .into(),
         );
-        reconcile(
-            &models.claude_results,
-            entries
+        reconcile(&models.claude_results, {
+            let rows = entries
                 .into_iter()
-                .skip(page * page_size)
-                .take(page_size)
+                .skip(if summary { 0 } else { page * page_size })
+                .take(if summary { usize::MAX } else { page_size })
                 .map(|entry| {
                     let kind = self.claude.kind(&entry);
                     let tone = match kind {
@@ -1115,70 +1153,64 @@ impl App {
                         claude_view::ResultKind::Risk => 3,
                         claude_view::ResultKind::Unknown => 2,
                     };
-                    let country = match &entry {
-                        claude_view::Entry::Signal(_, signal)
-                            if signal.group == clash_of_rust::claude_check::Group::Dns
-                                && !signal.ip.is_empty() =>
-                        {
-                            clash_of_rust::probe::country_name(&signal.country).unwrap_or_default()
-                        }
-                        _ => String::new(),
+                    let section = entry.section();
+                    let signal = match &entry {
+                        claude_view::Entry::Signal(_, signal) => Some(*signal),
+                        _ => None,
                     };
-                    let (_, flag) = clash_of_rust::flags::label(&country);
-                    let (title, value, detail, source) = match entry {
-                        claude_view::Entry::Config(finding) => (
-                            finding.display_title().to_owned(),
-                            if finding.value.trim().is_empty() {
-                                "未提供".into()
-                            } else {
-                                finding.value.clone()
-                            },
-                            finding.explanation(),
-                            finding.path.clone(),
-                        ),
-                        claude_view::Entry::Clean(path) => (
-                            "项目配置".into(),
-                            "未发现额外代理或地区覆盖".into(),
-                            String::new(),
-                            path.into(),
-                        ),
-                        claude_view::Entry::Signal(_, signal) => (
-                            signal.display_title().into(),
-                            if country.is_empty() {
-                                signal.display_value().into()
-                            } else {
-                                signal.ip.clone()
-                            },
-                            signal.explanation(),
-                            signal.source.clone(),
-                        ),
-                        claude_view::Entry::Route(route) => (
-                            route.display_title().into(),
-                            if route.outcome.is_empty() {
-                                "仅记录选路".into()
-                            } else {
-                                route.outcome.clone()
-                            },
-                            route.explanation(),
-                            "内核连接记录".into(),
-                        ),
-                    };
-                    ReportItem {
-                        country: country.into(),
-                        flagged: flag.is_some(),
-                        flag: flag.unwrap_or_default().into(),
-                        id: "".into(),
-                        title: title.into(),
-                        value: value.into(),
-                        detail: detail.into(),
-                        source: source.into(),
+                    let priority = clash_of_rust::claude_check::summary_order(
+                        signal,
+                        kind == claude_view::ResultKind::Risk,
+                    );
+                    let (title, value) = entry.title_value();
+                    clash_of_rust::claude_check::BlockRow {
+                        section,
+                        title,
+                        value,
+                        priority,
                         tone,
-                        delay: "".into(),
-                        delay_tone: 4,
+                        summary_hint: matches!(&entry, claude_view::Entry::Routes(_)),
+                        item: (entry, tone),
                     }
                 })
-                .collect(),
-        );
+                .collect::<Vec<_>>();
+            if summary {
+                let mut items = Vec::new();
+                for block in clash_of_rust::claude_check::group_blocks(rows) {
+                    let total = block.rows.len();
+                    items.push(ReportItem {
+                        id: block.section.into(),
+                        title: block.section.into(),
+                        value: block.summary.into(),
+                        tone: 0,
+                        delay_tone: block.tone,
+                        block_items: total as i32,
+                        ..Default::default()
+                    });
+                    items.extend(
+                        block
+                            .rows
+                            .into_iter()
+                            .take(12)
+                            .map(|(entry, tone)| claude_report_item(entry, tone)),
+                    );
+                    if total > 12 {
+                        items.push(ReportItem {
+                            id: block.section.into(),
+                            title: "更多项目".into(),
+                            value: format!("另有 {} 项，请点击上方分类查看。", total - 12).into(),
+                            tone: 2,
+                            ..Default::default()
+                        });
+                    }
+                }
+                items
+            } else {
+                rows.into_iter()
+                    .map(|row| claude_report_item(row.item.0, row.item.1))
+                    .collect()
+            }
+        });
     }
 
     fn present_dialog(&self, data: &UiData) {

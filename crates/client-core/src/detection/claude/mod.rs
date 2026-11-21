@@ -8,7 +8,11 @@ pub mod guard;
 pub mod observe;
 pub mod preferences;
 mod quality;
+mod report_view;
 pub use crate::protection;
+pub use report_view::{
+    BlockRow, ReportBlock, group_blocks, group_routes, route_group_detail, route_group_value,
+};
 
 use crate::{api, probe::country_name};
 use anyhow::{Context, Result, bail};
@@ -242,6 +246,20 @@ impl Route {
             self.host.trim()
         }
     }
+    pub fn display_outcome(&self) -> String {
+        let outcome = self.outcome.trim();
+        if self.risky() && outcome != "连接失败" && !outcome.starts_with("异常连接") {
+            if outcome.is_empty() {
+                "异常线路".into()
+            } else {
+                format!("异常线路 · {outcome}")
+            }
+        } else if outcome.is_empty() {
+            "仅记录选路".into()
+        } else {
+            outcome.into()
+        }
+    }
     pub fn explanation(&self) -> String {
         [
             ("规则", self.rule.trim()),
@@ -255,14 +273,17 @@ impl Route {
         .join("\n")
     }
     pub fn risky(&self) -> bool {
-        self.outcome == "连接失败"
-            || self.outcome.starts_with("异常连接")
-            || self
-                .chain
-                .split(" → ")
-                .any(|part| matches!(part.trim(), "DIRECT" | "REJECT" | "REJECT-DROP"))
-            || self.chain.ends_with("[DIRECT]")
-            || self.chain.ends_with("[REJECT]")
+        let outcome = self.outcome.trim();
+        let chain = self.chain.trim();
+        outcome == "连接失败"
+            || outcome.starts_with("异常连接")
+            || chain.split(" → ").any(|part| {
+                let part = part.trim();
+                matches!(part, "DIRECT" | "REJECT" | "REJECT-DROP")
+                    || ["[DIRECT]", "[REJECT]", "[REJECT-DROP]"]
+                        .into_iter()
+                        .any(|suffix| part.ends_with(suffix))
+            })
     }
 }
 
@@ -368,6 +389,13 @@ impl Report {
                 counts.2 += 1;
             } else {
                 counts.0 += 1;
+            }
+        }
+        for route in &self.routes {
+            if route.risky() {
+                counts.1 += 1;
+            } else {
+                counts.2 += 1;
             }
         }
         counts
