@@ -2446,6 +2446,55 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual((staged/'package.deb').read_bytes(), package.read_bytes())
                 self.assertEqual(json.loads((data/'update-install.json').read_text())['state'], 'preparing')
 
+    def test_arch_update_cleanup_handles_completed_handoff_without_masking_failures(self):
+        for outcome in ('succeeded', 'update-failed', 'cleanup-denied'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                staged = directory/'staged'
+                staged.mkdir()
+                report = directory/'report'
+
+                def cli(data, *arguments):
+                    data.mkdir(parents=True, exist_ok=True)
+                    settings = data/'settings.json'
+                    if not settings.exists():
+                        settings.write_text('{}')
+                    return {'running': False}
+
+                def helper(_, __):
+                    if outcome != 'cleanup-denied':
+                        shutil.rmtree(staged)
+                    if outcome == 'update-failed':
+                        raise AssertionError('original update failure')
+                    return {'state': 'succeeded', 'error': False, 'message': 'done'}
+
+                remove = shutil.rmtree
+
+                def cleanup(path, *args, **kwargs):
+                    if outcome == 'cleanup-denied' and Path(path) == staged:
+                        raise PermissionError('cleanup denied')
+                    return remove(path, *args, **kwargs)
+
+                with patch.object(cli_update.os, 'geteuid', return_value=1000), \
+                        patch.object(cli_update.os, 'kill'), \
+                        patch.object(cli_update.subprocess, 'Popen') as process, \
+                        patch.object(cli_update, 'endpoint',
+                                     side_effect=[{'pid': 123}, {'pid': 456}, None]), \
+                        patch.object(cli_update, 'cli', side_effect=cli), \
+                        patch.object(cli_update, 'stage', return_value=staged), \
+                        patch.object(cli_update, 'run_helper', side_effect=helper), \
+                        patch.object(cli_update.shutil, 'rmtree', side_effect=cleanup):
+                    process.return_value.poll.return_value = 0
+                    if outcome == 'succeeded':
+                        cli_update.exercise_arch(directory/'candidate.pkg.tar.zst', '0.7.3', report)
+                        self.assertEqual(json.loads((report/'arch-update.json').read_text())['status'], 'passed')
+                    elif outcome == 'update-failed':
+                        with self.assertRaisesRegex(AssertionError, 'original update failure'):
+                            cli_update.exercise_arch(directory/'candidate.pkg.tar.zst', '0.7.3', report)
+                    else:
+                        with self.assertRaisesRegex(PermissionError, 'cleanup denied'):
+                            cli_update.exercise_arch(directory/'candidate.pkg.tar.zst', '0.7.3', report)
+
     def test_installed_terminal_update_is_not_run_in_a_development_environment(self):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), \
                 patch.object(sys, 'argv', ['test-cli-update.py', '--package', '/candidate.deb']), \

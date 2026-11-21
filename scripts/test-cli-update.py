@@ -403,7 +403,8 @@ def exercise_arch(package, version, report):
                     daemon.terminate()
                 daemon.wait(timeout=30)
                 if directory:
-                    shutil.rmtree(directory)
+                    with contextlib.suppress(FileNotFoundError):
+                        shutil.rmtree(directory)
 
 
 def main():
