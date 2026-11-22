@@ -9,7 +9,7 @@
 | Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，用 APT 安装 DEB |
 | Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity 安装系统，再用 APT 安装 DEB |
 | Fedora Compatibility | Fedora Cloud Base Generic 44-1.7、45-1.4（x64） | DNF 安装同源 RPM |
-| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.20、Tumbleweed 20261119（x64） | 可写 Cloud VM，Zypper 安装同源 RPM |
+| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.21、Tumbleweed 20261120（x64） | 可写 Cloud VM，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
 镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。openSUSE 原站返回 404 或 410 时，从[列名镜像站](https://mirrors.opensuse.org/)尝试下载相同文件，沿用固定摘要，报告记录实际使用的地址。若两处均已移除，从官方索引核对替代镜像、摘要及匹配的签名软件源，再更新目标并复验。这里的 QEMU 来宾统一用 x64 `ubuntu-24.04` runner。
