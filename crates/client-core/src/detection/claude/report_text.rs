@@ -315,9 +315,10 @@ fn quality_summary(value: &str) -> String {
         return format!("{count} unconfirmed");
     }
     if let Some(count) = value.strip_suffix(" 个来源查询未完成")
-        && count.parse::<usize>().is_ok()
+        && let Ok(number) = count.parse::<usize>()
     {
-        return format!("{count} sources incomplete");
+        let label = if number == 1 { "source" } else { "sources" };
+        return format!("{count} {label} incomplete");
     }
     match value {
         "各项均待确认" => "All properties unconfirmed",

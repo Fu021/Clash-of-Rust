@@ -429,6 +429,15 @@ mod tests {
         );
         assert_eq!(signal.evidence, Evidence::Unknown);
         assert_eq!(signal.value, "各项均待确认 · 2 个来源查询未完成");
+        assert_eq!(
+            signal.display_value_in(crate::config::Language::English),
+            "All properties unconfirmed · 2 sources incomplete"
+        );
+        let single_failure = summarize(ip, &[(Provider::IpQuery, Err(LookupFailure::Timeout))]);
+        assert_eq!(
+            single_failure.display_value_in(crate::config::Language::English),
+            "All properties unconfirmed · 1 source incomplete"
+        );
         for detail in [
             "尚未确认",
             "查询未完成",

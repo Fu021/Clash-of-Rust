@@ -143,6 +143,9 @@ fn help_reads_ordered_system_languages_on_first_install_and_upgrade() {
         let result = cor()
             .args(["help", "--data-dir"])
             .arg(&data)
+            .env_remove("LC_ALL")
+            .env_remove("LC_MESSAGES")
+            .env("LANG", "en_US.UTF-8")
             .env("LANGUAGE", system)
             .output()
             .unwrap();
@@ -155,6 +158,116 @@ fn help_reads_ordered_system_languages_on_first_install_and_upgrade() {
             std::fs::create_dir(&data).unwrap();
             std::fs::write(&settings, legacy).unwrap();
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn help_respects_linux_message_locale_precedence_and_c_locale() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("unused");
+    for (list, all, messages, lang, override_lang, heading) in [
+        (
+            Some("zh_CN"),
+            Some("C"),
+            None,
+            "zh_CN.UTF-8",
+            None,
+            "Usage: cor ",
+        ),
+        (
+            Some("zh_CN"),
+            Some("C.UTF-8"),
+            None,
+            "zh_CN.UTF-8",
+            None,
+            "Usage: cor ",
+        ),
+        (
+            None,
+            Some("POSIX"),
+            None,
+            "zh_CN.UTF-8",
+            None,
+            "Usage: cor ",
+        ),
+        (
+            None,
+            Some("fr_FR.UTF-8"),
+            None,
+            "zh_CN.UTF-8",
+            None,
+            "Usage: cor ",
+        ),
+        (
+            None,
+            None,
+            Some("fr_FR.UTF-8"),
+            "zh_CN.UTF-8",
+            None,
+            "Usage: cor ",
+        ),
+        (
+            Some("fr:zh_CN"),
+            Some("fr_FR.UTF-8"),
+            None,
+            "en_US.UTF-8",
+            None,
+            "用法：cor ",
+        ),
+        (
+            Some("fr:C:zh_CN"),
+            Some("fr_FR.UTF-8"),
+            None,
+            "zh_CN.UTF-8",
+            None,
+            "Usage: cor ",
+        ),
+        (
+            Some("fr"),
+            Some("fr_FR.UTF-8"),
+            None,
+            "zh_CN.UTF-8",
+            None,
+            "Usage: cor ",
+        ),
+        (
+            None,
+            Some("C"),
+            None,
+            "en_US.UTF-8",
+            Some("zh-CN"),
+            "用法：cor ",
+        ),
+    ] {
+        let mut command = cor();
+        command
+            .args(["help", "--data-dir"])
+            .arg(&data)
+            .env_remove("LANGUAGE")
+            .env_remove("LC_ALL")
+            .env_remove("LC_MESSAGES")
+            .env("LANG", lang);
+        for (key, value) in [
+            ("LANGUAGE", list),
+            ("LC_ALL", all),
+            ("LC_MESSAGES", messages),
+        ] {
+            if let Some(value) = value {
+                command.env(key, value);
+            }
+        }
+        if let Some(language) = override_lang {
+            command.args(["--lang", language]);
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success());
+        let output = String::from_utf8(result.stdout).unwrap();
+        assert!(
+            output.contains(heading),
+            "LANGUAGE={list:?}, LC_ALL={all:?}, LC_MESSAGES={messages:?}, LANG={lang}, override={override_lang:?}\n{output}"
+        );
+        assert!(!data.exists());
     }
 }
 

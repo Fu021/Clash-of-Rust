@@ -141,7 +141,8 @@ def exercise_picker(data):
     group = '默认策略'
     for answer, expected in ((b'DIRECT\n1\n', 0), (b'q\n', 1), (None, 130)):
         master, slave = pty.openpty()
-        child = subprocess.Popen([str(CLI), '--data-dir', str(data), 'node', 'select', group],
+        child = subprocess.Popen([str(CLI), '--lang=zh-CN', '--data-dir', str(data),
+                                  'node', 'select', group],
                                  stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
         os.close(slave)
         try:

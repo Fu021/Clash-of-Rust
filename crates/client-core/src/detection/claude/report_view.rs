@@ -184,7 +184,7 @@ pub fn group_blocks_in<T>(rows: Vec<BlockRow<T>>, language: Language) -> Vec<Rep
                         format!("{title}{}{value}", language.text("：", ": "))
                     };
                     let limit = if language == Language::English {
-                        80
+                        112
                     } else {
                         64
                     };
@@ -401,7 +401,7 @@ mod tests {
             vec![BlockRow {
                 section: REPORT_SECTIONS[2],
                 title: "Exit IP quality · 203.0.113.12".into(),
-                value: "Datacenter or hosting: Yes · 2 unconfirmed".into(),
+                value: "Datacenter or hosting: Yes · 2 unconfirmed · 1 source incomplete".into(),
                 priority: 1,
                 tone: 2,
                 summary_hint: false,
@@ -411,7 +411,7 @@ mod tests {
         );
         assert_eq!(
             blocks[2].overview,
-            "Exit IP quality · 203.0.113.12: Datacenter or hosting: Yes · 2 unconfirmed"
+            "Exit IP quality · 203.0.113.12: Datacenter or hosting: Yes · 2 unconfirmed · 1 source incomplete"
         );
         assert_eq!(
             shorten(

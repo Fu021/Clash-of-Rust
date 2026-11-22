@@ -62,7 +62,7 @@ fn capture_report_previews(window: &AndroidWindow, adapter: &MinimalSoftwareWind
             2,
             Group::Quality,
             "出口 IP 质量 · 203.0.113.12",
-            "机房或托管网络：是 · 2 项待确认",
+            "机房或托管网络：是 · 2 项待确认 · 1 个来源查询未完成",
             2,
         ),
         (3, Group::Dns, "实际递归 DNS", "203.0.113.53", 1),

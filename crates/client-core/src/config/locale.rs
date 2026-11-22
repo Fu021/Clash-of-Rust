@@ -40,7 +40,27 @@ impl LanguagePreference {
         Ok(settings.language)
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "linux")]
+    pub fn resolve_desktop(self) -> Language {
+        if self != Self::System {
+            return self.resolve([] as [&str; 0]);
+        }
+        let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .into_iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .find(|value| !value.is_empty())
+            .unwrap_or_else(|| "C".into());
+        let base = locale.split(['.', '@']).next().unwrap_or("");
+        if base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") {
+            return Language::English;
+        }
+        match std::env::var("LANGUAGE") {
+            Ok(languages) if !languages.is_empty() => self.resolve(languages.split(':')),
+            _ => self.resolve([locale]),
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
     pub fn resolve_desktop(self) -> Language {
         self.resolve(std::iter::once_with(sys_locale::get_locales).flatten())
     }
@@ -92,7 +112,7 @@ impl Language {
     fn from_system_tag(tag: &str) -> Option<Self> {
         let mut subtags = tag.trim().split(['.', '@']).next()?.split(['-', '_']);
         match subtags.next()?.to_ascii_lowercase().as_str() {
-            "en" => Some(Self::English),
+            "en" | "c" | "posix" => Some(Self::English),
             "zh" => match subtags.next().map(str::to_ascii_lowercase).as_deref() {
                 Some("hant" | "tw" | "hk" | "mo") => None,
                 _ => Some(Self::SimplifiedChinese),
@@ -131,7 +151,13 @@ mod tests {
             preference.resolve(["", "C.UTF-8", "fr-FR", "zh-Hant-TW"]),
             Language::English
         );
+        assert_eq!(
+            preference.resolve(["fr", "C.UTF-8", "zh-CN"]),
+            Language::English
+        );
         assert_eq!(preference.resolve(["zh-HK", "zh-Hans-TW"]).tag(), "zh-CN");
+        assert_eq!(LanguagePreference::from_tag("c"), None);
+        assert_eq!(LanguagePreference::from_tag("posix"), None);
     }
 
     #[test]
