@@ -1,6 +1,7 @@
 //! Background enforcement of the pinned Claude route. Bounded state, no processes.
 use super::{Evidence, Group, Route, Signal, observe, protection};
 use crate::api::Api;
+use crate::config::Language;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -136,6 +137,15 @@ impl Guard {
         N: Fn(String, String) -> F + Send + 'static,
         F: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
     {
+        Self::start_localized(api, node, || Language::SimplifiedChinese, notify)
+    }
+
+    pub fn start_localized<N, F, L>(api: Api, node: String, language: L, notify: N) -> Self
+    where
+        N: Fn(String, String) -> F + Send + 'static,
+        F: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+        L: Fn() -> Language + Send + 'static,
+    {
         let state = Arc::new(Mutex::new(Snapshot::default()));
         let captured = state.clone();
         let task = tokio::spawn(async move {
@@ -252,23 +262,37 @@ impl Guard {
                     if let Ok(mut state) = captured.lock() {
                         state.alerts = state.alerts.saturating_add(1);
                     }
-                    let message = format!(
-                        "检测到 Claude 或关联服务偏离保护节点，已尝试关闭对应连接。\n域名：{}\n保护节点：{}\n共享服务可能属于其他应用，请在 A÷检测中查看记录。",
-                        alert_hosts
-                            .into_iter()
-                            .take(4)
-                            .collect::<Vec<_>>()
-                            .join("、"),
-                        node
+                    let (title, message) = notification_text(
+                        &alert_hosts.into_iter().take(4).collect::<Vec<_>>(),
+                        &node,
+                        language(),
                     );
-                    notification.0 = Some(tokio::spawn(notify(
-                        "Clash of Rust · Claude 保护".into(),
-                        message,
-                    )));
+                    notification.0 = Some(tokio::spawn(notify(title, message)));
                 }
             }
         });
         Self(Arc::new(Inner { task, state }))
+    }
+}
+
+fn notification_text(hosts: &[String], node: &str, language: Language) -> (String, String) {
+    match language {
+        Language::SimplifiedChinese => (
+            "Clash of Rust · Claude 保护".into(),
+            format!(
+                "检测到 Claude 或关联服务偏离保护节点，已尝试关闭对应连接。\n域名：{}\n保护节点：{}\n共享服务可能属于其他应用，请在 A÷检测中查看记录。",
+                hosts.join("、"),
+                node
+            ),
+        ),
+        Language::English => (
+            "Clash of Rust · Claude protection".into(),
+            format!(
+                "Claude or a related service used a different route. Attempted to close the connection.\nDomains: {}\nProtected node: {}\nSee Claude check for details.",
+                hosts.join(", "),
+                node
+            ),
+        ),
     }
 }
 fn retain_route(state: &mut Snapshot, route: Route) {
@@ -493,6 +517,10 @@ mod tests {
         assert_eq!(signal.title, REPORT_SECTION);
         assert!(signal.value.contains("已观察 8 次请求"));
         assert!(signal.value.contains("已关闭 1 条异常连接"));
+        assert_eq!(
+            signal.display_value_in(crate::config::Language::English),
+            "8 requests observed · 1 unexpected connection closed · 2 notification requests"
+        );
         assert!(signal.risk);
         assert_eq!(signal.evidence, Evidence::Measured);
 
@@ -508,6 +536,11 @@ mod tests {
         assert!(signal.explanation().contains("异常连接关闭失败"));
         assert!(signal.risk);
         assert_eq!(signal.evidence, Evidence::Unknown);
+        assert!(
+            signal
+                .display_value_in(crate::config::Language::English)
+                .contains("Failed to close an unexpected connection")
+        );
 
         snapshot.error.clear();
         snapshot.blocked = 0;
@@ -519,6 +552,11 @@ mod tests {
         mark_report_history(&mut signal);
         assert_eq!(signal.evidence, Evidence::Unknown);
         assert!(signal.value.starts_with("上次保护记录 · 已观察 8 次请求"));
+        assert!(
+            signal
+                .display_value_in(crate::config::Language::English)
+                .starts_with("Previous protection record · 8 requests observed")
+        );
         assert_eq!(signal.value.matches("上次保护记录").count(), 1);
     }
 
@@ -618,6 +656,21 @@ mod tests {
         enforcement_and_controller_recovery(true).await;
     }
 
+    #[test]
+    fn notification_text_preserves_host_and_node_names_in_both_languages() {
+        let hosts = vec!["claude.ai".to_owned(), "example.test".to_owned()];
+        let node = "示例 Node";
+        let (chinese_title, chinese_message) =
+            notification_text(&hosts, node, Language::SimplifiedChinese);
+        let (english_title, english_message) = notification_text(&hosts, node, Language::English);
+        assert!(chinese_title.contains("Claude 保护"));
+        assert!(chinese_message.contains("域名：claude.ai、example.test"));
+        assert!(chinese_message.contains("保护节点：示例 Node"));
+        assert!(english_title.contains("Claude protection"));
+        assert!(english_message.contains("Domains: claude.ai, example.test"));
+        assert!(english_message.contains("Protected node: 示例 Node"));
+    }
+
     async fn enforcement_and_controller_recovery(notification_fails: bool) {
         use std::sync::atomic::{AtomicBool, Ordering};
         use tokio::{
@@ -692,9 +745,10 @@ mod tests {
             }
         });
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let guard = Guard::start(
+        let guard = Guard::start_localized(
             Api::new(&settings).unwrap(),
             "node".into(),
+            || Language::English,
             move |title, message| {
                 let sender = sender.clone();
                 async move {
@@ -709,7 +763,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(closed.load(Ordering::SeqCst));
-        assert!(title.contains("Claude"));
+        assert_eq!(title, "Clash of Rust · Claude protection");
+        assert!(message.contains("Protected node: node"));
         assert!(message.contains("claude.ai"));
         assert!(!message.contains("example.org"));
         assert_eq!(guard.snapshot().blocked, 1);

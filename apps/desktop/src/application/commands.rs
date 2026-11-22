@@ -12,6 +12,7 @@ pub(super) enum Action {
     Accent(AccentColor),
     TextScale(u16),
     TraySpeed(bool),
+    SetLanguage(LanguagePreference),
     UpdatePrereleases(bool),
     DnsOverride(bool),
     FakeIp(bool),
@@ -55,6 +56,7 @@ impl Action {
                 | Self::Accent(_)
                 | Self::TextScale(_)
                 | Self::TraySpeed(_)
+                | Self::SetLanguage(_)
                 | Self::NodeSort(_)
                 | Self::GroupPagination(_)
                 | Self::ProfilePagination(_)
@@ -141,6 +143,7 @@ pub(super) async fn execute(
     scope: Scope,
     header: bool,
     context: ViewContext,
+    language: Language,
 ) -> Reply {
     let profile_edit = matches!(&action, Action::EditProfile(..));
     let profile_import = matches!(&action, Action::Import(..));
@@ -168,7 +171,7 @@ pub(super) async fn execute(
         Action::Import(name, source) => Some(
             Engine::import_shared(&engine, name.clone(), source.clone(), None)
                 .await
-                .map(|()| "配置已导入".into()),
+                .map(|()| language.text("配置已导入", "Configuration imported").into()),
         ),
         Action::UpdateProfile(id) => {
             let profile = engine
@@ -182,9 +185,12 @@ pub(super) async fn execute(
                 Some(profile) => {
                     Engine::import_shared(&engine, profile.name, profile.source, Some(profile.id))
                         .await
-                        .map(|()| "订阅已更新".into())
+                        .map(|()| language.text("订阅已更新", "Subscription updated").into())
                 }
-                None => Err(anyhow::anyhow!("配置不存在")),
+                None => Err(anyhow::anyhow!(
+                    "{}",
+                    language.text("配置不存在", "Configuration not found")
+                )),
             })
         }
         _ => None,
@@ -222,11 +228,16 @@ pub(super) async fn execute(
                 if !engine.running() {
                     engine.start_with_proxy_mode().await?;
                 }
-                Ok("内核已启动".into())
+                Ok(language.text("内核已启动", "Core started").into())
             }
             Action::SavePorts(mixed) => {
                 engine.save_ports(mixed).await?;
-                Ok("端口已保存，运行中的内核已自动重启".into())
+                Ok(language
+                    .text(
+                        "端口已保存，运行中的内核已自动重启",
+                        "Port saved; the running core was restarted",
+                    )
+                    .into())
             }
             Action::LoadRules(_) => Ok(String::new()),
             Action::SaveRules(id, rules, saved) => {
@@ -234,9 +245,15 @@ pub(super) async fn execute(
                     .save_profile_rules_checked(&id, rules, Some(rule_manager::revision(&saved)?))
                     .await?;
                 Ok(if engine.settings.active_profile.as_deref() == Some(&id) {
-                    "规则已保存并应用；新连接按新规则匹配"
+                    language.text(
+                        "规则已保存并应用；新连接按新规则匹配",
+                        "Rules saved and applied to new connections",
+                    )
                 } else {
-                    "规则已保存，启用该订阅时生效"
+                    language.text(
+                        "规则已保存，启用该订阅时生效",
+                        "Rules saved; they apply when this subscription is active",
+                    )
                 }
                 .into())
             }
@@ -246,7 +263,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("外观已自动保存".into())
+                Ok(language.text("外观已自动保存", "Appearance saved").into())
             }
             Action::Accent(accent_color) => {
                 let settings = Settings {
@@ -254,7 +271,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("强调色已自动保存".into())
+                Ok(language.text("强调色已自动保存", "Accent color saved").into())
             }
             Action::TextScale(text_scale) => {
                 let settings = Settings {
@@ -262,7 +279,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("字号已自动保存".into())
+                Ok(language.text("字号已自动保存", "Text size saved").into())
             }
             Action::TraySpeed(tray_speed) => {
                 let settings = Settings {
@@ -270,7 +287,17 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("托盘显示已保存".into())
+                Ok(language.text("托盘显示已保存", "Tray display saved").into())
+            }
+            Action::SetLanguage(language) => {
+                if engine.settings.language != language {
+                    let settings = Settings {
+                        language,
+                        ..engine.settings.clone()
+                    };
+                    engine.save_settings(settings).await?;
+                }
+                Ok(String::new())
             }
             Action::UpdatePrereleases(update_prereleases) => {
                 let settings = Settings {
@@ -278,7 +305,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("更新通道已保存".into())
+                Ok(language.text("更新通道已保存", "Update channel saved").into())
             }
             Action::DnsOverride(dns_override) => {
                 // DNS override owns Fake-IP: turning it off also turns off the
@@ -292,15 +319,30 @@ pub(super) async fn execute(
                 };
                 engine.save_settings(settings).await?;
                 Ok(match (dns_override, fake_ip) {
-                    (true, true) => "DNS 覆盖已保存并应用；Fake-IP 保持开启",
-                    (true, false) => "DNS 覆盖已保存并应用；Fake-IP 保持关闭，可在网络设置中开启",
-                    (false, _) => "DNS 覆盖与 Fake-IP 已关闭，其他 DNS 字段沿用订阅",
+                    (true, true) => language.text(
+                        "DNS 覆盖已保存并应用；Fake-IP 保持开启",
+                        "DNS override applied; Fake-IP remains on",
+                    ),
+                    (true, false) => language.text(
+                        "DNS 覆盖已保存并应用；Fake-IP 保持关闭，可在网络设置中开启",
+                        "DNS override applied; Fake-IP remains off and can be enabled in Network settings",
+                    ),
+                    (false, _) => language.text(
+                        "DNS 覆盖与 Fake-IP 已关闭，其他 DNS 字段沿用订阅",
+                        "DNS override and Fake-IP are off; other DNS settings use the subscription",
+                    ),
                 }
                 .into())
             }
             Action::FakeIp(fake_ip) => {
                 if fake_ip && !engine.settings.dns_override {
-                    anyhow::bail!("请先开启 DNS 覆盖，再启用 Fake-IP");
+                    anyhow::bail!(
+                        "{}",
+                        language.text(
+                            "请先开启 DNS 覆盖，再启用 Fake-IP",
+                            "Enable DNS override before enabling Fake-IP",
+                        )
+                    );
                 }
                 let settings = Settings {
                     fake_ip,
@@ -308,9 +350,9 @@ pub(super) async fn execute(
                 };
                 engine.save_settings(settings).await?;
                 Ok(if fake_ip {
-                    "Fake-IP 已开启并应用"
+                    language.text("Fake-IP 已开启并应用", "Fake-IP enabled and applied")
                 } else {
-                    "Fake-IP 已关闭，DNS 改用真实 IP"
+                    language.text("Fake-IP 已关闭，DNS 改用真实 IP", "Fake-IP disabled; DNS uses real IP addresses")
                 }
                 .into())
             }
@@ -318,19 +360,28 @@ pub(super) async fn execute(
                 let mut settings = engine.settings.clone();
                 settings.add_fake_ip_exclusions(&values)?;
                 engine.save_settings(settings).await?;
-                Ok("Fake-IP 排除项已保存并应用".into())
+                Ok(language
+                    .text("Fake-IP 排除项已保存并应用", "Fake-IP exclusions saved and applied")
+                    .into())
             }
             Action::FakeIpRemove(domain) => {
                 let mut settings = engine.settings.clone();
                 settings.remove_fake_ip_exclusion(&domain)?;
                 engine.save_settings(settings).await?;
-                Ok("Fake-IP 排除项已保存并应用".into())
+                Ok(language
+                    .text("Fake-IP 排除项已保存并应用", "Fake-IP exclusions saved and applied")
+                    .into())
             }
             Action::FakeIpRestoreDefaults => {
                 let mut settings = engine.settings.clone();
                 settings.restore_fake_ip_defaults()?;
                 engine.save_settings(settings).await?;
-                Ok("DNS 覆盖排除项已还原，自定义排除项已保留".into())
+                Ok(language
+                    .text(
+                        "DNS 覆盖排除项已还原，自定义排除项已保留",
+                        "DNS override exclusions restored; custom exclusions retained",
+                    )
+                    .into())
             }
             Action::Ipv6(ipv6) => {
                 let settings = Settings {
@@ -338,7 +389,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("IPv6 设置已保存并应用".into())
+                Ok(language.text("IPv6 设置已保存并应用", "IPv6 settings saved and applied").into())
             }
             Action::Udp(udp) => {
                 let settings = Settings {
@@ -346,23 +397,29 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("UDP 设置已保存并应用".into())
+                Ok(language.text("UDP 设置已保存并应用", "UDP settings saved and applied").into())
             }
             Action::ClaudeProtection(enabled) => {
                 engine.claude_protection(enabled).await?;
                 Ok(if enabled {
-                    "Claude 保护已启用，正在复测"
+                    language.text(
+                        "Claude 保护已启用，正在复测",
+                        "Claude protection enabled; checking status",
+                    )
                 } else {
-                    "Claude 保护已关闭，原网络状态已恢复"
+                    language.text(
+                        "Claude 保护已关闭，原网络状态已恢复",
+                        "Claude protection disabled; previous network state restored",
+                    )
                 }
                 .into())
             }
             Action::Autostart(enabled) => {
                 tokio::task::spawn_blocking(move || platform::set_autostart(enabled)).await??;
                 Ok(if enabled {
-                    "已开启后台自启动"
+                    language.text("已开启后台自启动", "Background autostart enabled")
                 } else {
-                    "已关闭后台自启动"
+                    language.text("已关闭后台自启动", "Background autostart disabled")
                 }
                 .into())
             }
@@ -372,7 +429,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("定时测速间隔已保存".into())
+                Ok(language.text("定时测速间隔已保存", "Speed test interval saved").into())
             }
             Action::SubscriptionInterval(minutes) => {
                 let settings = Settings {
@@ -380,7 +437,9 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("订阅自动更新间隔已保存".into())
+                Ok(language
+                    .text("订阅自动更新间隔已保存", "Subscription update interval saved")
+                    .into())
             }
             Action::UpdateInterval(minutes) => {
                 let settings = Settings {
@@ -388,7 +447,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("自动检查更新间隔已保存".into())
+                Ok(language.text("自动检查更新间隔已保存", "Update check interval saved").into())
             }
             Action::NodeSort(node_sort) => {
                 let settings = Settings {
@@ -396,7 +455,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("节点排序已保存".into())
+                Ok(language.text("节点排序已保存", "Node sort order saved").into())
             }
             Action::GroupPagination(proxy_groups_paginated) => {
                 let settings = Settings {
@@ -404,7 +463,7 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("代理组显示方式已保存".into())
+                Ok(language.text("代理组显示方式已保存", "Proxy group display saved").into())
             }
             Action::ProfilePagination(profiles_paginated) => {
                 let settings = Settings {
@@ -412,67 +471,81 @@ pub(super) async fn execute(
                     ..engine.settings.clone()
                 };
                 engine.save_settings(settings).await?;
-                Ok("订阅显示方式已保存".into())
+                Ok(language.text("订阅显示方式已保存", "Subscription display saved").into())
             }
             Action::DeleteProfile(id) => {
                 engine.delete_profile(&id).await?;
-                Ok("订阅已删除；使用中的订阅会先切换到默认直连".into())
+                Ok(language
+                    .text(
+                        "订阅已删除；使用中的订阅会先切换到默认直连",
+                        "Subscription removed; an active subscription is switched to the default direct connection",
+                    )
+                    .into())
             }
             Action::OpenProfiles => {
                 platform::open_directory(&engine.store.root.join("profiles"))?;
-                Ok("已打开订阅配置目录".into())
+                Ok(language.text("已打开订阅配置目录", "Subscription directory opened").into())
             }
             Action::Import(..) | Action::UpdateProfile(_) => {
                 import_result.expect("import actions are handled before locking")
             }
             Action::EditProfile(id, name, source) => {
                 engine.edit_profile(&id, &name, &source)?;
-                Ok("订阅信息已保存；更改来源后，点击更新可重新载入配置。".into())
+                Ok(language
+                    .text(
+                        "订阅信息已保存；更改来源后，点击更新可重新载入配置。",
+                        "Subscription saved; select Update to reload a changed source.",
+                    )
+                    .into())
             }
             Action::Activate(id) => {
                 engine.activate(id).await?;
-                Ok("当前配置已切换".into())
+                Ok(language.text("当前配置已切换", "Active configuration changed").into())
             }
             Action::Mode(mode) => {
                 engine.select_mode(&mode).await?;
-                Ok("运行模式已切换".into())
+                Ok(language.text("运行模式已切换", "Routing mode changed").into())
             }
             Action::ProxyMode(mode) => {
                 engine.select_proxy_mode(mode).await?;
                 Ok(match mode {
-                    ProxyMode::System => "系统代理已开启",
-                    ProxyMode::Tun => "TUN 模式已开启",
-                    ProxyMode::Off => "代理模式已关闭",
+                    ProxyMode::System => language.text("系统代理已开启", "System proxy enabled"),
+                    ProxyMode::Tun => language.text("TUN 模式已开启", "TUN mode enabled"),
+                    ProxyMode::Off => language.text("代理模式已关闭", "Proxy mode disabled"),
                 }
                 .into())
             }
             Action::Select(group, node) => {
                 engine.select_node(&group, &node).await?;
-                Ok(format!("已选择 {node}"))
+                Ok(format!("{} {node}", language.text("已选择", "Selected")))
             }
             Action::Delay(node) => {
                 let delay = engine.api.delay(&node).await?;
                 Ok(if delay == 0 {
-                    format!("{node} · 测速未成功")
+                    format!("{node} · {}", language.text("测速未成功", "Speed test failed"))
                 } else {
                     format!("{node} · {delay} ms")
                 })
             }
             Action::Close(id) => {
                 engine.api.close_connection(&id).await?;
-                Ok("连接已关闭".into())
+                Ok(language.text("连接已关闭", "Connection closed").into())
             }
             Action::CloseAll => {
                 engine.api.close_connections().await?;
-                Ok("连接已全部关闭".into())
+                Ok(language.text("连接已全部关闭", "All connections closed").into())
             }
             Action::ClearLogs => {
                 engine.clear_logs()?;
-                Ok("日志已清空".into())
+                Ok(language.text("日志已清空", "Logs cleared").into())
             }
             Action::ExportLogs => {
                 let path = engine.export_logs()?;
-                Ok(format!("日志已导出到 {}", path.display()))
+                Ok(format!(
+                    "{} {}",
+                    language.text("日志已导出到", "Logs exported to"),
+                    path.display()
+                ))
             }
         }
     }
@@ -566,6 +639,7 @@ mod synchronization_tests {
             Action::Accent(clash_client_core::config::AccentColor::Blue),
             Action::TextScale(125),
             Action::TraySpeed(true),
+            Action::SetLanguage(LanguagePreference::English),
             Action::NodeSort(proxy_order::NodeSort::Name),
             Action::GroupPagination(true),
         ] {

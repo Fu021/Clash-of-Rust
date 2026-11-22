@@ -42,7 +42,16 @@ impl App {
             Ok(Some(status)) if status.needs_notification() => status,
             Ok(_) => return,
             Err(error) => {
-                self.show_notice_followup(format!("读取上次安装结果失败：{error:#}"), true);
+                self.show_notice_followup(
+                    format!(
+                        "{}{error:#}",
+                        self.presentation_language.text(
+                            "读取上次安装结果失败：",
+                            "Could not read the previous installation result: "
+                        )
+                    ),
+                    true,
+                );
                 return;
             }
         };
@@ -72,10 +81,16 @@ impl App {
                 true
             }
             Err(error) => {
-                let message = format!(
-                    "{}\n\n无法保存安装失败确认：{error:#}；请稍后重试关闭提示。",
-                    status.message
-                );
+                let message = match self.presentation_language {
+                    Language::SimplifiedChinese => format!(
+                        "{}\n\n无法保存安装失败确认：{error:#}；请稍后重试关闭提示。",
+                        status.message
+                    ),
+                    Language::English => format!(
+                        "{}\n\nCould not acknowledge the installation failure: {error:#}. Try closing this notice again later.",
+                        status.message
+                    ),
+                };
                 if self.notice != message {
                     self.show_notice(message, true);
                 }
@@ -104,13 +119,28 @@ impl App {
     }
 
     pub(super) fn show_unreachable_nodes(&mut self, context: &str, count: usize) {
+        let language = self.presentation_language;
         let detail = if self.settings.claude_protection.is_some() {
-            "请检查 Claude 保护线路。"
+            language.text(
+                "请检查 Claude 保护线路。",
+                "Check the Claude protection route.",
+            )
         } else {
-            "请更换节点；更新失败后会自动尝试直连。"
+            language.text(
+                "请更换节点；更新失败后会自动尝试直连。",
+                "Choose another node; failed updates will retry using a direct connection.",
+            )
         };
         let revision = self.notice_revision;
-        self.show_notice(format!("{context}：{count} 个节点不可达。{detail}"), true);
+        self.show_notice(
+            match language {
+                Language::SimplifiedChinese => {
+                    format!("{context}：{count} 个节点不可达。{detail}")
+                }
+                Language::English => format!("{context}: {count} nodes unreachable. {detail}"),
+            },
+            true,
+        );
         if self.notice_revision != revision {
             self.notice_network_recovery = true;
         }

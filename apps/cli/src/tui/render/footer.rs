@@ -18,23 +18,34 @@ pub(super) fn has_notice(state: &State) -> bool {
 }
 
 pub(super) fn compact_help(state: &State) -> &'static str {
+    let language = state.language;
     if state.entering_text() {
-        "Ctrl+C 退出 · Esc 返回"
+        language.text("Ctrl+C 退出 · Esc 返回", "Ctrl+C quit · Esc back")
     } else if state.page == Page::Home && state.form.is_none() && state.updates.pending.is_none() {
-        "Enter 操作 · q 退出"
+        language.text("Enter 操作 · q 退出", "Enter action · q quit")
     } else {
-        "q 退出 · Esc 返回"
+        language.text("q 退出 · Esc 返回", "q quit · Esc back")
     }
 }
 
 fn help(state: &State) -> &'static str {
+    let language = state.language;
     if state.execution.is_some() || state.confirmation.is_some() || state.updates.pending.is_some()
     {
-        "Enter 确认 · Esc 取消 · q 退出"
+        language.text(
+            "Enter 确认 · Esc 取消 · q 退出",
+            "Enter confirm · Esc cancel · q quit",
+        )
     } else if state.form.as_ref().is_some_and(|form| form.editing) {
-        "输入中 · Enter 保留草稿 · Ctrl+U 清空 · Esc 撤销本项 · Ctrl+C 退出"
+        language.text(
+            "输入中 · Enter 保留草稿 · Ctrl+U 清空 · Esc 撤销本项 · Ctrl+C 退出",
+            "Enter keep draft · Ctrl+U clear · Esc undo field · Ctrl+C quit",
+        )
     } else if state.searching {
-        "Enter 完成输入 · Ctrl+U 清空 · Esc 取消 · Ctrl+C 退出"
+        language.text(
+            "Enter 完成输入 · Ctrl+U 清空 · Esc 取消 · Ctrl+C 退出",
+            "Enter finish · Ctrl+U clear · Esc cancel · Ctrl+C quit",
+        )
     } else if state.page == Page::Rules
         && !state.shortcuts_open
         && let Some(rules) = &state.rules
@@ -65,12 +76,21 @@ fn help(state: &State) -> &'static str {
             .is_some_and(|field| !field.choices.is_empty())
         {
             if form.setting.is_some() {
-                "↑↓ 选择 · ←→ 调整 · Enter 确认当前值 · Esc 返回 · q 退出"
+                language.text(
+                    "↑↓ 选择 · ←→ 调整 · Enter 确认当前值 · Esc 返回 · q 退出",
+                    "↑↓ select · ←→ change · Enter review · Esc back · q quit",
+                )
             } else {
-                "↑↓ 选择 · ←→ 调整 · Enter 下一项 · Esc 返回 · q 退出"
+                language.text(
+                    "↑↓ 选择 · ←→ 调整 · Enter 下一项 · Esc 返回 · q 退出",
+                    "↑↓ select · ←→ change · Enter next · Esc back · q quit",
+                )
             }
         } else {
-            "↑↓ 选择 · Enter 编辑/确认 · Esc 返回 · q 退出"
+            language.text(
+                "↑↓ 选择 · Enter 编辑/确认 · Esc 返回 · q 退出",
+                "↑↓ select · Enter edit or review · Esc back · q quit",
+            )
         }
     } else if state.connection.is_some() {
         "↑↓ 详情 · d 解析 · x 关闭 · Esc 返回 · q 退出"
@@ -81,7 +101,10 @@ fn help(state: &State) -> &'static str {
     } else if state.page == Page::Home {
         "↑↓ 选择 · Enter 操作 · r 刷新 · q 退出"
     } else {
-        "↑↓ 选择 · Enter 打开 · / 搜索 · Esc 返回 · q 退出"
+        language.text(
+            "↑↓ 选择 · Enter 打开 · / 搜索 · Esc 返回 · q 退出",
+            "↑↓ select · Enter open · / search · Esc back · q quit",
+        )
     }
 }
 

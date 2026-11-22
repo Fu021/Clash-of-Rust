@@ -597,7 +597,7 @@ def account_cli_matrix():
                 # help must not create a data directory or require a display.
                 for path in sorted(catalogue):
                     for mode in ('root', 'user'):
-                        output = invoke(user, mode, 'help', *path.split(), json_output=False)
+                        output = invoke(user, mode, 'help', *path.split(), '--lang=zh-CN', json_output=False)
                         assert '用法：cor ' in output.stdout
                 assert not data(user).exists()
                 invoke(user, 'user', 'profile', 'list', '--all-users', success=False)

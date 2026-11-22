@@ -151,7 +151,7 @@ def verify(console, resources, report):
     report.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cor-tui-check-') as temporary:
         data = Path(temporary)/'absent'
-        command = [str(console), '--data-dir', str(data), '--resources', str(resources), 'ui']
+        command = [str(console), '--lang=zh-CN', '--data-dir', str(data), '--resources', str(resources), 'ui']
         rejected = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
                                   text=True, timeout=10)
         if rejected.returncode == 0 or data.exists():
@@ -342,7 +342,7 @@ def verify_settings(console, resources, report):
     import tempfile
     with tempfile.TemporaryDirectory(prefix='cor-tui-settings-') as temporary:
         data = Path(temporary)
-        command = [str(console), '--data-dir', str(data), '--resources', str(resources)]
+        command = [str(console), '--lang=zh-CN', '--data-dir', str(data), '--resources', str(resources)]
 
         def call(*arguments):
             result = subprocess.run([*command, '--json', *arguments], capture_output=True,

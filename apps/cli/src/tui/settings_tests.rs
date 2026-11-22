@@ -4,9 +4,10 @@ use crate::tui::{
     model::{Action, Page, State, demo_poll},
     render, settings,
 };
+use clash_client_core::config::Language::{English, SimplifiedChinese};
 
 fn args() -> crate::args::Args {
-    crate::args::parse(["ui"].into_iter().map(str::to_owned)).unwrap()
+    crate::args::parse(["ui", "--lang=zh-CN"].into_iter().map(str::to_owned)).unwrap()
 }
 
 #[test]
@@ -36,8 +37,10 @@ fn native_choices_wait_for_confirmation_and_backend_state_before_showing_saved_v
     );
     state.execution = Some(state.form.as_ref().unwrap().args(&args()).unwrap());
     assert!(render::frame(&state, 80, 24).iter().any(|line| {
-        line.text
-            .contains(&format!("保存{}为", settings::title("ipv6")))
+        line.text.contains(&format!(
+            "保存{}为",
+            settings::title("ipv6", SimplifiedChinese)
+        ))
     }));
     let Action::ApplySetting(operation) = state.key(Key::Enter) else {
         panic!("native setting must remain inside TUI");
@@ -57,10 +60,62 @@ fn native_choices_wait_for_confirmation_and_backend_state_before_showing_saved_v
 }
 
 #[test]
+fn language_choices_use_localized_interface_and_save_the_stable_setting_value() {
+    for (language, query, system, confirmation) in [
+        (
+            SimplifiedChinese,
+            "语言",
+            "跟随系统",
+            "保存语言为「English」",
+        ),
+        (
+            English,
+            "language",
+            "Follow system",
+            "Save Language as English",
+        ),
+    ] {
+        let mut state = State::new(false);
+        state.accept(Some(demo_poll()));
+        state.language = language;
+        state.page = Page::Settings;
+        state.query = query.into();
+        assert_eq!(state.items(), ["language"]);
+        assert!(
+            render::frame(&state, 80, 24)
+                .iter()
+                .any(|line| line.text.contains(system))
+        );
+        state.key(Key::Enter);
+        assert_eq!(state.form.as_ref().unwrap().visible_value(1), system);
+        state.key(Key::Left);
+        assert_eq!(state.form.as_ref().unwrap().visible_value(1), "English");
+        assert!(matches!(state.key(Key::Enter), Action::ReviewForm));
+        state.execution = Some(state.form.as_ref().unwrap().args(&args()).unwrap());
+        assert!(
+            render::frame(&state, 80, 24)
+                .iter()
+                .any(|line| line.text.contains(confirmation))
+        );
+        let Action::ApplySetting(operation) = state.key(Key::Enter) else {
+            panic!("language must use the existing setting patch");
+        };
+        let clash_client_runtime::control::Command::ConfigSet { key, value } =
+            settings::command(&operation).unwrap()
+        else {
+            panic!("language must use the existing setting patch");
+        };
+        assert_eq!(key, "language");
+        assert_eq!(value, "en");
+        assert_eq!(operation.get("lang"), Some("zh-CN"));
+    }
+}
+
+#[test]
 fn mode_profile_and_protection_use_dedicated_commands_without_generic_setting_bypass() {
     for key in ["run_mode", "proxy_mode", "claude_protection"] {
         let poll = demo_poll();
-        let mut form = settings::open(&poll, key).unwrap();
+        let mut form = settings::open(&poll, key, SimplifiedChinese).unwrap();
         assert!(!form.fields[0].choices.is_empty());
         form.cycle(false);
         let operation = form.args(&args()).unwrap();
@@ -102,27 +157,43 @@ fn mode_choices_use_observed_state_and_proxy_preferences_are_labelled_separately
     poll.snapshot.system_proxy = false;
     poll.snapshot.mode = "global".into();
     assert_eq!(
-        settings::display(&poll, "proxy_mode"),
+        settings::display(&poll, "proxy_mode", SimplifiedChinese),
         "关闭（启动偏好：TUN）"
     );
-    assert_eq!(settings::display(&poll, "run_mode"), "全局");
     assert_eq!(
-        settings::open(&poll, "proxy_mode").unwrap().fields[0].value,
+        settings::display(&poll, "run_mode", SimplifiedChinese),
+        "全局"
+    );
+    assert_eq!(
+        settings::open(&poll, "proxy_mode", SimplifiedChinese)
+            .unwrap()
+            .fields[0]
+            .value,
         "off"
     );
     assert_eq!(
-        settings::open(&poll, "run_mode").unwrap().fields[0].value,
+        settings::open(&poll, "run_mode", SimplifiedChinese)
+            .unwrap()
+            .fields[0]
+            .value,
         "global"
     );
     poll.snapshot.system_proxy = true;
-    assert!(settings::display(&poll, "proxy_mode").starts_with("系统代理"));
+    assert!(settings::display(&poll, "proxy_mode", SimplifiedChinese).starts_with("系统代理"));
     poll.snapshot.tun = true;
-    assert_eq!(settings::display(&poll, "proxy_mode"), "TUN");
+    assert_eq!(
+        settings::display(&poll, "proxy_mode", SimplifiedChinese),
+        "TUN"
+    );
 }
 
 #[test]
 fn exclusion_lists_accept_comma_separated_domains_and_keep_invalid_drafts() {
-    let mut form = Form::setting("fake_ip_exclusions", &serde_json::json!([]));
+    let mut form = Form::setting(
+        "fake_ip_exclusions",
+        &serde_json::json!([]),
+        SimplifiedChinese,
+    );
     form.fields[1].value = "example.test, example.org, EXAMPLE.test".into();
     let operation = form.args(&args()).unwrap();
     assert_eq!(
@@ -154,8 +225,11 @@ fn shortcut_values_follow_the_active_profile_and_stale_profile_drafts_are_cancel
         .settings
         .rule_profiles
         .insert("test-profile".into(), Arc::new(ProfileRules::default()));
-    assert_eq!(settings::display(&poll, "shortcut_ads"), "关闭");
-    let mut form = settings::open(&poll, "shortcut_ads").unwrap();
+    assert_eq!(
+        settings::display(&poll, "shortcut_ads", SimplifiedChinese),
+        "关闭"
+    );
+    let mut form = settings::open(&poll, "shortcut_ads", SimplifiedChinese).unwrap();
     assert_eq!(form.fields[1].value, "off");
     form.cycle(false);
     let clash_client_runtime::control::Command::ActiveShortcut { id, index, enabled } =
@@ -174,12 +248,18 @@ fn shortcut_values_follow_the_active_profile_and_stale_profile_drafts_are_cancel
             .unwrap(),
     )
     .enabled[0] = true;
-    assert_eq!(settings::display(&poll, "shortcut_ads"), "开启");
+    assert_eq!(
+        settings::display(&poll, "shortcut_ads", SimplifiedChinese),
+        "开启"
+    );
     poll.meta.settings.rule_profiles.clear();
-    assert_eq!(settings::display(&poll, "shortcut_ads"), "开启");
+    assert_eq!(
+        settings::display(&poll, "shortcut_ads", SimplifiedChinese),
+        "开启"
+    );
     poll.meta.profiles[0].builtin = true;
-    assert!(settings::open(&poll, "shortcut_ads").is_err());
-    assert!(settings::display(&poll, "shortcut_ads").contains("非内置订阅"));
+    assert!(settings::open(&poll, "shortcut_ads", SimplifiedChinese).is_err());
+    assert!(settings::display(&poll, "shortcut_ads", SimplifiedChinese).contains("非内置订阅"));
     poll.meta.profiles[0].builtin = false;
     let mut state = State::new(false);
     state.accept(Some(poll));
@@ -325,21 +405,37 @@ fn sniffed_domains_are_searchable_and_long_detail_values_remain_scrollable() {
 #[test]
 fn settings_show_effective_fake_ip_and_empty_list_counts_instead_of_blank_values() {
     let mut poll = demo_poll();
-    assert_eq!(settings::display(&poll, "fake_ip"), "开启");
-    assert!(settings::display(&poll, "fake_ip_exclusions").starts_with("0 项自定义"));
-    assert!(settings::display(&poll, "fake_ip_disabled_defaults").starts_with("0 项已停用"));
+    assert_eq!(
+        settings::display(&poll, "fake_ip", SimplifiedChinese),
+        "开启"
+    );
+    assert!(
+        settings::display(&poll, "fake_ip_exclusions", SimplifiedChinese).starts_with("0 项自定义")
+    );
+    assert!(
+        settings::display(&poll, "fake_ip_disabled_defaults", SimplifiedChinese)
+            .starts_with("0 项已停用")
+    );
     poll.meta.settings.dns_override = false;
     assert_eq!(
-        settings::display(&poll, "fake_ip"),
+        settings::display(&poll, "fake_ip", SimplifiedChinese),
         "关闭（DNS 覆盖未开启）"
     );
     assert_eq!(
-        settings::open(&poll, "fake_ip").unwrap().fields[1].value,
+        settings::open(&poll, "fake_ip", SimplifiedChinese)
+            .unwrap()
+            .fields[1]
+            .value,
         "false"
     );
-    assert!(settings::open(&poll, "fake_ip_exclusions").is_err());
+    assert!(settings::open(&poll, "fake_ip_exclusions", SimplifiedChinese).is_err());
     for key in settings::KEYS {
-        assert!(!settings::display(&poll, key).trim().is_empty(), "{key}");
+        assert!(
+            !settings::display(&poll, key, SimplifiedChinese)
+                .trim()
+                .is_empty(),
+            "{key}"
+        );
     }
 }
 
@@ -353,7 +449,7 @@ fn categories_and_dedicated_pages_keep_shortcuts_out_of_general_settings() {
     assert!(frame.iter().any(|line| line.text.contains("── 常规 ──")));
     assert!(frame.iter().any(|line| line.text.contains("── 网络 ──")));
     assert_eq!(
-        settings::category("update_check_interval_minutes"),
+        settings::category("update_check_interval_minutes", SimplifiedChinese),
         "计划任务"
     );
     for query in ["网络", "dns", "DNS", "dNs"] {
@@ -397,10 +493,11 @@ fn long_settings_and_choice_help_wrap_without_losing_the_selected_item() {
             .map(|line| line.text.trim())
             .collect::<Vec<_>>()
             .join("");
-        assert!(selected.contains(settings::title(key)));
+        assert!(selected.contains(settings::title(key, SimplifiedChinese)));
         assert!(!selected.contains('…'));
     }
-    state.form = Some(settings::open(state.poll.as_ref().unwrap(), "ipv6").unwrap());
+    state.form =
+        Some(settings::open(state.poll.as_ref().unwrap(), "ipv6", SimplifiedChinese).unwrap());
     for columns in [36, 40, 60, 80, 120] {
         let frame = render::frame(&state, columns, 24);
         let text = frame

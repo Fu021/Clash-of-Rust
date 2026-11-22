@@ -42,6 +42,33 @@ fn additions_preserve_both_settings_fields_and_use_the_full_expected_snapshot() 
 }
 
 #[test]
+fn english_exclusion_editor_localizes_confirmation_and_preserves_the_domain() {
+    use clash_client_core::config::Language;
+
+    let mut state = editor();
+    state.language = Language::English;
+    let frame = render::frame(&state, 120, 40)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(frame.contains("Fake-IP exclusions"));
+    assert!(frame.contains("Restore defaults"));
+    state.key(Key::Enter);
+    state.key(Key::Paste("example.test".into()));
+    state.key(Key::Enter);
+    let (_, description) = state.fake_ip.as_ref().unwrap().pending.as_ref().unwrap();
+    assert_eq!(description, "Add exclusions: example.test");
+    let Action::SaveFakeIp(command) = state.key(Key::Enter) else {
+        panic!("expected settings save")
+    };
+    let Command::Settings { settings, .. } = *command else {
+        panic!("expected settings")
+    };
+    assert_eq!(settings.fake_ip_exclusions, ["example.test"]);
+}
+
+#[test]
 fn pasted_domains_share_gui_parsing_and_invalid_batches_do_not_partially_save() {
     let mut state = editor();
     state.key(Key::Enter);

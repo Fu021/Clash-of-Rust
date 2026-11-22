@@ -49,12 +49,14 @@ fn main() {
     if clash_client_runtime::platform::autostart_helper_main() {
         return;
     }
-    let result = args::parse(std::env::args().skip(1)).and_then(|args| {
+    let input: Vec<String> = std::env::args().skip(1).collect();
+    let language = args::language_from_input(&input);
+    let result = args::parse(input).and_then(|args| {
         if args.help {
             use std::io::Write;
             std::io::stdout()
                 .lock()
-                .write_all(args::help(&args.path).as_bytes())?;
+                .write_all(args::localized_help(&args.path, args.language()).as_bytes())?;
             return Ok(());
         }
         users::prepare(&args)?;
@@ -65,7 +67,11 @@ fn main() {
         }
         anyhow::ensure!(
             !(args.flag("json") && args.flag("jsonl")),
-            "--json 与 --jsonl 不能同时指定"
+            "{}",
+            language.text(
+                "--json 与 --jsonl 不能同时指定",
+                "--json and --jsonl cannot be combined"
+            )
         );
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -77,7 +83,7 @@ fn main() {
             }
             tokio::select! {
                 result=commands::execute(&args)=>result,
-                result=backend::interrupted()=>{ result?; Err(Cancelled.into()) },
+                result=backend::interrupted()=>{ result?; Err(Cancelled(language).into()) },
             }
         })
     });
@@ -108,19 +114,22 @@ fn main() {
             1
         };
         if code != 0 {
-            eprintln!("cor: {error:#}");
+            eprintln!("cor: {}", output::localized_error(&error, language));
             if code != 130 {
-                diagnostics::failure_hint(None);
+                diagnostics::failure_hint_in(None, language);
             }
         }
         std::process::exit(code);
     }
 }
 #[derive(Debug)]
-struct Cancelled;
+struct Cancelled(clash_client_core::config::Language);
 impl std::fmt::Display for Cancelled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("已取消；后台已提交的操作可通过 cor status 查看")
+        f.write_str(self.0.text(
+            "已取消；后台已提交的操作可通过 cor status 查看",
+            "Cancelled; use cor status to check operations already submitted to the backend",
+        ))
     }
 }
 impl std::error::Error for Cancelled {}

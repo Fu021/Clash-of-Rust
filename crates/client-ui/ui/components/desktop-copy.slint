@@ -4,12 +4,12 @@ import { CopyFeedback } from "motion.slint";
 
 export component CopyButton inherits ActionButton {
     in property <string> value;
-    in property <string> label: "复制";
+    in property <string> label: @tr("复制");
     in property <Intent> intent: Intent.copy;
     width: max(88px, measure.preferred-width + 28px);
     measure := Label { visible: false; text: root.label; }
     feedback := CopyFeedback { revision: UiData.copy-revision; acknowledged: UiData.copy-value; value: root.value; any-value: root.intent != Intent.copy; }
-    text: feedback.copied ? "已复制" : root.label;
+    text: feedback.copied ? @tr("已复制") : root.label;
     success: feedback.copied;
     clicked => { feedback.requested(); UiActions.dispatch(root.intent, root.value, ""); }
 }

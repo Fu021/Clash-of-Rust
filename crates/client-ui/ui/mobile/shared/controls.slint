@@ -12,7 +12,7 @@ export component MAppIcon inherits Rectangle {
     background: icon-area.pressed ? Theme.accent-wash : icon-area.has-hover ? Theme.inset : transparent;
     animate background { duration: Motion.fast; enabled: Motion.active; }
     accessible-role: button;
-    accessible-label: "发送系统通知";
+    accessible-label: @tr("发送系统通知");
     accessible-action-default => { if !MobileView.modal && !MobileView.notice-modal { MobileActions.request(MobileIntent.system-notification, "", ""); } }
     Image { width: 28px; height: 28px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
         source: @image-url("../../../../../resources/icons/app.png");
@@ -227,12 +227,12 @@ export component MProtectionLock inherits Rectangle {
         spacing: 8px; cross-axis-alignment: center;
         Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.success; horizontal-stretch: 0; }
         detail := MParagraph {
-            text: "Claude 保护已锁定网络修改和更新。";
+            text: @tr("Claude 保护已锁定网络修改和更新。");
             font-size: MobileTypography.font-size(13); color: Theme.ink;
             horizontal-stretch: 1; min-width: 0px;
         }
         MButton {
-            text: "关闭保护"; quiet: true; compact: true;
+            text: @tr("关闭保护"); quiet: true; compact: true;
             width: max(88px, MobileTypography.font-size(13) * 5.4); horizontal-stretch: 0;
             enabled: root.enabled && !root.pending;
             clicked => { MobileActions.request(MobileIntent.claude-protection, "false", ""); }
@@ -247,16 +247,16 @@ export component MPagination inherits HorizontalLayout {
     callback turn(int);
     alignment: start; spacing: MobileTypography.small-gap; vertical-stretch: 0;
     MButton {
-        text: root.compact || Theme.text-scale > 1.25 ? "‹" : "上一页";
-        accessible-role: button; accessible-label: "上一页";
+        text: root.compact || Theme.text-scale > 1.25 ? "‹" : @tr("上一页");
+        accessible-role: button; accessible-label: @tr("上一页");
         width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);
         horizontal-stretch: 0; enabled: root.previous-enabled;
         clicked => { root.turn(-1); }
     }
     MSmall { text: root.status; horizontal-alignment: center; wrap: word-wrap; }
     MButton {
-        text: root.compact || Theme.text-scale > 1.25 ? "›" : "下一页";
-        accessible-role: button; accessible-label: "下一页";
+        text: root.compact || Theme.text-scale > 1.25 ? "›" : @tr("下一页");
+        accessible-role: button; accessible-label: @tr("下一页");
         width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);
         horizontal-stretch: 0; enabled: root.next-enabled;
         clicked => { root.turn(1); }
@@ -307,7 +307,7 @@ export component MRow inherits Rectangle {
 }
 export component MBackButton inherits MButton {
     text: ""; width: 48px; height: 48px; horizontal-stretch: 0;
-    accessible-role: button; accessible-label: "返回";
+    accessible-role: button; accessible-label: @tr("返回");
     Image { source: @image-url("../../icons/chevron-left.svg");
         width: 24px; height: 24px; x: 12px; y: 12px + root.press-offset; colorize: Theme.ink;
     }
@@ -367,21 +367,28 @@ export component MSelect inherits Rectangle {
     changed error-active => { if root.error-active { popup.close(); } }
     in property <[string]> options;
     in property <string> value;
+    pure callback display-value(string) -> string;
+    display-value(value) => { value }
     callback selected(int, string);
     height: button.height; vertical-stretch: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
-    button := MButton { width: parent.width; text: root.value; dropdown: true; enabled: root.enabled; clicked => { popup.show(); } }
+    button := MButton { width: parent.width; text: root.display-value(root.value); dropdown: true; enabled: root.enabled; clicked => { popup.show(); } }
     popup := PopupWindow {
         y: root.height + 4px; width: max(root.width, 200px);
         height: min(300px, root.options.length * 52px + 16px);
         close-policy: close-on-click-outside;
         Rectangle { entrance := Entrance { } opacity: entrance.progress; background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.line;
             MScroll { VerticalLayout { alignment: start; spacing: 4px; padding: MobileTypography.small-gap;
-                for option[i] in root.options: MButton { width: popup.width - 16px; text: option; selected: option == root.value;
+                for option[i] in root.options: MButton { width: popup.width - 16px; text: root.display-value(option); selected: option == root.value;
+                    geometry-key: root.geometry-key == "" ? "" : "option:" + root.geometry-key + "/" + i;
                     enabled: root.enabled;
                     clicked => { root.selected(i, option); popup.close(); }
                 }
             } }
         }
+    }
+    GeometryTarget {
+        key: root.geometry-key == "" ? "" : "popup:" + root.geometry-key;
+        bounds: [root.absolute-position.x, root.absolute-position.y + root.height + 4px, max(root.width, 200px), min(300px, root.options.length * 52px + 16px)];
     }
 }
 export component MTag inherits Rectangle {
@@ -430,7 +437,7 @@ export component MNotice inherits Rectangle {
             Rectangle { width: 26px; height: 26px; border-radius: 8px; background: Theme.danger-wash;
                 MHeading { text: "!"; width: parent.width; height: parent.height; color: Theme.danger; horizontal-alignment: center; }
             }
-            MHeading { text: MobileView.notice-modal ? "需要处理" : "操作未完成"; font-size: MobileTypography.font-size(MobileView.notice-modal ? 18 : 14); }
+            MHeading { text: MobileView.notice-modal ? @tr("需要处理") : @tr("操作未完成"); font-size: MobileTypography.font-size(MobileView.notice-modal ? 18 : 14); }
         }
         MScroll {
             content-key: root.text; preferred-height: body.preferred-height;
@@ -443,7 +450,7 @@ export component MNotice inherits Rectangle {
                     accessible-role: AccessibleRole.text; accessible-label: root.text;
                     message := MParagraph { width: parent.width; text: root.text; color: root.error ? Theme.ink : Theme.canvas; font-size: MobileTypography.font-size(14); }
                     if !root.error: TouchArea {
-                        accessible-role: button; accessible-label: "关闭提示";
+                        accessible-role: button; accessible-label: @tr("关闭提示");
                         accessible-action-default => { root.dismissed(); }
                         mouse-cursor: pointer; clicked => { root.dismissed(); }
                     }
@@ -465,7 +472,7 @@ export component MNotice inherits Rectangle {
                 width: actions.button-width; height: actions.row-height;
                 modal-control: true; notice-control: true; quiet: true; compact: true;
                 geometry-key: index == 2 && root.can-restart ? "notice-retry-core" : "";
-                text: index == root.action-count - 1 ? "关闭" : index == 0 ? "导出诊断" : index == 1 ? "新建 Issue" : root.can-restart ? "重试启动" : "关闭代理";
+                text: index == root.action-count - 1 ? @tr("关闭") : index == 0 ? @tr("导出诊断") : index == 1 ? @tr("新建 Issue") : root.can-restart ? @tr("重试启动") : @tr("关闭代理");
                 enabled: index != 2 || !root.has-recovery || !MobileData.working;
                 clicked => {
                     if index == root.action-count - 1 { root.dismissed(); }
@@ -508,8 +515,8 @@ export component MNav inherits Rectangle {
 
 export component MCopyButton inherits MButton {
     in property <string> value;
-    in property <string> label: "复制";
+    in property <string> label: @tr("复制");
     feedback := CopyFeedback { revision: MobileView.copy-revision; acknowledged: MobileView.copy-value; value: root.value; }
-    text: feedback.copied ? "已复制" : root.label; success: feedback.copied;
+    text: feedback.copied ? @tr("已复制") : root.label; success: feedback.copied;
     clicked => { feedback.requested(); MobileActions.request(MobileIntent.copy, root.value, ""); }
 }

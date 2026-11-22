@@ -22,7 +22,7 @@
 
 ```sh
 CARGO_TARGET_DIR=target/desktop cargo test -p clash-client-ui --test desktop_lists --release --locked -- --test-threads=1
-CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --features mobile-ui-tests --test mobile_lists --test scroll_remount --test claude_report_blocks --release --locked -- --test-threads=1
+CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --features mobile-ui-tests --test mobile_lists --test scroll_remount --test claude_report_blocks --test language_ui --test policy_language --release --locked -- --test-threads=1
 ```
 
 本地 `target` 体积和可回收构建产物按[磁盘管理](workflows/local-development.md#本地-rust-构建与磁盘管理)检查；不能把另一端已有的构建结果当作当前端的验证。
@@ -63,6 +63,7 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 ## 修改前后都要检查
 
 - GUI/CLI 共享数据目录、后台所有者和内核；检查两端刷新、退出与重新附加，避免重复内核、轮询或测速。
+- 语言仅在展示边界转换；协议键、持久化值、筛选与排序标识、节点和订阅名称、JSON 字段及外部原始证据保持原样。新增可见文案同时检查两种语言、旧数据和长文本布局，语言选择规则见[界面设计](ui-design.md#语言与展示)。
 - 界面选项贯通 Slint 状态/回调、协议、宿主、业务、持久化和刷新，并检查桌面/移动端。协议变更同步收发端、序列化、预览和测试，明确兼容性与版本变化。
 - 外部更新不得覆盖规则、订阅或设置草稿；保留并发校验、删除确认、原订阅与配置原子保存/回滚，覆盖拒绝、超时、退出和重启恢复。
 - 规则新增、编辑和启用统一拒绝重复的启用规则，表单拒绝越界位置；数量上限等校验通过后才替换草稿，拒绝不得污染原草稿。拖动按起始规则 ID 提交，筛选或分页变化后立即失效，不能只等待异步状态回调清理。

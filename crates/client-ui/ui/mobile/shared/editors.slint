@@ -1,4 +1,5 @@
 import { Theme } from "../../theme/palette.slint";
+import { IpStatusText } from "../../components/ip-status.slint";
 import { MobileTypography } from "typography.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MScroll, ListView, MTag } from "controls.slint";
@@ -6,19 +7,19 @@ import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MF
 export component MobileFakeIp inherits VerticalLayout {
     property <bool> editable: MobileData.dns-override && !MobileData.protected && !MobileData.protection-pending && !MobileData.working;
     spacing: MobileTypography.gap;
-    MSmall { text: "来源分别标明自定义与 DNS 覆盖；订阅原有过滤规则仍会生效。"; wrap: word-wrap; }
+    MSmall { text: @tr("来源分别标明自定义与 DNS 覆盖；订阅原有过滤规则仍会生效。"); wrap: word-wrap; }
     if !MobileData.dns-override || MobileData.protected: MSmall {
-        text: MobileData.protected ? "关闭 Claude 保护后可编辑。" : "开启 DNS 覆盖后可编辑。"; color: Theme.warning;
+        text: MobileData.protected ? @tr("关闭 Claude 保护后可编辑。") : @tr("开启 DNS 覆盖后可编辑。"); color: Theme.warning;
     }
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MField { text <=> MobileView.fake-ip-input; placeholder: "example.com 或 +.example.com"; }
-        MButton { text: "添加"; width: 68px; horizontal-stretch: 0; enabled: root.editable;
+        MField { text <=> MobileView.fake-ip-input; placeholder: @tr("example.com 或 +.example.com"); }
+        MButton { text: @tr("添加"); width: 68px; horizontal-stretch: 0; enabled: root.editable;
             clicked => { MobileActions.request(MobileIntent.fake-ip-add, MobileView.fake-ip-input, ""); }
         }
     }
     if MobileData.fake-ip-removed-defaults > 0: MCard {
-        MSmall { text: "已移除 " + MobileData.fake-ip-removed-defaults + " 项 DNS 覆盖排除项"; wrap: word-wrap; }
-        MButton { text: "一键还原 DNS 覆盖项"; enabled: root.editable;
+        MSmall { text: @tr("已移除 {} 项 DNS 覆盖排除项", MobileData.fake-ip-removed-defaults); wrap: word-wrap; }
+        MButton { text: @tr("一键还原 DNS 覆盖项"); enabled: root.editable;
             clicked => { MobileActions.request(MobileIntent.fake-ip-restore-defaults, "", ""); }
         }
     }
@@ -29,9 +30,9 @@ export component MobileFakeIp inherits VerticalLayout {
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                     VerticalLayout { spacing: 4px;
                         MText { text: entry.domain; }
-                        MSmall { text: "来源：" + entry.source; wrap: word-wrap; }
+                        MSmall { text: @tr("来源：{}", entry.source == "自定义、DNS 覆盖" ? @tr("自定义、DNS 覆盖") : entry.source == "自定义" ? @tr("自定义") : entry.source == "DNS 覆盖" ? @tr("DNS 覆盖") : entry.source); wrap: word-wrap; }
                     }
-                    MButton { text: "删除"; quiet: true; width: 64px; horizontal-stretch: 0; danger: true; enabled: root.editable;
+                    MButton { text: @tr("删除"); quiet: true; width: 64px; horizontal-stretch: 0; danger: true; enabled: root.editable;
                         clicked => { MobileActions.request(MobileIntent.fake-ip-remove, entry.domain, ""); }
                     }
                 }
@@ -45,73 +46,75 @@ export component MobileRuleActions inherits MScroll {
     VerticalLayout { spacing: MobileTypography.gap;
         MCard {
             MHeading { text: MobileView.selected-rule.value == "" ? MobileView.selected-rule.kind : MobileView.selected-rule.value; wrap: word-wrap; }
-            MSmall { text: "第 " + MobileView.selected-rule.position + " 条 · 来源：" + MobileView.selected-rule.source + (MobileView.selected-rule.enabled ? " · 已启用" : " · 已停用"); wrap: word-wrap; }
-            MSmall { text: "类型：" + MobileView.selected-rule.kind + " · 策略：" + MobileView.selected-rule.policy; wrap: word-wrap; }
+            MSmall { text: @tr("第 {} 条 · 来源：{} · {}", MobileView.selected-rule.position, MobileView.selected-rule.source == "自定义" ? @tr("自定义") : MobileView.selected-rule.source == "快捷规则" ? @tr("快捷规则") : MobileView.selected-rule.source == "订阅" ? @tr("订阅") : MobileView.selected-rule.source, MobileView.selected-rule.enabled ? @tr("已启用") : @tr("已停用")); wrap: word-wrap; }
+            MSmall { text: @tr("类型：{} · 策略：{}", MobileView.selected-rule.kind, MobileView.selected-rule.policy); wrap: word-wrap; }
             MDivider { }
-            MSmall { text: "完整规则"; }
+            MSmall { text: @tr("完整规则"); }
             MParagraph { text: MobileView.selected-rule.raw; }
-            MRow { title: "复制规则原文"; clicked => { MobileActions.request(MobileIntent.copy, MobileView.selected-rule.raw, ""); } }
+            MRow { title: @tr("复制规则原文"); clicked => { MobileActions.request(MobileIntent.copy, MobileView.selected-rule.raw, ""); } }
             MDivider { }
-            MRow { title: MobileView.selected-rule.source == "自定义" ? "编辑规则" : "复制为自定义规则";
+            MRow { title: MobileView.selected-rule.source == "自定义" ? @tr("编辑规则") : @tr("复制为自定义规则");
                 interactive: root.editable;
                 clicked => { MobileActions.request(MobileIntent.rule-edit, MobileView.selected-id, ""); }
             }
             if MobileView.selected-rule.source == "自定义": VerticalLayout {
                 MDivider { }
-                MRow { title: MobileView.selected-rule.enabled ? "停用规则" : "启用规则";
+                MRow { title: MobileView.selected-rule.enabled ? @tr("停用规则") : @tr("启用规则");
                     interactive: root.editable;
                     clicked => { MobileActions.request(MobileIntent.rule-enable, MobileView.selected-id, ""); }
                 }
                 MDivider { }
-                MRow { title: "删除规则"; value-color: Theme.danger;
+                MRow { title: @tr("删除规则"); value-color: Theme.danger;
                     interactive: root.editable;
                     clicked => { MobileActions.request(MobileIntent.rule-delete, MobileView.selected-id, ""); }
                 }
             }
         }
         MCard {
-            MSmall { text: "长按左侧手柄拖动，靠近列表上下边缘可连续滚动；跨页可指定位置。"; wrap: word-wrap; }
+            MSmall { text: @tr("长按左侧手柄拖动，靠近列表上下边缘可连续滚动；跨页可指定位置。"); wrap: word-wrap; }
             HorizontalLayout { spacing: MobileTypography.small-gap;
-                MField { text <=> MobileView.rule-position; placeholder: "目标位置"; enabled: root.editable; }
-                MButton { text: "移动"; width: 72px; horizontal-stretch: 0;
+                MField { text <=> MobileView.rule-position; placeholder: @tr("目标位置"); enabled: root.editable; }
+                MButton { text: @tr("移动"); width: 72px; horizontal-stretch: 0;
                     enabled: root.editable;
                     clicked => { MobileActions.request(MobileIntent.rule-move, MobileView.selected-id, MobileView.rule-position); }
                 }
             }
-            MRow { title: "恢复订阅顺序"; subtitle: "保留自定义规则和快捷规则";
+            MRow { title: @tr("恢复订阅顺序"); subtitle: @tr("保留自定义规则和快捷规则");
                 interactive: root.editable;
                 clicked => { MobileActions.request(MobileIntent.rule-restore, "", ""); }
             }
         }
-        MSmall { text: "操作保存到草稿，返回规则页后统一应用。"; wrap: word-wrap; }
+        MSmall { text: @tr("操作保存到草稿，返回规则页后统一应用。"); wrap: word-wrap; }
     }
 }
 
 export component MobileSiteResults inherits VerticalLayout {
     spacing: MobileTypography.small-gap;
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MField { text <=> MobileView.site-query; placeholder: "搜索平台、地区或结果";
+        MField { text <=> MobileView.site-query; placeholder: @tr("搜索平台、地区或结果");
             edited(value) => { MobileActions.request(MobileIntent.site-filter, value, "query"); }
         }
-        MButton { text: "筛选"; selected: MobileView.site-filters; width: 68px; horizontal-stretch: 0;
+        MButton { text: @tr("筛选"); selected: MobileView.site-filters; width: 68px; horizontal-stretch: 0;
             clicked => { MobileView.site-filters = !MobileView.site-filters; }
         }
     }
     if MobileView.site-filters: MCard {
-        MSelect { options: ["全部结果", "确认可用", "部分可用", "仅网页可达", "信息已识别", "不可用或受限", "结果未确认", "超时或失败", "未检测"]; value: MobileView.site-status;
+        MSelect { geometry-key: "site-filter-status"; options: ["全部结果", "确认可用", "部分可用", "仅网页可达", "信息已识别", "不可用或受限", "结果未确认", "超时或失败", "未检测"]; value: MobileView.site-status;
+            display-value(value) => { IpStatusText.label(value) }
             selected(index, value) => { MobileView.site-status = value; MobileActions.request(MobileIntent.site-filter, value, "status"); }
         }
         MSelect { options: MobileData.site-regions; value: MobileView.site-region;
+            display-value(value) => { IpStatusText.label(value) }
             selected(index, value) => { MobileView.site-region = value; MobileActions.request(MobileIntent.site-filter, value, "region"); }
         }
-        MRow { title: "清除筛选"; clicked => {
+        MRow { title: @tr("清除筛选"); clicked => {
             MobileView.site-query = ""; MobileView.site-status = "全部结果"; MobileView.site-region = "全部地区";
             MobileActions.request(MobileIntent.site-filter, "", "reset");
         } }
     }
     HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
-        MSmall { text: MobileData.site-results.length + " 项 · 点按查看详情"; }
-        MButton { text: "重测分类"; width: 100px; horizontal-stretch: 0; enabled: !MobileData.detecting;
+        MSmall { text: @tr("{} 项 · 点按查看详情", MobileData.site-results.length); }
+        MButton { text: @tr("重测分类"); width: 100px; horizontal-stretch: 0; enabled: !MobileData.detecting;
             clicked => { MobileActions.request(MobileIntent.site-retest, MobileView.category, ""); }
         }
     }
@@ -124,7 +127,7 @@ export component MobileSiteResults inherits VerticalLayout {
                 }
                 HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                     MHeading { text: result.title; }
-                    MTag { text: result.status-label; tone: result.tone; }
+                    MTag { text: IpStatusText.label(result.status-label); tone: result.tone; }
                 }
                 MParagraph { text: result.value; font-size: MobileTypography.font-size(14); }
                 if result.detail != "": MSmall { text: result.detail; wrap: word-wrap; }
@@ -132,11 +135,11 @@ export component MobileSiteResults inherits VerticalLayout {
                     Rectangle { width: 24px; height: 24px; horizontal-stretch: 0;
                         if result.flagged: Text { text: result.flag; width: parent.width; height: parent.height; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
                     }
-                    MSmall { text: result.country == "" ? result.source : "地区：" + result.country; min-width: 0px; preferred-width: 0px; }
+                    MSmall { text: result.country == "" ? result.source : @tr("地区：{}", result.country); min-width: 0px; preferred-width: 0px; }
                     MSmall { text: result.delay; width: 76px * Theme.text-scale; color: Theme.tone-color(result.delay-tone); horizontal-alignment: right; horizontal-stretch: 0; }
                 }
             }
         }
     }
-    if MobileData.site-results.length == 0: MParagraph { text: "没有符合筛选条件的结果。"; color: Theme.secondary; }
+    if MobileData.site-results.length == 0: MParagraph { text: @tr("没有符合筛选条件的结果。"); color: Theme.secondary; }
 }

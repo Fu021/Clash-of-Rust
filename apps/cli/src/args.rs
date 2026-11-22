@@ -1,18 +1,33 @@
 //! One command catalogue drives parsing, help and shell completions.
 use anyhow::{Result, bail, ensure};
+use clash_client_core::config::{Language, LanguagePreference, Store};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 pub struct Spec {
     pub path: &'static str,
     pub description: &'static str,
+    english_description: &'static str,
     pub usage: &'static str,
     pub min: usize,
     pub max: usize,
     pub options: &'static str,
 }
 impl Spec {
+    pub fn localized_description(&self, language: Language) -> &'static str {
+        language.text(self.description, self.english_description)
+    }
+
     pub fn retired(&self) -> bool {
-        self.description.starts_with("已移除")
+        matches!(
+            self.path,
+            "network explain"
+                | "network rule"
+                | "network config-diff"
+                | "network traffic"
+                | "network performance"
+                | "network node"
+        )
     }
 
     pub fn required_options(&self) -> &'static [(&'static str, &'static str)] {
@@ -24,10 +39,11 @@ impl Spec {
     }
 }
 macro_rules! command {
-    ($path:literal, $description:literal, $usage:literal, $min:literal, $max:literal, $options:literal) => {
+    ($path:literal, $description:literal, $english:literal, $usage:literal, $min:literal, $max:literal, $options:literal) => {
         Spec {
             path: $path,
             description: $description,
+            english_description: $english,
             usage: $usage,
             min: $min,
             max: $max,
@@ -39,6 +55,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "ui",
         "打开终端界面；含设置与管理命令，退出保留后台和代理",
+        "Open the terminal interface. The backend and proxy stay running when you exit.",
         "ui [--demo]",
         0,
         0,
@@ -47,6 +64,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "run",
         "前台运行后台与内核；Ctrl+C 恢复网络后退出",
+        "Run the backend and core in the foreground. Ctrl+C restores networking and exits.",
         "run [--no-core]",
         0,
         0,
@@ -55,6 +73,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "start",
         "启动后台和内核，已有 GUI 时复用它",
+        "Start the backend and core, reusing the running desktop app if available.",
         "start",
         0,
         0,
@@ -63,6 +82,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "stop",
         "停止内核并恢复网络；独立后台同时退出",
+        "Stop the core, restore networking, and exit a standalone backend.",
         "stop [--all-users]",
         0,
         0,
@@ -71,6 +91,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "restart",
         "重启内核；--network-only 仅刷新出站与 DNS 并关闭旧连接",
+        "Restart the core. Use --network-only to refresh outbound routes and DNS and close old connections.",
         "restart [--network-only] [--yes]",
         0,
         0,
@@ -79,15 +100,25 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "status",
         "显示内核、订阅、节点、模式及实时流量",
+        "Show the core status, subscription, nodes, mode, and live traffic.",
         "status [--watch] [--all-users]",
         0,
         0,
         "watch interval all-users"
     ),
-    command!("version", "显示客户端版本与本机架构", "version", 0, 0, ""),
+    command!(
+        "version",
+        "显示客户端版本与本机架构",
+        "Show the client version and machine architecture.",
+        "version",
+        0,
+        0,
+        ""
+    ),
     command!(
         "profile list",
         "列出订阅；来源中的凭据默认脱敏",
+        "List subscriptions. Source credentials are redacted by default.",
         "profile list [--filter TEXT --all-users]",
         0,
         0,
@@ -96,6 +127,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile add",
         "从 URL、YAML 路径或标准输入 - 导入订阅",
+        "Import a subscription from a URL, YAML path, or standard input (-).",
         "profile add NAME SOURCE",
         2,
         2,
@@ -104,6 +136,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile import",
         "从 YAML 文件或标准输入 - 导入订阅",
+        "Import a subscription from a YAML file or standard input (-).",
         "profile import FILE --name NAME",
         1,
         1,
@@ -112,6 +145,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile update",
         "更新一份订阅或全部非内置订阅",
+        "Update one subscription or all user subscriptions.",
         "profile update [PROFILE] [--all]",
         0,
         1,
@@ -120,6 +154,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile use",
         "按唯一名称或 ID 切换当前订阅",
+        "Switch the active subscription by unique name or ID.",
         "profile use PROFILE",
         1,
         1,
@@ -128,6 +163,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile edit",
         "修改名称或来源；重新更新后载入新来源",
+        "Edit the subscription name or source. Update it to load the new source.",
         "profile edit PROFILE [--name NAME] [--source SOURCE]",
         1,
         1,
@@ -136,6 +172,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile remove",
         "删除订阅；活动订阅会切换到默认直连",
+        "Remove a subscription. Removing the active one switches to the built-in direct profile.",
         "profile remove PROFILE [--yes]",
         1,
         1,
@@ -144,6 +181,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile export",
         "导出缓存 YAML；导出完整凭据需 --show-secrets",
+        "Export cached YAML. Use --show-secrets to include credentials.",
         "profile export PROFILE [--output FILE]",
         1,
         1,
@@ -152,6 +190,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "profile directory",
         "输出订阅文件目录",
+        "Print the subscription directory.",
         "profile directory",
         0,
         0,
@@ -160,6 +199,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "node list",
         "查看策略组或成员，支持自然名称与延迟排序",
+        "List proxy groups or their members, sorted by name or latency.",
         "node list [GROUP] [--sort name|latency] [--reverse]",
         0,
         1,
@@ -168,6 +208,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "node select",
         "选择策略组节点；省略参数时交互筛选，保护期间禁止切换",
+        "Choose a node in a proxy group. Omit arguments for an interactive picker. Protection locks node selection.",
         "node select [GROUP [NODE]]",
         0,
         2,
@@ -176,6 +217,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "node test",
         "节点、单组或全部测速；自动组按共享策略重新选优",
+        "Test latency for one node, one group, or all nodes. Automatic groups reselect their preferred node.",
         "node test [NODE] [--group GROUP | --all]",
         0,
         1,
@@ -184,6 +226,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "mode",
         "读取或切换规则、全局、直连模式",
+        "Show or switch between rule, global, and direct modes.",
         "mode [rule|global|direct]",
         0,
         1,
@@ -192,6 +235,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "proxy",
         "读取或切换系统代理、TUN、关闭状态",
+        "Show or switch between system proxy, TUN, and off.",
         "proxy [system|tun|off] [--all-users]",
         0,
         1,
@@ -200,6 +244,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "env",
         "输出供父终端显式加载的代理环境变量",
+        "Print proxy environment variables for the parent shell to load.",
         "env [--shell bash|zsh|fish|powershell|cmd] [--unset]",
         0,
         0,
@@ -208,6 +253,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "rule list",
         "查看指定或当前订阅的有效规则、来源与稳定 ID",
+        "Show effective rules, sources, and stable IDs for the selected or active subscription.",
         "rule list [--profile PROFILE] [--filter TEXT]",
         0,
         0,
@@ -216,6 +262,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "rule add",
         "新增自定义规则，校验后立即保存应用",
+        "Validate, save, and apply a new custom rule.",
         "rule add 'TYPE,VALUE,POLICY' [--position N]",
         1,
         1,
@@ -224,6 +271,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "rule edit",
         "修改自定义规则；订阅原规则保持只读",
+        "Edit a custom rule. Subscription rules are read-only.",
         "rule edit RULE 'TYPE,VALUE,POLICY'",
         2,
         2,
@@ -232,6 +280,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "rule remove",
         "删除自定义规则",
+        "Remove a custom rule.",
         "rule remove RULE [--yes]",
         1,
         1,
@@ -240,6 +289,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "rule move",
         "将任意规则移到从 1 开始的位置",
+        "Move a rule to a position starting at 1.",
         "rule move RULE POSITION",
         2,
         2,
@@ -248,6 +298,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "rule enable",
         "启用或停用自定义规则",
+        "Enable or disable a custom rule.",
         "rule enable RULE on|off",
         2,
         2,
@@ -256,6 +307,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "rule shortcut",
         "读写五项快捷规则；原订阅已有规则不重复添加",
+        "Show or change five rule shortcuts. Existing subscription rules are reused.",
         "rule shortcut [ads|private-domain|private-ip|cn-domain|cn-ip] [on|off]",
         0,
         2,
@@ -264,6 +316,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "connection list",
         "查看连接、双向速率与流量，支持筛选排序和连续采样",
+        "List connections with upload and download rates and totals. Supports filtering, sorting, and live sampling.",
         "connection list [--watch] [--sort download-rate]",
         0,
         0,
@@ -272,6 +325,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "connection show",
         "查看完整连接详情，按需补充目标 IP",
+        "Show connection details, resolving the destination IP when needed.",
         "connection show ID",
         1,
         1,
@@ -280,6 +334,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "connection close",
         "关闭一条或全部连接",
+        "Close one or all connections.",
         "connection close [ID] [--all --yes]",
         0,
         1,
@@ -288,6 +343,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "logs",
         "查看完整日志，支持等级、文本筛选与实时跟随",
+        "View logs with level and text filters or follow live output.",
         "logs [--follow] [--level warning] [--filter TEXT]",
         0,
         0,
@@ -296,6 +352,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "logs clear",
         "清空客户端有界日志缓冲区",
+        "Clear the client log buffer.",
         "logs clear [--yes]",
         0,
         0,
@@ -304,6 +361,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "logs export",
         "导出当前最多 500 条缓冲日志；排障现场用 diagnose --output",
+        "Export up to 500 buffered log entries. Use diagnose --output to capture diagnostics.",
         "logs export --output FILE",
         0,
         0,
@@ -312,6 +370,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "config get",
         "读取设置；密钥默认脱敏",
+        "Read settings. Secrets are redacted by default.",
         "config get [KEY]",
         0,
         1,
@@ -320,6 +379,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "config set",
         "校验并应用一个设置；网络模式使用 mode/proxy 命令",
+        "Validate and apply a setting. Use mode or proxy to change network mode.",
         "config set KEY VALUE",
         2,
         2,
@@ -328,6 +388,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "config check",
         "用内核校验当前合并后的实际配置",
+        "Use the core to validate the effective configuration.",
         "config check",
         0,
         0,
@@ -336,6 +397,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "config effective",
         "输出含覆盖规则的有效 YAML，默认移除凭据",
+        "Print effective YAML with rule overrides. Credentials are redacted by default.",
         "config effective [--output FILE]",
         0,
         0,
@@ -344,6 +406,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "diagnose",
         "检查网络；--output 保存诊断报告，--offline 仅收集本地现场",
+        "Diagnose networking. Use --output to save a report and --offline to collect local data only.",
         "diagnose [--url URL] [--host DOMAIN] [--offline] [--output FILE] [--all-users]",
         0,
         0,
@@ -352,6 +415,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "dns",
         "查询系统或经内核代理的 DNS",
+        "Look up DNS records using system DNS or the proxy core.",
         "dns DOMAIN [--system]",
         1,
         1,
@@ -360,6 +424,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network check",
         "检查网址的 DNS、响应与本次实际代理线路",
+        "Check a URL’s DNS, response, and the proxy route used.",
         "network check URL",
         1,
         1,
@@ -368,6 +433,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network dns",
         "比较系统与内核 DNS",
+        "Compare system DNS with the core’s DNS.",
         "network dns HOST [--type ADDR|A|AAAA|CNAME|MX|TXT|NS|SOA|PTR|CAA]",
         1,
         1,
@@ -376,6 +442,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network phase",
         "检查 TCP、TLS 与首字节耗时",
+        "Measure TCP, TLS, and time to first byte.",
         "network phase URL [--seconds N]",
         1,
         1,
@@ -384,6 +451,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network family",
         "分别检查 IPv4 与 IPv6",
+        "Check IPv4 and IPv6 separately.",
         "network family URL [--seconds N]",
         1,
         1,
@@ -392,6 +460,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network explain",
         "已移除；请用 network check 查看规则与出口",
+        "Removed. Use network check to see matched rules and outbound routes.",
         "network explain URL",
         1,
         1,
@@ -400,6 +469,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network tls",
         "检查 HTTPS 证书与信任链",
+        "Inspect the HTTPS certificate and trust chain.",
         "network tls URL [--seconds N]",
         1,
         1,
@@ -408,6 +478,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network stability",
         "检查短时请求稳定性",
+        "Check whether repeated requests succeed over a short interval.",
         "network stability URL [--count N] [--interval-ms N] [--seconds N]",
         1,
         1,
@@ -416,6 +487,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network udp",
         "经内核 UDP 中继检查 DNS 响应",
+        "Check DNS responses over the core’s UDP relay.",
         "network udp DNS_SERVER [--seconds N]",
         1,
         1,
@@ -424,6 +496,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network ping",
         "执行系统 ICMP 探针",
+        "Run a system ICMP probe.",
         "network ping URL [--count N]",
         1,
         1,
@@ -432,6 +505,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network trace",
         "执行系统逐跳探针",
+        "Run a system traceroute.",
         "network trace URL [--max-hops N]",
         1,
         1,
@@ -440,6 +514,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network download",
         "限时限量下载并即时丢弃正文",
+        "Run a time- and size-limited download and discard the response body.",
         "network download URL [--max-bytes N] [--seconds N]",
         1,
         1,
@@ -448,6 +523,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network tcp",
         "检查指定端口的 TCP 连接",
+        "Check TCP connectivity to a specified port.",
         "network tcp HOST[:PORT] [--seconds N]",
         1,
         1,
@@ -456,6 +532,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network http",
         "读取有界 HTTP 响应详情",
+        "Inspect HTTP response details within the configured limits.",
         "network http URL [--method HEAD|GET|OPTIONS] [--seconds N]",
         1,
         1,
@@ -464,6 +541,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network rule",
         "已移除；请用 network check 查看实际命中",
+        "Removed. Use network check to see the matched rule.",
         "network rule URL",
         1,
         1,
@@ -472,6 +550,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network config-diff",
         "已移除；请用 config get/check/effective",
+        "Removed. Use config get, config check, or config effective.",
         "network config-diff",
         0,
         0,
@@ -480,6 +559,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network traffic",
         "已移除；流量汇总位于连接页",
+        "Removed. Traffic totals are on the Connections page.",
         "network traffic",
         0,
         0,
@@ -488,6 +568,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network performance",
         "已移除；请用 status 或 diagnose",
+        "Removed. Use status or diagnose.",
         "network performance",
         0,
         0,
@@ -496,6 +577,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "network node",
         "已移除；节点信息位于代理页",
+        "Removed. Node details are on the Proxies page.",
         "network node NODE",
         1,
         1,
@@ -504,6 +586,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "ip-check list",
         "列出内置 IP/地区检测项目",
+        "List the available IP and region checks.",
         "ip-check list [--category CATEGORY]",
         0,
         0,
@@ -512,6 +595,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "ip-check",
         "执行全部、分类或单项检测并生成总结",
+        "Run all checks, one category, or a single check and summarize the results.",
         "ip-check [ID] [--category CATEGORY] [--output FILE]",
         0,
         1,
@@ -520,6 +604,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "claude check",
         "检测本机网络和 Claude 环境的地区线索",
+        "Check regional signals from the local network and Claude environment.",
         "claude check [--details] [--output FILE]",
         0,
         0,
@@ -528,6 +613,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "claude audit",
         "扫描实际终端环境与已记录 Claude 项目配置",
+        "Inspect the current terminal environment and recorded Claude project settings.",
         "claude audit [--offline] [--output FILE]",
         0,
         0,
@@ -536,6 +622,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "claude browser",
         "创建浏览器真实采样入口并等待报告",
+        "Open a local browser probe and wait for its report.",
         "claude browser [--open] [--details] [--output FILE]",
         0,
         0,
@@ -544,6 +631,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "claude protect",
         "查看或开关 Claude 保护，开启需要确认",
+        "Show or toggle Claude protection. Enabling it requires confirmation.",
         "claude protect [on|off] [--yes]",
         0,
         1,
@@ -552,15 +640,25 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "claude watch",
         "实时查看异常连接及拦截记录",
+        "Watch unusual connections and block events live.",
         "claude watch [--interval SECONDS]",
         0,
         0,
         "interval"
     ),
-    command!("geo status", "查看 Geo 数据版本", "geo status", 0, 0, ""),
+    command!(
+        "geo status",
+        "查看 Geo 数据版本",
+        "Show Geo data versions.",
+        "geo status",
+        0,
+        0,
+        ""
+    ),
     command!(
         "geo update",
         "校验并更新全部 Geo 数据",
+        "Verify and update all Geo data.",
         "geo update",
         0,
         0,
@@ -569,6 +667,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "update check",
         "按已保存的更新通道检查客户端更新",
+        "Check for client updates on the saved update channel.",
         "update check",
         0,
         0,
@@ -577,6 +676,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "update download",
         "下载并校验当前通道的更新安装包",
+        "Download and verify an installer from the current update channel.",
         "update download --output FILE",
         0,
         0,
@@ -585,6 +685,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "update status",
         "查看本账户最近一次更新安装的结果，不启动后台",
+        "Show this account’s last update result without starting the backend.",
         "update status",
         0,
         0,
@@ -593,6 +694,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "update install",
         "下载安装更新；Linux 终端成功后启动，失败恢复原状态",
+        "Download and install an update. On Linux, start the backend after success or restore its previous state on failure.",
         "update install [--yes] [--no-start]",
         0,
         0,
@@ -601,6 +703,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "autostart",
         "读取或配置后台自启动",
+        "Show or change backend autostart.",
         "autostart [on|off]",
         0,
         1,
@@ -609,6 +712,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "service install",
         "安装当前用户的无界面后台自启",
+        "Install headless backend autostart for the current user.",
         "service install [--yes]",
         0,
         0,
@@ -617,6 +721,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "service remove",
         "删除当前用户的 CLI 后台自启",
+        "Remove CLI backend autostart for the current user.",
         "service remove [--yes]",
         0,
         0,
@@ -625,6 +730,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "service status",
         "查看 CLI 后台自启配置",
+        "Show the CLI backend autostart configuration.",
         "service status",
         0,
         0,
@@ -633,6 +739,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "notify",
         "调用与 Claude 拦截共用的系统通知入口",
+        "Send a system notification through the Claude protection notification path.",
         "notify [MESSAGE]",
         0,
         1,
@@ -641,6 +748,7 @@ pub static COMMANDS: &[Spec] = &[
     command!(
         "completion",
         "生成 Bash、Zsh、Fish 或 PowerShell 上下文补全脚本",
+        "Generate context-sensitive completion for Bash, Zsh, Fish, or PowerShell.",
         "completion SHELL",
         1,
         1,
@@ -649,8 +757,8 @@ pub static COMMANDS: &[Spec] = &[
 ];
 
 const GLOBAL: &str =
-    "help version json jsonl timeout data-dir resources user yes show-secrets quiet no-color";
-pub(crate) const VALUES: &str = "timeout data-dir resources user filter name source output sort limit offset group profile position interval level shell url host category count interval-ms seconds max-bytes max-hops type method";
+    "help version json jsonl timeout data-dir resources user yes show-secrets quiet no-color lang";
+pub(crate) const VALUES: &str = "timeout data-dir resources user lang filter name source output sort limit offset group profile position interval level shell url host category count interval-ms seconds max-bytes max-hops type method";
 
 #[derive(Debug)]
 pub struct Usage(pub String);
@@ -675,23 +783,84 @@ impl Args {
     pub fn get(&self, key: &str) -> Option<&str> {
         self.options.get(key).map(String::as_str)
     }
+    pub fn language(&self) -> Language {
+        self.get("lang")
+            .and_then(LanguagePreference::from_tag)
+            .or_else(|| {
+                let root = match self.get("data-dir") {
+                    Some(path) => PathBuf::from(path),
+                    None => Store::default_root().ok()?,
+                };
+                LanguagePreference::read(&root).ok()
+            })
+            .unwrap_or_default()
+            .resolve_desktop()
+    }
     pub fn number(&self, key: &str, default: usize, max: usize) -> Result<usize> {
         let value = self.get(key).map_or(Ok(default), str::parse::<usize>)?;
-        ensure!(value <= max, "--{key} 不能超过 {max}");
+        ensure!(
+            value <= max,
+            "{}",
+            match self.language() {
+                Language::SimplifiedChinese => format!("--{key} 不能超过 {max}"),
+                Language::English => format!("--{key} cannot exceed {max}"),
+            }
+        );
         Ok(value)
     }
     pub fn interval(&self) -> Result<std::time::Duration> {
         let seconds = self.get("interval").unwrap_or("1").parse::<f64>()?;
         ensure!(
             seconds.is_finite() && (0.25..=3600.).contains(&seconds),
-            "采样间隔应为 0.25–3600 秒"
+            "{}",
+            self.language().text(
+                "采样间隔应为 0.25–3600 秒",
+                "The sampling interval must be 0.25–3600 seconds",
+            )
         );
         Ok(std::time::Duration::from_secs_f64(seconds))
     }
 }
 
+pub(crate) fn language_from_input(input: &[String]) -> Language {
+    let mut options = BTreeMap::new();
+    let mut words = input.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            break;
+        }
+        let option = match word.as_str() {
+            "-o" => "output",
+            value => match value.strip_prefix("--") {
+                Some(value) => value,
+                None => continue,
+            },
+        };
+        let (key, supplied) = option
+            .split_once('=')
+            .map_or((option, None), |(key, value)| (key, Some(value)));
+        if VALUES.split_whitespace().any(|value| value == key) {
+            let value = supplied.or_else(|| words.next().map(String::as_str));
+            if matches!(key, "lang" | "data-dir")
+                && let Some(value) = value
+            {
+                options.insert(key.to_owned(), value.to_owned());
+            }
+        }
+    }
+    Args {
+        path: String::new(),
+        positional: Vec::new(),
+        options,
+        help: false,
+    }
+    .language()
+}
+
 pub fn parse(input: impl IntoIterator<Item = String>) -> Result<Args> {
-    parse_inner(input)
+    let input: Vec<String> = input.into_iter().collect();
+    let language = language_from_input(&input);
+    parse_inner(input, language)
         .and_then(|args| {
             if !args.help {
                 validate(&args)?;
@@ -701,21 +870,34 @@ pub fn parse(input: impl IntoIterator<Item = String>) -> Result<Args> {
         .map_err(|error| Usage(error.to_string()).into())
 }
 fn validate(args: &Args) -> Result<()> {
+    let language = args.language();
     if args.path == "ui" {
         ensure!(
             !["json", "jsonl", "quiet", "output"]
                 .iter()
                 .any(|key| args.flag(key)),
-            "终端界面需要交互终端；脚本请使用 status、node list 或 connection list"
+            "{}",
+            language.text(
+                "终端界面需要交互终端；脚本请使用 status、node list 或 connection list",
+                "The terminal interface requires an interactive terminal; scripts can use status, node list, or connection list",
+            )
         );
     }
     ensure!(
         !args.flag("all-users") || (args.get("user").is_none() && args.get("data-dir").is_none()),
-        "--all-users 不能与 --user 或 --data-dir 同时使用"
+        "{}",
+        language.text(
+            "--all-users 不能与 --user 或 --data-dir 同时使用",
+            "--all-users cannot be combined with --user or --data-dir",
+        )
     );
     ensure!(
         !(args.flag("json") && args.flag("jsonl")),
-        "--json 与 --jsonl 不能同时指定"
+        "{}",
+        language.text(
+            "--json 与 --jsonl 不能同时指定",
+            "--json and --jsonl cannot be combined",
+        )
     );
     for (key, max) in [
         ("limit", 10_000),
@@ -727,7 +909,11 @@ fn validate(args: &Args) -> Result<()> {
             let value = args.number(key, 0, max)?;
             ensure!(
                 !matches!(key, "timeout" | "position") || value > 0,
-                "--{key} 必须大于 0"
+                "{}",
+                match language {
+                    Language::SimplifiedChinese => format!("--{key} 必须大于 0"),
+                    Language::English => format!("--{key} must be greater than 0"),
+                }
             );
         }
     }
@@ -736,15 +922,28 @@ fn validate(args: &Args) -> Result<()> {
     }
     if let Some(spec) = COMMANDS.iter().find(|spec| spec.path == args.path) {
         for (key, placeholder) in spec.required_options() {
-            ensure!(args.get(key).is_some(), "请提供 --{key} {placeholder}");
+            ensure!(
+                args.get(key).is_some(),
+                "{}",
+                match language {
+                    Language::SimplifiedChinese => format!("请提供 --{key} {placeholder}"),
+                    Language::English => format!("Provide --{key} {placeholder}"),
+                }
+            );
         }
     }
     let enum_value = |value: &str, choices: &[&str]| -> Result<()> {
         ensure!(
             choices.contains(&value),
-            "{} 的参数应为 {}",
-            args.path,
-            choices.join(" / ")
+            "{}",
+            match language {
+                Language::SimplifiedChinese => {
+                    format!("{} 的参数应为 {}", args.path, choices.join(" / "))
+                }
+                Language::English => {
+                    format!("{} requires one of: {}", args.path, choices.join(" / "))
+                }
+            }
         );
         Ok(())
     };
@@ -760,7 +959,11 @@ fn validate(args: &Args) -> Result<()> {
             }
             ensure!(
                 !args.flag("all-users") || args.positional.is_empty(),
-                "--all-users 仅用于跨用户观察，不能同时切换代理"
+                "{}",
+                language.text(
+                    "--all-users 仅用于跨用户观察，不能同时切换代理",
+                    "--all-users is read-only and cannot switch the proxy",
+                )
             );
         }
         "claude protect" | "autostart" => {
@@ -782,22 +985,32 @@ fn validate(args: &Args) -> Result<()> {
         }
         "profile edit" => ensure!(
             args.get("name").is_some() || args.get("source").is_some(),
-            "请提供 --name 或 --source"
+            "{}",
+            language.text("请提供 --name 或 --source", "Provide --name or --source")
         ),
         "profile update" => ensure!(
             !(args.flag("all") && !args.positional.is_empty()),
-            "PROFILE 与 --all 不能同时指定"
+            "{}",
+            language.text(
+                "PROFILE 与 --all 不能同时指定",
+                "PROFILE and --all cannot be combined"
+            )
         ),
         "node test" => ensure!(
             usize::from(!args.positional.is_empty())
                 + usize::from(args.get("group").is_some())
                 + usize::from(args.flag("all"))
                 == 1,
-            "请选择 NODE、--group GROUP 或 --all 中的一项"
+            "{}",
+            language.text(
+                "请选择 NODE、--group GROUP 或 --all 中的一项",
+                "Choose one of NODE, --group GROUP, or --all"
+            )
         ),
         "connection close" => ensure!(
             args.flag("all") != !args.positional.is_empty(),
-            "请选择 ID 或 --all"
+            "{}",
+            language.text("请选择 ID 或 --all", "Choose ID or --all")
         ),
         "rule add" => {
             clash_client_core::rule_manager::parts(&args.positional[0])?;
@@ -806,7 +1019,11 @@ fn validate(args: &Args) -> Result<()> {
             clash_client_core::rule_manager::parts(&args.positional[1])?;
         }
         "rule move" => {
-            ensure!(args.positional[1].parse::<usize>()? > 0, "位置必须大于 0");
+            ensure!(
+                args.positional[1].parse::<usize>()? > 0,
+                "{}",
+                language.text("位置必须大于 0", "Position must be greater than 0")
+            );
         }
         "completion" => enum_value(&args.positional[0], &["bash", "zsh", "fish", "powershell"])?,
         _ => {}
@@ -839,7 +1056,7 @@ fn validate(args: &Args) -> Result<()> {
     }
     Ok(())
 }
-fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
+fn parse_inner(input: impl IntoIterator<Item = String>, language: Language) -> Result<Args> {
     let mut words = Vec::new();
     let mut options = BTreeMap::new();
     let mut literal = false;
@@ -861,9 +1078,10 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
             "-o" => "--output",
             _ => &value,
         };
-        let value = value
-            .strip_prefix("--")
-            .ok_or_else(|| anyhow::anyhow!("不支持组合短选项：{value}"))?;
+        let value = value.strip_prefix("--").ok_or_else(|| match language {
+            Language::SimplifiedChinese => anyhow::anyhow!("不支持组合短选项：{value}"),
+            Language::English => anyhow::anyhow!("Combined short options are unsupported: {value}"),
+        })?;
         let (key, supplied) = value
             .split_once('=')
             .map_or((value, None), |(k, v)| (k, Some(v.to_owned())));
@@ -871,14 +1089,32 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
         let parameter = if needs_value {
             supplied
                 .or_else(|| input.next())
-                .ok_or_else(|| anyhow::anyhow!("--{key} 缺少参数"))?
+                .ok_or_else(|| match language {
+                    Language::SimplifiedChinese => anyhow::anyhow!("--{key} 缺少参数"),
+                    Language::English => anyhow::anyhow!("--{key} requires a value"),
+                })?
         } else {
-            ensure!(supplied.is_none(), "--{key} 不接受参数");
+            ensure!(
+                supplied.is_none(),
+                "{}",
+                match language {
+                    Language::SimplifiedChinese => format!("--{key} 不接受参数"),
+                    Language::English => format!("--{key} does not take a value"),
+                }
+            );
             "true".into()
         };
         ensure!(
+            key != "lang" || LanguagePreference::from_tag(&parameter).is_some(),
+            "--lang: system / zh-CN / en"
+        );
+        ensure!(
             options.insert(key.to_owned(), parameter).is_none(),
-            "--{key} 重复指定"
+            "{}",
+            match language {
+                Language::SimplifiedChinese => format!("--{key} 重复指定"),
+                Language::English => format!("--{key} was specified more than once"),
+            }
         );
     }
     let mut help = options.contains_key("help");
@@ -920,7 +1156,11 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
                 options
                     .keys()
                     .all(|key| GLOBAL.split_whitespace().any(|g| g == key)),
-                "分组帮助不接受命令专属选项"
+                "{}",
+                language.text(
+                    "分组帮助不接受命令专属选项",
+                    "Group help does not accept command-specific options"
+                )
             );
             return Ok(Args {
                 path: prefix,
@@ -929,7 +1169,17 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
                 help: true,
             });
         }
-        bail!("未知命令：{}；运行 cor help 查看命令", words.join(" "));
+        bail!(
+            "{}",
+            match language {
+                Language::SimplifiedChinese => {
+                    format!("未知命令：{}；运行 cor help 查看命令", words.join(" "))
+                }
+                Language::English => {
+                    format!("Unknown command: {}; run cor help", words.join(" "))
+                }
+            }
+        );
     };
     let positional = words[spec.path.split_whitespace().count()..].to_vec();
     for key in options.keys() {
@@ -938,14 +1188,18 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
                 .split_whitespace()
                 .chain(spec.options.split_whitespace())
                 .any(|allowed| allowed == key),
-            "{} 不支持 --{key}",
-            spec.path
+            "{}",
+            match language {
+                Language::SimplifiedChinese => format!("{} 不支持 --{key}", spec.path),
+                Language::English => format!("{} does not support --{key}", spec.path),
+            }
         );
     }
     if !help {
         ensure!(
             (spec.min..=spec.max).contains(&positional.len()),
-            "用法：cor {}",
+            "{}cor {}",
+            language.text("用法：", "Usage: "),
             spec.usage
         );
     }
@@ -957,18 +1211,28 @@ fn parse_inner(input: impl IntoIterator<Item = String>) -> Result<Args> {
     })
 }
 
-pub fn help(prefix: &str) -> String {
+pub fn localized_help(prefix: &str, language: Language) -> String {
+    let usage = language.text("用法：", "Usage: ");
+    let command = language.text("命令", "command");
+    let options = language.text("选项", "options");
     let mut out = format!("Clash of Rust CLI {}\n\n", clash_client_core::VERSION);
     if prefix.is_empty() {
-        out += "用法：cor <命令> [选项]\n\n常用命令：\n";
+        let common = language.text("常用命令：", "Common commands:");
+        out += &format!("{usage}cor <{command}> [{options}]\n\n{common}\n");
         for path in [
             "ui", "start", "stop", "restart", "status", "proxy", "diagnose",
         ] {
             let spec = COMMANDS.iter().find(|spec| spec.path == path).unwrap();
-            out += &format!("  {:<25} {}\n", spec.path, spec.description);
+            out += &format!(
+                "  {:<25} {}\n",
+                spec.path,
+                spec.localized_description(language)
+            );
         }
-        out += "  profile                   订阅添加、切换与更新；cor profile help\n";
-        out += "  node                      节点选择与测速；cor node help\n";
+        out += language.text(
+            "  profile                   订阅添加、切换与更新；cor profile help\n  node                      节点选择与测速；cor node help\n",
+            "  profile                   Add, switch, and update subscriptions. See cor profile help.\n  node                      Pick and test nodes. See cor node help.\n",
+        );
         let advanced = COMMANDS
             .iter()
             .map(|spec| spec.path.split_whitespace().next().unwrap())
@@ -982,25 +1246,29 @@ pub fn help(prefix: &str) -> String {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>()
-            .join("、");
-        out += &format!("\n其他功能：{advanced}\n完整命令与通用选项：cor help all\n");
+            .join(language.text("、", ", "));
+        let other = language.text("其他功能：", "Other commands: ");
+        let full = language.text("完整命令与通用选项：", "All commands and global options: ");
+        out += &format!("\n{other}{advanced}\n{full}cor help all\n");
     } else if prefix == "all" {
-        out += "用法：cor <命令> [选项]\n\n全部命令：\n";
+        let all = language.text("全部命令：", "All commands:");
+        out += &format!("{usage}cor <{command}> [{options}]\n\n{all}\n");
     } else if let Some(spec) = COMMANDS.iter().find(|s| s.path == prefix) {
-        out += &format!("{}\n\n用法：cor {}\n\n", spec.description, spec.usage);
+        out += &format!(
+            "{}\n\n{usage}cor {}\n\n",
+            spec.localized_description(language),
+            spec.usage
+        );
         if !spec.options.is_empty() {
-            out += "命令选项：\n";
+            out += language.text("命令选项：\n", "Command options:\n");
             for key in spec.options.split_whitespace() {
-                out += &option_help(key);
+                out += &option_help(key, language);
             }
             out += "\n";
         }
     } else {
-        out += &format!(
-            "用法：cor {}{}<命令> [选项]\n\n命令：\n",
-            prefix,
-            if prefix.is_empty() { "" } else { " " }
-        );
+        let heading = language.text("命令：", "Commands:");
+        out += &format!("{usage}cor {prefix} <{command}> [{options}]\n\n{heading}\n");
     }
     for spec in COMMANDS.iter().filter(|spec| {
         prefix == "all"
@@ -1009,13 +1277,26 @@ pub fn help(prefix: &str) -> String {
                 && spec.path != "profile import"
                 && !spec.retired())
     }) {
-        out += &format!("  {:<25} {}\n", spec.path, spec.description);
+        out += &format!(
+            "  {:<25} {}\n",
+            spec.path,
+            spec.localized_description(language)
+        );
     }
     let example = match prefix {
-        "profile add" => Some("cor profile add 我的订阅 'https://example.com/subscription'"),
-        "profile import" => Some("cat profile.yaml | cor profile import - --name 本地订阅"),
+        "profile add" => Some(language.text(
+            "cor profile add 我的订阅 'https://example.com/subscription'",
+            "cor profile add 'My subscription' 'https://example.com/subscription'",
+        )),
+        "profile import" => Some(language.text(
+            "cat profile.yaml | cor profile import - --name 本地订阅",
+            "cat profile.yaml | cor profile import - --name 'Local subscription'",
+        )),
         "node list" => Some("cor node list Proxy --sort latency --limit 50"),
-        "node select" => Some("cor node select Proxy '节点 1'"),
+        "node select" => Some(language.text(
+            "cor node select Proxy '节点 1'",
+            "cor node select Proxy 'Node 1'",
+        )),
         "rule add" => Some("cor rule add 'DOMAIN-SUFFIX,example.com,DIRECT' --position 1"),
         "rule shortcut" => Some("cor rule shortcut ads on"),
         "connection list" => Some("cor connection list --watch --sort download-rate --jsonl"),
@@ -1028,24 +1309,29 @@ pub fn help(prefix: &str) -> String {
         _ => None,
     };
     if let Some(example) = example {
-        out += &format!("\n示例：\n  {example}\n");
+        out += language.text("\n示例：\n", "\nExamples:\n");
+        out += &format!("  {example}\n");
     }
-    out += "\n通用选项：\n";
+    out += language.text("\n通用选项：\n", "\nGlobal options:\n");
     for key in (if prefix.is_empty() {
-        "help version json data-dir user"
+        "help version json data-dir user lang"
     } else {
         GLOBAL
     })
     .split_whitespace()
     {
-        out += &option_help(key);
+        out += &option_help(key, language);
     }
-    out += "\n详情：cor help <命令>；使用文档：docs/cli.md\n退出码：0 成功，1 操作失败，2 参数错误，3 后台不可达，124 请求超时，130 已取消。\n";
+    out += language.text(
+        "\n详情：cor help <命令>；使用文档：docs/cli.md\n退出码：0 成功，1 操作失败，2 参数错误，3 后台不可达，124 请求超时，130 已取消。\n",
+        "\nRun cor help <command> for details. See docs/cli.md for the CLI guide.\nExit codes: 0 success, 1 operation failed, 2 invalid arguments, 3 backend unavailable, 124 timed out, 130 cancelled.\n",
+    );
     out
 }
-fn option_help(key: &str) -> String {
-    let description = match key {
+fn option_help(key: &str, language: Language) -> String {
+    let chinese = match key {
         "help" => "显示当前命令及参数帮助（-h）",
+        "lang" => "本次帮助或终端界面的语言：system、zh-CN、en",
         "version" => "显示客户端版本（-V）",
         "json" => "只输出机器可读 JSON",
         "jsonl" => "逐行输出 JSON，适合持续采样",
@@ -1098,15 +1384,76 @@ fn option_help(key: &str) -> String {
         "open" => "在默认浏览器打开本机采样入口",
         _ => "见当前命令说明",
     };
+    let english = match key {
+        "help" => "Show help for this command and its options (-h).",
+        "lang" => "Choose the language for help or the terminal interface: system, zh-CN, or en.",
+        "version" => "Show the client version (-V).",
+        "json" => "Output machine-readable JSON only.",
+        "jsonl" => "Output one JSON record per line, including live samples.",
+        "timeout" => "Backend request timeout in seconds (default: 300).",
+        "data-dir" => "Use a separate data directory.",
+        "resources" => "Use a directory containing the core and Geo resources.",
+        "user" => "On Linux, administer another user's settings and backend as that user.",
+        "all-users" => "On Linux, let root view subscriptions or TUN processes across users.",
+        "yes" => "Confirm removal, protection, installation, or similar operations (-y).",
+        "show-secrets" => "Include full credentials in subscription and configuration output.",
+        "quiet" => "Hide progress messages (-q).",
+        "no-color" => "Use plain text. CLI output is plain by default.",
+        "demo" => "Preview the terminal interface with mock data and no network changes.",
+        "no-core" => "Start the backend without starting the core.",
+        "no-start" => "Preserve the core's previous running state after a Linux update.",
+        "network-only" => {
+            "Refresh outbound routes and DNS and close old connections without restarting the core."
+        }
+        "watch" | "follow" => "Stream new samples or log entries until Ctrl+C.",
+        "interval" => "Sampling interval in seconds (default: 1, minimum: 0.25).",
+        "count" => "Number of checks (1–20, default: 5).",
+        "interval-ms" => "Request interval in milliseconds (100–5000, default: 1000).",
+        "seconds" => "Time limit per request in seconds (1–30, default: 10).",
+        "max-bytes" => "Download limit in bytes (1024–16777216, default: 8388608).",
+        "max-hops" => "Maximum traceroute hops (1–16, default: 8).",
+        "type" => "DNS record type (default: ADDR, which checks A and AAAA).",
+        "method" => "HTTP method: HEAD, GET, or OPTIONS (default: HEAD).",
+        "filter" => "Filter by text.",
+        "sort" => {
+            "Sort by name or latency for nodes. Connections also support rule, chain, upload, download, upload-rate, download-rate, and start."
+        }
+        "reverse" => {
+            "Reverse the sort order. Names ascend by default and rates and totals descend."
+        }
+        "limit" => "Maximum number of results (default: 100, maximum: 10000).",
+        "offset" => "Number of results to skip (default: 0).",
+        "details" => "Show all checks, explanations, and sources.",
+        "output" => {
+            "Write to a file (-o). Full logs and configurations are private to the current user."
+        }
+        "name" => "Subscription display name.",
+        "source" => "Subscription URL or local YAML path.",
+        "all" => "Apply to all items.",
+        "group" => "Test only the specified proxy group.",
+        "profile" => "Select a subscription by unique name or ID (default: active subscription).",
+        "position" => "Rule position starting at 1 (default: first).",
+        "disabled" => "Create the rule disabled.",
+        "level" => "Log level: debug, info, warning, error, or silent.",
+        "shell" => "Environment syntax: bash, zsh, fish, powershell, or cmd.",
+        "unset" => "Print shell commands to clear proxy environment variables.",
+        "url" => "HTTP or HTTPS diagnostics URL.",
+        "host" => "Diagnostics hostname (default: github.com).",
+        "system" => "Use system DNS instead of the proxy core's DNS.",
+        "category" => "Check category, such as AI, 全球, or 日本.",
+        "offline" => "Collect local information without contacting external check services.",
+        "open" => "Open the local probe in the default browser.",
+        _ => "See the command description.",
+    };
     format!(
         "  --{:<20} {}{}\n",
         key,
         if VALUES.split_whitespace().any(|v| v == key) {
-            "<值>  "
+            language.text("<值>  ", "<value>  ")
         } else {
             ""
         },
-        description
+        language.text(chinese, english)
     )
 }
 
@@ -1265,6 +1612,7 @@ fn setting_values(key: &str) -> &'static [&'static str] {
         "dark" | "tray_speed" | "update_prereleases" | "dns_override" | "fake_ip" | "ipv6"
         | "udp" => &["false", "true"],
         "theme_mode" => &["system", "light", "dark"],
+        "language" => &["system", "zh-CN", "en"],
         "accent_color" => &["teal", "blue", "purple", "rose", "amber", "slate"],
         "node_sort" | "tui_node_sort" => &["latency_ascending", "latency_descending", "name"],
         _ => &[],
@@ -1281,6 +1629,7 @@ fn attached_option(word: &str) -> Option<(&str, &str)> {
 
 fn option_values(path: &str, option: &str) -> &'static [&'static str] {
     match option {
+        "lang" => &["system", "zh-CN", "en"],
         "type" if path == "network dns" => &[
             "ADDR", "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA", "PTR", "CAA",
         ],
@@ -1306,6 +1655,10 @@ fn option_values(path: &str, option: &str) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn help(path: &str) -> String {
+        localized_help(path, Language::SimplifiedChinese)
+    }
+
     fn args(line: &[&str]) -> Result<Args> {
         parse(line.iter().map(|s| (*s).into()))
     }
@@ -1318,6 +1671,16 @@ mod tests {
         assert!(args(&["profile", "list", "--srot", "name"]).is_err());
         assert!(args(&["mode", "rule", "extra"]).is_err());
         assert!(args(&["--json", "--json", "status"]).is_err());
+    }
+    #[test]
+    fn language_selection_does_not_interpret_literal_or_option_values_as_flags() {
+        for words in [
+            vec!["--lang=zh-CN", "--output", "--lang=en"],
+            vec!["--lang=zh-CN", "--", "--lang=en"],
+        ] {
+            let input: Vec<String> = words.into_iter().map(str::to_owned).collect();
+            assert_eq!(language_from_input(&input), Language::SimplifiedChinese);
+        }
     }
     #[test]
     fn network_inspection_commands_validate_targets_and_options_independently() {

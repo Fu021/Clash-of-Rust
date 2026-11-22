@@ -72,7 +72,7 @@ class CliTuiTests(unittest.TestCase):
             run.return_value.stdout = help_text
             self.assertEqual(cli_tui_preview.command_catalog('cor'),
                              [('profile import', '从文件导入'), ('network http', '读取响应')])
-            self.assertEqual(run.call_args.args[0], ['cor', 'help', 'all'])
+        self.assertEqual(run.call_args.args[0], ['cor', '--lang=zh-CN', 'help', 'all'])
 
     def test_desktop_preview_escapes_terminal_text_and_identifies_the_frame_source(self):
         with tempfile.TemporaryDirectory() as temporary:

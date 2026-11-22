@@ -1,3 +1,4 @@
+use clash_client_core::config::Language;
 use serde_json::{Value, json};
 
 #[cfg(target_os = "linux")]
@@ -437,6 +438,10 @@ fn holder_labels(holders: &[Value]) -> Vec<String> {
 }
 
 pub fn holder_summary(routes: &Value) -> Option<String> {
+    holder_summary_in(routes, Language::SimplifiedChinese)
+}
+
+pub fn holder_summary_in(routes: &Value, language: Language) -> Option<String> {
     if routes["scope"] != "current_network_namespace" || routes["holder_scope"] != "all_users" {
         return None;
     }
@@ -462,9 +467,16 @@ pub fn holder_summary(routes: &Value) -> Option<String> {
             .unwrap_or_default();
         let owners = holder_labels(holders);
         evidence.push(if owners.is_empty() {
-            format!("{interface}：未找到持有进程")
+            format!(
+                "{interface}{}",
+                language.text("：未找到持有进程", ": No holder found")
+            )
         } else {
-            format!("{interface}：{}", owners.join("、"))
+            format!(
+                "{interface}{}{}",
+                language.text("：", ": "),
+                owners.join(language.text("、", ", "))
+            )
         });
     }
     if evidence.is_empty() {
@@ -472,14 +484,21 @@ pub fn holder_summary(routes: &Value) -> Option<String> {
     }
     let state = match routes["tun_holders"]["state"].as_str() {
         Some("complete") => "",
-        Some("partial") => "；扫描不完整",
-        Some("unavailable") => "；扫描不可用",
+        Some("partial") => language.text("；扫描不完整", "; Scan incomplete"),
+        Some("unavailable") => language.text("；扫描不可用", "; Scan unavailable"),
         _ => "",
     };
-    Some(format!("{}{state}", evidence.join("；")))
+    Some(format!(
+        "{}{state}",
+        evidence.join(language.text("；", "; "))
+    ))
 }
 
 pub fn notice(routes: &Value) -> Option<String> {
+    notice_in(routes, Language::SimplifiedChinese)
+}
+
+pub fn notice_in(routes: &Value, language: Language) -> Option<String> {
     if routes["scope"] != "current_network_namespace" {
         return None;
     }
@@ -529,19 +548,40 @@ pub fn notice(routes: &Value) -> Option<String> {
             .unwrap_or_default();
         let owners = holder_labels(holders);
         evidence.push(if !owners.is_empty() {
-            format!("{interface}；持有进程 {}", owners.join("、"))
+            format!(
+                "{interface}{}{}",
+                language.text("；持有进程 ", "; Holders: "),
+                owners.join(language.text("、", ", "))
+            )
         } else if routes["holder_scope"] == "all_users" {
             match routes["tun_holders"]["state"].as_str() {
-                Some("complete") => format!("{interface}；跨用户扫描未找到持有进程"),
-                _ => format!("{interface}；跨用户持有进程读取不完整"),
+                Some("complete") => format!(
+                    "{interface}{}",
+                    language.text(
+                        "；跨用户扫描未找到持有进程",
+                        "; No holder found in the all-user scan"
+                    )
+                ),
+                _ => format!(
+                    "{interface}{}",
+                    language.text("；跨用户持有进程读取不完整", "; All-user scan incomplete")
+                ),
             }
         } else if routes["tun_holders"]["state"] == "complete" {
             format!(
-                "{interface}；当前用户范围未发现持有进程，跨用户检查请运行 sudo cor status --all-users"
+                "{interface}{}",
+                language.text(
+                    "；当前用户范围未发现持有进程，跨用户检查请运行 sudo cor status --all-users",
+                    "; No holder found for the current user; run sudo cor status --all-users to check all users"
+                )
             )
         } else {
             format!(
-                "{interface}；当前用户持有进程读取不完整，跨用户检查请运行 sudo cor status --all-users"
+                "{interface}{}",
+                language.text(
+                    "；当前用户持有进程读取不完整，跨用户检查请运行 sudo cor status --all-users",
+                    "; Current-user scan incomplete; run sudo cor status --all-users to check all users"
+                )
             )
         });
     }
@@ -549,7 +589,11 @@ pub fn notice(routes: &Value) -> Option<String> {
         if !bypass {
             return None;
         }
-        evidence.push("未能读取具体接口".into());
+        evidence.push(
+            language
+                .text("未能读取具体接口", "Interface unavailable")
+                .into(),
+        );
     }
     let uncertain = warnings
         .iter()
@@ -558,17 +602,37 @@ pub fn notice(routes: &Value) -> Option<String> {
         .iter()
         .any(|warning| warning == "tun_current_uid_route_bypass");
     let message = if uid_bypass {
-        "检测到 TUN 路由，但当前用户的 TCP/443 样本仍绕过 TUN"
+        language.text(
+            "检测到 TUN 路由，但当前用户的 TCP/443 样本仍绕过 TUN",
+            "TUN route detected, but the current user's TCP/443 sample bypasses it",
+        )
     } else if bypass && external {
-        "检测到 TUN 路由异常，同时存在外部 TUN 接管"
+        language.text(
+            "检测到 TUN 路由异常，同时存在外部 TUN 接管",
+            "TUN routing issue and an external TUN detected",
+        )
     } else if bypass {
-        "TUN 已开启，但示例路由显示仍有流量绕过 TUN"
+        language.text(
+            "TUN 已开启，但示例路由显示仍有流量绕过 TUN",
+            "TUN is enabled, but sampled routes bypass it",
+        )
     } else if uncertain {
-        "检测到流量经过 TUN，本程序代理状态暂时无法读取"
+        language.text(
+            "检测到流量经过 TUN，本程序代理状态暂时无法读取",
+            "Traffic uses TUN; this application's proxy status is unavailable",
+        )
     } else {
-        "检测到流量经过外部 TUN，本程序的“关闭代理”无法关闭它"
+        language.text(
+            "检测到流量经过外部 TUN，本程序的“关闭代理”无法关闭它",
+            "Traffic uses an external TUN; this app cannot turn it off",
+        )
     };
-    Some(format!("{message}（{}）。", evidence.join("；")))
+    Some(format!(
+        "{message}{}{}{}",
+        language.text("（", " ("),
+        evidence.join(language.text("；", "; ")),
+        language.text("）。", ").")
+    ))
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -1128,6 +1192,14 @@ mod context_tests {
         });
         let current = notice(&with_proxy_context(routes.clone(), Some(ProxyMode::Off))).unwrap();
         assert!(current.contains("sudo cor status --all-users"), "{current}");
+        let english = notice_in(
+            &with_proxy_context(routes.clone(), Some(ProxyMode::Off)),
+            Language::English,
+        )
+        .unwrap();
+        assert!(english.contains("external TUN"), "{english}");
+        assert!(english.contains("Meta"), "{english}");
+        assert!(english.contains("sudo cor status --all-users"), "{english}");
         let mut all_users = routes;
         all_users["holder_scope"] = json!("all_users");
         all_users["tun_holders"]["scope"] = json!("all_users");

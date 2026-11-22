@@ -71,10 +71,14 @@ impl App {
             && self.site_detail.is_none()
         {
             self.notification_guide_pending = false;
+            let language = self.presentation_language;
             let _ = self.ask(
-                "允许系统通知",
-                "Claude 保护的异常连接提醒需要系统通知权限。请在系统设置中允许 Clash of Rust 发送通知。".into(),
-                "打开通知设置", Pending::NotificationSettings,
+                language.text("允许系统通知", "Allow system notifications"),
+                language.text(
+                    "Claude 保护的异常连接提醒需要系统通知权限。请在系统设置中允许 Clash of Rust 发送通知。",
+                    "Claude protection needs notification permission to report unexpected connections. Allow Clash of Rust notifications in system settings.",
+                ).into(),
+                language.text("打开通知设置", "Open notification settings"), Pending::NotificationSettings,
             );
         }
     }
@@ -123,16 +127,33 @@ impl App {
             return Task::none();
         };
         let active = self.settings.active_profile.as_deref() == Some(&id);
-        let description = format!(
-            "将删除“{}”及其缓存配置和自定义规则。{}",
-            profile.name,
-            if active {
-                "此订阅正在使用，将先切换到默认直连；新连接将不再通过此订阅。"
-            } else {
-                "此操作无法撤销。"
-            }
-        );
-        self.ask("删除订阅？", description, "删除订阅", Pending::Delete(id))
+        let language = self.presentation_language;
+        let description = match language {
+            Language::SimplifiedChinese => format!(
+                "将删除“{}”及其缓存配置和自定义规则。{}",
+                profile.name,
+                if active {
+                    "此订阅正在使用，将先切换到默认直连；新连接将不再通过此订阅。"
+                } else {
+                    "此操作无法撤销。"
+                }
+            ),
+            Language::English => format!(
+                "Delete “{}” and its cached configuration and custom rules. {}",
+                profile.name,
+                if active {
+                    "This subscription is active; it will switch to the default direct connection first. New connections will no longer use it."
+                } else {
+                    "This action cannot be undone."
+                }
+            ),
+        };
+        self.ask(
+            language.text("删除订阅？", "Delete subscription?"),
+            description,
+            language.text("删除订阅", "Delete subscription"),
+            Pending::Delete(id),
+        )
     }
     pub(crate) fn request_exit(&mut self) -> Task<Message> {
         if (self.import_open && (!self.profile_name.is_empty() || !self.profile_source.is_empty()))
@@ -143,10 +164,14 @@ impl App {
                 .as_ref()
                 .is_some_and(ProfileEditor::dirty)
         {
+            let language = self.presentation_language;
             let task = self.ask(
-                "退出并放弃修改？",
-                "有尚未保存或应用的修改。退出后将丢弃这些修改，并关闭内核、恢复系统代理。".into(),
-                "放弃并退出",
+                language.text("退出并放弃修改？", "Discard changes and quit?"),
+                language.text(
+                    "有尚未保存或应用的修改。退出后将丢弃这些修改，并关闭内核、恢复系统代理。",
+                    "Unsaved or unapplied changes will be discarded. The core will stop and the system proxy will be restored.",
+                ).into(),
+                language.text("放弃并退出", "Discard and quit"),
                 Pending::Exit,
             );
             return Task::batch([
@@ -169,10 +194,14 @@ impl App {
             }
             Message::ImportDialog(false) => {
                 if !self.profile_name.is_empty() || !self.profile_source.is_empty() {
+                    let language = self.presentation_language;
                     self.ask(
-                        "放弃订阅草稿？",
-                        "名称或来源尚未导入，关闭后会丢弃本次草稿。".into(),
-                        "放弃修改",
+                        language.text("放弃订阅草稿？", "Discard subscription draft?"),
+                        language.text(
+                            "名称或来源尚未导入，关闭后会丢弃本次草稿。",
+                            "The name or source has not been imported. Closing will discard this draft.",
+                        ).into(),
+                        language.text("放弃修改", "Discard changes"),
                         Pending::CloseImport,
                     )
                 } else {
@@ -194,9 +223,16 @@ impl App {
             Message::ReportIssue(context) => self.prepare_diagnostics(context, true),
             Message::DiagnosticsExported(result) => {
                 self.diagnosing = false;
+                let language = self.presentation_language;
                 match result {
                     Ok((path, url)) => {
-                        self.show_notice_followup(format!("诊断已导出：{path}"), false);
+                        self.show_notice_followup(
+                            format!(
+                                "{}{path}",
+                                language.text("诊断已导出：", "Diagnostics exported: ")
+                            ),
+                            false,
+                        );
                         if let Some(url) = url {
                             let url = url.clone();
                             return Some(Task::perform(
@@ -210,15 +246,29 @@ impl App {
                             ));
                         }
                     }
-                    Err(error) => {
-                        self.show_notice_followup(format!("诊断采集或导出失败：{error}"), true)
-                    }
+                    Err(error) => self.show_notice_followup(
+                        format!(
+                            "{}{error}",
+                            language.text(
+                                "诊断采集或导出失败：",
+                                "Failed to collect or export diagnostics: "
+                            )
+                        ),
+                        true,
+                    ),
                 }
                 none()
             }
             Message::IssueOpened(result) => {
                 if let Err(error) = result {
-                    self.show_notice_followup(format!("无法打开问题反馈页面：{error}"), true);
+                    self.show_notice_followup(
+                        format!(
+                            "{}{error}",
+                            self.presentation_language
+                                .text("无法打开问题反馈页面：", "Failed to open the issue page: ")
+                        ),
+                        true,
+                    );
                 }
                 none()
             }
@@ -327,10 +377,16 @@ impl App {
                     .as_ref()
                     .is_some_and(ProfileEditor::dirty)
                 {
+                    let language = self.presentation_language;
                     self.ask(
-                        "放弃订阅修改？",
-                        "配置名称或来源的修改尚未保存。".into(),
-                        "放弃修改",
+                        language.text("放弃订阅修改？", "Discard subscription changes?"),
+                        language
+                            .text(
+                                "配置名称或来源的修改尚未保存。",
+                                "Changes to the name or source have not been saved.",
+                            )
+                            .into(),
+                        language.text("放弃修改", "Discard changes"),
                         Pending::CloseProfile,
                     )
                 } else {
@@ -346,7 +402,13 @@ impl App {
                     if p.name.trim().is_empty()
                         || (p.source.trim().is_empty() && !p.original.1.is_empty())
                     {
-                        p.error = "配置名称与来源不能为空。".into();
+                        p.error = self
+                            .presentation_language
+                            .text(
+                                "配置名称与来源不能为空。",
+                                "The configuration name and source are required.",
+                            )
+                            .into();
                         return Some(none());
                     }
                     let action = Action::EditProfile(
@@ -398,11 +460,14 @@ impl App {
             Message::FilePickStarted(edit, session) => {
                 let edit = *edit;
                 if let Some(receiver) = session.lock().unwrap().take() {
+                    let language = self.presentation_language;
                     Task::perform(
                         async move {
-                            receiver
-                                .await
-                                .unwrap_or_else(|_| Err("文件选择器已关闭".into()))
+                            receiver.await.unwrap_or_else(|_| {
+                                Err(language
+                                    .text("文件选择器已关闭", "File picker closed")
+                                    .into())
+                            })
                         },
                         move |result| Message::FilePicked(edit, result),
                     )
@@ -743,6 +808,61 @@ mod tests {
         let _ = app.update(Message::Confirm);
         assert!(app.profile_editor.is_none());
         assert_eq!(app.profiles[0].source, "https://example.com/sub");
+    }
+    #[test]
+    fn english_delete_confirmation_keeps_the_active_subscription_and_network_consequences() {
+        let mut app = app();
+        app.presentation_language = Language::English;
+        app.profiles.push(Profile {
+            builtin: false,
+            id: "test".into(),
+            name: "我的订阅".into(),
+            source: "https://example.com/sub".into(),
+            updated: 0,
+            usage: None,
+        });
+        app.settings.active_profile = Some("test".into());
+        let _ = app.update(Message::Action(Action::DeleteProfile("test".into())));
+        let confirmation = app.confirmation.as_ref().unwrap();
+        assert_eq!(confirmation.title, "Delete subscription?");
+        assert_eq!(confirmation.accept, "Delete subscription");
+        assert!(confirmation.description.contains("我的订阅"));
+        assert!(
+            confirmation
+                .description
+                .contains("default direct connection")
+        );
+        assert!(confirmation.description.contains("New connections"));
+        let _ = app.update(Message::CancelConfirm);
+        assert!(app.profiles.iter().any(|profile| profile.id == "test"));
+    }
+    #[test]
+    fn english_diagnostics_feedback_preserves_paths_and_failure_details() {
+        let mut app = app();
+        app.presentation_language = Language::English;
+        app.diagnosing = true;
+        let _ = app.update(Message::DiagnosticsExported(Ok((
+            "/tmp/诊断.json".into(),
+            None,
+        ))));
+        assert!(!app.diagnosing);
+        assert!(app.notice.contains("Diagnostics exported: /tmp/诊断.json"));
+        app.dismiss_notice();
+
+        let _ = app.update(Message::DiagnosticsExported(Err("磁盘已满".into())));
+        assert!(
+            app.notice
+                .contains("Failed to collect or export diagnostics: 磁盘已满")
+        );
+        assert!(app.error);
+        app.dismiss_notice();
+
+        let _ = app.update(Message::IssueOpened(Err("browser unavailable".into())));
+        assert!(
+            app.notice
+                .contains("Failed to open the issue page: browser unavailable")
+        );
+        assert!(app.error);
     }
     #[test]
     fn theme_changes_and_font_scale_do_not_modify_window_geometry() {

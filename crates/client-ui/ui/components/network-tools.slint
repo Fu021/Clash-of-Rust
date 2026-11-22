@@ -4,14 +4,14 @@ import { GeometryTarget } from "geometry.slint";
 import { Motion } from "motion.slint";
 
 export global NetworkTools {
-    out property <[string]> titles: ["网站检查", "DNS 查询", "连接耗时", "IPv4 / IPv6", "TLS 证书", "短时稳定性", "UDP 连通", "Ping", "路由追踪", "限量下载", "TCP 端口", "HTTP 检查"];
+    out property <[string]> titles: [@tr("网站检查"), @tr("DNS 查询"), @tr("连接耗时"), "IPv4 / IPv6", @tr("TLS 证书"), @tr("短时稳定性"), @tr("UDP 连通"), "Ping", @tr("路由追踪"), @tr("限量下载"), @tr("TCP 端口"), @tr("HTTP 检查")];
     pure public function needs-target(index: int) -> bool { return index >= 0 && index < 12; }
     out property <[string]> summaries: [
-        "解析、响应与出口", "系统与内核解析", "TCP、TLS 与首字节",
-        "目标地址族连接能力", "证书、域名与有效期",
-        "有限次请求与延迟波动", "UDP 响应与当前线路", "ICMP 往返与丢包",
-        "逐跳响应与未响应", "有上限的下载速度检查",
-        "指定端口的握手", "方法、状态与安全响应头"
+        @tr("解析、响应与出口"), @tr("系统与内核解析"), @tr("TCP、TLS 与首字节"),
+        @tr("目标地址族连接能力"), @tr("证书、域名与有效期"),
+        @tr("有限次请求与延迟波动"), @tr("UDP 响应与当前线路"), @tr("ICMP 往返与丢包"),
+        @tr("逐跳响应与未响应"), @tr("有上限的下载速度检查"),
+        @tr("指定端口的握手"), @tr("方法、状态与安全响应头")
     ];
     out property <[image]> icons: [
         @image-url("../icons/globe.svg"), @image-url("../icons/network-dns.svg"),
@@ -23,23 +23,23 @@ export global NetworkTools {
         @image-url("../icons/globe.svg")
     ];
     out property <[string]> target-labels: [
-        "网址", "域名", "网址", "网址", "域名或网址",
-        "网址", "DNS 响应目标", "域名或 IP", "域名或 IP", "下载网址",
-        "主机与端口", "网址"
+        @tr("网址"), @tr("域名"), @tr("网址"), @tr("网址"), @tr("域名或网址"),
+        @tr("网址"), @tr("DNS 响应目标"), @tr("域名或 IP"), @tr("域名或 IP"), @tr("下载网址"),
+        @tr("主机与端口"), @tr("网址")
     ];
     out property <[string]> hints: [
-        "快速定位解析、响应与实际规则；详细分析使用专项工具",
-        "查询记录、TTL 和返回码，对照系统与内核解析",
-        "分段测量代理建连、TLS 与首字节，明确代理侧处理开销",
-        "经代理分别连接目标地址族，不代表本机 IPv6 能力",
-        "仅验证 TLS 握手和证书，不发送 HTTP 请求",
-        "分别统计传输失败、HTTP 状态与耗时分布",
-        "经内核 UDP 中继向目标 DNS 服务器发送探针",
-        "系统 ICMP 探针，不代表代理节点延迟",
-        "系统逐跳探针，部分跳不响应属于常见情况",
-        "限时限量测量吞吐，样本不代表线路最大带宽",
-        "经当前代理连接端口，不发送应用数据",
-        "分析方法、状态和安全响应头；Cookie 和认证头不展示"
+        @tr("快速定位解析、响应与实际规则；详细分析使用专项工具"),
+        @tr("查询记录、TTL 和返回码，对照系统与内核解析"),
+        @tr("分段测量代理建连、TLS 与首字节，明确代理侧处理开销"),
+        @tr("经代理分别连接目标地址族，不代表本机 IPv6 能力"),
+        @tr("仅验证 TLS 握手和证书，不发送 HTTP 请求"),
+        @tr("分别统计传输失败、HTTP 状态与耗时分布"),
+        @tr("经内核 UDP 中继向目标 DNS 服务器发送探针"),
+        @tr("系统 ICMP 探针，不代表代理节点延迟"),
+        @tr("系统逐跳探针，部分跳不响应属于常见情况"),
+        @tr("限时限量测量吞吐，样本不代表线路最大带宽"),
+        @tr("经当前代理连接端口，不发送应用数据"),
+        @tr("分析方法、状态和安全响应头；Cookie 和认证头不展示")
     ];
 }
 
@@ -58,7 +58,7 @@ export component NetworkToolOptions inherits Rectangle {
     property <[string]> methods: ["HEAD", "GET", "OPTIONS"];
     out property <string> encoded: root.count + "|" + root.interval + "|" + root.seconds + "|" + root.megabytes + "|" + root.hops + "|" + root.record-types[root.record-index] + "|" + root.methods[root.method-index];
     property <[int]> fields: root.tool == 1 ? [5] : root.tool == 11 ? [6, 2] : root.tool == 5 ? [0, 1, 2] : root.tool == 7 ? [0] : root.tool == 8 ? [4] : root.tool == 9 ? [2, 3] : (root.tool == 2 || root.tool == 3 || root.tool == 4 || root.tool == 6 || root.tool == 10) ? [2] : [];
-    property <[string]> titles: ["次数 · 1～20", "间隔 · 毫秒", "时限 · 秒", "流量上限 · MiB", "最大跳数 · 1～16"];
+    property <[string]> titles: [@tr("次数 · 1～20"), @tr("间隔 · 毫秒"), @tr("时限 · 秒"), @tr("流量上限 · MiB"), @tr("最大跳数 · 1～16")];
     property <[string]> values: [root.count, root.interval, root.seconds, root.megabytes, root.hops];
     property <int> columns: root.width >= 520px * Theme.text-scale ? 3 : root.width >= 300px * Theme.text-scale ? 2 : 1;
     property <length> row-height: max(80px, Theme.detail-size * 1.5 + max(48px, Theme.control-height) + 16px);
@@ -70,7 +70,7 @@ export component NetworkToolOptions inherits Rectangle {
         y: floor(index / root.columns) * root.row-height;
         width: (root.width - (root.columns - 1) * 12px) / root.columns;
         height: root.row-height - 10px; spacing: 6px;
-        Caption { text: field == 5 ? "记录类型" : field == 6 ? "请求方法" : root.titles[field]; }
+        Caption { text: field == 5 ? @tr("记录类型") : field == 6 ? @tr("请求方法") : root.titles[field]; }
         if field < 5: Field {
             enabled: root.enabled;
             placeholder: root.titles[field];
@@ -114,7 +114,7 @@ export component NetworkToolEntry inherits Rectangle {
     border-color: Theme.accent;
     animate background { duration: Motion.fast; enabled: Motion.active; }
     accessible-role: button;
-    accessible-label: NetworkTools.titles[root.tool] + (root.descriptions ? "，" + NetworkTools.summaries[root.tool] : "");
+    accessible-label: root.descriptions ? @tr("{}，{}", NetworkTools.titles[root.tool], NetworkTools.summaries[root.tool]) : NetworkTools.titles[root.tool];
     accessible-action-default => { if root.enabled { root.chosen(); } }
     forward-focus: keys;
     GeometryTarget { key: "network-tool:" + root.tool; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
@@ -171,7 +171,7 @@ export component NetworkToolMenu inherits VerticalLayout {
             GeometryTarget { key: index == 0 ? "network-group:target" : index == 5 ? "network-group:link" : "network-group:protocol"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
             group-title := Caption {
                 x: 9px; y: index == 0 ? 6px : 16px; width: parent.width - 18px;
-                text: index == 0 ? "目标检查" : index == 5 ? "链路分析" : "端口与 HTTP"; font-size: root.detail-size;
+                text: index == 0 ? @tr("目标检查") : index == 5 ? @tr("链路分析") : @tr("端口与 HTTP"); font-size: root.detail-size;
             }
         }
         NetworkToolEntry {

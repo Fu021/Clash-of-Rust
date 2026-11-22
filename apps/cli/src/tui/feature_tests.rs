@@ -254,6 +254,36 @@ fn command_forms_label_options_required_by_the_shared_parser() {
 }
 
 #[test]
+fn english_forms_localize_labels_and_validation_without_changing_arguments() {
+    use clash_client_core::config::Language;
+
+    let spec = form::commands()
+        .find(|spec| spec.path == "profile update")
+        .unwrap();
+    let mut form = Form::new_in(spec, Language::English);
+    let all = form
+        .fields
+        .iter_mut()
+        .find(|field| field.option == Some("all"))
+        .unwrap();
+    assert!(all.label.contains("true to enable"));
+    all.value = "maybe".into();
+    assert!(
+        form.args(&context())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("must be true")
+    );
+    form.fields
+        .iter_mut()
+        .find(|field| field.option == Some("all"))
+        .unwrap()
+        .value = "true".into();
+    assert!(form.args(&context()).unwrap().flag("all"));
+}
+
+#[test]
 fn profile_changes_release_the_previous_sources_notice_without_an_open_draft() {
     let mut state = State::new(false);
     state.page = Page::Rules;
@@ -421,6 +451,55 @@ fn connection_details_keep_identity_when_a_connection_disappears() {
 }
 
 #[test]
+fn english_node_and_connection_pages_keep_names_and_live_identity() {
+    let mut state = State::new(true);
+    state.language = clash_client_core::config::Language::English;
+    state.page = Page::Nodes;
+    state.group = Some("PROXY".into());
+    let nodes = render::frame(&state, 120, 30)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(nodes.contains("[s change sort] Sort:"), "{nodes}");
+    assert!(nodes.contains("🇺🇸 美国 02"), "{nodes}");
+
+    state.page = Page::Connections;
+    state.group = None;
+    state.selected = 0;
+    state.key(Key::Enter);
+    let details = panels::connection(&state, 120, 30)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(details.contains("Connection details"), "{details}");
+    assert!(
+        details.contains("Proxy chain: PROXY → AUTO → 🇺🇸"),
+        "{details}"
+    );
+    assert!(details.contains("Connection ID: demo-1"), "{details}");
+
+    state
+        .poll
+        .as_mut()
+        .unwrap()
+        .snapshot
+        .connections
+        .connections
+        .clear();
+    let missing = panels::connection(&state, 120, 30)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        missing.contains("Connection demo-1 has closed"),
+        "{missing}"
+    );
+}
+
+#[test]
 fn settings_secrets_and_large_rule_collections_do_not_leak_into_frames() {
     let mut state = State::new(true);
     state.page = Page::Settings;
@@ -432,7 +511,11 @@ fn settings_secrets_and_large_rule_collections_do_not_leak_into_frames() {
         .join("\n");
     assert!(!text.contains("must-not-render-token"));
     assert!(!state.items().contains(&"secret"));
-    state.form = Some(Form::setting("secret", &serde_json::json!("")));
+    state.form = Some(Form::setting(
+        "secret",
+        &serde_json::json!(""),
+        state.language,
+    ));
     state.form.as_mut().unwrap().fields[1].value = "new-hidden-token".into();
     state.form.as_mut().unwrap().selected = 0;
     state.form.as_mut().unwrap().begin_edit();
@@ -628,4 +711,47 @@ fn empty_profile_and_shortcut_guidance_wraps_in_phone_frames() {
             assert!(!text.contains('…'), "{columns}: {text}");
         }
     }
+}
+
+#[test]
+fn english_profile_and_shortcut_guidance_remains_readable_at_narrow_widths() {
+    for (page, expected) in [
+        (
+            Page::Profiles,
+            "No matching subscriptions; clear the search or add one under Actions.",
+        ),
+        (
+            Page::Rules,
+            "Select a subscription; press 3 to open subscriptions",
+        ),
+    ] {
+        let mut state = State::new(true);
+        state.language = clash_client_core::config::Language::English;
+        state.page = page;
+        state.shortcuts_open = page == Page::Rules;
+        let compact = |text: &str| {
+            text.chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>()
+        };
+        for columns in [36, 40, 80] {
+            let text = render::frame(&state, columns, 24)
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<String>();
+            assert!(
+                compact(&text).contains(&compact(expected)),
+                "{columns}: {text}"
+            );
+        }
+    }
+    let mut state = State::new(false);
+    state.language = clash_client_core::config::Language::English;
+    assert_eq!(
+        crate::tui::catalog::open_shortcut(&state, "shortcut_ads")
+            .err()
+            .unwrap()
+            .to_string(),
+        "Backend disconnected"
+    );
 }

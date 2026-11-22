@@ -381,6 +381,13 @@ mod tests {
             assert_eq!(signal.context_only(), challenged);
             assert!(signal.value.contains("响应 3/3"));
             assert!(signal.value.contains(&format!("HTTP {status}")));
+            let english = signal.display_value_in(crate::config::Language::English);
+            assert!(english.contains("Responses 3/3"));
+            assert!(english.contains(&format!("HTTP {status}")));
+            assert_eq!(
+                english.contains("Browser verification required"),
+                challenged
+            );
             let mut report = Report::new(super::super::Environment::Core, "test");
             report.signals.push(signal.clone());
             report.validate().unwrap();

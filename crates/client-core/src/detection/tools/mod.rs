@@ -6,9 +6,10 @@ mod inspection_tests;
 mod process;
 #[cfg(test)]
 mod tests;
+mod text;
 mod transport;
 
-use crate::{api::Api, probe};
+use crate::{api::Api, config::Language, probe};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use std::time::{Duration, Instant};
@@ -190,27 +191,62 @@ impl Options {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!((1..=20).contains(&self.count), "检查次数应为 1～20");
+        self.validate_for_language(Language::SimplifiedChinese)
+    }
+
+    pub fn validate_for_language(&self, language: Language) -> Result<()> {
+        ensure!(
+            (1..=20).contains(&self.count),
+            "{}",
+            language.text("检查次数应为 1～20", "Count must be between 1 and 20")
+        );
         ensure!(
             (100..=5000).contains(&self.interval_ms),
-            "请求间隔应为 100～5000 毫秒"
+            "{}",
+            language.text(
+                "请求间隔应为 100～5000 毫秒",
+                "Interval must be between 100 and 5000 ms"
+            )
         );
-        ensure!((1..=30).contains(&self.seconds), "单次时限应为 1～30 秒");
+        ensure!(
+            (1..=30).contains(&self.seconds),
+            "{}",
+            language.text(
+                "单次时限应为 1～30 秒",
+                "Timeout must be between 1 and 30 seconds"
+            )
+        );
         ensure!(
             (1024..=16 * 1024 * 1024).contains(&self.max_bytes),
-            "下载上限应为 1 KiB～16 MiB"
+            "{}",
+            language.text(
+                "下载上限应为 1 KiB～16 MiB",
+                "Size limit must be between 1 KiB and 16 MiB"
+            )
         );
-        ensure!((1..=16).contains(&self.max_hops), "最大跳数应为 1～16");
+        ensure!(
+            (1..=16).contains(&self.max_hops),
+            "{}",
+            language.text(
+                "最大跳数应为 1～16",
+                "Maximum hops must be between 1 and 16"
+            )
+        );
         ensure!(
             matches!(
                 self.record_type.as_str(),
                 "ADDR" | "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SOA" | "PTR" | "CAA"
             ),
-            "DNS 记录类型无效"
+            "{}",
+            language.text("DNS 记录类型无效", "Invalid DNS record type")
         );
         ensure!(
             matches!(self.method.as_str(), "HEAD" | "GET" | "OPTIONS"),
-            "HTTP 方法应为 HEAD、GET 或 OPTIONS"
+            "{}",
+            language.text(
+                "HTTP 方法应为 HEAD、GET 或 OPTIONS",
+                "HTTP method must be HEAD, GET, or OPTIONS"
+            )
         );
         Ok(())
     }
@@ -272,26 +308,46 @@ pub struct Report {
 
 impl Report {
     pub fn lines(&self) -> Vec<String> {
+        self.lines_in(Language::SimplifiedChinese)
+    }
+
+    pub fn lines_in(&self, language: Language) -> Vec<String> {
         [
             format!(
-                "检查状态 · {} · {} ms",
+                "{} · {} · {} ms",
+                language.text("检查状态", "Status"),
                 match self.status {
-                    "complete" => "完成",
-                    "partial" => "部分完成",
-                    "failed" => "失败",
-                    "unavailable" => "不可用或未确认",
-                    _ => "未知",
+                    "complete" => language.text("完成", "Complete"),
+                    "partial" => language.text("部分完成", "Partial"),
+                    "failed" => language.text("失败", "Failed"),
+                    "unavailable" => language.text("不可用或未确认", "Unavailable or unconfirmed"),
+                    _ => language.text("未知", "Unknown"),
                 },
                 self.elapsed_ms
             ),
-            format!("目标 · {}", self.target),
+            format!(
+                "{} · {}",
+                language.text("目标", "Target"),
+                if self.target == "未检查"
+                    && self
+                        .entries
+                        .iter()
+                        .any(|entry| matches!(entry.code, "invalid_options" | "invalid_target"))
+                {
+                    language.text("未检查", "Not checked")
+                } else {
+                    &self.target
+                }
+            ),
         ]
         .into_iter()
-        .chain(
-            self.entries
-                .iter()
-                .map(|entry| format!("{} · {}", entry.label, entry.detail)),
-        )
+        .chain(self.entries.iter().map(|entry| {
+            format!(
+                "{} · {}",
+                entry_label_in(&entry.label, language),
+                entry_detail_in(&entry.label, &entry.detail, entry.code, language)
+            )
+        }))
         .collect()
     }
 
@@ -325,6 +381,14 @@ impl Report {
             (false, false) => "unavailable",
         };
     }
+}
+
+pub fn entry_label_in(label: &str, language: Language) -> String {
+    text::label(label, language)
+}
+
+pub fn entry_detail_in(label: &str, detail: &str, code: &str, language: Language) -> String {
+    text::detail(label, detail, code, language)
 }
 
 fn bounded(value: &str, limit: usize) -> String {

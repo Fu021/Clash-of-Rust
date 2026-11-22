@@ -88,6 +88,47 @@ fn rule_sources_have_discoverable_actions_and_subscription_rows_only_move() {
 }
 
 #[test]
+fn english_rule_actions_and_search_keep_stable_rule_ids() {
+    use clash_client_core::config::Language;
+
+    let mut state = browser();
+    state.language = Language::English;
+    let content = text(&state, 80, 24);
+    for expected in [
+        "Rules",
+        "Rule shortcuts",
+        "Add custom rule",
+        "Custom",
+        "Subscription",
+    ] {
+        assert!(content.contains(expected), "{content}");
+    }
+    state.query = "custom".into();
+    let ids = state.items();
+    assert_eq!(ids.len(), 3);
+    assert!(ids[2].starts_with("c:"));
+    state.query.clear();
+    state.selected = 2;
+    state.key(Key::Enter);
+    let content = text(&state, 80, 24);
+    for expected in ["Move down", "Disable", "Edit", "Delete"] {
+        assert!(content.contains(expected), "{content}");
+    }
+    state.key(Key::Enter);
+    assert!(
+        state
+            .rules
+            .as_ref()
+            .unwrap()
+            .pending
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("rule:")
+    );
+}
+
+#[test]
 fn rule_additions_use_the_shared_validator_and_atomic_revision_without_modifying_source() {
     let mut state = browser();
     let original = state

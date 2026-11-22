@@ -8,14 +8,16 @@ pub mod guard;
 pub mod observe;
 pub mod preferences;
 mod quality;
+mod report_text;
 mod report_view;
 pub use crate::protection;
 pub use report_view::{
-    BlockRow, REPORT_SECTIONS, ReportBlock, group_blocks, group_routes, report_blocks,
-    report_section, route_group_detail, route_group_value,
+    BlockRow, REPORT_SECTIONS, ReportBlock, group_blocks, group_blocks_in, group_routes,
+    report_blocks, report_blocks_in, report_section, route_group_detail, route_group_detail_in,
+    route_group_value, route_group_value_in,
 };
 
-use crate::{api, probe::country_name};
+use crate::{api, config::Language, probe::country_name};
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -103,6 +105,42 @@ impl Evidence {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignalKind {
+    Guard,
+    GuardMonitor,
+    IpQuality,
+    Registration,
+    Connectivity,
+    Cloudflare,
+    Fonts,
+    Emoji,
+    Canvas,
+    WebGlVendor,
+    WebGlRenderer,
+    Cookies,
+}
+
+impl SignalKind {
+    fn from_legacy_title(title: &str) -> Option<Self> {
+        match title {
+            "实时保护与异常拦截" => Some(Self::Guard),
+            "Claude 请求实时检测" => Some(Self::GuardMonitor),
+            "IP 注册信息" => Some(Self::Registration),
+            "全球连通性" => Some(Self::Connectivity),
+            "Cloudflare 网络环境" => Some(Self::Cloudflare),
+            "可识别字体" => Some(Self::Fonts),
+            "Emoji 渲染" => Some(Self::Emoji),
+            "Canvas 指纹摘要" => Some(Self::Canvas),
+            "WebGL 厂商" => Some(Self::WebGlVendor),
+            "WebGL 渲染器" => Some(Self::WebGlRenderer),
+            "浏览器 Cookie 功能" => Some(Self::Cookies),
+            title if title.starts_with("出口 IP 质量 · ") => Some(Self::IpQuality),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {
     pub group: Group,
@@ -122,8 +160,23 @@ pub struct Signal {
     /// regional or routing failure. Keep its observation separate from risk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub challenged: bool,
+    #[serde(skip)]
+    kind: Option<SignalKind>,
 }
 impl Signal {
+    fn kind(&self) -> Option<SignalKind> {
+        self.kind
+            .or_else(|| SignalKind::from_legacy_title(self.title.trim()))
+    }
+    pub fn is_guard(&self) -> bool {
+        self.kind() == Some(SignalKind::Guard)
+    }
+    pub fn is_guard_monitor(&self) -> bool {
+        matches!(
+            self.kind(),
+            Some(SignalKind::Guard | SignalKind::GuardMonitor)
+        )
+    }
     pub fn display_title(&self) -> &str {
         if self.title.trim().is_empty() {
             self.group.name()
@@ -138,13 +191,36 @@ impl Signal {
             self.value.trim()
         }
     }
+    pub fn display_title_in(&self, language: Language) -> String {
+        report_text::title(self.display_title(), language)
+    }
+    pub fn display_value_in(&self, language: Language) -> String {
+        report_text::value(self, language)
+    }
+    pub fn source_in(&self, language: Language) -> String {
+        report_text::source(&self.source, language)
+    }
+    pub fn detail_in(&self, language: Language) -> String {
+        report_text::detail(self, language)
+    }
+    pub fn advice_in(&self, language: Language) -> &str {
+        report_text::message(self.advice.trim(), language)
+    }
     pub fn explanation(&self) -> String {
-        [("说明", self.detail.trim()), ("建议", self.advice.trim())]
-            .into_iter()
-            .filter(|(_, value)| !value.is_empty())
-            .map(|(label, value)| format!("{label}：{value}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.explanation_in(Language::SimplifiedChinese)
+    }
+    pub fn explanation_in(&self, language: Language) -> String {
+        let detail = self.detail_in(language);
+        let advice = self.advice_in(language);
+        [
+            (language.text("说明", "Details"), detail.as_str()),
+            (language.text("建议", "Advice"), advice),
+        ]
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(label, value)| format!("{label}{}{value}", language.text("：", ": ")))
+        .collect::<Vec<_>>()
+        .join("\n")
     }
     pub fn new(
         group: Group,
@@ -162,6 +238,7 @@ impl Signal {
         };
         Self {
             group,
+            kind: SignalKind::from_legacy_title(title.trim()),
             title: if title.trim().is_empty() {
                 group.name().into()
             } else {
@@ -213,16 +290,18 @@ pub fn summary_order(signal: Option<&Signal>, risk: bool) -> u8 {
         _ if risk => 1,
         Some(signal)
             if matches!(
-                signal.title.as_str(),
-                "IP 注册信息"
-                    | "全球连通性"
-                    | "Cloudflare 网络环境"
-                    | "可识别字体"
-                    | "Emoji 渲染"
-                    | "Canvas 指纹摘要"
-                    | "WebGL 厂商"
-                    | "WebGL 渲染器"
-                    | "浏览器 Cookie 功能"
+                signal.kind(),
+                Some(
+                    SignalKind::Registration
+                        | SignalKind::Connectivity
+                        | SignalKind::Cloudflare
+                        | SignalKind::Fonts
+                        | SignalKind::Emoji
+                        | SignalKind::Canvas
+                        | SignalKind::WebGlVendor
+                        | SignalKind::WebGlRenderer
+                        | SignalKind::Cookies
+                )
             ) =>
         {
             4
@@ -257,35 +336,64 @@ pub struct Route {
 }
 impl Route {
     pub fn display_title(&self) -> &str {
+        self.display_title_in(Language::SimplifiedChinese)
+    }
+    pub fn display_title_in(&self, language: Language) -> &str {
         if self.host.trim().is_empty() {
-            "连接检查"
+            language.text("连接检查", "Connection check")
         } else {
             self.host.trim()
         }
     }
     pub fn display_outcome(&self) -> String {
+        self.display_outcome_in(Language::SimplifiedChinese)
+    }
+    pub fn recorded_outcome_in(&self, language: Language) -> &str {
         let outcome = self.outcome.trim();
+        match outcome {
+            "" => language.text("仅记录选路", "Route recorded"),
+            "连接失败" => language.text("连接失败", "Connection failed"),
+            "内核已选路" => language.text("内核已选路", "Route selected by core"),
+            "仅记录选路" => language.text("仅记录选路", "Route recorded"),
+            "异常连接已关闭" => {
+                language.text("异常连接已关闭", "Unexpected connection closed")
+            }
+            "异常连接关闭失败" => {
+                language.text("异常连接关闭失败", "Failed to close unexpected connection")
+            }
+            _ => outcome,
+        }
+    }
+    pub fn display_outcome_in(&self, language: Language) -> String {
+        let outcome = self.outcome.trim();
+        let display = self.recorded_outcome_in(language);
         if self.risky() && outcome != "连接失败" && !outcome.starts_with("异常连接") {
             if outcome.is_empty() {
-                "异常线路".into()
+                language.text("异常线路", "Unexpected route").into()
             } else {
-                format!("异常线路 · {outcome}")
+                format!(
+                    "{} · {display}",
+                    language.text("异常线路", "Unexpected route")
+                )
             }
         } else if outcome.is_empty() {
-            "仅记录选路".into()
+            language.text("仅记录选路", "Route recorded").into()
         } else {
-            outcome.into()
+            display.into()
         }
     }
     pub fn explanation(&self) -> String {
+        self.explanation_in(Language::SimplifiedChinese)
+    }
+    pub fn explanation_in(&self, language: Language) -> String {
         [
-            ("规则", self.rule.trim()),
-            ("线路", self.chain.trim()),
-            ("时间", self.time.trim()),
+            (language.text("规则", "Rule"), self.rule.trim()),
+            (language.text("线路", "Route"), self.chain.trim()),
+            (language.text("时间", "Time"), self.time.trim()),
         ]
         .into_iter()
         .filter(|(_, value)| !value.is_empty())
-        .map(|(label, value)| format!("{label}：{value}"))
+        .map(|(label, value)| format!("{label}{}{value}", language.text("：", ": ")))
         .collect::<Vec<_>>()
         .join("\n")
     }
@@ -827,6 +935,89 @@ pub async fn system_dns(client: &Client, source: &str) -> Vec<Signal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn localized_regions_preserve_legacy_observations_and_unknown_values() {
+        let mut signal = Signal::new(
+            Group::Exit,
+            "IPv4 出口",
+            "203.0.113.12 · 美国",
+            "fixture",
+            Evidence::Measured,
+            "",
+        );
+        signal.ip = "203.0.113.12".into();
+        signal.country = "US".into();
+        let old = serde_json::to_value(&signal).unwrap();
+        let restored: Signal = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(restored.display_title_in(Language::English), "IPv4 exit");
+        assert_eq!(
+            restored.display_value_in(Language::English),
+            "203.0.113.12 · United States"
+        );
+        assert_eq!(serde_json::to_value(&restored).unwrap(), old);
+        signal.value = "用户提供的美国节点".into();
+        assert_eq!(
+            signal.display_value_in(Language::English),
+            "用户提供的美国节点"
+        );
+    }
+
+    #[test]
+    fn english_connectivity_localizes_remote_measurements_without_changing_evidence() {
+        let signal = Signal::new(
+            Group::Connectivity,
+            "全球连通性",
+            "3/4 个探针取得响应 · 中位 18.5 ms",
+            "Globalping 远端探针",
+            Evidence::Measured,
+            "远端探针到出口 IP 203.0.113.12 的 ICMP 测量；有效探针平均延迟范围 12.5–20.0 ms。",
+        );
+        let original = serde_json::to_value(&signal).unwrap();
+        assert_eq!(
+            signal.display_value_in(Language::English),
+            "3/4 probes responded · Median 18.5 ms"
+        );
+        assert_eq!(
+            signal.detail_in(Language::English),
+            "ICMP from remote probes to exit IP 203.0.113.12; average latency range 12.5–20.0 ms."
+        );
+        assert_eq!(
+            signal.source_in(Language::English),
+            "Globalping remote probes"
+        );
+        assert_eq!(serde_json::to_value(signal).unwrap(), original);
+    }
+
+    #[test]
+    fn report_semantics_survive_translation_and_legacy_serialization() {
+        let signal = Signal::new(
+            Group::Browser,
+            "可识别字体",
+            "Fixture Font",
+            "fixture",
+            Evidence::Inferred,
+            "",
+        );
+        let stored = serde_json::to_value(&signal).unwrap();
+        assert!(stored.get("kind").is_none());
+        assert_eq!(signal.display_title_in(Language::English), "Detected fonts");
+        assert_eq!(summary_order(Some(&signal), false), 4);
+        assert_eq!(serde_json::to_value(&signal).unwrap(), stored);
+        let imported: Signal = serde_json::from_value(stored).unwrap();
+        assert_eq!(summary_order(Some(&imported), false), 4);
+        let mut renamed = signal;
+        renamed.title = "Displayed font label".into();
+        assert_eq!(summary_order(Some(&renamed), false), 4);
+
+        let guard = guard::report_signal(&guard::Snapshot::default());
+        let imported: Signal =
+            serde_json::from_value(serde_json::to_value(&guard).unwrap()).unwrap();
+        assert!(guard.is_guard());
+        assert!(imported.is_guard());
+        assert!(guard.is_guard_monitor() && imported.is_guard_monitor());
+    }
+
     #[test]
     fn report_labels_survive_empty_imported_fields() {
         for group in Group::ALL {

@@ -60,29 +60,68 @@ public class ProxyTunTest {
             proxies.getJSONObject("proxies").has("CI-TUN-origin"));
     }
 
-    @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() {
-        String text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", true, "");
+    @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Context chinese = AppLanguage.localized(context, "zh-CN");
+        Context english = AppLanguage.localized(context, "en");
+        assertEquals("zh-CN", AppLanguage.resolve("system", android.os.LocaleList.forLanguageTags("fr-FR,zh-CN,en")));
+        assertEquals("en", AppLanguage.resolve("system", android.os.LocaleList.forLanguageTags("zh-Hant-TW,en,zh-CN")));
+        assertEquals("zh-CN", AppLanguage.resolve("system", android.os.LocaleList.forLanguageTags("zh-Hans-TW")));
+        assertEquals("en", AppLanguage.resolve("system", android.os.LocaleList.forLanguageTags("fr-FR,ja-JP")));
+        assertEquals("zh-CN", AppLanguage.resolve("zh-CN", android.os.LocaleList.forLanguageTags("en")));
+        assertEquals("en", AppLanguage.resolve("en", android.os.LocaleList.forLanguageTags("zh-CN")));
+        String text = TunnelService.statusText(chinese, "1 MiB/s", "2 KiB/s", "Current node", "global", true, "");
         assertTrue(text.contains("全局 · Current node"));
         assertTrue(text.contains("↓ 1 MiB/s"));
-        text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Other node", "rule", false, "");
+        text = TunnelService.statusText(chinese, "1 MiB/s", "2 KiB/s", "Other node", "rule", false, "");
         assertEquals("规则 · Other node", text);
-        assertEquals("直连 · DIRECT", TunnelService.statusText("", "", "DIRECT", "direct", false, ""));
-        assertEquals("", ProtectionRuntime.notificationLabel(false, 3));
-        assertEquals("Claude 保护已启用", ProtectionRuntime.notificationLabel(true, 1));
-        assertEquals("Claude 保护异常", ProtectionRuntime.notificationLabel(true, 3));
-        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, 2));
-        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, 0));
-        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(true, -1));
+        assertEquals("直连 · DIRECT", TunnelService.statusText(chinese, "", "", "DIRECT", "direct", false, ""));
+        assertEquals("Global · Current node", TunnelService.statusText(english, "", "", "Current node", "global", false, ""));
+        assertEquals("Direct · DIRECT", TunnelService.statusText(english, "", "", "DIRECT", "direct", false, ""));
+        assertEquals("", ProtectionRuntime.notificationLabel(chinese, false, 3));
+        assertEquals("Claude 保护已启用", ProtectionRuntime.notificationLabel(chinese, true, 1));
+        assertEquals("Claude 保护异常", ProtectionRuntime.notificationLabel(chinese, true, 3));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(chinese, true, 2));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(chinese, true, 0));
+        assertEquals("Claude 保护待确认", ProtectionRuntime.notificationLabel(chinese, true, -1));
+        assertEquals("Claude protection enabled", ProtectionRuntime.notificationLabel(english, true, 1));
+        assertEquals("Claude protection error", ProtectionRuntime.notificationLabel(english, true, 3));
         int health = ProtectionRuntime.notificationHealth();
         assertTrue("Native protection status must use the shared readiness states", health >= 1 && health <= 3);
         for (int value : new int[]{1, 2, 3}) {
-            String protection = ProtectionRuntime.notificationLabel(true, value);
+            String protection = ProtectionRuntime.notificationLabel(chinese, true, value);
             for (boolean speeds : new boolean[]{true, false}) {
-                text = TunnelService.statusText("1 MiB/s", "2 KiB/s", "Current node", "global", speeds, protection);
+                text = TunnelService.statusText(chinese, "1 MiB/s", "2 KiB/s", "Current node", "global", speeds, protection);
                 assertTrue("Protection must remain visible in the notification title", text.startsWith(protection + "\n"));
                 assertTrue(text.contains("全局 · Current node"));
                 assertEquals(speeds, text.contains("↓ 1 MiB/s"));
             }
+        }
+        File files = new File(context.getCacheDir(), "language-test-" + java.util.UUID.randomUUID());
+        File settings = new File(files, "client/settings.json");
+        assertTrue(settings.getParentFile().mkdirs());
+        Context fixture = new ContextWrapper(context) {
+            @Override public File getFilesDir() { return files; }
+        };
+        try {
+            String systemTag = AppLanguage.resolve("system", android.content.res.Resources.getSystem().getConfiguration().getLocales());
+            String systemMode = AppLanguage.localized(context, systemTag).getString(R.string.mode_global);
+            assertEquals(systemMode, AppLanguage.current(fixture).getString(R.string.mode_global));
+            java.nio.file.Files.write(settings.toPath(), "{\"dark\":true}".getBytes(StandardCharsets.UTF_8));
+            assertEquals(systemMode, AppLanguage.current(fixture).getString(R.string.mode_global));
+            java.nio.file.Files.write(settings.toPath(), "{\"language\":\"en\"}".getBytes(StandardCharsets.UTF_8));
+            assertEquals("Global", AppLanguage.current(fixture).getString(R.string.mode_global));
+            assertEquals("en", ProtectionRuntime.language(fixture));
+            java.nio.file.Files.write(settings.toPath(), "{\"language\":\"zh-CN\"}".getBytes(StandardCharsets.UTF_8));
+            assertEquals("全局", AppLanguage.current(fixture).getString(R.string.mode_global));
+            assertEquals("zh-CN", ProtectionRuntime.language(fixture));
+            java.nio.file.Files.write(settings.toPath(), "{\"language\":\"system\"}".getBytes(StandardCharsets.UTF_8));
+            assertEquals(systemMode, AppLanguage.current(fixture).getString(R.string.mode_global));
+            assertEquals(systemTag, ProtectionRuntime.language(fixture));
+        } finally {
+            java.nio.file.Files.deleteIfExists(settings.toPath());
+            java.nio.file.Files.deleteIfExists(settings.getParentFile().toPath());
+            java.nio.file.Files.deleteIfExists(files.toPath());
         }
     }
     private static boolean injectPointer(int action,float x,float y,long down,long now) {
@@ -151,8 +190,9 @@ public class ProxyTunTest {
         assertFalse(IncidentNotifications.eligible(10, 60_009));
         assertTrue(IncidentNotifications.eligible(10, 60_010));
         assertTrue(IncidentNotifications.eligible(100, 50));
-        assertTrue(IncidentNotifications.message("application-target-missing").contains("被拦截"));
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertTrue(IncidentNotifications.message(AppLanguage.localized(context, "zh-CN"), "application-target-missing").contains("被拦截"));
+        assertTrue(IncidentNotifications.message(AppLanguage.localized(context, "en"), "application-target-missing").contains("blocked"));
         if (Build.VERSION.SDK_INT >= 33)
             shell("pm grant " + context.getPackageName() + " android.permission.POST_NOTIFICATIONS");
         boolean posted = IncidentNotifications.publish(context, "recovery", false);
@@ -1568,7 +1608,7 @@ public class ProxyTunTest {
     }
     @Test public void androidUiPreviewCapturesPagesAndApplications() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        String before = ApplicationRouting.load(context).summary();
+        String before = ApplicationRouting.load(context).summary(context);
         File directory = new File(context.getExternalFilesDir(null), "application-preview");
         assertTrue(directory.isDirectory() || directory.mkdirs());
         JSONArray cases = new JSONArray();
@@ -1638,7 +1678,7 @@ public class ProxyTunTest {
             previewPrimaryPages(directory, cases, "tablet-landscape");
             previewSettings(directory, cases, "tablet-landscape");
             previewApplications(context, directory, cases, "tablet-landscape", false);
-            assertEquals("Preview must not save application routing", before, ApplicationRouting.load(context).summary());
+            assertEquals("Preview must not save application routing", before, ApplicationRouting.load(context).summary(context));
             assertFalse("Preview must not start VPN", TunnelService.connected() || TunnelService.pending());
         } catch (Exception | AssertionError error) {
             try { capturePreview(directory, cases, "failure"); }
@@ -1688,7 +1728,7 @@ public class ProxyTunTest {
             ApplicationRouting legacy = ApplicationRouting.load(migration);
             assertEquals(ApplicationRouting.EXCLUDE, legacy.mode);
             assertEquals(java.util.Collections.singleton(self), legacy.packages);
-            legacy.persist(migration);
+            legacy.persist(context,migration);
             assertEquals(ApplicationRouting.EXCLUDE, ApplicationRouting.load(migration).mode);
             assertEquals(java.util.Collections.singleton(self), ApplicationRouting.load(migration).packages);
             ApplicationRouting protectedRouting = ApplicationRouting.effective(legacy, true);
@@ -1699,7 +1739,7 @@ public class ProxyTunTest {
                 new ApplicationRouting(ApplicationRouting.ONLY, java.util.Collections.emptySet()).save(context);
                 fail("An empty allowlist must never capture every application");
             } catch (IllegalArgumentException expected) {
-                assertEquals("请至少选择一个应用", expected.getMessage());
+                assertEquals(AppLanguage.current(context).getString(R.string.applications_select_one), expected.getMessage());
             }
             String raw = CoreBridge.config();
             assertNetworkProfile(raw);
@@ -1795,13 +1835,13 @@ public class ProxyTunTest {
             shell("input keyevent KEYCODE_BACK");
             await("All-applications editor did not close", () -> MainActivity.diagnostics().optInt("detail", -1) == 0);
             long preservedGeneration=TunnelService.generation();
-            new ApplicationRouting(ApplicationRouting.ONLY,java.util.Collections.singleton(removed)).persist(preferences);
+            new ApplicationRouting(ApplicationRouting.ONLY,java.util.Collections.singleton(removed)).persist(context,preferences);
             TunnelService.start(context,true);
             await("Rejected routing replacement did not preserve the working VPN",()->
                 !TunnelService.error().isEmpty() && TunnelService.connected() && !TunnelService.pending());
             assertEquals("Rejected routing replacement changed the VPN generation",preservedGeneration,TunnelService.generation());
             tunCarriesSocket(controller,secret);
-            new ApplicationRouting(ApplicationRouting.ALL,java.util.Collections.emptySet()).persist(preferences);
+            new ApplicationRouting(ApplicationRouting.ALL,java.util.Collections.emptySet()).persist(context,preferences);
             await("Rejected routing replacement did not show its error",()->
                 MainActivity.diagnostics().optBoolean("notice_active") && MainActivity.diagnostics().optBoolean("notice_error"));
             tapTarget("notice_close_target");
@@ -1869,7 +1909,7 @@ public class ProxyTunTest {
         } finally {
             TunnelService.stop(context);
             await("Application routing cleanup did not stop VPN", () -> !TunnelService.connected() && !TunnelService.pending());
-            original.persist(preferences);
+            original.persist(context,preferences);
             assertTrue(migration.edit().clear().commit());
         }
     }
@@ -1933,7 +1973,7 @@ public class ProxyTunTest {
 
     private static void verifyApplicationOutbounds(Context context,String controller,String secret) throws Exception {
         verifyUidProbeRecovery();
-        assertEquals(Build.VERSION.SDK_INT>=29,ApplicationOwners.capability().getBoolean("supported"));
+        assertEquals(Build.VERSION.SDK_INT>=29,ApplicationOwners.capability(context).getBoolean("supported"));
         openApplicationRouting();
         previewApplicationPolicies(null, null, "");
         if (Build.VERSION.SDK_INT<29) return;
@@ -1948,14 +1988,14 @@ public class ProxyTunTest {
                     + "    hidden: true\n    proxies: ['"+nodeName+"']\n    empty-fallback: REJECT\n";
                 long missingBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                     .getLong("missing_rejected");
-                CoreBridge.reload(applicationOutboundConfig(named,self,"cor-application-unicode",true));
+                CoreBridge.reload(context,applicationOutboundConfig(named,self,"cor-application-unicode",true));
                 tunCarriesSocket(controller,secret,"198.51.100.1",true,nodeName);
                 tunCarriesSocket(controller,secret,"application-policy.test",true,nodeName);
                 assertEquals("A valid emoji target was reported as missing",missingBefore,
                     new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                         .getLong("missing_rejected"));
             }
-            CoreBridge.reload(applicationOutboundConfig(restrictive,self,"CI-TUN-origin",false));
+            CoreBridge.reload(context,applicationOutboundConfig(restrictive,self,"CI-TUN-origin",false));
             tunCarriesSocket(controller,secret,"198.51.100.1",true,"CI-TUN-origin");
             tunCarriesSocket(controller,secret,"application-policy.test",true,"CI-TUN-origin");
             long rejectedBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
@@ -1972,11 +2012,11 @@ public class ProxyTunTest {
             assertEquals("Unsupported UDP must not be reported as a missing target",udpMissingBefore,
                 new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                     .getLong("missing_rejected"));
-            CoreBridge.reload(applicationOutboundConfig(restrictive,self,"DIRECT",false));
+            CoreBridge.reload(context,applicationOutboundConfig(restrictive,self,"DIRECT",false));
             assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
             long missingRejectedBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                 .getLong("missing_rejected");
-            CoreBridge.reload(applicationOutboundConfig(original,self,"REJECT",false));
+            CoreBridge.reload(context,applicationOutboundConfig(original,self,"REJECT",false));
             boolean blocked=false;
             try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
             catch (IOException expected) {blocked=true;}
@@ -1984,9 +2024,9 @@ public class ProxyTunTest {
             assertEquals("Explicit rejection must not be reported as an unavailable target",
                 missingRejectedBefore,new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                     .getLong("missing_rejected"));
-            CoreBridge.reload(applicationOutboundConfig(original,self,"missing-node",false));
+            CoreBridge.reload(context,applicationOutboundConfig(original,self,"missing-node",false));
             assertEquals("cor-android-network-ok",read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null));
-            CoreBridge.reload(applicationOutboundConfig(original,self,"missing-node",true));
+            CoreBridge.reload(context,applicationOutboundConfig(original,self,"missing-node",true));
             blocked=false;
             try {read(new URL("http://10.0.2.2:18081/probe"),java.net.Proxy.NO_PROXY,null);}
             catch (IOException expected) {blocked=true;}
@@ -1996,7 +2036,7 @@ public class ProxyTunTest {
                     .getLong("missing_rejected")>missingRejectedBefore);
             await("Missing-target rejection did not leave a recovery reminder", () ->
                 "application-target-missing".equals(IncidentNotifications.state(context).optString("code")));
-            CoreBridge.reload(applicationOutboundConfig(restrictive,"com.android.shell","CI-TUN-origin",false));
+            CoreBridge.reload(context,applicationOutboundConfig(restrictive,"com.android.shell","CI-TUN-origin",false));
             long matchesBefore=new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics())
                 .getLong("matches");
             String probeApk=InstrumentationRegistry.getInstrumentation().getContext().getApplicationInfo().sourceDir;
@@ -2018,7 +2058,7 @@ public class ProxyTunTest {
             assertTrue("Another application's assignment must not affect this UID",blocked);
             assertTrue(new JSONObject(org.clashofrust.nativecore.mobile.Mobile.applicationRoutingDiagnostics()).getLong("matches")>0);
         } finally {
-            CoreBridge.reload(original);
+            CoreBridge.reload(context,original);
         }
     }
 
@@ -2275,7 +2315,7 @@ public class ProxyTunTest {
             awaitDirectRecovery(connectivity);
             String rejected = raw.replaceFirst("(?m)^secret:.*$", "secret: ci-controller-rejected");
             assertNotEquals("No controller secret was changed for the isolated failure", raw, rejected);
-            CoreBridge.reload(rejected);
+            CoreBridge.reload(context,rejected);
             measureDiagnostic(true);
             JSONObject authentication = exportMeasurementReport(directory, "controller-authentication");
             JSONObject failed = latestMeasurement(authentication);
@@ -2286,7 +2326,7 @@ public class ProxyTunTest {
             assertEquals("controller_authentication", failed.getJSONObject("failure").getString("code"));
             assertEquals(401, failed.getJSONObject("failure").getInt("http_status"));
             assertEquals(0, failed.getInt("node_failures"));
-            CoreBridge.reload(raw);
+            CoreBridge.reload(context,raw);
             measureDiagnosticGroup();
             JSONObject recovered = exportMeasurementReport(directory, "recovered");
             assertMixedMeasurement(recovered, false);
@@ -2302,12 +2342,13 @@ public class ProxyTunTest {
             java.nio.file.Files.write(new File(directory, "result.json").toPath(),
                 receipt.toString().getBytes(StandardCharsets.UTF_8));
         } finally {
-            CoreBridge.reload(raw);
+            CoreBridge.reload(context,raw);
             TunnelService.stop(context);
         }
     }
 
     @Test public void basicSystemProxyAndTun() throws Exception {
+        notificationShowsModeAndNodeWithOptionalSpeeds();
         heldResponseClassifiesTruncationAsTransportFailure();
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         persistNetworkProfile(context);
@@ -2396,7 +2437,7 @@ public class ProxyTunTest {
             await("Android did not make the VPN its active network", () -> vpnActive(connectivity));
             tunCarriesSocket(controller,secret);
             // A settings reload must preserve the independently owned Android TUN.
-            CoreBridge.reload(CoreBridge.config());
+            CoreBridge.reload(context,CoreBridge.config());
             tunCarriesSocket(controller,secret);
             if (cycle == 0) {
                 shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
@@ -2500,12 +2541,13 @@ public class ProxyTunTest {
             assertTrue(CoreBridge.ready());
             if (Build.VERSION.SDK_INT >= 33)
                 shell("pm grant org.clashofrust.android android.permission.POST_NOTIFICATIONS");
+            String expectedMode = AppLanguage.current(context).getString(R.string.mode_rule) + " · DIRECT";
             await("Cold VPN notification did not show its actual mode and node", () ->
-                vpnNotification(context).contains("规则 · DIRECT"));
+                vpnNotification(context).contains(expectedMode));
             context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putBoolean("notification-speeds", false).commit();
             await("Hiding speeds also hid the VPN node or mode", () -> {
                 String text = vpnNotification(context);
-                return text.contains("规则 · DIRECT") && !text.contains("↓");
+                return text.contains(expectedMode) && !text.contains("↓");
             });
             context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putBoolean("notification-speeds", true).commit();
             await("Cold VPN notification did not restore speed display", () -> vpnNotification(context).contains("↓"));

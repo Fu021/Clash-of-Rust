@@ -26,7 +26,10 @@ mod ui_testing;
 mod ui_tests;
 mod window_state;
 use clash_of_rust::{
-    config::{AccentColor, Profile, Settings, Store, ThemeMode, parse_fake_ip_exclusions},
+    config::{
+        AccentColor, Language, LanguagePreference, Profile, Settings, Store, ThemeMode,
+        parse_fake_ip_exclusions,
+    },
     connection::{self, Field as ConnectionField, Sort as ConnectionSort},
     engine::{Engine, ProxyMode, Scope, Snapshot},
     ip_check,
@@ -316,6 +319,7 @@ struct App {
     backend_remote: bool,
     page: Page,
     settings: Settings,
+    presentation_language: Language,
     rule_state: rules_view::State,
     claude: claude_view::State,
     profiles: Vec<Profile>,
@@ -571,6 +575,7 @@ impl App {
             view_revision: 0,
             backend_remote: false,
             engine,
+            presentation_language: Language::SimplifiedChinese,
             settings,
             profiles,
             geo_status,
@@ -723,7 +728,10 @@ impl App {
                 || self.claude.protection_pending.is_some())
         {
             self.show_notice(
-                "Claude 保护已锁定当前运行模式，请先关闭保护再切换模式".into(),
+                self.presentation_language.text(
+                    "Claude 保护已锁定当前运行模式，请先关闭保护再切换模式",
+                    "Claude protection has locked the routing mode; disable protection before changing it",
+                ).into(),
                 false,
             );
             return Task::none();
@@ -733,7 +741,10 @@ impl App {
                 || self.claude.protection_pending.is_some())
         {
             self.show_notice(
-                "Claude 保护已锁定当前节点，请先关闭保护再切换节点".into(),
+                self.presentation_language.text(
+                    "Claude 保护已锁定当前节点，请先关闭保护再切换节点",
+                    "Claude protection has locked the current node; disable protection before changing it",
+                ).into(),
                 false,
             );
             return Task::none();
@@ -830,7 +841,14 @@ impl App {
             editing_rules: self.rule_state.dirty() || self.rule_state.has_editor(),
         };
         Task::perform(
-            execute(engine, action, scope, self.visible, context),
+            execute(
+                engine,
+                action,
+                scope,
+                self.visible,
+                context,
+                self.presentation_language,
+            ),
             |reply| Message::Finished(Box::new(reply)),
         )
     }
@@ -846,7 +864,13 @@ impl App {
         self.reset_site_filters();
         self.claude.close();
         self.claude.reports = Default::default();
-        self.claude.status = "网络配置已改变，请重新检测地区线索。".into();
+        self.claude.status = self
+            .presentation_language
+            .text(
+                "网络配置已改变，请重新检测地区线索。",
+                "Network settings changed; run the region check again.",
+            )
+            .into();
     }
 
     fn clear_network_test(&mut self) {
@@ -994,7 +1018,10 @@ impl App {
                         self.update_unreachable_notice(message);
                     }
                     Ok(None) => {}
-                    Err(error) => self.update_unreachable_notice(format!("节点复测失败：{error}")),
+                    Err(error) => self.update_unreachable_notice(format!(
+                        "{}{error}",
+                        self.presentation_language.text("节点复测失败：", "Node recheck failed: ")
+                    )),
                 }
                 return self.dispatch(Action::Refresh);
             }
@@ -1008,8 +1035,9 @@ impl App {
                     return Task::none();
                 }
                 self.notification_busy = true;
+                let language = self.presentation_language;
                 return Task::perform(
-                    async {
+                    async move {
                         match platform::notification::show("Clash of Rust", "喵!").await {
                             Err(error)
                                 if error.is::<platform::notification::PermissionDenied>() =>
@@ -1017,7 +1045,10 @@ impl App {
                                 Message::NotificationPermissionDenied
                             }
                             result => Message::NotificationFinished(
-                                result.map_err(|error| format!("系统通知失败：{error:#}")),
+                                result.map_err(|error| format!(
+                                    "{}{error:#}",
+                                    language.text("系统通知失败：", "System notification failed: ")
+                                )),
                             ),
                         }
                     },
@@ -1038,7 +1069,10 @@ impl App {
                             self.confirmation = None;
                         }
                     }
-                    Err(error) => self.show_notice(format!("通知权限检查失败：{error}"), true),
+                    Err(error) => self.show_notice(format!(
+                        "{}{error}",
+                        self.presentation_language.text("通知权限检查失败：", "Notification permission check failed: ")
+                    ), true),
                 }
                 self.offer_notification_settings();
             }
@@ -1049,10 +1083,16 @@ impl App {
             }
             Message::NotificationSettingsOpened(result) => match result {
                 Ok(()) => self.show_notice(
-                    "已打开系统通知设置，请允许 Clash of Rust 发送通知。".into(),
+                    self.presentation_language.text(
+                        "已打开系统通知设置，请允许 Clash of Rust 发送通知。",
+                        "Notification settings opened; allow Clash of Rust to send notifications.",
+                    ).into(),
                     false,
                 ),
-                Err(error) => self.show_notice(format!("通知设置打开失败：{error}"), true),
+                Err(error) => self.show_notice(format!(
+                    "{}{error}",
+                    self.presentation_language.text("通知设置打开失败：", "Could not open notification settings: ")
+                ), true),
             },
             Message::NotificationFinished(result) => {
                 self.notification_busy = false;
@@ -1136,7 +1176,10 @@ impl App {
                     match &result {
                         Err(reason) => {
                             let previous = self.notice_revision;
-                            self.show_notice(format!("检查更新失败：{reason}"), true);
+                            self.show_notice(format!(
+                                "{}{reason}",
+                                self.presentation_language.text("检查更新失败：", "Update check failed: ")
+                            ), true);
                             self.update_check_notice_revision =
                                 (self.notice_revision != previous).then_some(self.notice_revision);
                         }
@@ -1174,10 +1217,22 @@ impl App {
                     if !self.settings.update_prereleases {
                         return Task::none();
                     }
+                    let language = self.presentation_language;
+                    let title = match language {
+                        Language::SimplifiedChinese => {
+                            format!("安装预发布版 {}？", available.version)
+                        }
+                        Language::English => {
+                            format!("Install pre-release {}?", available.version)
+                        }
+                    };
                     let task = self.ask(
-                        &format!("安装预发布版 {}？", available.version),
-                        update::channel::PRERELEASE_WARNING.into(),
-                        "继续安装",
+                        &title,
+                        language.text(
+                            update::channel::PRERELEASE_WARNING,
+                            "Pre-releases may contain undiscovered bugs that cause crashes, network problems or configuration incompatibilities. Back up your configuration before installing.",
+                        ).into(),
+                        language.text("继续安装", "Continue"),
                         desktop_view::Pending::InstallUpdate(available.version),
                     );
                     self.confirmation.as_mut().unwrap().ready_at =
@@ -1300,7 +1355,10 @@ impl App {
             }
             Message::ReleaseOpened(result) => {
                 if let Err(error) = result {
-                    self.show_notice(format!("无法打开 Release 页面：{error}"), true);
+                    self.show_notice(format!(
+                        "{}{error}",
+                        self.presentation_language.text("无法打开 Release 页面：", "Could not open the release page: ")
+                    ), true);
                 }
             }
             Message::Navigate(page) => {
@@ -1578,7 +1636,10 @@ impl App {
             }
             Message::WindowStateSaved(result) => {
                 if let Err(error) = result {
-                    self.show_notice(format!("无法保存窗口状态：{error}"), true);
+                    self.show_notice(format!(
+                        "{}{error}",
+                        self.presentation_language.text("无法保存窗口状态：", "Could not save window state: ")
+                    ), true);
                 }
             }
             Message::Window((
@@ -1630,7 +1691,10 @@ impl App {
                     return self.dispatch(Action::SavePorts(mixed_port));
                 }
                 _ => {
-                    self.show_notice("端口必须为 1–65535 的整数".into(), true);
+                    self.show_notice(self.presentation_language.text(
+                        "端口必须为 1–65535 的整数",
+                        "Port must be an integer from 1 to 65535",
+                    ).into(), true);
                 }
             },
             Message::UpdateGeo => {
@@ -1673,11 +1737,17 @@ impl App {
                     Ok(()) => {
                         self.reset_network_results();
                         self.show_notice(
-                            "GeoIP、GeoSite、Country、ASN 数据已全部更新".into(),
+                            self.presentation_language.text(
+                                "GeoIP、GeoSite、Country、ASN 数据已全部更新",
+                                "GeoIP, GeoSite, Country and ASN data updated",
+                            ).into(),
                             false,
                         );
                     }
-                    Err(error) => self.show_notice(format!("Geo 更新失败：{error}"), true),
+                    Err(error) => self.show_notice(format!(
+                        "{}{error}",
+                        self.presentation_language.text("Geo 更新失败：", "Geo update failed: ")
+                    ), true),
                 }
                 return self.dispatch(Action::Refresh);
             }
@@ -1752,10 +1822,11 @@ impl App {
                         if good == 0 && !delays.is_empty() {
                             self.show_unreachable_nodes(&group, delays.len());
                         } else {
-                            self.show_notice(
-                                format!("{group}：{good}/{} 个节点可达", delays.len()),
-                                false,
-                            );
+                            let message = match self.presentation_language {
+                                Language::SimplifiedChinese => format!("{group}：{good}/{} 个节点可达", delays.len()),
+                                Language::English => format!("{group}: {good}/{} nodes reachable", delays.len()),
+                            };
+                            self.show_notice(message, false);
                         }
                         self.node_delays.extend(delays);
                         self.proxy_order.get_mut().clear();
@@ -1767,7 +1838,11 @@ impl App {
                         }
                     }
                     Err(error) => {
-                        self.show_notice(format!("{group} 测速失败：{error}"), true);
+                        let message = match self.presentation_language {
+                            Language::SimplifiedChinese => format!("{group} 测速失败：{error}"),
+                            Language::English => format!("{group} speed test failed: {error}"),
+                        };
+                        self.show_notice(message, true);
                     }
                 }
                 return self.dispatch(Action::Refresh);
@@ -1789,7 +1864,10 @@ impl App {
                 Ok(minutes) if minutes <= 10080 => {
                     return self.dispatch(Action::UpdateInterval(minutes));
                 }
-                _ => self.show_notice("请输入 0–10080 分钟，0 表示关闭自动检查更新".into(), true),
+                _ => self.show_notice(self.presentation_language.text(
+                    "请输入 0–10080 分钟，0 表示关闭自动检查更新",
+                    "Enter 0–10080 minutes; 0 disables automatic update checks",
+                ).into(), true),
             },
             Message::SaveSubscriptionInterval => {
                 match self.subscription_interval_input.trim().parse::<u32>() {
@@ -1797,7 +1875,10 @@ impl App {
                         return self.dispatch(Action::SubscriptionInterval(minutes));
                     }
                     _ => {
-                        self.show_notice("请输入 0–10080 分钟，0 表示关闭订阅自动更新".into(), true)
+                        self.show_notice(self.presentation_language.text(
+                            "请输入 0–10080 分钟，0 表示关闭订阅自动更新",
+                            "Enter 0–10080 minutes; 0 disables automatic subscription updates",
+                        ).into(), true)
                     }
                 }
             }
@@ -1806,7 +1887,10 @@ impl App {
                     return self.dispatch(Action::DelayInterval(minutes));
                 }
                 _ => {
-                    self.show_notice("请输入 0–1440 分钟，0 表示关闭定时测速".into(), true);
+                    self.show_notice(self.presentation_language.text(
+                        "请输入 0–1440 分钟，0 表示关闭定时测速",
+                        "Enter 0–1440 minutes; 0 disables scheduled speed tests",
+                    ).into(), true);
                 }
             },
             Message::FakeIpEditor(open) => {
@@ -1822,11 +1906,17 @@ impl App {
             }
             Message::FakeIpAdd => {
                 if !self.settings.dns_override {
-                    self.fake_ip_error = "请先开启 DNS 覆盖".into();
+                    self.fake_ip_error = self.presentation_language.text(
+                        "请先开启 DNS 覆盖",
+                        "Enable DNS override first",
+                    ).into();
                 } else {
                     match parse_fake_ip_exclusions(&self.fake_ip_input) {
                         Ok(values) if values.is_empty() => {
-                            self.fake_ip_error = "请输入要排除的域名".into();
+                            self.fake_ip_error = self.presentation_language.text(
+                                "请输入要排除的域名",
+                                "Enter a domain to exclude",
+                            ).into();
                         }
                         Ok(values) => {
                             let mut settings = self.settings.clone();
@@ -1855,7 +1945,10 @@ impl App {
             }
             Message::FakeIpRestoreDefaults => {
                 if !self.settings.dns_override {
-                    self.fake_ip_error = "请先开启 DNS 覆盖".into();
+                    self.fake_ip_error = self.presentation_language.text(
+                        "请先开启 DNS 覆盖",
+                        "Enable DNS override first",
+                    ).into();
                 } else {
                     self.fake_ip_error.clear();
                     return self.dispatch(Action::FakeIpRestoreDefaults);
@@ -1910,7 +2003,11 @@ impl App {
                         && (self.node_delays.is_empty()
                             || self.node_delays.values().any(|delay| *delay > 0))
                     {
-                        self.show_unreachable_nodes("本次定时测速", delays.len());
+                        self.show_unreachable_nodes(
+                            self.presentation_language
+                                .text("本次定时测速", "Scheduled latency test"),
+                            delays.len(),
+                        );
                     }
                     self.node_delays = delays;
                     self.proxy_order.get_mut().clear();
@@ -2306,8 +2403,10 @@ impl App {
                     {
                         if self.rule_state.dirty() || self.rule_state.has_editor() {
                             self.show_notice(
-                                "该订阅已被另一客户端删除，未保存的规则草稿仍保留在当前页面。"
-                                    .into(),
+                                self.presentation_language.text(
+                                    "该订阅已被另一客户端删除，未保存的规则草稿仍保留在当前页面。",
+                                    "Another client deleted this subscription. The unsaved rule draft remains on this page.",
+                                ).into(),
                                 true,
                             );
                         } else {
@@ -2324,8 +2423,10 @@ impl App {
                     self.group_offsets.clear();
                     self.cancel_site_checks();
                     self.claude.close();
-                    self.claude.status =
-                        "内核已停止；已获得的报告保留，网络结果可能已过期。".into();
+                    self.claude.status = self.presentation_language.text(
+                        "内核已停止；已获得的报告保留，网络结果可能已过期。",
+                        "The core stopped. Reports are retained; network results may be outdated.",
+                    ).into();
                 }
                 let core_failed =
                     !reply.running && (reply.start_requested || self.snapshot.running);
@@ -2342,7 +2443,10 @@ impl App {
                             .as_ref()
                             .err()
                             .cloned()
-                            .unwrap_or_else(|| "内核已退出，请查看日志或重试启动。".into()),
+                            .unwrap_or_else(|| self.presentation_language.text(
+                                "内核已退出，请查看日志或重试启动。",
+                                "The core exited; check the logs or try starting it again.",
+                            ).into()),
                     );
                 }
                 self.snapshot.running = reply.running;
@@ -2361,7 +2465,7 @@ impl App {
                         }
                     }
                     if let Some(guard) = &snapshot.claude_guard {
-                        self.claude.guard_report(guard);
+                        self.claude.guard_report(guard, self.presentation_language);
                     } else if reply.scope == Scope::Claude {
                         self.claude.clear_guard();
                     }
@@ -2447,7 +2551,7 @@ impl App {
                 }
                 match reply.notice {
                     Ok(notice) => {
-                        if notice.starts_with("订阅信息已保存") {
+                        if reply.profile_edit {
                             self.profile_editor = None;
                         }
                         if let Some(error) = subscription_failure {
@@ -2499,7 +2603,7 @@ impl App {
             }
             Message::ProbeCancel => {
                 self.clear_network_test();
-                self.test_results = vec!["检查已取消".into()];
+                self.test_results = vec![self.presentation_language.text("检查已取消", "Check cancelled").into()];
                 self.network_codes = vec!["cancelled"];
             }
             Message::Probe(fields) => {
@@ -2507,7 +2611,10 @@ impl App {
                     return Task::none();
                 }
                 if self.claude.protection_pending.is_some() {
-                    self.test_results = vec!["Claude 保护切换中，请稍后重试".into()];
+                    self.test_results = vec![self.presentation_language.text(
+                        "Claude 保护切换中，请稍后重试",
+                        "Claude protection is changing; try again shortly",
+                    ).into()];
                     return Task::none();
                 }
                 self.probing = true;
@@ -2549,12 +2656,15 @@ impl App {
                 self.network_test_task = None;
                 match result {
                     Ok(result) => {
-                        self.test_results = result.lines();
+                        self.test_results = result.lines_in(self.presentation_language);
                         self.network_codes =
                             result.entries.iter().map(|entry| entry.code).collect();
                     }
                     Err(error) => {
-                        self.test_results = vec![format!("检查失败 · {error}")];
+                        self.test_results = vec![format!(
+                            "{} · {error}",
+                            self.presentation_language.text("检查失败", "Check failed")
+                        )];
                     }
                 }
             }
@@ -2611,7 +2721,10 @@ impl App {
                 if self.tray_startup.is_some() && self.tray_close_requested.is_none() {
                     self.tray_close_requested = Some(id);
                     self.show_notice(
-                        "桌面托盘正在初始化，完成后会自动关闭窗口；再次关闭可退出程序。".into(),
+                        self.presentation_language.text(
+                            "桌面托盘正在初始化，完成后会自动关闭窗口；再次关闭可退出程序。",
+                            "The tray is starting. The window will close when ready; close again to exit.",
+                        ).into(),
                         false,
                     );
                     return Task::none();
@@ -2648,14 +2761,19 @@ impl App {
                 Ok(()) => return desktop_runtime::exit(),
                 Err(error) => {
                     self.exiting = false;
-                    self.show_critical(format!("退出失败：{error}"));
+                    self.show_critical(format!(
+                        "{}{error}",
+                        self.presentation_language.text("退出失败：", "Exit failed: ")
+                    ));
                     if self.updates.busy() {
                         if let Some(session) = &self.updates.installing {
                             session.cancel();
                         }
                         self.updates.progress = None;
-                        self.updates.failure =
-                            Some("更新失败：客户端无法正常退出，请检查代理恢复或内核状态".into());
+                        self.updates.failure = Some(self.presentation_language.text(
+                            "更新失败：客户端无法正常退出，请检查代理恢复或内核状态",
+                            "Update failed: the client could not exit. Check proxy recovery and core status.",
+                        ).into());
                     }
                 }
             },
@@ -2665,18 +2783,31 @@ impl App {
 
     fn install_download(&mut self, downloaded: Arc<update::Downloaded>) -> Task<Message> {
         if self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some() {
-            self.fail_update(clash_client_core::protection::READ_ONLY_NOTICE.into());
+            self.fail_update(
+                self.presentation_language
+                    .text(
+                        clash_client_core::protection::READ_ONLY_NOTICE,
+                        "Disable Claude protection first; network changes and updates are locked while protection is active",
+                    )
+                    .into(),
+            );
             return Task::none();
         }
         self.updates.prepare_install(downloaded.clone());
         let data_dir = startup_store().ok().map(|store| store.root);
+        let language = self.presentation_language;
         Task::perform(
             async move {
                 match tokio::task::spawn_blocking(move || update::handoff_at(downloaded, data_dir))
                     .await
                 {
                     Ok(result) => result.map_err(|error| format!("{error:#}")),
-                    Err(_) => Err("安装助手无法启动，请重试".into()),
+                    Err(_) => Err(language
+                        .text(
+                            "安装助手无法启动，请重试",
+                            "Could not start the installation helper; try again",
+                        )
+                        .into()),
                 }
             },
             Message::UpdateHandoff,
@@ -3772,13 +3903,13 @@ mod dev2_tests {
             .chain(app.site_queue.iter())
             .cloned()
             .collect();
-        assert_eq!(checking.len(), 5);
-        assert!(
-            ip_check::services()
-                .iter()
-                .filter(|service| checking.contains(&service.id))
-                .all(|service| service.group == "AI")
-        );
+        let expected: BTreeSet<_> = ip_check::services()
+            .iter()
+            .filter(|service| service.group == "AI")
+            .map(|service| service.id.clone())
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(checking, expected);
         let generation = app.site_generation;
         let _ = app.update(Message::SiteReport);
         assert!(!app.site_show_results);

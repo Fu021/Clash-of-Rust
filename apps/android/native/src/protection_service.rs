@@ -70,6 +70,23 @@ struct Notifications {
     class: Global<JClass<'static>>,
 }
 impl Notifications {
+    fn language(&self) -> core::config::Language {
+        self.vm
+            .attach_current_thread(|env| -> Result<core::config::Language> {
+                let result = env
+                    .call_static_method(
+                        &self.class,
+                        jni_str!("language"),
+                        jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )?
+                    .l()?;
+                let tag = env.cast_local::<JString>(result)?.try_to_string(env)?;
+                Ok(core::config::LanguagePreference::System.resolve([tag]))
+            })
+            .unwrap_or(core::config::Language::English)
+    }
+
     fn show(&self, title: &str, message: &str) -> Result<()> {
         self.vm.attach_current_thread(|env| -> Result<()> {
             let title = env.new_string(title)?;
@@ -149,7 +166,9 @@ fn configure(env: &mut Env<'_>, class: JClass<'_>, value: JString<'_>) -> Result
                                         secret: next.secret.clone(), ..Default::default()
                                     })?;
                                     let host = notifications.clone();
-                                    guard = Some(core::claude_check::guard::Guard::start(api, next.node.clone(),
+                                    let language_host = notifications.clone();
+                                    guard = Some(core::claude_check::guard::Guard::start_localized(api, next.node.clone(),
+                                        move || language_host.language(),
                                         move |title, message| {
                                             let host = host.clone();
                                             async move {

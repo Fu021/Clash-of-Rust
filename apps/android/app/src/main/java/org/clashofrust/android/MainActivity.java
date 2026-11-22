@@ -105,7 +105,7 @@ public final class MainActivity extends NativeActivity {
         if (waitingForInstallPermission) {
             waitingForInstallPermission=false;
             if (getPackageManager().canRequestPackageInstalls()) UpdateInstaller.launch(this);
-            else emit("notice","尚未允许安装更新，可在设置页点击安装更新重试");
+            else emit("notice",AppLanguage.current(this).getString(R.string.update_permission_missing));
         }
     }
     @Override protected void onPause() { emit("visible", false); super.onPause(); }
@@ -127,17 +127,17 @@ public final class MainActivity extends NativeActivity {
             String op = data.getString("op");
             switch (op) {
                 case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); runOnUiThread(this::connectFromTile); break;
-                case "reload": CoreBridge.reload(data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
+                case "reload": CoreBridge.reload(this, data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
                 case "state": return CoreBridge.state()
                     .put("network_revision",networkRevision())
                     .put("font_sizes",systemFontSizes())
                     .put("dark", Appearance.systemDark(this))
                     .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                     .put("incident_notifications", IncidentNotifications.state(this))
-                    .put("application_scope",ApplicationRouting.load(this).summary()).toString();
+                    .put("application_scope",ApplicationRouting.load(this).summary(this)).toString();
                 case "network-info": {
                     NetworkOverview current = networkOverview;
-                    if (current == null) throw new IOException("系统网络信息尚未就绪");
+                    if (current == null) throw new IOException(AppLanguage.current(this).getString(R.string.network_info_pending));
                     return current.read().toString();
                 }
                 case "connect":
@@ -172,6 +172,12 @@ public final class MainActivity extends NativeActivity {
                     getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", data.getBoolean("enabled")).commit();
                     break;
                 case "appearance": return Appearance.startup(this).put("font_sizes",systemFontSizes()).toString();
+                case "system-languages": {
+                    android.os.LocaleList locales = android.content.res.Resources.getSystem().getConfiguration().getLocales();
+                    org.json.JSONArray languages = new org.json.JSONArray();
+                    for (int index = 0; index < locales.size(); index++) languages.put(locales.get(index).toLanguageTag());
+                    return new JSONObject().put("languages", languages).toString();
+                }
                 case "system-bars": runOnUiThread(() -> {
                     Appearance.persistSystemMode(this,data.optInt("mode",2));
                     configureSystemBars(data.optBoolean("dark"));
@@ -197,7 +203,7 @@ public final class MainActivity extends NativeActivity {
                 case "export": {
                     String name = data.getString("name"), content = data.getString("content");
                     runOnUiThread(() -> {
-                        if (exportContent != null) { emit("export-error", "已有导出操作正在进行"); return; }
+                        if (exportContent != null) { emit("export-error", AppLanguage.current(this).getString(R.string.export_in_progress)); return; }
                         exportContent = content;
                         documentFailure = null;
                         try {
@@ -209,7 +215,7 @@ public final class MainActivity extends NativeActivity {
                             documentFailure = error.toString();
                             android.util.Log.e("ClashOfRust",
                                 "DOCUMENT_PICKER_FAILED (" + error.getClass().getSimpleName() + ")");
-                            emit("export-error", "无法打开保存位置：" + error);
+                            emit("export-error", AppLanguage.current(this).getString(R.string.export_open_failed, error));
                         }
                     });
                     break;
@@ -232,10 +238,10 @@ public final class MainActivity extends NativeActivity {
                 case "battery-settings": runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))); break;
                 case "applications-list": return ApplicationCatalog.read(this).toString();
                 case "applications-save": return ApplicationCatalog.save(this, data).toString();
-                case "application-policy-capability": return ApplicationOwners.capability().toString();
+                case "application-policy-capability": return ApplicationOwners.capability(this).toString();
                 case "applications-reconnect":
                     if (CoreBridge.protectedMode(this))
-                        throw new IllegalStateException("请先关闭 Claude 保护，再修改应用规则");
+                        throw new IllegalStateException(AppLanguage.current(this).getString(R.string.applications_guard_rules));
                     if (TunnelService.connected()) TunnelService.start(this, true);
                     break;
                 case "applications-permissions":
@@ -243,7 +249,7 @@ public final class MainActivity extends NativeActivity {
                         try {
                             startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                                 Uri.parse("package:" + getPackageName())));
-                        } catch (RuntimeException error) { emit("error", "无法打开应用权限设置：" + error); }
+                        } catch (RuntimeException error) { emit("error", AppLanguage.current(this).getString(R.string.applications_permission_settings, error)); }
                     });
                     break;
                 case "notification-speeds":
@@ -257,7 +263,7 @@ public final class MainActivity extends NativeActivity {
                 case "acknowledge-incident":
                     IncidentNotifications.acknowledge(this, data.getLong("sequence")); break;
                 case "notify": {
-                    String title = data.optString("title", "Clash of Rust"), message = data.optString("message", "喵!");
+                    String title = data.optString("title", "Clash of Rust"), message = data.optString("message", AppLanguage.current(this).getString(R.string.notification_test_message));
                     if (!SystemNotifications.permitted(this) && data.optBoolean("request_permission")) {
                         runOnUiThread(() -> {
                             notificationTitle = title; notificationMessage = message;
@@ -269,14 +275,14 @@ public final class MainActivity extends NativeActivity {
                 case "open-url": {
                     Uri url = Uri.parse(data.getString("url"));
                     if (!"https".equals(url.getScheme()) && !"http".equals(url.getScheme()))
-                        throw new IOException("仅支持 HTTP/HTTPS 地址");
+                        throw new IOException(AppLanguage.current(this).getString(R.string.link_scheme));
                     runOnUiThread(() -> {
                         try { startActivity(new Intent(Intent.ACTION_VIEW, url)); }
-                        catch (RuntimeException error) { emit("link-error", "无法打开网页：" + error); }
+                        catch (RuntimeException error) { emit("link-error", AppLanguage.current(this).getString(R.string.link_open_failed, error)); }
                     });
                     break;
                 }
-                default: throw new IOException("未知 Android 操作：" + op);
+                default: throw new IOException(AppLanguage.current(this).getString(R.string.android_operation_unknown, op));
             }
             return new JSONObject().put("ok", true).toString();
         } catch (Exception error) {
@@ -327,7 +333,7 @@ public final class MainActivity extends NativeActivity {
     }
     private void authorizeVpn(long request) {
         if (vpnPrompt) {
-            authorizationResult(request, false, "已有 VPN 授权正在进行");
+            authorizationResult(request, false, AppLanguage.current(this).getString(R.string.vpn_authorization_pending));
             return;
         }
         try {
@@ -353,7 +359,7 @@ public final class MainActivity extends NativeActivity {
     private void prepareVpn(boolean reconfigure, String request) {
         if (!TunnelService.current(this, request)) return;
         if (vpnPrompt || (TunnelService.connected() && !reconfigure)) return;
-        if (!CoreBridge.ready()) { emit("error", "请先启动内核"); return; }
+        if (!CoreBridge.ready()) { emit("error", AppLanguage.current(this).getString(R.string.core_start_first)); return; }
         Intent permission = VpnService.prepare(this);
         vpnReconfigure = reconfigure;
         vpnStartRequest = request;
@@ -381,7 +387,7 @@ public final class MainActivity extends NativeActivity {
                 vpnAuthorizationRequest = 0;
                 if (pending != 0) {
                     boolean granted = result == RESULT_OK && VpnService.prepare(this) == null;
-                    authorizationResult(pending, granted, granted ? "" : "VPN 授权已取消或失效");
+                    authorizationResult(pending, granted, granted ? "" : AppLanguage.current(this).getString(R.string.vpn_authorization_cancelled));
                 }
                 return;
             }
@@ -389,7 +395,7 @@ public final class MainActivity extends NativeActivity {
                 vpnReconfigure = false;
                 vpnStartRequest = null;
                 emit("vpn-cancelled", true);
-                emit("error", "VPN 授权已取消");
+                emit("error", AppLanguage.current(this).getString(R.string.vpn_authorization_cancelled_short));
             }
             return;
         }
@@ -402,23 +408,23 @@ public final class MainActivity extends NativeActivity {
         worker.execute(() -> {
             try {
                 if (request == SAVE) {
-                    if (content == null) throw new IOException("导出内容已失效");
+                    if (content == null) throw new IOException(AppLanguage.current(this).getString(R.string.export_expired));
                     try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
-                        if (out == null) throw new IOException("无法写入所选文件");
+                        if (out == null) throw new IOException(AppLanguage.current(this).getString(R.string.export_write_failed));
                         out.write(content.getBytes(StandardCharsets.UTF_8));
                     }
-                    emit("export-notice", "文件已导出");
+                    emit("export-notice", AppLanguage.current(this).getString(R.string.export_complete));
                 } else {
                     try (InputStream in = getContentResolver().openInputStream(uri)) {
-                        if (in == null) throw new IOException("无法读取所选文件");
+                        if (in == null) throw new IOException(AppLanguage.current(this).getString(R.string.import_read_failed));
                         ByteArrayOutputStream out = new ByteArrayOutputStream();
                         byte[] buffer = new byte[8192];
                         int count;
                         while ((count = in.read(buffer)) != -1) {
-                            if (out.size() + count > 10 * 1024 * 1024) throw new IOException("订阅超过 10 MiB");
+                            if (out.size() + count > 10 * 1024 * 1024) throw new IOException(AppLanguage.current(this).getString(R.string.import_too_large));
                             out.write(buffer, 0, count);
                         }
-                        String name="导入配置";
+                        String name=AppLanguage.current(this).getString(R.string.import_default_name);
                         try (android.database.Cursor cursor=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)) {
                             if (cursor!=null && cursor.moveToFirst()) name=cursor.getString(0);
                         }
@@ -445,7 +451,7 @@ public final class MainActivity extends NativeActivity {
             if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED && title != null && message != null) {
                 try { SystemNotifications.show(this, title, message); }
                 catch (Exception error) { emit("error", error.toString()); }
-            } else emit("notice", "未获得系统通知权限，Claude 保护通知将无法显示");
+            } else emit("notice", AppLanguage.current(this).getString(R.string.notification_permission_denied));
         }
     }
 }

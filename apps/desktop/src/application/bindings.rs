@@ -592,6 +592,7 @@ impl native::Host for DesktopHost {
         self.data = UiData::default();
         self.models.attach(&self.data);
         self.last_frame = None;
+        self.app.presentation_language = self.app.settings.language.resolve_desktop();
         self.app.present(&self.data, &mut self.models);
         let result = (|| -> anyhow::Result<Renderer> {
             let owner = std::env::current_exe()?;
@@ -631,6 +632,7 @@ impl native::Host for DesktopHost {
             let open = HostPacket::Open {
                 protocol: wire::PROTOCOL,
                 version: clash_of_rust::VERSION.into(),
+                language: self.app.presentation_language.tag().into(),
                 id: id.0,
                 size: wire_size(settings.size),
                 visible: settings.visible,

@@ -1,0 +1,35 @@
+export global IpStatusText {
+    pure callback region-name(string) -> string;
+    region-name(value) => { value }
+
+    pure public function label(value: string) -> string {
+        if value == "全部结果" { return @tr("全部结果"); }
+        if value == "确认可用" { return @tr("确认可用"); }
+        if value == "部分可用" { return @tr("部分可用"); }
+        if value == "仅网页可达" { return @tr("仅网页可达"); }
+        if value == "信息已识别" { return @tr("信息已识别"); }
+        if value == "不可用或受限" { return @tr("不可用或受限"); }
+        if value == "结果未确认" { return @tr("结果未确认"); }
+        if value == "超时或失败" { return @tr("超时或失败"); }
+        if value == "未检测" { return @tr("未检测"); }
+        if value == "全部地区" { return @tr("全部地区"); }
+        if value == "全部识别地区" { return @tr("全部识别地区"); }
+        if value == "未识别地区" { return @tr("未识别地区"); }
+        if value == "全部分类" { return @tr("全部分类"); }
+        if value == "IP信息" { return @tr("IP信息"); }
+        if value == "全球" { return @tr("全球"); }
+        if value == "东南亚" { return @tr("东南亚"); }
+        if value == "体育" { return @tr("体育"); }
+        if value == "其他" { return @tr("其他"); }
+        if value == "北美" { return @tr("北美"); }
+        if value == "南美" { return @tr("南美"); }
+        if value == "台湾" { return @tr("台湾"); }
+        if value == "大洋洲" { return @tr("大洋洲"); }
+        if value == "日本" { return @tr("日本"); }
+        if value == "欧洲" { return @tr("欧洲"); }
+        if value == "非洲" { return @tr("非洲"); }
+        if value == "韩国" { return @tr("韩国"); }
+        if value == "香港" { return @tr("香港"); }
+        return root.region-name(value);
+    }
+}

@@ -71,7 +71,7 @@ public final class TunnelService extends VpnService {
     @Override public void onCreate() {
         super.onCreate(); instance = this;
         NotificationManager manager = getSystemService(NotificationManager.class);
-        manager.createNotificationChannel(new NotificationChannel("vpn", "VPN 连接", NotificationManager.IMPORTANCE_LOW));
+        manager.createNotificationChannel(new NotificationChannel("vpn", AppLanguage.current(this).getString(R.string.vpn_channel), NotificationManager.IMPORTANCE_LOW));
         notificationTask = serial.scheduleWithFixedDelay(this::updateStatus, 1, 1, TimeUnit.SECONDS);
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -82,7 +82,7 @@ public final class TunnelService extends VpnService {
                 // A previously queued foreground start must not undo a later stop.
                 // Android's foreground deadline belongs to the service, even
                 // when this request is stale and a newer start prevents stopSelf.
-                startForeground(1, notification(connected ? "VPN 已连接" : "VPN 连接已取消"));
+                startForeground(1, notification(AppLanguage.current(this).getString(connected ? R.string.vpn_connected : R.string.vpn_cancelled)));
                 if (current(this, acceptedRequest)) return START_STICKY;
                 stopForeground(STOP_FOREGROUND_REMOVE);
                 stopSelfResult(startId);
@@ -91,7 +91,7 @@ public final class TunnelService extends VpnService {
             boolean restore = intent == null;
             boolean alwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
             if (restore && !alwaysOn && !getSharedPreferences("vpn", MODE_PRIVATE).getBoolean("desired", false)) {
-                startForeground(1, notification("VPN 连接已取消"));
+                startForeground(1, notification(AppLanguage.current(this).getString(R.string.vpn_cancelled)));
                 stopForeground(STOP_FOREGROUND_REMOVE);
                 stopSelfResult(startId); return START_NOT_STICKY;
             }
@@ -100,7 +100,7 @@ public final class TunnelService extends VpnService {
             stopping = false;
             getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", true).apply();
             clearError();
-            startForeground(1, notification("正在连接…"));
+            startForeground(1, notification(AppLanguage.current(this).getString(R.string.vpn_connecting)));
             boolean reconfigure = intent != null && RECONFIGURE.equals(intent.getAction());
             String accepted = request;
             serial.execute(() -> connect(reconfigure, accepted));
@@ -117,7 +117,7 @@ public final class TunnelService extends VpnService {
         try {
             CoreBridge.restore(this);
             if (stopping || !current(this, request)) return;
-            if (VpnService.prepare(this) != null) throw new IllegalStateException("VPN 授权已失效，请打开应用重新连接");
+            if (VpnService.prepare(this) != null) throw new IllegalStateException(AppLanguage.current(this).getString(R.string.vpn_permission_expired));
             boolean ipv6 = CoreBridge.ipv6();
             Builder builder = new Builder().setSession("Clash of Rust").setMtu(1500)
                 .addAddress("198.18.0.1", 30).addRoute("0.0.0.0", 0).addDnsServer("198.18.0.2");
@@ -140,7 +140,7 @@ public final class TunnelService extends VpnService {
                     Mobile.stopTun();
                 }
                 replacement = builder.establish();
-                if (replacement == null) throw new IllegalStateException("系统拒绝建立 VPN");
+                if (replacement == null) throw new IllegalStateException(AppLanguage.current(this).getString(R.string.vpn_establish_denied));
                 established = true;
                 connected = false;
                 // establish() returns before ConnectivityService/netd finishes
@@ -182,7 +182,7 @@ public final class TunnelService extends VpnService {
                     if (keepPrevious && previousReaderStopped) Mobile.startTun(previous.getFd(), interfaceIpv6);
                 } catch (Exception restore) {
                     keepPrevious = false;
-                    lastError += "; 原连接恢复失败：" + restore;
+                    lastError += "; " + AppLanguage.current(this).getString(R.string.vpn_restore_failed, restore);
                     android.util.Log.e("ClashOfRust", "Restore previous VPN reader", restore);
                 }
             }
@@ -194,14 +194,14 @@ public final class TunnelService extends VpnService {
                 try { ProtectionRuntime.sync(this); }
                 catch (Exception guard) {
                     protectionRestored = false;
-                    lastError += "; 保护恢复失败：" + guard;
+                    lastError += "; " + AppLanguage.current(this).getString(R.string.vpn_guard_restore_failed, guard);
                     android.util.Log.e("ClashOfRust", "Restore protection after rejected VPN replacement", guard);
                 }
                 try {
                     VpnTileService.refresh(this);
-                    getSystemService(NotificationManager.class).notify(1, notification("VPN 重建失败，原连接已保留"));
+                    getSystemService(NotificationManager.class).notify(1, notification(AppLanguage.current(this).getString(R.string.vpn_rebuild_preserved)));
                 } catch (RuntimeException status) { android.util.Log.w("ClashOfRust", "Update preserved VPN status", status); }
-                MainActivity.emit(protectionRestored ? "error" : "critical", "VPN 重建失败，原连接已保留：" + lastError);
+                MainActivity.emit(protectionRestored ? "error" : "critical", AppLanguage.current(this).getString(R.string.vpn_rebuild_preserved_detail, lastError));
                 IncidentNotifications.publish(this, protectionRestored ? "recovery" : "critical", true);
                 return;
             }
@@ -209,7 +209,7 @@ public final class TunnelService extends VpnService {
                 closeDescriptor(previous);
                 if (descriptor == previous) descriptor = null;
             }
-            MainActivity.emit("critical", "VPN 启动失败：" + lastError);
+            MainActivity.emit("critical", AppLanguage.current(this).getString(R.string.vpn_start_failed, lastError));
             IncidentNotifications.publish(this, "critical", true);
             disconnect(request);
         }
@@ -247,7 +247,7 @@ public final class TunnelService extends VpnService {
         }
     }
     @Override public void onRevoke() {
-        lastError = "VPN 授权已被系统撤回";
+        lastError = AppLanguage.current(this).getString(R.string.vpn_permission_revoked);
         MainActivity.emit("error", lastError);
         IncidentNotifications.publish(this, "recovery", true);
         stop(this);
@@ -271,15 +271,15 @@ public final class TunnelService extends VpnService {
             .setOnlyAlertOnce(true).setShowWhen(false)
             .setSmallIcon(R.drawable.ic_app).setOngoing(true).setContentIntent(open).build();
     }
-    static String statusText(String down, String up, String node, String mode, boolean speeds, String protection) {
+    static String statusText(Context context, String down, String up, String node, String mode, boolean speeds, String protection) {
         String label;
         switch (mode) {
-            case "global": label = "全局"; break;
-            case "rule": label = "规则"; break;
-            case "direct": label = "直连"; break;
-            default: label = "未知模式"; break;
+            case "global": label = context.getString(R.string.mode_global); break;
+            case "rule": label = context.getString(R.string.mode_rule); break;
+            case "direct": label = context.getString(R.string.mode_direct); break;
+            default: label = context.getString(R.string.mode_unknown); break;
         }
-        String text = label + " · " + (node == null || node.isEmpty() ? "节点待确认" : node);
+        String text = label + " · " + (node == null || node.isEmpty() ? context.getString(R.string.node_unknown) : node);
         if (speeds) text += "\n↓ " + down + "  ↑ " + up;
         return protection.isEmpty() ? text : protection + "\n" + text;
     }
@@ -307,10 +307,11 @@ public final class TunnelService extends VpnService {
         }
         if (!SystemNotifications.permitted(this)) return;
         try {
-            String text = statusText(speed(networkStatus.optLong("down")), speed(networkStatus.optLong("up")),
+            Context localized = AppLanguage.current(this);
+            String text = statusText(localized, speed(networkStatus.optLong("down")), speed(networkStatus.optLong("up")),
                 networkStatus.optString("node"), networkStatus.optString("mode"),
                 getSharedPreferences("appearance", MODE_PRIVATE).getBoolean("notification-speeds", true),
-                ProtectionRuntime.notificationStatus());
+                ProtectionRuntime.notificationStatus(localized));
             synchronized (requests) {
                 if (instance == this && connected && !stopping && !text.equals(lastStatus))
                     getSystemService(NotificationManager.class).notify(1, notification(text));

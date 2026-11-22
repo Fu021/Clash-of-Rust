@@ -18,7 +18,7 @@ export component SettingsNavigation inherits Flickable {
     navigation := HorizontalLayout {
         x: 0px; y: 0px; width: self.preferred-width; height: parent.height;
         spacing: 4px; alignment: start;
-        for title[index] in ["常规", "网络", "外观", "更新", "计划任务"]: ActionButton {
+        for title[index] in [@tr("常规"), @tr("网络"), @tr("外观"), @tr("更新"), @tr("计划任务")]: ActionButton {
             geometry-key: "settings-section:" + index;
             text: title; quiet: true; compact: true;
             selected: root.active-section == index;
@@ -59,28 +59,39 @@ export component SettingsPage inherits PageSurface {
                 alignment: start;
                 padding-right: Theme.content-gap; padding-bottom: Theme.card-padding; spacing: Theme.section-gap;
                 general-section := SettingsSection {
-                    title: "常规";
+                    title: @tr("常规");
                     ListPanel {
-                        FormRow { title: "后台自启动";
+                        FormRow { title: @tr("语言"); hint: @tr("重新打开窗口后生效。");
+                            Select {
+                                geometry-key: "language";
+                                width: 162px * Theme.text-scale; horizontal-stretch: 0;
+                                options: [@tr("跟随系统"), "简体中文", "English"];
+                                value: self.options[UiData.language == "zh-CN" ? 1 : UiData.language == "en" ? 2 : 0];
+                                enabled: UiData.ready && !UiData.exiting && !UiData.update-busy;
+                                selected(index, value) => { UiActions.dispatch(Intent.language, ["system", "zh-CN", "en"][index], ""); }
+                            }
+                        }
+                        Divider { }
+                        FormRow { title: @tr("后台自启动");
                             Toggle { checked: UiData.autostart; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; toggled(value) => { UiActions.dispatch(Intent.autostart, value ? "true" : "false", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "托盘显示上传与下载速度";
+                        FormRow { title: @tr("托盘显示上传与下载速度");
                             Toggle { checked: UiData.tray-speed; enabled: !UiData.working; toggled(value) => { UiActions.dispatch(Intent.tray-speed, value ? "true" : "false", ""); } }
                         }
                     }
                 }
                 network-section := SettingsSection {
-                    title: "网络";
+                    title: @tr("网络");
                     ListPanel {
-                        FormRow { title: "混合端口";
+                        FormRow { title: @tr("混合端口");
                             Field { text <=> UiData.mixed-port; width: 96px; horizontal-stretch: 0; enabled: root.dns-locked; edited(value) => { UiActions.dispatch(Intent.mixed-port, value, ""); } }
                         }
-                        if UiData.ports-dirty: FormRow { title: "端口已修改";
-                            ActionButton { text: "保存并重启内核"; compact: true; primary: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
+                        if UiData.ports-dirty: FormRow { title: @tr("端口已修改");
+                            ActionButton { text: @tr("保存并重启内核"); compact: true; primary: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-ports, "", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "DNS 覆盖";
+                        FormRow { title: @tr("DNS 覆盖");
                             Toggle { checked: UiData.dns-override; enabled: root.dns-locked; toggled(value) => { UiActions.dispatch(Intent.dns-override, value ? "true" : "false", ""); } }
                         }
                         Divider { }
@@ -88,88 +99,88 @@ export component SettingsPage inherits PageSurface {
                             Toggle { checked: UiData.fake-ip; enabled: UiData.dns-override && root.dns-locked; toggled(value) => { UiActions.dispatch(Intent.fake-ip, value ? "true" : "false", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "Fake-IP 排除项";
-                            ActionButton { text: "管理"; compact: true; enabled: UiData.dns-override && root.dns-locked; clicked => { UiActions.dispatch(Intent.fake-ip-editor, "true", ""); } }
+                        FormRow { title: @tr("Fake-IP 排除项");
+                            ActionButton { text: @tr("管理"); compact: true; enabled: UiData.dns-override && root.dns-locked; clicked => { UiActions.dispatch(Intent.fake-ip-editor, "true", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "启用 IPv6";
+                        FormRow { title: @tr("启用 IPv6");
                             Toggle { checked: UiData.ipv6; enabled: root.dns-locked; toggled(value) => { UiActions.dispatch(Intent.ipv6, value ? "true" : "false", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "启用 UDP";
+                        FormRow { title: @tr("启用 UDP");
                             Toggle { checked: UiData.udp || UiData.protected; enabled: root.dns-locked; toggled(value) => { UiActions.dispatch(Intent.udp, value ? "true" : "false", ""); } }
                         }
                     }
                 }
                 appearance-section := SettingsSection {
-                    title: "外观";
+                    title: @tr("外观");
                     ListPanel {
-                        FormRow { title: "主题";
+                        FormRow { title: @tr("主题");
                             ChoiceBar {
                                 available-width: 220px * Theme.text-scale; horizontal-stretch: 0;
-                                options: ["浅色", "深色", "跟随系统"];
+                                options: [@tr("浅色"), @tr("深色"), @tr("跟随系统")];
                                 selected: UiData.appearance == 1 ? 0 : UiData.appearance == 0 ? 1 : 2;
                                 enabled: !UiData.exiting;
                                 chosen(index) => { UiActions.dispatch(Intent.appearance, index == 0 ? "1" : index == 1 ? "0" : "2", ""); }
                             }
                         }
                         Divider { }
-                        FormRow { title: "强调色";
+                        FormRow { title: @tr("强调色");
                             AccentSwatches { selected: UiData.accent; enabled: !UiData.exiting; chosen(index) => { UiActions.dispatch(Intent.accent-color, "" + index, ""); } }
                         }
                         Divider { }
-                        FormRow { title: "字号";
+                        FormRow { title: @tr("字号");
                             Select { geometry-key: "text-scale"; width: 100px; horizontal-stretch: 0; value: "" + UiData.text-scale + "%"; options: ["80%", "90%", "100%", "110%", "125%", "150%"]; enabled: !UiData.exiting; selected(index, value) => { UiActions.dispatch(Intent.text-scale, value, ""); } }
                         }
                         Divider { }
-                        FormRow { title: "窗口大小";
+                        FormRow { title: @tr("窗口大小");
                             Field { width: 76px; horizontal-stretch: 0; text <=> UiData.window-width; enabled: !UiData.exiting; edited(value) => { UiActions.dispatch(Intent.window-width, value, ""); } }
                             Caption { text: "×"; horizontal-stretch: 0; }
                             Field { width: 76px; horizontal-stretch: 0; text <=> UiData.window-height; enabled: !UiData.exiting; edited(value) => { UiActions.dispatch(Intent.window-height, value, ""); } }
-                            ActionButton { text: "恢复默认"; compact: true; quiet: true; enabled: !UiData.exiting; clicked => { UiActions.dispatch(Intent.reset-window, "", ""); } }
+                            ActionButton { text: @tr("恢复默认"); compact: true; quiet: true; enabled: !UiData.exiting; clicked => { UiActions.dispatch(Intent.reset-window, "", ""); } }
                         }
                     }
                 }
                 update-section := SettingsSection {
-                    title: "更新";
+                    title: @tr("更新");
                     ListPanel {
-                        FormRow { title: "当前版本 " + UiData.version; hint: UiData.update-status;
-                            ActionButton { text: "检查更新"; compact: true; busy: UiData.update-checking; enabled: !UiData.update-checking && !UiData.update-busy && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }
+                        FormRow { title: @tr("当前版本 {}", UiData.version); hint: UiData.update-status;
+                            ActionButton { text: @tr("检查更新"); compact: true; busy: UiData.update-checking; enabled: !UiData.update-checking && !UiData.update-busy && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.check-update, "", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "包含预发布版本";
+                        FormRow { title: @tr("包含预发布版本");
                             Toggle { checked: UiData.update-prereleases; enabled: !UiData.working && !UiData.update-busy && !UiData.update-checking && !UiData.protected && !UiData.protection-pending; toggled(value) => { UiActions.dispatch(Intent.update-prereleases, value ? "true" : "false", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "安装包";
-                            ActionButton { text: "查看 Release"; compact: true; quiet: true; clicked => { UiActions.dispatch(Intent.open-release, "", ""); } }
-                            if UiData.update-installable: ActionButton { text: "下载安装"; compact: true; primary: true; enabled: !UiData.update-busy && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
+                        FormRow { title: @tr("安装包");
+                            ActionButton { text: @tr("查看 Release"); compact: true; quiet: true; clicked => { UiActions.dispatch(Intent.open-release, "", ""); } }
+                            if UiData.update-installable: ActionButton { text: @tr("下载安装"); compact: true; primary: true; enabled: !UiData.update-busy && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.install-update, "", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "Geo 数据"; hint: UiData.geo-status;
-                            ActionButton { text: "更新 Geo 数据"; compact: true; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working && !UiData.geo-updating && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
+                        FormRow { title: @tr("Geo 数据"); hint: UiData.geo-status;
+                            ActionButton { text: @tr("更新 Geo 数据"); compact: true; busy: UiData.geo-updating; enabled: UiData.ready && !UiData.working && !UiData.geo-updating && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.update-geo, "", ""); } }
                         }
                     }
                 }
                 schedule-section := SettingsSection {
-                    title: "计划任务";
+                    title: @tr("计划任务");
                     ListPanel {
-                        FormRow { title: "自动检查更新"; hint: "0 关闭，默认 360 分钟；Claude 保护期间暂停。";
+                        FormRow { title: @tr("自动检查更新"); hint: @tr("0 关闭，默认 360 分钟；Claude 保护期间暂停。");
                             Field { text <=> UiData.update-interval; width: 76px; horizontal-stretch: 0; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.update-interval-input, value, ""); } }
-                            Caption { text: "分钟"; horizontal-stretch: 0; }
-                            ActionButton { text: "保存"; compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-update-interval, "", ""); } }
+                            Caption { text: @tr("分钟"); horizontal-stretch: 0; }
+                            ActionButton { text: @tr("保存"); compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-update-interval, "", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "订阅自动更新"; hint: "0 关闭，默认 360 分钟；Claude 保护期间暂停。";
+                        FormRow { title: @tr("订阅自动更新"); hint: @tr("0 关闭，默认 360 分钟；Claude 保护期间暂停。");
                             Field { text <=> UiData.subscription-interval; width: 76px; horizontal-stretch: 0; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.subscription-interval-input, value, ""); } }
-                            Caption { text: "分钟"; horizontal-stretch: 0; }
-                            ActionButton { text: "保存"; compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-subscription-interval, "", ""); } }
+                            Caption { text: @tr("分钟"); horizontal-stretch: 0; }
+                            ActionButton { text: @tr("保存"); compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-subscription-interval, "", ""); } }
                         }
                         Divider { }
-                        FormRow { title: "定时测速"; hint: "0 表示关闭";
+                        FormRow { title: @tr("定时测速"); hint: @tr("0 表示关闭");
                             Field { text <=> UiData.interval; width: 76px; horizontal-stretch: 0; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.interval-input, value, ""); } }
-                            Caption { text: "分钟"; horizontal-stretch: 0; }
-                            ActionButton { text: "保存"; compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-interval, "", ""); } }
+                            Caption { text: @tr("分钟"); horizontal-stretch: 0; }
+                            ActionButton { text: @tr("保存"); compact: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.save-interval, "", ""); } }
                         }
                     }
                 }

@@ -78,6 +78,24 @@ impl GeoManifest {
     }
 }
 
+pub fn localize_status(status: &str, language: crate::config::Language) -> String {
+    if language == crate::config::Language::SimplifiedChinese {
+        return status.to_owned();
+    }
+    let Some((version, updated)) = status
+        .strip_prefix("数据版本：")
+        .and_then(|value| value.rsplit_once("\n本机上次更新："))
+    else {
+        return status.to_owned();
+    };
+    let updated = if updated == "暂无记录" {
+        "No record"
+    } else {
+        updated
+    };
+    format!("Data version: {version}\nLast updated locally: {updated}")
+}
+
 pub fn verify_geo(directory: &Path) -> Result<GeoManifest> {
     let manifest = read_manifest(directory)?;
     if manifest.files.len() != GEO_FILES.len() {
@@ -629,6 +647,23 @@ pub fn recover(runtime: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn localized_status_preserves_version_and_unknown_messages() {
+        let status = "数据版本：v1 · example\n本机上次更新：暂无记录";
+        assert_eq!(
+            localize_status(status, crate::config::Language::English),
+            "Data version: v1 · example\nLast updated locally: No record"
+        );
+        assert_eq!(
+            localize_status(status, crate::config::Language::SimplifiedChinese),
+            status
+        );
+        assert_eq!(
+            localize_status("custom status", crate::config::Language::English),
+            "custom status"
+        );
+    }
 
     #[tokio::test]
     async fn a_geo_batch_reuses_its_route_connection_across_files() {

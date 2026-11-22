@@ -95,9 +95,29 @@ pub struct Available {
 }
 
 pub fn package_manager_update_hint(manager: &str) -> String {
-    match manager {
-        "pacman" => "AUR 请用助手或更新配方后运行 makepkg -si；其他包请用 pacman".into(),
-        _ => format!("请使用 {manager} 更新此版本的客户端"),
+    package_manager_update_hint_in(
+        manager,
+        clash_client_core::config::Language::SimplifiedChinese,
+    )
+}
+
+pub fn package_manager_update_hint_in(
+    manager: &str,
+    language: clash_client_core::config::Language,
+) -> String {
+    match (language, manager) {
+        (clash_client_core::config::Language::SimplifiedChinese, "pacman") => {
+            "AUR 请用助手或更新配方后运行 makepkg -si；其他包请用 pacman".into()
+        }
+        (clash_client_core::config::Language::English, "pacman") => {
+            "For AUR, use an AUR helper or update the recipe and run makepkg -si; use pacman for other packages".into()
+        }
+        (clash_client_core::config::Language::SimplifiedChinese, _) => {
+            format!("请使用 {manager} 更新此版本的客户端")
+        }
+        (clash_client_core::config::Language::English, _) => {
+            format!("Use {manager} to update this installation")
+        }
     }
 }
 

@@ -15,6 +15,7 @@ mod tests;
 
 use crate::{args::Args, backend};
 use anyhow::{Context, Result, ensure};
+use clash_client_core::config::Language;
 use clash_client_runtime::{
     control::{Command, Poll},
     engine::Scope,
@@ -53,6 +54,7 @@ async fn read(
     page: Page,
     cached: Option<catalog::Shortcuts>,
     include_rules: bool,
+    language: Language,
 ) -> Result<Reply> {
     tokio::time::timeout(Duration::from_secs(4), async {
         let Some((remote, poll)) = backend::observed_snapshot(args, page.scope()).await? else {
@@ -66,21 +68,24 @@ async fn read(
         Ok(Reply::Snapshot(Some(Box::new(poll)), shortcuts))
     })
     .await
-    .context("读取后台超时；按 r 重试，或退出后导出诊断")?
+    .context(language.text(
+        "读取后台超时；按 r 重试，或退出后导出诊断",
+        "Backend read timed out; press r to retry or export diagnostics",
+    ))?
 }
 
-async fn select(args: &Args, target: Target) -> Result<Option<Poll>> {
+async fn select(args: &Args, target: Target, language: Language) -> Result<Option<Poll>> {
     tokio::time::timeout(Duration::from_secs(10), async {
         let remote = backend::connect(args, false)
             .await?
-            .context("后台已退出，未切换节点")?;
+            .context(language.text("后台已退出，未切换节点", "Backend exited; node not changed"))?;
         let current: Poll = remote
             .request(Command::Snapshot {
                 scope: Scope::Proxies,
                 header: true,
             })
             .await?;
-        target.validate(&current)?;
+        target.validate_in(&current, language)?;
         let _: serde_json::Value = remote
             .request(Command::Select {
                 group: target.group,
@@ -96,17 +101,22 @@ async fn select(args: &Args, target: Target) -> Result<Option<Poll>> {
             .map(Some)
     })
     .await
-    .context("节点切换等待超时；实际选择以刷新结果为准")?
+    .context(language.text(
+        "节点切换等待超时；实际选择以刷新结果为准",
+        "Node selection timed out; refresh to see the actual selection",
+    ))?
 }
 
 async fn set_node_sort(
     args: &Args,
     mode: clash_client_core::proxy_order::NodeSort,
+    language: Language,
 ) -> Result<Option<Poll>> {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let remote = backend::connect(args, false)
-            .await?
-            .context("后台已退出，未保存节点排序")?;
+        let remote = backend::connect(args, false).await?.context(language.text(
+            "后台已退出，未保存节点排序",
+            "Backend exited; node order not saved",
+        ))?;
         let _: serde_json::Value = remote
             .request(Command::ConfigSet {
                 key: "tui_node_sort".into(),
@@ -122,12 +132,22 @@ async fn set_node_sort(
             .map(Some)
     })
     .await
-    .context("保存节点排序等待超时；实际状态以刷新结果为准")?
+    .context(language.text(
+        "保存节点排序等待超时；实际状态以刷新结果为准",
+        "Saving node order timed out; refresh to see the actual state",
+    ))?
 }
 
-async fn save_setting(context: &Args, operation: &Args) -> Result<Reply> {
-    let command = settings::command(operation)?;
-    save_command(context, command, operation.path == "rule shortcut", false).await
+async fn save_setting(context: &Args, operation: &Args, language: Language) -> Result<Reply> {
+    let command = settings::command_in(operation, language)?;
+    save_command(
+        context,
+        command,
+        operation.path == "rule shortcut",
+        false,
+        language,
+    )
+    .await
 }
 
 async fn save_command(
@@ -135,18 +155,25 @@ async fn save_command(
     command: Command,
     shortcut: bool,
     include_rules: bool,
+    language: Language,
 ) -> Result<Reply> {
     tokio::time::timeout(Duration::from_secs(20), async {
         let remote = backend::connect(context, false)
             .await?
-            .context("后台已退出，未保存更改")?;
+            .context(language.text(
+                "后台已退出，未保存更改",
+                "Backend exited; changes not saved",
+            ))?;
         let _: serde_json::Value = remote.request(command).await.map_err(|error| {
             if shortcut
                 && error
                     .downcast_ref::<std::io::Error>()
                     .is_some_and(|cause| cause.kind() == std::io::ErrorKind::UnexpectedEof)
             {
-                error.context("后台已断开；若仍为旧版，请退出旧版 GUI／cor 后台后重试")
+                error.context(language.text(
+                    "后台已断开；若仍为旧版，请退出旧版 GUI／cor 后台后重试",
+                    "Backend disconnected; close an older GUI or cor backend and retry",
+                ))
             } else {
                 error
             }
@@ -165,16 +192,24 @@ async fn save_command(
         Ok(Reply::Saved(Box::new(poll), shortcuts))
     })
     .await
-    .context("保存或读取结果超时；实际状态以刷新结果为准，草稿仍保留")?
+    .context(language.text(
+        "保存或读取结果超时；实际状态以刷新结果为准，草稿仍保留",
+        "Save or read timed out; the draft is retained. Refresh to see the actual state",
+    ))?
 }
 
 pub async fn run(args: &Args) -> Result<()> {
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-        "cor ui 需要交互终端；脚本请使用 cor --json status"
+        "{}",
+        args.language().text(
+            "cor ui 需要交互终端；脚本请使用 cor --json status",
+            "cor ui requires an interactive terminal; scripts can use cor --json status"
+        )
     );
     let mut terminal = Some(terminal::Terminal::enter(!args.flag("no-color"))?);
     let mut state = State::new(args.flag("demo"));
+    state.language = args.language();
     let mut input = input::Decoder::default();
     let mut request: Option<Request> = None;
     let mut update_request: Option<Request<Option<clash_client_runtime::update::Available>>> = None;
@@ -262,22 +297,43 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.updates.checking = false;
                     state.saving = false;
                     drop(terminal.take());
-                    eprintln!("\ncor {} · 使用相同账户和数据目录\n", operation.path);
+                    eprintln!(
+                        "\ncor {} · {}\n",
+                        operation.path,
+                        state.language.text(
+                            "使用相同账户和数据目录",
+                            "Using the same account and data directory"
+                        )
+                    );
                     let result = Box::pin(crate::commands::execute(&operation)).await;
                     if operation.path == "update install" {
                         eprintln!(
-                            "\n已退出 TUI 以释放程序文件；安装结果请用 cor update status 查看"
+                            "\n{}",
+                            state.language.text(
+                                "已退出 TUI 以释放程序文件；安装结果请用 cor update status 查看",
+                                "TUI closed for installation; check the result with cor update status"
+                            )
                         );
                         return result;
                     }
                     match result {
-                        Ok(()) => eprintln!("\n命令已完成"),
+                        Ok(()) => eprintln!(
+                            "\n{}",
+                            state.language.text("命令已完成", "Command completed")
+                        ),
                         Err(error) => {
-                            eprintln!("\n操作失败：{error:#}");
+                            eprintln!(
+                                "\n{}{error:#}",
+                                state.language.text("操作失败：", "Operation failed: ")
+                            );
                             crate::diagnostics::failure_hint(Some(&operation));
                         }
                     }
-                    crate::output::read_line("按 Enter 返回 TUI；Ctrl+C 退出：").await?;
+                    crate::output::read_line(state.language.text(
+                        "按 Enter 返回 TUI；Ctrl+C 退出：",
+                        "Press Enter to return to the TUI, or Ctrl+C to exit: ",
+                    ))
+                    .await?;
                     terminal = Some(terminal::Terminal::enter(!args.flag("no-color"))?);
                     input = input::Decoder::default();
                     state.form = None;
@@ -289,25 +345,28 @@ pub async fn run(args: &Args) -> Result<()> {
                 }
                 Action::ApplySetting(operation) => {
                     let args = args.clone();
+                    let language = state.language;
                     state.saving = true;
                     state.message = None;
                     request = Some(Request(tokio::spawn(async move {
-                        save_setting(&args, &operation).await
+                        save_setting(&args, &operation, language).await
                     })));
                 }
                 Action::SaveFakeIp(command) => {
                     let args = args.clone();
+                    let language = state.language;
                     state.saving = true;
                     state.message = None;
                     request = Some(Request(tokio::spawn(async move {
-                        save_command(&args, *command, false, false).await
+                        save_command(&args, *command, false, false, language).await
                     })));
                 }
                 Action::SaveRules(command) => {
                     let args = args.clone();
+                    let language = state.language;
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
-                        save_command(&args, *command, true, true).await
+                        save_command(&args, *command, true, true, language).await
                     })));
                 }
                 Action::ScrollDetail(down) => {
@@ -327,18 +386,20 @@ pub async fn run(args: &Args) -> Result<()> {
                 Action::Refresh => last_refresh -= Duration::from_secs(5),
                 Action::Select(target) => {
                     let args = args.clone();
+                    let language = state.language;
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
-                        select(&args, target)
+                        select(&args, target, language)
                             .await
                             .map(|poll| Reply::Snapshot(poll.map(Box::new), None))
                     })));
                 }
                 Action::SetNodeSort(mode) => {
                     let args = args.clone();
+                    let language = state.language;
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
-                        set_node_sort(&args, mode)
+                        set_node_sort(&args, mode, language)
                             .await
                             .map(|poll| Reply::Snapshot(poll.map(Box::new), None))
                     })));
@@ -368,16 +429,24 @@ pub async fn run(args: &Args) -> Result<()> {
                     drop(request.take());
                     drop(update_request.take());
                     drop(terminal.take());
+                    let language = state.language;
                     drop(state);
-                    let operation = form::Form::new(
+                    let operation = form::Form::new_in(
                         form::commands()
                             .find(|spec| spec.path == "update install")
                             .unwrap(),
+                        language,
                     )
                     .args(args)?;
                     let result =
                         crate::commands::install_selected_update(&operation, *available).await;
-                    eprintln!("\n已退出 TUI；安装结果请用 cor update status 查看");
+                    eprintln!(
+                        "\n{}",
+                        language.text(
+                            "已退出 TUI；安装结果请用 cor update status 查看",
+                            "TUI closed; check the result with cor update status"
+                        )
+                    );
                     return result;
                 }
             }
@@ -412,9 +481,11 @@ pub async fn run(args: &Args) -> Result<()> {
                     let key = state.form.as_ref().and_then(|form| form.setting.clone());
                     let message = key.map(|key| {
                         format!(
-                            "已保存 · {}：{}",
-                            settings::title(&key),
-                            settings::display(&poll, &key)
+                            "{} · {}{}{}",
+                            state.language.text("已保存", "Saved"),
+                            settings::title(&key, state.language),
+                            state.language.text("：", ": "),
+                            settings::display(&poll, &key, state.language)
                         )
                     });
                     state.accept(Some(*poll));
@@ -454,33 +525,52 @@ pub async fn run(args: &Args) -> Result<()> {
                             editor.draft.clear();
                             editor.saving_addition = false;
                         }
-                        state.message = Some("已保存 Fake-IP 排除项".into());
+                        state.message = Some(
+                            state
+                                .language
+                                .text("已保存 Fake-IP 排除项", "Fake-IP exclusions saved")
+                                .into(),
+                        );
                     } else if saved_rules {
-                        state.message = Some("已保存规则".into());
+                        state.message =
+                            Some(state.language.text("已保存规则", "Rules saved").into());
                     } else {
                         state.message = message;
                     }
                 }
                 Ok(Ok(Reply::Network(result))) => match *result {
                     Ok(report) => {
-                        state.network_results = report.lines();
+                        state.network_results = report.lines_in(state.language);
                         state.network_report = Some(report);
                     }
                     Err(error) => {
-                        state.network_results = vec![format!("检查失败 · {error}")];
+                        state.network_results = vec![format!(
+                            "{} · {error}",
+                            state.language.text("检查失败", "Check failed")
+                        )];
                         state.network_report = None;
                     }
                 },
                 Ok(Ok(Reply::Exported(result))) => match result {
                     Ok(path) => {
                         state.form = None;
-                        state.message = Some(format!("已导出：{path}"));
+                        state.message = Some(format!(
+                            "{}{path}",
+                            state.language.text("已导出：", "Exported: ")
+                        ));
                     }
                     Err(error) => {
-                        state.message = Some(format!("导出失败，路径和报告保留：{error}"));
+                        state.message = Some(format!(
+                            "{}{error}",
+                            state.language.text(
+                                "导出失败，路径和报告保留：",
+                                "Export failed; path and report retained: "
+                            )
+                        ));
                     }
                 },
                 Ok(Err(error)) => {
+                    let detail = crate::output::localized_error(&error, state.language);
                     if state.saving
                         && (state.fake_ip.is_some()
                             || state.rules.as_ref().is_some_and(rules::Browser::busy)
@@ -489,11 +579,20 @@ pub async fn run(args: &Args) -> Result<()> {
                                 .as_ref()
                                 .is_some_and(|form| form.setting.is_some()))
                     {
-                        state.message = Some(format!("保存失败或结果未确认，草稿保留：{error:#}"));
+                        state.message = Some(format!(
+                            "{}{detail}",
+                            state.language.text(
+                                "保存失败或结果未确认，草稿保留：",
+                                "Save failed or was not confirmed; draft retained: "
+                            )
+                        ));
                     }
-                    state.failure(format!("{error:#}"));
+                    state.failure(detail);
                 }
-                Err(error) => state.failure(format!("读取任务失败：{error}")),
+                Err(error) => state.failure(format!(
+                    "{}{error}",
+                    state.language.text("读取任务失败：", "Read task failed: ")
+                )),
             }
             state.saving = false;
             last_refresh = tokio::time::Instant::now();
@@ -510,7 +609,12 @@ pub async fn run(args: &Args) -> Result<()> {
             let mut completed = update_request.take().unwrap();
             let result = match (&mut completed.0).await {
                 Ok(result) => result.map_err(|error| format!("{error:#}")),
-                Err(error) => Err(format!("更新检查任务失败：{error}")),
+                Err(error) => Err(format!(
+                    "{}{error}",
+                    state
+                        .language
+                        .text("更新检查任务失败：", "Update check failed: ")
+                )),
             };
             home::accept(&mut state, result);
             dirty = true;
@@ -527,8 +631,9 @@ pub async fn run(args: &Args) -> Result<()> {
             let page = state.page;
             let cached = state.shortcuts.clone();
             let include_rules = !state.shortcuts_open;
+            let language = state.language;
             request = Some(Request(tokio::spawn(async move {
-                read(&args, page, cached, include_rules).await
+                read(&args, page, cached, include_rules, language).await
             })));
             last_refresh = tokio::time::Instant::now();
         }

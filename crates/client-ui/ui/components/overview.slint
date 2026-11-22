@@ -20,7 +20,7 @@ component InfoCell inherits Rectangle {
         spacing: 5px; alignment: start;
         Caption { text: root.item.title; font-size: root.caption-size; }
         Paragraph {
-            text: root.item.fogged ? "已隐藏" : root.item.value;
+            text: root.item.fogged ? @tr("已隐藏") : root.item.value;
             font-size: root.body-size; font-weight: 600;
             color: root.item.fogged ? Theme.muted : root.item.tone == 3 || root.item.tone == 4 ? OverviewTone.color(root.item.tone) : Theme.ink;
         }
@@ -68,12 +68,12 @@ export component NetworkInfo inherits HomeSection {
     callback privacy-requested();
     callback refresh-requested();
     HomeSectionHeader {
-        title: "网络信息"; title-size: root.title-size; control-size: root.control-size;
+        title: @tr("网络信息"); title-size: root.title-size; control-size: root.control-size;
         ActionButton {
             geometry-key: "overview-privacy";
             quiet: true; compact: true; width: root.control-size; height: root.control-size;
             selected: root.hidden; enabled: root.enabled;
-            accessible-label: root.hidden ? "显示 IP 地址" : "隐藏 IP 地址";
+            accessible-label: root.hidden ? @tr("显示 IP 地址") : @tr("隐藏 IP 地址");
             Image {
                 source: root.hidden ? @image-url("../icons/eye-off.svg") : @image-url("../icons/eye.svg");
                 colorize: root.hidden ? Theme.accent : Theme.secondary;
@@ -85,7 +85,7 @@ export component NetworkInfo inherits HomeSection {
             geometry-key: "overview-refresh";
             quiet: true; compact: true; width: root.control-size; height: root.control-size;
             busy: root.busy; enabled: root.enabled && !root.busy;
-            accessible-label: root.busy ? "网络检测中" : "重新检测网络";
+            accessible-label: root.busy ? @tr("网络检测中") : @tr("重新检测网络");
             Image {
                 source: @image-url("../icons/refresh.svg"); colorize: Theme.secondary;
                 width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
@@ -114,7 +114,7 @@ export component ServiceStatus inherits HomeSection {
     in property <length> control-size: Theme.control-height;
     property <int> columns: root.available-width / Theme.text-scale >= 780px ? 4 : root.available-width / Theme.text-scale >= 340px ? 2 : 1;
     HomeSectionHeader {
-        title: "服务状态"; title-size: root.title-size; control-size: root.control-size;
+        title: @tr("服务状态"); title-size: root.title-size; control-size: root.control-size;
         if Theme.text-scale <= 1.25: Caption { text: root.status; font-size: root.body-size; horizontal-alignment: right; }
     }
     Divider { }

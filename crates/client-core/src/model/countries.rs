@@ -11,6 +11,12 @@ fn countries() -> &'static BTreeMap<String, String> {
     })
 }
 
+pub fn english_name(code: &str) -> Option<&'static str> {
+    countries()
+        .get(&code.to_ascii_uppercase())
+        .map(String::as_str)
+}
+
 pub fn country_code(name: &str) -> Option<&'static str> {
     if let Some((code, _)) = countries().get_key_value(name) {
         return Some(code);
@@ -31,6 +37,17 @@ pub fn country_text(country: &str) -> &str {
         return country[first.len_utf8() + second.len_utf8()..].trim_start();
     }
     country
+}
+
+pub fn localized_name(country: &str, language: crate::config::Language) -> String {
+    if language == crate::config::Language::SimplifiedChinese {
+        return country.to_owned();
+    }
+    let text = country_text(country);
+    let Some(name) = country_code(text).and_then(english_name) else {
+        return country.to_owned();
+    };
+    format!("{}{name}", &country[..country.len() - text.len()])
 }
 
 pub fn flag_code(country: &str) -> Option<&'static str> {
@@ -91,6 +108,7 @@ mod tests {
     #[test]
     fn every_country_name_and_code_produce_the_same_flag_text() {
         for (code, english) in countries() {
+            assert_eq!(english_name(code), Some(english.as_str()));
             let flag = flag_emoji(code).unwrap();
             assert_eq!(flag.chars().count(), 2, "{code}");
             assert!(
@@ -138,5 +156,18 @@ mod tests {
         for country in ["", "🇽🇽 未知", "🇩", "🚀 🇺🇸 美国"] {
             assert_eq!(flag_code(country), None, "{country}");
         }
+    }
+
+    #[test]
+    fn localized_names_preserve_unknown_values_and_flag_prefixes() {
+        use crate::config::Language;
+
+        assert_eq!(localized_name("德国", Language::English), "Germany");
+        assert_eq!(
+            localized_name("🇺🇸 美国", Language::English),
+            "🇺🇸 United States"
+        );
+        assert_eq!(localized_name("德国", Language::SimplifiedChinese), "德国");
+        assert_eq!(localized_name("未知地区", Language::English), "未知地区");
     }
 }

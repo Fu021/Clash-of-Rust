@@ -8,8 +8,8 @@ import { MobileReport } from "reports.slint";
 
 component MobileEditorActions inherits HorizontalLayout {
     spacing: MobileTypography.small-gap;
-    MButton { text: "取消"; enabled: !MobileData.profile-busy; clicked => { MobileView.back(); } }
-    MButton { text: MobileView.detail == 2 ? "保存规则" : MobileData.profile-busy ? "正在保存…" : "保存订阅"; primary: true;
+    MButton { text: @tr("取消"); enabled: !MobileData.profile-busy; clicked => { MobileView.back(); } }
+    MButton { text: MobileView.detail == 2 ? @tr("保存规则") : MobileData.profile-busy ? @tr("正在保存…") : @tr("保存订阅"); primary: true;
         enabled: !MobileData.working && !MobileData.profile-busy;
         busy: MobileView.detail == 3 && MobileData.profile-busy;
         clicked => {
@@ -44,36 +44,36 @@ export component MobileDetails inherits PageSurface {
                 }
             }
             if MobileView.detail == 10: MCard {
-                MTag { text: "完整日志"; tone: 4; }
+                MTag { text: @tr("完整日志"); tone: 4; }
                 MParagraph { text: MobileView.log-message; }
             }
             if MobileView.detail == 2: MCard {
                 HorizontalLayout { spacing: MobileTypography.small-gap;
-                    MButton { text: "表单"; selected: !MobileView.rule-text-mode; clicked => { MobileActions.request(MobileIntent.rule-text-mode, MobileView.rule-raw, "form"); } }
-                    MButton { text: "规则文本"; selected: MobileView.rule-text-mode; clicked => { if !MobileView.rule-text-mode { MobileView.rule-raw = root.rule-line; } MobileView.rule-text-mode = true; } }
+                    MButton { text: @tr("表单"); selected: !MobileView.rule-text-mode; clicked => { MobileActions.request(MobileIntent.rule-text-mode, MobileView.rule-raw, "form"); } }
+                    MButton { text: @tr("规则文本"); selected: MobileView.rule-text-mode; clicked => { if !MobileView.rule-text-mode { MobileView.rule-raw = root.rule-line; } MobileView.rule-text-mode = true; } }
                 }
                 if !MobileView.rule-text-mode: VerticalLayout { spacing: MobileTypography.gap;
-                    MSmall { text: "规则类型"; }
+                    MSmall { text: @tr("规则类型"); }
                     MSelect { options: MobileData.rule-types; value: MobileView.rule-kind;
                         selected(index, value) => { MobileView.rule-kind = value; MobileView.draft-dirty = true; }
                     }
-                    if MobileView.rule-kind != "MATCH": MSmall { text: "匹配内容"; }
-                    if MobileView.rule-kind != "MATCH": MField { placeholder: "例如 google.com"; text <=> MobileView.rule-payload; edited(value) => { MobileView.draft-dirty = true; } }
-                    MSmall { text: "匹配策略"; }
+                    if MobileView.rule-kind != "MATCH": MSmall { text: @tr("匹配内容"); }
+                    if MobileView.rule-kind != "MATCH": MField { placeholder: @tr("例如 google.com"); text <=> MobileView.rule-payload; edited(value) => { MobileView.draft-dirty = true; } }
+                    MSmall { text: @tr("匹配策略"); }
                     MSelect { options: MobileData.rule-policies; value: MobileView.rule-policy;
                         selected(index, value) => { MobileView.rule-policy = value; MobileView.draft-dirty = true; }
                     }
-                    if root.supports-no-resolve: MSwitch { title: "no-resolve"; subtitle: "匹配此规则时不额外解析域名"; checked: MobileView.rule-no-resolve;
+                    if root.supports-no-resolve: MSwitch { title: "no-resolve"; subtitle: @tr("匹配此规则时不额外解析域名"); checked: MobileView.rule-no-resolve;
                         toggled(value) => { MobileView.rule-no-resolve = value; MobileView.draft-dirty = true; }
                     }
                 }
                 if MobileView.rule-text-mode: VerticalLayout { spacing: MobileTypography.gap;
-                    MSmall { text: "完整规则"; }
+                    MSmall { text: @tr("完整规则"); }
                     MField { placeholder: "DOMAIN-SUFFIX,google.com,DIRECT"; text <=> MobileView.rule-raw; edited(value) => { MobileView.draft-dirty = true; } }
                 }
-                MSmall { text: "插入位置"; }
+                MSmall { text: @tr("插入位置"); }
                 MField { text <=> MobileView.rule-position; edited(value) => { MobileView.draft-dirty = true; } }
-                MSwitch { title: "启用规则"; checked: MobileView.rule-enabled;
+                MSwitch { title: @tr("启用规则"); checked: MobileView.rule-enabled;
                     toggled(value) => { MobileView.rule-enabled = value; MobileView.draft-dirty = true; }
                 }
             }
@@ -95,8 +95,8 @@ export component MobileDetails inherits PageSurface {
                 changed viewport-height => { self.reveal-profile-field(); }
                 changed name-focused => { self.reveal-profile-field(); }
                 changed source-focused => { self.reveal-profile-field(); }
-                MSmall { text: "订阅名称"; }
-                name-field := MField { placeholder: "输入名称"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
+                MSmall { text: @tr("订阅名称"); }
+                name-field := MField { placeholder: @tr("输入名称"); enabled: !MobileData.profile-busy; text <=> MobileView.profile-name;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-name-target = self.target; }
                     changed has-focus => {
@@ -105,8 +105,8 @@ export component MobileDetails inherits PageSurface {
                     init => { MobileView.profile-name-target = self.target; MobileView.profile-name-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
-                MButton { text: "选择本地文件"; enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
-                MSmall { text: "订阅地址（本地配置可留空）"; }
+                MButton { text: @tr("选择本地文件"); enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
+                MSmall { text: @tr("订阅地址（本地配置可留空）"); }
                 source-field := MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-source-target = self.target; }
@@ -116,7 +116,7 @@ export component MobileDetails inherits PageSurface {
                     init => { MobileView.profile-source-target = self.target; MobileView.profile-source-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
-                if MobileData.profile-busy: MSmall { text: "正在保存订阅，请稍候…"; wrap: word-wrap; }
+                if MobileData.profile-busy: MSmall { text: @tr("正在保存订阅，请稍候…"); wrap: word-wrap; }
             }
             if MobileView.detail == 16 && MobileData.site-details.length > 0: MCard {
                 for row[index] in MobileData.site-details: VerticalLayout { spacing: MobileTypography.small-gap;
@@ -132,15 +132,15 @@ export component MobileDetails inherits PageSurface {
             if root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         } }
         if MobileView.detail == 5 || MobileView.detail == 10: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MCopyButton { label: MobileView.detail == 5 ? "复制详情" : "复制全文";
+            MCopyButton { label: MobileView.detail == 5 ? @tr("复制详情") : @tr("复制全文");
                 value: MobileView.detail == 10 ? MobileView.log-message : "connection:" + MobileView.selected-id;
             }
-            MButton { text: "关闭"; clicked => { MobileView.back(); } }
+            MButton { text: @tr("关闭"); clicked => { MobileView.back(); } }
         }
         if !root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         if MobileView.detail == 16: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "返回结果"; clicked => { MobileView.detail = 6; } }
-            MButton { text: "重测此项"; primary: true; enabled: !MobileData.detecting;
+            MButton { text: @tr("返回结果"); clicked => { MobileView.detail = 6; } }
+            MButton { text: @tr("重测此项"); primary: true; enabled: !MobileData.detecting;
                 clicked => { MobileActions.request(MobileIntent.site-probe, MobileView.site-selected, ""); }
             }
         }
@@ -175,23 +175,27 @@ export component MobileModal inherits Rectangle {
             Timer { running: MobileView.modal && root.kind == 8 && root.seconds > 0; interval: 1s; triggered => { root.seconds -= 1; } }
             dialog := Rectangle {
                 width: min(parent.width - 32px - MobileView.safe-left - MobileView.safe-right, 480px);
-                height: content.preferred-height;
+                height: min(content.preferred-height, max(0px, parent.height - MobileView.safe-top - MobileView.safe-bottom - 24px));
                 x: (parent.width - self.width) / 2;
                 y: root.centered ? (parent.height - self.height) / 2 : max(MobileView.safe-top, parent.height - self.height - MobileView.safe-bottom - 12px) + (1 - presence.progress) * (root.centered ? 8px : 20px);
             background: Theme.raised; border-radius: 18px; border-width: 1px; border-color: Theme.line;
             drop-shadow-blur: 32px; drop-shadow-offset-y: 8px;
+                MScroll {
+                    geometry-key: "mobile-modal-scroll";
+                    content-key: "" + root.kind;
+                    width: parent.width; height: parent.height;
                 content := VerticalLayout { alignment: start; spacing: MobileTypography.padding; padding: 24px;
-                    MHeading { text: root.kind == 4 ? "删除此订阅？" : root.kind == 8 ? "开启 Claude 保护？" : root.kind == 12 ? "放弃未保存的修改？" : root.kind == 13 ? "安装预发布版 " + MobileData.update-version + "？" : "强调色"; }
+                    MHeading { text: root.kind == 4 ? @tr("删除此订阅？") : root.kind == 8 ? @tr("开启 Claude 保护？") : root.kind == 12 ? @tr("放弃未保存的修改？") : root.kind == 13 ? @tr("安装预发布版 {}？", MobileData.update-version) : @tr("强调色"); }
                     if root.kind != 11: MParagraph {
-                        text: root.kind == 4 ? "将删除“" + MobileView.profile-name + "”及其配置文件。"
-                                + (MobileView.profile-active ? "此订阅正在使用，将先切换到默认直连；新连接将不再通过此订阅。" : "")
-                                + "此操作无法撤销。"
-                            : root.kind == 8 ? "将锁定当前节点及模式，启用 VPN、广泛规则、代理 DNS 和实时拦截，并关闭已有内核连接。全局 DIRECT 无法开启；直连模式将改为规则模式。可能影响其他应用，关闭后恢复。"
-                            : root.kind == 13 ? "预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。"
-                            : "尚有未保存的内容，离开后将丢弃本次编辑。";
+                        text: root.kind == 4 ? @tr("将删除“{}”及其配置文件。", MobileView.profile-name)
+                                + (MobileView.profile-active ? @tr("此订阅正在使用，将先切换到默认直连；新连接将不再通过此订阅。") : "")
+                                + @tr("此操作无法撤销。")
+                            : root.kind == 8 ? @tr("将锁定当前节点及模式，启用 VPN、广泛规则、代理 DNS 和实时拦截，并关闭已有内核连接。全局 DIRECT 无法开启；直连模式将改为规则模式。可能影响其他应用，关闭后恢复。")
+                            : root.kind == 13 ? @tr("预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。")
+                            : @tr("尚有未保存的内容，离开后将丢弃本次编辑。");
                     }
                     if root.kind == 13: MParagraph {
-                        text: "安装预发布版后，无法保证在保留数据的情况下恢复正式版；回退可能需要先备份配置，再卸载重装。";
+                        text: @tr("安装预发布版后，无法保证在保留数据的情况下恢复正式版；回退可能需要先备份配置，再卸载重装。");
                         color: Theme.danger; font-weight: 600;
                     }
                     if root.kind == 11: VerticalLayout { spacing: MobileTypography.small-gap;
@@ -204,13 +208,13 @@ export component MobileModal inherits Rectangle {
                         }
                     }
                     if root.kind != 11: MButton {
-                        geometry-key: root.kind == 12 ? "preview-discard" : "";
+                        geometry-key: root.kind == 12 ? "preview-discard" : "mobile-modal-confirm";
                         modal-control: true; primary: root.kind == 8 || root.kind == 13; danger: root.kind == 4 || root.kind == 12;
                         enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending && (root.kind != 8 || root.seconds == 0) && (root.kind != 13 || MobileData.update-confirm-wait == 0);
                         busy: root.kind == 4 && MobileData.profile-busy;
-                        text: root.kind == 4 ? (MobileData.profile-busy ? "正在删除…" : "删除订阅") : root.kind == 12 ? "放弃修改"
-                            : root.kind == 13 ? (MobileData.update-confirm-wait > 0 ? "继续安装（" + MobileData.update-confirm-wait + " 秒）" : "继续安装")
-                            : root.seconds > 0 ? "开启保护（" + root.seconds + " 秒）" : "开启保护";
+                        text: root.kind == 4 ? (MobileData.profile-busy ? @tr("正在删除…") : @tr("删除订阅")) : root.kind == 12 ? @tr("放弃修改")
+                            : root.kind == 13 ? (MobileData.update-confirm-wait > 0 ? @tr("继续安装（{} 秒）", MobileData.update-confirm-wait) : @tr("继续安装"))
+                            : root.seconds > 0 ? @tr("开启保护（{} 秒）", root.seconds) : @tr("开启保护");
                         clicked => {
                             if root.kind == 4 { MobileActions.request(MobileIntent.delete-profile, MobileView.selected-id, ""); }
                             else if root.kind == 8 {
@@ -228,12 +232,13 @@ export component MobileModal inherits Rectangle {
                             }
                         }
                     }
-                    MButton { modal-control: true; text: root.kind == 11 ? "完成" : root.kind == 12 ? "继续编辑" : "取消";
+                    MButton { geometry-key: "mobile-modal-cancel"; modal-control: true; text: root.kind == 11 ? @tr("完成") : root.kind == 12 ? @tr("继续编辑") : @tr("取消");
                         clicked => {
                             if root.kind == 13 { MobileActions.request(MobileIntent.install-update, "", "cancel"); }
                             MobileView.detail = root.kind == 12 ? MobileView.pending-detail : 0;
                         }
                     }
+                }
                 }
             }
         }

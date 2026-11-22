@@ -2647,12 +2647,12 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         command = [item.value for item in calls[0].args[0].elts if isinstance(item, ast.Constant)]
         self.assertIn('clash-android', command)
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
             self.assertIn(target, command)
             path = build.ROOT/'apps/android/native/tests'/(target+'.rs')
             self.assertRegex(path.read_text(), r'#\[test\]\s*fn\s+')
         desktop = (build.ROOT/'scripts/run-ci.py').read_text()
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
             self.assertNotIn("'"+target+"'", desktop)
 
     def test_linux_network_selection_survives_sudo(self):
@@ -3061,7 +3061,7 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-cli'
                             and 'args::tests::' in command and '--no-run' not in command
                             for command in ui_checks))
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
             self.assertFalse(any(target in command for command in ui_checks))
         focused = [command for command in ui_checks if command[command.index('-p')+1] == 'clash-of-rust']
         for case in (
@@ -3070,7 +3070,16 @@ class BuildTests(unittest.TestCase):
                 'application::ui_tests::remounted_long_pages_preserve_valid_scroll_positions',
                 'application::ui_tests::window_controls_remain_available_during_subscription_and_proxy_updates',
                 'application::ui_tests::ip_report_shows_each_target_exit_and_its_measurement_state',
+                'application::ui_tests::ip_category_status_and_region_popups_drive_report_filters',
+                'application::ui_tests::desktop_language_menu_dispatches_stable_tags_in_both_catalogs',
+                'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
+                'application::ui_tests::english_desktop_validation_and_errors_follow_language',
+                'application::ui_tests::profile_edit_closes_on_success_independently_of_presentation_language',
+                'application::ui_tests::english_desktop_dialogs_show_edit_validation_and_protection_effects',
+                'application::interaction::tests::english_delete_confirmation_keeps_the_active_subscription_and_network_consequences',
+                'application::interaction::tests::english_diagnostics_feedback_preserves_paths_and_failure_details',
                 'application::ui_tests::claude_report_rows_keep_titles_and_labeled_explanations',
+                'application::ui_tests::english_claude_report_keeps_original_keys_and_evidence',
                 'application::ui_tests::claude_route_section_keeps_each_domain_and_failure',
                 'application::ui_tests::claude_guard_block_keeps_status_and_interceptions_together',
                 'application::ui_tests::claude_summary_keeps_quality_disagreements_visible_with_many_risks',
@@ -3253,7 +3262,7 @@ class BuildTests(unittest.TestCase):
         self.assertIn('--lib', commands[0])
         self.assertEqual(commands[1][commands[1].index('-p')+1], 'clash-android')
         self.assertIn('mobile-ui-tests', commands[1])
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
             self.assertIn(target, commands[1])
         self.assertNotIn('--no-run', commands[1])
 

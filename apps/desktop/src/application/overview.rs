@@ -179,7 +179,7 @@ impl App {
             exit: &overview.exit,
             services: &overview.services,
         }
-        .present();
+        .present_in(self.presentation_language);
         let row = |entry: probes::Item| OverviewItem {
             id: entry.id.into(),
             title: entry.title.into(),

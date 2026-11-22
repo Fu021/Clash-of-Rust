@@ -9,6 +9,11 @@ export { ApplicationItem, ApplicationPolicyItem, ApplicationPolicyApp } from "st
 export { Theme } from "../../theme/palette.slint";
 export { MobileTypography } from "../shared/typography.slint";
 export { UiGeometry } from "../../components/geometry.slint";
+export { ReportText } from "../../components/report.slint";
+export { NetworkTools } from "../../components/network-tools.slint";
+export { IpStatusText } from "../../components/ip-status.slint";
+export { MobilePageText } from "../shared/pages.slint";
+export { Motion } from "../../components/motion.slint";
 export { PageViews } from "../../components/view-toggle.slint";
 export { GroupItem, NodeItem, NodePair, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem, OverviewItem } from "../../models.slint";
 import "../../../../../resources/fonts/SourceHanSansCN-Regular.otf";
@@ -23,6 +28,7 @@ export component AndroidWindow inherits Window {
     property <length> right: self.safe-area-insets.right;
     property <length> keyboard: max(0px, self.virtual-keyboard-size.height - self.safe-area-insets.bottom);
     in-out property <int> current-page <=> MobileView.page;
+    out property <string> page-title: surface.titles[MobileView.page];
     in-out property <int> current-detail <=> MobileView.detail;
     in-out property <string> selected-id <=> MobileView.selected-id;
     in-out property <string> query <=> MobileView.query;

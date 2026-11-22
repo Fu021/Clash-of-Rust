@@ -31,9 +31,9 @@ export component HomeConnections inherits HomeSection {
     callback open-all();
     callback item-selected(string);
     HomeSectionHeader {
-        title: "活跃连接"; title-size: root.title-size; control-size: root.control-size;
+        title: @tr("活跃连接"); title-size: root.title-size; control-size: root.control-size;
         ActionButton {
-            text: (root.running ? root.count : "0") + " 条 ›"; quiet: true; compact: true;
+            text: @tr("{} 条 ›", root.running ? root.count : "0"); quiet: true; compact: true;
             width: max(84px, root.caption-size * 6 + 16px); height: root.control-size;
             enabled: root.enabled;
             clicked => { root.open-all(); }
@@ -63,7 +63,7 @@ export component HomeConnections inherits HomeSection {
             TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.item-selected(row.item.id); } }
         }
         if !root.running || root.items.length == 0: Paragraph {
-            text: !root.running ? "启动内核后查看实时连接" : root.count == "0" ? "暂无活跃连接" : root.count + " 条活跃连接，查看完整列表";
+            text: !root.running ? @tr("启动内核后查看实时连接") : root.count == "0" ? @tr("暂无活跃连接") : @tr("{} 条活跃连接，查看完整列表", root.count);
             color: Theme.secondary; font-size: root.caption-size; min-height: 48px;
         }
     }

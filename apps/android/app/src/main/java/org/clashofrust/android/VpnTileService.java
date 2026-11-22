@@ -35,7 +35,8 @@ public final class VpnTileService extends TileService {
         if (tile!=null) {
             tile.setState(TunnelService.connected() || TunnelService.pending()?Tile.STATE_ACTIVE:Tile.STATE_INACTIVE);
             tile.setLabel("Clash of Rust");
-            if (Build.VERSION.SDK_INT>=29) tile.setSubtitle(TunnelService.connected()?"VPN 已连接":TunnelService.pending()?"正在连接…":"VPN 未连接");
+            if (Build.VERSION.SDK_INT>=29) tile.setSubtitle(AppLanguage.current(this).getString(
+                TunnelService.connected()?R.string.vpn_connected:TunnelService.pending()?R.string.vpn_connecting:R.string.vpn_disconnected));
             tile.updateTile();
         }
     }
@@ -48,7 +49,8 @@ public final class VpnTileService extends TileService {
         if (TunnelService.connected() || TunnelService.pending()) {
             try {
                 if (CoreBridge.protectedMode(this)) {
-                    SystemNotifications.show(this,"Claude 保护","请先在 A÷检测中关闭 Claude 保护，再断开 VPN。");
+                    Context localized=AppLanguage.current(this);
+                    SystemNotifications.show(this,localized.getString(R.string.protection_title),localized.getString(R.string.protection_disconnect));
                     return;
                 }
             } catch (Exception error) {

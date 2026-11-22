@@ -54,6 +54,7 @@ impl Renderer {
         renderer.send(HostPacket::Open {
             protocol: wire::PROTOCOL,
             version: clash_client_core::VERSION.into(),
+            language: "en".into(),
             id: 1,
             size: wire::Size {
                 width: 950.,

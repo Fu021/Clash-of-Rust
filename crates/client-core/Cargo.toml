@@ -28,6 +28,9 @@ base64 = { workspace = true }
 bytes = "1"
 semver = { workspace = true }
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+sys-locale = "0.3.2"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

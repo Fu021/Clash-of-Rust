@@ -8,23 +8,44 @@ pub fn target_exit_detail(
     service: &ip_check::Service,
     result: Option<&Result<CheckResult, String>>,
 ) -> Option<String> {
+    target_exit_detail_in(service, result, crate::config::Language::SimplifiedChinese)
+}
+
+pub fn target_exit_detail_in(
+    service: &ip_check::Service,
+    result: Option<&Result<CheckResult, String>>,
+    language: crate::config::Language,
+) -> Option<String> {
     let host = ip_check::target_host(service)?;
     let value = match result {
-        None => "待检测".to_owned(),
+        None => language.text("待检测", "Pending").to_owned(),
         Some(Ok(result)) => result
             .target_exit
             .as_ref()
             .filter(|exit| exit.host == host)
             .map_or_else(
-                || "未确认".to_owned(),
+                || language.text("未确认", "Unconfirmed").to_owned(),
                 |exit| match &exit.country {
-                    Some(country) => format!("{} · {country}", exit.ip),
+                    Some(country) => {
+                        let displayed = match language {
+                            crate::config::Language::SimplifiedChinese => country.as_str(),
+                            crate::config::Language::English => crate::countries::country_code(
+                                crate::countries::country_text(country),
+                            )
+                            .and_then(crate::countries::english_name)
+                            .unwrap_or(country),
+                        };
+                        format!("{} · {displayed}", exit.ip)
+                    }
                     None => exit.ip.to_string(),
                 },
             ),
-        Some(Err(_)) => "未确认".to_owned(),
+        Some(Err(_)) => language.text("未确认", "Unconfirmed").to_owned(),
     };
-    Some(format!("同域出口：{value}"))
+    Some(format!(
+        "{}{value}",
+        language.text("同域出口：", "Same-domain exit: ")
+    ))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -123,20 +144,37 @@ impl Status {
             None => Self::Untested,
         }
     }
+
+    pub fn label_in(self, language: crate::config::Language) -> &'static str {
+        match self {
+            Self::Available => language.text("确认可用", "Available"),
+            Self::Partial => language.text("部分可用", "Partially available"),
+            Self::Reachable => language.text("仅网页可达", "Website reachable"),
+            Self::Identified => language.text("信息已识别", "Identified"),
+            Self::Restricted => language.text("不可用或受限", "Unavailable or restricted"),
+            Self::Unknown => language.text("结果未确认", "Unconfirmed"),
+            Self::Failed => language.text("超时或失败", "Timed out or failed"),
+            Self::Untested => language.text("未检测", "Not checked"),
+        }
+    }
+
+    pub fn summary_is_generic(self, summary: &str) -> bool {
+        summary == self.label_in(crate::config::Language::SimplifiedChinese)
+            || (self == Self::Reachable && summary == "网页可达")
+    }
+
+    pub fn summary_in(self, summary: &str, language: crate::config::Language) -> &str {
+        if language == crate::config::Language::English && self.summary_is_generic(summary) {
+            self.label_in(language)
+        } else {
+            summary
+        }
+    }
 }
 
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Available => "确认可用",
-            Self::Partial => "部分可用",
-            Self::Reachable => "仅网页可达",
-            Self::Identified => "信息已识别",
-            Self::Restricted => "不可用或受限",
-            Self::Unknown => "结果未确认",
-            Self::Failed => "超时或失败",
-            Self::Untested => "未检测",
-        })
+        f.write_str(self.label_in(crate::config::Language::SimplifiedChinese))
     }
 }
 
@@ -221,6 +259,28 @@ mod tests {
     }
 
     #[test]
+    fn generic_status_summaries_translate_without_changing_custom_evidence() {
+        use crate::config::Language;
+
+        assert_eq!(
+            Status::Reachable.summary_in("网页可达", Language::English),
+            "Website reachable"
+        );
+        assert_eq!(
+            Status::Available.summary_in("确认可用", Language::English),
+            "Available"
+        );
+        assert_eq!(
+            Status::Available.summary_in("自定义地区结果", Language::English),
+            "自定义地区结果"
+        );
+        assert_eq!(
+            Status::Reachable.summary_in("网页可达", Language::SimplifiedChinese),
+            "网页可达"
+        );
+    }
+
+    #[test]
     fn target_exit_detail_keeps_targets_pending_failures_and_addresses_distinct() {
         let mut results: Vec<ResultSlot> = std::iter::repeat_with(|| None)
             .take(ip_check::services().len())
@@ -244,6 +304,33 @@ mod tests {
         assert_eq!(
             target_exit_detail(&ip_check::services()[claude], results[claude].as_ref()).as_deref(),
             Some("同域出口：8.8.8.8 · 美国")
+        );
+        assert_eq!(
+            target_exit_detail_in(
+                &ip_check::services()[claude],
+                results[claude].as_ref(),
+                crate::config::Language::English,
+            )
+            .as_deref(),
+            Some("Same-domain exit: 8.8.8.8 · United States")
+        );
+        assert_eq!(
+            target_exit_detail_in(
+                &ip_check::services()[chatgpt],
+                None,
+                crate::config::Language::English,
+            )
+            .as_deref(),
+            Some("Same-domain exit: Pending")
+        );
+        assert_eq!(
+            target_exit_detail_in(
+                &ip_check::services()[chatgpt],
+                results[chatgpt].as_ref(),
+                crate::config::Language::English,
+            )
+            .as_deref(),
+            Some("Same-domain exit: Unconfirmed")
         );
         assert_eq!(
             target_exit_detail(&ip_check::services()[chatgpt], results[chatgpt].as_ref())

@@ -8,10 +8,10 @@ export component DiagnosticActions inherits HorizontalLayout {
     in property <string> context;
     in property <bool> notice-control;
     spacing: 6px; alignment: start;
-    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: UiData.diagnosing ? "正在采集…" : "导出诊断"; enabled: !UiData.diagnosing;
+    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: UiData.diagnosing ? @tr("正在采集…") : @tr("导出诊断"); enabled: !UiData.diagnosing;
         clicked => { UiActions.dispatch(Intent.export-diagnostics, root.context, ""); }
     }
-    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: "新建 Issue"; enabled: !UiData.diagnosing;
+    ActionButton { modal-control: true; notice-control: root.notice-control; compact: true; quiet: true; text: @tr("新建 Issue"); enabled: !UiData.diagnosing;
         clicked => { UiActions.dispatch(Intent.report-issue, root.context, ""); }
     }
     @children
@@ -61,7 +61,7 @@ export component DesktopNotice inherits Rectangle {
                 Rectangle { width: 26px; height: 26px; border-radius: 8px; background: Theme.danger-wash;
                     Heading { text: "!"; color: Theme.danger; width: parent.width; height: parent.height; horizontal-alignment: center; }
                 }
-                Heading { text: UiData.notice-modal ? "需要处理" : "操作未完成"; font-size: UiData.notice-modal ? 18px * Theme.text-scale : Theme.detail-size; }
+                Heading { text: UiData.notice-modal ? @tr("需要处理") : @tr("操作未完成"); font-size: UiData.notice-modal ? 18px * Theme.text-scale : Theme.detail-size; }
             }
             HorizontalLayout { cross-axis-alignment: start; spacing: Theme.content-gap;
                 Flickable {
@@ -86,7 +86,7 @@ export component DesktopNotice inherits Rectangle {
                             accessible-label: root.message;
                             message := Paragraph { width: parent.width; text: root.message; color: UiData.notice-error ? Theme.ink : Theme.canvas; font-size: UiData.notice-modal ? Theme.body-size : Theme.detail-size; }
                             if !UiData.notice-error: TouchArea {
-                                accessible-role: button; accessible-label: "关闭提示";
+                                accessible-role: button; accessible-label: @tr("关闭提示");
                                 accessible-action-default => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
                                 mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
                             }
@@ -96,15 +96,15 @@ export component DesktopNotice inherits Rectangle {
             }
             if UiData.notice-error: DiagnosticActions { context: root.message; notice-control: true;
                 if UiData.notice-recover-network && UiData.proxy-mode != 2 && !UiData.protected && !UiData.protection-pending: ActionButton {
-                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭代理"; enabled: !UiData.working;
+                    modal-control: true; notice-control: true; compact: true; quiet: true; text: @tr("关闭代理"); enabled: !UiData.working;
                     clicked => { UiActions.dispatch(Intent.proxy-mode, "2", ""); }
                 }
-                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; compact: true; quiet: true; text: "重试启动"; enabled: UiData.notice != "" && !UiData.working && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
+                if UiData.notice-modal && UiData.retry-core: ActionButton { modal-control: true; notice-control: true; compact: true; quiet: true; text: @tr("重试启动"); enabled: UiData.notice != "" && !UiData.working && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.restart-core, "", ""); } }
                 ActionButton {
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { root.close-target = self.target; }
                     init => { root.close-target = self.target; }
-                    modal-control: true; notice-control: true; compact: true; quiet: true; text: "关闭";
+                    modal-control: true; notice-control: true; compact: true; quiet: true; text: @tr("关闭");
                     clicked => { UiActions.dispatch(Intent.dismiss-notice, "", ""); }
                 }
             }

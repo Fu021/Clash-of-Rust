@@ -4,7 +4,9 @@ use super::{
     render::{Tone, wrap},
 };
 use anyhow::{Context, Result, ensure};
-use clash_client_core::config::{DEFAULT_FAKE_IP_EXCLUSIONS, Settings, parse_fake_ip_exclusions};
+use clash_client_core::config::{
+    DEFAULT_FAKE_IP_EXCLUSIONS, Language, Settings, parse_fake_ip_exclusions,
+};
 use clash_client_runtime::control::Command;
 
 pub(super) struct Entry {
@@ -75,38 +77,67 @@ impl Editor {
             .map_or(self.selected.min(self.entries.len() + 1), |index| index + 2);
     }
 
-    fn prepare(&self, settings: &Settings) -> Result<(Command, String)> {
+    fn prepare(&self, settings: &Settings, language: Language) -> Result<(Command, String)> {
         let mut next = settings.clone();
         let description = match self.selected {
             0 => {
                 let values = parse_fake_ip_exclusions(&self.draft)?;
-                ensure!(!values.is_empty(), "请输入域名后再保存");
+                ensure!(
+                    !values.is_empty(),
+                    "{}",
+                    language.text("请输入域名后再保存", "Enter a domain before saving")
+                );
                 next.add_fake_ip_exclusions(&values)?;
-                format!("新增排除项：{}", values.join(", "))
+                format!(
+                    "{}{}",
+                    language.text("新增排除项：", "Add exclusions: "),
+                    values.join(", ")
+                )
             }
             1 => {
-                ensure!(self.disabled_defaults > 0, "默认排除项均已启用");
+                ensure!(
+                    self.disabled_defaults > 0,
+                    "{}",
+                    language.text("默认排除项均已启用", "All default exclusions are enabled")
+                );
                 next.restore_fake_ip_defaults()?;
-                "恢复全部默认排除项，保留自定义项".into()
+                language
+                    .text(
+                        "恢复全部默认排除项，保留自定义项",
+                        "Restore all defaults and keep custom exclusions",
+                    )
+                    .into()
             }
             index => {
-                let entry = self.entries.get(index - 2).context("请重新选择排除项")?;
+                let entry = self
+                    .entries
+                    .get(index - 2)
+                    .context(language.text("请重新选择排除项", "Select the exclusion again"))?;
                 if entry.enabled {
                     next.remove_fake_ip_exclusion(&entry.domain)?;
                     format!(
-                        "{}：{}",
+                        "{}{}{}",
                         if entry.default {
-                            "停用默认排除项"
+                            language.text("停用默认排除项", "Disable default exclusion")
                         } else {
-                            "删除自定义排除项"
+                            language.text("删除自定义排除项", "Delete custom exclusion")
                         },
+                        language.text("：", ": "),
                         entry.domain
                     )
                 } else {
-                    ensure!(next.dns_override, "请先开启 DNS 覆盖");
+                    ensure!(
+                        next.dns_override,
+                        "{}",
+                        language.text("请先开启 DNS 覆盖", "Enable DNS override first")
+                    );
                     next.fake_ip_disabled_defaults
                         .retain(|domain| !domain.eq_ignore_ascii_case(&entry.domain));
-                    format!("恢复默认排除项：{}", entry.domain)
+                    format!(
+                        "{}{}",
+                        language.text("恢复默认排除项：", "Restore default exclusion: "),
+                        entry.domain
+                    )
                 }
             }
         };
@@ -123,6 +154,7 @@ impl Editor {
 }
 
 pub(super) fn key(state: &mut State, key: Key) -> Action {
+    let language = state.language;
     let editor = state.fake_ip.as_mut().unwrap();
     if editor.editing {
         match key {
@@ -149,10 +181,24 @@ pub(super) fn key(state: &mut State, key: Key) -> Action {
             Key::Escape | Key::Back => editor.pending = None,
             Key::Enter if state.demo => {
                 editor.pending = None;
-                state.message = Some("演示模式：未保存 Fake-IP 排除项".into());
+                state.message = Some(
+                    language
+                        .text(
+                            "演示模式：未保存 Fake-IP 排除项",
+                            "Demo mode: Fake-IP exclusions not saved",
+                        )
+                        .into(),
+                );
             }
             Key::Enter if state.error.is_some() => {
-                state.message = Some("后台状态过期，输入保留；等待读取恢复后再保存".into());
+                state.message = Some(
+                    language
+                        .text(
+                            "后台状态过期，输入保留；等待读取恢复后再保存",
+                            "Backend state is stale; input is retained until it reconnects",
+                        )
+                        .into(),
+                );
             }
             Key::Enter => {
                 let unchanged = state.poll.as_ref().is_some_and(|poll| {
@@ -169,7 +215,14 @@ pub(super) fn key(state: &mut State, key: Key) -> Action {
                     return Action::SaveFakeIp(Box::new(command));
                 }
                 editor.pending = None;
-                state.message = Some("设置已变化，输入保留；请重新确认操作".into());
+                state.message = Some(
+                    language
+                        .text(
+                            "设置已变化，输入保留；请重新确认操作",
+                            "Settings changed; input is retained. Confirm the action again",
+                        )
+                        .into(),
+                );
             }
             _ => {}
         }
@@ -207,10 +260,18 @@ fn append(draft: &mut String, text: &str) {
 
 fn review(state: &mut State) -> Action {
     if state.error.is_some() {
-        state.message = Some("后台状态过期，输入保留；等待读取恢复后再保存".into());
+        state.message = Some(
+            state
+                .language
+                .text(
+                    "后台状态过期，输入保留；等待读取恢复后再保存",
+                    "Backend state is stale; input is retained until it reconnects",
+                )
+                .into(),
+        );
     } else if let Some(poll) = &state.poll {
         let editor = state.fake_ip.as_mut().unwrap();
-        match editor.prepare(&poll.meta.settings) {
+        match editor.prepare(&poll.meta.settings, state.language) {
             Ok(pending) => {
                 editor.pending = Some(pending);
                 state.message = None;
@@ -218,18 +279,30 @@ fn review(state: &mut State) -> Action {
             Err(error) => state.message = Some(format!("{error:#}")),
         }
     } else {
-        state.message = Some("后台未运行，输入保留".into());
+        state.message = Some(
+            state
+                .language
+                .text(
+                    "后台未运行，输入保留",
+                    "Backend is not running; input is retained",
+                )
+                .into(),
+        );
     }
     Action::None
 }
 
 pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let editor = state.fake_ip.as_ref().unwrap();
-    let mut heading: Vec<_> = wrap("设置 · Fake-IP 排除项", width)
-        .into_iter()
-        .take(height.saturating_sub(1))
-        .map(|line| (line, Tone::Accent))
-        .collect();
+    let language = state.language;
+    let mut heading: Vec<_> = wrap(
+        language.text("设置 · Fake-IP 排除项", "Settings · Fake-IP exclusions"),
+        width,
+    )
+    .into_iter()
+    .take(height.saturating_sub(1))
+    .map(|line| (line, Tone::Accent))
+    .collect();
     let available = height.saturating_sub(heading.len());
     let mut lines = Vec::new();
     let mut selected_range = (0, 0);
@@ -238,51 +311,93 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
     };
     if let Some((_, description)) = &editor.pending {
         push(description.clone(), Tone::Selected);
-        push("Enter 确认保存 · Esc 取消".into(), Tone::Warning);
+        push(
+            language
+                .text("Enter 确认保存 · Esc 取消", "Enter to save · Esc to cancel")
+                .into(),
+            Tone::Warning,
+        );
     } else {
         if let Some(poll) = &state.poll {
             if !poll.meta.settings.dns_override {
                 push(
-                    "DNS 覆盖已关闭 · 排除项未应用，只可查看。".into(),
+                    language
+                        .text(
+                            "DNS 覆盖已关闭 · 排除项未应用，只可查看。",
+                            "DNS override is off · Exclusions are read-only and inactive.",
+                        )
+                        .into(),
                     Tone::Warning,
                 );
             } else if poll.meta.settings.claude_protection.is_some() {
-                push("Claude 保护中 · 排除项只可查看。".into(), Tone::Warning);
+                push(
+                    language
+                        .text(
+                            "Claude 保护中 · 排除项只可查看。",
+                            "Claude protection is active · Exclusions are read-only.",
+                        )
+                        .into(),
+                    Tone::Warning,
+                );
             } else if !poll.meta.settings.fake_ip_enabled() {
                 push(
-                    "Fake-IP 已关闭 · 列表保留，启用后生效。".into(),
+                    language
+                        .text(
+                            "Fake-IP 已关闭 · 列表保留，启用后生效。",
+                            "Fake-IP is off · Exclusions apply when enabled.",
+                        )
+                        .into(),
                     Tone::Muted,
                 );
             }
         }
         push(
-            "新增支持逗号或换行；订阅原有过滤独立合并。".into(),
+            language
+                .text(
+                    "新增支持逗号或换行；订阅原有过滤独立合并。",
+                    "Separate new entries with commas or newlines; subscription filters are merged.",
+                )
+                .into(),
             Tone::Muted,
         );
         for index in 0..editor.entries.len() + 2 {
             let selected = editor.selected == index;
             let text = match index {
                 0 => format!(
-                    "新增：{}{}",
+                    "{}{}{}",
+                    language.text("新增：", "Add: "),
                     editor.draft,
                     if editor.editing {
                         " ▏"
                     } else {
-                        "（Enter 编辑）"
+                        language.text("（Enter 编辑）", " (Enter to edit)")
                     }
                 ),
-                1 => format!("恢复默认 · {} 项已停用", editor.disabled_defaults),
+                1 => match language {
+                    Language::SimplifiedChinese => {
+                        format!("恢复默认 · {} 项已停用", editor.disabled_defaults)
+                    }
+                    Language::English => {
+                        format!("Restore defaults · {} disabled", editor.disabled_defaults)
+                    }
+                },
                 index => {
                     let entry = &editor.entries[index - 2];
                     let source = match (entry.custom, entry.default) {
-                        (true, true) => "用户自定义、DNS 覆盖",
-                        (true, false) => "用户自定义",
-                        _ => "DNS 覆盖默认",
+                        (true, true) => {
+                            language.text("用户自定义、DNS 覆盖", "Custom, DNS override")
+                        }
+                        (true, false) => language.text("用户自定义", "Custom"),
+                        _ => language.text("DNS 覆盖默认", "DNS override default"),
                     };
                     format!(
                         "{} · {} · {source}",
                         entry.domain,
-                        if entry.enabled { "启用" } else { "已停用" }
+                        if entry.enabled {
+                            language.text("启用", "Enabled")
+                        } else {
+                            language.text("已停用", "Disabled")
+                        }
                     )
                 }
             };

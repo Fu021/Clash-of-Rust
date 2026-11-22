@@ -3,6 +3,16 @@ import { ActionButton, Panel, Label, Caption, Paragraph, Badge } from "controls.
 import { Theme } from "../theme/palette.slint";
 import { ReportItem } from "../models.slint";
 
+export global ReportText {
+    public pure function section-title(section: string) -> string {
+        return section == "实时保护与异常拦截" ? @tr("实时保护与异常拦截")
+            : section == "Claude 连接与选路" ? @tr("Claude 连接与选路")
+            : section == "出口与 IP 属性" ? @tr("出口与 IP 属性")
+            : section == "DNS 与 WebRTC" ? @tr("DNS 与 WebRTC")
+            : section == "浏览器与配置" ? @tr("浏览器与配置") : section;
+    }
+}
+
 component FindingRow inherits Rectangle {
     in property <ReportItem> item;
     in property <length> title-size;
@@ -31,21 +41,21 @@ component FindingRow inherits Rectangle {
             spacing: 5px; min-width: 0px;
             Label { text: root.item.title; font-weight: 600; font-size: root.title-size; wrap: word-wrap; }
             Paragraph { text: root.item.value; font-size: root.detail-size; }
-            if root.item.country != "": Caption { text: "地区：" + root.item.country; font-size: root.caption-size; wrap: word-wrap; }
+            if root.item.country != "": Caption { text: @tr("地区：{}", root.item.country); font-size: root.caption-size; wrap: word-wrap; }
             if !root.show-details && (root.item.detail != "" || root.item.source != "" || root.item.delay != ""): HorizontalLayout {
                 ActionButton {
                     geometry-key: root.detail-key;
-                    text: root.expanded ? "收起详情" : "查看详情"; quiet: true; compact: true;
+                    text: root.expanded ? @tr("收起详情") : @tr("查看详情"); quiet: true; compact: true;
                     touch-height: root.detail-touch-height;
                     clicked => { root.expanded = !root.expanded; }
                 }
                 Rectangle { horizontal-stretch: 1; }
             }
             if (root.expanded || root.show-details) && root.item.detail != "": Paragraph { text: root.item.detail; color: Theme.secondary; font-size: root.detail-size; }
-            if (root.expanded || root.show-details) && root.item.source != "": Caption { text: "来源：" + root.item.source; wrap: word-wrap; color: Theme.muted; font-size: root.caption-size; }
+            if (root.expanded || root.show-details) && root.item.source != "": Caption { text: @tr("来源：{}", root.item.source); wrap: word-wrap; color: Theme.muted; font-size: root.caption-size; }
             if (root.expanded || root.show-details) && root.item.delay != "": Caption { text: root.item.delay; color: Theme.tone-color(root.item.delay-tone); font-size: root.caption-size; }
         }
-        if root.item.tone == 3: Badge { text: "需关注"; tone: 3; font-size: root.caption-size; }
+        if root.item.tone == 3: Badge { text: @tr("需关注"); tone: 3; font-size: root.caption-size; }
     }
     Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.subtle-line; }
 }
@@ -68,15 +78,15 @@ component FindingBlock inherits Panel {
         padding: 16px; spacing: 6px;
         HorizontalLayout {
             cross-axis-alignment: start; spacing: 8px;
-            Label { text: root.section.title; font-weight: 600; font-size: root.title-size; wrap: word-wrap; horizontal-stretch: 1; }
-            if root.section.delay-tone == 3: Badge { text: "需关注"; tone: 3; font-size: root.caption-size; }
+            Label { text: ReportText.section-title(root.section.title); font-weight: 600; font-size: root.title-size; wrap: word-wrap; horizontal-stretch: 1; }
+            if root.section.delay-tone == 3: Badge { text: @tr("需关注"); tone: 3; font-size: root.caption-size; }
         }
         if root.section.detail != "": Caption { text: root.section.detail; wrap: word-wrap; color: root.section.delay-tone == 3 ? Theme.danger : Theme.warning; font-size: root.caption-size; }
         Paragraph { text: root.section.value; font-size: root.detail-size; color: Theme.secondary; }
         HorizontalLayout {
             ActionButton {
                 geometry-key: "claude-block:" + root.section.id;
-                text: "查看 " + root.section.block-items + " 项详情 →"; quiet: true; compact: true;
+                text: @tr("查看 {} 项详情 →", root.section.block-items); quiet: true; compact: true;
                 touch-height: root.detail-touch-height;
                 enabled: root.section.block-items > 0;
                 clicked => { root.show-details(); }

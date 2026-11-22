@@ -1,4 +1,5 @@
 use chrono::{DateTime, Local, Utc};
+use clash_client_core::config::Language;
 use serde_json::Value;
 
 /// Escape terminal control characters without changing stored names or JSON.
@@ -40,6 +41,10 @@ pub(super) fn latency(value: &Value) -> String {
 
 pub(super) fn text(row: &Value, key: &str) -> String {
     scalar(key, &row[key])
+}
+
+pub(super) fn text_in(row: &Value, key: &str, language: Language) -> String {
+    scalar_in(key, &row[key], language)
 }
 
 pub(super) fn scalar(key: &str, value: &Value) -> String {
@@ -138,6 +143,9 @@ pub(super) fn scalar(key: &str, value: &Value) -> String {
                 ("theme_mode", "system") => "跟随系统",
                 ("theme_mode", "dark") => "深色",
                 ("theme_mode", "light") => "浅色",
+                ("language", "system") => "跟随系统",
+                ("language", "zh-CN") => "简体中文",
+                ("language", "en") => "English",
                 ("accent_color", "teal") => "青绿",
                 ("accent_color", "blue") => "蓝色",
                 ("accent_color", "purple") => "紫色",
@@ -170,7 +178,7 @@ pub(super) fn scalar(key: &str, value: &Value) -> String {
             };
             if matches!(
                 key,
-                "theme_mode" | "accent_color" | "node_sort" | "tui_node_sort"
+                "theme_mode" | "language" | "accent_color" | "node_sort" | "tui_node_sort"
             ) && name != s
             {
                 return clean(&format!("{name}（{s}）"));
@@ -231,6 +239,7 @@ pub(super) fn label(key: &str) -> &str {
         "secret" => "控制接口密钥",
         "dark" => "深色外观",
         "theme_mode" => "主题",
+        "language" => "语言",
         "accent_color" => "强调色",
         "text_scale" => "字号",
         "tray_speed" => "托盘网速",
@@ -329,5 +338,287 @@ pub(super) fn label(key: &str) -> &str {
         "Unknown" => "结果未确认",
         "Failed" => "检测失败",
         _ => key,
+    }
+}
+
+pub(super) fn label_in(key: &str, language: Language) -> &str {
+    if language == Language::SimplifiedChinese {
+        return label(key);
+    }
+    match key {
+        "id" => "ID",
+        "name" => "Name",
+        "type" => "Type",
+        "running" => "Core",
+        "owner" => "Owner",
+        "version" => "Version",
+        "profile" => "Subscription",
+        "node" => "Current node",
+        "mode" | "run_mode" => "Routing mode",
+        "proxy" | "proxy_mode" => "Proxy mode",
+        "protected" | "claude_protection" | "protection" => "Claude protection",
+        "connections" => "Connections",
+        "upload_rate" => "Upload speed",
+        "download_rate" => "Download speed",
+        "upload" => "Uploaded",
+        "download" => "Downloaded",
+        "source" => "Source",
+        "updated" => "Updated",
+        "active" => "Active",
+        "usage" => "Usage",
+        "position" => "Position",
+        "rule" => "Rule",
+        "rule_payload" => "Rule value",
+        "enabled" => "Enabled",
+        "duplicate" => "Duplicate",
+        "already_in_subscription" => "In subscription",
+        "host" => "Host",
+        "sniff_host" => "Sniffed host",
+        "ip" => "IP",
+        "port" => "Port",
+        "network" => "Network",
+        "chain" => "Route",
+        "start" => "Started",
+        "ip_source" => "IP source",
+        "resolution_error" => "Resolution error",
+        "controller_port" => "Controller port",
+        "mixed_port" => "Mixed port",
+        "secret" => "Controller secret",
+        "dark" => "Dark appearance",
+        "theme_mode" => "Theme",
+        "language" => "Language",
+        "accent_color" => "Accent color",
+        "text_scale" => "Text scale",
+        "tray_speed" => "Tray speed",
+        "dns_override" => "DNS override",
+        "ipv6" => "IPv6",
+        "udp" => "UDP",
+        "delay_interval_minutes" => "Automatic speed test interval",
+        "subscription_update_interval_minutes" => "Subscription update interval",
+        "update_check_interval_minutes" => "Update check interval",
+        "active_profile" => "Active subscription ID",
+        "node_sort" => "Node sort order",
+        "tui_node_sort" => "Terminal node sort order",
+        "rule_overrides" => "Rule shortcuts",
+        "rule_profiles" => "Subscription rule settings",
+        "application_rules" => "Application routing rules",
+        "path" => "Path",
+        "url" => "URL",
+        "size" => "Size",
+        "sha256" => "SHA256",
+        "available" => "Update available",
+        "package" => "Package",
+        "installed" => "Installed",
+        "matches_current" => "Matches current configuration",
+        "scope" => "Scope",
+        "effective" => "Effective",
+        "source_profile_id" | "profile_id" => "Subscription ID",
+        "source_group" => "Pinned group",
+        "target" => "Target",
+        "system_dns" => "System DNS",
+        "core_dns" => "Core DNS",
+        "answers" => "Answers",
+        "http" => "HTTP connectivity",
+        "ipv4" => "IPv4 exit",
+        "error" => "Error",
+        "status" => "Status",
+        "millis" => "Duration",
+        "detail" => "Details",
+        "category" => "Category",
+        "state" => "State",
+        "summary" => "Result",
+        "country" => "Region",
+        "total" => "Total",
+        "completed" => "Completed",
+        "non_red" => "Available or partially available",
+        "confirmed_available" => "Confirmed available",
+        "counts" => "Counts",
+        "categories" => "Category counts",
+        "results" => "Results",
+        "normal" => "Normal",
+        "risk" => "Risks",
+        "challenged" => "Browser verification required",
+        "clues" => "Observations",
+        "report" => "Report",
+        "terminal" => "Terminal environment",
+        "projects" => "Project configuration",
+        "environment" => "Environment",
+        "generated_at" => "Generated",
+        "context" => "Context",
+        "signals" => "Observations",
+        "routes" => "Connections",
+        "group" => "Category",
+        "title" => "Item",
+        "value" => "Result",
+        "evidence" => "Evidence",
+        "advice" => "Advice",
+        "time" => "Time",
+        "outcome" => "Outcome",
+        "level" => "Level",
+        "field" => "Field",
+        "reason" => "Reason",
+        "files" => "Configuration files",
+        "missing_projects" => "Missing projects",
+        "omitted" => "Omitted",
+        "incomplete" => "Incomplete",
+        "findings" => "Findings",
+        "clean_count" => "Files without findings",
+        "clean_files" => "Files without findings",
+        "issues" => "Issues",
+        "reviews" => "Items to review",
+        "unreadable" => "Unreadable files",
+        "guard" => "Live protection",
+        "protection_status" => "Protection status",
+        "observed" => "Requests observed",
+        "connected" => "Connected",
+        "failures" => "Failures",
+        "normal_closed" => "Unexpected connections closed",
+        "notifications" => "Notifications",
+        "last_error" => "Last error",
+        "Ok" => "Success",
+        "Err" => "Failure",
+        "Confirmed" => "Confirmed available",
+        "Partial" => "Partially available",
+        "Reachable" => "Website reachable",
+        "Identified" => "Identified",
+        "Restricted" => "Unavailable or restricted",
+        "Unknown" => "Unconfirmed",
+        "Failed" => "Failed",
+        _ => key,
+    }
+}
+
+pub(super) fn scalar_in(key: &str, value: &Value, language: Language) -> String {
+    if language == Language::SimplifiedChinese {
+        return scalar(key, value);
+    }
+    match value {
+        Value::Null if matches!(key, "upload_rate" | "download_rate") => "Not sampled".into(),
+        Value::Bool(value) => match (key, *value) {
+            ("running", true) => "Running",
+            ("running", false) => "Stopped",
+            (
+                "enabled" | "protected" | "dns_override" | "ipv6" | "udp" | "tray_speed" | "dark",
+                true,
+            ) => "On",
+            (
+                "enabled" | "protected" | "dns_override" | "ipv6" | "udp" | "tray_speed" | "dark",
+                false,
+            ) => "Off",
+            (_, true) => "Yes",
+            (_, false) => "No",
+        }
+        .into(),
+        Value::Number(number) if key == "latency_ms" && number.as_u64() == Some(0) => {
+            "Timed out".into()
+        }
+        Value::Number(number)
+            if matches!(key, "updated" | "installed_at") && number.as_u64() == Some(0) =>
+        {
+            "Not updated".into()
+        }
+        Value::Number(number)
+            if matches!(
+                key,
+                "delay_interval_minutes"
+                    | "subscription_update_interval_minutes"
+                    | "update_check_interval_minutes"
+            ) =>
+        {
+            match number.as_u64() {
+                Some(0) => "Off".into(),
+                Some(minutes) => format!("{minutes} min"),
+                None => number.to_string(),
+            }
+        }
+        Value::String(value) if !value.is_empty() => {
+            if key == "country"
+                && let Some(name) = clash_client_core::countries::english_name(value)
+            {
+                return clean(&format!("{name} ({value})"));
+            }
+            let translated = match (key, value.as_str()) {
+                ("evidence", "measured") => "Measured",
+                ("evidence", "inferred") => "Inferred",
+                ("evidence", "unknown") => "Unconfirmed",
+                ("environment", "core") => "Core",
+                ("environment", "web") => "Browser",
+                ("environment", "desktop") => "Desktop",
+                ("environment", "code") => "Claude Code",
+                ("group", "exit") => "Network exit",
+                ("group", "browser") => "Browser preferences",
+                ("group", "web-rtc") => "WebRTC",
+                ("group", "dns") => "DNS",
+                ("group", "desktop") => "Claude Desktop",
+                ("group", "code") => "Claude Code",
+                ("group", "quality") => "IP quality",
+                ("group", "cloudflare") => "Cloudflare",
+                ("group", "connectivity") => "Connectivity",
+                ("mode" | "run_mode", "rule") => "Rule",
+                ("mode" | "run_mode", "global") => "Global",
+                ("mode" | "run_mode", "direct") => "Direct",
+                ("proxy" | "proxy_mode", "off") => "Local port only",
+                ("proxy" | "proxy_mode", "system") => "System proxy",
+                ("proxy" | "proxy_mode", "tun") => "TUN",
+                ("owner", "gui") => "Desktop",
+                ("owner", "daemon") => "CLI background",
+                ("source", "Custom") => "Custom",
+                ("source", "Shortcut") => "Rule shortcut",
+                ("source", "Subscription") => "Subscription",
+                ("source", "system") => "System DNS",
+                ("source", "core/proxy") => "Core / proxy DNS",
+                ("ip_source", "resolver") => "Additional DNS lookup",
+                ("theme_mode", "system") => "Follow system",
+                ("theme_mode", "dark") => "Dark",
+                ("theme_mode", "light") => "Light",
+                ("language", "system") => "Follow system",
+                ("language", "zh-CN") => "Simplified Chinese",
+                ("language", "en") => "English",
+                ("accent_color", "teal") => "Teal",
+                ("accent_color", "blue") => "Blue",
+                ("accent_color", "purple") => "Purple",
+                ("accent_color", "rose") => "Rose",
+                ("accent_color", "amber") => "Amber",
+                ("accent_color", "slate") => "Slate",
+                ("node_sort" | "tui_node_sort", "name") => "Name",
+                ("node_sort" | "tui_node_sort", "latency_ascending") => "Latency ascending",
+                ("node_sort" | "tui_node_sort", "latency_descending") => "Latency descending",
+                ("state", "Confirmed") => "Confirmed available",
+                ("state", "Partial") => "Partially available",
+                ("state", "Reachable") => "Website reachable",
+                ("state", "Identified") => "Identified",
+                ("state", "Restricted") => "Unavailable or restricted",
+                ("state", "Unknown") => "Unconfirmed",
+                ("state", "Failed") => "Failed",
+                ("state", "Off") => "Protection off",
+                ("state", "Active") => "Protection ready",
+                ("state", "Checking") => "Protection unconfirmed",
+                ("state", "Error") => "Protection error",
+                ("level", "issue") => "Configuration issue",
+                ("level", "review") => "Review",
+                ("level", "incomplete") => "Incomplete",
+                ("scope", "current-user-logon") => "At current user login",
+                ("effective", "next-login") => "At next login",
+                _ => value,
+            };
+            if matches!(
+                key,
+                "theme_mode" | "language" | "accent_color" | "node_sort" | "tui_node_sort"
+            ) && translated != value
+            {
+                return clean(&format!("{translated} ({value})"));
+            }
+            if matches!(key, "start" | "generated_at")
+                && let Ok(time) = DateTime::parse_from_rfc3339(value)
+            {
+                return time
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string();
+            }
+            clean(translated)
+        }
+        Value::Null if key == "latency_ms" => "Not tested".into(),
+        _ => scalar(key, value),
     }
 }

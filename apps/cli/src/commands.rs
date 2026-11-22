@@ -32,16 +32,25 @@ pub async fn execute(args: &Args) -> Result<()> {
         "restart" if args.flag("network-only") => {
             output::confirm(
                 args,
-                "刷新内核出站与 DNS 会关闭当前内核的旧连接，可能中断其他用户和程序；继续？",
+                args.language().text(
+                    "刷新内核出站与 DNS 会关闭当前内核的旧连接，可能中断其他用户和程序；继续？",
+                    "Refreshing core routes and DNS closes existing connections and may interrupt other users and applications. Continue?",
+                ),
             )
             .await?;
             let remote = backend::connect(args, false)
                 .await?
-                .context("当前用户后台未运行；网络刷新不会自动启动内核")?;
+                .context(args.language().text(
+                "当前用户后台未运行；网络刷新不会自动启动内核",
+                "The current user's backend is not running; a network refresh will not start it",
+            ))?;
             let _: Value = remote
                 .request(Command::RecoverNetwork)
                 .await
-                .context("网络刷新请求失败；请检查后台状态，旧版后台可能不支持此操作")?;
+                .context(args.language().text(
+                "网络刷新请求失败；请检查后台状态，旧版后台可能不支持此操作",
+                "Network refresh failed; check the backend, as older versions may not support it",
+            ))?;
             output::emit(args, json!({"network_refreshed":true}))
         }
         "start" | "restart" => {
@@ -55,19 +64,23 @@ pub async fn execute(args: &Args) -> Result<()> {
             output::emit(args, serde_json::to_value(backend::meta(args).await?)?)
         }
         "stop" => {
-            if let Some(remote) = backend::connect(args, false)
-                .await
-                .context("连接待停止的后台失败")?
-            {
-                let result: Value = remote
-                    .request(Command::Shutdown)
+            if let Some(remote) =
+                backend::connect(args, false)
                     .await
-                    .context("停止内核失败")?;
+                    .context(args.language().text(
+                        "连接待停止的后台失败",
+                        "Failed to connect to the backend to stop it",
+                    ))?
+            {
+                let result: Value = remote.request(Command::Shutdown).await.context(
+                    args.language()
+                        .text("停止内核失败", "Failed to stop the core"),
+                )?;
                 if result["shutdown"] == true {
-                    remote
-                        .wait_closed(&backend::store(args)?)
-                        .await
-                        .context("等待后台清理失败")?;
+                    remote.wait_closed(&backend::store(args)?).await.context(
+                        args.language()
+                            .text("等待后台清理失败", "Backend cleanup did not complete"),
+                    )?;
                 }
             }
             let routes = crate::host_network::with_proxy_context(
@@ -81,7 +94,11 @@ pub async fn execute(args: &Args) -> Result<()> {
             if let Some(mode) = args.positional.first() {
                 ensure!(
                     matches!(mode.as_str(), "rule" | "global" | "direct"),
-                    "模式应为 rule、global 或 direct"
+                    "{}",
+                    args.language().text(
+                        "模式应为 rule、global 或 direct",
+                        "Mode must be rule, global or direct"
+                    )
                 );
                 let _: Value = backend::request(args, Command::Mode { mode: mode.clone() }).await?;
             }
@@ -96,7 +113,13 @@ pub async fn execute(args: &Args) -> Result<()> {
                     "off" => ProxyMode::Off,
                     "system" => ProxyMode::System,
                     "tun" => ProxyMode::Tun,
-                    _ => bail!("代理状态应为 system、tun 或 off"),
+                    _ => bail!(
+                        "{}",
+                        args.language().text(
+                            "代理状态应为 system、tun 或 off",
+                            "Proxy mode must be system, tun or off"
+                        )
+                    ),
                 };
                 if mode == ProxyMode::Tun {
                     maintenance::authorize_tun(args).await?;
@@ -144,7 +167,10 @@ async fn current_snapshot(args: &Args, scope: Scope, header: bool) -> Result<Opt
             .map(Some)
     })
     .await
-    .context("读取当前用户后台状态超过 5 秒")?
+    .context(args.language().text(
+        "读取当前用户后台状态超过 5 秒",
+        "Reading the current user's backend status exceeded 5 seconds",
+    ))?
 }
 
 async fn status(args: &Args) -> Result<()> {
@@ -209,17 +235,33 @@ async fn status(args: &Args) -> Result<()> {
 pub fn profile<'a>(
     meta: &'a Meta,
     requested: Option<&str>,
+    language: clash_client_core::config::Language,
 ) -> Result<&'a clash_client_core::config::Profile> {
     let id = requested
         .or(meta.settings.active_profile.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("尚未选择订阅"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                language.text("尚未选择订阅", "No subscription is selected")
+            )
+        })?;
     if let Some(profile) = meta.profiles.iter().find(|p| p.id == id) {
         return Ok(profile);
     }
     let mut matches = meta.profiles.iter().filter(|p| p.name == id);
-    let value = matches
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("未找到订阅：{id}"))?;
-    ensure!(matches.next().is_none(), "订阅名称不唯一，请使用 ID");
+    let value = matches.next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{}{id}",
+            language.text("未找到订阅：", "Subscription not found: ")
+        )
+    })?;
+    ensure!(
+        matches.next().is_none(),
+        "{}",
+        language.text(
+            "订阅名称不唯一，请使用 ID",
+            "The subscription name is ambiguous; use its ID"
+        )
+    );
     Ok(value)
 }

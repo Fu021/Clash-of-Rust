@@ -211,6 +211,10 @@ impl Monitor {
     }
 
     pub fn present(&self, running: bool) -> Presentation {
+        self.present_in(running, core::config::Language::SimplifiedChinese)
+    }
+
+    pub fn present_in(&self, running: bool, language: core::config::Language) -> Presentation {
         View {
             running,
             busy: self.busy(),
@@ -222,7 +226,7 @@ impl Monitor {
             exit: &self.exit,
             services: &self.services,
         }
-        .present()
+        .present_in(language)
     }
 }
 

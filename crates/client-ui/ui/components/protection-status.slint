@@ -38,13 +38,13 @@ export component ProtectionBadge inherits Rectangle {
     in property <int> health;
     in property <bool> enabled: true;
     in property <length> touch-size: 32px;
-    out property <string> status-label: root.health == 3 ? "Claude 保护异常" : root.health == 2 ? "Claude 保护正在验证" : "Claude 保护中";
+    out property <string> status-label: root.health == 3 ? @tr("Claude 保护异常") : root.health == 2 ? @tr("Claude 保护正在验证") : @tr("Claude 保护中");
     out property <color> status-color: root.health == 3 ? Theme.danger : root.health == 2 ? Theme.warning : Theme.success;
     callback clicked();
     height: 32px; width: 32px;
     horizontal-stretch: 0; vertical-stretch: 0;
     accessible-role: button;
-    accessible-label: root.status-label + "，查看保护详情";
+    accessible-label: @tr("{}，查看保护详情", root.status-label);
     accessible-action-default => { if root.enabled { root.clicked(); } }
     forward-focus: keys;
     Rectangle {
@@ -87,7 +87,7 @@ export component ProtectionAlert inherits Rectangle {
     border-radius: 10px; border-width: 1px; border-color: root.status-color.with-alpha(0.25);
     background: root.health == 3 ? Theme.danger-wash : Theme.warning-wash;
     accessible-role: button;
-    accessible-label: root.message + "，查看保护详情";
+    accessible-label: @tr("{}，查看保护详情", root.message);
     accessible-action-default => { if root.enabled { root.clicked(); } }
     forward-focus: keys;
     ProtectionIcon { x: 10px; y: 10px;

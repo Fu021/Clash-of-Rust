@@ -39,16 +39,30 @@ pub fn absolute(path: &str) -> Result<PathBuf> {
 }
 pub fn timeout(args: &Args) -> Result<Duration> {
     let value = args.number("timeout", 300, 3600)?;
-    ensure!(value > 0, "--timeout 必须大于 0");
+    ensure!(
+        value > 0,
+        "{}",
+        args.language()
+            .text("--timeout 必须大于 0", "--timeout must be greater than 0")
+    );
     Ok(Duration::from_secs(value as u64))
 }
 
-async fn reachable(store: &Store, remote: &Remote) -> Result<bool> {
+async fn reachable(
+    store: &Store,
+    remote: &Remote,
+    language: clash_client_core::config::Language,
+) -> Result<bool> {
     match remote.request::<Meta>(Command::Meta).await {
         Ok(_) => Ok(true),
-        Err(error) if owner_locked(store)? => {
-            Err(error.context(Unavailable("存活的后台暂时不可达，请先保留排障现场".into())))
-        }
+        Err(error) if owner_locked(store)? => Err(error.context(Unavailable(
+            language
+                .text(
+                    "存活的后台暂时不可达，请先保留排障现场",
+                    "The running backend is temporarily unreachable; preserve the diagnostic state",
+                )
+                .into(),
+        ))),
         Err(_) => Ok(false),
     }
 }
@@ -69,7 +83,7 @@ pub async fn observed_snapshot(args: &Args, scope: Scope) -> Result<Option<(Remo
     {
         Ok(snapshot) => Ok(Some((remote, snapshot))),
         Err(error) => {
-            if reachable(&store, &remote).await? {
+            if reachable(&store, &remote, args.language()).await? {
                 Err(error)
             } else {
                 Ok(None)
@@ -87,7 +101,7 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
         }
     };
     if let Some(remote) = Remote::discover(&store, timeout(args)?)?
-        && reachable(&store, &remote).await?
+        && reachable(&store, &remote, args.language()).await?
     {
         return Ok(Some(remote));
     }
@@ -134,7 +148,10 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
         &file,
     )?;
     #[cfg(not(windows))]
-    let mut child = process.spawn().context("启动无界面后台失败")?;
+    let mut child = process.spawn().context(
+        args.language()
+            .text("启动无界面后台失败", "Failed to start the headless backend"),
+    )?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(remote) = Remote::discover(&store, timeout(args)?)?
@@ -145,16 +162,20 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
         if let Some(status) = child.try_wait()?
             && store.instance_lock().is_ok()
         {
-            bail!(Unavailable(format!(
-                "后台启动失败（{status}）；请查看 {}",
-                log.display()
-            )));
+            bail!(Unavailable(match args.language() {
+                clash_client_core::config::Language::SimplifiedChinese =>
+                    format!("后台启动失败（{status}）；请查看 {}", log.display()),
+                clash_client_core::config::Language::English =>
+                    format!("Backend startup failed ({status}); see {}", log.display()),
+            }));
         }
         if tokio::time::Instant::now() >= deadline {
-            bail!(Unavailable(format!(
-                "等待后台启动超时；请查看 {}",
-                log.display()
-            )));
+            bail!(Unavailable(match args.language() {
+                clash_client_core::config::Language::SimplifiedChinese =>
+                    format!("等待后台启动超时；请查看 {}", log.display()),
+                clash_client_core::config::Language::English =>
+                    format!("Timed out waiting for the backend; see {}", log.display()),
+            }));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -175,7 +196,9 @@ fn owner_locked(store: &Store) -> Result<bool> {
     }
 }
 pub async fn remote(args: &Args) -> Result<Remote> {
-    connect(args, true).await?.context("后台不可用")
+    connect(args, true)
+        .await?
+        .context(args.language().text("后台不可用", "Backend unavailable"))
 }
 pub async fn request<T: DeserializeOwned + Send + 'static>(
     args: &Args,
@@ -233,7 +256,13 @@ pub async fn authorize_tun(args: &Args) -> Result<()> {
 pub async fn run(args: &Args) -> Result<()> {
     let store = store(args)?;
     if connect(args, false).await?.is_some() {
-        bail!("这个数据目录已有 GUI 或后台；请使用 cor status/start");
+        bail!(
+            "{}",
+            args.language().text(
+                "这个数据目录已有 GUI 或后台；请使用 cor status/start",
+                "This data directory already has a GUI or backend; use cor status/start",
+            )
+        );
     }
     let resources = args.get("resources").map(absolute).transpose()?;
     let engine = tokio::task::spawn_blocking(move || match resources {
@@ -243,7 +272,11 @@ pub async fn run(args: &Args) -> Result<()> {
     .await??;
     ensure!(
         !engine.is_remote(),
-        "已有其他进程先启动后台，请使用 cor status"
+        "{}",
+        args.language().text(
+            "已有其他进程先启动后台，请使用 cor status",
+            "Another process started the backend first; use cor status"
+        )
     );
     let engine = Arc::new(Mutex::new(engine));
     control::serve(&engine, Owner::Daemon).await?;
@@ -251,7 +284,10 @@ pub async fn run(args: &Args) -> Result<()> {
         .lock()
         .await
         .shutdown_signal()
-        .context("后台未创建控制端点")?;
+        .context(args.language().text(
+            "后台未创建控制端点",
+            "The backend did not create a control endpoint",
+        ))?;
     if !args.flag("no-core") {
         let state = engine.lock().await.settings.clone();
         if state.proxy_mode == clash_client_runtime::engine::ProxyMode::Tun
@@ -263,7 +299,13 @@ pub async fn run(args: &Args) -> Result<()> {
         owner.start_with_proxy_mode().await?;
     }
     if !args.flag("quiet") {
-        eprintln!("Clash of Rust 后台已运行；Ctrl+C 恢复网络后退出");
+        eprintln!(
+            "{}",
+            args.language().text(
+                "Clash of Rust 后台已运行；Ctrl+C 恢复网络后退出",
+                "Clash of Rust backend is running; press Ctrl+C to restore the network and exit",
+            )
+        );
     }
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut delay_at = tokio::time::Instant::now();

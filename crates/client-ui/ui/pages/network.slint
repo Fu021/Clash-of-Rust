@@ -31,7 +31,7 @@ export component NetworkPage inherits PageSurface {
                         edited(value) => { UiActions.dispatch(Intent.test-url, value, ""); }
                         accepted => { if !UiData.probing { UiActions.dispatch(Intent.probe, "", parameters.encoded); } }
                     }
-                    ActionButton { text: UiData.probing ? "取消" : "检查"; primary: !UiData.probing;
+                    ActionButton { text: UiData.probing ? @tr("取消") : @tr("检查"); primary: !UiData.probing;
                         clicked => { UiActions.dispatch(UiData.probing ? Intent.probe-cancel : Intent.probe, "", parameters.encoded); }
                     }
                 }
@@ -50,7 +50,7 @@ export component NetworkPage inherits PageSurface {
                 if UiData.network-results.length > 0: HorizontalLayout {
                     alignment: start;
                     ActionButton {
-                        text: "导出诊断";
+                        text: @tr("导出诊断");
                         clicked => { UiActions.dispatch(Intent.export-diagnostics, "网络工具检查", ""); }
                     }
                 }

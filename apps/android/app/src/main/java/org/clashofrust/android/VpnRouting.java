@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 /** Wait for ordered system callbacks, rather than an old VPN capability snapshot. */
 final class VpnRouting extends ConnectivityManager.NetworkCallback implements AutoCloseable {
     private final ConnectivityManager manager;
+    private final Context languageContext;
     private final String previousInterface;
     private final boolean ipv6;
     private final CountDownLatch ready=new CountDownLatch(1);
@@ -23,6 +24,7 @@ final class VpnRouting extends ConnectivityManager.NetworkCallback implements Au
 
     VpnRouting(Context context,String previousInterface,boolean ipv6) {
         manager=context.getSystemService(ConnectivityManager.class);
+        languageContext=context.getApplicationContext();
         this.previousInterface=previousInterface;
         this.ipv6=ipv6;
         manager.registerNetworkCallback(new NetworkRequest.Builder()
@@ -73,10 +75,10 @@ final class VpnRouting extends ConnectivityManager.NetworkCallback implements Au
         try {
             long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
             while (!ready.await(100,TimeUnit.MILLISECONDS)) {
-                if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("VPN 连接已取消");
-                if (System.nanoTime()>=deadline) throw new IOException("系统尚未完成 VPN 路由切换");
+                if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException(AppLanguage.current(languageContext).getString(R.string.vpn_cancelled));
+                if (System.nanoTime()>=deadline) throw new IOException(AppLanguage.current(languageContext).getString(R.string.vpn_route_pending));
             }
-            if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("VPN 连接已取消");
+            if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException(AppLanguage.current(languageContext).getString(R.string.vpn_cancelled));
         } catch (InterruptedException error) {Thread.currentThread().interrupt();throw error;}
         return interfaceName;
     }

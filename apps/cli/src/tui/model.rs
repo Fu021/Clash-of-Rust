@@ -1,6 +1,7 @@
 use super::form::{self, Form};
 use super::input::Key;
 use anyhow::{Context, Result, ensure};
+use clash_client_core::config::Language;
 use clash_client_core::proxy_order::{self, NodeSort};
 use clash_client_runtime::{
     control::{Meta, Owner, Poll},
@@ -31,17 +32,18 @@ impl Page {
         Self::Tools,
     ];
 
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Home => "首页",
-            Self::Nodes => "节点",
-            Self::Profiles => "订阅",
-            Self::Connections => "连接",
-            Self::Rules => "规则",
-            Self::Network => "工具",
-            Self::Settings => "设置",
-            Self::Tools => "操作",
-        }
+    pub fn title(self, language: Language) -> &'static str {
+        let (chinese, english) = match self {
+            Self::Home => ("首页", "Home"),
+            Self::Nodes => ("节点", "Nodes"),
+            Self::Profiles => ("订阅", "Subscriptions"),
+            Self::Connections => ("连接", "Connections"),
+            Self::Rules => ("规则", "Rules"),
+            Self::Network => ("工具", "Network"),
+            Self::Settings => ("设置", "Settings"),
+            Self::Tools => ("操作", "Commands"),
+        };
+        language.text(chinese, english)
     }
 
     pub fn scope(self) -> Scope {
@@ -64,25 +66,56 @@ pub(super) struct Target {
 }
 
 impl Target {
+    #[cfg(test)]
     pub fn validate(&self, poll: &Poll) -> Result<()> {
-        ensure!(poll.snapshot.running, "内核已停止，未切换节点");
+        self.validate_in(poll, Language::SimplifiedChinese)
+    }
+
+    pub fn validate_in(&self, poll: &Poll, language: Language) -> Result<()> {
+        ensure!(
+            poll.snapshot.running,
+            "{}",
+            language.text(
+                "内核已停止，未切换节点",
+                "Core stopped; node was not changed"
+            )
+        );
         ensure!(
             poll.meta.settings.claude_protection.is_none(),
-            "Claude 保护期间不能切换节点"
+            "{}",
+            language.text(
+                "Claude 保护期间不能切换节点",
+                "Nodes cannot be changed while Claude protection is active"
+            )
         );
         ensure!(
             poll.meta.settings.active_profile == self.profile,
-            "订阅已经变化，请重新选择节点"
+            "{}",
+            language.text(
+                "订阅已经变化，请重新选择节点",
+                "The subscription changed; select the node again"
+            )
         );
         let group = poll.snapshot.proxies.proxies.get(self.group.as_str());
-        let group = group.context("策略组已不存在，请重新选择")?;
+        let group = group.context(language.text(
+            "策略组已不存在，请重新选择",
+            "The group no longer exists; select it again",
+        ))?;
         ensure!(
             group.kind.as_str() == "Selector",
-            "自动策略组由内核选择节点，不能手动固定成员；请在上一级手动组选择 AUTO 或具体节点"
+            "{}",
+            language.text(
+                "自动策略组由内核选择节点，不能手动固定成员；请在上一级手动组选择 AUTO 或具体节点",
+                "Automatic groups select nodes themselves; choose a node in the parent selector"
+            )
         );
         ensure!(
             group.all.iter().any(|node| node.as_str() == self.node),
-            "节点已不在这个策略组中，请重新选择"
+            "{}",
+            language.text(
+                "节点已不在这个策略组中，请重新选择",
+                "The node is no longer in this group; select it again"
+            )
         );
         Ok(())
     }
@@ -112,6 +145,7 @@ pub(super) enum Action {
 
 pub(super) struct State {
     pub page: Page,
+    pub language: Language,
     pub poll: Option<Poll>,
     pub error: Option<String>,
     pub query: String,
@@ -141,6 +175,7 @@ impl State {
     pub fn new(demo: bool) -> Self {
         Self {
             page: Page::Home,
+            language: Language::SimplifiedChinese,
             poll: demo.then(demo_poll),
             error: None,
             query: String::new(),
@@ -194,7 +229,14 @@ impl State {
             });
             if !preserve_form {
                 self.message = if self.form.is_some() || self.confirmation.is_some() || rule_draft {
-                    Some("后台或当前订阅已变化，已取消旧表单，请重新选择".into())
+                    Some(
+                        self.language
+                            .text(
+                                "后台或当前订阅已变化，已取消旧表单，请重新选择",
+                                "Backend or subscription changed; select again",
+                            )
+                            .into(),
+                    )
                 } else {
                     None
                 };
@@ -275,7 +317,7 @@ impl State {
             return super::settings::KEYS
                 .iter()
                 .copied()
-                .filter(|key| super::settings::matches_query(key, &query))
+                .filter(|key| super::settings::matches_query(key, &query, self.language))
                 .collect();
         }
         if self.page == Page::Rules {
@@ -283,20 +325,28 @@ impl State {
                 return self
                     .rules
                     .as_ref()
-                    .map_or_else(Vec::new, |rules| rules.items(&query));
+                    .map_or_else(Vec::new, |rules| rules.items(&query, self.language));
             }
             return super::settings::RULE_KEYS
                 .iter()
                 .copied()
                 .filter(|key| {
                     key.contains(&query)
-                        || super::settings::title(key).to_lowercase().contains(&query)
+                        || super::settings::title(key, self.language)
+                            .to_lowercase()
+                            .contains(&query)
                 })
                 .collect();
         }
         if self.page == Page::Tools {
             return form::commands()
-                .filter(|spec| spec.path.contains(&query) || spec.description.contains(&query))
+                .filter(|spec| {
+                    spec.path.contains(&query)
+                        || spec
+                            .localized_description(self.language)
+                            .to_lowercase()
+                            .contains(&query)
+                })
                 .map(|spec| spec.path)
                 .collect();
         }
@@ -407,11 +457,24 @@ impl State {
                     Key::Enter => {
                         let args = self.execution.take().unwrap();
                         if self.demo {
-                            self.message = Some("演示模式：未执行操作或保存设置".into());
+                            self.message = Some(
+                                self.language
+                                    .text(
+                                        "演示模式：未执行操作或保存设置",
+                                        "Demo mode: no command run or settings saved",
+                                    )
+                                    .into(),
+                            );
                             Action::None
                         } else if form.setting.is_some() && self.error.is_some() {
-                            self.message =
-                                Some("后台状态过期，草稿保留；等待读取恢复后再确认".into());
+                            self.message = Some(
+                                self.language
+                                    .text(
+                                        "后台状态过期，草稿保留；等待读取恢复后再确认",
+                                        "Backend state is stale; draft retained until it reconnects",
+                                    )
+                                    .into(),
+                            );
                             Action::None
                         } else if form.setting.is_some() && super::settings::inline(&args) {
                             Action::ApplySetting(args)
@@ -443,8 +506,14 @@ impl State {
                         form.begin_edit();
                     } else if form.setting.is_some() {
                         if self.error.is_some() {
-                            self.message =
-                                Some("后台状态过期，草稿保留；等待读取恢复后再保存".into());
+                            self.message = Some(
+                                self.language
+                                    .text(
+                                        "后台状态过期，草稿保留；等待读取恢复后再保存",
+                                        "Backend state is stale; draft retained until it reconnects",
+                                    )
+                                    .into(),
+                            );
                         } else {
                             return Action::ReviewForm;
                         }
@@ -453,7 +522,14 @@ impl State {
                     }
                 }
                 Key::Enter if form.setting.is_some() && self.error.is_some() => {
-                    self.message = Some("后台状态过期，草稿保留；等待读取恢复后再保存".into());
+                    self.message = Some(
+                        self.language
+                            .text(
+                                "后台状态过期，草稿保留；等待读取恢复后再保存",
+                                "Backend state is stale; draft retained until it reconnects",
+                            )
+                            .into(),
+                    );
                 }
                 Key::Enter => return Action::ReviewForm,
                 _ => {}
@@ -502,10 +578,24 @@ impl State {
                 Key::Enter => {
                     let target = self.confirmation.take().unwrap();
                     if self.demo {
-                        self.message = Some("演示模式：未提交节点切换".into());
+                        self.message = Some(
+                            self.language
+                                .text(
+                                    "演示模式：未提交节点切换",
+                                    "Demo mode: node selection not submitted",
+                                )
+                                .into(),
+                        );
                         Action::None
                     } else if self.error.is_some() {
-                        self.message = Some("后台状态过期，请先刷新".into());
+                        self.message = Some(
+                            self.language
+                                .text(
+                                    "后台状态过期，请先刷新",
+                                    "Backend state is stale; refresh first",
+                                )
+                                .into(),
+                        );
                         Action::None
                     } else {
                         Action::Select(target)
@@ -532,8 +622,10 @@ impl State {
                     } else {
                         "connection show"
                     };
-                    let mut form =
-                        Form::new(form::commands().find(|spec| spec.path == path).unwrap());
+                    let mut form = Form::new_in(
+                        form::commands().find(|spec| spec.path == path).unwrap(),
+                        self.language,
+                    );
                     form.fields[0].value.clone_from(connection);
                     form.selected = form.fields.len();
                     self.form = Some(form);
@@ -545,12 +637,23 @@ impl State {
         match key {
             Key::Char('e') if self.page == Page::Network => {
                 if self.demo {
-                    self.message = Some("演示模式：未导出文件".into());
+                    self.message = Some(
+                        self.language
+                            .text("演示模式：未导出文件", "Demo mode: no file exported")
+                            .into(),
+                    );
                 } else if self.network_report.is_some() {
                     self.message = None;
-                    self.form = Some(super::network::export_editor());
+                    self.form = Some(super::network::export_editor(self.language));
                 } else {
-                    self.message = Some("请先完成一次检查，再导出本次结果".into());
+                    self.message = Some(
+                        self.language
+                            .text(
+                                "请先完成一次检查，再导出本次结果",
+                                "Run a check before exporting its result",
+                            )
+                            .into(),
+                    );
                 }
             }
             Key::Char('o') if self.page == Page::Network => {
@@ -559,12 +662,20 @@ impl State {
                     clash_client_core::network_tools::Tool::ALL[self.network_tool],
                     &self.query,
                     &self.network_options,
+                    self.language,
                 ));
                 return Action::CancelNetwork;
             }
             Key::Char('s') if self.page == Page::Nodes => {
                 let Some(poll) = &self.poll else {
-                    self.message = Some("后台未运行，无法保存节点排序".into());
+                    self.message = Some(
+                        self.language
+                            .text(
+                                "后台未运行，无法保存节点排序",
+                                "Backend is not running; node order was not saved",
+                            )
+                            .into(),
+                    );
                     return Action::None;
                 };
                 let mode = match poll.meta.settings.tui_node_sort {
@@ -573,7 +684,14 @@ impl State {
                     NodeSort::LatencyDescending => NodeSort::Name,
                 };
                 if self.error.is_some() {
-                    self.message = Some("后台状态过期，请先刷新".into());
+                    self.message = Some(
+                        self.language
+                            .text(
+                                "后台状态过期，请先刷新",
+                                "Backend state is stale; refresh first",
+                            )
+                            .into(),
+                    );
                 } else if self.demo {
                     let selected_node = self.selected_node();
                     self.poll.as_mut().unwrap().meta.settings.tui_node_sort = mode;
@@ -651,7 +769,7 @@ impl State {
                 if let Some(path) = self.items().get(self.selected)
                     && let Some(spec) = form::commands().find(|spec| spec.path == *path)
                 {
-                    self.form = Some(Form::new(spec));
+                    self.form = Some(Form::new_in(spec, self.language));
                 }
             }
             Key::Enter if self.page == Page::Rules && !self.shortcuts_open => {
@@ -662,7 +780,14 @@ impl State {
             }
             Key::Enter if self.page == Page::Network => {
                 if self.query.trim().is_empty() {
-                    self.error = Some("请输入域名、IP 或网址".into());
+                    self.error = Some(
+                        self.language
+                            .text(
+                                "请输入域名、IP 或网址",
+                                "Enter a domain, IP address, or URL",
+                            )
+                            .into(),
+                    );
                     return Action::None;
                 }
                 self.selected = 0;
@@ -673,22 +798,37 @@ impl State {
                     if self.network_tool != 0 {
                         let tool = clash_client_core::network_tools::Tool::ALL[self.network_tool];
                         self.network_results = vec![
-                            format!("目标（演示） · {}", self.query),
-                            format!("{} · {}", tool.title(), tool.hint()),
-                            "演示模式 · 未运行网络或系统探针".into(),
+                            format!(
+                                "{} · {}",
+                                self.language.text("目标（演示）", "Target (demo)"),
+                                self.query
+                            ),
+                            format!(
+                                "{} · {}",
+                                super::network::title(tool, self.language),
+                                super::network::hint(tool, self.language)
+                            ),
+                            self.language
+                                .text(
+                                    "演示模式 · 未运行网络或系统探针",
+                                    "Demo mode · No network or system probes run",
+                                )
+                                .into(),
                         ];
                         return Action::None;
                     }
                     self.network_results = vec![
-                        format!("目标（演示） · {}", self.query),
-                        "系统 DNS · 198.18.0.12".into(),
-                        "内核 DNS · 203.0.113.42".into(),
-                        "本机代理 · 端口可连接 · 1 ms".into(),
+                        format!("{} · {}", self.language.text("目标（演示）", "Target (demo)"), self.query),
+                        format!("{} · 198.18.0.12", self.language.text("系统 DNS", "System DNS")),
+                        format!("{} · 203.0.113.42", self.language.text("内核 DNS", "Core DNS")),
+                        self.language.text("本机代理 · 端口可连接 · 1 ms", "Local proxy · Port reachable · 1 ms").into(),
                         "HTTPS · HTTP 200 · 128 ms".into(),
                         "HTTP · HTTP 301 · 96 ms".into(),
-                        "采用协议 · HTTPS".into(),
-                        "实际线路 · PROXY → AUTO → 🇺🇸 美国 02 · 命中 DomainSuffix (github.com)"
-                            .into(),
+                        self.language.text("采用协议 · HTTPS", "Protocol · HTTPS").into(),
+                        self.language.text(
+                            "实际线路 · PROXY → AUTO → 🇺🇸 美国 02 · 命中 DomainSuffix (github.com)",
+                            "Route · PROXY → AUTO → 🇺🇸 美国 02 · Matched DomainSuffix (github.com)",
+                        ).into(),
                     ];
                 } else {
                     return Action::CheckNetwork(
@@ -729,12 +869,21 @@ impl State {
             group: group.clone(),
             node: name,
         };
-        match target.validate(poll) {
+        match target.validate_in(poll, self.language) {
             Ok(()) if self.error.is_none() => {
                 self.message = None;
                 self.confirmation = Some(target);
             }
-            Ok(()) => self.message = Some("后台状态过期，请先刷新".into()),
+            Ok(()) => {
+                self.message = Some(
+                    self.language
+                        .text(
+                            "后台状态过期，请先刷新",
+                            "Backend state is stale; refresh first",
+                        )
+                        .into(),
+                );
+            }
             Err(error) => self.message = Some(error.to_string()),
         }
     }
@@ -748,11 +897,25 @@ impl State {
             return;
         };
         let Some(poll) = &self.poll else {
-            self.message = Some("后台未运行；请在「操作」页启动或读取配置".into());
+            self.message = Some(
+                self.language
+                    .text(
+                        "后台未运行；请在「操作」页启动或读取配置",
+                        "Backend is not running; start it or load a configuration under Commands",
+                    )
+                    .into(),
+            );
             return;
         };
         if self.error.is_some() {
-            self.message = Some("后台状态过期，请先刷新".into());
+            self.message = Some(
+                self.language
+                    .text(
+                        "后台状态过期，请先刷新",
+                        "Backend state is stale; refresh first",
+                    )
+                    .into(),
+            );
             return;
         }
         let key = if self.page == Page::Profiles {
@@ -768,7 +931,7 @@ impl State {
         let form = if self.page == Page::Rules {
             super::catalog::open_shortcut(self, key)
         } else {
-            super::settings::open(poll, key)
+            super::settings::open(poll, key, self.language)
         };
         match form {
             Ok(mut form) => {

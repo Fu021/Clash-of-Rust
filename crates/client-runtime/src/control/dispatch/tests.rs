@@ -116,6 +116,17 @@ async fn protected_display_patch_persists_without_starting_or_changing_protectio
     execute(
         &shared,
         Command::ConfigSet {
+            key: "language".into(),
+            value: json!("en"),
+        },
+        Owner::Daemon,
+        None,
+    )
+    .await
+    .unwrap();
+    execute(
+        &shared,
+        Command::ConfigSet {
             key: "proxy_groups_paginated".into(),
             value: json!(true),
         },
@@ -136,6 +147,10 @@ async fn protected_display_patch_persists_without_starting_or_changing_protectio
         assert_eq!(
             engine.store.load_settings().unwrap().tui_node_sort,
             clash_client_core::proxy_order::NodeSort::Name
+        );
+        assert_eq!(
+            engine.store.load_settings().unwrap().language,
+            clash_client_core::config::LanguagePreference::English
         );
         assert!(!engine.store.runtime().join("config.yaml").exists());
         engine.settings.clone()

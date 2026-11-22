@@ -1,5 +1,6 @@
 use crate::args::{Args, COMMANDS, Spec, VALUES};
 use anyhow::{Result, ensure};
+use clash_client_core::config::Language;
 
 pub(super) struct Field {
     pub label: String,
@@ -12,6 +13,7 @@ pub(super) struct Field {
 
 pub(super) struct Form {
     pub spec: &'static Spec,
+    language: Language,
     pub fields: Vec<Field>,
     pub selected: usize,
     pub editing: bool,
@@ -26,41 +28,58 @@ pub(super) fn commands() -> impl Iterator<Item = &'static Spec> {
         .filter(|spec| !matches!(spec.path, "ui" | "run") && !spec.retired())
 }
 
-pub(super) fn setting_title(key: &str) -> &str {
+pub(super) fn setting_title(key: &str, language: Language) -> &str {
     match key {
-        "mixed_port" => "混合端口",
-        "direct_download_port" => "内核直连端口",
-        "secret" => "控制器密钥",
-        "dark" => "深色外观",
-        "theme_mode" => "主题",
-        "accent_color" => "强调色",
-        "text_scale" => "字号百分比",
-        "tray_speed" => "托盘网速",
-        "update_prereleases" => "包含预发布版本",
-        "update_check_interval_minutes" => "自动检查更新（分钟，0 关闭）",
-        "dns_override" => "DNS 覆盖",
+        "mixed_port" => language.text("混合端口", "Mixed port"),
+        "direct_download_port" => language.text("内核直连端口", "Core direct port"),
+        "secret" => language.text("控制器密钥", "Controller secret"),
+        "dark" => language.text("深色外观", "Dark appearance"),
+        "theme_mode" => language.text("主题", "Theme"),
+        "accent_color" => language.text("强调色", "Accent color"),
+        "text_scale" => language.text("字号百分比", "Text scale (%)"),
+        "tray_speed" => language.text("托盘网速", "Tray transfer rates"),
+        "update_prereleases" => language.text("包含预发布版本", "Include prereleases"),
+        "update_check_interval_minutes" => language.text(
+            "自动检查更新（分钟，0 关闭）",
+            "Update check interval (min, 0 disables)",
+        ),
+        "dns_override" => language.text("DNS 覆盖", "DNS override"),
         "fake_ip" => "Fake-IP",
-        "fake_ip_exclusions" => "Fake-IP 排除项",
-        "fake_ip_disabled_defaults" => "停用的默认排除项",
-        "ipv6" => "启用 IPv6",
-        "udp" => "启用 UDP",
-        "claude_protection" => "Claude 保护",
-        "delay_interval_minutes" => "定时测速（分钟，0 关闭）",
-        "subscription_update_interval_minutes" => "订阅自动更新（分钟，0 关闭）",
-        "active_profile" => "当前订阅",
-        "run_mode" => "运行模式",
-        "proxy_mode" => "代理方式",
-        "node_sort" => "节点排序",
-        "tui_node_sort" => "终端节点排序",
-        "rule_overrides" => "快捷规则",
-        "rule_profiles" => "订阅规则",
-        "application_rules" => "应用规则",
+        "fake_ip_exclusions" => language.text("Fake-IP 排除项", "Fake-IP exclusions"),
+        "fake_ip_disabled_defaults" => {
+            language.text("停用的默认排除项", "Disabled default exclusions")
+        }
+        "ipv6" => language.text("启用 IPv6", "Enable IPv6"),
+        "udp" => language.text("启用 UDP", "Enable UDP"),
+        "claude_protection" => language.text("Claude 保护", "Claude protection"),
+        "delay_interval_minutes" => language.text(
+            "定时测速（分钟，0 关闭）",
+            "Latency test interval (min, 0 disables)",
+        ),
+        "subscription_update_interval_minutes" => language.text(
+            "订阅自动更新（分钟，0 关闭）",
+            "Subscription update interval (min, 0 disables)",
+        ),
+        "active_profile" => language.text("当前订阅", "Active subscription"),
+        "run_mode" => language.text("运行模式", "Routing mode"),
+        "proxy_mode" => language.text("代理方式", "Proxy mode"),
+        "node_sort" => language.text("节点排序", "Node sort order"),
+        "tui_node_sort" => language.text("终端节点排序", "Terminal node sort order"),
+        "language" => language.text("语言", "Language"),
+        "rule_overrides" => language.text("快捷规则", "Rule shortcuts"),
+        "rule_profiles" => language.text("订阅规则", "Subscription rules"),
+        "application_rules" => language.text("应用规则", "Application rules"),
         _ => key,
     }
 }
 
 impl Form {
+    #[cfg(test)]
     pub fn new(spec: &'static Spec) -> Self {
+        Self::new_in(spec, Language::SimplifiedChinese)
+    }
+
+    pub fn new_in(spec: &'static Spec, language: Language) -> Self {
         let mut fields = spec
             .usage
             .split_whitespace()
@@ -72,9 +91,9 @@ impl Form {
                     "{}{}",
                     word.trim_matches(['[', ']']),
                     if index < spec.min {
-                        "（必填）"
+                        language.text("（必填）", " (required)")
                     } else {
-                        "（可选）"
+                        language.text("（可选）", " (optional)")
                     }
                 ),
                 value: String::new(),
@@ -92,11 +111,11 @@ impl Form {
                     .iter()
                     .any(|(required, _)| *required == key)
                 {
-                    "（必填）"
+                    language.text("（必填）", " (required)")
                 } else if VALUES.split_whitespace().any(|value| value == key) {
-                    "（可选）"
+                    language.text("（可选）", " (optional)")
                 } else {
-                    "（true 开启，留空关闭）"
+                    language.text("（true 开启，留空关闭）", " (true to enable, empty to disable)")
                 }
             ),
             value: String::new(),
@@ -110,6 +129,7 @@ impl Form {
         }
         Self {
             spec,
+            language,
             fields,
             selected: 0,
             editing: false,
@@ -119,14 +139,16 @@ impl Form {
         }
     }
 
-    pub fn setting(key: &str, value: &serde_json::Value) -> Self {
-        let mut form = Self::new(commands().find(|spec| spec.path == "config set").unwrap());
+    pub fn setting(key: &str, value: &serde_json::Value, language: Language) -> Self {
+        let mut form = Self::new_in(
+            commands().find(|spec| spec.path == "config set").unwrap(),
+            language,
+        );
         form.fields[0].value = key.into();
         form.fields[0].secret = false;
         form.fields[0].locked = true;
-        form.fields[0].label = "KEY（固定）".into();
         form.setting = Some(key.into());
-        form.fields[1].label = "值".into();
+        form.fields[1].label = language.text("值", "Value").into();
         form.fields[1].secret = key == "secret";
         form.fields[1].value = if key == "secret" {
             String::new()
@@ -211,7 +233,14 @@ impl Form {
             .split_whitespace()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        for key in ["user", "data-dir", "resources", "timeout", "no-color"] {
+        for key in [
+            "user",
+            "data-dir",
+            "resources",
+            "timeout",
+            "no-color",
+            "lang",
+        ] {
             if let Some(value) = context.get(key) {
                 words.push(if VALUES.split_whitespace().any(|item| item == key) {
                     format!("--{key}={value}")
@@ -230,7 +259,18 @@ impl Form {
                 if VALUES.split_whitespace().any(|item| item == key) {
                     words.push(format!("--{key}={}", field.value));
                 } else {
-                    ensure!(field.value == "true", "--{key} 请填 true、false 或留空");
+                    ensure!(
+                        field.value == "true",
+                        "{}",
+                        match self.language {
+                            Language::SimplifiedChinese => {
+                                format!("--{key} 请填 true、false 或留空")
+                            }
+                            Language::English => {
+                                format!("--{key} must be true, false, or empty")
+                            }
+                        }
+                    );
                     words.push(format!("--{key}"));
                 }
             }
@@ -246,7 +286,14 @@ impl Form {
             if field.value.is_empty() {
                 missing = true;
             } else {
-                ensure!(!missing, "请按顺序填写参数，不能跳过前一个参数");
+                ensure!(
+                    !missing,
+                    "{}",
+                    self.language.text(
+                        "请按顺序填写参数，不能跳过前一个参数",
+                        "Fill arguments in order without skipping an earlier argument"
+                    )
+                );
                 let value = if self.setting.as_deref().is_some_and(|key| {
                     matches!(key, "fake_ip_exclusions" | "fake_ip_disabled_defaults")
                 }) && self.spec.path == "config set"
@@ -264,7 +311,9 @@ impl Form {
         }
         ensure!(
             words.iter().map(String::len).sum::<usize>() <= 65536,
-            "表单内容过大"
+            "{}",
+            self.language
+                .text("表单内容过大", "Form contents are too large")
         );
         crate::args::parse(words)
     }
@@ -318,6 +367,7 @@ pub(super) fn setting_value(
         "proxy_mode" => json!(settings.proxy_mode),
         "node_sort" => json!(settings.node_sort),
         "tui_node_sort" => json!(settings.tui_node_sort),
+        "language" => json!(settings.language),
         "proxy_groups_paginated" => json!(settings.proxy_groups_paginated),
         "profiles_paginated" => json!(settings.profiles_paginated),
         "rule_overrides" => json!(settings.rule_overrides),

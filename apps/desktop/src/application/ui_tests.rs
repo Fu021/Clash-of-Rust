@@ -1,6 +1,9 @@
 //! Exercise production component callbacks, model projection and application state.
 use super::*;
-use clash_client_ui::{AppWindow, Intent, UiActions, UiData, UiGeometry, models::ViewModels};
+use clash_client_ui::{
+    AppWindow, Intent, IpStatusText, NetworkTools, UiActions, UiData, UiGeometry,
+    models::ViewModels,
+};
 use slint::{ComponentHandle, Model};
 
 #[test]
@@ -53,6 +56,33 @@ fn network_report_is_replaced_and_late_results_cannot_reappear_after_navigation(
     let _ = app.update(Message::ProbeCancel);
     assert!(!app.probing);
     assert_eq!(app.test_results, ["检查已取消"]);
+}
+
+#[test]
+fn english_network_report_displays_translated_status_and_preserves_raw_evidence() {
+    let mut app = fixture(Page::Tests);
+    app.presentation_language = Language::English;
+    let generation = app.network_test_generation;
+    let report = network_tools::Report {
+        schema: 1,
+        tool: network_tools::Tool::Dns,
+        target: "https://example.test".into(),
+        elapsed_ms: 42,
+        status: "partial",
+        entries: vec![network_tools::Entry {
+            label: "系统 DNS".into(),
+            detail: "系统解析失败或超时".into(),
+            success: Some(false),
+            code: "dns_failed",
+        }],
+    };
+    let _ = app.update(Message::ProbeDone(generation, Ok(report)));
+    assert_eq!(app.test_results[0], "Status · Partial · 42 ms");
+    assert_eq!(
+        app.test_results[2],
+        "System DNS · System DNS failed or timed out"
+    );
+    assert_eq!(app.network_codes, ["dns_failed"]);
 }
 
 #[test]
@@ -1002,18 +1032,40 @@ fn connection_sort_clicks_redraw_the_header_immediately_and_third_click_restores
     let events = pointer_events(&window);
     window.show().unwrap();
     let mut pixels = vec![slint::Rgb8Pixel::default(); 950 * 700];
+    let mut frame_number = 0;
     let mut header = || {
+        frame_number += 1;
         assert!(adapter.draw_if_needed(|renderer| {
             renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             renderer.render(&mut pixels, 950);
             let mut reference = vec![slint::Rgb8Pixel::default(); 950 * 700];
             renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
             renderer.render(&mut reference, 950);
-            assert!(
-                pixels == reference,
-                "partial repaint differs from a fresh frame at pixel {:?}",
-                pixels.iter().zip(&reference).position(|(a, b)| a != b)
-            );
+            if let Some(index) = pixels.iter().zip(&reference).position(|(a, b)| a != b) {
+                let differences: Vec<_> = pixels
+                    .iter()
+                    .zip(&reference)
+                    .enumerate()
+                    .filter(|(_, (actual, expected))| actual != expected)
+                    .collect();
+                let max_delta = differences
+                    .iter()
+                    .map(|(_, (actual, expected))| {
+                        actual.r.abs_diff(expected.r)
+                            .max(actual.g.abs_diff(expected.g))
+                            .max(actual.b.abs_diff(expected.b))
+                    })
+                    .max()
+                    .unwrap();
+                panic!(
+                    "frame {frame_number}: {} pixels differ, largest channel delta {max_delta}; first at ({}, {}): {:?} versus {:?}",
+                    differences.len(),
+                    index % 950,
+                    index / 950,
+                    pixels[index],
+                    reference[index]
+                );
+            }
             renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             // Changing buffer modes clears Slint's damage cache. Warm it now,
             // so the next click really renders incrementally into this buffer.
@@ -1215,6 +1267,39 @@ fn connection_detail_exposes_all_fields_and_copies_the_same_values() {
     assert!(data.get_modal_copy().is_empty());
     assert!(data.get_modal_description().contains("已结束"));
     window.hide().unwrap();
+}
+
+#[test]
+fn english_connection_detail_actions_fit_a_scaled_window() {
+    ui_testing::initialize(800, 450);
+    let mut app = fixture(Page::Connections);
+    app.presentation_language = Language::English;
+    app.settings.text_scale = 130;
+    let window = AppWindow::new().unwrap();
+    slint::select_bundled_translation("en").unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let _ = app.ui_intent(Intent::ConnectionDetail, "1", "");
+    app.present_slint(&data, &mut models);
+    let _events = pointer_events(&window);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    let close = target_bounds("dialog-dismiss");
+    for key in ["dialog-copy", "dialog-close-connection"] {
+        let bounds = target_bounds(key);
+        assert_eq!(bounds[2], close[2], "{key} must use the same button width");
+        assert!(
+            bounds[0] >= 0. && bounds[0] + bounds[2] <= 800.,
+            "{key}: {bounds:?}"
+        );
+        assert!(
+            bounds[1] >= 0. && bounds[1] + bounds[3] <= 450.,
+            "{key}: {bounds:?}"
+        );
+    }
+    window.hide().unwrap();
+    slint::select_bundled_translation("").unwrap();
 }
 
 #[test]
@@ -2300,6 +2385,12 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
         ),
         (Intent::TextScale, "125%", "", Action::TextScale(125)),
         (Intent::TraySpeed, "true", "", Action::TraySpeed(true)),
+        (
+            Intent::Language,
+            "en",
+            "",
+            Action::SetLanguage(LanguagePreference::English),
+        ),
         (Intent::DnsOverride, "false", "", Action::DnsOverride(false)),
         (Intent::FakeIp, "false", "", Action::FakeIp(false)),
         (Intent::Ipv6, "true", "", Action::Ipv6(true)),
@@ -2404,6 +2495,100 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
 }
 
 #[test]
+fn desktop_language_menu_dispatches_stable_tags_in_both_catalogs() {
+    ui_testing::initialize(800, 450);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    data.set_page(9);
+    data.set_ready(true);
+    data.set_protected(true);
+    track_targets(&window);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+
+    for (locale, title, network_title, status_label, option, expected) in [
+        (
+            "en",
+            "Settings",
+            "Website check",
+            "Available",
+            "option:language/1",
+            "zh-CN",
+        ),
+        (
+            "",
+            "设置",
+            "网站检查",
+            "确认可用",
+            "option:language/2",
+            "en",
+        ),
+    ] {
+        slint::select_bundled_translation(locale).unwrap();
+        assert_eq!(window.get_page_title(), title);
+        assert_eq!(
+            window
+                .global::<NetworkTools>()
+                .get_titles()
+                .row_data(0)
+                .unwrap(),
+            network_title
+        );
+        assert_eq!(
+            window
+                .global::<IpStatusText>()
+                .invoke_label("确认可用".into()),
+            status_label
+        );
+        assert_eq!(
+            window.global::<IpStatusText>().invoke_label("全球".into()),
+            if locale == "en" { "Global" } else { "全球" }
+        );
+        let _ = window.window().take_snapshot().unwrap();
+        click_target(&window, "language");
+        let _ = window.window().take_snapshot().unwrap();
+        click_popup_target(&window, "language", option);
+        assert_eq!(
+            events.borrow_mut().pop(),
+            Some((Intent::Language, expected.into(), "".into()))
+        );
+    }
+    window.hide().unwrap();
+}
+
+#[test]
+fn english_sample_actions_fit_and_dispatch_in_a_scaled_dialog() {
+    ui_testing::initialize(800, 450);
+    let window = AppWindow::new().unwrap();
+    slint::select_bundled_translation("en").unwrap();
+    let data = window.global::<UiData>();
+    data.set_text_scale(130);
+    data.set_modal(8);
+    data.set_browser_session(true);
+    window
+        .global::<clash_client_ui::Motion>()
+        .set_enabled(false);
+    track_targets(&window);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    motion_frame(&window, 250);
+    for (key, intent) in [
+        ("button:Copy script", Intent::ClaudeCopyScript),
+        ("button:Import clipboard", Intent::ClaudeImport),
+        ("button:Close callback", Intent::ClaudeCloseSession),
+        ("button:Open sample page", Intent::ClaudeBrowser),
+    ] {
+        let bounds = target_bounds(key);
+        assert!(bounds[0] >= 0. && bounds[0] + bounds[2] <= 800.);
+        assert!(bounds[1] >= 0. && bounds[1] + bounds[3] <= 450.);
+        click_target(&window, key);
+        assert_eq!(events.borrow_mut().pop().unwrap().0, intent);
+    }
+    window.hide().unwrap();
+    slint::select_bundled_translation("").unwrap();
+}
+
+#[test]
 fn ip_report_uses_emoji_in_summary_rows_and_details() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Websites);
@@ -2505,6 +2690,24 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         row("AIUnlockTest_Gemini_location").detail,
         "同域出口：待检测"
     );
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    assert!(data.get_site_summary().contains("Cloudflare probe exit:"));
+    let available = data.get_site_counts().row_data(0).unwrap();
+    assert_eq!(available.id, "确认可用");
+    assert!(available.label.starts_with("Available "));
+    let english_rows = data.get_site_results().iter().collect::<Vec<_>>();
+    let english_claude = english_rows
+        .iter()
+        .find(|row| row.id == "AIUnlockTest_Claude")
+        .unwrap();
+    assert_eq!(english_claude.status_label, "仅网页可达");
+    assert_eq!(english_claude.value, "Website reachable");
+    assert_eq!(
+        english_claude.detail,
+        "Same-domain exit: 203.0.113.12 · Hong Kong SAR China"
+    );
+    app.presentation_language = Language::SimplifiedChinese;
     app.site_results[index("AIUnlockTest_Claude")] = None;
     app.site_results[index("MediaUnlockTest_ChatGPT")] = Some(Err("请求失败".into()));
     app.present_slint(&data, &mut models);
@@ -2698,6 +2901,67 @@ fn claude_report_rows_keep_titles_and_labeled_explanations() {
 }
 
 #[test]
+fn english_claude_report_keeps_original_keys_and_evidence() {
+    use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Route, Signal};
+
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Claude);
+    app.presentation_language = Language::English;
+    let mut report = Report::new(Environment::Core, "fixture");
+    report.signals.push(Signal::new(
+        Group::Quality,
+        "出口 IP 质量 · 203.0.113.12",
+        "机房或托管网络：是 · 2 项待确认",
+        "IPQuery、IPLogs",
+        Evidence::Inferred,
+        "已标记\n机房或托管网络：IPQuery 是、IPLogs 否",
+    ));
+    report.routes = ["api.anthropic.com", "claude.ai"]
+        .into_iter()
+        .map(|host| Route {
+            host: host.into(),
+            chain: "Node A".into(),
+            rule: "DOMAIN".into(),
+            ..Default::default()
+        })
+        .collect();
+    let original = serde_json::to_value(&report).unwrap();
+    app.claude.reports[0] = Some(report);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let rows = data.get_claude_results();
+    let quality = rows
+        .iter()
+        .find(|row| row.title == "Exit IP quality · 203.0.113.12")
+        .unwrap();
+    assert_eq!(quality.id, "出口与 IP 属性");
+    assert_eq!(quality.value, "Datacenter or hosting: Yes · 2 unconfirmed");
+    assert!(quality.detail.contains("IPQuery: Yes, IPLogs: No"));
+    let routes = rows
+        .iter()
+        .find(|row| row.title == "Claude domain routes")
+        .unwrap();
+    assert_eq!(routes.id, "Claude 连接与选路");
+    assert_eq!(routes.value, "2 domains · Route recorded");
+    assert!(routes.detail.contains("api.anthropic.com"));
+    assert!(routes.detail.contains("claude.ai"));
+    assert_eq!(
+        serde_json::to_value(app.claude.reports[0].as_ref().unwrap()).unwrap(),
+        original
+    );
+    app.settings.language = LanguagePreference::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert!(
+        data.get_claude_results()
+            .iter()
+            .any(|row| row.title == "Claude domain routes")
+    );
+}
+
+#[test]
 fn claude_route_section_keeps_each_domain_and_failure() {
     use clash_of_rust::claude_check::{Environment, Evidence, Group, Report, Route, Signal};
 
@@ -2786,6 +3050,31 @@ fn claude_route_section_keeps_each_domain_and_failure() {
         "1 项来源不一致"
     );
     if preview.is_some() {
+        let report = app.claude.reports[0].as_mut().unwrap();
+        for signal in &mut report.signals {
+            match signal.group {
+                Group::Quality => {
+                    signal.value = "机房或托管网络：是 · 2 项待确认 · 1 个来源查询未完成".into();
+                    signal.detail = "已标记\n机房或托管网络：IPQuery 是、IPLogs 否\n\n尚未确认\n爬虫地址：未提供\n\n查询未完成\nLayer3 Intel：请求超时".into();
+                }
+                Group::Exit | Group::Dns => {
+                    signal.title = if signal.group == Group::Exit {
+                        "Claude 网页实际出口"
+                    } else {
+                        "实际递归 DNS"
+                    }
+                    .into();
+                    signal.value = "203.0.113.12 · 美国".into();
+                    signal.ip = "203.0.113.12".into();
+                    signal.country = "US".into();
+                }
+                Group::Connectivity => {
+                    signal.title = "claude.ai 连通性".into();
+                    signal.value = "响应 3/3 · 中位 42 ms · HTTP 200".into();
+                }
+                _ => {}
+            }
+        }
         let mut guard = Report::new(Environment::Desktop, "演示数据");
         let route = Route {
             host: "api.anthropic.com".into(),
@@ -2811,11 +3100,11 @@ fn claude_route_section_keeps_each_domain_and_failure() {
             .signals
             .push(Signal::new(
                 Group::Browser,
-                "浏览器语言",
-                "zh-CN",
+                "语言偏好",
+                "zh-CN、en-US",
                 "演示数据",
                 Evidence::Measured,
-                "仅用于报告预览",
+                "按浏览器返回的优先顺序排列。",
             ));
         app.present_slint(&data, &mut models);
     }
@@ -2835,6 +3124,14 @@ fn claude_route_section_keeps_each_domain_and_failure() {
     };
     capture("overview");
     if preview.is_some() {
+        app.presentation_language = Language::English;
+        slint::select_bundled_translation("en").unwrap();
+        app.present_slint(&data, &mut models);
+        motion_frame(&window, 50);
+        capture("english");
+        app.presentation_language = Language::SimplifiedChinese;
+        slint::select_bundled_translation("").unwrap();
+        app.present_slint(&data, &mut models);
         window
             .window()
             .set_size(slint::PhysicalSize::new(1100, 2200));
@@ -2921,7 +3218,8 @@ fn claude_guard_block_keeps_status_and_interceptions_together() {
         .into(),
         ..Default::default()
     };
-    app.claude.guard_report(&snapshot);
+    app.claude
+        .guard_report(&snapshot, Language::SimplifiedChinese);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
@@ -2967,7 +3265,8 @@ fn claude_guard_block_keeps_status_and_interceptions_together() {
     motion_frame(&window, 50);
     assert!(target_bounds(&item_key)[3] > collapsed_height);
     snapshot.total += 1;
-    app.claude.guard_report(&snapshot);
+    app.claude
+        .guard_report(&snapshot, Language::SimplifiedChinese);
     app.present_slint(&data, &mut models);
     motion_frame(&window, 50);
     assert!(
@@ -3190,6 +3489,7 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
     let mut app = fixture(Page::Websites);
     app.site_show_results = true;
     let window = AppWindow::new().unwrap();
+    slint::select_bundled_translation("en").unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
@@ -3223,6 +3523,7 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
         assert_eq!(selected, value);
     }
     window.hide().unwrap();
+    slint::select_bundled_translation("").unwrap();
 }
 
 #[test]
@@ -3832,6 +4133,90 @@ fn synchronized_reply(app: &App) -> Reply {
         autostart: false,
         protection_changed: false,
         tray_nodes: None,
+    }
+}
+
+#[test]
+fn english_desktop_validation_and_errors_follow_language() {
+    let mut app = fixture(Page::Settings);
+    app.presentation_language = Language::English;
+    app.mixed_port = "0".into();
+    let _ = app.update(Message::SavePorts);
+    assert!(
+        app.notice
+            .contains("Port must be an integer from 1 to 65535")
+    );
+
+    app.update_interval_input = "10081".into();
+    let _ = app.update(Message::SaveUpdateInterval);
+    assert!(app.notice.contains("0 disables automatic update checks"));
+
+    app.settings.dns_override = false;
+    let _ = app.update(Message::FakeIpAdd);
+    assert_eq!(app.fake_ip_error, "Enable DNS override first");
+
+    let _ = app.update(Message::ProbeCancel);
+    assert_eq!(app.test_results, ["Check cancelled"]);
+}
+
+#[test]
+fn profile_edit_closes_on_success_independently_of_presentation_language() {
+    let mut app = fixture(Page::Profiles);
+    app.presentation_language = Language::English;
+    app.updates.started = true;
+    let _ = app.update(Message::EditProfile("fixture".into()));
+    assert!(app.profile_editor.is_some());
+
+    let mut failure = synchronized_reply(&app);
+    failure.profile_edit = true;
+    failure.notice = Err("Permission denied".into());
+    let _ = app.update(Message::Finished(Box::new(failure)));
+    assert_eq!(
+        app.profile_editor.as_ref().unwrap().error,
+        "Permission denied"
+    );
+
+    let mut success = synchronized_reply(&app);
+    success.profile_edit = true;
+    success.notice = Ok("Subscription saved".into());
+    let _ = app.update(Message::Finished(Box::new(success)));
+    assert!(app.profile_editor.is_none());
+}
+
+#[test]
+fn english_desktop_dialogs_show_edit_validation_and_protection_effects() {
+    ui_testing::initialize(800, 450);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Profiles);
+    app.presentation_language = Language::English;
+
+    let _ = app.update(Message::EditProfile("fixture".into()));
+    let _ = app.update(Message::EditName(String::new()));
+    let _ = app.update(Message::SaveProfileEdit);
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_modal_title(), "Edit subscription");
+    assert_eq!(data.get_modal_accept(), "Save");
+    assert_eq!(
+        data.get_modal_error(),
+        "The configuration name and source are required."
+    );
+
+    app.profile_editor = None;
+    app.claude.guide = Some(claude_view::Guide::Protection);
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_modal_title(), "Enable Claude protection?");
+    let description = data.get_modal_description().to_string();
+    for expected in [
+        "strict routing",
+        "encrypted DNS",
+        "DIRECT",
+        "other apps",
+        "restored when protection is disabled",
+    ] {
+        assert!(description.contains(expected), "{description}");
     }
 }
 

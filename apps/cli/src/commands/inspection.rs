@@ -24,21 +24,40 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             output::emit(args, serde_json::to_value(report)?)
         }
         "network explain" | "network rule" => {
-            bail!("此独立工具已移除；请用 cor network check URL 查看真实命中规则与出口")
+            bail!("{}", args.language().text(
+                "此独立工具已移除；请用 cor network check URL 查看真实命中规则与出口",
+                "This tool has been removed; use cor network check URL to inspect the matched rule and exit",
+            ))
         }
         "network config-diff" => {
-            bail!(
-                "配置差异摘要已移除；请用 cor config get、cor config check 或 cor config effective 检查配置"
-            )
+            bail!("{}", args.language().text(
+                "配置差异摘要已移除；请用 cor config get、cor config check 或 cor config effective 检查配置",
+                "The configuration diff was removed; use cor config get, cor config check or cor config effective",
+            ))
         }
         "network traffic" => {
-            bail!("流量汇总已移至连接页；命令行请用 cor connection list 查看当前连接")
+            bail!("{}", args.language().text(
+                "流量汇总已移至连接页；命令行请用 cor connection list 查看当前连接",
+                "Traffic is shown on the connections page; use cor connection list to inspect current connections",
+            ))
         }
         "network performance" => {
-            bail!("内核指标摘要已移除；请用 cor status 或 cor diagnose 查看状态与诊断")
+            bail!(
+                "{}",
+                args.language().text(
+                    "内核指标摘要已移除；请用 cor status 或 cor diagnose 查看状态与诊断",
+                    "The core metrics summary was removed; use cor status or cor diagnose",
+                )
+            )
         }
         "network node" => {
-            bail!("节点信息已移至代理页详情；命令行请用 cor node list 查看节点")
+            bail!(
+                "{}",
+                args.language().text(
+                    "节点信息已移至代理页详情；命令行请用 cor node list 查看节点",
+                    "Node information moved to proxy details; use cor node list",
+                )
+            )
         }
         path if path.starts_with("network ") => {
             use clash_client_core::network_tools::Tool;
@@ -55,7 +74,11 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             output::emit(args, serde_json::to_value(report)?)?;
             ensure!(
                 !failed,
-                "网络检查未完成；请查看逐项结果或保存 --output 报告"
+                "{}",
+                args.language().text(
+                    "网络检查未完成；请查看逐项结果或保存 --output 报告",
+                    "Network check did not complete; inspect the results or save a report with --output",
+                )
             );
             Ok(())
         }
@@ -162,11 +185,22 @@ async fn nodes(args: &Args) -> Result<()> {
         let count = usize::from(!args.positional.is_empty())
             + usize::from(args.flag("all"))
             + usize::from(args.get("group").is_some());
-        ensure!(count == 1, "请选择 NODE、--group GROUP 或 --all 中的一项");
+        ensure!(
+            count == 1,
+            "{}",
+            args.language().text(
+                "请选择 NODE、--group GROUP 或 --all 中的一项",
+                "Choose one of NODE, --group GROUP or --all",
+            )
+        );
         let meta = backend::meta(args).await?;
         ensure!(
             meta.running || meta.settings.claude_protection.is_none(),
-            "Claude 保护期间测速不会启动内核；请先执行 cor start"
+            "{}",
+            args.language().text(
+                "Claude 保护期间测速不会启动内核；请先执行 cor start",
+                "Speed tests will not start the core while Claude protection is enabled; run cor start first",
+            )
         );
         backend::live(args).await?;
         let value: Value = backend::request(
@@ -189,7 +223,12 @@ async fn nodes(args: &Args) -> Result<()> {
             root: backend::data_root(args)?,
         })?
     } else {
-        poll.context("后台状态已丢失")?.snapshot.proxies
+        poll.context(
+            args.language()
+                .text("后台状态已丢失", "Backend status is unavailable"),
+        )?
+        .snapshot
+        .proxies
     };
     let filter = args.get("filter").unwrap_or("").to_lowercase();
     let sort = match args.get("sort").unwrap_or("name") {
@@ -201,13 +240,22 @@ async fn nodes(args: &Args) -> Result<()> {
                 proxy_order::NodeSort::LatencyAscending
             }
         }
-        _ => bail!("节点排序支持 name、latency"),
+        _ => bail!(
+            "{}",
+            args.language().text(
+                "节点排序支持 name、latency",
+                "Node sort supports name or latency"
+            )
+        ),
     };
     let names: Vec<_> = if let Some(group) = args.positional.first() {
         proxies
             .proxies
             .get(group.as_str())
-            .context("未找到策略组")?
+            .context(
+                args.language()
+                    .text("未找到策略组", "Policy group not found"),
+            )?
             .all
             .clone()
     } else {
@@ -243,35 +291,55 @@ async fn select_node(args: &Args) -> Result<()> {
         picker::require_terminal(
             std::io::stdin().is_terminal(),
             args.flag("json") || args.flag("jsonl") || args.get("output").is_some(),
+            args.language(),
         )?;
     } else {
         let meta = backend::meta(args).await?;
         ensure!(
             meta.settings.claude_protection.is_none(),
-            "Claude 保护期间不能切换节点"
+            "{}",
+            args.language().text(
+                "Claude 保护期间不能切换节点",
+                "Nodes cannot be changed while Claude protection is enabled"
+            )
         );
         backend::live(args).await?;
     }
     let poll = super::current_snapshot(args, Scope::Proxies, false)
         .await?
-        .context("后台未运行；请先执行 cor start，再选择节点")?;
+        .context(args.language().text(
+            "后台未运行；请先执行 cor start，再选择节点",
+            "The backend is not running; run cor start before selecting a node",
+        ))?;
     ensure!(
         poll.meta.settings.claude_protection.is_none(),
-        "Claude 保护期间不能切换节点"
+        "{}",
+        args.language().text(
+            "Claude 保护期间不能切换节点",
+            "Nodes cannot be changed while Claude protection is enabled"
+        )
     );
-    ensure!(poll.meta.running, "内核未运行；请先执行 cor start");
+    ensure!(
+        poll.meta.running,
+        "{}",
+        args.language().text(
+            "内核未运行；请先执行 cor start",
+            "The core is not running; run cor start first"
+        )
+    );
     let proxies = poll.snapshot.proxies;
     let group = match args.positional.first() {
         Some(group) => group.clone(),
         None => {
             picker::choose(
-                "策略组",
+                args.language().text("策略组", "Policy group"),
                 proxies
                     .proxies
                     .iter()
                     .filter(|(_, proxy)| !proxy.all.is_empty())
                     .map(|(name, _)| name.to_string())
                     .collect(),
+                args.language(),
             )
             .await?
         }
@@ -279,16 +347,37 @@ async fn select_node(args: &Args) -> Result<()> {
     let members = &proxies
         .proxies
         .get(group.as_str())
-        .context("未找到策略组")?
+        .context(
+            args.language()
+                .text("未找到策略组", "Policy group not found"),
+        )?
         .all;
-    ensure!(!members.is_empty(), "所选名称不是可切换的策略组");
+    ensure!(
+        !members.is_empty(),
+        "{}",
+        args.language().text(
+            "所选名称不是可切换的策略组",
+            "The selected name is not a switchable policy group"
+        )
+    );
     let node = match args.positional.get(1) {
         Some(node) => node.clone(),
-        None => picker::choose("节点", members.iter().map(ToString::to_string).collect()).await?,
+        None => {
+            picker::choose(
+                args.language().text("节点", "Node"),
+                members.iter().map(ToString::to_string).collect(),
+                args.language(),
+            )
+            .await?
+        }
     };
     ensure!(
         members.iter().any(|member| member.as_str() == node),
-        "节点不属于所选策略组"
+        "{}",
+        args.language().text(
+            "节点不属于所选策略组",
+            "The node does not belong to the selected policy group"
+        )
     );
     let _: Value = backend::request(
         args,
@@ -310,8 +399,18 @@ fn connection_json(c: &Connection) -> Value {
 async fn sample(args: &Args) -> Result<Vec<Connection>> {
     let poll = super::current_snapshot(args, Scope::Connections, false)
         .await?
-        .context("后台已停止；连接查询不会启动内核")?;
-    ensure!(poll.meta.running, "内核已停止；连接查询不会重启内核");
+        .context(args.language().text(
+            "后台已停止；连接查询不会启动内核",
+            "The backend is stopped; inspecting connections will not start the core",
+        ))?;
+    ensure!(
+        poll.meta.running,
+        "{}",
+        args.language().text(
+            "内核已停止；连接查询不会重启内核",
+            "The core is stopped; inspecting connections will not restart it"
+        )
+    );
     Ok(poll.snapshot.connections.connections)
 }
 async fn connections(args: &Args) -> Result<()> {
@@ -319,7 +418,11 @@ async fn connections(args: &Args) -> Result<()> {
     let Some(poll) = poll.filter(|poll| poll.meta.running) else {
         ensure!(
             args.path == "connection list" && !args.flag("watch"),
-            "内核未运行，没有活动连接；请先执行 cor start"
+            "{}",
+            args.language().text(
+                "内核未运行，没有活动连接；请先执行 cor start",
+                "The core is not running and there are no active connections; run cor start first"
+            )
         );
         let mut page = output::page(args, Vec::new())?;
         page["offline"] = json!(true);
@@ -329,10 +432,17 @@ async fn connections(args: &Args) -> Result<()> {
     if args.path == "connection close" {
         ensure!(
             args.flag("all") != !args.positional.is_empty(),
-            "请选择 ID 或 --all"
+            "{}",
+            args.language()
+                .text("请选择 ID 或 --all", "Choose ID or --all")
         );
         if args.flag("all") {
-            output::confirm(args, "关闭全部现有连接？").await?;
+            output::confirm(
+                args,
+                args.language()
+                    .text("关闭全部现有连接？", "Close all active connections?"),
+            )
+            .await?;
         }
         let _: Value = backend::request(
             args,
@@ -348,7 +458,10 @@ async fn connections(args: &Args) -> Result<()> {
         let c = entries
             .iter()
             .find(|c| c.id.as_ref() == args.positional[0])
-            .context("连接已关闭或 ID 不存在")?;
+            .context(args.language().text(
+                "连接已关闭或 ID 不存在",
+                "The connection is closed or the ID does not exist",
+            ))?;
         let mut row = connection_json(c);
         if c.metadata.destination_ip.is_empty() && !connection::hostname(c).is_empty() {
             match connection::resolve_target(
@@ -377,7 +490,11 @@ async fn connections(args: &Args) -> Result<()> {
         Some("upload-rate") => Some(connection::Field::UploadRate),
         Some("download-rate") => Some(connection::Field::DownloadRate),
         Some("start") => Some(connection::Field::Start),
-        _ => bail!("未知连接排序字段"),
+        _ => bail!(
+            "{}",
+            args.language()
+                .text("未知连接排序字段", "Unknown connection sort field")
+        ),
     };
     let sort = connection::Sort {
         field,
@@ -454,12 +571,20 @@ fn log_level(line: &str) -> &'static str {
 }
 async fn logs(args: &Args) -> Result<()> {
     if args.path == "logs clear" {
-        output::confirm(args, "清空客户端日志？").await?;
+        output::confirm(
+            args,
+            args.language()
+                .text("清空客户端日志？", "Clear the client logs?"),
+        )
+        .await?;
         let _: Value = backend::request(args, Command::Logs { clear: true }).await?;
         return output::emit(args, json!({"cleared":true}));
     }
     if args.path == "logs export" {
-        let path = args.get("output").context("请提供 --output FILE")?;
+        let path = args.get("output").context(
+            args.language()
+                .text("请提供 --output FILE", "Pass --output FILE"),
+        )?;
         let lines: Vec<String> = backend::request(args, Command::Logs { clear: false }).await?;
         let secret = backend::meta(args).await?.settings.secret;
         clash_client_core::config::atomic_write(
@@ -467,7 +592,7 @@ async fn logs(args: &Args) -> Result<()> {
             lines.join("\n").replace(&secret, "[密钥]").as_bytes(),
         )?;
         if !args.flag("quiet") {
-            eprintln!("已保存：{path}");
+            eprintln!("{}{path}", args.language().text("已保存：", "Saved: "));
         }
         if lines.iter().any(|line| log_level(line) == "error") {
             crate::diagnostics::failure_hint(Some(args));
@@ -477,7 +602,11 @@ async fn logs(args: &Args) -> Result<()> {
     let level = args.get("level");
     ensure!(
         level.is_none_or(|v| matches!(v, "debug" | "info" | "warning" | "error" | "silent")),
-        "日志等级应为 debug/info/warning/error/silent"
+        "{}",
+        args.language().text(
+            "日志等级应为 debug/info/warning/error/silent",
+            "Log level must be debug/info/warning/error/silent"
+        )
     );
     let filter = args.get("filter").unwrap_or("").to_lowercase();
     let limit = args.number("limit", 100, 10_000)?;
@@ -698,7 +827,11 @@ async fn ip(args: &Args) -> Result<()> {
         .collect();
     ensure!(
         !services.is_empty(),
-        "未找到检测项目；使用 cor ip-check list 查看 ID 与分类"
+        "{}",
+        args.language().text(
+            "未找到检测项目；使用 cor ip-check list 查看 ID 与分类",
+            "No check found; use cor ip-check list to view IDs and categories",
+        )
     );
     if args.path == "ip-check list" {
         return output::emit(
@@ -767,11 +900,15 @@ async fn ip(args: &Args) -> Result<()> {
         if args.flag("jsonl") && args.get("output").is_none() {
             output::emit(args, json!({"event":"result","result":row}))?;
         } else if !args.flag("quiet") {
-            eprintln!(
-                "已完成 {}：{}",
-                results.len() + 1,
-                row["name"].as_str().unwrap_or("")
-            );
+            let name = row["name"].as_str().unwrap_or("");
+            match args.language() {
+                clash_client_core::config::Language::SimplifiedChinese => {
+                    eprintln!("已完成 {}：{name}", results.len() + 1)
+                }
+                clash_client_core::config::Language::English => {
+                    eprintln!("Completed {}: {name}", results.len() + 1)
+                }
+            }
         }
         results.push(row);
     }
@@ -786,11 +923,14 @@ async fn ip(args: &Args) -> Result<()> {
 async fn claude(args: &Args) -> Result<()> {
     if args.path == "claude protect" {
         if let Some(value) = args.positional.first() {
-            let enabled = output::on_off(value)?;
+            let enabled = output::on_off(value, args.language())?;
             if enabled {
                 output::confirm(
                     args,
-                    "Claude 保护会启用 TUN、覆盖 DNS 和广泛规则，锁定节点并关闭已有内核连接，可能影响其他服务。继续？",
+                    args.language().text(
+                        "Claude 保护会启用 TUN、覆盖 DNS 和广泛规则，锁定节点并关闭已有内核连接，可能影响其他服务。继续？",
+                        "Claude protection enables TUN, overrides DNS and routing rules, locks the node and closes existing core connections. Other services may be affected. Continue?",
+                    ),
                 ).await?;
                 super::maintenance::authorize_tun(args).await?;
             }
@@ -858,7 +998,14 @@ async fn claude(args: &Args) -> Result<()> {
     if args.path == "claude browser" {
         let session = claude_check::browser::Session::start(client).await?;
         // URL goes to stderr as well so machine-readable output remains a report stream.
-        eprintln!("请在需要检测的浏览器中打开：{}", session.url);
+        eprintln!(
+            "{}{}",
+            args.language().text(
+                "请在需要检测的浏览器中打开：",
+                "Open in the browser to check: "
+            ),
+            session.url
+        );
         if args.flag("open") {
             clash_client_runtime::platform::open_diagnostic(&session.url)?;
         }
@@ -869,7 +1016,11 @@ async fn claude(args: &Args) -> Result<()> {
             }
             ensure!(
                 tokio::time::Instant::now() < deadline && !session.finished(),
-                "等待浏览器采样超时或入口已关闭"
+                "{}",
+                args.language().text(
+                    "等待浏览器采样超时或入口已关闭",
+                    "Browser sampling timed out or its page was closed"
+                )
             );
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }

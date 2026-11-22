@@ -9,10 +9,11 @@ import { ProtectionBadge, ProtectionAlert } from "../../components/protection-st
 import { Wordmark, ConnectionPower } from "../../components/brand.slint";
 import { RuleShortcutsDialog } from "../../components/rule-shortcuts.slint";
 import { GeometryTarget } from "../../components/geometry.slint";
+import { ReportText } from "../../components/report.slint";
 
 component RulesShortcutButton inherits MButton {
     geometry-key: "rule-shortcuts-open";
-    text: "快捷规则"; compact: true; quiet: true;
+    text: @tr("快捷规则"); compact: true; quiet: true;
     width: max(80px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0;
     enabled: !MobileData.protected && !MobileData.protection-pending && !MobileData.working;
     clicked => { MobileView.shortcuts-open = true; }
@@ -32,7 +33,7 @@ component HeaderStatus inherits VerticalLayout {
         }
         if root.rules-shortcut: RulesShortcutButton { }
         MTag {
-            text: MobileData.core-running ? "● 内核运行中" : "○ 内核未运行"; tone: MobileData.core-running ? 1 : 4;
+            text: MobileData.core-running ? @tr("● 内核运行中") : @tr("○ 内核未运行"); tone: MobileData.core-running ? 1 : 4;
         }
     }
 }
@@ -72,7 +73,7 @@ export component MobileFrame inherits Rectangle {
     in property <float> update-progress;
     callback install-update();
     out property <length> update-banner-height: update-banner.height;
-    in property <[string]> titles: ["首页", "代理", "订阅", "连接", "规则", "日志", "网络诊断", "IP 检测", "A÷检测", "设置", "工具"];
+    in property <[string]> titles: [@tr("首页"), @tr("代理"), @tr("订阅"), @tr("连接"), @tr("规则"), @tr("日志"), @tr("网络诊断"), @tr("IP 检测"), @tr("A÷检测"), @tr("设置"), @tr("工具")];
     property <[image]> icons: [@image-url("../../icons/home.svg"), @image-url("../../icons/proxies.svg"), @image-url("../../icons/subscriptions.svg"), @image-url("../../icons/connections.svg"), @image-url("../../icons/rules.svg"), @image-url("../../icons/logs.svg"), @image-url("../../icons/network.svg"), @image-url("../../icons/ip.svg"), @image-url("../../icons/ai.svg"), @image-url("../../icons/settings.svg"), @image-url("../../icons/network.svg")];
     property <length> usable-width: root.width - MobileView.safe-left - MobileView.safe-right;
     property <length> usable-height: max(0px, root.height - MobileView.safe-top - MobileView.safe-bottom - MobileView.keyboard-inset);
@@ -100,7 +101,7 @@ export component MobileFrame inherits Rectangle {
         root.previous-rule-profile = root.rule-profile;
     }
     changed modal-notice => { if self.modal-notice { keys.focus(); } }
-    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP" : MobileView.detail == 15 ? "规则操作" : MobileView.detail == 16 ? "检测详情" : MobileView.detail == 1 ? MobileView.claude-section : MobileView.detail == 2 ? "编辑规则" : MobileView.detail == 3 ? (MobileView.selected-id == "" ? "添加订阅" : "编辑订阅") : MobileView.detail == 5 ? "连接详情" : MobileView.detail == 6 ? (MobileView.category == "all" ? "全部检测结果" : MobileView.category) : "日志详情";
+    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP" : MobileView.detail == 15 ? @tr("规则操作") : MobileView.detail == 16 ? @tr("检测详情") : MobileView.detail == 1 ? ReportText.section-title(MobileView.claude-section) : MobileView.detail == 2 ? @tr("编辑规则") : MobileView.detail == 3 ? (MobileView.selected-id == "" ? @tr("添加订阅") : @tr("编辑订阅")) : MobileView.detail == 5 ? @tr("连接详情") : MobileView.detail == 6 ? (MobileView.category == "all" ? @tr("全部检测结果") : MobileView.category) : @tr("日志详情");
     property <duration> notice-start;
     property <int> notice-revision: MobileView.notice-revision;
     property <float> notice-elapsed: MobileView.notice-elapsed;
@@ -162,16 +163,16 @@ export component MobileFrame inherits Rectangle {
                     if root.expanded: Wordmark { width: 138px; }
                 }
                 if root.expanded: HorizontalLayout { height: 48px; spacing: 12px; padding-left: 10px; cross-axis-alignment: center;
-                    ConnectionPower { width: 30px; height: 30px; connected: MobileData.vpn-connected; label: MobileData.vpn-connected ? "断开 VPN" : "连接 VPN";
+                    ConnectionPower { width: 30px; height: 30px; connected: MobileData.vpn-connected; label: MobileData.vpn-connected ? @tr("断开 VPN") : @tr("连接 VPN");
                         enabled: !MobileData.working && !MobileData.protected && !MobileData.protection-pending && !MobileView.modal && !MobileView.notice-modal;
                         clicked => { MobileActions.request(MobileData.vpn-connected || MobileData.vpn-pending ? MobileIntent.disconnect : MobileIntent.connect, "", ""); }
                     }
-                    MText { text: MobileData.vpn-connected ? "已连接" : MobileData.vpn-pending ? "连接中…" : "未连接"; }
+                    MText { text: MobileData.vpn-connected ? @tr("已连接") : MobileData.vpn-pending ? @tr("连接中…") : @tr("未连接"); }
                 }
                 MScroll { vertical-stretch: 1; min-height: 0px;
                     if root.expanded: VerticalLayout { alignment: start; spacing: 4px;
                         for route-id in root.sidebar-pages: VerticalLayout { alignment: start; spacing: 4px;
-                            if route-id == 6: MSmall { text: "工具"; height: max(28px, MobileTypography.font-size(12) + 12px); font-size: MobileTypography.font-size(12); }
+                            if route-id == 6: MSmall { text: @tr("工具"); height: max(28px, MobileTypography.font-size(12) + 12px); font-size: MobileTypography.font-size(12); }
                             MNav { geometry-key: "preview-nav:" + route-id; height: 48px; text: root.titles[route-id]; icon: root.icons[route-id]; selected: MobileView.page == route-id || (route-id == 10 && MobileView.page >= 3 && MobileView.page <= 8);
                                 clicked => { MobileView.navigate(route-id); }
                             }
@@ -239,16 +240,16 @@ export component MobileFrame inherits Rectangle {
                 padding: 10px; spacing: 6px;
                 HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
                     VerticalLayout { horizontal-stretch: 1; min-width: 0px; spacing: 2px;
-                        MSmall { text: root.update-downloading ? "正在下载更新" : "发现新版本"; font-weight: 600; color: Theme.accent; }
-                        MSmall { text: !root.update-downloading && MobileView.draft-dirty ? "请先保存或放弃当前修改" : root.update-status; wrap: word-wrap; }
+                        MSmall { text: root.update-downloading ? @tr("正在下载更新") : @tr("发现新版本"); font-weight: 600; color: Theme.accent; }
+                        MSmall { text: !root.update-downloading && MobileView.draft-dirty ? @tr("请先保存或放弃当前修改") : root.update-status; wrap: word-wrap; }
                     }
                     if root.update-downloading: MButton {
-                        text: "取消"; compact: true; enabled: !MobileView.modal && !MobileView.notice-modal;
+                        text: @tr("取消"); compact: true; enabled: !MobileView.modal && !MobileView.notice-modal;
                         width: max(64px, MobileTypography.font-size(13) * 2 + 20px); horizontal-stretch: 0;
                         clicked => { MobileActions.request(MobileIntent.cancel-update, "", ""); }
                     }
                     if root.update-available && !root.update-downloading: MButton {
-                        geometry-key: "mobile-update-install"; text: "下载安装"; compact: true; primary: true;
+                        geometry-key: "mobile-update-install"; text: @tr("下载安装"); compact: true; primary: true;
                         width: max(84px, MobileTypography.font-size(13) * 4 + 20px); horizontal-stretch: 0;
                         enabled: !root.update-busy && !MobileView.draft-dirty && !MobileData.profile-busy && !MobileView.modal && !MobileView.notice-modal;
                         clicked => { root.install-update(); }
@@ -272,7 +273,7 @@ export component MobileFrame inherits Rectangle {
                     VerticalLayout { spacing: MobileTypography.gap;
                         HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
                             MHeading { text: root.detail-title; }
-                            MButton { text: "关闭"; width: max(64px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileView.back(); } }
+                            MButton { text: @tr("关闭"); width: max(64px, MobileTypography.font-size(15) * 2 + 16px); horizontal-stretch: 0; clicked => { MobileView.back(); } }
                         }
                         MobileDetails { }
                     }

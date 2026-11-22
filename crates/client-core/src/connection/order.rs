@@ -85,9 +85,13 @@ pub fn response_tone(millis: u128) -> i32 {
 }
 
 pub fn delay_label(delay: Option<u32>) -> String {
+    delay_label_in(delay, crate::config::Language::SimplifiedChinese)
+}
+
+pub fn delay_label_in(delay: Option<u32>, language: crate::config::Language) -> String {
     match delay {
-        None => "未测速".into(),
-        Some(0) => "超时".into(),
+        None => language.text("未测速", "Not tested").into(),
+        Some(0) => language.text("超时", "Timed out").into(),
         Some(ms) => format!("{ms} ms"),
     }
 }

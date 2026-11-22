@@ -1,4 +1,5 @@
 use super::{Group, Route};
+use crate::config::Language;
 use std::collections::BTreeSet;
 
 const ROUTES_PER_GROUP: usize = 8;
@@ -41,13 +42,17 @@ pub struct ReportBlock<T> {
 }
 
 pub fn report_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
-    let mut blocks = group_blocks(rows);
+    report_blocks_in(rows, Language::SimplifiedChinese)
+}
+
+pub fn report_blocks_in<T>(rows: Vec<BlockRow<T>>, language: Language) -> Vec<ReportBlock<T>> {
+    let mut blocks = group_blocks_in(rows, language);
     for section in REPORT_SECTIONS {
         if !blocks.iter().any(|block| block.section == section) {
             blocks.push(ReportBlock {
                 section,
                 summary: String::new(),
-                overview: "暂无结果".into(),
+                overview: language.text("暂无结果", "No results yet").into(),
                 attention: String::new(),
                 tone: 0,
                 rows: Vec::new(),
@@ -64,6 +69,31 @@ pub fn report_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
 }
 
 pub fn group_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
+    group_blocks_in(rows, Language::SimplifiedChinese)
+}
+
+fn shorten(value: &str, limit: usize, language: Language) -> String {
+    let mut characters = value.chars();
+    let mut shortened = characters.by_ref().take(limit).collect::<String>();
+    let Some(next) = characters.next() else {
+        return shortened;
+    };
+    if language == Language::English
+        && next.is_ascii_alphanumeric()
+        && shortened
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+        && let Some(boundary) = shortened.rfind(char::is_whitespace)
+        && shortened[..boundary].chars().count() >= limit / 2
+    {
+        shortened.truncate(boundary);
+    }
+    shortened.push('…');
+    shortened
+}
+
+pub fn group_blocks_in<T>(rows: Vec<BlockRow<T>>, language: Language) -> Vec<ReportBlock<T>> {
     let mut sections: Vec<Vec<BlockRow<T>>> = Vec::new();
     for row in rows {
         if let Some(section) = sections
@@ -97,25 +127,34 @@ pub fn group_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
             };
             let mut summary = Vec::new();
             if section.len() > 1 {
-                summary.push(format!("{} 组结果", section.len()));
+                summary.push(match language {
+                    Language::SimplifiedChinese => format!("{} 组结果", section.len()),
+                    Language::English => format!("{} result groups", section.len()),
+                });
             }
             if risks > 0 {
-                summary.push(format!("{risks} 项风险"));
+                summary.push(match language {
+                    Language::SimplifiedChinese => format!("{risks} 项风险"),
+                    Language::English => format!("Risks: {risks}"),
+                });
             }
             if disagreements > 0 {
-                summary.push(format!("{disagreements} 项来源不一致"));
+                summary.push(match language {
+                    Language::SimplifiedChinese => format!("{disagreements} 项来源不一致"),
+                    Language::English => format!("Source disagreements: {disagreements}"),
+                });
             }
             let title = primary.title.trim();
             let value = primary.value.trim();
-            let description = if title.is_empty() || title == primary.section {
+            let description = if title.is_empty()
+                || title == primary.section
+                || title == super::report_text::title(primary.section, language)
+            {
                 value.to_owned()
             } else {
-                format!("{title}：{value}")
+                format!("{title}{}{value}", language.text("：", ": "))
             };
-            let mut short = description.chars().take(100).collect::<String>();
-            if description.chars().count() > 100 {
-                short.push('…');
-            }
+            let short = shorten(&description, 100, language);
             if !short.is_empty() {
                 summary.push(short);
             }
@@ -124,12 +163,9 @@ pub fn group_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
                 .find(|row| row.summary_hint && !std::ptr::eq(*row, primary))
             {
                 let value = grouped.value.trim();
-                let mut short = value.chars().take(100).collect::<String>();
-                if value.chars().count() > 100 {
-                    short.push('…');
-                }
+                let short = shorten(value, 100, language);
                 if !short.is_empty() {
-                    summary.push(format!("其他：{short}"));
+                    summary.push(format!("{}{short}", language.text("其他：", "Other: ")));
                 }
             }
             let overview = section
@@ -139,31 +175,46 @@ pub fn group_blocks<T>(rows: Vec<BlockRow<T>>) -> Vec<ReportBlock<T>> {
                 .map(|row| {
                     let title = row.title.trim();
                     let value = row.value.trim();
-                    let text = if title.is_empty() || title == row.section {
+                    let text = if title.is_empty()
+                        || title == row.section
+                        || title == super::report_text::title(row.section, language)
+                    {
                         value.to_owned()
                     } else {
-                        format!("{title}：{value}")
+                        format!("{title}{}{value}", language.text("：", ": "))
                     };
-                    let mut shortened = text.chars().take(64).collect::<String>();
-                    if text.chars().count() > 64 {
-                        shortened.push('…');
-                    }
-                    shortened
+                    let limit = if language == Language::English {
+                        80
+                    } else {
+                        64
+                    };
+                    shorten(&text, limit, language)
                 })
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
             let overview = if overview.is_empty() {
-                format!("{} 项结果，点击查看详情", section.len())
+                match language {
+                    Language::SimplifiedChinese => {
+                        format!("{} 项结果，点击查看详情", section.len())
+                    }
+                    Language::English => format!("Results: {}; open for details", section.len()),
+                }
             } else {
                 overview
             };
             let mut attention = Vec::new();
             if risks > 0 {
-                attention.push(format!("{risks} 项需关注"));
+                attention.push(match language {
+                    Language::SimplifiedChinese => format!("{risks} 项需关注"),
+                    Language::English => format!("Attention: {risks}"),
+                });
             }
             if disagreements > 0 {
-                attention.push(format!("{disagreements} 项来源不一致"));
+                attention.push(match language {
+                    Language::SimplifiedChinese => format!("{disagreements} 项来源不一致"),
+                    Language::English => format!("Source disagreements: {disagreements}"),
+                });
             }
             ReportBlock {
                 section: primary.section,
@@ -216,6 +267,10 @@ pub fn group_routes<'a>(routes: impl IntoIterator<Item = &'a Route>) -> Vec<Vec<
 }
 
 pub fn route_group_value(routes: &[&Route]) -> String {
+    route_group_value_in(routes, Language::SimplifiedChinese)
+}
+
+pub fn route_group_value_in(routes: &[&Route], language: Language) -> String {
     let hosts = routes
         .iter()
         .filter_map(|route| {
@@ -224,13 +279,27 @@ pub fn route_group_value(routes: &[&Route]) -> String {
         })
         .collect::<BTreeSet<_>>();
     let count = if routes.iter().any(|route| route.host.trim().is_empty()) {
-        format!("{} 条记录", routes.len())
+        match language {
+            Language::SimplifiedChinese => format!("{} 条记录", routes.len()),
+            Language::English => format!("{} records", routes.len()),
+        }
     } else if hosts.len() == routes.len() {
-        format!("{} 个域名", hosts.len())
+        match language {
+            Language::SimplifiedChinese => format!("{} 个域名", hosts.len()),
+            Language::English => format!("{} domains", hosts.len()),
+        }
     } else {
-        format!("{} 个域名 · {} 条记录", hosts.len(), routes.len())
+        match language {
+            Language::SimplifiedChinese => {
+                format!("{} 个域名 · {} 条记录", hosts.len(), routes.len())
+            }
+            Language::English => format!("{} domains · {} records", hosts.len(), routes.len()),
+        }
     };
-    let value = routes.first().map_or("仅记录选路", |route| outcome(route));
+    let value = routes.first().map_or_else(
+        || language.text("仅记录选路", "Route recorded"),
+        |route| route.recorded_outcome_in(language),
+    );
     let mut shortened = value.chars().take(80).collect::<String>();
     if value.chars().count() > 80 {
         shortened.push('…');
@@ -242,23 +311,35 @@ pub fn route_group_value(routes: &[&Route]) -> String {
         .collect::<BTreeSet<_>>();
     let mut parts = vec![count, shortened];
     if chains.len() > 1 {
-        parts.push("线路不同".into());
+        parts.push(language.text("线路不同", "Different routes").into());
     }
     if !chains.is_empty() && routes.iter().any(|route| route.chain.trim().is_empty()) {
-        parts.push("部分线路未记录".into());
+        parts.push(
+            language
+                .text("部分线路未记录", "Some routes not recorded")
+                .into(),
+        );
     }
     parts.join(" · ")
 }
 
 pub fn route_group_detail(routes: &[&Route]) -> String {
+    route_group_detail_in(routes, Language::SimplifiedChinese)
+}
+
+pub fn route_group_detail_in(routes: &[&Route], language: Language) -> String {
     routes
         .iter()
         .map(|route| {
             let mut lines = vec![
-                route.display_title().to_owned(),
-                format!("结果：{}", outcome(route)),
+                route.display_title_in(language).to_owned(),
+                format!(
+                    "{}{}",
+                    language.text("结果：", "Result: "),
+                    route.recorded_outcome_in(language)
+                ),
             ];
-            let explanation = route.explanation();
+            let explanation = route.explanation_in(language);
             if !explanation.is_empty() {
                 lines.push(explanation);
             }
@@ -291,6 +372,102 @@ mod tests {
         assert!(blocks[0].rows.is_empty());
         assert_eq!(blocks[2].attention, "1 项来源不一致");
         assert_eq!(blocks[2].rows, [7]);
+    }
+
+    #[test]
+    fn english_blocks_keep_section_keys_and_risk_counts() {
+        let blocks = report_blocks_in(
+            vec![BlockRow {
+                section: REPORT_SECTIONS[1],
+                title: "Claude connections and routing".into(),
+                value: "3 domains · Route recorded".into(),
+                priority: 1,
+                tone: 3,
+                summary_hint: false,
+                item: 7,
+            }],
+            Language::English,
+        );
+        assert_eq!(blocks[0].overview, "No results yet");
+        assert_eq!(blocks[1].section, "Claude 连接与选路");
+        assert_eq!(blocks[1].overview, "3 domains · Route recorded");
+        assert_eq!(blocks[1].attention, "Attention: 1");
+        assert_eq!(blocks[1].rows, [7]);
+    }
+
+    #[test]
+    fn overview_preserves_short_english_results_and_truncates_at_word_boundaries() {
+        let blocks = report_blocks_in(
+            vec![BlockRow {
+                section: REPORT_SECTIONS[2],
+                title: "Exit IP quality · 203.0.113.12".into(),
+                value: "Datacenter or hosting: Yes · 2 unconfirmed".into(),
+                priority: 1,
+                tone: 2,
+                summary_hint: false,
+                item: 7,
+            }],
+            Language::English,
+        );
+        assert_eq!(
+            blocks[2].overview,
+            "Exit IP quality · 203.0.113.12: Datacenter or hosting: Yes · 2 unconfirmed"
+        );
+        assert_eq!(
+            shorten(
+                "The quick brown fox jumps over the lazy dog",
+                18,
+                Language::English
+            ),
+            "The quick brown…"
+        );
+        assert_eq!(
+            shorten("a-very-long-unbroken-value", 10, Language::English),
+            "a-very-lon…"
+        );
+        assert_eq!(
+            shorten("中文结果不会依赖空格截断", 5, Language::SimplifiedChinese),
+            "中文结果不…"
+        );
+    }
+
+    #[test]
+    fn english_routes_preserve_host_evidence_and_failures() {
+        let routes = [
+            Route {
+                host: "api.anthropic.com".into(),
+                chain: "Node A".into(),
+                rule: "DOMAIN".into(),
+                ..Default::default()
+            },
+            Route {
+                host: "claude.ai".into(),
+                chain: "Node A".into(),
+                rule: "DOMAIN-SUFFIX".into(),
+                ..Default::default()
+            },
+            Route {
+                host: "failed.example".into(),
+                outcome: "连接失败".into(),
+                ..Default::default()
+            },
+        ];
+        let groups = group_routes(&routes);
+        assert_eq!(
+            route_group_value_in(&groups[0], Language::English),
+            "2 domains · Route recorded"
+        );
+        let detail = route_group_detail_in(&groups[0], Language::English);
+        assert!(
+            detail
+                .contains("api.anthropic.com\nResult: Route recorded\nRule: DOMAIN\nRoute: Node A")
+        );
+        assert!(detail.contains("claude.ai"));
+        assert_eq!(
+            groups[1][0].display_outcome_in(Language::English),
+            "Connection failed"
+        );
+        assert!(groups[1][0].risky());
     }
 
     #[test]

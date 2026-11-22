@@ -27,12 +27,24 @@ pub struct Progress {
 }
 impl Progress {
     pub fn routing(&self) -> String {
+        self.routing_in(crate::config::Language::SimplifiedChinese)
+    }
+
+    pub fn routing_in(&self, language: crate::config::Language) -> String {
+        let route = match (language, self.route) {
+            (crate::config::Language::English, "内核代理") => "Core proxy",
+            (crate::config::Language::English, "系统代理") => "System proxy",
+            (crate::config::Language::English, "内核直连") => "Core direct",
+            (crate::config::Language::English, "系统网络") => "System network",
+            (crate::config::Language::English, "直连") => "Direct",
+            _ => self.route,
+        };
         match self.outbound.as_deref() {
             Some(node) if node == "DIRECT" || node.starts_with("DIRECT → ") => {
-                format!("{} · 直连 ({node})", self.route)
+                format!("{route} · {} ({node})", language.text("直连", "Direct"))
             }
-            Some(node) => format!("{} · {node}", self.route),
-            None => self.route.to_owned(),
+            Some(node) => format!("{route} · {node}"),
+            None => route.to_owned(),
         }
     }
 }
@@ -379,6 +391,31 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn localized_download_routes_preserve_node_names_and_unknown_labels() {
+        let mut progress = Progress {
+            route: "内核代理",
+            outbound: Some("东京 Node A".into()),
+            ..Progress::default()
+        };
+        assert_eq!(progress.routing(), "内核代理 · 东京 Node A");
+        assert_eq!(
+            progress.routing_in(crate::config::Language::English),
+            "Core proxy · 东京 Node A"
+        );
+        progress.outbound = Some("DIRECT".into());
+        assert_eq!(
+            progress.routing_in(crate::config::Language::English),
+            "Core proxy · Direct (DIRECT)"
+        );
+        progress.route = "custom route";
+        progress.outbound = None;
+        assert_eq!(
+            progress.routing_in(crate::config::Language::English),
+            "custom route"
+        );
+    }
     #[tokio::test]
     async fn buffered_download_reconnects_after_interruption_and_flushes_verified_bytes() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

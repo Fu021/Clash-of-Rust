@@ -168,7 +168,7 @@ export component Preview inherits AppWindow {
             {id: "1", host: "api.github.com:443", detail: "tcp · 10:31:20", rule: "DOMAIN-SUFFIX github.com", route: "Proxy → 德国 01", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
             {id: "2", host: "www.google.com:443", detail: "tcp · 10:31:24", rule: "MATCH", route: "Proxy → 德国 01", up: "1.8 KiB/s", down: "86 KiB/s", upload: "18 KiB", download: "980 KiB"},
             {id: "3", host: "example.org:443", detail: "tcp · 10:31:28", rule: "DOMAIN example.org", route: "DIRECT", up: "0 B/s", down: "0 B/s", upload: "2 KiB", download: "34 KiB"}];
-        UiData.rule-profile = "我的订阅"; UiData.rule-profile-options = ["我的订阅", "备用订阅"];
+        UiData.rule-profile = "我的订阅"; UiData.rule-profile-id = "preview-profile"; UiData.rule-profile-options = ["我的订阅", "备用订阅"];
         UiData.rule-profiles = [{id: "main", label: "我的订阅"}, {id: "backup", label: "备用订阅"}];
         UiData.rule-types = ["DOMAIN-SUFFIX", "DOMAIN", "IP-CIDR", "GEOIP", "GEOSITE"];
         UiData.rule-policies = ["DIRECT", "REJECT", "Proxy"];

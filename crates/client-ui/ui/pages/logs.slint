@@ -10,12 +10,12 @@ export component LogsPage inherits PageSurface {
         spacing: Theme.page-gap;
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             if root.width >= 720px && Theme.text-scale <= 1.1: ChoiceBar {
-                width: 260px; horizontal-stretch: 0; options: ["全部", "信息", "警告", "错误"];
+                width: 260px; horizontal-stretch: 0; options: [@tr("全部"), @tr("信息"), @tr("警告"), @tr("错误")];
                 selected: UiData.log-level == "INFO" ? 1 : UiData.log-level == "WARN" ? 2 : UiData.log-level == "ERROR" ? 3 : 0;
                 chosen(index) => { UiActions.dispatch(Intent.log-level, ["全部等级", "INFO", "WARN", "ERROR"][index], ""); }
             }
-            Field { placeholder: "搜索日志"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-            Select { geometry-key: "log-level"; width: 112px; horizontal-stretch: 0; options: ["全部等级", "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: UiData.log-level; selected(index, value) => { UiActions.dispatch(Intent.log-level, value, ""); } }
+            Field { placeholder: @tr("搜索日志"); focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+            Select { geometry-key: "log-level"; width: 112px; horizontal-stretch: 0; options: [@tr("全部等级"), "TRACE", "DEBUG", "INFO", "WARN", "ERROR"]; value: UiData.log-level == "全部等级" ? self.options[0] : UiData.log-level; selected(index, value) => { UiActions.dispatch(Intent.log-level, index == 0 ? "全部等级" : value, ""); } }
         }
         Panel {
             vertical-stretch: 1;
@@ -51,9 +51,9 @@ export component LogsPage inherits PageSurface {
         }
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Caption { text: UiData.page-status; }
-            ActionButton { text: "导出诊断"; enabled: !UiData.diagnosing; clicked => { UiActions.dispatch(Intent.export-diagnostics, "", ""); } }
-            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+            ActionButton { text: @tr("导出诊断"); enabled: !UiData.diagnosing; clicked => { UiActions.dispatch(Intent.export-diagnostics, "", ""); } }
+            ActionButton { text: @tr("上一页"); enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: @tr("下一页"); enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
 }

@@ -35,19 +35,19 @@ export component HomePage inherits PageSurface {
                         padding: 24px; spacing: 24px; cross-axis-alignment: center;
                         VerticalLayout { spacing: 10px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
                             HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
-                                Caption { text: "● " + (!UiData.running ? "内核未启动" : UiData.proxy-mode == 2 ? "代理已关闭" : "已连接"); color: UiData.running && UiData.proxy-mode != 2 ? Theme.success : Theme.secondary; horizontal-stretch: 0; }
+                                Caption { text: "● " + (!UiData.running ? @tr("内核未启动") : UiData.proxy-mode == 2 ? @tr("代理已关闭") : @tr("已连接")); color: UiData.running && UiData.proxy-mode != 2 ? Theme.success : Theme.secondary; horizontal-stretch: 0; }
                                 Caption { text: "·  " + UiData.profile; preferred-width: 0px; }
                             }
                             Rectangle {
                                 height: max(44px, node.preferred-height);
-                                node := Label { width: parent.width; height: parent.height; text: UiData.node == "" ? "选择一个节点" : UiData.node; font-size: 30px * Theme.text-scale; font-weight: 600; }
+                                node := Label { width: parent.width; height: parent.height; text: UiData.node == "" ? @tr("选择一个节点") : UiData.node; font-size: 30px * Theme.text-scale; font-weight: 600; }
                                 TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.navigate, "1", ""); } }
                             }
-                            Caption { text: !UiData.running ? "启动内核以恢复连接" : UiData.proxy-mode == 1 ? "TUN  ·  全局网络接管" : UiData.proxy-mode == 0 ? "系统代理  ·  按当前规则路由" : "系统网络"; }
+                            Caption { text: !UiData.running ? @tr("启动内核以恢复连接") : UiData.proxy-mode == 1 ? @tr("TUN  ·  全局网络接管") : UiData.proxy-mode == 0 ? @tr("系统代理  ·  按当前规则路由") : @tr("系统网络"); }
                         }
                         ConnectionPower {
                             connected: UiData.running && UiData.proxy-mode != 2;
-                            label: self.connected ? "关闭代理" : UiData.retry-core ? "重试启动" : "连接代理";
+                            label: self.connected ? @tr("关闭代理") : UiData.retry-core ? @tr("重试启动") : @tr("连接代理");
                             enabled: (UiData.ready || UiData.retry-core) && !UiData.working && (UiData.retry-core || (!UiData.protected && !UiData.protection-pending)) && UiData.modal == 0 && !UiData.notice-modal;
                             clicked => {
                                 if UiData.retry-core { UiActions.dispatch(Intent.restart-core, "", ""); }
@@ -58,7 +58,7 @@ export component HomePage inherits PageSurface {
                     Divider { }
                     GridLayout { padding: 10px; spacing: 8px;
                         ChoiceBar {
-                            col: 0; row: 0; options: ["规则", "全局", "直连"]; selected: UiData.mode;
+                            col: 0; row: 0; options: [@tr("规则"), @tr("全局"), @tr("直连")]; selected: UiData.mode;
                             available-width: root.choice-width;
                             enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
                             chosen(index) => { UiActions.dispatch(Intent.mode, "" + index, ""); }
@@ -66,7 +66,7 @@ export component HomePage inherits PageSurface {
                         ChoiceBar {
                             col: Theme.text-scale > 1.25 ? 0 : 1; row: Theme.text-scale > 1.25 ? 1 : 0;
                             available-width: root.choice-width;
-                            options: ["系统代理", "TUN", "关闭"]; selected: UiData.proxy-mode;
+                            options: [@tr("系统代理"), "TUN", @tr("mode" => "关闭")]; selected: UiData.proxy-mode;
                             enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending;
                             chosen(index) => { UiActions.dispatch(Intent.proxy-mode, "" + index, ""); }
                         }
@@ -76,10 +76,10 @@ export component HomePage inherits PageSurface {
             Panel {
                 height: stats.preferred-height;
                 stats := GridLayout { spacing: 0px;
-                    TrafficMetric { col: 0; row: 0; title: "↓ 下载速度"; value: UiData.running ? UiData.download-rate : "—"; detail: "累计 " + UiData.download-total; }
-                    TrafficMetric { col: 1; row: 0; title: "↑ 上传速度"; value: UiData.running ? UiData.upload-rate : "—"; detail: "累计 " + UiData.upload-total; }
-                    TrafficMetric { col: root.width < 680px * Theme.text-scale ? 0 : 2; row: root.width < 680px * Theme.text-scale ? 1 : 0; title: "活跃连接"; value: UiData.running ? UiData.connection-count : "0"; detail: "当前内核连接"; }
-                    TrafficMetric { col: root.width < 680px * Theme.text-scale ? 1 : 3; row: root.width < 680px * Theme.text-scale ? 1 : 0; title: "本次下载"; value: UiData.download-total; detail: "↑ " + UiData.upload-total; }
+                    TrafficMetric { col: 0; row: 0; title: @tr("↓ 下载速度"); value: UiData.running ? UiData.download-rate : "—"; detail: @tr("累计 {}", UiData.download-total); }
+                    TrafficMetric { col: 1; row: 0; title: @tr("↑ 上传速度"); value: UiData.running ? UiData.upload-rate : "—"; detail: @tr("累计 {}", UiData.upload-total); }
+                    TrafficMetric { col: root.width < 680px * Theme.text-scale ? 0 : 2; row: root.width < 680px * Theme.text-scale ? 1 : 0; title: @tr("活跃连接"); value: UiData.running ? UiData.connection-count : "0"; detail: @tr("当前内核连接"); }
+                    TrafficMetric { col: root.width < 680px * Theme.text-scale ? 1 : 3; row: root.width < 680px * Theme.text-scale ? 1 : 0; title: @tr("本次下载"); value: UiData.download-total; detail: "↑ " + UiData.upload-total; }
                 }
             }
             NetworkOverview { available-width: root.width - 48px; }

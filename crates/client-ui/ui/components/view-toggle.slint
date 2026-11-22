@@ -28,7 +28,7 @@ export component ViewModeIcon inherits Rectangle {
 export component ViewToggle inherits ActionButton {
     in-out property <bool> list-view;
     width: 32px; height: 32px;
-    accessible-label: root.list-view ? "切换到宫格视图" : "切换到列表视图";
+    accessible-label: root.list-view ? @tr("切换到宫格视图") : @tr("切换到列表视图");
     compact: true;
     quiet: true;
     ViewModeIcon {

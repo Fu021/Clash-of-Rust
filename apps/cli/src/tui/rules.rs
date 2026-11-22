@@ -4,6 +4,7 @@ use super::{
     render::{Tone, wrap},
 };
 use anyhow::{Context, Result, ensure};
+use clash_client_core::config::Language;
 use clash_client_core::rule_manager::{self, Document, ProfileRules, Row, Source};
 use clash_client_runtime::control::{Command, RuleChange};
 use std::sync::Arc;
@@ -52,7 +53,7 @@ impl Browser {
         self.menu.is_some() || self.input.is_some() || self.pending.is_some()
     }
 
-    pub fn items(&self, query: &str) -> Vec<&str> {
+    pub fn items(&self, query: &str, language: Language) -> Vec<&str> {
         ["shortcuts", "add"]
             .into_iter()
             .chain(
@@ -62,7 +63,9 @@ impl Browser {
                         query.is_empty()
                             || row.raw.to_lowercase().contains(query)
                             || row.id.to_lowercase().contains(query)
-                            || row.source.to_string().contains(query)
+                            || source_label(row.source, language)
+                                .to_lowercase()
+                                .contains(query)
                     })
                     .map(|row| row.id.as_str()),
             )
@@ -70,15 +73,34 @@ impl Browser {
     }
 
     fn current(&self, state: &State) -> Result<()> {
-        let poll = state.poll.as_ref().context("后台未连接")?;
-        ensure!(state.error.is_none(), "后台状态过期，请先刷新");
+        let language = state.language;
+        let poll = state
+            .poll
+            .as_ref()
+            .context(language.text("后台未连接", "Backend disconnected"))?;
+        ensure!(
+            state.error.is_none(),
+            "{}",
+            language.text(
+                "后台状态过期，请先刷新",
+                "Backend state is stale; refresh first"
+            )
+        );
         ensure!(
             poll.meta.settings.claude_protection.is_none(),
-            "Claude 保护期间不能修改规则"
+            "{}",
+            language.text(
+                "Claude 保护期间不能修改规则",
+                "Rules cannot be changed while Claude protection is active"
+            )
         );
         ensure!(
             poll.meta.settings.active_profile.as_deref() == Some(self.document.profile_id.as_str()),
-            "订阅已变化，请重新选择规则"
+            "{}",
+            language.text(
+                "订阅已变化，请重新选择规则",
+                "The subscription changed; select the rule again"
+            )
         );
         let current = ProfileRules::for_profile(
             &poll.meta.settings,
@@ -87,14 +109,21 @@ impl Browser {
         );
         ensure!(
             *current == *self.saved,
-            "规则已变化，输入保留；请返回列表重新选择"
+            "{}",
+            language.text(
+                "规则已变化，输入保留；请返回列表重新选择",
+                "Rules changed; your input is retained. Return to the list and select again"
+            )
         );
         let document = state
             .shortcuts
             .as_ref()
             .filter(|status| status.matches(poll) && status.error.is_none())
             .and_then(|status| status.document.as_ref())
-            .context("规则状态尚未读取，请刷新")?;
+            .context(language.text(
+                "规则状态尚未读取，请刷新",
+                "Rules are not loaded; refresh first",
+            ))?;
         ensure!(
             self.document
                 .original
@@ -103,7 +132,11 @@ impl Browser {
                 .eq(document.original.iter().map(|row| (&row.id, &row.raw)))
                 && self.document.policies == document.policies
                 && self.document.included == document.included,
-            "订阅规则已更新，输入保留；请返回列表重新选择"
+            "{}",
+            language.text(
+                "订阅规则已更新，输入保留；请返回列表重新选择",
+                "Subscription rules changed; your input is retained. Return to the list and select again"
+            )
         );
         Ok(())
     }
@@ -127,7 +160,7 @@ impl Browser {
         ))
     }
 
-    fn operations(&self) -> Vec<(Operation, &'static str)> {
+    fn operations(&self, language: Language) -> Vec<(Operation, &'static str)> {
         let Some((id, _)) = &self.menu else {
             return Vec::new();
         };
@@ -137,21 +170,39 @@ impl Browser {
         let row = &self.rows[index];
         let mut actions = Vec::new();
         if index > 0 {
-            actions.push((Operation::Up, "上移"));
+            actions.push((Operation::Up, language.text("上移", "Move up")));
         }
         if index + 1 < self.rows.len() {
-            actions.push((Operation::Down, "下移"));
+            actions.push((Operation::Down, language.text("下移", "Move down")));
         }
         match row.source {
             Source::Custom => {
-                actions.push((Operation::Toggle, if row.enabled { "停用" } else { "启用" }));
-                actions.push((Operation::Edit, "编辑"));
-                actions.push((Operation::Remove, "删除"));
+                actions.push((
+                    Operation::Toggle,
+                    if row.enabled {
+                        language.text("停用", "Disable")
+                    } else {
+                        language.text("启用", "Enable")
+                    },
+                ));
+                actions.push((Operation::Edit, language.text("编辑", "Edit")));
+                actions.push((Operation::Remove, language.text("删除", "Delete")));
             }
-            Source::Shortcut => actions.push((Operation::Shortcuts, "管理快捷规则")),
+            Source::Shortcut => actions.push((
+                Operation::Shortcuts,
+                language.text("管理快捷规则", "Manage rule shortcuts"),
+            )),
             Source::Subscription => {}
         }
         actions
+    }
+}
+
+fn source_label(source: Source, language: Language) -> &'static str {
+    match source {
+        Source::Custom => language.text("自定义", "Custom"),
+        Source::Shortcut => language.text("快捷规则", "Shortcut"),
+        Source::Subscription => language.text("订阅", "Subscription"),
     }
 }
 
@@ -259,7 +310,12 @@ pub(super) fn key(state: &mut State, key: Key) -> Option<Action> {
             Key::Escape | Key::Back => browser.pending = None,
             Key::Enter if state.demo => {
                 browser.pending = None;
-                state.message = Some("演示模式：未保存规则".into());
+                state.message = Some(
+                    state
+                        .language
+                        .text("演示模式：未保存规则", "Demo mode: rules not saved")
+                        .into(),
+                );
             }
             Key::Enter => match state.rules.as_ref().unwrap().current(state) {
                 Ok(_) => {
@@ -286,7 +342,7 @@ pub(super) fn key(state: &mut State, key: Key) -> Option<Action> {
         return Some(Action::None);
     }
     if browser.menu.is_some() {
-        let count = browser.operations().len();
+        let count = browser.operations(state.language).len();
         match key {
             Key::Up => {
                 let selected = &mut browser.menu.as_mut().unwrap().1;
@@ -330,13 +386,18 @@ fn review_input(state: &mut State) {
             enabled: true,
         }
     };
-    review(state, change, format!("保存规则：{}", input.raw));
+    let description = match state.language {
+        Language::SimplifiedChinese => format!("保存规则：{}", input.raw),
+        Language::English => format!("Save rule: {}", input.raw),
+    };
+    review(state, change, description);
 }
 
 fn review_operation(state: &mut State) {
     let browser = state.rules.as_ref().unwrap();
     let (id, selected) = browser.menu.as_ref().unwrap();
-    let Some((operation, label)) = browser.operations().get(*selected).copied() else {
+    let Some((operation, label)) = browser.operations(state.language).get(*selected).copied()
+    else {
         return;
     };
     let index = browser.rows.iter().position(|row| row.id == *id).unwrap();
@@ -369,14 +430,22 @@ fn review_operation(state: &mut State) {
             return;
         }
     };
-    let description = format!("{label}规则：{}", row.raw);
+    let description = match state.language {
+        Language::SimplifiedChinese => format!("{label}规则：{}", row.raw),
+        Language::English => format!("{label} rule: {}", row.raw),
+    };
     review(state, change, description);
 }
 
 fn review(state: &mut State, change: RuleChange, description: String) {
     let browser = state.rules.as_ref().unwrap();
     if state.demo {
-        state.message = Some("演示模式：未保存规则".into());
+        state.message = Some(
+            state
+                .language
+                .text("演示模式：未保存规则", "Demo mode: rules not saved")
+                .into(),
+        );
         return;
     }
     match browser.prepare(state, change, description) {
@@ -389,13 +458,21 @@ fn review(state: &mut State, change: RuleChange, description: String) {
 }
 
 pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
+    let language = state.language;
     let Some(browser) = &state.rules else {
         let message = match &state.poll {
-            None => "规则 · 后台未连接，按 r 重试",
-            Some(poll) if poll.meta.settings.active_profile.is_none() => {
-                "规则 · 尚未选择订阅，按 3 打开订阅页"
-            }
-            Some(_) => "规则 · 状态尚未读取，按 r 刷新",
+            None => language.text(
+                "规则 · 后台未连接，按 r 重试",
+                "Rules · Backend disconnected; press r to retry",
+            ),
+            Some(poll) if poll.meta.settings.active_profile.is_none() => language.text(
+                "规则 · 尚未选择订阅，按 3 打开订阅页",
+                "Rules · No subscription selected; press 3 for subscriptions",
+            ),
+            Some(_) => language.text(
+                "规则 · 状态尚未读取，按 r 刷新",
+                "Rules · Not loaded; press r to refresh",
+            ),
         };
         let mut lines = wrapped(vec![(message.into(), Tone::Accent)], width);
         if let Some(error) = state
@@ -404,7 +481,13 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
             .and_then(|status| status.error.as_ref())
         {
             lines.extend(wrapped(
-                vec![(format!("读取规则失败：{error}"), Tone::Warning)],
+                vec![(
+                    match language {
+                        Language::SimplifiedChinese => format!("读取规则失败：{error}"),
+                        Language::English => format!("Failed to load rules: {error}"),
+                    },
+                    Tone::Warning,
+                )],
                 width,
             ));
         }
@@ -412,7 +495,12 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
         return lines;
     };
     let mut lines = vec![(
-        "规则 · Enter 打开操作 · / 搜索原文或来源".into(),
+        language
+            .text(
+                "规则 · Enter 打开操作 · / 搜索原文或来源",
+                "Rules · Enter for actions · / to search text or source",
+            )
+            .into(),
         Tone::Accent,
     )];
     if let Some(error) = state
@@ -421,28 +509,40 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
         .and_then(|status| status.error.as_ref())
     {
         lines.push((
-            format!("读取规则失败，旧列表仅供参考：{error}"),
+            match language {
+                Language::SimplifiedChinese => format!("读取规则失败，旧列表仅供参考：{error}"),
+                Language::English => format!("Failed to load rules; showing old list: {error}"),
+            },
             Tone::Warning,
         ));
     }
     if let Some(input) = &browser.input {
         lines.push((
-            format!(
-                "{}规则 · 单行文本",
-                if input.id.is_some() {
-                    "编辑"
-                } else {
-                    "新增"
-                }
-            ),
+            match (language, input.id.is_some()) {
+                (Language::SimplifiedChinese, true) => "编辑规则 · 单行文本",
+                (Language::SimplifiedChinese, false) => "新增规则 · 单行文本",
+                (Language::English, true) => "Edit rule · Single line",
+                (Language::English, false) => "Add rule · Single line",
+            }
+            .into(),
             Tone::Accent,
         ));
         lines.push((
-            "示例：DOMAIN-SUFFIX,example.test,DIRECT".into(),
+            language
+                .text(
+                    "示例：DOMAIN-SUFFIX,example.test,DIRECT",
+                    "Example: DOMAIN-SUFFIX,example.test,DIRECT",
+                )
+                .into(),
             Tone::Muted,
         ));
         lines.push((
-            format!("策略：{}", browser.document.policies.join(" / ")),
+            match language {
+                Language::SimplifiedChinese => {
+                    format!("策略：{}", browser.document.policies.join(" / "))
+                }
+                Language::English => format!("Policies: {}", browser.document.policies.join(" / ")),
+            },
             Tone::Muted,
         ));
         let tail = input.raw.chars().count().saturating_sub(1024);
@@ -459,20 +559,32 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
         lines.push((
             format!(
                 "{} · {} · {}",
-                row.source,
-                if row.enabled { "启用" } else { "停用" },
+                source_label(row.source, language),
+                if row.enabled {
+                    language.text("启用", "Enabled")
+                } else {
+                    language.text("停用", "Disabled")
+                },
                 row.raw
             ),
             Tone::Plain,
         ));
-        lines.push((format!("稳定 ID：{}", row.id), Tone::Muted));
         lines.push((
-            "订阅原规则只调整顺序；快捷规则在独立入口管理。".into(),
+            format!("{}{}", language.text("稳定 ID：", "ID: "), row.id),
+            Tone::Muted,
+        ));
+        lines.push((
+            language
+                .text(
+                    "订阅原规则只调整顺序；快捷规则在独立入口管理。",
+                    "Subscription rules can be reordered; manage shortcuts separately.",
+                )
+                .into(),
             Tone::Muted,
         ));
         let mut header = wrapped(lines, width);
         header.truncate(height.saturating_sub(3));
-        let actions = browser.operations();
+        let actions = browser.operations(language);
         let available = height.saturating_sub(header.len());
         for (index, (_, label)) in actions
             .iter()
@@ -495,7 +607,17 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
         return header;
     } else {
         lines.push((
-            format!("{} 条 · 来源：订阅 / 自定义 / 快捷规则", browser.rows.len()),
+            match language {
+                Language::SimplifiedChinese => {
+                    format!("{} 条 · 来源：订阅 / 自定义 / 快捷规则", browser.rows.len())
+                }
+                Language::English => {
+                    format!(
+                        "{} rules · Subscription / Custom / Shortcut",
+                        browser.rows.len()
+                    )
+                }
+            },
             Tone::Muted,
         ));
         if let Some(warning) = browser.warnings.first() {
@@ -510,15 +632,25 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
         let mut selected_end = 0;
         for (index, id) in items.iter().enumerate().skip(start).take(available * 2) {
             let label = match *id {
-                "shortcuts" => "快捷规则 →".into(),
-                "add" => "新增自定义规则 →".into(),
+                "shortcuts" => language.text("快捷规则 →", "Rule shortcuts →").into(),
+                "add" => language
+                    .text("新增自定义规则 →", "Add custom rule →")
+                    .into(),
                 id => {
                     let row = browser.rows.iter().find(|row| row.id == id).unwrap();
                     format!(
                         "{} · {}{} · {}",
-                        row.source,
-                        if row.enabled { "启用" } else { "停用" },
-                        if row.duplicate { " · 重复" } else { "" },
+                        source_label(row.source, language),
+                        if row.enabled {
+                            language.text("启用", "Enabled")
+                        } else {
+                            language.text("停用", "Disabled")
+                        },
+                        if row.duplicate {
+                            language.text(" · 重复", " · Duplicate")
+                        } else {
+                            ""
+                        },
                         row.raw
                     )
                 }

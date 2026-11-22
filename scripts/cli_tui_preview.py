@@ -193,7 +193,7 @@ document.querySelector('#collapse').onclick=()=>cards.forEach(card=>card.open=fa
 
 
 def command_catalog(console):
-    result = subprocess.run([str(console), 'help', 'all'], capture_output=True,
+    result = subprocess.run([str(console), '--lang=zh-CN', 'help', 'all'], capture_output=True,
                             text=True, check=True, timeout=15)
     commands = [(match[1], match[2]) for match in re.finditer(
         r'^  ([a-z][a-z-]*(?: [a-z][a-z-]*)*) {2,}(\S.*)$', result.stdout, re.MULTILINE)]

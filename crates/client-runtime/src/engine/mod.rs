@@ -1356,9 +1356,15 @@ impl Engine {
             && self.running()
             && self.protection_guard.is_none()
         {
-            self.protection_guard = Some(crate::claude_check::guard::Guard::start(
+            let root = self.store.root.clone();
+            self.protection_guard = Some(crate::claude_check::guard::Guard::start_localized(
                 self.api.clone(),
                 protection.node.clone(),
+                move || {
+                    clash_client_core::config::LanguagePreference::read(&root)
+                        .unwrap_or_default()
+                        .resolve_desktop()
+                },
                 |title, message| async move { platform::notification::show(&title, &message).await },
             ));
         }

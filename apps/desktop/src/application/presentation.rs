@@ -36,14 +36,21 @@ fn tone(status: Status) -> i32 {
     }
 }
 
-fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32) -> ReportItem {
+fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32, language: Language) -> ReportItem {
     let section = entry.section();
-    let (title, value) = entry.title_value();
+    let (title, value) = entry.title_value(language);
     let country = match &entry {
         claude_view::Entry::Signal(_, signal)
             if signal.group == clash_of_rust::claude_check::Group::Dns && !signal.ip.is_empty() =>
         {
-            clash_of_rust::probe::country_name(&signal.country).unwrap_or_default()
+            match language {
+                Language::SimplifiedChinese => {
+                    clash_of_rust::probe::country_name(&signal.country).unwrap_or_default()
+                }
+                Language::English => clash_client_core::countries::english_name(&signal.country)
+                    .unwrap_or_default()
+                    .to_owned(),
+            }
         }
         _ => String::new(),
     };
@@ -51,14 +58,29 @@ fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32) -> ReportItem {
     let (detail, source) = match entry {
         claude_view::Entry::Config(finding) => (finding.explanation(), finding.path.clone()),
         claude_view::Entry::Clean(path) => (String::new(), path.into()),
-        claude_view::Entry::Signal(_, signal) => (signal.explanation(), signal.source.clone()),
-        claude_view::Entry::Route(route) => (route.explanation(), "内核连接记录".into()),
-        claude_view::Entry::GuardRoute(route) => {
-            (route.explanation(), "实时拦截 · 内核连接记录".into())
+        claude_view::Entry::Signal(_, signal) => {
+            (signal.explanation_in(language), signal.source_in(language))
         }
+        claude_view::Entry::Route(route) => (
+            route.explanation_in(language),
+            language
+                .text("内核连接记录", "Core connection records")
+                .into(),
+        ),
+        claude_view::Entry::GuardRoute(route) => (
+            route.explanation_in(language),
+            language
+                .text(
+                    "实时拦截 · 内核连接记录",
+                    "Live blocking · core connection records",
+                )
+                .into(),
+        ),
         claude_view::Entry::Routes(routes) => (
-            clash_of_rust::claude_check::route_group_detail(&routes),
-            "内核连接记录".into(),
+            clash_of_rust::claude_check::route_group_detail_in(&routes, language),
+            language
+                .text("内核连接记录", "Core connection records")
+                .into(),
         ),
     };
     ReportItem {
@@ -81,8 +103,9 @@ fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32) -> ReportItem {
 fn connection_details(
     connection: &clash_of_rust::api::Connection,
     resolved: &str,
+    language: Language,
 ) -> Vec<DetailItem> {
-    connection::detail_values(connection, resolved)
+    connection::detail_values_in(connection, resolved, language)
         .into_iter()
         .map(|(label, value)| DetailItem {
             label: label.into(),
@@ -97,6 +120,7 @@ fn connection_details(
 
 impl App {
     pub(super) fn proxy_rows(&self) -> (usize, Vec<(GroupItem, Vec<NodePair>)>) {
+        let language = self.presentation_language;
         let query = self.query.to_lowercase();
         let mut groups: Vec<_> = self
             .snapshot
@@ -175,7 +199,7 @@ impl App {
                         .map_or_else(|| unknown_kind.clone(), |node| node.kind.shared().into());
                     let delay_label = delay_labels
                         .entry(delay)
-                        .or_insert_with(|| proxy_order::delay_label(delay).into())
+                        .or_insert_with(|| proxy_order::delay_label_in(delay, language).into())
                         .clone();
                     NodeItem {
                         group: group_name.clone(),
@@ -203,12 +227,22 @@ impl App {
                     id: group_name.clone(),
                     title: group_name,
                     current: proxy.now.shared().into(),
-                    detail: format!("{} · {} 个节点", proxy.kind, proxy.all.len()).into(),
+                    detail: match language {
+                        Language::SimplifiedChinese => {
+                            format!("{} · {} 个节点", proxy.kind, proxy.all.len())
+                        }
+                        Language::English => format!("{} · {} nodes", proxy.kind, proxy.all.len()),
+                    }
+                    .into(),
                     expanded,
                     testing: self.testing_groups.contains(group.as_str()),
                     page: if expanded {
                         format!(
-                            "{count} 个节点 · {}–{}",
+                            "{} · {}–{}",
+                            match language {
+                                Language::SimplifiedChinese => format!("{count} 个节点"),
+                                Language::English => format!("{count} nodes"),
+                            },
                             if count == 0 { 0 } else { start + 1 },
                             (start + PAGE_SIZE).min(count)
                         )
@@ -298,16 +332,24 @@ impl App {
         data.set_previous(offset > 0);
         data.set_next(offset + step < total);
         data.set_page_status(
-            format!(
-                "{total} 条 · {}–{}",
-                if total == 0 { 0 } else { offset + 1 },
-                (offset + step).min(total)
-            )
+            match self.presentation_language {
+                Language::SimplifiedChinese => format!(
+                    "{total} 条 · {}–{}",
+                    if total == 0 { 0 } else { offset + 1 },
+                    (offset + step).min(total)
+                ),
+                Language::English => format!(
+                    "{total} items · {}–{}",
+                    if total == 0 { 0 } else { offset + 1 },
+                    (offset + step).min(total)
+                ),
+            }
             .into(),
         );
     }
 
     pub(super) fn present(&self, data: &UiData, models: &mut ViewModels) {
+        let language = self.presentation_language;
         macro_rules! set {
             ($get:ident, $put:ident, $value:expr) => {{
                 let value = $value;
@@ -356,6 +398,7 @@ impl App {
         );
         set!(get_autostart, set_autostart, self.autostart);
         set!(get_tray_speed, set_tray_speed, self.settings.tray_speed);
+        text!(get_language, set_language, self.settings.language.tag());
         set!(
             get_update_prereleases,
             set_update_prereleases,
@@ -380,9 +423,11 @@ impl App {
                         .map(|entry| FakeIpExclusionItem {
                             domain: entry.domain.into(),
                             source: match (entry.custom, entry.dns_override) {
-                                (true, true) => "用户自定义、DNS 覆盖",
-                                (true, false) => "用户自定义",
-                                _ => "DNS 覆盖",
+                                (true, true) => {
+                                    language.text("用户自定义、DNS 覆盖", "Custom, DNS override")
+                                }
+                                (true, false) => language.text("用户自定义", "Custom"),
+                                _ => language.text("DNS 覆盖", "DNS override"),
                             }
                             .into(),
                         })
@@ -450,7 +495,10 @@ impl App {
             self.profiles
                 .iter()
                 .find(|profile| self.settings.active_profile.as_deref() == Some(&profile.id))
-                .map_or("未选择订阅", |profile| profile.name.as_str())
+                .map_or(
+                    language.text("未选择订阅", "No subscription selected"),
+                    |profile| profile.name.as_str()
+                )
         );
         text!(
             get_node,
@@ -521,7 +569,11 @@ impl App {
         );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
         text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
-        text!(get_geo_status, set_geo_status, &self.geo_status);
+        text!(
+            get_geo_status,
+            set_geo_status,
+            clash_client_core::geodata::localize_status(&self.geo_status, language)
+        );
         set!(
             get_node_sort,
             set_node_sort,
@@ -588,17 +640,25 @@ impl App {
                 })
         );
         let download_status = self.updates.progress.as_ref().map(|progress| {
+            let language = self.presentation_language;
             if progress.route.is_empty() {
-                "正在准备下载…".to_owned()
+                language
+                    .text("正在准备下载…", "Preparing download…")
+                    .to_owned()
             } else if progress.received == 0 {
-                format!("正在连接下载 · {}", progress.routing())
+                format!(
+                    "{} · {}",
+                    language.text("正在连接下载", "Connecting to download"),
+                    progress.routing_in(language)
+                )
             } else {
                 format!(
-                    "下载 {}/{} · {}/s · {}",
+                    "{} {}/{} · {}/s · {}",
+                    language.text("下载", "Download"),
                     bytes(progress.received),
                     bytes(progress.total),
                     bytes(progress.bytes_per_second),
-                    progress.routing(),
+                    progress.routing_in(language),
                 )
             }
         });
@@ -673,7 +733,7 @@ impl App {
                         local: profile.is_local(),
                         builtin: profile.is_default(),
                         detail: if profile.is_local() {
-                            "本地配置".into()
+                            language.text("本地配置", "Local configuration").into()
                         } else {
                             clash_client_core::subscription::summary(
                                 profile.usage.as_deref(),
@@ -699,7 +759,7 @@ impl App {
         data.set_connection_summary(strings(
             data.get_connection_summary(),
             if self.page == Page::Connections {
-                connection::traffic_summary(&self.snapshot.connections.connections)
+                connection::traffic_summary_in(&self.snapshot.connections.connections, language)
             } else {
                 Vec::new()
             },
@@ -755,6 +815,7 @@ impl App {
     }
 
     fn present_rules(&self, data: &UiData, models: &ViewModels, query: &str) {
+        let language = self.presentation_language;
         let state = &self.rule_state;
         data.set_rule_dirty(state.dirty());
         data.set_rule_selected(state.selected.is_some());
@@ -780,18 +841,14 @@ impl App {
             data.get_rule_profile_options(),
             self.profiles.iter().map(|profile| &profile.name),
         ));
-        data.set_rule_profile(
-            self.profiles
-                .iter()
-                .find(|profile| {
-                    state
-                        .document
-                        .as_ref()
-                        .is_some_and(|doc| doc.profile_id == profile.id)
-                })
-                .map_or("选择订阅", |profile| profile.name.as_str())
-                .into(),
-        );
+        let selected_profile = self.profiles.iter().find(|profile| {
+            state
+                .document
+                .as_ref()
+                .is_some_and(|doc| doc.profile_id == profile.id)
+        });
+        data.set_rule_profile(selected_profile.map_or("", |profile| &profile.name).into());
+        data.set_rule_profile_id(selected_profile.map_or("", |profile| &profile.id).into());
         data.set_rule_types(strings(
             data.get_rule_types(),
             if state.document.as_ref().is_some_and(|doc| !doc.builtin) {
@@ -811,10 +868,23 @@ impl App {
                 .iter()
                 .enumerate()
                 .map(|(index, label)| {
+                    let label = language.text(
+                        label,
+                        [
+                            "Block ads",
+                            "Private domains direct",
+                            "Private IPs direct",
+                            "China domains direct",
+                            "China IPs direct",
+                        ][index],
+                    );
                     if document.is_some_and(|doc| doc.included[index]) {
-                        format!("{label} · 订阅已包含")
+                        format!(
+                            "{label}{}",
+                            language.text(" · 订阅已包含", " · Included in subscription")
+                        )
                     } else {
-                        (*label).into()
+                        label.into()
                     }
                 }),
         ));
@@ -849,7 +919,12 @@ impl App {
                     RuleItem {
                         id: row.id.as_str().into(),
                         position: (index + 1).to_string().into(),
-                        kind: parts.as_ref().map_or("复杂规则", |parts| parts.kind).into(),
+                        kind: parts
+                            .as_ref()
+                            .map_or(language.text("复杂规则", "Complex rule"), |parts| {
+                                parts.kind
+                            })
+                            .into(),
                         value: parts
                             .as_ref()
                             .map_or(row.raw.as_ref(), |parts| parts.payload)
@@ -866,10 +941,17 @@ impl App {
     }
 
     fn present_sites(&self, data: &UiData, models: &ViewModels, query: &str) {
+        let language = self.presentation_language;
         let report = ip_report::Report::from_results(&self.site_results);
         let total = report.totals.total();
         let completed = report.totals.completed();
-        data.set_site_progress(format!("完成 {completed} / {total}").into());
+        data.set_site_progress(
+            format!(
+                "{} {completed} / {total}",
+                language.text("完成", "Completed")
+            )
+            .into(),
+        );
         data.set_site_fraction(if total == 0 {
             0.0
         } else {
@@ -913,24 +995,48 @@ impl App {
                 .into_iter()
                 .map(|status| Choice {
                     id: status.to_string().into(),
-                    label: format!("{} {}", status, report.totals.count(status)).into(),
+                    label: format!(
+                        "{} {}",
+                        status.label_in(language),
+                        report.totals.count(status)
+                    )
+                    .into(),
                 })
                 .collect(),
         ));
         let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
         let summary = exit.map_or_else(
-            || "完成检测后显示出口与各类平台结果".into(),
-            |exit| {
-                format!(
+            || {
+                language
+                    .text(
+                        "完成检测后显示出口与各类平台结果",
+                        "Run the check to see the exit and service results",
+                    )
+                    .into()
+            },
+            |exit| match language {
+                Language::SimplifiedChinese => format!(
                     "Cloudflare 探针出口：{} · 各平台识别到 {} 个地区",
                     exit.summary, region_count
-                )
+                ),
+                Language::English => format!(
+                    "Cloudflare probe exit: {} · {region_count} regions identified",
+                    exit.summary
+                ),
             },
         );
         data.set_site_summary(summary.into());
         let (country, flag) =
             clash_of_rust::flags::label(exit.map_or("", |exit| exit.country.as_str()));
-        data.set_site_exit_country(country.into());
+        data.set_site_exit_country(
+            match language {
+                Language::SimplifiedChinese => country,
+                Language::English => clash_client_core::countries::country_code(country)
+                    .and_then(clash_client_core::countries::english_name)
+                    .unwrap_or(country),
+            }
+            .into(),
+        );
         data.set_site_exit_flagged(flag.is_some());
         data.set_site_exit_flag(flag.unwrap_or_default().into());
         let categories: Vec<_> = report
@@ -945,12 +1051,20 @@ impl App {
                     category.counts.total()
                 )
                 .into(),
-                detail: format!(
-                    "确认可用 {} · 网页可达 {} · 受限 {}",
-                    category.counts.count(Status::Available),
-                    category.counts.count(Status::Reachable),
-                    category.counts.count(Status::Restricted)
-                )
+                detail: match language {
+                    Language::SimplifiedChinese => format!(
+                        "确认可用 {} · 网页可达 {} · 受限 {}",
+                        category.counts.count(Status::Available),
+                        category.counts.count(Status::Reachable),
+                        category.counts.count(Status::Restricted)
+                    ),
+                    Language::English => format!(
+                        "Available {} · Reachable {} · Restricted {}",
+                        category.counts.count(Status::Available),
+                        category.counts.count(Status::Reachable),
+                        category.counts.count(Status::Restricted)
+                    ),
+                }
                 .into(),
                 tone: if category.counts.non_red() == category.counts.total() {
                     1
@@ -995,25 +1109,27 @@ impl App {
                         id: service.id.as_str().into(),
                         title: service.name.as_str().into(),
                         value: match result {
-                            Some(Ok(result))
-                                if result.summary == status.to_string()
-                                    || (status == Status::Reachable
-                                        && result.summary == "网页可达") =>
-                            {
-                                status.to_string()
+                            Some(Ok(result)) if status.summary_is_generic(&result.summary) => {
+                                status.label_in(language).to_owned()
                             }
-                            Some(Ok(result)) => format!("{status} · {}", result.summary),
+                            Some(Ok(result)) => {
+                                format!("{} · {}", status.label_in(language), result.summary)
+                            }
                             Some(Err(error)) => error.clone(),
-                            None => status.to_string(),
+                            None => status.label_in(language).to_owned(),
                         }
                         .into(),
-                        detail: ip_report::target_exit_detail(service, result)
+                        detail: ip_report::target_exit_detail_in(service, result, language)
                             .unwrap_or_default()
                             .into(),
-                        source: result
-                            .and_then(|result| result.as_ref().ok())
-                            .map_or("", |_| country)
-                            .into(),
+                        source: if language == Language::English {
+                            clash_client_core::countries::country_code(country)
+                                .and_then(clash_client_core::countries::english_name)
+                                .unwrap_or(country)
+                        } else {
+                            country
+                        }
+                        .into(),
                         status_label: status.to_string().into(),
                         tone: tone(status),
                         delay: result
@@ -1054,6 +1170,7 @@ impl App {
     }
 
     fn present_claude(&self, data: &UiData, models: &ViewModels) {
+        let language = self.presentation_language;
         let entries = self.claude.entries();
         let counts = self.claude.counts(&entries);
         data.set_claude_normal(counts[0].to_string().into());
@@ -1066,8 +1183,14 @@ impl App {
         data.set_claude_guard(self.claude.guard_status.as_str().into());
         data.set_protection_status(
             match self.claude.protection_pending {
-                Some(true) => "正在开启保护，切换 TUN、规则与 DNS…",
-                Some(false) => "正在关闭保护，恢复原网络状态…",
+                Some(true) => language.text(
+                    "正在开启保护，切换 TUN、规则与 DNS…",
+                    "Enabling protection and switching TUN, rules, and DNS…",
+                ),
+                Some(false) => language.text(
+                    "正在关闭保护，恢复原网络状态…",
+                    "Disabling protection and restoring network settings…",
+                ),
                 None => "",
             }
             .into(),
@@ -1092,21 +1215,33 @@ impl App {
                 .audit
                 .as_ref()
                 .map_or(String::new(), |audit| {
-                    format!(
-                        "已检查 {} 个已记录项目 · {} 份配置{}{}",
-                        audit.projects,
-                        audit.files,
-                        if audit.missing_projects > 0 {
-                            format!(" · {} 个目录已不存在", audit.missing_projects)
-                        } else {
-                            String::new()
-                        },
-                        if audit.incomplete {
-                            " · 扫描未完成，详见浏览器与配置"
-                        } else {
-                            ""
+                    let missing = if audit.missing_projects > 0 {
+                        match language {
+                            Language::SimplifiedChinese => {
+                                format!(" · {} 个目录已不存在", audit.missing_projects)
+                            }
+                            Language::English => {
+                                format!(" · {} directories missing", audit.missing_projects)
+                            }
                         }
-                    )
+                    } else {
+                        String::new()
+                    };
+                    let incomplete = if audit.incomplete {
+                        language.text(" · 扫描未完成，详见浏览器与配置", " · Scan incomplete")
+                    } else {
+                        ""
+                    };
+                    match language {
+                        Language::SimplifiedChinese => format!(
+                            "已检查 {} 个已记录项目 · {} 份配置{missing}{incomplete}",
+                            audit.projects, audit.files
+                        ),
+                        Language::English => format!(
+                            "Checked {} projects · {} configuration files{missing}{incomplete}",
+                            audit.projects, audit.files
+                        ),
+                    }
                 })
                 .into(),
         );
@@ -1143,13 +1278,16 @@ impl App {
         data.set_claude_result_page(page as i32);
         data.set_claude_previous(page > 0);
         data.set_claude_next(!summary && (page + 1) * page_size < entries.len());
+        let pages = entries.len().div_ceil(page_size).max(1);
         data.set_claude_result_status(
-            format!(
-                "列出 {} 项 · 第 {} / {} 页",
-                entries.len(),
-                page + 1,
-                entries.len().div_ceil(page_size).max(1)
-            )
+            match language {
+                Language::SimplifiedChinese => {
+                    format!("列出 {} 项 · 第 {} / {} 页", entries.len(), page + 1, pages)
+                }
+                Language::English => {
+                    format!("{} results · Page {} / {}", entries.len(), page + 1, pages)
+                }
+            }
             .into(),
         );
         reconcile(&models.claude_results, {
@@ -1173,7 +1311,7 @@ impl App {
                         signal,
                         kind == claude_view::ResultKind::Risk,
                     );
-                    let (title, value) = entry.title_value();
+                    let (title, value) = entry.title_value(language);
                     clash_of_rust::claude_check::BlockRow {
                         section,
                         title,
@@ -1188,7 +1326,7 @@ impl App {
             if summary {
                 let mut headers = Vec::new();
                 let mut items = Vec::new();
-                for block in clash_of_rust::claude_check::report_blocks(rows) {
+                for block in clash_of_rust::claude_check::report_blocks_in(rows, language) {
                     let total = block.rows.len();
                     headers.push(ReportItem {
                         id: block.section.into(),
@@ -1205,20 +1343,21 @@ impl App {
                             .rows
                             .into_iter()
                             .take(12)
-                            .map(|(entry, tone)| claude_report_item(entry, tone)),
+                            .map(|(entry, tone)| claude_report_item(entry, tone, language)),
                     );
                 }
                 headers.extend(items);
                 headers
             } else {
                 rows.into_iter()
-                    .map(|row| claude_report_item(row.item.0, row.item.1))
+                    .map(|row| claude_report_item(row.item.0, row.item.1, language))
                     .collect()
             }
         });
     }
 
     fn present_dialog(&self, data: &UiData) {
+        let language = self.presentation_language;
         let rules_locked = self.page != Page::Rules
             || self.settings.claude_protection.is_some()
             || self.claude.protection_pending.is_some();
@@ -1244,7 +1383,13 @@ impl App {
             data.set_modal_accept(if wait == 0 {
                 confirmation.accept.into()
             } else {
-                format!("{}（{wait} 秒）", confirmation.accept).into()
+                match language {
+                    Language::SimplifiedChinese => {
+                        format!("{}（{wait} 秒）", confirmation.accept)
+                    }
+                    Language::English => format!("{} ({wait}s)", confirmation.accept),
+                }
+                .into()
             });
             data.set_modal_can_accept(wait == 0 && !self.working && !self.exiting);
             data.set_modal_danger(!matches!(
@@ -1254,15 +1399,15 @@ impl App {
             ));
         } else if let Some(editor) = &self.profile_editor {
             kind = 2;
-            data.set_modal_title("编辑订阅".into());
+            data.set_modal_title(language.text("编辑订阅", "Edit subscription").into());
             data.set_edit_name(editor.name.as_str().into());
             data.set_edit_source(editor.source.as_str().into());
             data.set_modal_error(editor.error.as_str().into());
-            data.set_modal_accept("保存".into());
+            data.set_modal_accept(language.text("保存", "Save").into());
         } else if self.import_open {
             kind = 3;
-            data.set_modal_title("添加订阅".into());
-            data.set_modal_accept("导入".into());
+            data.set_modal_title(language.text("添加订阅", "Add subscription").into());
+            data.set_modal_accept(language.text("导入", "Import").into());
             data.set_modal_can_accept(!self.working && !self.profile_source.trim().is_empty());
         } else if let Some(profile) = self
             .rule_state
@@ -1271,15 +1416,28 @@ impl App {
             .filter(|_| !rules_locked)
         {
             kind = 6;
-            data.set_modal_title("切换规则配置？".into());
-            data.set_modal_description(
-                format!("当前未应用的草稿将丢弃，切换到“{}”。", profile.name).into(),
+            data.set_modal_title(
+                language
+                    .text("切换规则配置？", "Switch rule configuration?")
+                    .into(),
             );
-            data.set_modal_accept("放弃并切换".into());
+            data.set_modal_description(
+                match language {
+                    Language::SimplifiedChinese => {
+                        format!("当前未应用的草稿将丢弃，切换到“{}”。", profile.name)
+                    }
+                    Language::English => format!(
+                        "Discard the unapplied draft and switch to “{}”.",
+                        profile.name
+                    ),
+                }
+                .into(),
+            );
+            data.set_modal_accept(language.text("放弃并切换", "Discard and switch").into());
         } else if let Some(editor) = self.rule_state.editor.as_ref().filter(|_| !rules_locked) {
             kind = 4;
-            data.set_modal_title("编辑规则".into());
-            data.set_modal_accept("保存到草稿".into());
+            data.set_modal_title(language.text("编辑规则", "Edit rule").into());
+            data.set_modal_accept(language.text("保存到草稿", "Save to draft").into());
             data.set_rule_text_mode(editor.text_mode);
             data.set_rule_raw(editor.raw.as_str().into());
             data.set_rule_kind(editor.kind.as_str().into());
@@ -1291,33 +1449,49 @@ impl App {
             data.set_modal_error(editor.error.as_str().into());
         } else if self.rule_state.move_open && !rules_locked {
             kind = 5;
-            data.set_modal_title("移动到指定位置".into());
-            data.set_modal_accept("移动".into());
+            data.set_modal_title(language.text("移动到指定位置", "Move to position").into());
+            data.set_modal_accept(language.text("移动", "Move").into());
             data.set_rule_move_position(self.rule_state.move_position.as_str().into());
         } else if let Some(guide) = self.claude.guide {
             match guide {
                 claude_view::Guide::Protection => {
                     kind = 7;
                     let wait = self.claude.protection_wait();
-                    data.set_modal_title("开启 Claude 保护？".into());
-                    data.set_modal_description("将锁定当前具体节点和运行模式（规则或全局），启用 TUN、严格路由、IPv6 接管、UDP、广泛规则、加密 DNS 与实时异常连接拦截，并关闭当前内核连接，让应用重新建立连接。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。\n\n这些设置可能影响其他应用、国内网站与内网服务；节点故障时相关解析也可能失败。节点域名沿用原节点 DNS 在本地解析；公网域名通过保护节点使用加密 DNS，局域网名称保留本地解析。\n\n原代理模式、DNS、UDP、规则和节点选择会保存；重启后仍保留，关闭保护后恢复。\n\n不能保证消除所有地区线索或满足服务的账号资格要求。".into());
+                    data.set_modal_title(
+                        language
+                            .text("开启 Claude 保护？", "Enable Claude protection?")
+                            .into(),
+                    );
+                    data.set_modal_description(language.text(
+                        "将锁定当前具体节点和运行模式（规则或全局），启用 TUN、严格路由、IPv6 接管、UDP、广泛规则、加密 DNS 与实时异常连接拦截，并关闭当前内核连接，让应用重新建立连接。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。\n\n这些设置可能影响其他应用、国内网站与内网服务；节点故障时相关解析也可能失败。节点域名沿用原节点 DNS 在本地解析；公网域名通过保护节点使用加密 DNS，局域网名称保留本地解析。\n\n原代理模式、DNS、UDP、规则和节点选择会保存；重启后仍保留，关闭保护后恢复。\n\n不能保证消除所有地区线索或满足服务的账号资格要求。",
+                        "Locks the current node and routing mode (rule or global), enables TUN, strict routing, IPv6 handling, UDP, broad rules, encrypted DNS and live blocking of unexpected connections, then closes current core connections so apps can reconnect. Protection cannot start with DIRECT as the global exit; direct mode switches to rule mode.\n\nThese settings may affect other apps, local websites and private network services. DNS lookups may fail if the node fails. Node domains use the original node DNS locally; public domains use encrypted DNS through the protected node, while local network names remain locally resolved.\n\nThe previous proxy mode, DNS, UDP, rules and node selection are saved across restarts and restored when protection is disabled.\n\nProtection cannot eliminate every regional signal or guarantee account eligibility.",
+                    ).into());
                     data.set_modal_accept(if wait == 0 {
-                        "开启并重新检测".into()
+                        language
+                            .text("开启并重新检测", "Enable and check again")
+                            .into()
                     } else {
-                        format!("请阅读（{wait} 秒）").into()
+                        match language {
+                            Language::SimplifiedChinese => format!("请阅读（{wait} 秒）"),
+                            Language::English => format!("Please read ({wait}s)"),
+                        }
+                        .into()
                     });
                     data.set_modal_can_accept(wait == 0 && !self.working && !self.claude.busy());
                 }
                 claude_view::Guide::Supplement => {
                     kind = 8;
-                    data.set_modal_title("补充采样".into());
-                    data.set_modal_description("自动浏览器检测来自本机检测页面。需要核对 Claude 网页本身的设置时，可在该网页的开发者工具 Console 运行采样脚本，再导入结果。".into());
+                    data.set_modal_title(language.text("补充采样", "Additional sample").into());
+                    data.set_modal_description(language.text(
+                        "自动浏览器检测来自本机检测页面。需要核对 Claude 网页本身的设置时，可在该网页的开发者工具 Console 运行采样脚本，再导入结果。",
+                        "Automatic browser checks use a local test page. To check the Claude website itself, run the sampling script in its developer console and import the result.",
+                    ).into());
                 }
             }
         } else if let Some(id) = &self.connection_detail {
             kind = 10;
             data.set_connection_selected_id(id.as_str().into());
-            data.set_modal_title("连接详情".into());
+            data.set_modal_title(language.text("连接详情", "Connection details").into());
             let connection = self
                 .snapshot
                 .connections
@@ -1326,22 +1500,29 @@ impl App {
                 .find(|connection| connection.id.as_ref() == id);
             let rows = connection.map_or_else(Vec::new, |connection| {
                 let resolved = self.connection_lookup.addresses(connection);
-                connection_details(connection, resolved)
+                connection_details(connection, resolved, language)
             });
             data.set_modal_copy(
                 rows.iter()
-                    .map(|row| format!("{}：{}", row.label, row.value))
+                    .map(|row| format!("{}{}{}", row.label, language.text("：", ": "), row.value))
                     .collect::<Vec<_>>()
                     .join("\n")
                     .into(),
             );
             data.set_connection_details(model(data.get_connection_details(), rows));
             if connection.is_none() {
-                data.set_modal_description("此连接已结束，详情不再保留。".into());
+                data.set_modal_description(
+                    language
+                        .text(
+                            "此连接已结束，详情不再保留。",
+                            "This connection has ended; its details are no longer available.",
+                        )
+                        .into(),
+                );
             }
         } else if let Some(line) = &self.log_detail {
             kind = 13;
-            data.set_modal_title("日志详情".into());
+            data.set_modal_title(language.text("日志详情", "Log details").into());
             data.set_modal_description(line.as_str().into());
             data.set_modal_copy(line.as_str().into());
         } else if let Some(index) = self.site_detail {
@@ -1361,7 +1542,7 @@ impl App {
                         format!("{}{}\n\n{}", result.summary, latency, result.detail)
                     }
                     Some(Err(error)) => error.clone(),
-                    None => "尚未完成检测".into(),
+                    None => language.text("尚未完成检测", "Check not completed").into(),
                 }
                 .into(),
             );
@@ -1377,9 +1558,9 @@ impl App {
             });
         } else if self.accent_open {
             kind = 12;
-            data.set_modal_title("强调色".into());
+            data.set_modal_title(language.text("强调色", "Accent color").into());
             data.set_modal_can_accept(!self.exiting);
-            data.set_modal_accept("完成".into());
+            data.set_modal_accept(language.text("完成", "Done").into());
         } else {
             kind = 0;
         }

@@ -19,7 +19,10 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 (&*args.positional[0], &*args.positional[1])
             } else {
                 (
-                    args.get("name").context("导入文件时请提供 --name")?,
+                    args.get("name").context(args.language().text(
+                        "导入文件时请提供 --name",
+                        "Pass --name when importing a file",
+                    ))?,
                     &*args.positional[0],
                 )
             };
@@ -39,7 +42,11 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         "profile update" => {
             ensure!(
                 !(args.flag("all") && !args.positional.is_empty()),
-                "PROFILE 与 --all 不能同时指定"
+                "{}",
+                args.language().text(
+                    "PROFILE 与 --all 不能同时指定",
+                    "PROFILE and --all cannot be used together"
+                )
             );
             let profiles = if args.flag("all") {
                 meta.profiles
@@ -50,6 +57,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 vec![super::profile(
                     &meta,
                     args.positional.first().map(String::as_str),
+                    args.language(),
                 )?]
             };
             let mut results = Vec::new();
@@ -74,20 +82,29 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                     .push(json!({"id":p.id,"name":p.name,"updated":error.is_none(),"error":error}));
             }
             output::emit(args, json!(results))?;
-            ensure!(!failed, "部分订阅更新失败");
+            ensure!(
+                !failed,
+                "{}",
+                args.language().text(
+                    "部分订阅更新失败",
+                    "Some subscriptions could not be updated"
+                )
+            );
             Ok(())
         }
         "profile use" => {
-            let p = super::profile(&meta, Some(&args.positional[0]))?;
+            let p = super::profile(&meta, Some(&args.positional[0]), args.language())?;
             let _: Value = backend::request(args, Command::Activate { id: p.id.clone() }).await?;
             output::emit(args, json!({"active":p.id,"name":p.name}))
         }
         "profile edit" => {
             ensure!(
                 args.get("name").is_some() || args.get("source").is_some(),
-                "请提供 --name 或 --source"
+                "{}",
+                args.language()
+                    .text("请提供 --name 或 --source", "Pass --name or --source")
             );
-            let p = super::profile(&meta, Some(&args.positional[0]))?;
+            let p = super::profile(&meta, Some(&args.positional[0]), args.language())?;
             let source = args
                 .get("source")
                 .map(|s| source_path(args, s))
@@ -106,14 +123,22 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             output::emit(args, json!({"edited":p.id}))
         }
         "profile remove" => {
-            let p = super::profile(&meta, Some(&args.positional[0]))?;
-            output::confirm(args, &format!("删除订阅“{}”？", p.name)).await?;
+            let p = super::profile(&meta, Some(&args.positional[0]), args.language())?;
+            let prompt = match args.language() {
+                clash_client_core::config::Language::SimplifiedChinese => {
+                    format!("删除订阅“{}”？", p.name)
+                }
+                clash_client_core::config::Language::English => {
+                    format!("Delete subscription “{}”?", p.name)
+                }
+            };
+            output::confirm(args, &prompt).await?;
             let _: Value =
                 backend::request(args, Command::DeleteProfile { id: p.id.clone() }).await?;
             output::emit(args, json!({"removed":p.id}))
         }
         "profile export" => {
-            let p = super::profile(&meta, Some(&args.positional[0]))?;
+            let p = super::profile(&meta, Some(&args.positional[0]), args.language())?;
             let raw = config::read_profile(&backend::store(args)?.profile_path(&p.id)?)?;
             super::maintenance::yaml(args, &raw)
         }
@@ -127,7 +152,12 @@ fn source_path(args: &Args, source: &str) -> Result<String> {
         std::io::stdin()
             .take(config::PROFILE_LIMIT as u64 + 1)
             .read_to_string(&mut raw)?;
-        ensure!(raw.len() <= config::PROFILE_LIMIT, "订阅超过大小限制");
+        ensure!(
+            raw.len() <= config::PROFILE_LIMIT,
+            "{}",
+            args.language()
+                .text("订阅超过大小限制", "Subscription exceeds the size limit")
+        );
         config::parse_profile(&raw)?;
         // Keep the imported source so later updates remain valid; it is never in /tmp.
         let root = backend::store(args)?.root.join("imports");
@@ -141,7 +171,10 @@ fn source_path(args: &Args, source: &str) -> Result<String> {
     }
     Ok(backend::absolute(source)?
         .canonicalize()
-        .context("找不到订阅文件")?
+        .context(
+            args.language()
+                .text("找不到订阅文件", "Subscription file not found"),
+        )?
         .to_string_lossy()
         .into_owned())
 }

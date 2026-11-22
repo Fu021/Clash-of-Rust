@@ -11,6 +11,7 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
             | Intent::AccentColor
             | Intent::TextScale
             | Intent::TraySpeed
+            | Intent::Language
             | Intent::NodeSort
             | Intent::GroupPagination
             | Intent::ProfilePagination
@@ -316,6 +317,12 @@ impl App {
                 Message::Action(Action::Accent(color))
             }
             Intent::TraySpeed => Message::TraySpeed(boolean(a)),
+            Intent::Language => {
+                let Some(preference) = LanguagePreference::from_tag(a) else {
+                    return Task::none();
+                };
+                Message::Action(Action::SetLanguage(preference))
+            }
             Intent::DnsOverride => Message::Action(Action::DnsOverride(boolean(a))),
             Intent::FakeIp => Message::Action(Action::FakeIp(boolean(a))),
             Intent::FakeIpEditor => Message::FakeIpEditor(boolean(a)),

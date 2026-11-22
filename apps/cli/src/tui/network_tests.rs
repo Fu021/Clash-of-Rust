@@ -3,6 +3,7 @@ use crate::tui::{
     model::{Action, Page, State, demo_poll},
     network, render,
 };
+use clash_client_core::config::Language;
 use clash_client_core::network_tools::{Entry, Options, Report, Tool};
 use unicode_width::UnicodeWidthStr;
 
@@ -14,6 +15,52 @@ fn state(tool: Tool) -> State {
     state.query = "example.test".into();
     assert!(matches!(state.key(Key::Char('o')), Action::CancelNetwork));
     state
+}
+
+#[test]
+fn english_network_controls_keep_stable_options_and_validate_the_draft() {
+    let mut state = State::new(false);
+    state.language = Language::English;
+    state.page = Page::Network;
+    state.network_tool = Tool::Dns.index() as usize;
+    state.query = "example.test".into();
+    let page = render::frame(&state, 100, 30)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(page.contains("DNS lookup"));
+    assert!(page.contains("Target: example.test"));
+    assert!(page.contains("Record ADDR"));
+
+    assert!(matches!(state.key(Key::Char('o')), Action::CancelNetwork));
+    let form = state.form.as_ref().unwrap();
+    assert_eq!(form.fields[0].label, "Domain");
+    assert_eq!(form.fields[1].label, "Record type");
+    state.form.as_mut().unwrap().fields[0].value.clear();
+    let error = network::apply(&mut state).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Target must contain 1–256 bytes")
+    );
+    assert_eq!(state.query, "example.test");
+    let form = state.form.as_mut().unwrap();
+    form.fields[0].value = "new.example.test".into();
+    form.fields[1].value = "AAAA".into();
+    network::apply(&mut state).unwrap();
+    assert_eq!(state.query, "new.example.test");
+    assert_eq!(state.network_options.record_type, "AAAA");
+    assert!(state.message.as_deref().unwrap().contains("press Enter"));
+    state.network_tool = Tool::Http.index() as usize;
+    assert!(matches!(state.key(Key::Char('o')), Action::CancelNetwork));
+    state.form.as_mut().unwrap().fields[2].value = "0".into();
+    assert_eq!(
+        network::apply(&mut state).unwrap_err().to_string(),
+        "Timeout must be between 1 and 30 seconds"
+    );
+    assert_eq!(state.network_options.seconds, Options::default().seconds);
+    assert_eq!(state.form.as_ref().unwrap().fields[2].value, "0");
 }
 
 #[test]
@@ -304,7 +351,7 @@ fn empty_and_demo_results_cannot_export_or_create_files() {
     state.key(Key::Char('e'));
     assert!(state.form.is_none());
     assert!(state.message.as_ref().unwrap().contains("未导出"));
-    state.form = Some(network::export_editor());
+    state.form = Some(network::export_editor(state.language));
     assert!(network::prepare_export(&state).is_err());
 }
 

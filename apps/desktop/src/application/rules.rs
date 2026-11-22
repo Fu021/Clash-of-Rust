@@ -370,6 +370,7 @@ impl App {
             return Task::none();
         }
         let focus_editor = matches!(&event, Event::Add | Event::Edit);
+        let language = self.presentation_language;
         let state = &mut self.rule_state;
         match event {
             Event::Profile(choice) => {
@@ -477,9 +478,12 @@ impl App {
             Event::Discard => {
                 if state.dirty() || state.editor_modified() {
                     return self.ask(
-                        "放弃规则修改？",
-                        "当前未应用的规则顺序、快捷规则与自定义规则修改将被丢弃。".into(),
-                        "放弃修改",
+                        language.text("放弃规则修改？", "Discard rule changes?"),
+                        language.text(
+                            "当前未应用的规则顺序、快捷规则与自定义规则修改将被丢弃。",
+                            "Unapplied rule order, shortcut and custom rule changes will be discarded.",
+                        ).into(),
+                        language.text("放弃修改", "Discard changes"),
                         desktop_view::Pending::Rules(Event::DiscardConfirmed),
                     );
                 }
@@ -508,10 +512,12 @@ impl App {
                     state.pending_profile = None;
                 } else if state.editor_modified() {
                     return self.ask(
-                        "放弃规则编辑？",
-                        "这条规则的编辑尚未加入草稿。关闭后将丢弃本次编辑，已有规则草稿仍会保留。"
-                            .into(),
-                        "放弃编辑",
+                        language.text("放弃规则编辑？", "Discard rule edit?"),
+                        language.text(
+                            "这条规则的编辑尚未加入草稿。关闭后将丢弃本次编辑，已有规则草稿仍会保留。",
+                            "This edit has not been added to the draft. Closing discards this edit and keeps the existing rule draft.",
+                        ).into(),
+                        language.text("放弃编辑", "Discard edit"),
                         desktop_view::Pending::Rules(Event::CloseEditorConfirmed),
                     );
                 } else {

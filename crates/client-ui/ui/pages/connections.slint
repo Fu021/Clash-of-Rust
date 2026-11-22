@@ -19,16 +19,27 @@ component SortHeading inherits Rectangle {
         // Keep the indicator's geometry stable, including when no sort is active.
         // A path does not depend on fallback-font shaping or empty text metrics.
         Rectangle { width: 16px; horizontal-stretch: 0;
-            Path {
+            if root.active && root.descending: Path {
                 x: 2px; y: (parent.height - self.height) / 2;
                 width: 12px; height: 12px; viewbox-width: 12; viewbox-height: 12;
-                stroke: root.active ? Theme.accent : transparent;
+                stroke: Theme.accent;
                 stroke-width: 1.5px;
-                MoveTo { x: 6; y: root.descending ? 1 : 11; }
-                LineTo { x: 6; y: root.descending ? 11 : 1; }
-                MoveTo { x: 2; y: root.descending ? 7 : 5; }
-                LineTo { x: 6; y: root.descending ? 11 : 1; }
-                LineTo { x: 10; y: root.descending ? 7 : 5; }
+                MoveTo { x: 6; y: 1; }
+                LineTo { x: 6; y: 11; }
+                MoveTo { x: 2; y: 7; }
+                LineTo { x: 6; y: 11; }
+                LineTo { x: 10; y: 7; }
+            }
+            if root.active && !root.descending: Path {
+                x: 2px; y: (parent.height - self.height) / 2;
+                width: 12px; height: 12px; viewbox-width: 12; viewbox-height: 12;
+                stroke: Theme.accent;
+                stroke-width: 1.5px;
+                MoveTo { x: 6; y: 11; }
+                LineTo { x: 6; y: 1; }
+                MoveTo { x: 2; y: 5; }
+                LineTo { x: 6; y: 1; }
+                LineTo { x: 10; y: 5; }
             }
         }
     }
@@ -45,9 +56,9 @@ export component ConnectionsPage inherits PageSurface {
     VerticalLayout {
         spacing: Theme.page-gap;
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-            Field { placeholder: "搜索域名、IP、规则或代理链"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-            Caption { text: UiData.connection-count + " 条活跃连接"; horizontal-stretch: 0; }
-            ActionButton { text: root.summary-open ? "收起汇总" : "流量汇总"; quiet: true;
+            Field { placeholder: @tr("搜索域名、IP、规则或代理链"); focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+            Caption { text: @tr("{} 条活跃连接", UiData.connection-count); horizontal-stretch: 0; }
+            ActionButton { text: root.summary-open ? @tr("收起汇总") : @tr("流量汇总"); quiet: true;
                 geometry-key: "connections-summary-toggle";
                 clicked => { root.summary-open = !root.summary-open; }
             }
@@ -69,10 +80,10 @@ export component ConnectionsPage inherits PageSurface {
                     GeometryTarget { key: "connection-header"; bounds: [table-header.absolute-position.x, table-header.absolute-position.y, table-header.width, table-header.height]; }
                     Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.line; }
                     HorizontalLayout { cross-axis-alignment: center; padding-left: 12px; padding-right: 12px; spacing: 12px;
-                        VerticalLayout { width: root.host-column; SortHeading { label: "主机"; field: "name"; active: root.sort-field == "name"; descending: root.sort-descending; } SortHeading { label: "时间"; field: "start"; active: root.sort-field == "start"; descending: root.sort-descending; } }
-                        VerticalLayout { width: root.rule-column; SortHeading { label: "代理链"; field: "chain"; active: root.sort-field == "chain"; descending: root.sort-descending; } SortHeading { label: "匹配规则"; field: "rule"; active: root.sort-field == "rule"; descending: root.sort-descending; } }
-                        VerticalLayout { width: root.speed-column; SortHeading { label: "下载"; field: "download-rate"; active: root.sort-field == "download-rate"; descending: root.sort-descending; } SortHeading { label: "累计"; field: "download-total"; active: root.sort-field == "download-total"; descending: root.sort-descending; } }
-                        VerticalLayout { width: root.speed-column; SortHeading { label: "上传"; field: "upload-rate"; active: root.sort-field == "upload-rate"; descending: root.sort-descending; } SortHeading { label: "累计"; field: "upload-total"; active: root.sort-field == "upload-total"; descending: root.sort-descending; } }
+                        VerticalLayout { width: root.host-column; SortHeading { label: @tr("主机"); field: "name"; active: root.sort-field == "name"; descending: root.sort-descending; } SortHeading { label: @tr("时间"); field: "start"; active: root.sort-field == "start"; descending: root.sort-descending; } }
+                        VerticalLayout { width: root.rule-column; SortHeading { label: @tr("代理链"); field: "chain"; active: root.sort-field == "chain"; descending: root.sort-descending; } SortHeading { label: @tr("匹配规则"); field: "rule"; active: root.sort-field == "rule"; descending: root.sort-descending; } }
+                        VerticalLayout { width: root.speed-column; SortHeading { label: @tr("下载"); field: "download-rate"; active: root.sort-field == "download-rate"; descending: root.sort-descending; } SortHeading { label: @tr("累计"); field: "download-total"; active: root.sort-field == "download-total"; descending: root.sort-descending; } }
+                        VerticalLayout { width: root.speed-column; SortHeading { label: @tr("上传"); field: "upload-rate"; active: root.sort-field == "upload-rate"; descending: root.sort-descending; } SortHeading { label: @tr("累计"); field: "upload-total"; active: root.sort-field == "upload-total"; descending: root.sort-descending; } }
                         Rectangle { width: 72px; }
                     }
                 }
@@ -89,7 +100,7 @@ export component ConnectionsPage inherits PageSurface {
                             VerticalLayout { width: root.rule-column; spacing: 4px; Caption { text: connection.route; } Caption { text: connection.rule; color: Theme.muted; } }
                             VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.down; font-size: Theme.detail-size; } Caption { text: connection.download; color: Theme.muted; } }
                             VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.up; font-size: Theme.detail-size; } Caption { text: connection.upload; color: Theme.muted; } }
-                            ActionButton { width: 72px; text: "关闭"; compact: true; quiet: true; danger: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-connection, connection.id, ""); } }
+                            ActionButton { width: 72px; text: @tr("关闭"); compact: true; quiet: true; danger: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-connection, connection.id, ""); } }
                         }
                     }
                 }
@@ -97,8 +108,8 @@ export component ConnectionsPage inherits PageSurface {
         }
         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
             Caption { text: UiData.page-status; }
-            ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-            ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+            ActionButton { text: @tr("上一页"); enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+            ActionButton { text: @tr("下一页"); enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
         }
     }
     property <length> row-height: max(52px, Theme.body-size * 2.4 + 14px);

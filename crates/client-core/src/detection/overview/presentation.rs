@@ -1,5 +1,5 @@
 use super::{Health, Status, TARGETS};
-use crate::ip_check;
+use crate::{config::Language, ip_check};
 use std::net::IpAddr;
 
 pub type Probe<T> = Option<Result<T, String>>;
@@ -51,6 +51,17 @@ fn item(id: &str, title: &str, value: &str, detail: &str, tone: i32) -> Item {
         detail: detail.into(),
         tone,
         ..Default::default()
+    }
+}
+
+fn probe_error(error: &str, language: Language) -> &str {
+    match error {
+        "超时" => language.text("超时", "Timed out"),
+        "无法连接" => language.text("无法连接", "Connection failed"),
+        "请求失败" => language.text("请求失败", "Request failed"),
+        "未返回地址" => language.text("未返回地址", "No address returned"),
+        "检测任务中断" => language.text("检测任务中断", "Check interrupted"),
+        _ => error,
     }
 }
 
@@ -117,15 +128,40 @@ impl View<'_> {
     }
 
     pub fn present(&self) -> Presentation {
-        let waiting = if self.busy { "检测中…" } else { "—" };
+        self.present_in(Language::SimplifiedChinese)
+    }
+
+    pub fn present_in(&self, language: Language) -> Presentation {
+        let waiting = if self.busy {
+            language.text("检测中…", "Checking…")
+        } else {
+            "—"
+        };
+        let lan_title = language.text("内网 IP", "Local IP");
+        let dns_title = language.text("DNS 服务器", "DNS servers");
+        let exit_title = language.text("出口 IP", "Exit IP");
+        let lookup_title = language.text("DNS 解析", "DNS lookup");
+        let start_core = language.text("启动内核后检测", "Start the core to check");
         let (lan, dns_servers) = match self.host {
             None => (
-                item("lan", "内网 IP", waiting, "", 4),
-                item("dns", "DNS 服务器", waiting, "", 4),
+                item("lan", lan_title, waiting, "", 4),
+                item("dns", dns_title, waiting, "", 4),
             ),
             Some(Err(error)) => (
-                item("lan", "内网 IP", "读取失败", error, 3),
-                item("dns", "DNS 服务器", "读取失败", error, 3),
+                item(
+                    "lan",
+                    lan_title,
+                    language.text("读取失败", "Read failed"),
+                    probe_error(error, language),
+                    3,
+                ),
+                item(
+                    "dns",
+                    dns_title,
+                    language.text("读取失败", "Read failed"),
+                    probe_error(error, language),
+                    3,
+                ),
             ),
             Some(Ok(info)) => {
                 let family = match (
@@ -133,17 +169,29 @@ impl View<'_> {
                     info.addresses.iter().any(IpAddr::is_ipv6),
                 ) {
                     (true, true) => "IPv4 + IPv6",
-                    (true, false) => "仅 IPv4",
-                    (false, true) => "仅 IPv6",
+                    (true, false) => language.text("仅 IPv4", "IPv4 only"),
+                    (false, true) => language.text("仅 IPv6", "IPv6 only"),
                     (false, false) => "",
                 };
-                let mut lan = item("lan", "内网 IP", "未检测到", family, 2);
+                let mut lan = item(
+                    "lan",
+                    lan_title,
+                    language.text("未检测到", "Not detected"),
+                    family,
+                    2,
+                );
                 if !info.addresses.is_empty() {
                     lan.value = self.addresses(&info.addresses);
                     lan.tone = 0;
                     lan.fogged = self.hidden;
                 }
-                let mut dns = item("dns", "DNS 服务器", "未读取到", "系统解析器配置", 2);
+                let mut dns = item(
+                    "dns",
+                    dns_title,
+                    language.text("未读取到", "Not found"),
+                    language.text("系统解析器配置", "System resolver configuration"),
+                    2,
+                );
                 if !info.dns.is_empty() {
                     dns.value = self.addresses(&info.dns);
                     dns.tone = 0;
@@ -153,15 +201,30 @@ impl View<'_> {
             }
         };
         let exit = match self.exit {
-            _ if !self.running => item("exit", "出口 IP", "—", "启动内核后检测", 4),
-            None => item("exit", "出口 IP", waiting, "", 4),
-            Some(Err(error)) => item("exit", "出口 IP", "检测失败", error, 3),
+            _ if !self.running => item("exit", exit_title, "—", start_core, 4),
+            None => item("exit", exit_title, waiting, "", 4),
+            Some(Err(error)) => item(
+                "exit",
+                exit_title,
+                language.text("检测失败", "Check failed"),
+                probe_error(error, language),
+                3,
+            ),
             Some(Ok(result)) => match result.summary.parse::<IpAddr>() {
-                Err(_) => item("exit", "出口 IP", "未确认", &result.summary, 2),
+                Err(_) => item(
+                    "exit",
+                    exit_title,
+                    language.text("未确认", "Unconfirmed"),
+                    &result.summary,
+                    2,
+                ),
                 Ok(address) => {
-                    let country = crate::countries::country_text(&result.country);
+                    let country = crate::countries::localized_name(
+                        crate::countries::country_text(&result.country),
+                        language,
+                    );
                     let flag = crate::countries::flag_emoji(&result.country);
-                    let mut entry = item("exit", "出口 IP", &self.address(address), country, 1)
+                    let mut entry = item("exit", exit_title, &self.address(address), &country, 1)
                         .with_delay(result.millis);
                     entry.flag = flag.unwrap_or_default();
                     entry.fogged = self.hidden;
@@ -170,9 +233,15 @@ impl View<'_> {
             },
         };
         let lookup = match self.dns {
-            _ if !self.running => item("lookup", "DNS 解析", "—", "启动内核后检测", 4),
-            None => item("lookup", "DNS 解析", waiting, "", 4),
-            Some(Err(error)) => item("lookup", "DNS 解析", "解析失败", error, 3),
+            _ if !self.running => item("lookup", lookup_title, "—", start_core, 4),
+            None => item("lookup", lookup_title, waiting, "", 4),
+            Some(Err(error)) => item(
+                "lookup",
+                lookup_title,
+                language.text("解析失败", "Lookup failed"),
+                probe_error(error, language),
+                3,
+            ),
             Some(Ok((addresses, millis))) => {
                 let first = addresses.first().map_or("", String::as_str);
                 let fake = first.starts_with("198.18.") || first.starts_with("198.19.");
@@ -180,7 +249,7 @@ impl View<'_> {
                 let address = parsed.map_or_else(|| first.to_owned(), |ip| self.address(ip));
                 let mut entry = item(
                     "lookup",
-                    "DNS 解析",
+                    lookup_title,
                     &format!("github.com → {address}"),
                     if fake { "Fake-IP" } else { "" },
                     1,
@@ -197,9 +266,21 @@ impl View<'_> {
             .map(|(index, target)| {
                 let result = self.services.get(index).and_then(Option::as_ref);
                 match result {
-                    _ if !self.running => item(target.id, target.name, "未检测", "内核未运行", 4),
+                    _ if !self.running => item(
+                        target.id,
+                        target.name,
+                        language.text("未检测", "Not checked"),
+                        language.text("内核未运行", "Core stopped"),
+                        4,
+                    ),
                     None => item(target.id, target.name, waiting, "", 4),
-                    Some(Err(error)) => item(target.id, target.name, error, "未获得响应", 3),
+                    Some(Err(error)) => item(
+                        target.id,
+                        target.name,
+                        probe_error(error, language),
+                        language.text("未获得响应", "No response"),
+                        3,
+                    ),
                     Some(Ok(status)) => {
                         let detail = format!("HTTP {}", status.status);
                         match status.health {
@@ -210,7 +291,7 @@ impl View<'_> {
                                     target.name,
                                     &format!("{} ms", status.millis),
                                     &if status.health == Health::Reachable {
-                                        format!("{detail} · 可达")
+                                        format!("{detail} · {}", language.text("可达", "Reachable"))
                                     } else {
                                         detail
                                     },
@@ -218,22 +299,38 @@ impl View<'_> {
                                 )
                                 .with_delay(status.millis)
                             }
-                            Health::Error => item(target.id, target.name, "服务异常", &detail, 3),
+                            Health::Error => item(
+                                target.id,
+                                target.name,
+                                language.text("服务异常", "Service error"),
+                                &detail,
+                                3,
+                            ),
                         }
                     }
                 }
             })
             .collect();
         let status = if self.busy {
-            "检测中…".to_owned()
+            language.text("检测中…", "Checking…").to_owned()
         } else if !self.running {
-            "内核未运行，仅显示本机信息".to_owned()
+            language
+                .text(
+                    "内核未运行，仅显示本机信息",
+                    "Core stopped; showing local information",
+                )
+                .to_owned()
         } else if self.dirty {
-            "等待重新检测".to_owned()
+            language
+                .text("等待重新检测", "Waiting to recheck")
+                .to_owned()
         } else if !self.measured {
             String::new()
         } else {
-            format!("可访问 {reachable} / {}", TARGETS.len())
+            match language {
+                Language::SimplifiedChinese => format!("可访问 {reachable} / {}", TARGETS.len()),
+                Language::English => format!("Reachable {reachable} / {}", TARGETS.len()),
+            }
         };
         Presentation {
             network: vec![lan, exit, dns_servers, lookup],
@@ -291,6 +388,48 @@ mod tests {
         assert!(report.services[1].detail.contains("可达"));
         assert_eq!(report.services[2].tone, 3);
         assert!(report.services[2].delay.is_empty());
+    }
+
+    #[test]
+    fn english_overview_translates_display_without_rewriting_external_values() {
+        let host = Some(Ok(HostInfo {
+            addresses: vec!["192.0.2.12".parse().unwrap()],
+            dns: vec![],
+        }));
+        let exit = Some(Ok(ip_check::CheckResult {
+            state: ip_check::State::Identified,
+            summary: "198.51.100.7".into(),
+            country: "🇩🇪 德国".into(),
+            millis: 42,
+            detail: String::new(),
+            target_exit: None,
+        }));
+        let services = [
+            Some(Err("超时".into())),
+            Some(Err("custom evidence".into())),
+        ];
+        let view = View {
+            running: true,
+            busy: false,
+            dirty: false,
+            measured: true,
+            hidden: false,
+            host: &host,
+            dns: &None,
+            exit: &exit,
+            services: &services,
+        };
+        let english = view.present_in(Language::English);
+        let chinese = view.present();
+        assert_eq!(english.network[0].id, chinese.network[0].id);
+        assert_eq!(english.network[0].title, "Local IP");
+        assert_eq!(english.network[0].value, "192.0.2.12");
+        assert_eq!(english.network[1].detail, "Germany");
+        assert_eq!(english.network[1].flag, chinese.network[1].flag);
+        assert_eq!(english.services[0].value, "Timed out");
+        assert_eq!(english.services[1].value, "custom evidence");
+        assert_eq!(english.status, "Reachable 0 / 8");
+        assert_eq!(chinese.services[0].value, "超时");
     }
 
     #[test]

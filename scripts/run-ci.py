@@ -74,12 +74,22 @@ def main():
                      case, '--', '--test-threads=1', '--show-output'])
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for case in ('application::ui_tests::network_report_is_replaced_and_late_results_cannot_reappear_after_navigation',
+                     'application::ui_tests::english_network_report_displays_translated_status_and_preserves_raw_evidence',
                      'application::ui_tests::network_tools_remain_reachable_after_scrolling_other_pages',
                      'application::ui_tests::remounted_subscription_list_clamps_a_stale_scroll_position',
                      'application::ui_tests::remounted_long_pages_preserve_valid_scroll_positions',
                      'application::ui_tests::window_controls_remain_available_during_subscription_and_proxy_updates',
                      'application::ui_tests::ip_report_shows_each_target_exit_and_its_measurement_state',
+                     'application::ui_tests::ip_category_status_and_region_popups_drive_report_filters',
+                     'application::ui_tests::desktop_language_menu_dispatches_stable_tags_in_both_catalogs',
+                     'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
+                     'application::ui_tests::english_desktop_validation_and_errors_follow_language',
+                     'application::ui_tests::profile_edit_closes_on_success_independently_of_presentation_language',
+                     'application::ui_tests::english_desktop_dialogs_show_edit_validation_and_protection_effects',
+                     'application::interaction::tests::english_delete_confirmation_keeps_the_active_subscription_and_network_consequences',
+                     'application::interaction::tests::english_diagnostics_feedback_preserves_paths_and_failure_details',
                      'application::ui_tests::claude_report_rows_keep_titles_and_labeled_explanations',
+                     'application::ui_tests::english_claude_report_keeps_original_keys_and_evidence',
                      'application::ui_tests::claude_route_section_keeps_each_domain_and_failure',
                      'application::ui_tests::claude_guard_block_keeps_status_and_interceptions_together',
                      'application::ui_tests::claude_summary_keeps_quality_disagreements_visible_with_many_risks',
@@ -118,7 +128,8 @@ def main():
                 ('clash-desktop-protocol', ['--test', 'schema'], ['']),
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),
-                ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::']),
+                ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::',
+                                               'output::tests::english_network_report_translates_known_evidence_without_rewriting_external_values']),
                 ('clash-client-runtime', ['--lib'],
                  ['control::dispatch::tests::', 'control::transport::tests::']
                  + ([] if linux_user_tests() else ['control::tests::']))):

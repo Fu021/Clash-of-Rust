@@ -1,4 +1,5 @@
 use super::model::{Page, State};
+use clash_client_core::config::Language;
 use unicode_width::UnicodeWidthStr;
 
 mod footer;
@@ -129,10 +130,10 @@ pub(super) fn list(
     lines
 }
 
-fn navigation(page: Page) -> [String; 2] {
+fn navigation(state: &State) -> [String; 2] {
     let items = Page::ALL.map(|target| {
         let number = Page::ALL.iter().position(|page| *page == target).unwrap() + 1;
-        (target, format!("{number} {}", target.title()))
+        (target, format!("{number} {}", target.title(state.language)))
     });
     let mut rows = [String::new(), String::new()];
     for (row, items) in rows.iter_mut().zip(items.chunks(4)) {
@@ -141,9 +142,9 @@ fn navigation(page: Page) -> [String; 2] {
             if index > 0 {
                 row.push_str("     ");
             }
-            row.push(if page == *target { '[' } else { ' ' });
+            row.push(if state.page == *target { '[' } else { ' ' });
             row.push_str(label);
-            row.push(if page == *target { ']' } else { ' ' });
+            row.push(if state.page == *target { ']' } else { ' ' });
         }
     }
     rows
@@ -162,10 +163,14 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     };
     let spacious = columns >= 80 && rows >= 24;
     let page = match state.page {
-        Page::Connections if state.connection.is_some() => "连接详情",
-        Page::Settings if state.fake_ip.is_some() => "Fake-IP 排除项",
-        Page::Rules if state.shortcuts_open => "快捷规则",
-        page => page.title(),
+        Page::Connections if state.connection.is_some() => {
+            state.language.text("连接详情", "Connection details")
+        }
+        Page::Settings if state.fake_ip.is_some() => {
+            state.language.text("Fake-IP 排除项", "Fake-IP exclusions")
+        }
+        Page::Rules if state.shortcuts_open => state.language.text("快捷规则", "Rule shortcuts"),
+        page => page.title(state.language),
     };
     if height <= 2 {
         let (text, tone) = focus_line(state, width);
@@ -175,13 +180,13 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
         }
         return lines;
     }
-    let navigation = navigation(state.page);
+    let navigation = navigation(state);
     let expanded_navigation = rows >= 24 && navigation.iter().all(|row| row.width() <= width);
     if expanded_navigation {
         let status = if state.demo {
-            "演示 · 不连接后台"
+            state.language.text("演示 · 不连接后台", "Demo · Offline")
         } else {
-            "本机控制台"
+            state.language.text("本机控制台", "Local console")
         };
         let title = format!("  CLASH OF RUST   /   TERMINAL   {status}");
         lines.push(line(
@@ -206,7 +211,13 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
             Tone::Accent,
         ));
         if height >= 10 {
-            lines.push(line("1–8 切页 · Tab 下一页".into(), Tone::Muted));
+            lines.push(line(
+                state
+                    .language
+                    .text("1–8 切页 · Tab 下一页", "1–8 Switch page · Tab Next")
+                    .into(),
+                Tone::Muted,
+            ));
         }
     }
     let footer = footer::lines(state, width, height, lines.len(), spacious);
@@ -217,7 +228,14 @@ pub(super) fn frame(state: &State, columns: usize, rows: usize) -> Vec<Line> {
     } else if state.form.is_some() {
         super::panels::editor(state, content_width(columns, rows), body_height)
     } else if state.searching && body_height <= 2 {
-        vec![(format!("输入中：{} ▏", state.query), Tone::Selected)]
+        vec![(
+            format!(
+                "{}{} ▏",
+                state.language.text("输入中：", "Typing: "),
+                state.query
+            ),
+            Tone::Selected,
+        )]
     } else if state.connection.is_some() {
         super::panels::connection(state, content_width(columns, rows), body_height)
     } else {
@@ -271,7 +289,14 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
     } else if state.form.is_some() {
         super::panels::editor(state, width, 1)
     } else if state.searching {
-        vec![(format!("输入中：{} ▏", state.query), Tone::Selected)]
+        vec![(
+            format!(
+                "{}{} ▏",
+                state.language.text("输入中：", "Typing: "),
+                state.query
+            ),
+            Tone::Selected,
+        )]
     } else if state.connection.is_some() {
         super::panels::connection(state, width, 1)
     } else {
@@ -291,7 +316,10 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
                     .unwrap_or_else(|| {
                         format!(
                             "{} · {}",
-                            clash_client_core::network_tools::Tool::ALL[state.network_tool].title(),
+                            super::network::title(
+                                clash_client_core::network_tools::Tool::ALL[state.network_tool],
+                                state.language
+                            ),
                             state.query
                         )
                     }),
@@ -299,10 +327,12 @@ fn focus_line(state: &State, width: usize) -> (String, Tone) {
             )],
         }
     };
-    content
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| ("没有匹配项".into(), Tone::Muted))
+    content.into_iter().next().unwrap_or_else(|| {
+        (
+            state.language.text("没有匹配项", "No matches").into(),
+            Tone::Muted,
+        )
+    })
 }
 
 fn notice(state: &State) -> (String, Tone) {
@@ -315,46 +345,61 @@ fn notice(state: &State) -> (String, Tone) {
                 .iter()
                 .position(|field| !field.locked)
                 .unwrap_or(0);
-            return (
-                format!(
-                    "保存{}为「{}」？Enter 确认 · Esc 取消{}",
-                    super::settings::title(key),
-                    form.visible_value(field),
-                    if super::settings::inline(operation) {
-                        ""
-                    } else {
-                        "；普通终端完成授权"
-                    }
-                ),
-                Tone::Warning,
-            );
+            let title = super::settings::title(key, state.language);
+            let value = form.visible_value(field);
+            let authorization = if super::settings::inline(operation) {
+                ""
+            } else {
+                state
+                    .language
+                    .text("；普通终端完成授权", " · Authorize in the terminal")
+            };
+            let text = match state.language {
+                Language::SimplifiedChinese => {
+                    format!("保存{title}为「{value}」？Enter 确认 · Esc 取消{authorization}")
+                }
+                Language::English => {
+                    format!("Save {title} as {value}? Enter confirm · Esc cancel{authorization}")
+                }
+            };
+            return (text, Tone::Warning);
         }
-        (
-            format!(
+        let text = match state.language {
+            Language::SimplifiedChinese => format!(
                 "执行 cor {}？Enter 确认 · Esc 取消；授权和结果将在普通终端显示",
                 operation.path
             ),
-            Tone::Warning,
-        )
+            Language::English => format!(
+                "Run cor {}? Enter confirm · Esc cancel; authorization and results appear in the terminal",
+                operation.path
+            ),
+        };
+        (text, Tone::Warning)
     } else if let Some(message) = state.message.as_ref().filter(|_| state.form.is_some()) {
         (message.clone(), Tone::Warning)
     } else if let Some(error) = &state.error {
-        (
-            format!("读取失败（旧数据仅供参考）：{error}"),
-            Tone::Warning,
-        )
+        let prefix = state.language.text(
+            "读取失败（旧数据仅供参考）：",
+            "Read failed (previous data shown for reference): ",
+        );
+        (format!("{prefix}{error}"), Tone::Warning)
     } else if let Some((_, description)) = state
         .rules
         .as_ref()
         .and_then(|rules| rules.pending.as_ref())
     {
         (
-            format!("{description}？Enter 确认 · Esc 取消"),
+            format!(
+                "{description}{}",
+                state
+                    .language
+                    .text("？Enter 确认 · Esc 取消", "? Enter confirm · Esc cancel")
+            ),
             Tone::Warning,
         )
     } else if let Some(available) = &state.updates.pending {
-        (
-            format!(
+        let text = match state.language {
+            Language::SimplifiedChinese => format!(
                 "{}安装{} {}？继续后在普通终端确认与授权。",
                 if available.preview {
                     clash_client_core::update::channel::PRERELEASE_WARNING
@@ -368,26 +413,48 @@ fn notice(state: &State) -> (String, Tone) {
                 },
                 available.version,
             ),
-            Tone::Warning,
-        )
+            Language::English => format!(
+                "{}Install {} {}? Confirm and authorize in the terminal.",
+                if available.preview {
+                    "Pre-releases may cause crashes, network problems or configuration incompatibilities. Back up your configuration before installing. "
+                } else {
+                    ""
+                },
+                if available.preview {
+                    "pre-release"
+                } else {
+                    "release"
+                },
+                available.version,
+            ),
+        };
+        (text, Tone::Warning)
     } else if let Some(target) = &state.confirmation {
-        (
-            format!(
+        let text = match state.language {
+            Language::SimplifiedChinese => format!(
                 "切换 {} → {}？ Enter 确认 · Esc 取消",
                 target.group, target.node
             ),
-            Tone::Warning,
-        )
+            Language::English => format!(
+                "Switch {} → {}? Enter confirm · Esc cancel",
+                target.group, target.node
+            ),
+        };
+        (text, Tone::Warning)
     } else if state.saving {
         (
             if state.form.as_ref().and_then(|form| form.network)
                 == Some(super::network::Editor::Export)
             {
-                "正在导出本次结果…"
+                state
+                    .language
+                    .text("正在导出本次结果…", "Exporting results…")
             } else if state.page == Page::Network {
-                "正在检查… Esc 取消"
+                state
+                    .language
+                    .text("正在检查… Esc 取消", "Checking… Esc cancel")
             } else {
-                "正在保存操作…"
+                state.language.text("正在保存操作…", "Saving…")
             }
             .into(),
             Tone::Accent,
@@ -396,7 +463,13 @@ fn notice(state: &State) -> (String, Tone) {
         (message.clone(), Tone::Warning)
     } else {
         (
-            "退出界面保留后台和代理；按 1–8 或 Tab 切换页面".into(),
+            state
+                .language
+                .text(
+                    "退出界面保留后台和代理；按 1–8 或 Tab 切换页面",
+                    "Quitting keeps the background and proxy running; use 1–8 or Tab to switch pages",
+                )
+                .into(),
             Tone::Muted,
         )
     }
@@ -407,7 +480,7 @@ fn network(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let mut lines = vec![(
         format!(
             "{}  {}/{}",
-            tool.title(),
+            super::network::title(tool, state.language),
             state.network_tool + 1,
             clash_client_core::network_tools::Tool::ALL.len()
         ),
@@ -416,12 +489,14 @@ fn network(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     if tool.needs_target() {
         lines.push((
             format!(
-                "目标{}：{}",
+                "{}{}{}{}",
+                state.language.text("目标", "Target"),
                 if state.searching {
-                    "（输入中）"
+                    state.language.text("（输入中）", " (editing)")
                 } else {
                     ""
                 },
+                state.language.text("：", ": "),
                 state.query
             ),
             Tone::Plain,
@@ -430,12 +505,17 @@ fn network(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     lines.extend([
         (
             format!(
-                "参数：{}",
-                super::network::summary(tool, &state.network_options)
+                "{}{}{}",
+                state.language.text("参数", "Parameters"),
+                state.language.text("：", ": "),
+                super::network::summary(tool, &state.network_options, state.language)
             ),
             Tone::Muted,
         ),
-        (tool.hint().into(), Tone::Muted),
+        (
+            super::network::hint(tool, state.language).into(),
+            Tone::Muted,
+        ),
         (String::new(), Tone::Plain),
     ]);
     let mut lines = lines
@@ -454,41 +534,66 @@ fn network(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     lines
 }
 
-fn disconnected(width: usize, height: usize) -> Vec<(String, Tone)> {
-    wrap("尚未连接后台；按 1 回首页启动后台与内核。", width)
-        .into_iter()
-        .take(height)
-        .map(|text| (text, Tone::Warning))
-        .collect()
+fn disconnected(width: usize, height: usize, language: Language) -> Vec<(String, Tone)> {
+    wrap(
+        language.text(
+            "尚未连接后台；按 1 回首页启动后台与内核。",
+            "Backend disconnected; press 1 to start the background and core from Home.",
+        ),
+        width,
+    )
+    .into_iter()
+    .take(height)
+    .map(|text| (text, Tone::Warning))
+    .collect()
 }
 
 fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(String, Tone)> {
     let items = state.items();
     let Some(poll) = &state.poll else {
-        return disconnected(width, height);
+        return disconnected(width, height, state.language);
     };
     let proxies = &poll.snapshot.proxies.proxies;
+    let language = state.language;
+    let group = state
+        .group
+        .as_deref()
+        .unwrap_or(language.text("策略组", "Group"));
+    let sort = match poll.meta.settings.tui_node_sort {
+        clash_client_core::proxy_order::NodeSort::LatencyAscending => {
+            language.text("延迟从低到高", "Lowest latency first")
+        }
+        clash_client_core::proxy_order::NodeSort::LatencyDescending => {
+            language.text("延迟从高到低", "Highest latency first")
+        }
+        clash_client_core::proxy_order::NodeSort::Name => language.text("名称排序", "Name"),
+    };
+    let item_count = items.len();
     let mut rows = vec![
         (
-            format!(
-                "{}   ·   {} 项",
-                state.group.as_deref().unwrap_or("策略组"),
-                items.len()
-            ),
+            match language {
+                Language::SimplifiedChinese => format!("{group}   ·   {item_count} 项"),
+                Language::English => format!("{group}   ·   {item_count} items"),
+            },
             Tone::Plain,
         ),
         (
-            format!("[s 切换排序] 排序：{}", poll.meta.settings.tui_node_sort),
+            match language {
+                Language::SimplifiedChinese => format!("[s 切换排序] 排序：{sort}"),
+                Language::English => format!("[s change sort] Sort: {sort}"),
+            },
             Tone::Muted,
         ),
         (
             format!(
-                "搜索{}：{}",
+                "{}{}{}{}",
+                language.text("搜索", "Search"),
                 if state.searching {
-                    "（输入中）"
+                    language.text("（输入中）", " (editing)")
                 } else {
                     " /"
                 },
+                language.text("：", ": "),
                 state.query
             ),
             Tone::Muted,
@@ -502,7 +607,10 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
         .is_some_and(|group| group.kind.as_str() != "Selector")
     {
         rows[3] = (
-            "自动组 · 内核自行选择最优节点；在上一级手动组选择 AUTO 或具体节点".into(),
+            language.text(
+                "自动组 · 内核自行选择最优节点；在上一级手动组选择 AUTO 或具体节点",
+                "Automatic group · The core selects a node; choose AUTO or a node in the parent manual group",
+            ).into(),
             Tone::Muted,
         );
     }
@@ -512,7 +620,10 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
     if items.is_empty() {
         return list(
             rows,
-            std::iter::once(("没有匹配项".into(), Tone::Muted)),
+            std::iter::once((
+                language.text("没有匹配项", "No matches").into(),
+                Tone::Muted,
+            )),
             0,
             width,
             height,
@@ -528,17 +639,20 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
                         .delay
                         .map(|delay| {
                             if delay == 0 {
-                                "超时".into()
+                                language.text("超时", "Timed out").into()
                             } else {
                                 format!("{delay} ms")
                             }
                         })
-                        .unwrap_or_else(|| "未测速".into())
+                        .unwrap_or_else(|| language.text("未测速", "Not tested").into())
                 } else {
-                    format!("{} 项", proxy.all.len())
+                    match language {
+                        Language::SimplifiedChinese => format!("{} 项", proxy.all.len()),
+                        Language::English => format!("{} members", proxy.all.len()),
+                    }
                 }
             })
-            .unwrap_or_else(|| "未测速".into());
+            .unwrap_or_else(|| language.text("未测速", "Not tested").into());
         let current = state
             .group
             .as_deref()
@@ -550,7 +664,11 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
                 format!(
                     "{} {name} · {info}{}",
                     if selected { "›" } else { " " },
-                    if current { " · 使用中" } else { "" }
+                    if current {
+                        language.text(" · 使用中", " · Current")
+                    } else {
+                        ""
+                    }
                 )
             } else {
                 format!(
@@ -558,7 +676,11 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
                     if selected { "›" } else { " " },
                     fit(name, name_width),
                     fit(&info, 8),
-                    if current { "使用中" } else { "" }
+                    if current {
+                        language.text("使用中", "Current")
+                    } else {
+                        ""
+                    }
                 )
             },
             if selected {
@@ -575,26 +697,36 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
 
 fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let Some(poll) = &state.poll else {
-        return disconnected(width, height);
+        return disconnected(width, height, state.language);
     };
     let items = state.items();
+    let language = state.language;
     let header = vec![
         (
-            format!(
-                "活跃连接 {}   ·   匹配 {} 项",
-                poll.snapshot.connection_count,
-                items.len()
-            ),
+            match language {
+                Language::SimplifiedChinese => format!(
+                    "活跃连接 {}   ·   匹配 {} 项",
+                    poll.snapshot.connection_count,
+                    items.len()
+                ),
+                Language::English => format!(
+                    "Active connections {}   ·   {} matches",
+                    poll.snapshot.connection_count,
+                    items.len()
+                ),
+            },
             Tone::Plain,
         ),
         (
             format!(
-                "搜索{}：{}",
+                "{}{}{}{}",
+                language.text("搜索", "Search"),
                 if state.searching {
-                    "（输入中）"
+                    language.text("（输入中）", " (editing)")
                 } else {
                     " /"
                 },
+                language.text("：", ": "),
                 state.query
             ),
             Tone::Muted,
@@ -609,7 +741,11 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
             .find(|connection| connection.id.as_ref() == *id)
             .unwrap();
         let name = clash_client_core::connection::name(connection);
-        let name = if name.is_empty() { "未提供" } else { name };
+        let name = if name.is_empty() {
+            language.text("未提供", "Not provided")
+        } else {
+            name
+        };
         (
             if width < 50 {
                 format!("{} {name}", if index == state.selected { "›" } else { " " })
@@ -642,7 +778,8 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
             (String::new(), Tone::Plain),
             (
                 format!(
-                    "规则  {}  {}",
+                    "{}  {}  {}",
+                    language.text("规则", "Rule"),
                     connection.rule.as_str(),
                     connection.rule_payload.as_str()
                 ),
@@ -650,7 +787,8 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
             ),
             (
                 format!(
-                    "线路  {}",
+                    "{}  {}",
+                    language.text("线路", "Route"),
                     connection
                         .chains
                         .iter()

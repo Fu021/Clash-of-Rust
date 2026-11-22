@@ -21,9 +21,9 @@ final class ApplicationOwners implements ConnectionOwner {
         return Build.VERSION.SDK_INT >= 29;
     }
 
-    static JSONObject capability() throws Exception {
+    static JSONObject capability(Context context) throws Exception {
         return new JSONObject().put("supported", supported())
-            .put("reason", supported() ? "" : "按应用指定出口需要 Android 10 或更新版本；当前仍可使用全部、仅选中和排除模式。");
+            .put("reason", supported() ? "" : AppLanguage.current(context).getString(R.string.applications_capability));
     }
 
     static void install(Context context) {

@@ -29,27 +29,40 @@ final class ApplicationRouting {
     }
 
     static ApplicationRouting load(Context context) {
-        return load(context.getSharedPreferences("vpn", Context.MODE_PRIVATE));
+        try {
+            return load(context.getSharedPreferences("vpn", Context.MODE_PRIVATE));
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException(AppLanguage.current(context).getString(R.string.applications_invalid_mode), error);
+        }
     }
 
-    String summary() {
-        if (ALL.equals(mode)) return "全部应用";
-        return (ONLY.equals(mode) ? "仅选中 " : "排除 ") + packages.size() + " 个应用";
+    static ApplicationRouting create(Context context, String mode, Set<String> packages) {
+        try {
+            return new ApplicationRouting(mode, packages);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException(AppLanguage.current(context).getString(R.string.applications_invalid_mode), error);
+        }
     }
 
-    void persist(SharedPreferences preferences) throws IOException {
+    String summary(Context context) {
+        Context localized = AppLanguage.current(context);
+        if (ALL.equals(mode)) return localized.getString(R.string.applications_all);
+        return localized.getString(ONLY.equals(mode) ? R.string.applications_only : R.string.applications_excluded, packages.size());
+    }
+
+    void persist(Context context, SharedPreferences preferences) throws IOException {
         if (!preferences.edit().putString("application_mode", mode)
                 .putStringSet("selected_apps", packages)
                 .putStringSet("excluded", EXCLUDE.equals(mode) ? packages : Collections.emptySet()).commit())
-            throw new IOException("应用分流保存失败，可返回日志页导出诊断");
+            throw new IOException(AppLanguage.current(context).getString(R.string.applications_save_failed));
     }
 
     void save(Context context) throws Exception {
         if (CoreBridge.protectedMode(context))
-            throw new IllegalStateException("请先关闭 Claude 保护，再修改应用分流");
+            throw new IllegalStateException(AppLanguage.current(context).getString(R.string.applications_guard_routing));
         if (ONLY.equals(mode) && packages.isEmpty())
-            throw new IllegalArgumentException("请至少选择一个应用");
-        persist(context.getSharedPreferences("vpn", Context.MODE_PRIVATE));
+            throw new IllegalArgumentException(AppLanguage.current(context).getString(R.string.applications_select_one));
+        persist(context, context.getSharedPreferences("vpn", Context.MODE_PRIVATE));
     }
 
     static ApplicationRouting effective(ApplicationRouting saved, boolean protectedMode) {
@@ -72,8 +85,8 @@ final class ApplicationRouting {
             }
         }
         if (!valid.equals(saved.packages))
-            new ApplicationRouting(saved.mode, valid).persist(context.getSharedPreferences("vpn", Context.MODE_PRIVATE));
+            new ApplicationRouting(saved.mode, valid).persist(context, context.getSharedPreferences("vpn", Context.MODE_PRIVATE));
         if (ONLY.equals(routing.mode) && valid.isEmpty())
-            throw new IOException("选中的应用已卸载，请在应用分流中重新选择；本次未接管其他应用");
+            throw new IOException(AppLanguage.current(context).getString(R.string.applications_removed));
     }
 }

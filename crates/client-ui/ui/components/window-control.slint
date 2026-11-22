@@ -8,7 +8,7 @@ export component WindowControl inherits ActionButton {
     compact: true; quiet: true;
     modal-control: true; notice-control: true;
     text: "";
-    accessible-label: root.action == 0 ? "最小化" : root.action == 1 ? (root.restored ? "还原窗口" : "最大化") : "关闭窗口";
+    accessible-label: root.action == 0 ? @tr("最小化") : root.action == 1 ? (root.restored ? @tr("还原窗口") : @tr("最大化")) : @tr("关闭窗口");
     geometry-key: root.action == 0 ? "window-minimize" : root.action == 1 ? "window-maximize" : "window-close";
     Path {
         x: 13px; y: 9px; width: 14px; height: 14px;

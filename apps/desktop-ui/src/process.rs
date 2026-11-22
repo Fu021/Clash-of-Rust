@@ -1,6 +1,8 @@
 //! The renderer owns no Engine, settings writer, notification sender or tray.
 use crate::{activation, apply, apply_if_current, intent, repaint, view_state};
-use clash_client_ui::{AppWindow, Motion, Theme, UiActions, UiData, models::ViewModels};
+use clash_client_ui::{
+    AppWindow, IpStatusText, Motion, Theme, UiActions, UiData, models::ViewModels,
+};
 use clash_desktop_protocol::{self as wire, HostPacket, UiEvent, WindowCommand};
 use slint::{
     ComponentHandle, Model, Timer,
@@ -122,6 +124,7 @@ pub fn run() -> anyhow::Result<()> {
     let HostPacket::Open {
         protocol,
         version,
+        language,
         id: _,
         size,
         visible,
@@ -175,6 +178,17 @@ pub fn run() -> anyhow::Result<()> {
         }
     });
     let window = AppWindow::new()?;
+    slint::select_bundled_translation(if language == "zh-CN" { "" } else { &language })?;
+    let language = if language == "zh-CN" {
+        clash_client_core::config::Language::SimplifiedChinese
+    } else {
+        clash_client_core::config::Language::English
+    };
+    window
+        .global::<IpStatusText>()
+        .on_region_name(move |value| {
+            clash_client_core::countries::localized_name(value.as_str(), language).into()
+        });
     let weak = window.as_weak();
     window.on_minimize_requested(move || {
         if let Some(window) = weak.upgrade() {

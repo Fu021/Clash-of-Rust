@@ -76,8 +76,7 @@ impl Entry<'_> {
         match self {
             Self::Config(_) | Self::Clean(_) => check::REPORT_SECTIONS[4],
             Self::Signal(report, signal)
-                if report.environment == Environment::Desktop
-                    && signal.title == check::guard::REPORT_SECTION =>
+                if report.environment == Environment::Desktop && signal.is_guard() =>
             {
                 check::guard::REPORT_SECTION
             }
@@ -87,32 +86,46 @@ impl Entry<'_> {
         }
     }
 
-    pub(super) fn title_value(&self) -> (String, String) {
+    pub(super) fn title_value(&self, language: Language) -> (String, String) {
         match self {
             Self::Config(finding) => (
                 finding.display_title().to_owned(),
                 if finding.value.trim().is_empty() {
-                    "未提供".into()
+                    language.text("未提供", "Not provided").into()
                 } else {
                     finding.value.clone()
                 },
             ),
-            Self::Clean(_) => ("项目配置".into(), "未发现额外代理或地区覆盖".into()),
+            Self::Clean(_) => (
+                language.text("项目配置", "Project configuration").into(),
+                language
+                    .text(
+                        "未发现额外代理或地区覆盖",
+                        "No extra proxy or region overrides",
+                    )
+                    .into(),
+            ),
             Self::Signal(_, signal) => (
-                signal.display_title().into(),
+                signal.display_title_in(language),
                 if signal.group == Group::Dns
                     && !signal.ip.is_empty()
                     && clash_of_rust::probe::country_name(&signal.country).is_some()
                 {
                     signal.ip.clone()
                 } else {
-                    signal.display_value().into()
+                    signal.display_value_in(language)
                 },
             ),
-            Self::Route(route) | Self::GuardRoute(route) => {
-                (route.display_title().into(), route.display_outcome())
-            }
-            Self::Routes(routes) => ("Claude 域名选路".into(), check::route_group_value(routes)),
+            Self::Route(route) | Self::GuardRoute(route) => (
+                route.display_title_in(language).into(),
+                route.display_outcome_in(language),
+            ),
+            Self::Routes(routes) => (
+                language
+                    .text("Claude 域名选路", "Claude domain routes")
+                    .into(),
+                check::route_group_value_in(routes, language),
+            ),
         }
     }
 }
@@ -134,24 +147,26 @@ impl State {
     pub(crate) fn clear_guard(&mut self) {
         self.guard_status.clear();
         if let Some(report) = &mut self.reports[index(Environment::Desktop)]
-            && let Some(signal) = report
-                .signals
-                .iter_mut()
-                .find(|signal| signal.title == check::guard::REPORT_SECTION)
+            && let Some(signal) = report.signals.iter_mut().find(|signal| signal.is_guard())
         {
             check::guard::mark_report_history(signal);
         }
     }
-    pub(crate) fn guard_report(&mut self, snapshot: &check::guard::Snapshot) {
-        self.guard_status = format!(
-            "{} · 已关闭 {} 条异常连接",
-            if snapshot.connected {
-                "后台实时保护中"
-            } else {
-                "实时保护暂未确认"
-            },
-            snapshot.blocked
-        );
+    pub(crate) fn guard_report(&mut self, snapshot: &check::guard::Snapshot, language: Language) {
+        let status = if snapshot.connected {
+            language.text("后台实时保护中", "Live protection active")
+        } else {
+            language.text("实时保护暂未确认", "Live protection unconfirmed")
+        };
+        self.guard_status = match language {
+            Language::SimplifiedChinese => {
+                format!("{status} · 已关闭 {} 条异常连接", snapshot.blocked)
+            }
+            Language::English => format!(
+                "{status} · {} abnormal connections closed",
+                snapshot.blocked
+            ),
+        };
         let mut report = Report::new(
             Environment::Desktop,
             "Claude 保护的后台监测与拦截记录，按服务域名匹配",
@@ -161,7 +176,7 @@ impl State {
         let current = self.reports[index(Environment::Desktop)]
             .get_or_insert_with(|| Report::new(Environment::Desktop, "本机环境与实时保护"));
         current.routes = report.routes;
-        current.signals.retain(|s| s.title != "实时保护与异常拦截");
+        current.signals.retain(|signal| !signal.is_guard());
         current.signals.extend(report.signals);
     }
     pub(super) fn entries(&self) -> Vec<Entry<'_>> {
@@ -214,12 +229,7 @@ impl State {
             Entry::Signal(r, s) => {
                 if s.risk && s.group != Group::Quality {
                     ResultKind::Risk
-                } else if s.context_only()
-                    || matches!(
-                        s.title.as_str(),
-                        "实时保护与异常拦截" | "Claude 请求实时检测"
-                    )
-                {
+                } else if s.context_only() || s.is_guard_monitor() {
                     ResultKind::Unknown
                 } else if matches!(s.group, Group::Exit | Group::WebRtc | Group::Dns)
                     && self.differs(r, s)
@@ -316,7 +326,7 @@ impl State {
                 previous
                     .signals
                     .iter()
-                    .filter(|s| s.title == "实时保护与异常拦截")
+                    .filter(|signal| signal.is_guard())
                     .cloned(),
             );
             report.routes = std::mem::take(&mut previous.routes);
@@ -324,20 +334,35 @@ impl State {
         let index = index(report.environment);
         self.reports[index] = Some(report);
     }
-    fn sampling_status(&mut self) {
+    fn sampling_status(&mut self, language: Language) {
         if self.error {
             return;
         }
         self.status = if self.audit_busy {
-            "正在扫描 Claude 项目配置…"
+            language.text(
+                "正在扫描 Claude 项目配置…",
+                "Scanning Claude project configuration…",
+            )
         } else if self.local_busy || self.network_busy {
-            "正在检测本机与网络地区线索…"
+            language.text(
+                "正在检测本机与网络地区线索…",
+                "Checking local and network region signals…",
+            )
         } else if self.browser_busy {
-            "浏览器正在自动检测，等待报告回传…"
+            language.text(
+                "浏览器正在自动检测，等待报告回传…",
+                "Browser check running; waiting for its report…",
+            )
         } else if self.reports[index(Environment::Web)].is_some() {
-            "检测完成，配置风险和地区线索已列在下方。"
+            language.text(
+                "检测完成，配置风险和地区线索已列在下方。",
+                "Check complete; results are shown below.",
+            )
         } else {
-            "配置与本机采样完成；浏览器采样尚未完成，可重新检测。"
+            language.text(
+                "配置与本机采样完成；浏览器采样尚未完成，可重新检测。",
+                "Local sampling complete; the browser check can be retried.",
+            )
         }
         .into();
     }
@@ -355,6 +380,7 @@ impl App {
 
     pub(crate) fn claude_event(&mut self, event: Event) -> Task<Message> {
         let wrap = |event| Message::Claude(event);
+        let language = self.presentation_language;
         match event {
             Event::Protection(enabled) => {
                 if self.working || self.exiting || self.claude.busy() {
@@ -387,7 +413,12 @@ impl App {
                 self.claude.close();
                 self.claude.reports = Default::default();
                 self.claude.error = false;
-                self.claude.status = "正在扫描项目配置，并自动打开浏览器检测…".into();
+                self.claude.status = language
+                    .text(
+                        "正在扫描项目配置，并自动打开浏览器检测…",
+                        "Scanning project configuration and opening the browser check…",
+                    )
+                    .into();
                 self.claude.results_page = 0;
                 self.claude.results_filter = None;
                 self.claude.audit = None;
@@ -447,7 +478,12 @@ impl App {
             }
             Event::Cancel => {
                 self.claude.close();
-                self.claude.status = "已停止检测，已获得的报告保留。".into();
+                self.claude.status = language
+                    .text(
+                        "已停止检测，已获得的报告保留。",
+                        "Check stopped; collected reports retained.",
+                    )
+                    .into();
             }
             Event::ResultsPage(page) => self.claude.results_page = page,
             Event::ResultsFilter(filter) => {
@@ -460,19 +496,19 @@ impl App {
                 self.claude.audit_busy = false;
                 self.claude.scan = None;
                 self.claude.audit = Some(audit);
-                self.claude.sampling_status();
+                self.claude.sampling_status(language);
             }
             Event::Local(generation, report) if generation == self.claude.generation => {
                 self.claude.local_busy = false;
                 self.claude.store(report);
-                self.claude.sampling_status();
+                self.claude.sampling_status(language);
             }
             Event::Network(generation, result) if generation == self.claude.generation => {
                 self.claude.network_busy = false;
                 match result {
                     Ok(report) => {
                         self.claude.store(report);
-                        self.claude.sampling_status();
+                        self.claude.sampling_status(language);
                     }
                     Err(error) => {
                         self.fail_claude_check(error);
@@ -515,10 +551,13 @@ impl App {
                     && self.claude.session.is_some() =>
             {
                 match result {
-                    Ok(()) => self.claude.sampling_status(),
+                    Ok(()) => self.claude.sampling_status(language),
                     Err(error) => {
                         self.claude.browser_busy = false;
-                        self.fail_claude_check(format!("无法自动打开浏览器：{error}"));
+                        self.fail_claude_check(format!(
+                            "{}{error}",
+                            language.text("无法自动打开浏览器：", "Could not open the browser: ")
+                        ));
                     }
                 }
             }
@@ -541,10 +580,15 @@ impl App {
                 self.claude.session = None;
                 self.claude.browser_busy = false;
                 self.claude.session_starting = false;
-                self.claude.status = "浏览器回传入口已关闭。".into();
+                self.claude.status = language
+                    .text("浏览器回传入口已关闭。", "Browser report receiver closed.")
+                    .into();
             }
             Event::CopySiteScript => {
-                self.claude.status = "脚本已复制：在 Claude 网页的开发者工具 Console 中运行，再导入脚本复制的 JSON。脚本不读取账号或 Cookie。".into();
+                self.claude.status = language.text(
+                    "脚本已复制：在 Claude 网页的开发者工具 Console 中运行，再导入脚本复制的 JSON。脚本不读取账号或 Cookie。",
+                    "Script copied. Run it in the Claude page's developer console, then import the copied JSON.",
+                ).into();
                 return desktop_runtime::clipboard::write(check::browser::site_script());
             }
             Event::Import => {
@@ -554,18 +598,35 @@ impl App {
             }
             Event::Clipboard(generation, text) if generation == self.claude.generation => {
                 let Some(text) = text.filter(|s| s.len() <= check::REPORT_LIMIT) else {
-                    self.fail_claude_check("剪贴板为空或内容超过 64 KiB；请复制采样 JSON。".into());
+                    self.fail_claude_check(
+                        language
+                            .text(
+                                "剪贴板为空或内容超过 64 KiB；请复制采样 JSON。",
+                                "Clipboard is empty or exceeds 64 KiB; copy the sampling JSON.",
+                            )
+                            .into(),
+                    );
                     return Task::none();
                 };
                 self.claude.importing = true;
                 let port = self.snapshot.running.then_some(self.settings.mixed_port);
                 return Task::perform(
                     async move {
-                        let json: serde_json::Value = serde_json::from_str(&text)
-                            .map_err(|_| "剪贴板不是有效的检测 JSON".to_string())?;
+                        let json: serde_json::Value =
+                            serde_json::from_str(&text).map_err(|_| {
+                                language
+                                    .text(
+                                        "剪贴板不是有效的检测 JSON",
+                                        "Clipboard does not contain valid check JSON",
+                                    )
+                                    .to_string()
+                            })?;
                         if json.get("kind").and_then(|v| v.as_str()) == Some("browser") {
-                            let data = serde_json::from_value(json)
-                                .map_err(|_| "浏览器采样格式无效".to_string())?;
+                            let data = serde_json::from_value(json).map_err(|_| {
+                                language
+                                    .text("浏览器采样格式无效", "Invalid browser sample")
+                                    .to_string()
+                            })?;
                             check::browser::report(
                                 data,
                                 &check::client(port).map_err(|e| e.to_string())?,
@@ -573,10 +634,18 @@ impl App {
                             .await
                             .map_err(|e| e.to_string())
                         } else {
-                            let report: Report = serde_json::from_value(json)
-                                .map_err(|_| "检测报告格式无效".to_string())?;
+                            let report: Report = serde_json::from_value(json).map_err(|_| {
+                                language
+                                    .text("检测报告格式无效", "Invalid check report")
+                                    .to_string()
+                            })?;
                             if report.environment != Environment::Code {
-                                return Err("请导入浏览器采样或 Code 终端报告".into());
+                                return Err(language
+                                    .text(
+                                        "请导入浏览器采样或 Code 终端报告",
+                                        "Import a browser sample or Code terminal report",
+                                    )
+                                    .into());
                             }
                             report.validate().map_err(|e| e.to_string())?;
                             Ok(report)
@@ -591,7 +660,12 @@ impl App {
                     Ok(report) => {
                         self.claude.store(report);
                         self.claude.error = false;
-                        self.claude.status = "采样报告已导入；来源与实测范围见各项详情。".into();
+                        self.claude.status = language
+                            .text(
+                                "采样报告已导入；来源与实测范围见各项详情。",
+                                "Sample report imported.",
+                            )
+                            .into();
                     }
                     Err(error) => {
                         self.fail_claude_check(error);
@@ -621,7 +695,11 @@ impl App {
                                 ));
                         tokio::task::spawn_blocking(move || {
                             clash_of_rust::config::atomic_write(&path, &bytes)?;
-                            Ok::<_, anyhow::Error>(format!("报告已导出：{}", path.display()))
+                            Ok::<_, anyhow::Error>(format!(
+                                "{}{}",
+                                language.text("报告已导出：", "Report exported: "),
+                                path.display()
+                            ))
                         })
                         .await
                         .map_err(|e| e.to_string())?
@@ -654,14 +732,21 @@ impl App {
                         self.claude.store(report);
                         self.claude.error = false;
                         if web {
-                            self.claude.sampling_status();
+                            self.claude.sampling_status(language);
                         } else {
-                            self.claude.status = "已收到补充采样报告。".into();
+                            self.claude.status = language
+                                .text("已收到补充采样报告。", "Additional sample received.")
+                                .into();
                         }
                     } else if session.finished() {
                         self.claude.session = None;
                         self.claude.browser_busy = false;
-                        self.claude.status = "回传入口已到期，请重新打开。".into();
+                        self.claude.status = language
+                            .text(
+                                "回传入口已到期，请重新打开。",
+                                "Report receiver expired; reopen it.",
+                            )
+                            .into();
                     }
                 }
             }

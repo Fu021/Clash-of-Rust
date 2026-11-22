@@ -24,12 +24,11 @@ final class IncidentNotifications {
         return previous < 0 || now < previous || now - previous >= 60_000;
     }
 
-    static String message(String code) {
+    static String message(Context context, String code) {
         if ("application-target-missing".equals(code))
-            return "有应用连接因指定出口失效被拦截，请在应用规则中更换出口。";
-        return "critical".equals(code)
-            ? "发生严重错误，请打开应用查看详情并导出诊断。"
-            : "发生可恢复错误，请打开应用查看详情并导出诊断。";
+            return context.getString(R.string.notification_application_message);
+        return context.getString("critical".equals(code)
+            ? R.string.notification_critical_message : R.string.notification_recovery_message);
     }
 
     private static synchronized void record(Context context, String code, boolean critical) {
@@ -48,12 +47,13 @@ final class IncidentNotifications {
 
     @android.annotation.SuppressLint("MissingPermission")
     static synchronized boolean publish(Context context, String code, boolean recordForUi) {
+        Context localized = AppLanguage.current(context);
         int index;
         switch (code) {
             case "recovery": index = 0; break;
             case "critical": index = 1; break;
             case "application-target-missing": index = 2; break;
-            default: throw new IllegalArgumentException("错误通知类型无效");
+            default: throw new IllegalArgumentException(localized.getString(R.string.notification_invalid_type));
         }
         attempted++;
         long now = SystemClock.elapsedRealtime();
@@ -73,7 +73,7 @@ final class IncidentNotifications {
             }
             String channel = critical ? CRITICAL_CHANNEL : RECOVERY_CHANNEL;
             manager.createNotificationChannel(new NotificationChannel(channel,
-                critical ? "严重错误" : "可恢复错误", critical
+                localized.getString(critical ? R.string.notification_critical_channel : R.string.notification_recovery_channel), critical
                     ? NotificationManager.IMPORTANCE_HIGH : NotificationManager.IMPORTANCE_DEFAULT));
             if (manager.getNotificationChannel(channel).getImportance() == NotificationManager.IMPORTANCE_NONE) {
                 denied++; delivery = "channel_disabled"; return false;
@@ -83,10 +83,12 @@ final class IncidentNotifications {
                 new Intent(context, MainActivity.class).putExtra("runtime_incident", code)
                     .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-            String title = index == 2 ? "应用出口不可用" : critical ? "Clash of Rust · 严重错误" : "Clash of Rust · 需要处理";
+            String title = localized.getString(index == 2 ? R.string.notification_application_unavailable
+                : critical ? R.string.notification_critical_title : R.string.notification_recovery_title);
+            String body = message(localized, code);
             manager.notify(identity, new Notification.Builder(context, channel)
-                .setSmallIcon(R.drawable.ic_app).setContentTitle(title).setContentText(message(code))
-                .setStyle(new Notification.BigTextStyle().bigText(message(code)))
+                .setSmallIcon(R.drawable.ic_app).setContentTitle(title).setContentText(body)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
                 .setVisibility(Notification.VISIBILITY_PRIVATE).setContentIntent(open)
                 .setAutoCancel(true).setOnlyAlertOnce(true).build());
             sent++; delivery = "posted";
@@ -112,7 +114,7 @@ final class IncidentNotifications {
             .put("sequence", preferences.getLong("sequence", 0) > preferences.getLong("acknowledged", 0)
                 ? preferences.getLong("sequence", 0) : 0).put("code", code)
             .put("critical", preferences.getBoolean("critical", false))
-            .put("message", code.isEmpty() ? "" : message(code));
+            .put("message", code.isEmpty() ? "" : message(AppLanguage.current(context), code));
     }
 
     private static String channelState(NotificationManager manager, String id) {

@@ -470,7 +470,7 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
         proxy_result = {}
         if verify_proxy:
             proxy_result = verify_proxy(mixed_port) or {'desktop_system_proxy_restored': True}
-        with Session([APP/'cor', 'ui'], env=env) as terminal:
+        with Session([APP/'cor', 'ui', '--lang=zh-CN'], env=env) as terminal:
             terminal.wait('CLASH OF RUST')
             terminal.send(terminal.page_key('订阅'))
             terminal.wait('GUI fixture')

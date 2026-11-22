@@ -12,10 +12,10 @@ component ProfileActions inherits HorizontalLayout {
     callback details();
     property <bool> mutable: !UiData.working && !UiData.protected && !UiData.protection-pending;
     spacing: 4px; alignment: start; horizontal-stretch: 0;
-    ActionButton { text: root.profile.active ? "使用中" : "使用"; geometry-key: "profile-use:" + root.profile.id; width: max(58px, Theme.detail-size * 3 + 16px); compact: true; primary: !root.profile.active; selected: root.profile.active; opacity: root.profile.active || self.enabled ? 1 : 0.5; enabled: !root.profile.active && root.mutable; clicked => { UiActions.dispatch(Intent.activate-profile, root.profile.id, ""); } }
-    ActionButton { text: "更新"; geometry-key: "profile-update:" + root.profile.id; compact: true; quiet: true; enabled: !root.profile.local && !root.profile.builtin && root.mutable; clicked => { UiActions.dispatch(Intent.update-profile, root.profile.id, ""); } }
-    ActionButton { text: "编辑"; geometry-key: "profile-edit:" + root.profile.id; compact: true; quiet: true; enabled: !root.profile.builtin && root.mutable; clicked => { UiActions.dispatch(Intent.edit-profile, root.profile.id, ""); } }
-    ActionButton { text: root.expanded ? "收起" : "详情"; geometry-key: "profile-detail:" + root.profile.id; compact: true; quiet: true; clicked => { root.details(); } }
+    ActionButton { text: root.profile.active ? @tr("使用中") : @tr("使用"); geometry-key: "profile-use:" + root.profile.id; compact: true; primary: !root.profile.active; selected: root.profile.active; opacity: root.profile.active || self.enabled ? 1 : 0.5; enabled: !root.profile.active && root.mutable; clicked => { UiActions.dispatch(Intent.activate-profile, root.profile.id, ""); } }
+    ActionButton { text: @tr("verb" => "更新"); geometry-key: "profile-update:" + root.profile.id; compact: true; quiet: true; enabled: !root.profile.local && !root.profile.builtin && root.mutable; clicked => { UiActions.dispatch(Intent.update-profile, root.profile.id, ""); } }
+    ActionButton { text: @tr("编辑"); geometry-key: "profile-edit:" + root.profile.id; compact: true; quiet: true; enabled: !root.profile.builtin && root.mutable; clicked => { UiActions.dispatch(Intent.edit-profile, root.profile.id, ""); } }
+    ActionButton { text: root.expanded ? @tr("收起") : @tr("详情"); geometry-key: "profile-detail:" + root.profile.id; compact: true; quiet: true; clicked => { root.details(); } }
 }
 
 component ProfileCard inherits ContentPanel {
@@ -40,7 +40,7 @@ component ProfileCard inherits ContentPanel {
             }
         }
         Label { text: root.profile.name; font-weight: 600; preferred-width: 0px; horizontal-stretch: 2; }
-        Badge { text: root.profile.local ? "本地" : "订阅"; tone: 4; }
+        Badge { text: root.profile.local ? @tr("本地") : @tr("订阅"); tone: 4; }
         ProfileActions {
             profile: root.profile; expanded: root.expanded;
             details => { root.details(); }
@@ -59,7 +59,7 @@ component ProfileCard inherits ContentPanel {
             }
         }
         Label { text: root.profile.name; font-weight: 600; preferred-width: 0px; }
-        Badge { text: root.profile.local ? "本地" : "订阅"; tone: 4; }
+        Badge { text: root.profile.local ? @tr("本地") : @tr("订阅"); tone: 4; }
     }
     if root.profile.source != "": Caption { col: 0; row: 1; text: root.profile.source; font-size: 12px * Theme.text-scale; }
     Caption { col: 0; row: 2; text: root.profile.detail; font-size: 12px * Theme.text-scale; wrap: word-wrap; }
@@ -72,10 +72,10 @@ component ProfileCard inherits ContentPanel {
         expanded: root.expanded;
         if detail.mounted: VerticalLayout {
             spacing: 8px;
-            Caption { text: "名称：" + root.profile.name; wrap: word-wrap; }
-            Caption { text: "来源：" + root.profile.source; wrap: word-wrap; }
+            Caption { text: @tr("名称：{}", root.profile.name); wrap: word-wrap; }
+            Caption { text: @tr("来源：{}", root.profile.source); wrap: word-wrap; }
             ActionButton {
-                text: "删除订阅"; compact: true; quiet: true; danger: !root.profile.builtin;
+                text: @tr("删除订阅"); compact: true; quiet: true; danger: !root.profile.builtin;
                 geometry-key: "profile-delete:" + root.profile.id;
                 enabled: !root.profile.builtin && !UiData.working && !UiData.protected && !UiData.protection-pending;
                 clicked => { UiActions.dispatch(Intent.delete-profile, root.profile.id, ""); }
@@ -95,16 +95,16 @@ export component SubscriptionsPage inherits PageSurface {
                 importer := HorizontalLayout { padding: 8px; spacing: 8px; cross-axis-alignment: center;
                     ViewToggle { geometry-key: "profiles-view"; list-view <=> PageViews.profiles-list; }
                     Field {
-                        placeholder: "粘贴订阅链接"; borderless: true;
+                        placeholder: @tr("粘贴订阅链接"); borderless: true;
                         text <=> UiData.profile-source; enabled: !UiData.protected && !UiData.protection-pending; edited(value) => { UiActions.dispatch(Intent.profile-source, value, ""); }
                         accepted => { if UiData.ready && !UiData.working { UiActions.dispatch(Intent.add-profile, "", ""); } }
                     }
-                    ActionButton { text: "本地文件"; quiet: true; compact: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.pick-file, "false", ""); } }
-                    ActionButton { text: "导入"; compact: true; primary: true; enabled: UiData.ready && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
+                    ActionButton { text: @tr("本地文件"); quiet: true; compact: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.pick-file, "false", ""); } }
+                    ActionButton { text: @tr("导入"); compact: true; primary: true; enabled: UiData.ready && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.add-profile, "", ""); } }
                 }
             }
             HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
-                Field { placeholder: "搜索名称或来源"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                Field { placeholder: @tr("搜索名称或来源"); focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
             }
             grid := ListView {
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + (UiData.profiles-paginated ? "paged" : "all");
@@ -124,16 +124,16 @@ export component SubscriptionsPage inherits PageSurface {
                     }
                 }
             }
-            if UiData.profiles.length == 0: ContentPanel { Caption { text: UiData.query != "" ? "没有匹配的订阅" : "导入订阅链接或本地 YAML 配置开始使用"; wrap: word-wrap; } }
+            if UiData.profiles.length == 0: ContentPanel { Caption { text: UiData.query != "" ? @tr("没有匹配的订阅") : @tr("导入订阅链接或本地 YAML 配置开始使用"); wrap: word-wrap; } }
             HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
                 Caption { text: UiData.page-status; }
                 ActionButton {
                     geometry-key: "profiles-pagination"; quiet: true; compact: true;
-                    text: UiData.profiles-paginated ? "显示全部" : "分页显示";
+                    text: UiData.profiles-paginated ? @tr("显示全部") : @tr("分页显示");
                     clicked => { UiActions.dispatch(Intent.profile-pagination, UiData.profiles-paginated ? "false" : "true", ""); }
                 }
-                if UiData.profiles-paginated: ActionButton { text: "上一页"; quiet: true; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-                if UiData.profiles-paginated: ActionButton { text: "下一页"; quiet: true; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+                if UiData.profiles-paginated: ActionButton { text: @tr("上一页"); quiet: true; compact: true; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                if UiData.profiles-paginated: ActionButton { text: @tr("下一页"); quiet: true; compact: true; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
             }
         }
 }

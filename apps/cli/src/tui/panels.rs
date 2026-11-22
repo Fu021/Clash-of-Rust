@@ -1,12 +1,21 @@
 use super::{form, model::State, render::Tone};
 
 pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
+    let language = state.language;
     let mut lines = vec![
         (
-            "设置 · Enter 打开；直接选择开关、模式或编辑数值".into(),
+            language
+                .text(
+                    "设置 · Enter 打开；直接选择开关、模式或编辑数值",
+                    "Press Enter to edit a setting",
+                )
+                .into(),
             Tone::Accent,
         ),
-        (format!("搜索：{}", state.query), Tone::Muted),
+        (
+            format!("{}{}", language.text("搜索：", "Search: "), state.query),
+            Tone::Muted,
+        ),
     ];
     let items = state.items();
     lines = lines
@@ -23,7 +32,7 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
     let mut selected_range = (0, 0);
     let mut category = "";
     for (index, key) in items.iter().enumerate() {
-        let next_category = super::settings::category(key);
+        let next_category = super::settings::category(key, language);
         if next_category != category && available >= 3 {
             rows.push((format!("── {next_category} ──"), Tone::Accent));
             category = next_category;
@@ -31,13 +40,13 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
         let selected = index == state.selected;
         let start = rows.len();
         let value = state.poll.as_ref().map_or_else(
-            || "后台未连接".into(),
-            |poll| super::settings::display(poll, key),
+            || language.text("后台未连接", "Backend disconnected").into(),
+            |poll| super::settings::display(poll, key, language),
         );
         let text = format!(
             "{} {} {value}",
             if selected { "›" } else { " " },
-            super::settings::title(key)
+            super::settings::title(key, language)
         );
         let tone = if selected {
             Tone::Selected
@@ -65,10 +74,23 @@ pub(super) fn settings(state: &State, width: usize, height: usize) -> Vec<(Strin
 pub(super) fn tools(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let header = vec![
         (
-            "管理操作 · 与 CLI 共用命令、授权和保护校验".into(),
+            state
+                .language
+                .text(
+                    "管理操作 · 与 CLI 共用命令、授权和保护校验",
+                    "Commands · Same permissions and protection as the CLI",
+                )
+                .into(),
             Tone::Accent,
         ),
-        (format!("搜索命令或说明：{}", state.query), Tone::Muted),
+        (
+            format!(
+                "{}{}",
+                state.language.text("搜索命令或说明：", "Search commands: "),
+                state.query
+            ),
+            Tone::Muted,
+        ),
     ];
     let items = state.items();
     let rows = items.iter().enumerate().map(|(index, path)| {
@@ -77,7 +99,7 @@ pub(super) fn tools(state: &State, width: usize, height: usize) -> Vec<(String, 
             format!(
                 "{} {}  · {}",
                 if index == state.selected { "›" } else { " " },
-                spec.description,
+                spec.localized_description(state.language),
                 spec.path
             ),
             if index == state.selected {
@@ -92,40 +114,85 @@ pub(super) fn tools(state: &State, width: usize, height: usize) -> Vec<(String, 
 
 pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
     let form = state.form.as_ref().unwrap();
+    let language = state.language;
     let mut lines = if form.network == Some(super::network::Editor::Export) {
         vec![
-            ("工具 · 导出本次结果".into(), Tone::Accent),
             (
-                "保存现有证据，不重新运行检查；Esc 返回。".into(),
+                language
+                    .text("工具 · 导出本次结果", "Tools · Export result")
+                    .into(),
+                Tone::Accent,
+            ),
+            (
+                language
+                    .text(
+                        "保存现有证据，不重新运行检查；Esc 返回。",
+                        "Save the current result; Esc returns.",
+                    )
+                    .into(),
                 Tone::Muted,
             ),
         ]
     } else if let Some(super::network::Editor::Parameters(tool)) = form.network {
         vec![
-            (format!("{} · 参数", tool.title()), Tone::Accent),
             (
-                "本页生效；切换工具恢复默认；Esc 丢弃草稿。".into(),
+                format!(
+                    "{} · {}",
+                    super::network::title(tool, language),
+                    language.text("参数", "Parameters")
+                ),
+                Tone::Accent,
+            ),
+            (
+                language
+                    .text(
+                        "本页生效；切换工具恢复默认；Esc 丢弃草稿。",
+                        "Applies here; switching tools resets defaults; Esc discards.",
+                    )
+                    .into(),
                 Tone::Muted,
             ),
         ]
     } else if let Some(key) = &form.setting {
         vec![
             (
-                format!("设置 · {}", super::settings::title(key)),
+                format!(
+                    "{} · {}",
+                    language.text("设置", "Settings"),
+                    super::settings::title(key, language),
+                ),
                 Tone::Accent,
             ),
-            (super::settings::hint(key).into(), Tone::Muted),
-            ("草稿不会自动保存；选择保存后确认。".into(), Tone::Muted),
+            (super::settings::hint(key, language).into(), Tone::Muted),
+            (
+                language
+                    .text(
+                        "草稿不会自动保存；选择保存后确认。",
+                        "Select Save and confirm to apply.",
+                    )
+                    .into(),
+                Tone::Muted,
+            ),
         ]
     } else {
         vec![
             (
-                format!("cor {} · {}", form.spec.path, form.spec.description),
+                format!(
+                    "cor {} · {}",
+                    form.spec.path,
+                    form.spec.localized_description(state.language)
+                ),
                 Tone::Accent,
             ),
             (form.spec.usage.into(), Tone::Muted),
             (
-                "每项单独填写，无需给空格或 emoji 加引号；数组使用 JSON。".into(),
+                state
+                    .language
+                    .text(
+                        "每项单独填写，无需给空格或 emoji 加引号；数组使用 JSON。",
+                        "Enter values as shown. Use JSON for arrays.",
+                    )
+                    .into(),
                 Tone::Muted,
             ),
         ]
@@ -154,13 +221,13 @@ pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String,
         let selected = index == form.selected;
         let text = if index == form.fields.len() {
             if form.network == Some(super::network::Editor::Export) {
-                "导出 JSON →"
+                language.text("导出 JSON →", "Export JSON →")
             } else if form.network.is_some() {
-                "应用参数 →"
+                language.text("应用参数 →", "Apply parameters →")
             } else if form.setting.is_some() {
-                "保存设置 →"
+                language.text("保存设置 →", "Save setting →")
             } else {
-                "检查并执行 →"
+                language.text("检查并执行 →", "Review and run →")
             }
             .into()
         } else {
@@ -175,8 +242,9 @@ pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String,
                 );
             }
             format!(
-                "{}：{}{}",
+                "{}{}{}{}",
                 form.fields[index].label,
+                language.text("：", ": "),
                 value,
                 if form.editing && selected {
                     " ▏"
@@ -219,6 +287,7 @@ pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String,
 
 pub(super) fn connection_rows(state: &State, width: usize) -> Vec<(String, Tone)> {
     let id = state.connection.as_deref().unwrap();
+    let language = state.language;
     let Some(connection) = state.poll.as_ref().and_then(|poll| {
         poll.snapshot
             .connections
@@ -226,30 +295,40 @@ pub(super) fn connection_rows(state: &State, width: usize) -> Vec<(String, Tone)
             .iter()
             .find(|connection| connection.id.as_ref() == id)
     }) else {
-        return super::render::wrap(
-            &format!("连接 {id} 已关闭或当前快照中不存在；Esc 返回列表"),
-            width,
-        )
-        .into_iter()
-        .map(|line| (line, Tone::Warning))
-        .collect();
+        let message = match language {
+            clash_client_core::config::Language::SimplifiedChinese => {
+                format!("连接 {id} 已关闭或当前快照中不存在；Esc 返回列表")
+            }
+            clash_client_core::config::Language::English => {
+                format!(
+                    "Connection {id} has closed or is absent from the current snapshot; Esc returns to the list"
+                )
+            }
+        };
+        return super::render::wrap(&message, width)
+            .into_iter()
+            .map(|line| (line, Tone::Warning))
+            .collect();
     };
-    clash_client_core::connection::detail_values(connection, "")
+    clash_client_core::connection::detail_values_in(connection, "", language)
         .into_iter()
         .filter(|(_, value)| !value.trim().is_empty() && value != "—")
         .flat_map(|(label, value)| {
-            super::render::wrap(&format!("{label}：{value}"), width)
-                .into_iter()
-                .map(move |line| {
-                    (
-                        line,
-                        if label == "代理链" {
-                            Tone::Accent
-                        } else {
-                            Tone::Plain
-                        },
-                    )
-                })
+            super::render::wrap(
+                &format!("{label}{}{value}", language.text("：", ": ")),
+                width,
+            )
+            .into_iter()
+            .map(move |line| {
+                (
+                    line,
+                    if label == language.text("代理链", "Proxy chain") {
+                        Tone::Accent
+                    } else {
+                        Tone::Plain
+                    },
+                )
+            })
         })
         .collect()
 }
@@ -260,7 +339,13 @@ pub(super) fn connection(state: &State, width: usize, height: usize) -> Vec<(Str
     let mut lines = Vec::new();
     if height >= 3 {
         lines.push((
-            "连接详情 · 空字段已隐藏 · ↑↓ 滚动 · Esc 返回 · d 解析 · x 关闭".into(),
+            state
+                .language
+                .text(
+                    "连接详情 · 空字段已隐藏 · ↑↓ 滚动 · Esc 返回 · d 解析 · x 关闭",
+                    "Connection details · ↑↓ scroll · Esc back · d resolve · x close",
+                )
+                .into(),
             Tone::Accent,
         ));
     }

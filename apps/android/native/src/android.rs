@@ -236,6 +236,7 @@ struct ProtectionChange {
 }
 struct State {
     session: Session,
+    presentation_language: config::Language,
     application_policies: application_policies::Editor,
     overview: clash_mobile_runtime::overview::Monitor,
     overview_epoch: u64,
@@ -329,9 +330,32 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     let update_path = native
         .directory(jni_str!("getCacheDir"))?
         .join("updates/update.apk");
+    let preference = config::LanguagePreference::read(&root).unwrap_or_default();
+    let system_languages = native.request(json!({"op":"system-languages"})).ok();
+    let language = preference.resolve(
+        system_languages
+            .as_ref()
+            .and_then(|value| value["languages"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str),
+    );
     slint::android::init(app)?;
     fonts::register_emoji()?;
     let window = AndroidWindow::new()?;
+    slint::select_bundled_translation(if language == config::Language::SimplifiedChinese {
+        ""
+    } else {
+        language.tag()
+    })?;
+    window
+        .global::<IpStatusText>()
+        .on_region_name(move |value| {
+            core::countries::localized_name(value.as_str(), language).into()
+        });
+    window
+        .global::<MobileData>()
+        .set_language(preference.tag().into());
     DIAGNOSTIC_GEOMETRY.with(|geometry| geometry.borrow_mut().clear());
     window.global::<UiGeometry>().on_measured(|key, bounds| {
         if !(key.starts_with("preview-")
@@ -421,7 +445,14 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                 }
                 ui.global::<MobileData>().set_profile_busy(gate.busy());
                 ui.global::<MobileData>().set_working(gate.busy());
-                ui.invoke_notify("操作过于频繁，请稍后再试".into());
+                ui.invoke_notify(
+                    language
+                        .text(
+                            "操作过于频繁，请稍后再试",
+                            "Too many requests; try again shortly",
+                        )
+                        .into(),
+                );
             }
         });
     let host = native.clone();
@@ -438,6 +469,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                         &ui,
                         intent,
                         value.as_str(),
+                        language,
                     )
                 {
                     ui.global::<AndroidData>()
@@ -475,8 +507,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                     biased;
                     _ = stopped => Ok(()),
                     result = run_loop(
-                        root,
-                        update_path,
+                        Startup { root, update_path, language },
                         native,
                         receive,
                         native_events,
@@ -539,9 +570,13 @@ enum Update {
     Downloaded(u64, std::result::Result<(), String>),
     IncidentPresented(u64),
 }
-async fn run_loop(
+struct Startup {
     root: PathBuf,
     update_path: PathBuf,
+    language: config::Language,
+}
+async fn run_loop(
+    startup: Startup,
     native: Arc<AndroidHost>,
     mut receive: mpsc::Receiver<Request>,
     mut native_events: mpsc::Receiver<String>,
@@ -549,7 +584,8 @@ async fn run_loop(
     profile_gate: Arc<RequestGate>,
 ) -> Result<()> {
     let mut state = State {
-        session: Session::open(root, native)?,
+        session: Session::open(startup.root, native)?,
+        presentation_language: startup.language,
         overview: Default::default(),
         overview_epoch: 0,
         application_policies: Default::default(),
@@ -570,7 +606,7 @@ async fn run_loop(
         connection_address: Default::default(),
         ip_results: vec![None; core::ip_check::services().len()],
         claude: None,
-        claude_status: "尚未检测".into(),
+        claude_status: startup.language.text("尚未检测", "Not checked").into(),
         protection_change: None,
         protection_status: String::new(),
         guard_snapshot: Default::default(),
@@ -591,7 +627,10 @@ async fn run_loop(
         probe_busy: false,
         network_tool: 0,
         probe_codes: Vec::new(),
-        geo: "Geo 数据状态不可用".into(),
+        geo: startup
+            .language
+            .text("Geo 数据状态不可用", "Geo data status unavailable")
+            .into(),
         geo_updating: false,
         node_pages: BTreeMap::new(),
         node_delays: BTreeMap::new(),
@@ -604,24 +643,33 @@ async fn run_loop(
         rule_form: None,
         rule_editor: None,
         update_package: None,
-        update_status: "尚未检查更新".into(),
+        update_status: startup
+            .language
+            .text("尚未检查更新", "Updates not checked")
+            .into(),
         update_busy: false,
         update_downloading: false,
         update_progress: 0.0,
         update_downloaded: false,
-        update_path,
+        update_path: startup.update_path,
         update_generation: 0,
         update_confirmation: None,
     };
     if let Err(error) = state.session.attach_or_initialize() {
-        state.notice = format!("内核启动失败：{error:#}");
+        state.notice = format!(
+            "{}{error:#}",
+            state
+                .presentation_language
+                .text("内核启动失败：", "Core startup failed: ")
+        );
         state.notice_error = true;
         state.notice_critical = true;
         log::error!("{}", state.notice);
         state.logs.push_back(("ERROR".into(), state.notice.clone()));
     }
     if let Ok(manifest) = core::geodata::read_manifest(&state.session.store.runtime()) {
-        state.geo = manifest.display_status();
+        state.geo =
+            core::geodata::localize_status(&manifest.display_status(), state.presentation_language);
     }
     state.session.observe_native()?;
     if state.session.settings.claude_protection.is_some()
@@ -647,9 +695,18 @@ async fn run_loop(
             authorization: None,
             auto_check: false,
         });
-        state.protection_status = "正在恢复保护 VPN…".into();
+        state.protection_status = state
+            .presentation_language
+            .text("正在恢复保护 VPN…", "Restoring the protected VPN…")
+            .into();
         if let Err(error) = state.session.native.request(json!({"op":"reconnect"})) {
-            rollback_protection(&mut state, &format!("保护恢复失败：{error:#}"))?;
+            let reason = format!(
+                "{}{error:#}",
+                state
+                    .presentation_language
+                    .text("保护恢复失败：", "Failed to restore protection: ")
+            );
+            rollback_protection(&mut state, &reason)?;
         }
     }
     let (updates, mut update_rx) = mpsc::channel::<Update>(32);
@@ -791,11 +848,11 @@ async fn run_loop(
                         if let Some(job) = update_job.take() { job.abort(); let _ = job.await; }
                         state.update_busy = false; state.update_downloading = false;
                         state.update_downloaded = false; state.update_progress = 0.0;
-                        state.update_status = "下载已取消，可重新下载".into();
+                        state.update_status = state.presentation_language.text("下载已取消，可重新下载", "Download cancelled; you can retry").into();
                         for path in [&state.update_path, &state.update_path.with_extension("partial")] {
                             if let Err(error) = tokio::fs::remove_file(path).await
                                 && error.kind() != std::io::ErrorKind::NotFound {
-                                state.notice = format!("下载已取消，缓存清理失败：{error}");
+                                state.notice = format!("{}{error}", state.presentation_language.text("下载已取消，缓存清理失败：", "Download cancelled; cache cleanup failed: "));
                                 state.notice_error = true;
                             }
                         }
@@ -811,12 +868,12 @@ async fn run_loop(
                             state.network_tool = tool.index();
                         }
                     } else {
-                        state.probe = vec!["检查已取消".into()];
+                        state.probe = vec![state.presentation_language.text("检查已取消", "Check cancelled").into()];
                         state.probe_codes = vec!["cancelled"];
                     }
                 } else if intent == MobileIntent::Probe {
                     if state.protection_change.is_some() {
-                        state.probe = vec!["Claude 保护切换中，请稍后重试".into()];
+                        state.probe = vec![state.presentation_language.text("Claude 保护切换中，请稍后重试", "Claude protection is changing; try again shortly").into()];
                     } else if network_job.is_none() && state.page == 6 {
                         state.probe = Default::default();
                         state.probe_codes.clear();
@@ -844,10 +901,10 @@ async fn run_loop(
                     if let Some(job) = claude_job.take() { job.abort(); }
                     state.claude_generation = state.claude_generation.wrapping_add(1);
                     state.claude_busy = false;
-                    state.claude_status = "已停止检测，保留上次完成的报告".into();
+                    state.claude_status = state.presentation_language.text("已停止检测，保留上次完成的报告", "Check stopped; the previous report is preserved").into();
                 } else if intent==MobileIntent::CheckUpdate {
                     if !blocked_during_protection(&mut state) && !state.update_busy {
-                        state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();state.update_progress=0.0;
+                        state.update_busy=true;state.update_downloading=false;state.update_status=state.presentation_language.text("正在检查更新…", "Checking for updates…").into();state.update_progress=0.0;
                         update_schedule.checked(std::time::Instant::now());
                         state.update_generation = state.update_generation.wrapping_add(1);
                         state.update_confirmation = None;
@@ -862,21 +919,21 @@ async fn run_loop(
                             if package.preview && state.session.settings.update_prereleases {
                                 state.update_confirmation = Some(core::update::channel::Consent::new(package.version.clone()));
                             } else {
-                                state.notice = "更新版本已变化，请重新检查更新".into();
+                                state.notice = state.presentation_language.text("更新版本已变化，请重新检查更新", "The update changed; check for updates again").into();
                                 state.notice_error = true;
                             }
                         } else if (package.preview && (!state.session.settings.update_prereleases
                             || request.b != "confirmed"
                             || !state.update_confirmation.as_ref().is_some_and(|consent| consent.accepts(&package.version))))
                             || (!package.preview && !request.b.is_empty()) {
-                            state.notice = "请先阅读预发布风险提示，并等待 3 秒后确认".into();
+                            state.notice = state.presentation_language.text("请先阅读预发布风险提示，并等待 3 秒后确认", "Read the pre-release warning and wait 3 seconds before confirming").into();
                             state.notice_error = true;
                         } else {
                         state.update_confirmation = None;
                         if state.update_downloaded && state.update_path.is_file() {
                             if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                         } else {
-                            state.update_busy=true;state.update_downloading=true;state.update_status="正在下载更新…".into();state.update_progress=0.0;
+                            state.update_busy=true;state.update_downloading=true;state.update_status=state.presentation_language.text("正在下载更新…", "Downloading update…").into();state.update_progress=0.0;
                             let path=state.update_path.clone();
                             let port=state.session.settings.download_ports();let send=updates.clone();
                             let download_api=state.session.api.clone();
@@ -949,7 +1006,7 @@ async fn run_loop(
                         if let Some(job) = update_job.take() { job.abort(); let _ = job.await; }
                         state.update_busy = false; state.update_downloading = false;
                         state.update_downloaded = false; state.update_progress = 0.0;
-                        state.update_status = "Claude 保护期间暂停客户端更新".into();
+                        state.update_status = state.presentation_language.text("Claude 保护期间暂停客户端更新", "Updates are paused while Claude protection is active").into();
                         if let Some(job) = geo_job.take() { job.abort(); let _ = job.await; }
                         state.geo_updating = false;
                         subscription_generation = subscription_generation.wrapping_add(1);
@@ -962,15 +1019,16 @@ async fn run_loop(
                             authorization: None,
                             auto_check: true,
                         });
-                        state.protection_status="正在确认当前代理节点…".into();
+                        state.protection_status=state.presentation_language.text("正在确认当前代理节点…", "Checking the current proxy node…").into();
                         let api=state.session.api.clone();let settings=state.session.settings.clone();
+                        let language=state.presentation_language;
                         let raw=state.session.raw();let vpn=state.session.vpn;let send=updates.clone();
                         protection_job=Some(tokio::spawn(async move {
                             let result=async {
                                 let raw=raw?;
                                 tokio::time::timeout(Duration::from_secs(20),
                                     clash_mobile_runtime::prepare_protection(&api,&settings,&raw,vpn))
-                                    .await.context("确认保护节点超时")?
+                                    .await.context(language.text("确认保护节点超时", "Timed out checking the protected node"))?
                             }.await.map_err(|error|format!("{error:#}"));
                             let _=send.send(Update::Protection(result)).await;
                         }));
@@ -997,7 +1055,8 @@ async fn run_loop(
                                 | MobileIntent::RuleSelect | MobileIntent::RuleEdit | MobileIntent::RuleSave
                                 | MobileIntent::RuleMove | MobileIntent::RuleDelete | MobileIntent::RuleShortcut
                                 | MobileIntent::RuleDiscard | MobileIntent::NodePage | MobileIntent::NodeSort
-                                | MobileIntent::Appearance | MobileIntent::Accent | MobileIntent::TextScale) {
+                                | MobileIntent::Appearance | MobileIntent::Accent | MobileIntent::TextScale
+                                | MobileIntent::Language) {
                                 if let Some(job) = refresh_job.take() { job.abort(); }
                                 refresh_generation += 1;
                                 refresh_requested = true;
@@ -1053,8 +1112,10 @@ async fn run_loop(
                             match result {
                                 Ok(()) => change.verified = true,
                                 Err(error) => {
-                                    if let Err(restore) = rollback_protection(&mut state, &format!("保护验证失败：{error}")) {
-                                        state.notice = format!("保护验证失败：{error}；恢复失败：{restore:#}");
+                                    let prefix = state.presentation_language.text("保护验证失败：", "Protection verification failed: ");
+                                    let reason = format!("{prefix}{error}");
+                                    if let Err(restore) = rollback_protection(&mut state, &reason) {
+                                        state.notice = format!("{reason}{}{restore:#}", state.presentation_language.text("；恢复失败：", "; recovery failed: "));
                                         state.notice_error = true;
                                         state.notice_critical = true;
                                     }
@@ -1076,9 +1137,9 @@ async fn run_loop(
                         state.probe = match result {
                             Ok(report) => {
                                 state.probe_codes = report.entries.iter().map(|entry| entry.code).collect();
-                                report.lines()
+                                report.lines_in(state.presentation_language)
                             }
-                            Err(error) => vec![format!("检查失败 · {error}")],
+                            Err(error) => vec![format!("{} · {error}", state.presentation_language.text("检查失败", "Check failed"))],
                         };
                         immediate = true;
                     }
@@ -1091,13 +1152,19 @@ async fn run_loop(
                                 let unavailable = !values.is_empty() && failed == values.len();
                                 state.notice=if unavailable {
                                     let detail = if state.session.settings.claude_protection.is_some() {
-                                        "请检查 Claude 保护线路。"
+                                        state.presentation_language.text("请检查 Claude 保护线路。", "Check the Claude protection route.")
                                     } else {
-                                        "请更换节点；更新失败后会自动尝试直连。"
+                                        state.presentation_language.text("请更换节点；更新失败后会自动尝试直连。", "Choose another node; failed updates will retry directly.")
                                     };
-                                    format!("本次测速：{} 个节点不可达。{detail}", values.len())
+                                    match state.presentation_language {
+                                        config::Language::SimplifiedChinese => format!("本次测速：{} 个节点不可达。{detail}", values.len()),
+                                        config::Language::English => format!("{} nodes unreachable. {detail}", values.len()),
+                                    }
                                 } else {
-                                    format!("测速完成 · {} 项，{} 项超时",values.len(),failed)
+                                    match state.presentation_language {
+                                        config::Language::SimplifiedChinese => format!("测速完成 · {} 项，{} 项超时", values.len(), failed),
+                                        config::Language::English => format!("Speed test complete · {} checked, {} timed out", values.len(), failed),
+                                    }
                                 };
                                 state.notice_network_recovery = unavailable;
                                 state.notice_error=failed > 0;
@@ -1108,17 +1175,18 @@ async fn run_loop(
                                     let settings = serde_json::to_value(&state.session.settings)?;
                                     let vpn_generation = state.session.platform["vpn_generation"].as_u64().unwrap_or(0);
                                     let sender = updates.clone();
+                                    let language = state.presentation_language;
                                     recovery_job = Some(tokio::spawn(async move {
                                         let result = tokio::time::timeout(Duration::from_secs(120),
                                             api.confirm_all_nodes_unreachable()).await
-                                            .context("全部节点复测超时")
+                                            .context(language.text("全部节点复测超时", "Timed out rechecking all nodes"))
                                             .and_then(|result| result).map_err(|error| format!("{error:#}"));
                                         let _ = sender.send(Update::Unreachable(generation, vpn_generation, settings, result)).await;
                                     }));
                                 }
                                 if all {state.node_delays=values;} else {state.node_delays.extend(values);}
                             }
-                            Err(error)=>{state.notice=format!("测速失败：{error}");state.notice_error=true;},
+                            Err(error)=>{state.notice=format!("{}{error}", state.presentation_language.text("测速失败：", "Speed test failed: "));state.notice_error=true;},
                         }
                         immediate=true;refresh_requested=true;
                     }
@@ -1131,11 +1199,11 @@ async fn run_loop(
                             match result {
                                 Ok(true) => {
                                     state.logs.push_back(("WARN".into(), "全部节点经两个独立目标复测仍不可达，VPN 保持连接".into()));
-                                    state.notice = "全部节点不可达，VPN 仍连接。请更换节点；更新失败后会自动尝试直连。".into();
+                                    state.notice = state.presentation_language.text("全部节点不可达，VPN 仍连接。请更换节点；更新失败后会自动尝试直连。", "All nodes are unreachable; the VPN remains connected. Choose another node; failed updates will retry directly.").into();
                                     state.notice_network_recovery = true;
                                 },
-                                Ok(false) => state.notice = "未确认全部节点失联，可重试或更换节点。".into(),
-                                Err(error) => state.notice = format!("节点复测失败：{error}"),
+                                Ok(false) => state.notice = state.presentation_language.text("未确认全部节点失联，可重试或更换节点。", "Not all nodes were confirmed unreachable. Retry or choose another node.").into(),
+                                Err(error) => state.notice = format!("{}{error}", state.presentation_language.text("节点复测失败：", "Node recheck failed: ")),
                             }
                             state.notice_error = true;
                             immediate = true;
@@ -1166,8 +1234,8 @@ async fn run_loop(
                     Some(Update::Claude(generation,result)) if generation == state.claude_generation => {
                         claude_job = None; state.claude_busy = false; immediate = true;
                         match result {
-                            Ok(report) => {state.claude=Some(report); state.claude_status="检测完成 · 浏览器及网络采样已结束".into(); state.notice="检测完成".into();}
-                            Err(error) => {state.claude_status=format!("检测失败：{error}"); state.notice=error;state.notice_error=true;}
+                            Ok(report) => {state.claude=Some(report); state.claude_status=state.presentation_language.text("检测完成 · 浏览器及网络采样已结束", "Check complete · browser and network sampling finished").into(); state.notice=state.presentation_language.text("检测完成", "Check complete").into();}
+                            Err(error) => {state.claude_status=format!("{}{error}", state.presentation_language.text("检测失败：", "Check failed: ")); state.notice=error;state.notice_error=true;}
                         }
                     }
                     Some(Update::Protection(result)) => {
@@ -1175,21 +1243,23 @@ async fn run_loop(
                         immediate=true;
                         let applied=(|| -> Result<()> {
                             let protection=result.map_err(anyhow::Error::msg)?;
-                            ensure!(state.protection_change.is_some(), "保护操作已取消");
+                            ensure!(state.protection_change.is_some(), "{}", state.presentation_language.text("保护操作已取消", "Protection change cancelled"));
                             ensure!(state.session.settings.active_profile.as_deref()==Some(protection.profile_id.as_str()),
-                                "订阅已变化，请重新开启保护");
+                                "{}", state.presentation_language.text("订阅已变化，请重新开启保护", "The subscription changed; enable protection again"));
                             let request=AUTHORIZATION_REQUEST.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
                             state.protection_change.as_mut().expect("pending protection")
                                 .authorization=Some((request,protection));
-                            state.protection_status="正在等待 VPN 授权，当前网络设置保持不变…".into();
+                            state.protection_status=state.presentation_language.text("正在等待 VPN 授权，当前网络设置保持不变…", "Waiting for VPN authorization; current network settings are unchanged…").into();
                             state.session.native.request(json!({"op":"authorize-vpn","request":request}))?;
                             Ok(())
                         })();
-                        if let Err(error)=applied
-                            && let Err(restore)=rollback_protection(&mut state,&format!("保护开启失败：{error:#}")) {
-                            state.notice=format!("保护开启失败：{error:#}；恢复失败：{restore:#}");
-                            state.notice_error=true;
-                            state.notice_critical=true;
+                        if let Err(error)=applied {
+                            let reason = format!("{}{error:#}", state.presentation_language.text("保护开启失败：", "Failed to enable protection: "));
+                            if let Err(restore)=rollback_protection(&mut state,&reason) {
+                                state.notice=format!("{reason}{}{restore:#}", state.presentation_language.text("；恢复失败：", "; recovery failed: "));
+                                state.notice_error=true;
+                                state.notice_critical=true;
+                            }
                         }
                         refresh_requested=true;
                     }
@@ -1205,8 +1275,8 @@ async fn run_loop(
                         refresh_requested = true;
                         state.geo_updating=false;geo_job=None;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
-                            Ok(manifest)=> {state.geo=manifest.display_status();state.notice="Geo 数据已更新".into();},
-                            Err(error)=>{state.notice=format!("Geo 更新失败：{error}");state.notice_error=true;},
+                            Ok(manifest)=> {state.geo=core::geodata::localize_status(&manifest.display_status(), state.presentation_language);state.notice=state.presentation_language.text("Geo 数据已更新", "Geo data updated").into();},
+                            Err(error)=>{state.notice=format!("{}{error}", state.presentation_language.text("Geo 更新失败：", "Geo update failed: "));state.notice_error=true;},
                         }
                     }
                     Some(Update::Subscription(generation, pending, result)) if generation == subscription_generation => {
@@ -1231,7 +1301,7 @@ async fn run_loop(
                                 Err(error) => {
                                     if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
                                         && let Some(message) = core::subscription::format_notice(&error) {
-                                        state.notice = format!("订阅定时更新失败，已保留原配置与运行状态：{message}");
+                                        state.notice = format!("{}{message}", state.presentation_language.text("订阅定时更新失败，已保留原配置与运行状态：", "Scheduled subscription update failed; the existing configuration and connection are preserved: "));
                                         state.notice_error = true;
                                     }
                                     state.logs.push_back(("WARN".into(), format!("订阅定时下载失败，已保留原配置与运行状态：{error}")));
@@ -1243,30 +1313,30 @@ async fn run_loop(
                         state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(package)=>{
-                                state.update_status=package.as_ref().map(|p|format!("{} · {:.1} MiB",core::update::channel::description(&p.version,p.preview,core::VERSION),p.size as f64/1024.0/1024.0))
-                                    .unwrap_or_else(||"当前更新通道没有可用的 Android 更新".into());
+                                state.update_status=package.as_ref().map(|p|format!("{} · {:.1} MiB",core::update::channel::description_in(&p.version,p.preview,core::VERSION,state.presentation_language),p.size as f64/1024.0/1024.0))
+                                .unwrap_or_else(||state.presentation_language.text("当前更新通道没有可用的 Android 更新", "No Android update is available in the current channel").into());
                                 state.update_downloaded=state.update_downloaded && state.update_package.as_ref().map(|p|&p.version)==package.as_ref().map(|p|&p.version);
                                 state.update_package=package;
                             }
-                            Err(error)=>{state.update_status=error.clone();state.notice=format!("检查更新失败：{error}");state.notice_error=true;},
+                            Err(error)=>{state.update_status=error.clone();state.notice=format!("{}{error}", state.presentation_language.text("检查更新失败：", "Update check failed: "));state.notice_error=true;},
                         }
                     }
                     Some(Update::DownloadProgress(generation,value)) if generation == state.update_generation =>{
                         state.update_progress=value.received as f32/value.total.max(1) as f32;
                         state.update_status=if value.received==0 {
-                            format!("正在连接下载 · {}",value.routing())
+                            format!("{} · {}",state.presentation_language.text("正在连接下载", "Connecting to download"),value.routing_in(state.presentation_language))
                         } else {
-                            format!("下载 {}/{} · {}/s · {}",bytes(value.received),bytes(value.total),bytes(value.bytes_per_second),value.routing())
+                            format!("{} {}/{} · {}/s · {}",state.presentation_language.text("下载", "Download"),bytes(value.received),bytes(value.total),bytes(value.bytes_per_second),value.routing_in(state.presentation_language))
                         };
                     }
                     Some(Update::Downloaded(generation,result)) if generation == state.update_generation =>{
                         state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(())=>{
-                                state.update_downloaded=true;state.update_status="下载完成，请在系统界面确认安装".into();
+                                state.update_downloaded=true;state.update_status=state.presentation_language.text("下载完成，请在系统界面确认安装", "Download complete; confirm installation in the system dialog").into();
                                 if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                             }
-                            Err(error)=>{state.update_status=error.clone();state.notice=format!("更新失败：{error}");state.notice_error=true;},
+                            Err(error)=>{state.update_status=error.clone();state.notice=format!("{}{error}", state.presentation_language.text("更新失败：", "Update failed: "));state.notice_error=true;},
                         }
                     }
                     _ => {}
@@ -1305,7 +1375,7 @@ async fn run_loop(
                 if update_schedule.due(state.session.settings.update_check_interval_minutes, std::time::Instant::now())
                     && state.session.running && !state.update_busy
                     && state.session.settings.claude_protection.is_none() && state.protection_change.is_none() {
-                    update_schedule.checked(std::time::Instant::now());state.update_busy=true;state.update_downloading=false;state.update_status="正在检查更新…".into();
+                    update_schedule.checked(std::time::Instant::now());state.update_busy=true;state.update_downloading=false;state.update_status=state.presentation_language.text("正在检查更新…", "Checking for updates…").into();
                     state.update_generation = state.update_generation.wrapping_add(1);
                     state.update_confirmation = None;
                     update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
@@ -1332,7 +1402,7 @@ async fn run_loop(
                 }
             };
             if was_running && !state.session.running {
-                state.notice = "内核已意外停止，请导出诊断后重试启动。".into();
+                state.notice = state.presentation_language.text("内核已意外停止，请导出诊断后重试启动。", "The core stopped unexpectedly. Export diagnostics, then try starting it again.").into();
                 state.notice_error = true;
                 state.notice_critical = true;
             }
@@ -1341,7 +1411,12 @@ async fn run_loop(
                 Ok(false) => {}
                 Err(error) => {
                     state.protection_observed = false;
-                    state.notice = format!("保护状态异常：{error:#}");
+                    state.notice = format!(
+                        "{}{error:#}",
+                        state
+                            .presentation_language
+                            .text("保护状态异常：", "Protection status error: ")
+                    );
                     state.notice_error = true;
                     state.notice_critical = true;
                     state.logs.push_back(("ERROR".into(), state.notice.clone()));
@@ -1368,7 +1443,7 @@ async fn run_loop(
                 let api = state.session.api.clone();
                 let token = change.deadline;
                 let send = updates.clone();
-                state.protection_status = "正在关闭旧连接并验证保护节点与加密 DNS…".into();
+                state.protection_status = state.presentation_language.text("正在关闭旧连接并验证保护节点与加密 DNS…", "Closing old connections and checking the protected node and encrypted DNS…").into();
                 protection_dns_job = Some(tokio::spawn(async move {
                     let result = api
                         .finish_protection_enable()
@@ -1389,13 +1464,16 @@ async fn run_loop(
                 let refresh_route = state.visible && state.session.proxies.proxies.is_empty();
                 let generation = refresh_generation;
                 let send = updates.clone();
+                let language = state.presentation_language;
                 refresh_job = Some(tokio::spawn(async move {
                     let result = tokio::time::timeout(
                         Duration::from_secs(3),
                         Snapshot::fetch(&api, page, refresh_route),
                     )
                     .await
-                    .context("控制接口刷新超时")
+                    .context(
+                        language.text("控制接口刷新超时", "Control interface refresh timed out"),
+                    )
                     .and_then(|result| result)
                     .map_err(|error| format!("{error:#}"));
                     let _ = send.send(Update::Snapshot(generation, result)).await;
@@ -1693,19 +1771,33 @@ fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
 
 /// Returns true only after a user-requested enable has completed successfully.
 fn observe_protection(state: &mut State) -> Result<bool> {
+    let language = state.presentation_language;
     if state
         .protection_change
         .as_ref()
         .is_some_and(|change| std::time::Instant::now() >= change.deadline)
     {
-        return rollback_protection(state, "保护切换超时，已恢复原状态").map(|_| false);
+        return rollback_protection(
+            state,
+            language.text(
+                "保护切换超时，已恢复原状态",
+                "Protection change timed out; previous state restored",
+            ),
+        )
+        .map(|_| false);
     }
     match state.session.protection_snapshot() {
         Ok(Some(snapshot)) => state.guard_snapshot = snapshot,
         Ok(None) => {}
         Err(error) => {
             state.protection_observed = false;
-            let message = format!("暂时无法读取保护状态：{error:#}");
+            let message = format!(
+                "{}{error:#}",
+                language.text(
+                    "暂时无法读取保护状态：",
+                    "Protection status temporarily unavailable: "
+                )
+            );
             if state.protection_status != message {
                 state.logs.push_back(("WARN".into(), message.clone()));
             }
@@ -1721,7 +1813,10 @@ fn observe_protection(state: &mut State) -> Result<bool> {
         }
         let error = state.session.platform["vpn_error"].as_str().unwrap_or("");
         if change.enabled && !error.is_empty() {
-            let message = format!("保护 VPN 连接失败：{error}");
+            let message = format!(
+                "{}{error}",
+                language.text("保护 VPN 连接失败：", "Protected VPN connection failed: ")
+            );
             return rollback_protection(state, &message).map(|_| false);
         }
         let desired = change.enabled
@@ -1746,9 +1841,12 @@ fn observe_protection(state: &mut State) -> Result<bool> {
             let auto_check = enabled && change.auto_check;
             state.protection_change = None;
             state.notice = if enabled {
-                "Claude 保护已开启"
+                language.text("Claude 保护已开启", "Claude protection enabled")
             } else {
-                "Claude 保护已关闭，原网络状态已恢复"
+                language.text(
+                    "Claude 保护已关闭，原网络状态已恢复",
+                    "Claude protection disabled; previous network state restored",
+                )
             }
             .into();
             state.protection_status = state.notice.clone();
@@ -1756,14 +1854,25 @@ fn observe_protection(state: &mut State) -> Result<bool> {
         }
     } else if let Some(protection) = &state.session.settings.claude_protection {
         state.protection_status = if !state.session.vpn || !active {
-            "保护已配置，实时拦截未运行；请重新连接 VPN".into()
+            language
+                .text(
+                    "保护已配置，实时拦截未运行；请重新连接 VPN",
+                    "Protection configured, but live blocking is stopped; reconnect the VPN",
+                )
+                .into()
         } else if !state.guard_snapshot.error.is_empty() {
             state.guard_snapshot.error.clone()
         } else {
-            format!(
-                "保护节点：{} · 已拦截 {} 条",
-                protection.node, state.guard_snapshot.blocked
-            )
+            match language {
+                config::Language::SimplifiedChinese => format!(
+                    "保护节点：{} · 已拦截 {} 条",
+                    protection.node, state.guard_snapshot.blocked
+                ),
+                config::Language::English => format!(
+                    "Protected node: {} · Blocked {}",
+                    protection.node, state.guard_snapshot.blocked
+                ),
+            }
         };
     }
     Ok(false)
@@ -1780,7 +1889,13 @@ fn start_claude_check(
     state.claude_generation = state.claude_generation.wrapping_add(1);
     state.claude_busy = true;
     let generation = state.claude_generation;
-    state.claude_status = "正在检测，浏览器将自动采样…".into();
+    state.claude_status = state
+        .presentation_language
+        .text(
+            "正在检测，浏览器将自动采样…",
+            "Checking; browser sampling starts automatically…",
+        )
+        .into();
     let port = state.session.settings.mixed_port;
     let api = state.session.api.clone();
     let host = state.session.native.clone();
@@ -1828,6 +1943,7 @@ fn start_claude_check(
 }
 
 async fn native_event(state: &mut State, raw: &str) -> Result<()> {
+    let language = state.presentation_language;
     let value: Value = serde_json::from_str(raw)?;
     match value["event"].as_str().unwrap_or("") {
         "vpn-authorized" => {
@@ -1846,13 +1962,19 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
                 .as_ref()
                 .is_some_and(|change| std::time::Instant::now() >= change.deadline)
             {
-                return rollback_protection(state, "VPN 授权等待超时，原网络状态未改变");
+                return rollback_protection(
+                    state,
+                    language.text(
+                        "VPN 授权等待超时，原网络状态未改变",
+                        "VPN authorization timed out; previous network state preserved",
+                    ),
+                );
             }
             if !result["granted"].as_bool().unwrap_or(false) {
                 let reason = result["error"]
                     .as_str()
                     .filter(|text| !text.is_empty())
-                    .unwrap_or("VPN 授权已取消");
+                    .unwrap_or(language.text("VPN 授权已取消", "VPN authorization cancelled"));
                 return rollback_protection(state, reason);
             }
             let applied = (|| -> Result<()> {
@@ -1864,7 +1986,11 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
                 ensure!(
                     state.session.settings.active_profile.as_deref()
                         == Some(protection.profile_id.as_str()),
-                    "订阅已变化，请重新开启保护"
+                    "{}",
+                    language.text(
+                        "订阅已变化，请重新开启保护",
+                        "The subscription changed; enable protection again",
+                    )
                 );
                 let before = state.session.settings.clone();
                 change.before = before.clone();
@@ -1885,14 +2011,28 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
                     .request(json!({"op":"vpn-plan","enabled":true}))?;
                 state.guard_snapshot = Default::default();
                 state.session.native.request(json!({"op":"reconnect"}))?;
-                state.protection_status = "正在连接保护 VPN…".into();
+                state.protection_status = language
+                    .text("正在连接保护 VPN…", "Connecting protected VPN…")
+                    .into();
                 Ok(())
             })();
             if let Err(error) = applied {
-                rollback_protection(state, &format!("保护开启失败：{error:#}"))?;
+                rollback_protection(
+                    state,
+                    &format!(
+                        "{}{error:#}",
+                        language.text("保护开启失败：", "Failed to enable protection: ")
+                    ),
+                )?;
             }
         }
-        "vpn-cancelled" => rollback_protection(state, "VPN 授权已取消，已恢复原状态")?,
+        "vpn-cancelled" => rollback_protection(
+            state,
+            language.text(
+                "VPN 授权已取消，已恢复原状态",
+                "VPN authorization cancelled; previous state restored",
+            ),
+        )?,
         "visible" => {
             state.visible = value["value"].as_bool().unwrap_or(true);
         }
@@ -1912,7 +2052,9 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
             );
         }
         "file" => {
-            let base = value["value"]["name"].as_str().unwrap_or("导入配置");
+            let base = value["value"]["name"]
+                .as_str()
+                .unwrap_or(language.text("导入配置", "Imported configuration"));
             let mut name = base.to_owned();
             let mut suffix = 2;
             while state.session.profiles.iter().any(|p| p.name == name) {
@@ -1925,11 +2067,20 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
                     None,
                     &name,
                     "",
-                    Some(value["value"]["content"].as_str().context("导入内容为空")?),
+                    Some(
+                        value["value"]["content"].as_str().context(
+                            language.text("导入内容为空", "The imported content is empty"),
+                        )?,
+                    ),
                 )
                 .await?;
             state.completed = Some(MobileIntent::SaveProfile);
-            state.notice = "配置已导入，请选择启用".into();
+            state.notice = language
+                .text(
+                    "配置已导入，请选择启用",
+                    "Configuration imported; select it to activate",
+                )
+                .into();
         }
         _ => {}
     }
@@ -1937,6 +2088,7 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
 }
 
 async fn handle(state: &mut State, request: Request) -> Result<()> {
+    let language = state.presentation_language;
     let Request {
         intent,
         a,
@@ -1950,7 +2102,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
     if state.session.settings.claude_protection.is_some() || state.protection_change.is_some() {
         ensure!(
             mobile_allowed_during_protection(intent, &a),
-            core::protection::READ_ONLY_NOTICE
+            "{}",
+            language.text(
+                core::protection::READ_ONLY_NOTICE,
+                "Disable Claude protection first; network changes and updates are locked while protection is active",
+            )
         );
     }
     if (state.session.settings.claude_protection.is_some() || state.protection_change.is_some())
@@ -1993,12 +2149,19 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     | MobileIntent::Udp
                     | MobileIntent::ClaudeProtection
             ),
-        "请等待 Claude 保护切换完成"
+        "{}",
+        language.text(
+            "请等待 Claude 保护切换完成",
+            "Wait for the Claude protection change to finish",
+        )
     );
     let session = &mut state.session;
     match intent {
         MobileIntent::ApplicationPolicy => {
-            let notice = state.application_policies.request(session, &a, &b).await?;
+            let notice = state
+                .application_policies
+                .request(session, &a, &b, language)
+                .await?;
             if !notice.is_empty() {
                 state.notice = notice;
                 state.completed = Some(MobileIntent::ApplicationPolicy);
@@ -2007,7 +2170,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::Connect | MobileIntent::Disconnect => {
             ensure!(
                 intent != MobileIntent::Disconnect || session.settings.claude_protection.is_none(),
-                "请先关闭 Claude 保护，再断开 VPN"
+                "{}",
+                language.text(
+                    "请先关闭 Claude 保护，再断开 VPN",
+                    "Disable Claude protection before disconnecting the VPN",
+                )
             );
             session.native.request(
                 json!({"op":if intent == MobileIntent::Connect {"connect"} else {"disconnect"}}),
@@ -2023,34 +2190,49 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::Mode => {
             ensure!(
                 session.settings.claude_protection.is_none(),
-                "请先关闭 Claude 保护，再切换运行模式"
+                "{}",
+                language.text(
+                    "请先关闭 Claude 保护，再切换运行模式",
+                    "Disable Claude protection before changing the routing mode",
+                )
             );
             let mut next = session.settings.clone();
             next.run_mode = ["rule", "global", "direct"]
                 .get(a.parse::<usize>()?)
-                .context("运行模式无效")?
+                .context(language.text("运行模式无效", "Invalid routing mode"))?
                 .to_string();
             session.commit_settings(next)?;
         }
         MobileIntent::SelectNode => {
             ensure!(
                 session.settings.claude_protection.is_none(),
-                "请先关闭 Claude 保护，再切换节点"
+                "{}",
+                language.text(
+                    "请先关闭 Claude 保护，再切换节点",
+                    "Disable Claude protection before changing nodes",
+                )
             );
             session.api.select(&a, &b).await?;
         }
         MobileIntent::SavePorts => {
-            ensure!(!session.vpn, "请先断开 VPN，再修改端口");
+            ensure!(
+                !session.vpn,
+                "{}",
+                language.text(
+                    "请先断开 VPN，再修改端口",
+                    "Disconnect the VPN before changing the port"
+                )
+            );
             let mut next = session.settings.clone();
             next.mixed_port = a.parse()?;
             session.commit_settings(next)?;
-            state.notice = "端口已保存".into();
+            state.notice = language.text("端口已保存", "Port saved").into();
         }
         MobileIntent::NodeSort => {
             let mut next = session.settings.clone();
             next.node_sort = *proxy_order::NodeSort::ALL
                 .get(a.parse::<usize>()?)
-                .context("排序无效")?;
+                .context(language.text("排序无效", "Invalid sort order"))?;
             session.commit_settings(next)?;
         }
         MobileIntent::Query => {
@@ -2076,7 +2258,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 let parts = rule_manager::draft_parts(&a)?;
                 ensure!(
                     rule_manager::FORM_TYPES.contains(&parts.kind),
-                    "此规则请继续使用文本编辑，以保留所有参数"
+                    "{}",
+                    language.text(
+                        "此规则请继续使用文本编辑，以保留所有参数",
+                        "Continue editing this rule as text to retain all parameters",
+                    )
                 );
                 Some(RuleForm {
                     kind: parts.kind.into(),
@@ -2096,7 +2282,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .find(|p| p.id == selected)
                 .map(|p| p.id.clone());
             session.save_profile(id.as_deref(), &a, &b, None).await?;
-            state.notice = "订阅已保存".into();
+            state.notice = language.text("订阅已保存", "Subscription saved").into();
         }
         MobileIntent::ActivateProfile => {
             session.activate(&a)?;
@@ -2105,15 +2291,18 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             let active = session.settings.active_profile.as_deref() == Some(&a);
             session.delete(&a)?;
             state.notice = if active {
-                "订阅已删除，已切换到默认直连"
+                language.text(
+                    "订阅已删除，已切换到默认直连",
+                    "Subscription removed; switched to the default direct connection",
+                )
             } else {
-                "订阅已删除"
+                language.text("订阅已删除", "Subscription removed")
             }
             .into();
         }
         MobileIntent::UpdateProfile => {
             session.update_profile(&a).await?;
-            state.notice = "订阅已更新".into();
+            state.notice = language.text("订阅已更新", "Subscription updated").into();
         }
         MobileIntent::CloseConnection => session.api.close_connection(&a).await?,
         MobileIntent::CloseAll => session.api.close_connections().await?,
@@ -2127,13 +2316,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     .connections
                     .iter()
                     .find(|c| c.id.as_ref() == id)
-                    .context("该连接已结束")?;
+                    .context(language.text("该连接已结束", "This connection has ended"))?;
                 let resolved = if state.connection_address.0 == id {
                     state.connection_address.1.as_str()
                 } else {
                     ""
                 };
-                core::connection::detail_values(c, resolved)
+                core::connection::detail_values_in(c, resolved, language)
                     .into_iter()
                     .map(|(label, value)| {
                         format!("{label}: {}", if value.is_empty() { "—" } else { &value })
@@ -2145,7 +2334,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             };
             session.native.request(json!({"op":"copy","text":text}))?;
             state.copied = (state.copied.0.wrapping_add(1), key.into());
-            state.notice = "已复制".into();
+            state.notice = language.text("已复制", "Copied").into();
         }
         MobileIntent::LogLevel => state.log_level = a,
         MobileIntent::ClearLogs => state.logs.clear(),
@@ -2183,11 +2372,18 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 }))?;
             } else if intent == MobileIntent::CopyDiagnostics {
                 let content = serde_json::to_string_pretty(&report)?;
-                ensure!(content.len() <= 256 * 1024, "诊断报告较大，请使用导出诊断");
+                ensure!(
+                    content.len() <= 256 * 1024,
+                    "{}",
+                    language.text(
+                        "诊断报告较大，请使用导出诊断",
+                        "The diagnostic report is large; export it instead",
+                    )
+                );
                 session
                     .native
                     .request(json!({"op":"copy","text":content}))?;
-                state.notice = "诊断已复制".into();
+                state.notice = language.text("诊断已复制", "Diagnostics copied").into();
             } else {
                 let content = serde_json::to_string_pretty(&report)?;
                 session
@@ -2201,7 +2397,10 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .iter()
                 .enumerate()
                 .find(|(_, row)| row.id == a)
-                .context("规则已不存在，请重新选择")?;
+                .context(language.text(
+                    "规则已不存在，请重新选择",
+                    "This rule no longer exists; select a rule again",
+                ))?;
             let parts = rule_manager::parts(&row.raw)?;
             let text_mode = !rule_manager::FORM_TYPES.contains(&parts.kind);
             state.rule_editor = Some(RuleEditor {
@@ -2218,36 +2417,61 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             });
         }
         MobileIntent::RuleSave => {
-            let (position, enabled) = b.split_once('|').context("规则保存参数无效")?;
+            let (position, enabled) = b
+                .split_once('|')
+                .context(language.text("规则保存参数无效", "Invalid rule save parameters"))?;
             session.save_rule_state(
                 &selected,
                 &a,
-                position.trim().parse().context("插入位置应为正整数")?,
+                position.trim().parse().context(language.text(
+                    "插入位置应为正整数",
+                    "The insertion position must be a positive integer",
+                ))?,
                 enabled.parse()?,
             )?;
-            state.notice = "已保存到草稿，请应用修改".into();
+            state.notice = language
+                .text(
+                    "已保存到草稿，请应用修改",
+                    "Saved to draft; apply the changes",
+                )
+                .into();
         }
         MobileIntent::RuleShortcut => {
             let index: usize = a.parse()?;
-            ensure!(!session.document().builtin, "默认直连配置不支持修改规则");
+            ensure!(
+                !session.document().builtin,
+                "{}",
+                language.text(
+                    "默认直连配置不支持修改规则",
+                    "Rules cannot be modified in the default direct configuration",
+                )
+            );
             ensure!(
                 !*session
                     .document()
                     .included
                     .get(index)
-                    .context("快捷规则不存在")?,
-                "订阅已包含此规则"
+                    .context(language.text("快捷规则不存在", "Rule shortcut not found"))?,
+                "{}",
+                language.text(
+                    "订阅已包含此规则",
+                    "The subscription already includes this rule"
+                )
             );
             *session
                 .draft
                 .enabled
                 .get_mut(index)
-                .context("快捷规则不存在")? = b == "true";
+                .context(language.text("快捷规则不存在", "Rule shortcut not found"))? = b == "true";
         }
         MobileIntent::RuleDelete => {
             ensure!(
                 a.starts_with("c:"),
-                "订阅原规则可调整顺序；只有自定义规则可以删除"
+                "{}",
+                language.text(
+                    "订阅原规则可调整顺序；只有自定义规则可以删除",
+                    "Subscription rules can be reordered; only custom rules can be deleted",
+                )
             );
             session
                 .draft
@@ -2255,9 +2479,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .retain(|r| r.id != a.trim_start_matches("c:"));
             session.draft.order.retain(|id| id != &a);
         }
-        MobileIntent::RuleMove => {
-            session.move_rule_to(&a, b.trim().parse().context("移动位置应为正整数")?)?
-        }
+        MobileIntent::RuleMove => session.move_rule_to(
+            &a,
+            b.trim().parse().context(language.text(
+                "移动位置应为正整数",
+                "The destination must be a positive integer",
+            ))?,
+        )?,
         MobileIntent::RuleDrop => session.move_rule(&a, &b)?,
         MobileIntent::RuleEnable => session.toggle_rule(&a)?,
         MobileIntent::RuleRestore => session.draft.order.clear(),
@@ -2267,7 +2495,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         }
         MobileIntent::RuleApply => {
             session.apply_rules()?;
-            state.notice = "规则已应用".into();
+            state.notice = language.text("规则已应用", "Rules applied").into();
         }
         MobileIntent::RuleDiscard => {
             session.draft = rule_manager::ProfileRules::for_profile(
@@ -2283,7 +2511,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .profiles
                 .iter()
                 .find(|p| p.name == a)
-                .context("订阅不存在")?
+                .context(language.text("订阅不存在", "Subscription not found"))?
                 .id
                 .clone();
             session.select_rules(&id)?;
@@ -2294,7 +2522,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         | MobileIntent::FakeIpRestoreDefaults => {
             ensure!(
                 session.settings.claude_protection.is_none() && state.protection_change.is_none(),
-                "请先关闭 Claude 保护，再编辑排除项"
+                "{}",
+                language.text(
+                    "请先关闭 Claude 保护，再编辑排除项",
+                    "Disable Claude protection before editing exclusions",
+                )
             );
             session.edit_fake_ip_exclusions(
                 &a,
@@ -2304,7 +2536,9 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     _ => "restore",
                 },
             )?;
-            state.notice = "Fake-IP 排除项已保存".into();
+            state.notice = language
+                .text("Fake-IP 排除项已保存", "Fake-IP exclusions saved")
+                .into();
         }
         MobileIntent::OpenRelease => {
             session.native.request(
@@ -2314,7 +2548,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::DnsOverride | MobileIntent::Ipv6 | MobileIntent::Udp => {
             ensure!(
                 !session.vpn || intent != MobileIntent::Ipv6,
-                "请先断开 VPN，再修改 IPv6"
+                "{}",
+                language.text(
+                    "请先断开 VPN，再修改 IPv6",
+                    "Disconnect the VPN before changing IPv6"
+                )
             );
             let mut next = session.settings.clone();
             match intent {
@@ -2325,7 +2563,14 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.commit_settings(next)?;
         }
         MobileIntent::UpdatePrereleases => {
-            ensure!(!state.update_busy, "请等待当前更新操作完成");
+            ensure!(
+                !state.update_busy,
+                "{}",
+                language.text(
+                    "请等待当前更新操作完成",
+                    "Wait for the current update to finish"
+                )
+            );
             let mut next = session.settings.clone();
             next.update_prereleases = a == "true";
             // This is an updater preference; it must not reload the core or VPN.
@@ -2335,7 +2580,12 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             state.update_confirmation = None;
             state.update_package = None;
             state.update_downloaded = false;
-            state.update_status = "更新通道已更改，请检查更新".into();
+            state.update_status = language
+                .text(
+                    "更新通道已更改，请检查更新",
+                    "Update channel changed; check for updates",
+                )
+                .into();
             if let Err(error) = tokio::fs::remove_file(&state.update_path).await
                 && error.kind() != std::io::ErrorKind::NotFound
             {
@@ -2343,7 +2593,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             }
         }
         MobileIntent::TextScale => {} // Android font sizes belong to the OS.
-        MobileIntent::Appearance | MobileIntent::Accent => {
+        MobileIntent::Appearance | MobileIntent::Accent | MobileIntent::Language => {
             let mut next = session.settings.clone();
             match intent {
                 MobileIntent::Appearance => {
@@ -2356,7 +2606,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 MobileIntent::Accent => {
                     next.accent_color = *config::AccentColor::ALL
                         .get(a.parse::<usize>()?)
-                        .context("强调色无效")?
+                        .context(language.text("强调色无效", "Invalid accent color"))?
+                }
+                MobileIntent::Language => {
+                    next.language = config::LanguagePreference::from_tag(&a)
+                        .context(language.text("语言无效", "Invalid language"))?
                 }
                 _ => unreachable!(),
             }
@@ -2374,17 +2628,26 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             next.subscription_update_interval_minutes = a.trim().parse()?;
             session.store.save_settings(&next)?;
             session.settings = next;
-            state.notice = "订阅自动更新间隔已保存".into();
+            state.notice = language
+                .text(
+                    "订阅自动更新间隔已保存",
+                    "Subscription update interval saved",
+                )
+                .into();
         }
         MobileIntent::UpdateInterval => {
             let mut next = session.settings.clone();
             next.update_check_interval_minutes = a.trim().parse()?;
             session.store.save_settings(&next)?;
             session.settings = next;
-            state.notice = "自动检查更新间隔已保存".into();
+            state.notice = language
+                .text("自动检查更新间隔已保存", "Update check interval saved")
+                .into();
         }
         MobileIntent::SystemNotification => {
-            session.native.notify("Clash of Rust", "喵!", true)?;
+            session
+                .native
+                .notify("Clash of Rust", language.text("喵!", "Meow!"), true)?;
         }
         MobileIntent::SiteCategory => {
             state.category = a;
@@ -2413,7 +2676,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             let Some(saved) = session.settings.claude_protection.clone() else {
                 return Ok(());
             };
-            ensure!(a == "false", "保护操作无效");
+            ensure!(
+                a == "false",
+                "{}",
+                language.text("保护操作无效", "Invalid protection action")
+            );
             let desired = saved.previous.proxy_mode == core::model::ProxyMode::Tun;
             let before = session.settings.clone();
             state.protection_change = Some(ProtectionChange {
@@ -2426,7 +2693,12 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 authorization: None,
                 auto_check: false,
             });
-            state.protection_status = "正在恢复原网络状态…".into();
+            state.protection_status = language
+                .text(
+                    "正在恢复原网络状态…",
+                    "Restoring the previous network state…",
+                )
+                .into();
             let result = async {
                 session
                     .native
@@ -2457,7 +2729,13 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             }
             .await;
             if let Err(error) = result {
-                rollback_protection(state, &format!("关闭保护失败：{error:#}"))?;
+                rollback_protection(
+                    state,
+                    &format!(
+                        "{}{error:#}",
+                        language.text("关闭保护失败：", "Failed to disable protection: ")
+                    ),
+                )?;
             }
         }
         _ => {}
@@ -2469,7 +2747,13 @@ fn blocked_during_protection(state: &mut State) -> bool {
     if state.session.settings.claude_protection.is_none() && state.protection_change.is_none() {
         return false;
     }
-    state.notice = core::protection::READ_ONLY_NOTICE.into();
+    state.notice = state
+        .presentation_language
+        .text(
+            core::protection::READ_ONLY_NOTICE,
+            "Disable Claude protection first; network changes and updates are locked while protection is active",
+        )
+        .into();
     state.notice_error = true;
     true
 }
@@ -2482,6 +2766,7 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::Appearance
             | MobileIntent::Accent
             | MobileIntent::TextScale
+            | MobileIntent::Language
             | MobileIntent::NodeSort
             | MobileIntent::ClearLogs
             | MobileIntent::OverviewRefresh
@@ -2586,7 +2871,13 @@ fn reset_subscription_results(
     state.claude_busy = false;
     state.ip_results.fill(None);
     state.claude = None;
-    state.claude_status = "订阅已更新，请重新检测地区线索。".into();
+    state.claude_status = state
+        .presentation_language
+        .text(
+            "订阅已更新，请重新检测地区线索。",
+            "Subscription updated; run the check again.",
+        )
+        .into();
     state.probe = Default::default();
     state.probe_codes.clear();
     state.probe_busy = false;
@@ -2620,6 +2911,7 @@ struct GroupView {
     testing: bool,
 }
 struct Projection {
+    language: config::Language,
     application_policies: application_policies::View,
     overview: core::overview::Presentation,
     copied: (i32, Arc<str>),
@@ -2698,6 +2990,7 @@ struct ReportRow {
 }
 fn project(state: &State) -> Projection {
     let s = &state.session;
+    let language = state.presentation_language;
     let query = state.query.to_lowercase();
     let mut groups = vec![];
     for (name, group) in s.proxies.proxies.iter().filter(|_| state.page == 1) {
@@ -2835,7 +3128,7 @@ fn project(state: &State) -> Projection {
         } else {
             ""
         };
-        details = core::connection::detail_values(c, resolved)
+        details = core::connection::detail_values_in(c, resolved, language)
             .into_iter()
             .map(|(label, value)| (label.into(), value))
             .collect();
@@ -2848,11 +3141,18 @@ fn project(state: &State) -> Projection {
             (
                 c.name.to_owned(),
                 format!("{} / {}", c.counts.non_red(), c.counts.total()),
-                format!(
-                    "可用与部分可达 {} · 其他 {}",
-                    c.counts.non_red(),
-                    c.counts.total() - c.counts.non_red()
-                ),
+                match language {
+                    config::Language::SimplifiedChinese => format!(
+                        "可用与部分可达 {} · 其他 {}",
+                        c.counts.non_red(),
+                        c.counts.total() - c.counts.non_red()
+                    ),
+                    config::Language::English => format!(
+                        "Available or reachable {} · Other {}",
+                        c.counts.non_red(),
+                        c.counts.total() - c.counts.non_red()
+                    ),
+                },
                 if c.counts.non_red() == c.counts.total() {
                     1
                 } else {
@@ -2864,9 +3164,13 @@ fn project(state: &State) -> Projection {
     let mut sites = vec![];
     let mut site_regions = std::collections::BTreeSet::new();
     let mut site_details = vec![];
-    let mut exit = ("—".to_string(), "未检测".to_string());
+    let mut exit = (
+        "—".to_string(),
+        language.text("未检测", "Not checked").to_string(),
+    );
     for (index, service) in core::ip_check::services().iter().enumerate() {
         let slot = state.ip_results.get(index).and_then(Option::as_ref);
+        let status = core::ip_report::Status::of(slot);
         if service.id == "exit-ip"
             && let Some(Ok(value)) = slot
         {
@@ -2874,7 +3178,7 @@ fn project(state: &State) -> Projection {
         }
         let (value, detail, country, tone) = match slot {
             Some(Ok(value)) => (
-                value.summary.clone(),
+                status.summary_in(&value.summary, language).to_owned(),
                 value.detail.clone(),
                 value.country.clone(),
                 match value.state {
@@ -2885,25 +3189,44 @@ fn project(state: &State) -> Projection {
                     _ => 3,
                 },
             ),
-            Some(Err(error)) => ("检测失败".into(), error.clone(), String::new(), 3),
-            None => ("尚未检测".into(), String::new(), String::new(), 4),
+            Some(Err(error)) => (
+                language.text("检测失败", "Check failed").into(),
+                error.clone(),
+                String::new(),
+                3,
+            ),
+            None => (
+                language.text("尚未检测", "Not checked").into(),
+                String::new(),
+                String::new(),
+                4,
+            ),
         };
         if !country.is_empty() {
             site_regions.insert(country.clone());
         }
         if service.id == state.site_selected {
             site_details = vec![
-                ("平台".into(), service.name.clone()),
-                ("结果".into(), value.clone()),
-                ("详情".into(), detail.clone()),
-                ("分类".into(), service.group.clone()),
-                ("地区".into(), country.clone()),
+                (
+                    language.text("平台", "Service").into(),
+                    service.name.clone(),
+                ),
+                (language.text("结果", "Result").into(), value.clone()),
+                (language.text("详情", "Details").into(), detail.clone()),
+                (
+                    language.text("分类", "Category").into(),
+                    service.group.clone(),
+                ),
+                (
+                    language.text("地区", "Region").into(),
+                    core::countries::localized_name(&country, language),
+                ),
             ];
         }
         if state.category != "all" && service.group != state.category {
             continue;
         }
-        let status = core::ip_report::Status::of(slot).to_string();
+        let status = status.to_string();
         let status_matches = state.site_status == "全部结果" || state.site_status == status;
         if !status_matches
             || (state.site_region != "全部地区" && country != state.site_region)
@@ -2918,11 +3241,22 @@ fn project(state: &State) -> Projection {
             id: service.id.clone(),
             title: service.name.clone(),
             value,
-            detail: core::ip_report::target_exit_detail(service, slot).unwrap_or_default(),
+            detail: core::ip_report::target_exit_detail_in(service, slot, language)
+                .unwrap_or_default(),
             source: service.group.clone(),
             status_label: status,
             tone,
-            country_label: core::probe::country_name(&country).unwrap_or_else(|| country.clone()),
+            country_label: match language {
+                config::Language::SimplifiedChinese => {
+                    core::probe::country_name(&country).unwrap_or_else(|| country.clone())
+                }
+                config::Language::English => {
+                    core::countries::country_code(core::countries::country_text(&country))
+                        .and_then(core::countries::english_name)
+                        .unwrap_or(&country)
+                        .to_owned()
+                }
+            },
             country,
             millis: slot
                 .and_then(|result| result.as_ref().ok())
@@ -2937,7 +3271,14 @@ fn project(state: &State) -> Projection {
         for signal in &report.signals {
             let country_label =
                 if signal.group == core::claude_check::Group::Dns && !signal.ip.is_empty() {
-                    core::probe::country_name(&signal.country).unwrap_or_default()
+                    match language {
+                        config::Language::SimplifiedChinese => {
+                            core::probe::country_name(&signal.country).unwrap_or_default()
+                        }
+                        config::Language::English => core::countries::english_name(&signal.country)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    }
                 } else {
                     String::new()
                 };
@@ -2955,14 +3296,14 @@ fn project(state: &State) -> Projection {
             let section = core::claude_check::report_section(signal.group);
             let row = ReportRow {
                 id: section.into(),
-                title: signal.display_title().into(),
+                title: signal.display_title_in(language),
                 value: if country_label.is_empty() {
-                    signal.display_value().into()
+                    signal.display_value_in(language)
                 } else {
                     signal.ip.clone()
                 },
-                detail: signal.explanation(),
-                source: signal.source.clone(),
+                detail: signal.explanation_in(language),
+                source: signal.source_in(language),
                 status_label: String::new(),
                 tone,
                 country: signal.country.clone(),
@@ -2994,21 +3335,25 @@ fn project(state: &State) -> Projection {
             let row = ReportRow {
                 id: section.into(),
                 title: if grouped {
-                    section.into()
+                    language
+                        .text("Claude 连接与选路", "Claude connections and routing")
+                        .into()
                 } else {
-                    route.display_title().into()
+                    route.display_title_in(language).into()
                 },
                 value: if grouped {
-                    core::claude_check::route_group_value(&routes)
+                    core::claude_check::route_group_value_in(&routes, language)
                 } else {
-                    route.display_outcome()
+                    route.display_outcome_in(language)
                 },
                 detail: if grouped {
-                    core::claude_check::route_group_detail(&routes)
+                    core::claude_check::route_group_detail_in(&routes, language)
                 } else {
-                    route.explanation()
+                    route.explanation_in(language)
                 },
-                source: "内核连接记录".into(),
+                source: language
+                    .text("内核连接记录", "Core connection records")
+                    .into(),
                 status_label: String::new(),
                 tone,
                 country: String::new(),
@@ -3052,10 +3397,10 @@ fn project(state: &State) -> Projection {
         let section = core::claude_check::guard::REPORT_SECTION;
         let row = ReportRow {
             id: section.into(),
-            title: signal.display_title().into(),
-            value: signal.display_value().into(),
-            detail: signal.explanation(),
-            source: signal.source.clone(),
+            title: signal.display_title_in(language),
+            value: signal.display_value_in(language),
+            detail: signal.explanation_in(language),
+            source: signal.source_in(language),
             status_label: String::new(),
             tone,
             country: String::new(),
@@ -3080,10 +3425,15 @@ fn project(state: &State) -> Projection {
         let section = core::claude_check::guard::REPORT_SECTION;
         let row = ReportRow {
             id: section.into(),
-            title: route.display_title().into(),
-            value: route.display_outcome(),
-            detail: route.explanation(),
-            source: "实时拦截 · 内核连接记录".into(),
+            title: route.display_title_in(language).into(),
+            value: route.display_outcome_in(language),
+            detail: route.explanation_in(language),
+            source: language
+                .text(
+                    "实时拦截 · 内核连接记录",
+                    "Live blocking · core connection records",
+                )
+                .into(),
             status_label: String::new(),
             tone: 3,
             country: String::new(),
@@ -3104,7 +3454,7 @@ fn project(state: &State) -> Projection {
     }
     let mut claude_headers = Vec::new();
     let mut claude_rows = Vec::new();
-    for block in core::claude_check::report_blocks(claude) {
+    for block in core::claude_check::report_blocks_in(claude, language) {
         let block_items = block.rows.len() as i32;
         claude_headers.push(ReportRow {
             id: block.section.into(),
@@ -3124,8 +3474,9 @@ fn project(state: &State) -> Projection {
     }
     claude_headers.extend(claude_rows);
     Projection {
-        application_policies: state.application_policies.view(s),
-        overview: state.overview.present(s.running),
+        language,
+        application_policies: state.application_policies.view(s, language),
+        overview: state.overview.present_in(s.running, language),
         copied: state.copied.clone(),
         page: state.page,
         settings: s.settings.clone(),
@@ -3140,7 +3491,7 @@ fn project(state: &State) -> Projection {
         profiles: s.profiles.clone(),
         connections,
         connection_summary: if state.page == 3 {
-            core::connection::traffic_summary(&s.connections.connections)
+            core::connection::traffic_summary_in(&s.connections.connections, language)
         } else {
             Vec::new()
         },
@@ -3196,14 +3547,24 @@ fn project(state: &State) -> Projection {
             .map_or(3, |consent| consent.remaining() as i32),
         geo_updating: state.geo_updating,
         delay_busy: state.delay_scope.is_some(),
-        site_summary: format!(
-            "确认可用 {} · 网页可达 {} · 受限 {} · 失败 {}",
-            report.totals.count(core::ip_report::Status::Available),
-            report.totals.count(core::ip_report::Status::Partial)
-                + report.totals.count(core::ip_report::Status::Reachable),
-            report.totals.count(core::ip_report::Status::Restricted),
-            report.totals.count(core::ip_report::Status::Failed)
-        ),
+        site_summary: match language {
+            config::Language::SimplifiedChinese => format!(
+                "确认可用 {} · 网页可达 {} · 受限 {} · 失败 {}",
+                report.totals.count(core::ip_report::Status::Available),
+                report.totals.count(core::ip_report::Status::Partial)
+                    + report.totals.count(core::ip_report::Status::Reachable),
+                report.totals.count(core::ip_report::Status::Restricted),
+                report.totals.count(core::ip_report::Status::Failed)
+            ),
+            config::Language::English => format!(
+                "Available {} · Reachable {} · Restricted {} · Failed {}",
+                report.totals.count(core::ip_report::Status::Available),
+                report.totals.count(core::ip_report::Status::Partial)
+                    + report.totals.count(core::ip_report::Status::Reachable),
+                report.totals.count(core::ip_report::Status::Restricted),
+                report.totals.count(core::ip_report::Status::Failed)
+            ),
+        },
         claude_status: state.claude_status.clone(),
         protection_pending: state.protection_change.is_some(),
         protection_status: state.protection_status.clone(),
@@ -3220,7 +3581,10 @@ fn project(state: &State) -> Projection {
                     .as_bool()
                     .unwrap_or(false)
                 {
-                    "实时拦截未运行，请重新连接 VPN"
+                    language.text(
+                        "实时拦截未运行，请重新连接 VPN",
+                        "Live blocking is not running; reconnect the VPN",
+                    )
                 } else {
                     ""
                 },
@@ -3253,6 +3617,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     if ui.get_current_page() != p.page {
         return;
     }
+    let language = p.language;
     let data = ui.global::<MobileData>();
     let view = ui.global::<MobileView>();
     let policies = ui.global::<AndroidData>();
@@ -3404,9 +3769,9 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                 .map(|entry| FakeIpExclusionItem {
                     domain: entry.domain.into(),
                     source: match (entry.custom, entry.dns_override) {
-                        (true, true) => "自定义、DNS 覆盖",
-                        (true, false) => "自定义",
-                        _ => "DNS 覆盖",
+                        (true, true) => language.text("自定义、DNS 覆盖", "Custom, DNS override"),
+                        (true, false) => language.text("自定义", "Custom"),
+                        _ => language.text("DNS 覆盖", "DNS override"),
                     }
                     .into(),
                 })
@@ -3437,11 +3802,18 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         (p.connection_page.0, p.connection_page.1, 50, false),
         (p.rule_page.0, p.rule_page.1, 100, true),
     ] {
-        let label = format!(
-            "{} / {} · {count} 条",
-            page + 1,
-            count.div_ceil(size).max(1)
-        );
+        let label = match language {
+            config::Language::SimplifiedChinese => format!(
+                "{} / {} · {count} 条",
+                page + 1,
+                count.div_ceil(size).max(1)
+            ),
+            config::Language::English => format!(
+                "{} / {} · {count} items",
+                page + 1,
+                count.div_ceil(size).max(1)
+            ),
+        };
         if rules {
             data.set_rule_page(label.into());
             data.set_rule_page_index(page as i32);
@@ -3500,19 +3872,20 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     android.set_update_progress(p.update_progress);
     android.set_update_available(p.update_available);
     data.set_update_prereleases(p.settings.update_prereleases);
+    data.set_language(p.settings.language.tag().into());
     data.set_update_preview(p.update_preview);
     data.set_update_version(p.update_version.into());
     data.set_update_confirm_wait(p.update_confirm_wait);
     android.set_authorization_status(if p.vpn {
-        "已连接".into()
+        language.text("已连接", "Connected").into()
     } else {
-        "查看授权".into()
+        language.text("查看授权", "View authorization").into()
     });
     android.set_notification_speeds(p.platform["notification_speeds"].as_bool().unwrap_or(true));
     android.set_application_scope(
         p.platform["application_scope"]
             .as_str()
-            .unwrap_or("全部应用")
+            .unwrap_or(language.text("全部应用", "All apps"))
             .into(),
     );
     if p.completed == Some(MobileIntent::SavePorts) {
@@ -3531,9 +3904,26 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     } else {
         p.progress.0 as f32 / p.progress.1 as f32
     });
-    data.set_site_progress(format!("完成 {} / {}", p.progress.0, p.progress.1).into());
+    data.set_site_progress(
+        match language {
+            config::Language::SimplifiedChinese => {
+                format!("完成 {} / {}", p.progress.0, p.progress.1)
+            }
+            config::Language::English => format!("Completed {} / {}", p.progress.0, p.progress.1),
+        }
+        .into(),
+    );
     data.set_exit_ip(p.exit.0.into());
-    data.set_exit_country(core::countries::country_text(&p.exit.1).into());
+    let exit_country = core::countries::country_text(&p.exit.1);
+    data.set_exit_country(
+        match language {
+            config::Language::SimplifiedChinese => exit_country,
+            config::Language::English => core::countries::country_code(exit_country)
+                .and_then(core::countries::english_name)
+                .unwrap_or(exit_country),
+        }
+        .into(),
+    );
     data.set_exit_flag(
         core::countries::flag_emoji(&p.exit.1)
             .unwrap_or_default()
@@ -3602,7 +3992,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         view.set_notice_error(false);
         view.set_notice_critical(false);
         view.set_notice_recover_network(false);
-        ui.invoke_notify("内核已启动".into());
+        ui.invoke_notify(language.text("内核已启动", "Core started").into());
     }
     data.set_vpn_connected(p.vpn);
     data.set_profile(p.profile.into());
@@ -3665,11 +4055,11 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         data.get_shortcuts(),
         rows(
             [
-                "拦截广告",
-                "私有域名直连",
-                "私有 IP 直连",
-                "国内域名直连",
-                "国内 IP 直连",
+                language.text("拦截广告", "Block ads"),
+                language.text("私有域名直连", "Direct private domains"),
+                language.text("私有 IP 直连", "Direct private IPs"),
+                language.text("国内域名直连", "Direct domestic domains"),
+                language.text("国内 IP 直连", "Direct domestic IPs"),
             ]
             .into_iter()
             .map(Into::into)
@@ -3722,7 +4112,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                         name: profile.name.into(),
                         source: profile.source.clone().into(),
                         detail: if local {
-                            "本地配置".into()
+                            language.text("本地配置", "Local configuration").into()
                         } else {
                             core::subscription::summary(profile.usage.as_deref(), profile.updated)
                                 .into()
@@ -3759,7 +4149,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                             selected: name == group.now.as_str(),
                             name: name.into(),
                             kind: node.kind.to_string().into(),
-                            delay: proxy_order::delay_label(node.delay).into(),
+                            delay: proxy_order::delay_label_in(node.delay, language).into(),
                             tone: proxy_order::delay_tone(node.delay),
                             valid: true,
                             details: details.into(),
@@ -3768,7 +4158,13 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     GroupItem {
                         id: name.clone().into(),
                         title: name.into(),
-                        detail: format!("{} · {count} 个节点", group.kind).into(),
+                        detail: match language {
+                            config::Language::SimplifiedChinese => {
+                                format!("{} · {count} 个节点", group.kind)
+                            }
+                            config::Language::English => format!("{} · {count} nodes", group.kind),
+                        }
+                        .into(),
                         current: group.now.as_str().into(),
                         expanded,
                         testing,
@@ -3788,8 +4184,17 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                                     .collect(),
                             ),
                         ),
-                        page: format!("{} / {} · {count} 个", page + 1, count.div_ceil(48).max(1))
-                            .into(),
+                        page: match language {
+                            config::Language::SimplifiedChinese => {
+                                format!("{} / {} · {count} 个", page + 1, count.div_ceil(48).max(1))
+                            }
+                            config::Language::English => format!(
+                                "{} / {} · {count} items",
+                                page + 1,
+                                count.div_ceil(48).max(1)
+                            ),
+                        }
+                        .into(),
                         previous: page > 0,
                         next: (page + 1) * 48 < count,
                     }
@@ -3838,7 +4243,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     RuleItem {
                         id: row.id.into(),
                         position: (index + 1).to_string().into(),
-                        kind: parts.as_ref().map_or("复杂规则", |parts| parts.kind).into(),
+                        kind: parts
+                            .as_ref()
+                            .map_or(language.text("复杂规则", "Complex rule"), |parts| {
+                                parts.kind
+                            })
+                            .into(),
                         value: parts
                             .as_ref()
                             .map_or(row.raw.as_ref(), |parts| parts.payload)

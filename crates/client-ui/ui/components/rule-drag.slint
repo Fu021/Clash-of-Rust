@@ -17,7 +17,7 @@ export component RuleDragHandle inherits Rectangle {
     callback cancelled();
     width: 24px; height: 40px; horizontal-stretch: 0;
     background: root.tracking ? Theme.accent-wash : transparent; border-radius: 6px;
-    accessible-role: button; accessible-label: "拖动调整规则顺序，方向键上下移动";
+    accessible-role: button; accessible-label: @tr("拖动调整规则顺序，方向键上下移动");
     changed interactive => {
         if !root.interactive && root.tracking { root.tracking = false; root.cancelled(); }
     }

@@ -1,6 +1,8 @@
 use super::form::{self, Form};
 use anyhow::{Context, Result, ensure};
+use clash_client_core::{config::Language, proxy_order::NodeSort};
 use clash_client_runtime::control::{Command, Poll};
+use clash_client_runtime::engine::ProxyMode;
 use serde_json::{Value, json};
 
 pub(super) const KEYS: &[&str] = &[
@@ -8,6 +10,7 @@ pub(super) const KEYS: &[&str] = &[
     "proxy_mode",
     "claude_protection",
     "tui_node_sort",
+    "language",
     "mixed_port",
     "dns_override",
     "fake_ip",
@@ -28,52 +31,121 @@ pub(super) const RULE_KEYS: &[&str] = &[
     "shortcut_cn_ip",
 ];
 
-pub(super) fn category(key: &str) -> &'static str {
+const NETWORK_KEYS: &[&str] = &[
+    "mixed_port",
+    "dns_override",
+    "fake_ip",
+    "fake_ip_exclusions",
+    "fake_ip_disabled_defaults",
+    "ipv6",
+    "udp",
+];
+
+pub(super) fn category(key: &str, language: Language) -> &'static str {
     match key {
-        "run_mode" | "proxy_mode" | "claude_protection" | "tui_node_sort" => "常规",
-        "mixed_port"
-        | "dns_override"
-        | "fake_ip"
-        | "fake_ip_exclusions"
-        | "fake_ip_disabled_defaults"
-        | "ipv6"
-        | "udp" => "网络",
-        "update_prereleases" => "更新",
-        "active_profile" => "订阅",
-        key if key.starts_with("shortcut_") => "快捷规则",
-        _ => "计划任务",
+        "run_mode" | "proxy_mode" | "claude_protection" | "tui_node_sort" | "language" => {
+            language.text("常规", "General")
+        }
+        key if NETWORK_KEYS.contains(&key) => language.text("网络", "Network"),
+        "update_prereleases" => language.text("更新", "Updates"),
+        "active_profile" => language.text("订阅", "Subscriptions"),
+        key if key.starts_with("shortcut_") => language.text("快捷规则", "Rule shortcuts"),
+        _ => language.text("计划任务", "Scheduled tasks"),
     }
 }
 
-pub(super) fn matches_query(key: &str, query: &str) -> bool {
-    let category = category(key);
+pub(super) fn matches_query(key: &str, query: &str, language: Language) -> bool {
+    let category = category(key, language);
     [
         key,
-        title(key),
+        title(key, language),
         category,
-        if category == "网络" { "DNS" } else { "" },
+        if NETWORK_KEYS.contains(&key) {
+            "DNS"
+        } else {
+            ""
+        },
     ]
     .iter()
     .any(|value| value.to_lowercase().contains(query))
 }
 
-const SHORTCUTS: &[(&str, &str, &str)] = &[
-    ("shortcut_ads", "ads", "广告拦截"),
-    ("shortcut_private_domain", "private-domain", "私有域名直连"),
-    ("shortcut_private_ip", "private-ip", "私有 IP 直连"),
-    ("shortcut_cn_domain", "cn-domain", "中国域名直连"),
-    ("shortcut_cn_ip", "cn-ip", "中国 IP 直连"),
+const SHORTCUTS: &[(&str, &str, &str, &str)] = &[
+    ("shortcut_ads", "ads", "广告拦截", "Block ads"),
+    (
+        "shortcut_private_domain",
+        "private-domain",
+        "私有域名直连",
+        "Private domains direct",
+    ),
+    (
+        "shortcut_private_ip",
+        "private-ip",
+        "私有 IP 直连",
+        "Private IPs direct",
+    ),
+    (
+        "shortcut_cn_domain",
+        "cn-domain",
+        "中国域名直连",
+        "China domains direct",
+    ),
+    (
+        "shortcut_cn_ip",
+        "cn-ip",
+        "中国 IP 直连",
+        "China IPs direct",
+    ),
 ];
 
-pub(super) fn title(key: &str) -> &str {
+pub(super) fn title(key: &str, language: Language) -> &str {
     SHORTCUTS
         .iter()
-        .find(|(setting, _, _)| *setting == key)
-        .map_or_else(|| form::setting_title(key), |(_, _, title)| *title)
+        .find(|(setting, _, _, _)| *setting == key)
+        .map_or_else(
+            || form::setting_title(key, language),
+            |(_, _, chinese, english)| language.text(chinese, english),
+        )
+}
+
+fn language_choices(language: Language) -> [(&'static str, &'static str); 3] {
+    [
+        ("system", language.text("跟随系统", "Follow system")),
+        ("zh-CN", "简体中文"),
+        ("en", "English"),
+    ]
+}
+
+fn enabled_label(enabled: bool, language: Language) -> &'static str {
+    if enabled {
+        language.text("开启", "On")
+    } else {
+        language.text("关闭", "Off")
+    }
+}
+
+fn proxy_mode_label(mode: ProxyMode, language: Language) -> &'static str {
+    match mode {
+        ProxyMode::Off => enabled_label(false, language),
+        ProxyMode::System => language.text("系统代理", "System proxy"),
+        ProxyMode::Tun => "TUN",
+    }
+}
+
+fn routing_mode_label(mode: &str, language: Language) -> &str {
+    match mode {
+        "rule" => language.text("规则", "Rule"),
+        "global" => language.text("全局", "Global"),
+        "direct" => language.text("直连", "Direct"),
+        _ => mode,
+    }
 }
 
 pub(super) fn value(poll: &Poll, key: &str) -> Value {
-    if let Some(index) = SHORTCUTS.iter().position(|(setting, _, _)| *setting == key) {
+    if let Some(index) = SHORTCUTS
+        .iter()
+        .position(|(setting, _, _, _)| *setting == key)
+    {
         json!(
             poll.meta
                 .profiles
@@ -98,13 +170,15 @@ pub(super) fn value(poll: &Poll, key: &str) -> Value {
     }
 }
 
-pub(super) fn display(poll: &Poll, key: &str) -> String {
+pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
     if key.starts_with("shortcut_")
         && !poll.meta.profiles.iter().any(|profile| {
             Some(&profile.id) == poll.meta.settings.active_profile.as_ref() && !profile.builtin
         })
     {
-        return "仅适用于非内置订阅".into();
+        return language
+            .text("仅适用于非内置订阅", "Available for added subscriptions")
+            .into();
     }
     let value = value(poll, key);
     match key {
@@ -113,63 +187,99 @@ pub(super) fn display(poll: &Poll, key: &str) -> String {
             .profiles
             .iter()
             .find(|profile| Some(&profile.id) == poll.meta.settings.active_profile.as_ref())
-            .map_or_else(|| "尚未选择".into(), |profile| profile.name.clone()),
-        "tui_node_sort" => poll.meta.settings.tui_node_sort.to_string(),
-        "fake_ip" if !poll.meta.settings.dns_override => "关闭（DNS 覆盖未开启）".into(),
-        "fake_ip_exclusions" => format!(
-            "{} 项自定义 · {} 项有效排除",
-            poll.meta.settings.fake_ip_exclusions.len(),
-            poll.meta.settings.fake_ip_exclusion_entries().len()
-        ),
-        "fake_ip_disabled_defaults" => format!(
-            "{} 项已停用 · {} 项内置",
-            poll.meta.settings.fake_ip_disabled_defaults.len(),
-            clash_client_core::config::DEFAULT_FAKE_IP_EXCLUSIONS.len()
-        ),
-        "run_mode" => match value.as_str().unwrap_or("") {
-            "rule" => "规则".into(),
-            "global" => "全局".into(),
-            "direct" => "直连".into(),
-            other => other.into(),
+            .map_or_else(
+                || language.text("尚未选择", "None selected").into(),
+                |profile| profile.name.clone(),
+            ),
+        "tui_node_sort" => match language {
+            Language::SimplifiedChinese => poll.meta.settings.tui_node_sort.to_string(),
+            Language::English => match poll.meta.settings.tui_node_sort {
+                NodeSort::Name => "Node name".into(),
+                NodeSort::LatencyAscending => "Lowest latency first".into(),
+                NodeSort::LatencyDescending => "Highest latency first".into(),
+            },
         },
+        "language" => language_choices(language)
+            .iter()
+            .find(|(tag, _)| value.as_str() == Some(*tag))
+            .map_or("", |(_, label)| *label)
+            .into(),
+        "fake_ip" if !poll.meta.settings.dns_override => language
+            .text("关闭（DNS 覆盖未开启）", "Off (DNS override is off)")
+            .into(),
+        "fake_ip_exclusions" => {
+            let custom = poll.meta.settings.fake_ip_exclusions.len();
+            let active = poll.meta.settings.fake_ip_exclusion_entries().len();
+            match language {
+                Language::SimplifiedChinese => format!("{custom} 项自定义 · {active} 项有效排除"),
+                Language::English => format!("{custom} custom · {active} active"),
+            }
+        }
+        "fake_ip_disabled_defaults" => {
+            let disabled = poll.meta.settings.fake_ip_disabled_defaults.len();
+            let defaults = clash_client_core::config::DEFAULT_FAKE_IP_EXCLUSIONS.len();
+            match language {
+                Language::SimplifiedChinese => format!("{disabled} 项已停用 · {defaults} 项内置"),
+                Language::English => format!("{disabled} disabled · {defaults} defaults"),
+            }
+        }
+        "run_mode" => routing_mode_label(value.as_str().unwrap_or(""), language).into(),
         "proxy_mode" => {
             let actual = poll.snapshot.proxy_mode();
-            let label = |mode| match mode {
-                clash_client_runtime::engine::ProxyMode::Off => "关闭",
-                clash_client_runtime::engine::ProxyMode::System => "系统代理",
-                clash_client_runtime::engine::ProxyMode::Tun => "TUN",
-            };
+            let label = |mode| proxy_mode_label(mode, language);
             if actual == poll.meta.settings.proxy_mode {
                 label(actual).into()
             } else {
-                format!(
-                    "{}（启动偏好：{}）",
-                    label(actual),
-                    label(poll.meta.settings.proxy_mode)
-                )
+                let current = label(actual);
+                let preferred = label(poll.meta.settings.proxy_mode);
+                match language {
+                    Language::SimplifiedChinese => format!("{current}（启动偏好：{preferred}）"),
+                    Language::English => format!("{current} (startup preference: {preferred})"),
+                }
             }
         }
         _ => match value {
-            Value::Bool(enabled) => if enabled { "开启" } else { "关闭" }.into(),
+            Value::Bool(enabled) => enabled_label(enabled, language).into(),
             Value::String(value) => value,
             other => other.to_string(),
         },
     }
 }
 
-pub(super) fn hint(key: &str) -> &'static str {
+pub(super) fn hint(key: &str, language: Language) -> &'static str {
     match key {
-        "proxy_mode" | "claude_protection" => {
-            "选择状态后确认；系统授权在普通终端完成，返回后读取实际状态。"
-        }
-        "active_profile" => "选择订阅名称；新增、编辑来源、更新和删除在操作页。",
-        "fake_ip_exclusions" => "Enter 管理已有排除项、新增项目或恢复默认。",
-        "fake_ip" => "先开启 DNS 覆盖；关闭 DNS 覆盖会同时关闭 Fake-IP。",
-        "tui_node_sort" => "只改变终端节点显示；节点页也可按 s 循环切换。",
-        key if key.starts_with("shortcut_") => {
-            "作用于当前订阅；自定义规则、顺序和订阅原规则在规则页管理。"
-        }
-        _ => "←→ 或 Space 调整选项，Enter 确认；文字与数值按 Enter 编辑，↓ 选择保存。",
+        "proxy_mode" | "claude_protection" => language.text(
+            "选择状态后确认；系统授权在普通终端完成，返回后读取实际状态。",
+            "Choose a mode and confirm. Complete any system prompt in the terminal.",
+        ),
+        "active_profile" => language.text(
+            "选择订阅名称；新增、编辑来源、更新和删除在操作页。",
+            "Choose a subscription. Manage subscriptions under Commands.",
+        ),
+        "fake_ip_exclusions" => language.text(
+            "Enter 管理已有排除项、新增项目或恢复默认。",
+            "Press Enter to manage exclusions or restore defaults.",
+        ),
+        "fake_ip" => language.text(
+            "先开启 DNS 覆盖；关闭 DNS 覆盖会同时关闭 Fake-IP。",
+            "Fake-IP requires DNS override.",
+        ),
+        "tui_node_sort" => language.text(
+            "只改变终端节点显示；节点页也可按 s 循环切换。",
+            "Press s on the Nodes page to cycle through sort orders.",
+        ),
+        "language" => language.text(
+            "重新打开终端界面后生效。",
+            "Reopen the terminal UI to apply.",
+        ),
+        key if key.starts_with("shortcut_") => language.text(
+            "作用于当前订阅；自定义规则、顺序和订阅原规则在规则页管理。",
+            "Applies to the active subscription. Manage other rules under Rules.",
+        ),
+        _ => language.text(
+            "←→ 或 Space 调整选项，Enter 确认；文字与数值按 Enter 编辑，↓ 选择保存。",
+            "Use ← → or Space to change a choice, Enter to edit, and ↓ to select Save.",
+        ),
     }
 }
 
@@ -180,15 +290,21 @@ fn choices(form: &mut Form, index: usize, values: &[(&str, &str)]) {
         .collect();
 }
 
-pub(super) fn open(poll: &Poll, key: &str) -> Result<Form> {
+pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
     ensure!(
         (KEYS.contains(&key) && key != "fake_ip_exclusions")
             || RULE_KEYS.contains(&key)
             || key == "active_profile",
-        "该设置请使用操作页的专用入口"
+        "{}",
+        language.text(
+            "该设置请使用操作页的专用入口",
+            "Manage this setting under Commands."
+        )
     );
     let value = value(poll, key);
-    let mut form = Form::setting(key, &value);
+    let mut form = Form::setting(key, &value, language);
+    let off = enabled_label(false, language);
+    let on = enabled_label(true, language);
     match key {
         "run_mode" | "proxy_mode" | "claude_protection" | "active_profile" => {
             let path = match key {
@@ -197,25 +313,39 @@ pub(super) fn open(poll: &Poll, key: &str) -> Result<Form> {
                 "claude_protection" => "claude protect",
                 _ => "profile use",
             };
-            form = Form::new(form::commands().find(|spec| spec.path == path).unwrap());
+            form = Form::new_in(
+                form::commands().find(|spec| spec.path == path).unwrap(),
+                language,
+            );
             form.fields.truncate(1);
-            form.fields[0].label = "值".into();
+            form.fields[0].label = language.text("值", "Value").into();
             form.setting = Some(key.into());
             match key {
                 "run_mode" => {
-                    form.fields[0].value = value.as_str().context("运行模式无效")?.into();
+                    form.fields[0].value = value
+                        .as_str()
+                        .context(language.text("运行模式无效", "Invalid routing mode"))?
+                        .into();
                     choices(
                         &mut form,
                         0,
-                        &[("rule", "规则"), ("global", "全局"), ("direct", "直连")],
+                        &["rule", "global", "direct"]
+                            .map(|mode| (mode, routing_mode_label(mode, language))),
                     );
                 }
                 "proxy_mode" => {
-                    form.fields[0].value = value.as_str().context("代理方式无效")?.into();
+                    form.fields[0].value = value
+                        .as_str()
+                        .context(language.text("代理方式无效", "Invalid proxy mode"))?
+                        .into();
                     choices(
                         &mut form,
                         0,
-                        &[("off", "关闭"), ("system", "系统代理"), ("tun", "TUN")],
+                        &[
+                            ("off", off),
+                            ("system", proxy_mode_label(ProxyMode::System, language)),
+                            ("tun", "TUN"),
+                        ],
                     );
                 }
                 "claude_protection" => {
@@ -225,12 +355,16 @@ pub(super) fn open(poll: &Poll, key: &str) -> Result<Form> {
                         "off"
                     }
                     .into();
-                    choices(&mut form, 0, &[("off", "关闭"), ("on", "开启")]);
+                    choices(&mut form, 0, &[("off", off), ("on", on)]);
                 }
                 _ => {
                     ensure!(
                         !poll.meta.profiles.is_empty(),
-                        "没有订阅，请先在操作页添加订阅"
+                        "{}",
+                        language.text(
+                            "没有订阅，请先在操作页添加订阅",
+                            "Add a subscription under Commands."
+                        )
                     );
                     form.fields[0].value = poll
                         .meta
@@ -251,45 +385,57 @@ pub(super) fn open(poll: &Poll, key: &str) -> Result<Form> {
             &mut form,
             1,
             &[
-                ("name", "节点名称"),
-                ("latency_ascending", "延迟从低到高"),
-                ("latency_descending", "延迟从高到低"),
+                ("name", language.text("节点名称", "Node name")),
+                (
+                    "latency_ascending",
+                    language.text("延迟从低到高", "Lowest latency first"),
+                ),
+                (
+                    "latency_descending",
+                    language.text("延迟从高到低", "Highest latency first"),
+                ),
             ],
         ),
+        "language" => choices(&mut form, 1, &language_choices(language)),
         key if key.starts_with("shortcut_") => {
-            let (_, name, _) = SHORTCUTS
+            let (_, name, _, _) = SHORTCUTS
                 .iter()
-                .find(|(setting, _, _)| *setting == key)
+                .find(|(setting, _, _, _)| *setting == key)
                 .unwrap();
             let id = poll
                 .meta
                 .settings
                 .active_profile
                 .as_ref()
-                .context("尚未选择订阅")?;
+                .context(language.text("尚未选择订阅", "No subscription selected"))?;
             ensure!(
                 poll.meta
                     .profiles
                     .iter()
                     .any(|profile| profile.id == *id && !profile.builtin),
-                "快捷规则只适用于非内置订阅"
+                "{}",
+                language.text(
+                    "快捷规则只适用于非内置订阅",
+                    "Rule shortcuts require an added subscription."
+                )
             );
-            form = Form::new(
+            form = Form::new_in(
                 form::commands()
                     .find(|spec| spec.path == "rule shortcut")
                     .unwrap(),
+                language,
             );
             form.setting = Some(key.into());
             form.fields[0].value = (*name).into();
             form.fields[0].locked = true;
-            form.fields[1].label = "值".into();
+            form.fields[1].label = language.text("值", "Value").into();
             form.fields[1].value = if value == true { "on" } else { "off" }.into();
             form.fields[2].value = id.clone();
             form.fields[2].locked = true;
-            choices(&mut form, 1, &[("off", "关闭"), ("on", "开启")]);
+            choices(&mut form, 1, &[("off", off), ("on", on)]);
             form.selected = 1;
         }
-        _ if value.is_boolean() => choices(&mut form, 1, &[("false", "关闭"), ("true", "开启")]),
+        _ if value.is_boolean() => choices(&mut form, 1, &[("false", off), ("true", on)]),
         _ => {}
     }
     Ok(form)
@@ -302,16 +448,31 @@ pub(super) fn inline(args: &crate::args::Args) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(super) fn command(args: &crate::args::Args) -> Result<Command> {
-    let first = args.positional.first().context("设置值缺失")?;
+    command_in(args, Language::SimplifiedChinese)
+}
+
+pub(super) fn command_in(args: &crate::args::Args, language: Language) -> Result<Command> {
+    let first = args
+        .positional
+        .first()
+        .context(language.text("设置值缺失", "Setting value is missing"))?;
     Ok(match args.path.as_str() {
         "config set" => {
             ensure!(
                 KEYS.contains(&first.as_str())
                     && clash_client_core::config::MUTABLE_SETTINGS.contains(&first.as_str()),
-                "该设置请使用专用入口"
+                "{}",
+                language.text(
+                    "该设置请使用专用入口",
+                    "Use the dedicated action for this setting"
+                )
             );
-            let raw = args.positional.get(1).context("设置值缺失")?;
+            let raw = args
+                .positional
+                .get(1)
+                .context(language.text("设置值缺失", "Setting value is missing"))?;
             Command::ConfigSet {
                 key: first.clone(),
                 value: serde_json::from_str(raw).unwrap_or_else(|_| json!(raw)),
@@ -324,14 +485,27 @@ pub(super) fn command(args: &crate::args::Args) -> Result<Command> {
         "rule shortcut" => Command::ActiveShortcut {
             id: args
                 .get("profile")
-                .context("订阅身份缺失，请重新打开设置")?
+                .context(language.text(
+                    "订阅身份缺失，请重新打开设置",
+                    "Subscription ID is missing; reopen settings",
+                ))?
                 .into(),
             index: SHORTCUTS
                 .iter()
-                .position(|(_, name, _)| *name == first.as_str())
-                .context("未知快捷规则")?,
-            enabled: args.positional.get(1).context("开关状态缺失")? == "on",
+                .position(|(_, name, _, _)| *name == first.as_str())
+                .context(language.text("未知快捷规则", "Unknown rule shortcut"))?,
+            enabled: args
+                .positional
+                .get(1)
+                .context(language.text("开关状态缺失", "Switch state is missing"))?
+                == "on",
         },
-        _ => anyhow::bail!("该操作需要普通终端授权"),
+        _ => anyhow::bail!(
+            "{}",
+            language.text(
+                "该操作需要普通终端授权",
+                "This action requires authorization in the terminal"
+            )
+        ),
     })
 }

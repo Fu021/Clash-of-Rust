@@ -346,6 +346,8 @@ export component Select inherits Rectangle {
     in property <bool> modal-control: false;
     in property <[string]> options;
     in property <string> value;
+    pure callback display-value(string) -> string;
+    display-value(value) => { value }
     callback selected(int, string);
     property <length> popup-request-x: 0px;
     property <length> popup-request-y: root.height + 4px;
@@ -356,7 +358,7 @@ export component Select inherits Rectangle {
     ActionButton {
         geometry-key: root.geometry-key;
         width: parent.width;
-        text: root.value;
+        text: root.display-value(root.value);
         dropdown: true;
         modal-control: root.modal-control;
         enabled: root.enabled && root.options.length > 0;
@@ -385,7 +387,7 @@ export component Select inherits Rectangle {
                         enabled: root.enabled;
                         width: popup.width - 16px;
                         modal-control: root.modal-control;
-                        text: option;
+                        text: root.display-value(option);
                         selected: option == root.value;
                         clicked => { root.selected(i, option); popup.close(); }
                     }

@@ -26,25 +26,25 @@ component NodeCard inherits ContentPanel {
     if root.list-view: HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
         Label { text: root.node.name; preferred-width: 0px; font-size: 14px * Theme.text-scale; font-weight: root.node.selected ? 600 : 500; }
         ActionButton { geometry-key: "node-delay:" + root.node.name; text: root.node.delay; width: 78px; compact: true; quiet: true; text-color: Theme.tone-color(root.node.tone); enabled: UiData.running && !UiData.working;
-            accessible-label: "测速 " + root.node.name + "，" + root.node.delay;
+            accessible-label: @tr("测速 {}，{}", root.node.name, root.node.delay);
             clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); }
         }
-        ActionButton { geometry-key: "node-detail:" + root.node.name; text: root.detailed ? "收起" : "详情"; width: 44px; compact: true; quiet: true; clicked => { root.detail-requested(); } }
+        ActionButton { geometry-key: "node-detail:" + root.node.name; text: root.detailed ? @tr("收起") : @tr("详情"); compact: true; quiet: true; clicked => { root.detail-requested(); } }
     }
     if !root.list-view: GridLayout { spacing: Theme.content-gap;
         HorizontalLayout { col: 0; row: 0; colspan: 3; cross-axis-alignment: center; spacing: Theme.content-gap;
             Label { text: root.node.name; preferred-width: 0px; font-size: 14px * Theme.text-scale; font-weight: root.node.selected ? 600 : 500; }
         }
         Caption { col: 0; row: 1; text: root.node.kind; horizontal-stretch: 1; }
-        ActionButton { col: 1; row: 1; geometry-key: "node-detail:" + root.node.name; text: root.detailed ? "收起" : "详情"; compact: true; quiet: true; clicked => { root.detail-requested(); } }
+        ActionButton { col: 1; row: 1; geometry-key: "node-detail:" + root.node.name; text: root.detailed ? @tr("收起") : @tr("详情"); compact: true; quiet: true; clicked => { root.detail-requested(); } }
         ActionButton { col: 2; row: 1; geometry-key: "node-delay:" + root.node.name; text: root.node.delay; compact: true; quiet: true; text-color: Theme.tone-color(root.node.tone); enabled: UiData.running && !UiData.working;
-            accessible-label: "测速 " + root.node.name + "，" + root.node.delay;
+            accessible-label: @tr("测速 {}，{}", root.node.name, root.node.delay);
             clicked => { UiActions.dispatch(Intent.node-delay, root.node.name, ""); }
         }
     }
     if root.detailed: VerticalLayout { spacing: Theme.content-gap;
-        Caption { text: "完整名称：" + root.node.name; wrap: word-wrap; }
-        Caption { text: "协议：" + root.node.kind; wrap: word-wrap; }
+        Caption { text: @tr("完整名称：{}", root.node.name); wrap: word-wrap; }
+        Caption { text: @tr("协议：{}", root.node.kind); wrap: word-wrap; }
         Caption { text: root.node.details; wrap: word-wrap; }
     }
 }
@@ -57,8 +57,8 @@ export component ProxiesPage inherits PageSurface {
             spacing: Theme.page-gap;
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                 ViewToggle { geometry-key: "nodes-view"; list-view <=> PageViews.nodes-list; }
-                Field { placeholder: "搜索节点或代理组"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                Select { geometry-key: "node-sort"; width: 172px; horizontal-stretch: 0; options: ["延迟从低到高", "延迟从高到低", "名称排序"]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
+                Field { placeholder: @tr("搜索节点或代理组"); focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                Select { geometry-key: "node-sort"; width: 172px; horizontal-stretch: 0; options: [@tr("延迟从低到高"), @tr("延迟从高到低"), @tr("名称排序")]; value: self.options[UiData.node-sort]; selected(index, value) => { UiActions.dispatch(Intent.node-sort, "" + index, ""); } }
             }
             ListView {
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.node-sort + "/" + (UiData.groups-paginated ? "paged" : "all");
@@ -92,7 +92,7 @@ export component ProxiesPage inherits PageSurface {
                         }
                         TouchArea { mouse-cursor: pointer; clicked => { group-card.toggle(); } }
                     }
-                    ActionButton { text: group.testing ? "测速中…" : "组测速"; compact: true; quiet: true; busy: group.testing; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
+                    ActionButton { text: group.testing ? @tr("测速中…") : @tr("组测速"); compact: true; quiet: true; busy: group.testing; enabled: UiData.running && !UiData.working && !group.testing; clicked => { UiActions.dispatch(Intent.group-delay, group.id, ""); } }
                 }
                 group-body := Disclosure { expanded: group-card.expanded;
                     if group-body.mounted: VerticalLayout {
@@ -123,26 +123,26 @@ export component ProxiesPage inherits PageSurface {
                         }
                         HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                             Caption { text: group.expanded ? group.page : group-card.closing-page; }
-                            ActionButton { text: "上一页"; compact: true; quiet: true; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
-                            ActionButton { text: "下一页"; compact: true; quiet: true; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
+                            ActionButton { text: @tr("上一页"); compact: true; quiet: true; enabled: group.previous; clicked => { UiActions.dispatch(Intent.group-page, group.id, "false"); } }
+                            ActionButton { text: @tr("下一页"); compact: true; quiet: true; enabled: group.next; clicked => { UiActions.dispatch(Intent.group-page, group.id, "true"); } }
                         }
                     }
                 }
             }
                 }
             }
-            if UiData.groups.length == 0: ContentPanel { Caption { text: UiData.running ? "当前配置没有匹配的代理组" : "内核启动后显示代理组"; } }
+            if UiData.groups.length == 0: ContentPanel { Caption { text: UiData.running ? @tr("当前配置没有匹配的代理组") : @tr("内核启动后显示代理组"); } }
             HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                Caption { text: (UiData.groups-paginated ? "分页显示 · " : "全部代理组 · ") + UiData.page-status; }
+                Caption { text: (UiData.groups-paginated ? @tr("分页显示") : @tr("全部代理组")) + " · " + UiData.page-status; }
                 ActionButton {
                     geometry-key: "group-pagination";
-                    text: UiData.groups-paginated ? "显示全部" : "分页显示";
+                    text: UiData.groups-paginated ? @tr("显示全部") : @tr("分页显示");
                     compact: true; quiet: true;
-                    accessible-label: UiData.groups-paginated ? "当前分页显示，切换为显示全部代理组" : "当前显示全部代理组，切换为每页八组";
+                    accessible-label: UiData.groups-paginated ? @tr("当前分页显示，切换为显示全部代理组") : @tr("当前显示全部代理组，切换为每页八组");
                     clicked => { UiActions.dispatch(Intent.group-pagination, UiData.groups-paginated ? "false" : "true", ""); }
                 }
-                if UiData.groups-paginated: ActionButton { text: "上一页"; geometry-key: "group-pagination-previous"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 8), ""); } }
-                if UiData.groups-paginated: ActionButton { text: "下一页"; geometry-key: "group-pagination-next"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 8), ""); } }
+                if UiData.groups-paginated: ActionButton { text: @tr("上一页"); geometry-key: "group-pagination-previous"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 8), ""); } }
+                if UiData.groups-paginated: ActionButton { text: @tr("下一页"); geometry-key: "group-pagination-next"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 8), ""); } }
             }
         }
 }

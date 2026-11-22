@@ -2077,6 +2077,7 @@ mod tests {
         let mut appearance = session.settings.clone();
         appearance.theme_mode = Some(core::config::ThemeMode::Light);
         appearance.accent_color = core::config::AccentColor::Blue;
+        appearance.language = core::config::LanguagePreference::English;
         session.commit_settings(appearance.clone()).unwrap();
         assert_eq!(std::fs::read(&files[3]).unwrap(), before_files[3]);
         assert_eq!(session.store.load_settings().unwrap(), appearance);

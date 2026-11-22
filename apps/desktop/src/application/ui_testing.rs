@@ -35,6 +35,11 @@ pub fn initialize(width: u32, height: u32) -> Rc<MinimalSoftwareWindow> {
             installed.set(true);
         }
     });
+    if slint::select_bundled_translation("").is_err() {
+        let window = clash_client_ui::AppWindow::new().expect("load desktop translations");
+        slint::select_bundled_translation("").expect("select Chinese test language");
+        drop(window);
+    }
     let window = WINDOW.with(Clone::clone);
     window.set_size(slint::PhysicalSize::new(width, height));
     window

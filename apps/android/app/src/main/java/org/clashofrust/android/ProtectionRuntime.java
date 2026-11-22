@@ -30,7 +30,7 @@ final class ProtectionRuntime {
         context = owner.getApplicationContext();
         if (!TunnelService.connected()) { pause(owner); return; }
         File path = new File(context.getFilesDir(), "client/settings.json");
-        if (path.length() > 10 * 1024 * 1024) throw new IOException("保护配置超过大小限制");
+        if (path.length() > 10 * 1024 * 1024) throw new IOException(AppLanguage.current(context).getString(R.string.protection_settings_large));
         JSONObject settings = path.isFile() ? new JSONObject(new String(Files.readAllBytes(path.toPath()), StandardCharsets.UTF_8)) : new JSONObject();
         JSONObject protection = settings.optJSONObject("claude_protection");
         boolean enabled = protection != null && TunnelService.connected();
@@ -43,16 +43,23 @@ final class ProtectionRuntime {
         if (response.has("error")) throw new IOException(response.getString("error"));
     }
     static JSONObject state() throws Exception { return new JSONObject(nativeState()); }
-    static String notificationLabel(boolean configured, int health) {
+    static String notificationLabel(Context context, boolean configured, int health) {
         if (!configured) return "";
         switch (health) {
-            case 1: return "Claude 保护已启用";
-            case 3: return "Claude 保护异常";
-            default: return "Claude 保护待确认";
+            case 1: return context.getString(R.string.protection_active);
+            case 3: return context.getString(R.string.protection_error);
+            default: return context.getString(R.string.protection_unconfirmed);
         }
     }
-    static String notificationStatus() {
-        return configured ? notificationLabel(true, notificationHealth()) : "";
+    static String notificationStatus(Context context) {
+        return configured ? notificationLabel(context, true, notificationHealth()) : "";
+    }
+    static String language() {
+        return language(context);
+    }
+    static String language(Context owner) {
+        return owner == null ? "en" : AppLanguage.current(owner).getResources()
+            .getConfiguration().getLocales().get(0).toLanguageTag();
     }
     // JNI calls this off the UI thread, including when the Activity is closed.
     static String notify(String title, String message) {

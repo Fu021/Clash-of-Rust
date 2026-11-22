@@ -10,6 +10,9 @@ use yaml_serde::{Mapping, Value};
 mod dns;
 pub use dns::{DEFAULT_DNS_NAMESERVERS, DEFAULT_FAKE_IP_EXCLUSIONS};
 pub mod ingress;
+mod locale;
+
+pub use locale::{Language, LanguagePreference};
 mod ports;
 pub use ports::reserve_controller;
 mod profile;
@@ -31,6 +34,7 @@ pub const READABLE_SETTINGS: &[&str] = &[
     "secret",
     "dark",
     "theme_mode",
+    "language",
     "accent_color",
     "text_scale",
     "tray_speed",
@@ -64,6 +68,7 @@ pub const MUTABLE_SETTINGS: &[&str] = &[
     "secret",
     "dark",
     "theme_mode",
+    "language",
     "accent_color",
     "text_scale",
     "tray_speed",
@@ -185,6 +190,7 @@ pub struct Settings {
     pub dark: bool,
     // None preserves the explicit theme of settings saved by older versions.
     pub theme_mode: Option<ThemeMode>,
+    pub language: LanguagePreference,
     pub accent_color: AccentColor,
     pub text_scale: u16,
     pub tray_speed: bool,
@@ -233,6 +239,7 @@ impl Default for Settings {
             secret: uuid::Uuid::new_v4().to_string(),
             dark: defaults.dark,
             theme_mode: None,
+            language: LanguagePreference::default(),
             accent_color: AccentColor::default(),
             text_scale: 100,
             tray_speed: false,
@@ -266,6 +273,7 @@ impl Settings {
         let mut proposed = next.clone();
         proposed.dark = self.dark;
         proposed.theme_mode = self.theme_mode;
+        proposed.language = self.language;
         proposed.accent_color = self.accent_color;
         proposed.text_scale = self.text_scale;
         proposed.tray_speed = self.tray_speed;
@@ -1011,6 +1019,7 @@ mod tests {
         let mut appearance = before.clone();
         appearance.dark = !before.dark;
         appearance.theme_mode = Some(ThemeMode::Light);
+        appearance.language = LanguagePreference::English;
         appearance.accent_color = AccentColor::Blue;
         appearance.text_scale = 125;
         appearance.tray_speed = true;

@@ -165,6 +165,34 @@ fn displayed_reports_distinguish_completion_failure_and_missing_evidence() {
     }
 }
 
+#[test]
+fn english_network_display_keeps_serialized_evidence_and_external_values() {
+    let report = Report {
+        schema: 1,
+        tool: Tool::Dns,
+        target: "https://example.test".into(),
+        elapsed_ms: 42,
+        status: "partial",
+        entries: vec![
+            Entry::error("系统 DNS", "系统解析失败或超时", "dns_failed"),
+            Entry::ok("记录", "TXT value: 保留原文"),
+            Entry::unknown("第 2 跳", "*", "probe_timeout"),
+        ],
+    };
+    let original = serde_json::to_value(&report).unwrap();
+    let lines = report.lines_in(Language::English);
+    assert_eq!(lines[0], "Status · Partial · 42 ms");
+    assert_eq!(lines[1], "Target · https://example.test");
+    assert_eq!(lines[2], "System DNS · System DNS failed or timed out");
+    assert_eq!(lines[3], "Record · TXT value: 保留原文");
+    assert_eq!(lines[4], "Hop 2 · *");
+    assert_eq!(serde_json::to_value(&report).unwrap(), original);
+    assert_eq!(
+        entry_label_in("用户自定义名称", Language::English),
+        "用户自定义名称"
+    );
+}
+
 #[tokio::test]
 async fn protection_rejects_raw_probes_before_opening_any_socket() {
     for tool in [Tool::Udp, Tool::Ping, Tool::Trace] {

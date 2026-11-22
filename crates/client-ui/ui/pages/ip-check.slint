@@ -1,6 +1,7 @@
 import { PageSurface, ProgressTrack } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent, CategoryItem } from "../state.slint";
+import { IpStatusText } from "../components/ip-status.slint";
 import { PageScroll, Label, Caption, Heading, Panel, ContentPanel, ActionButton, Field, Select, Badge } from "../components/controls.slint";
 
 component CategoryCard inherits ContentPanel {
@@ -9,11 +10,11 @@ component CategoryCard inherits ContentPanel {
     interactive: true;
     clicked => { UiActions.dispatch(Intent.site-open-category, root.item.id, ""); }
     HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-        Heading { text: root.item.title; }
+        Heading { text: IpStatusText.label(root.item.title); }
         Label { text: root.item.count; color: root.item.tone == 2 ? Theme.warning : Theme.accent; horizontal-alignment: right; font-size: 22px * Theme.text-scale; }
     }
     Caption { text: root.item.detail; }
-    Caption { text: "查看分类详情 →"; color: Theme.accent; }
+    Caption { text: @tr("查看分类详情 →"); color: Theme.accent; }
 }
 
 export component IpCheckPage inherits PageSurface {
@@ -29,8 +30,8 @@ export component IpCheckPage inherits PageSurface {
             ContentPanel {
                 HorizontalLayout { spacing: 16px; cross-axis-alignment: start;
                     VerticalLayout { spacing: 8px;
-                        Caption { text: UiData.site-summary == "" ? "检测当前出口与平台可用情况" : UiData.site-summary; wrap: word-wrap; }
-                        Heading { text: UiData.site-counts.length > 0 ? UiData.site-counts[0].label : "等待检测"; font-size: 24px * Theme.text-scale; color: Theme.success; }
+                        Caption { text: UiData.site-summary == "" ? @tr("检测当前出口与平台可用情况") : UiData.site-summary; wrap: word-wrap; }
+                        Heading { text: UiData.site-counts.length > 0 ? UiData.site-counts[0].label : @tr("等待检测"); font-size: 24px * Theme.text-scale; color: Theme.success; }
                     }
                     Caption { text: UiData.site-progress; horizontal-stretch: 0; }
                 }
@@ -42,7 +43,7 @@ export component IpCheckPage inherits PageSurface {
                 }
             }
             if UiData.sites-report: ContentPanel {
-                Caption { text: "按检测结果筛选"; }
+                Caption { text: @tr("按检测结果筛选"); }
                 GridLayout {
                     spacing: 8px;
                     for count[index] in UiData.site-counts: Rectangle {
@@ -62,23 +63,23 @@ export component IpCheckPage inherits PageSurface {
                     if pair.right.id != "": CategoryCard { item: pair.right; }
                     if pair.right.id == "": Rectangle { horizontal-stretch: 1; }
                 }
-                ActionButton { text: "IP 信息与全部检测结果 →"; clicked => { UiActions.dispatch(Intent.site-open-category, "", ""); } }
+                ActionButton { text: @tr("IP 信息与全部检测结果 →"); clicked => { UiActions.dispatch(Intent.site-open-category, "", ""); } }
             }
             if !UiData.sites-report: VerticalLayout {
                 spacing: Theme.page-gap;
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    ActionButton { text: "← 返回报告"; clicked => { UiActions.dispatch(Intent.site-report, "", ""); } }
-                    Field { placeholder: "搜索平台、地区或结果"; focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
-                    ActionButton { text: "重测分类"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-retest, "", ""); } }
+                    ActionButton { text: @tr("← 返回报告"); clicked => { UiActions.dispatch(Intent.site-report, "", ""); } }
+                    Field { placeholder: @tr("搜索平台、地区或结果"); focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                    ActionButton { text: @tr("重测分类"); enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-retest, "", ""); } }
                 }
                 GridLayout { spacing: Theme.content-gap;
-                    Select { col: 0; row: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; geometry-key: "site-category"; options: UiData.site-category-options; value: UiData.site-category; selected(index, value) => { UiActions.dispatch(Intent.site-category, value, ""); } }
-                    Select { col: 1; row: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; geometry-key: "site-status"; options: UiData.site-status-options; value: UiData.site-status; selected(index, value) => { UiActions.dispatch(Intent.site-status, value, ""); } }
-                    Select { col: root.compact-results ? 0 : 2; row: root.compact-results ? 1 : 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; geometry-key: "site-region"; options: UiData.site-region-options; value: UiData.site-region; selected(index, value) => { UiActions.dispatch(Intent.site-region, value, ""); } }
+                    Select { col: 0; row: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; geometry-key: "site-category"; options: UiData.site-category-options; value: UiData.site-category; display-value(value) => { IpStatusText.label(value) } selected(index, value) => { UiActions.dispatch(Intent.site-category, value, ""); } }
+                    Select { col: 1; row: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; geometry-key: "site-status"; options: UiData.site-status-options; value: UiData.site-status; display-value(value) => { IpStatusText.label(value) } selected(index, value) => { UiActions.dispatch(Intent.site-status, value, ""); } }
+                    Select { col: root.compact-results ? 0 : 2; row: root.compact-results ? 1 : 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; geometry-key: "site-region"; options: UiData.site-region-options; value: UiData.site-region; display-value(value) => { IpStatusText.label(value) } selected(index, value) => { UiActions.dispatch(Intent.site-region, value, ""); } }
                     Rectangle {
                         col: root.compact-results ? 1 : 3; row: root.compact-results ? 1 : 0;
                         height: Theme.control-height; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
-                        ActionButton { width: parent.width; text: "清除筛选"; clicked => { UiActions.dispatch(Intent.site-reset, "", ""); } }
+                        ActionButton { width: parent.width; text: @tr("清除筛选"); clicked => { UiActions.dispatch(Intent.site-reset, "", ""); } }
                     }
                 }
                 for result in UiData.site-results: ContentPanel {
@@ -97,7 +98,7 @@ export component IpCheckPage inherits PageSurface {
                                 width: 24px; height: 24px; horizontal-stretch: 0;
                                 if result.flagged: Text { text: result.flag; width: parent.width; height: parent.height; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
                             }
-                            Caption { text: result.source == "" ? "未识别" : result.source; min-width: 0px; preferred-width: 0px; }
+                            Caption { text: result.source == "" ? @tr("未识别") : result.source; min-width: 0px; preferred-width: 0px; }
                         }
                         Caption {
                             col: root.compact-results ? 1 : 2; row: root.compact-results ? 1 : 0;
@@ -108,15 +109,15 @@ export component IpCheckPage inherits PageSurface {
                             col: root.compact-results ? 2 : 3; row: root.compact-results ? 1 : 0;
                             horizontal-stretch: root.compact-results ? 1 : 0; spacing: 8px; cross-axis-alignment: center;
                             if root.compact-results: Rectangle { horizontal-stretch: 1; }
-                            ActionButton { text: "详情"; clicked => { UiActions.dispatch(Intent.site-detail, result.id, ""); } }
-                            ActionButton { text: "重测"; enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-probe, result.id, ""); } }
+                            ActionButton { text: @tr("详情"); clicked => { UiActions.dispatch(Intent.site-detail, result.id, ""); } }
+                            ActionButton { text: @tr("重测"); enabled: UiData.running && !UiData.sites-busy; clicked => { UiActions.dispatch(Intent.site-probe, result.id, ""); } }
                         }
                     }
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
                     Caption { text: UiData.page-status; }
-                    ActionButton { text: "上一页"; enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
-                    ActionButton { text: "下一页"; enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
+                    ActionButton { text: @tr("上一页"); enabled: UiData.previous; clicked => { UiActions.dispatch(Intent.list-page, "" + max(0, UiData.page-offset - 60), ""); } }
+                    ActionButton { text: @tr("下一页"); enabled: UiData.next; clicked => { UiActions.dispatch(Intent.list-page, "" + (UiData.page-offset + 60), ""); } }
                 }
             }
         }

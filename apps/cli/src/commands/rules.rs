@@ -7,7 +7,7 @@ const SHORTCUTS: [&str; 5] = ["ads", "private-domain", "private-ip", "cn-domain"
 
 pub(super) async fn execute(args: &Args) -> Result<()> {
     let meta = backend::meta(args).await?;
-    let p = super::profile(&meta, args.get("profile"))?;
+    let p = super::profile(&meta, args.get("profile"), args.language())?;
     let id = p.id.clone();
     if args.path == "rule list" || (args.path == "rule shortcut" && args.positional.len() < 2) {
         let doc: Document =
@@ -16,7 +16,12 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         if args.path == "rule shortcut" {
             let selected = args.positional.first();
             if let Some(name) = selected {
-                ensure!(SHORTCUTS.contains(&name.as_str()), "未知快捷规则");
+                ensure!(
+                    SHORTCUTS.contains(&name.as_str()),
+                    "{}",
+                    args.language()
+                        .text("未知快捷规则", "Unknown rule shortcut")
+                );
             }
             return output::emit(args,json!(SHORTCUTS.iter().enumerate().filter(|(_,name)|selected.is_none_or(|v|v==*name))
                 .map(|(i,name)|json!({"name":name,"enabled":draft.enabled[i],"already_in_subscription":doc.included[i],"rule":clash_client_core::config::SUBSCRIPTION_RULES[i]})).collect::<Vec<_>>()));
@@ -48,7 +53,12 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             raw: args.positional[1].clone(),
         },
         "rule remove" => {
-            output::confirm(args, "删除这条自定义规则？").await?;
+            output::confirm(
+                args,
+                args.language()
+                    .text("删除这条自定义规则？", "Delete this custom rule?"),
+            )
+            .await?;
             RuleChange::Remove {
                 rule: first.clone(),
             }
@@ -59,14 +69,17 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         },
         "rule enable" => RuleChange::Enable {
             rule: first.clone(),
-            enabled: output::on_off(&args.positional[1])?,
+            enabled: output::on_off(&args.positional[1], args.language())?,
         },
         "rule shortcut" => RuleChange::Shortcut {
-            index: SHORTCUTS
-                .iter()
-                .position(|s| s == first)
-                .ok_or_else(|| anyhow::anyhow!("未知快捷规则"))?,
-            enabled: output::on_off(&args.positional[1])?,
+            index: SHORTCUTS.iter().position(|s| s == first).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    args.language()
+                        .text("未知快捷规则", "Unknown rule shortcut")
+                )
+            })?,
+            enabled: output::on_off(&args.positional[1], args.language())?,
         },
         _ => unreachable!(),
     };

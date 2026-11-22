@@ -2,52 +2,66 @@ import { PageSurface } from "../../components/motion.slint";
 import { MobileTypography } from "../shared/typography.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
-import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MScroll, MProgress } from "../shared/controls.slint";
+import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect, MScroll, MProgress } from "../shared/controls.slint";
 import { AppearanceSettings, NetworkToggles, ScheduleSettings, CurrentVersion, GeoSettingsContents } from "../shared/settings.slint";
 
+component AndroidLanguage inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MSmall { text: @tr("语言"); font-weight: 600; }
+    MCard {
+        MSelect {
+            geometry-key: "language";
+            options: [@tr("跟随系统"), "简体中文", "English"];
+            value: self.options[MobileData.language == "zh-CN" ? 1 : MobileData.language == "en" ? 2 : 0];
+            enabled: !MobileData.working;
+            selected(index, value) => { MobileActions.request(MobileIntent.language, ["system", "zh-CN", "en"][index], ""); }
+        }
+        MSmall { text: @tr("重新打开应用后生效。"); wrap: word-wrap; }
+    }
+}
 component AndroidNetwork inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MSmall { text: "网络"; font-weight: 600; }
+    MSmall { text: @tr("网络"); font-weight: 600; }
     MCard {
         HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
-            MText { text: "混合端口"; }
+            MText { text: @tr("混合端口"); }
             MField { width: 96px; horizontal-stretch: 0; text <=> MobileData.mixed-port; enabled: !MobileData.protected && !MobileData.protection-pending; edited(value) => { AndroidData.ports-dirty = true; } }
         }
-        if AndroidData.ports-dirty: MButton { text: "保存端口"; primary: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
+        if AndroidData.ports-dirty: MButton { text: @tr("保存端口"); primary: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
         MDivider { }
         NetworkToggles { show-fake-ip-exclusions: true; }
     }
 }
 component AndroidConnection inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MSmall { text: "VPN 与系统"; font-weight: 600; }
+    MSmall { text: @tr("VPN 与系统"); font-weight: 600; }
     MCard {
-        MRow { title: "VPN 设置"; value: AndroidData.authorization-status; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
+        MRow { title: @tr("VPN 设置"); value: AndroidData.authorization-status; interactive: !MobileData.protected && !MobileData.protection-pending; clicked => { AndroidActions.request(AndroidIntent.vpn-settings, ""); } }
         MDivider { }
-        MRow { geometry-key: "preview-application-routing"; title: "应用分流"; value: AndroidData.application-scope;
+        MRow { geometry-key: "preview-application-routing"; title: @tr("应用分流"); value: AndroidData.application-scope;
             clicked => { AndroidActions.request(AndroidIntent.application-routing, ""); }
         }
         MDivider { }
-        MSwitch { title: "通知显示实时速度"; checked: AndroidData.notification-speeds;
+        MSwitch { title: @tr("通知显示实时速度"); checked: AndroidData.notification-speeds;
             toggled(value) => { AndroidActions.request(AndroidIntent.notification-speeds, value ? "true" : "false"); }
         }
         MDivider { }
-        MRow { title: "电池与后台运行"; clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
+        MRow { title: @tr("电池与后台运行"); clicked => { AndroidActions.request(AndroidIntent.battery-settings, ""); } }
     }
 }
 component AndroidUpdates inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MSmall { text: "更新"; font-weight: 600; }
+    MSmall { text: @tr("更新"); font-weight: 600; }
     MCard {
         CurrentVersion { }
-        MSwitch { title: "包含预发布版本"; checked: MobileData.update-prereleases; enabled: !MobileData.working && !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending;
+        MSwitch { title: @tr("包含预发布版本"); checked: MobileData.update-prereleases; enabled: !MobileData.working && !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending;
             toggled(value) => { MobileActions.request(MobileIntent.update-prereleases, value ? "true" : "false", ""); }
         }
         MSmall { text: AndroidData.update-status; wrap: word-wrap; }
         if AndroidData.update-downloading: MProgress { value: AndroidData.update-progress; indeterminate: AndroidData.update-progress == 0; }
         HorizontalLayout { spacing: MobileTypography.small-gap;
-            MButton { text: "检查更新"; busy: AndroidData.update-busy && !AndroidData.update-downloading; enabled: !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
-            if AndroidData.update-available: MButton { text: "安装更新"; primary: true; enabled: !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending;
+            MButton { text: @tr("检查更新"); busy: AndroidData.update-busy && !AndroidData.update-downloading; enabled: !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.check-update, "", ""); } }
+            if AndroidData.update-available: MButton { text: @tr("安装更新"); primary: true; enabled: !AndroidData.update-busy && !MobileData.protected && !MobileData.protection-pending;
                 clicked => {
                     if MobileData.update-preview {
                         MobileActions.request(MobileIntent.install-update, "", "prepare");
@@ -56,8 +70,8 @@ component AndroidUpdates inherits VerticalLayout {
                 }
             }
         }
-        if AndroidData.update-downloading: MButton { text: "取消下载"; clicked => { MobileActions.request(MobileIntent.cancel-update, "", ""); } }
-        MRow { title: "查看 Release"; subtitle: "在浏览器查看版本与发布说明"; clicked => { MobileActions.request(MobileIntent.open-release, "", ""); } }
+        if AndroidData.update-downloading: MButton { text: @tr("取消下载"); clicked => { MobileActions.request(MobileIntent.cancel-update, "", ""); } }
+        MRow { title: @tr("查看 Release"); subtitle: @tr("在浏览器查看版本与发布说明"); clicked => { MobileActions.request(MobileIntent.open-release, "", ""); } }
         MDivider { }
         GeoSettingsContents { }
     }
@@ -69,11 +83,11 @@ export component AndroidSettings inherits PageSurface {
         changed height => { MobileView.settings-viewport-height = self.height; }
         init => { MobileView.settings-content-height = self.content-height; MobileView.settings-viewport-height = self.height; }
         if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
-            AndroidConnection { } AndroidNetwork { } AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
+            AndroidLanguage { } AndroidConnection { } AndroidNetwork { } AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
         }
         if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
             VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
-                AndroidConnection { } AndroidNetwork { }
+                AndroidLanguage { } AndroidConnection { } AndroidNetwork { }
             }
             VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
                 AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }

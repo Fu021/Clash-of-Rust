@@ -11,8 +11,19 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 .expect("settings object")
                 .remove("controller_port");
             let value = if let Some(key) = args.positional.first() {
-                ensure!(key != "controller_port", "控制端口由后台自动管理");
-                ensure!(value.get(key).is_some(), "未知设置项：{key}");
+                ensure!(
+                    key != "controller_port",
+                    "{}",
+                    args.language().text(
+                        "控制端口由后台自动管理",
+                        "The backend manages the controller port"
+                    )
+                );
+                ensure!(
+                    value.get(key).is_some(),
+                    "{}{key}",
+                    args.language().text("未知设置项：", "Unknown setting: ")
+                );
                 json!({(key):value[key].clone()})
             } else {
                 value
@@ -35,7 +46,13 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         "config check" => output::emit(args, backend::request(args, Command::CheckConfig).await?),
         "config effective" => {
             let value: Value = backend::request(args, Command::EffectiveConfig).await?;
-            yaml(args, value["yaml"].as_str().context("配置内容缺失")?)
+            yaml(
+                args,
+                value["yaml"].as_str().context(
+                    args.language()
+                        .text("配置内容缺失", "Configuration content is missing"),
+                )?,
+            )
         }
         "env" => environment(args).await,
         "geo status" => output::emit(args, serde_json::to_value(backend::meta(args).await?.geo)?),
@@ -47,7 +64,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             let enabled = args
                 .positional
                 .first()
-                .map(|v| output::on_off(v))
+                .map(|value| output::on_off(value, args.language()))
                 .transpose()?;
             output::emit(
                 args,
@@ -76,9 +93,15 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 output::confirm(
                     args,
                     if path == "service install" {
-                        "设置当前用户的 CLI 后台登录自启？"
+                        args.language().text(
+                            "设置当前用户的 CLI 后台登录自启？",
+                            "Start the current user's CLI backend at login?",
+                        )
                     } else {
-                        "移除 CLI 后台登录自启？"
+                        args.language().text(
+                            "移除 CLI 后台登录自启？",
+                            "Remove the CLI backend from login startup?",
+                        )
                     },
                 )
                 .await?;
@@ -89,7 +112,11 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             crate::service::execute(args).await
         }
         path if path.starts_with("update ") => update(args).await,
-        _ => bail!("未知命令：{}", args.path),
+        _ => bail!(
+            "{}{}",
+            args.language().text("未知命令：", "Unknown command: "),
+            args.path
+        ),
     }
 }
 
@@ -104,7 +131,7 @@ pub(super) fn yaml(args: &Args, raw: &str) -> Result<()> {
     if let Some(path) = args.get("output") {
         atomic_write(&backend::absolute(path)?, yaml.as_bytes())?;
         if !args.flag("quiet") {
-            eprintln!("已保存：{path}");
+            eprintln!("{}{path}", args.language().text("已保存：", "Saved: "));
         }
         Ok(())
     } else if args.flag("json") || args.flag("jsonl") {
@@ -150,7 +177,10 @@ async fn environment(args: &Args) -> Result<()> {
                 ("powershell", false) => format!("$env:{key} = '{value}'"),
                 ("cmd", true) => format!("set \"{key}=\""),
                 ("cmd", false) => format!("set \"{key}={value}\""),
-                _ => bail!("不支持的 shell"),
+                _ => bail!(
+                    "{}",
+                    args.language().text("不支持的 shell", "Unsupported shell")
+                ),
             };
             lines.push(line);
         }
@@ -201,7 +231,10 @@ async fn update(args: &Args) -> Result<()> {
         let available =
             clash_client_runtime::update::check_with_prereleases(port, include_prereleases)
                 .await?
-                .context("当前更新通道没有可安装的版本")?;
+                .context(args.language().text(
+                    "当前更新通道没有可安装的版本",
+                    "The current update channel has no installable version",
+                ))?;
         return install_selected_update(args, available).await;
     }
     let available =
@@ -227,8 +260,17 @@ async fn update(args: &Args) -> Result<()> {
             },
         );
     }
-    let output_path = backend::absolute(args.get("output").context("请提供 --output FILE")?)?;
-    let available = available.context("当前更新通道没有可安装的版本")?;
+    let output_path = backend::absolute(
+        args.get("output").context(
+            args.language()
+                .text("请提供 --output FILE", "Pass --output FILE"),
+        )?,
+    )?;
+    let available = available.context(args.language().text(
+        "当前更新通道没有可安装的版本",
+        "The current update channel has no installable version",
+    ))?;
+    let language = args.language();
     let mut last_report: Option<std::time::Instant> = None;
     let downloaded = clash_client_runtime::update::download(available, port, api, |value| {
         if !args.flag("quiet")
@@ -237,12 +279,14 @@ async fn update(args: &Args) -> Result<()> {
                 || last_report
                     .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(1)))
         {
-            eprintln!("{}", output::download_progress(&value));
+            eprintln!("{}", output::download_progress(&value, language));
             last_report = Some(std::time::Instant::now());
         }
     })
     .await?;
-    let parent = output_path.parent().context("导出路径无效")?;
+    let parent = output_path
+        .parent()
+        .context(args.language().text("导出路径无效", "Invalid output path"))?;
     std::fs::create_dir_all(parent)?;
     clash_client_runtime::assets::atomic_copy(downloaded.package_path(), &output_path)?;
     // Do not make output::emit interpret --output a second time.
@@ -256,8 +300,10 @@ async fn update(args: &Args) -> Result<()> {
         )?;
     } else if !args.flag("quiet") {
         eprintln!(
-            "已保存：{}\nSHA256：{}",
+            "{}{}\nSHA256{}{}",
+            language.text("已保存：", "Saved: "),
             output_path.display(),
+            language.text("：", ": "),
             downloaded.sha256()
         );
     }
@@ -269,7 +315,11 @@ fn terminal_install_mode(args: &Args) -> Result<bool> {
         && clash_client_runtime::control::gui_pid(&backend::store(args)?)?.is_none();
     ensure!(
         !args.flag("no-start") || terminal,
-        "--no-start 仅支持 Linux 纯终端安装"
+        "{}",
+        args.language().text(
+            "--no-start 仅支持 Linux 纯终端安装",
+            "--no-start is supported only for Linux terminal installations"
+        )
     );
     Ok(terminal)
 }
@@ -278,6 +328,7 @@ pub(crate) async fn install_selected_update(
     args: &Args,
     available: clash_client_runtime::update::Available,
 ) -> Result<()> {
+    let language = args.language();
     let settings = if let Some(remote) = backend::connect(args, false).await? {
         let meta: clash_client_runtime::control::Meta = remote.request(Command::Meta).await?;
         meta.settings
@@ -287,19 +338,34 @@ pub(crate) async fn install_selected_update(
     settings.require_mutable()?;
     ensure!(
         !available.preview || settings.update_prereleases,
-        "更新通道已变化，请重新检查并选择版本"
+        "{}",
+        language.text(
+            "更新通道已变化，请重新检查并选择版本",
+            "Update channel changed; check again and select a version"
+        )
     );
-    if let Some(hint) = available.package_manager_hint() {
+    if let Some(hint) = available.package_manager.map(|manager| {
+        clash_client_runtime::update::package_manager_update_hint_in(manager, language)
+    }) {
         bail!("{hint}");
     }
     let terminal = terminal_install_mode(args)?;
-    let mut prompt = update_install_prompt(&available);
+    let mut prompt = update_install_prompt(&available, language);
     if terminal && !args.flag("no-start") {
-        prompt.push_str("\n安装成功后自动启动后台和内核；失败恢复原状态。");
+        prompt.push_str(language.text(
+            "\n安装成功后自动启动后台和内核；失败恢复原状态。",
+            "\nThe backend and core will start after installation; failure restores the previous state.",
+        ));
     }
     output::confirm(args, &prompt).await?;
     if !args.flag("quiet") && !args.flag("json") && !args.flag("jsonl") {
-        eprintln!("正在下载安装包并校验 SHA256…");
+        eprintln!(
+            "{}",
+            language.text(
+                "正在下载安装包并校验 SHA256…",
+                "Downloading the installer and verifying SHA256…"
+            )
+        );
     }
     let operation = Command::UpdateSelected {
         version: available.version,
@@ -311,12 +377,15 @@ pub(crate) async fn install_selected_update(
     if terminal {
         let prepared: Value = backend::request(args, operation)
             .await
-            .context("终端安装准备失败；旧版后台请先退出后重试")?;
-        let directory = std::path::PathBuf::from(
-            prepared["installer"]
-                .as_str()
-                .context("后台没有返回终端安装目录")?,
-        );
+            .context(language.text(
+                "终端安装准备失败；旧版后台请先退出后重试",
+                "Terminal installation could not be prepared; quit an older backend and retry",
+            ))?;
+        let directory =
+            std::path::PathBuf::from(prepared["installer"].as_str().context(language.text(
+                "后台没有返回终端安装目录",
+                "Backend did not return the terminal installer directory",
+            ))?);
         let result = tokio::task::spawn_blocking(move || {
             clash_client_runtime::update::run_terminal_install(&directory)
         })
@@ -332,20 +401,36 @@ pub(crate) async fn install_selected_update(
     output::emit(args, backend::request(args, operation).await?)
 }
 
-fn update_install_prompt(available: &clash_client_runtime::update::Available) -> String {
+fn update_install_prompt(
+    available: &clash_client_runtime::update::Available,
+    language: clash_client_core::config::Language,
+) -> String {
     let channel = if available.preview {
-        "预发布版"
+        language.text("预发布版", "pre-release")
     } else {
-        "正式版"
+        language.text("正式版", "release")
     };
-    let prompt = format!(
-        "下载并安装{channel} {}，停止当前内核和后台？",
-        available.version
-    );
+    let prompt = match language {
+        clash_client_core::config::Language::SimplifiedChinese => {
+            format!(
+                "下载并安装{channel} {}，停止当前内核和后台？",
+                available.version
+            )
+        }
+        clash_client_core::config::Language::English => {
+            format!(
+                "Download and install {channel} {}, stopping the current core and backend?",
+                available.version
+            )
+        }
+    };
     if available.preview {
         format!(
             "{}\n{prompt}",
-            clash_client_core::update::channel::PRERELEASE_WARNING
+            language.text(
+                clash_client_core::update::channel::PRERELEASE_WARNING,
+                "Pre-releases may contain undiscovered bugs that cause crashes, network problems or configuration incompatibilities. Back up your configuration before installing.",
+            )
         )
     } else {
         prompt
@@ -370,13 +455,21 @@ mod tests {
                 package: None,
                 package_manager: None,
             };
-            let prompt = update_install_prompt(&available);
+            let prompt = update_install_prompt(
+                &available,
+                clash_client_core::config::Language::SimplifiedChinese,
+            );
             assert!(prompt.contains(version));
             assert_eq!(
                 prompt.contains(clash_client_core::update::channel::PRERELEASE_WARNING),
                 preview
             );
             assert_eq!(prompt.starts_with("下载并安装正式版"), !preview);
+            let english =
+                update_install_prompt(&available, clash_client_core::config::Language::English);
+            assert!(english.contains(version));
+            assert_eq!(english.contains("Back up your configuration"), preview);
+            assert!(english.contains("stopping the current core and backend"));
         }
     }
 }

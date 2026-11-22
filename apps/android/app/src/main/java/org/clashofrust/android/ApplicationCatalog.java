@@ -28,7 +28,7 @@ final class ApplicationCatalog {
     static String icon(Context context, PackageManager manager, ApplicationInfo application) throws Exception {
         File directory = new File(context.getCacheDir(), "application-icons");
         if (!directory.isDirectory() && !directory.mkdirs())
-            throw new java.io.IOException("应用图标缓存目录不可写");
+            throw new java.io.IOException(AppLanguage.current(context).getString(R.string.applications_icon_directory));
         File destination = new File(directory, application.packageName + ".png");
         long modified = application.sourceDir == null ? 0 : new File(application.sourceDir).lastModified();
         if (destination.isFile() && destination.length() > 0 && destination.lastModified() >= modified)
@@ -42,7 +42,7 @@ final class ApplicationCatalog {
             drawable.draw(new Canvas(bitmap));
             stream = output.startWrite();
             if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream))
-                throw new java.io.IOException("应用图标转换失败");
+                throw new java.io.IOException(AppLanguage.current(context).getString(R.string.applications_icon_failed));
             output.finishWrite(stream);
             return destination.getAbsolutePath();
         } catch (Exception error) {
@@ -103,7 +103,7 @@ final class ApplicationCatalog {
         java.util.Collections.sort(selected);
         JSONObject catalog = new JSONObject().put("applications", new JSONArray(entries))
             .put("mode", saved.mode).put("selected", new JSONArray(selected))
-            .put("summary", saved.summary()).put("visibility_limited", other == 0)
+            .put("summary", saved.summary(context)).put("visibility_limited", other == 0)
             .put("query_permission", android.os.Build.VERSION.SDK_INT < 30
                 || manager.checkPermission("android.permission.QUERY_ALL_PACKAGES", context.getPackageName())
                     == PackageManager.PERMISSION_GRANTED)
@@ -119,23 +119,23 @@ final class ApplicationCatalog {
 
     static JSONObject save(Context context, JSONObject data) throws Exception {
         if (CoreBridge.protectedMode(context))
-            throw new IllegalStateException("请先关闭 Claude 保护，再修改应用分流");
+            throw new IllegalStateException(AppLanguage.current(context).getString(R.string.applications_guard_routing));
         Set<String> selected = new HashSet<>();
         JSONArray packages = data.getJSONArray("selected");
         for (int index = 0; index < packages.length(); index++) selected.add(packages.getString(index));
-        ApplicationRouting routing = new ApplicationRouting(data.getString("mode"), selected);
-        if (TunnelService.pending()) throw new IllegalStateException("VPN 正在连接，请稍后保存");
+        ApplicationRouting routing = ApplicationRouting.create(context, data.getString("mode"), selected);
+        if (TunnelService.pending()) throw new IllegalStateException(AppLanguage.current(context).getString(R.string.vpn_wait_before_save));
         routing.save(context);
         boolean reconnect = TunnelService.connected();
         String reconnectError = "";
         if (reconnect) {
             try {
                 if (VpnService.prepare(context) != null)
-                    throw new IllegalStateException("VPN 授权已失效，请重新连接");
+                    throw new IllegalStateException(AppLanguage.current(context).getString(R.string.applications_permission_expired));
                 TunnelService.start(context, true);
             } catch (RuntimeException error) { reconnectError = error.toString(); }
         }
-        return new JSONObject().put("summary", routing.summary()).put("connected", reconnect)
+        return new JSONObject().put("summary", routing.summary(context)).put("connected", reconnect)
             .put("reconnecting", reconnect && reconnectError.isEmpty()).put("reconnect_error", reconnectError);
     }
 }

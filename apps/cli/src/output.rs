@@ -5,8 +5,34 @@ use std::io::{IsTerminal, Write};
 mod human;
 pub(crate) use clash_client_core::support::redact;
 
-pub fn download_progress(progress: &clash_client_core::update::Progress) -> String {
-    human::download_progress(progress)
+pub(crate) fn localized_error(
+    error: &anyhow::Error,
+    language: clash_client_core::config::Language,
+) -> String {
+    error
+        .chain()
+        .map(|cause| {
+            let message = cause.to_string();
+            if message == clash_client_core::protection::READ_ONLY_NOTICE {
+                language
+                    .text(
+                        clash_client_core::protection::READ_ONLY_NOTICE,
+                        "Disable Claude protection first; network changes and updates are locked while protection is active",
+                    )
+                    .to_owned()
+            } else {
+                message
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
+pub fn download_progress(
+    progress: &clash_client_core::update::Progress,
+    language: clash_client_core::config::Language,
+) -> String {
+    human::download_progress(progress, language)
 }
 
 pub fn emit(args: &Args, value: Value) -> Result<()> {
@@ -18,7 +44,7 @@ pub fn emit(args: &Args, value: Value) -> Result<()> {
     if let Some(path) = args.get("output") {
         save(&crate::backend::absolute(path)?, &args.path, &value)?;
         if !args.flag("quiet") {
-            eprintln!("已保存：{path}");
+            eprintln!("{}{path}", args.language().text("已保存：", "Saved: "));
         }
         if needs_failure_hint(args, &value) {
             crate::diagnostics::failure_hint(Some(args));
@@ -75,12 +101,21 @@ pub async fn confirm(args: &Args, message: &str) -> Result<()> {
     if args.flag("yes") {
         return Ok(());
     }
+    let language = args.language();
     ensure!(
         std::io::stdin().is_terminal(),
-        "{message}；非交互模式请明确传入 --yes"
+        "{message}{}",
+        language.text(
+            "；非交互模式请明确传入 --yes",
+            "; pass --yes in non-interactive mode"
+        )
     );
     let answer = read_line(&format!("{message} [y/N] ")).await?;
-    ensure!(matches!(answer.trim(), "y" | "Y" | "yes"), "操作已取消");
+    ensure!(
+        matches!(answer.trim(), "y" | "Y" | "yes"),
+        "{}",
+        language.text("操作已取消", "Operation cancelled")
+    );
     Ok(())
 }
 
@@ -100,11 +135,14 @@ pub(crate) async fn read_line(prompt: &str) -> Result<String> {
     Ok(receiver.await??)
 }
 
-pub fn on_off(value: &str) -> Result<bool> {
+pub fn on_off(value: &str, language: clash_client_core::config::Language) -> Result<bool> {
     match value {
         "on" => Ok(true),
         "off" => Ok(false),
-        _ => anyhow::bail!("参数应为 on 或 off"),
+        _ => anyhow::bail!(
+            "{}",
+            language.text("参数应为 on 或 off", "Expected on or off")
+        ),
     }
 }
 pub fn page(args: &Args, rows: Vec<Value>) -> Result<Value> {
@@ -119,6 +157,50 @@ pub fn page(args: &Args, rows: Vec<Value>) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn localized_errors_translate_known_protection_message_and_preserve_external_values() {
+        use clash_client_core::config::Language;
+
+        let error =
+            anyhow::anyhow!(clash_client_core::protection::READ_ONLY_NOTICE).context("节点 東京");
+        let english = localized_error(&error, Language::English);
+        assert!(
+            english.starts_with("节点 東京: Disable Claude protection first"),
+            "{english}"
+        );
+        assert_eq!(
+            localized_error(&error, Language::SimplifiedChinese),
+            format!(
+                "节点 東京: {}",
+                clash_client_core::protection::READ_ONLY_NOTICE
+            )
+        );
+        let unknown = anyhow::anyhow!("节点 東京");
+        assert_eq!(localized_error(&unknown, Language::English), "节点 東京");
+    }
+
+    #[test]
+    fn update_progress_uses_the_requested_language_and_preserves_the_node() {
+        use clash_client_core::{config::Language, update::Progress};
+
+        let progress = Progress {
+            received: 1024,
+            total: 2048,
+            bytes_per_second: 512,
+            route: "内核代理",
+            outbound: Some("东京 Node A".into()),
+        };
+        let chinese = download_progress(&progress, Language::SimplifiedChinese);
+        let english = download_progress(&progress, Language::English);
+        assert!(chinese.contains("下载：1.0 KiB / 2.0 KiB"), "{chinese}");
+        assert!(english.contains("Download: 1.0 KiB / 2.0 KiB"), "{english}");
+        assert!(
+            english.contains("Route: Core proxy · 东京 Node A"),
+            "{english}"
+        );
+    }
+
     #[test]
     fn nested_configuration_credentials_are_removed_without_hiding_results() {
         let value = redact(
@@ -132,7 +214,17 @@ mod tests {
     }
 
     fn render(command: &[&str], value: Value) -> String {
-        let args = crate::args::parse(command.iter().map(|s| (*s).to_owned())).unwrap();
+        render_in(command, value, "zh-CN")
+    }
+
+    fn render_in(command: &[&str], value: Value, language: &str) -> String {
+        let args = crate::args::parse(
+            command
+                .iter()
+                .map(|s| (*s).to_owned())
+                .chain([format!("--lang={language}")]),
+        )
+        .unwrap();
         let mut out = Vec::new();
         write_output(&mut out, &args, &redact(value)).unwrap();
         String::from_utf8(out).unwrap()
@@ -200,6 +292,54 @@ mod tests {
         for host in ["api.anthropic.com", "claude.ai", "claude.com"] {
             assert!(details.contains(host), "{host}");
         }
+    }
+
+    #[test]
+    fn english_claude_summary_keeps_json_and_route_evidence_unchanged() {
+        use clash_client_core::claude_check::{
+            Environment, Evidence, Group, Report, Route, Signal,
+        };
+
+        let mut report = Report::new(Environment::Core, "test");
+        report.signals.push(Signal::new(
+            Group::Quality,
+            "出口 IP 质量 · 203.0.113.12",
+            "机房或托管网络：是 · 2 项待确认",
+            "IPQuery、IPLogs",
+            Evidence::Inferred,
+            "已标记\n机房或托管网络：IPQuery 是、IPLogs 否",
+        ));
+        report.routes = ["api.anthropic.com", "claude.ai"]
+            .into_iter()
+            .map(|host| Route {
+                host: host.into(),
+                chain: "Node A".into(),
+                ..Default::default()
+            })
+            .collect();
+        report.routes.push(Route {
+            host: "failed.example".into(),
+            outcome: "连接失败".into(),
+            ..Default::default()
+        });
+        let value = json!({"report": report});
+        let english = render_in(&["claude", "check"], value.clone(), "en");
+        assert!(english.contains("Claude check · Attention: 1"));
+        assert!(english.contains(
+            "Exit IP quality · 203.0.113.12: Datacenter or hosting: Yes · 2 unconfirmed"
+        ));
+        assert!(english.contains("Claude domain routes: 2 domains · Route recorded"));
+        assert!(english.contains("Unexpected route · failed.example: Connection failed"));
+        assert!(english.contains("Full report: cor claude check --details"));
+        let details = render_in(&["claude", "check", "--details"], value.clone(), "en");
+        assert!(details.contains("Observations:"));
+        assert!(details.contains("Item: Exit IP quality · 203.0.113.12"));
+        assert!(details.contains("Datacenter or hosting: IPQuery: Yes, IPLogs: No"));
+        assert!(details.contains("Host: api.anthropic.com"));
+        assert!(details.contains("Outcome: Connection failed"));
+        let json_english = render_in(&["claude", "check", "--json"], value.clone(), "en");
+        let json_chinese = render_in(&["claude", "check", "--json"], value, "zh-CN");
+        assert_eq!(json_english, json_chinese);
     }
 
     #[test]
@@ -382,6 +522,132 @@ mod tests {
     }
 
     #[test]
+    fn english_lists_preserve_names_and_keep_json_language_independent() {
+        let nodes = json!({"offset":0,"total":3,"items":[
+            {"name":"自动组","type":"URLTest","now":"德国01","members":1,"selected":true},
+            {"name":"德国01","type":"AnyTLS","members":0,"latency_ms":140},
+            {"name":"美国01","type":"AnyTLS","members":0,"latency_ms":null}
+        ]});
+        let output = render_in(&["node", "list", "Proxy"], nodes.clone(), "en");
+        for expected in [
+            "Group: Proxy",
+            "Automatic testing",
+            "Selected",
+            "Current",
+            "德国01",
+            "140 ms",
+            "Not tested",
+            "3 total",
+        ] {
+            assert!(output.contains(expected), "{expected}: {output}");
+        }
+        assert_eq!(
+            render_in(&["node", "list", "--json"], nodes.clone(), "en"),
+            render_in(&["node", "list", "--json"], nodes, "zh-CN")
+        );
+        let subscriptions = render_in(
+            &["profile", "list"],
+            json!([{"id":"example-id","name":"我的订阅","active":true,"source":"https://example.test","updated":0}]),
+            "en",
+        );
+        for expected in ["[Current] 我的订阅", "ID: example-id", "1 subscriptions"] {
+            assert!(subscriptions.contains(expected), "{subscriptions}");
+        }
+        let connections = render_in(
+            &["connection", "show", "example"],
+            json!({"name":"example.test:443","network":"tcp","id":"example","chain":["节点"],"upload_rate":null,"download_rate":0}),
+            "en",
+        );
+        assert!(connections.contains("节点"), "{connections}");
+        assert!(connections.contains("Not sampled"), "{connections}");
+    }
+
+    #[test]
+    fn english_commands_show_status_and_preserve_diagnostic_evidence() {
+        let started = render_in(
+            &["start"],
+            json!({
+                "settings":{"active_profile":"id","run_mode":"rule","proxy_mode":"tun","mixed_port":7897},
+                "profiles":[{"id":"id","name":"我的订阅"}]
+            }),
+            "en",
+        );
+        for expected in [
+            "Core started",
+            "Current subscription: 我的订阅",
+            "Routing mode: Rule",
+            "Proxy mode: TUN",
+        ] {
+            assert!(started.contains(expected), "{started}");
+        }
+        let service = render_in(
+            &["service", "status"],
+            json!({
+                "installed":true,"enabled":true,"active":false,"ownership":"detached",
+                "service_error":"Permission denied","matches_current":true
+            }),
+            "en",
+        );
+        for expected in [
+            "Start at login: On",
+            "Service status: Stopped",
+            "CLI background outside service",
+            "Query failed: Permission denied",
+        ] {
+            assert!(service.contains(expected), "{service}");
+        }
+        let update = render_in(
+            &["update", "check"],
+            json!({"available":true,"version":"0.8.0","package_manager":"pacman","url":"https://example.test"}),
+            "en",
+        );
+        assert!(update.contains("Release found: 0.8.0"), "{update}");
+        assert!(update.contains("makepkg -si"), "{update}");
+        assert!(update.contains("use pacman"), "{update}");
+        let diagnostics = render_in(
+            &["diagnose"],
+            json!({
+                "dns_host":"example.test",
+                "system_dns":{"Err":"resolver timeout"},
+                "core_dns":{"Ok":["192.0.2.1"]},
+                "http":{"error":"connection refused"},
+                "proxy_environment":{"http":true},
+                "tun_configuration":{"state":"observed","auto_route":true}
+            }),
+            "en",
+        );
+        for expected in [
+            "System DNS: Failed: resolver timeout",
+            "Current core DNS: 192.0.2.1",
+            "Local proxy HTTP: Failed: connection refused",
+            "HTTP_PROXY",
+            "TUN configuration: Auto route=true",
+        ] {
+            assert!(diagnostics.contains(expected), "{diagnostics}");
+        }
+    }
+
+    #[test]
+    fn english_network_report_translates_known_evidence_without_rewriting_external_values() {
+        let output = render_in(
+            &["network", "dns", "example.test"],
+            json!({
+                "target":"https://example.test",
+                "entries":[
+                    {"label":"系统 DNS","detail":"系统解析失败或超时","code":"dns_failed"},
+                    {"label":"记录","detail":"TXT: 保留原文","code":"ok"}
+                ]
+            }),
+            "en",
+        );
+        assert!(
+            output.contains("System DNS: System DNS failed or timed out"),
+            "{output}"
+        );
+        assert!(output.contains("Record: TXT: 保留原文"), "{output}");
+    }
+
+    #[test]
     fn readable_status_has_units_and_stopped_status_does_not_claim_a_live_route() {
         let status = render(
             &["status"],
@@ -405,6 +671,45 @@ mod tests {
             json!({"theme_mode":"dark"}),
         );
         assert!(setting.contains("深色（dark）"));
+    }
+
+    #[test]
+    fn english_status_keeps_route_context_and_external_tun_guidance() {
+        let value = json!({
+            "running":true,"owner":"daemon","mode":"rule","proxy":"tun",
+            "route":["PROXY","Node A"],"node":"Node A",
+            "upload_rate":1024,"download_rate":1536,"connections":1,"protected":false,
+            "host_routes":{
+                "scope":"current_network_namespace",
+                "holder_scope":"current_user",
+                "ipv4":{"state":"observed","interface":"Meta","kind":"tun"},
+                "ipv6":{"state":"unknown"},
+                "tun_holders":{"state":"complete","interfaces":{"Meta":[]}},
+                "warnings":["tun_owner_unconfirmed"]
+            }
+        });
+        let status = render_in(&["status"], value.clone(), "en");
+        for expected in [
+            "Core: Running · CLI background",
+            "Proxy: TUN · Rule mode",
+            "Reference route: PROXY → Node A",
+            "cor connection list",
+            "Claude protection: Off",
+            "Download 1.5 KiB/s · Upload 1.0 KiB/s",
+            "Traffic uses an external TUN",
+            "sudo cor status --all-users",
+            "cor diagnose --output cor-diagnose.json",
+        ] {
+            assert!(status.contains(expected), "{status}");
+        }
+        assert_eq!(
+            render_in(&["status", "--json"], value.clone(), "en"),
+            render_in(&["status", "--json"], value, "zh-CN")
+        );
+        assert_eq!(
+            render_in(&["status"], json!({"running":false}), "en"),
+            "Core: Stopped\n"
+        );
     }
 
     #[test]

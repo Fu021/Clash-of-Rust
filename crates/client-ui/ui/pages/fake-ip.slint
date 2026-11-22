@@ -13,16 +13,16 @@ export component FakeIpPage inherits Rectangle {
         HorizontalLayout {
             cross-axis-alignment: center;
             spacing: Theme.content-gap;
-            ActionButton { text: "← 返回设置"; clicked => { UiActions.dispatch(Intent.fake-ip-editor, "false", ""); } }
-            Heading { text: "Fake-IP 排除项"; }
+            ActionButton { text: @tr("← 返回设置"); clicked => { UiActions.dispatch(Intent.fake-ip-editor, "false", ""); } }
+            Heading { text: @tr("Fake-IP 排除项"); }
             Rectangle { horizontal-stretch: 1; }
         }
         if UiData.fake-ip-removed-defaults > 0: HorizontalLayout {
             cross-axis-alignment: center;
             spacing: Theme.content-gap;
-            Caption { text: "已移除 " + UiData.fake-ip-removed-defaults + " 项 DNS 覆盖排除项"; wrap: word-wrap; }
+            Caption { text: @tr("已移除 {} 项 DNS 覆盖排除项", UiData.fake-ip-removed-defaults); wrap: word-wrap; }
             ActionButton {
-                text: "一键还原 DNS 覆盖项";
+                text: @tr("一键还原 DNS 覆盖项");
                 enabled: UiData.dns-override && !UiData.working;
                 clicked => { UiActions.dispatch(Intent.fake-ip-restore-defaults, "", ""); }
             }
@@ -32,12 +32,12 @@ export component FakeIpPage inherits Rectangle {
             spacing: Theme.content-gap;
             Field {
                 text <=> UiData.fake-ip-input;
-                placeholder: "example.com 或 +.example.com";
+                placeholder: @tr("example.com 或 +.example.com");
                 enabled: UiData.dns-override && !UiData.working;
                 accepted => { if UiData.dns-override && !UiData.working { UiActions.dispatch(Intent.fake-ip-add, "", ""); } }
             }
             ActionButton {
-                text: "添加";
+                text: @tr("添加");
                 primary: true;
                 enabled: UiData.dns-override && !UiData.working;
                 clicked => { UiActions.dispatch(Intent.fake-ip-add, "", ""); }
@@ -45,8 +45,8 @@ export component FakeIpPage inherits Rectangle {
         }
         VerticalLayout {
             spacing: 4px;
-            Caption { text: "格式：example.com、+.example.com 或 *.example.com；多个用逗号分隔。"; wrap: word-wrap; }
-            Caption { text: "DNS 覆盖项删除后可一键还原，保留自定义项；订阅原有过滤规则仍会生效。"; wrap: word-wrap; }
+            Caption { text: @tr("格式：example.com、+.example.com 或 *.example.com；多个用逗号分隔。"); wrap: word-wrap; }
+            Caption { text: @tr("DNS 覆盖项删除后可一键还原，保留自定义项；订阅原有过滤规则仍会生效。"); wrap: word-wrap; }
             if UiData.fake-ip-error != "": Caption { text: UiData.fake-ip-error; color: Theme.warning; wrap: word-wrap; }
             if UiData.fake-ip-error != "": DiagnosticActions { context: UiData.fake-ip-error; }
         }
@@ -70,7 +70,7 @@ export component FakeIpPage inherits Rectangle {
                             Label { text: entry.domain; }
                             Badge { text: entry.source; tone: 4; width-limit: 150px; }
                             ActionButton {
-                                text: "删除"; quiet: true; compact: true;
+                                text: @tr("删除"); quiet: true; compact: true;
                                 danger: true;
                                 enabled: UiData.dns-override && !UiData.working;
                                 clicked => { UiActions.dispatch(Intent.fake-ip-remove, entry.domain, ""); }
@@ -79,7 +79,7 @@ export component FakeIpPage inherits Rectangle {
                     }
                 }
                 if UiData.fake-ip-exclusions.length == 0: Label {
-                    text: "暂无排除项";
+                    text: @tr("暂无排除项");
                     color: Theme.secondary;
                     height: Theme.control-height;
                 }

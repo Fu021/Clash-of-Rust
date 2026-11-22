@@ -1,0 +1,1033 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Claude 保护异常"
+msgstr "Claude protection error"
+
+msgid "Claude 保护正在验证"
+msgstr "Verifying Claude protection"
+
+msgid "Claude 保护中"
+msgstr "Claude protection active"
+
+msgid "{}，查看保护详情"
+msgstr "{}; view protection details"
+
+msgid "拖动调整规则顺序，方向键上下移动"
+msgstr "Drag to reorder rules, or use the up and down arrow keys"
+
+msgid "Claude 保护"
+msgstr "Claude protection"
+
+msgid "保护节点：{}"
+msgstr "Protected node: {}"
+
+msgid "一键启用 TUN、广泛规则、代理 DNS 与实时拦截"
+msgstr "Enable TUN, broad rules, proxy DNS, and live blocking"
+
+msgid "可能影响其他应用与国内网站；关闭后恢复原状态。"
+msgstr "May affect other apps and local websites. Settings are restored when disabled."
+
+msgid "正在检测…"
+msgstr "Checking…"
+
+msgid "地区线索检测"
+msgstr "Region check"
+
+msgid "开始检测"
+msgstr "Start check"
+
+msgid "浏览器正在自动采样；离开此页会关闭回传入口。"
+msgstr "The browser is collecting samples. Leaving this page closes the callback."
+
+msgid "关闭入口"
+msgstr "Close callback"
+
+msgid "报告摘要"
+msgstr "Report summary"
+
+msgid "暂无检测结果"
+msgstr "No results yet"
+
+msgid "{} 项需关注"
+msgstr "Attention: {}"
+
+msgid "← 返回报告"
+msgstr "← Back to report"
+
+msgid "实时保护与异常拦截"
+msgstr "Live protection and blocking"
+
+msgid "Claude 连接与选路"
+msgstr "Claude connections and routing"
+
+msgid "出口与 IP 属性"
+msgstr "Exit and IP attributes"
+
+msgid "DNS 与 WebRTC"
+msgstr "DNS and WebRTC"
+
+msgid "浏览器与配置"
+msgstr "Browser and settings"
+
+msgid "查看分类详情 →"
+msgstr "View category details →"
+
+msgid "检测当前出口与平台可用情况"
+msgstr "Check the current exit and platform availability"
+
+msgid "等待检测"
+msgstr "Waiting to check"
+
+msgid "按检测结果筛选"
+msgstr "Filter by result"
+
+msgid "IP 信息与全部检测结果 →"
+msgstr "IP information and all results →"
+
+msgid "搜索平台、地区或结果"
+msgstr "Search platforms, regions, or results"
+
+msgid "重测分类"
+msgstr "Recheck category"
+
+msgid "清除筛选"
+msgstr "Clear filters"
+
+msgid "未识别"
+msgstr "Unknown"
+
+msgid "地区：{}"
+msgstr "Region: {}"
+
+msgid "收起详情"
+msgstr "Hide details"
+
+msgid "查看详情"
+msgstr "View details"
+
+msgid "需关注"
+msgstr "Attention"
+
+msgid "查看 {} 项详情 →"
+msgstr "Details ({}) →"
+
+msgid "陶土"
+msgstr "Terracotta"
+
+msgid "蓝色"
+msgstr "Blue"
+
+msgid "紫色"
+msgstr "Purple"
+
+msgid "玫红"
+msgstr "Rose"
+
+msgid "琥珀"
+msgstr "Amber"
+
+msgid "石墨"
+msgstr "Graphite"
+
+msgid "正在采集…"
+msgstr "Collecting…"
+
+msgid "新建 Issue"
+msgstr "Open an issue"
+
+msgid "需要处理"
+msgstr "Action required"
+
+msgid "操作未完成"
+msgstr "Action incomplete"
+
+msgid "关闭提示"
+msgstr "Dismiss notification"
+
+msgid "复制"
+msgstr "Copy"
+
+msgid "已复制"
+msgstr "Copied"
+
+msgid "首页"
+msgstr "Home"
+
+msgid "代理"
+msgstr "Proxies"
+
+msgid "订阅"
+msgstr "Subscriptions"
+
+msgid "连接"
+msgstr "Connections"
+
+msgid "规则"
+msgstr "Rules"
+
+msgid "日志"
+msgstr "Logs"
+
+msgid "网络诊断"
+msgstr "Network diagnostics"
+
+msgid "IP 检测"
+msgstr "IP check"
+
+msgid "A÷检测"
+msgstr "Claude check"
+
+msgid "设置"
+msgstr "Settings"
+
+msgid "关闭代理"
+msgstr "Disable proxy"
+
+msgid "重启内核"
+msgstr "Restart core"
+
+msgid "连接代理"
+msgstr "Enable proxy"
+
+msgid "内核未启动"
+msgstr "Core stopped"
+
+msgid "代理已关闭"
+msgstr "Proxy off"
+
+msgid "已连接"
+msgstr "Connected"
+
+msgid "工具"
+msgstr "Tools"
+
+msgid "打开目录"
+msgstr "Open folder"
+
+msgid "关闭全部"
+msgstr "Close all"
+
+msgid "导出"
+msgstr "Export"
+
+msgid "清空"
+msgstr "Clear"
+
+msgid "取消"
+msgstr "Cancel"
+
+msgid "重测"
+msgstr "Check again"
+
+msgid "一键检测"
+msgstr "Check all"
+
+msgid "导出报告"
+msgstr "Export report"
+
+msgid "补充采样"
+msgstr "Collect samples"
+
+msgid "快捷规则"
+msgstr "Rule shortcuts"
+
+msgid "内核运行中"
+msgstr "Core running"
+
+msgid "正在初始化"
+msgstr "Starting"
+
+msgid "Claude 保护已锁定网络修改和更新。"
+msgstr "Claude protection locks network changes and updates."
+
+msgid "关闭保护"
+msgstr "Turn off protection"
+
+msgid "测试系统通知"
+msgstr "Send a test notification"
+
+msgid "展开侧栏"
+msgstr "Expand sidebar"
+
+msgid "收起侧栏"
+msgstr "Collapse sidebar"
+
+msgid "选择订阅"
+msgstr "Select subscription"
+
+msgid "请先选择并载入订阅。"
+msgstr "Select and load a subscription."
+
+msgid "默认直连配置不支持修改规则。"
+msgstr "The built-in Direct profile has fixed rules."
+
+msgid "修改保留为草稿，请在规则页应用。"
+msgstr "Apply rule drafts on the Rules page."
+
+msgid "最小化"
+msgstr "Minimize"
+
+msgid "还原窗口"
+msgstr "Restore window"
+
+msgid "最大化"
+msgstr "Maximize"
+
+msgid "关闭窗口"
+msgstr "Close window"
+
+msgid "常规"
+msgstr "General"
+
+msgid "网络"
+msgstr "Network"
+
+msgid "外观"
+msgstr "Appearance"
+
+msgid "更新"
+msgstr "Updates"
+
+msgid "计划任务"
+msgstr "Scheduled tasks"
+
+msgid "语言"
+msgstr "Language"
+
+msgid "重新打开窗口后生效。"
+msgstr "Reopen the window to apply."
+
+msgid "跟随系统"
+msgstr "Follow system"
+
+msgid "后台自启动"
+msgstr "Start in background at login"
+
+msgid "托盘显示上传与下载速度"
+msgstr "Show transfer rates in tray"
+
+msgid "混合端口"
+msgstr "Mixed port"
+
+msgid "端口已修改"
+msgstr "Unsaved port changes"
+
+msgid "保存并重启内核"
+msgstr "Save and restart core"
+
+msgid "DNS 覆盖"
+msgstr "DNS override"
+
+msgid "Fake-IP 排除项"
+msgstr "Fake-IP exclusions"
+
+msgid "管理"
+msgstr "Manage"
+
+msgid "启用 IPv6"
+msgstr "Enable IPv6"
+
+msgid "启用 UDP"
+msgstr "Enable UDP"
+
+msgid "主题"
+msgstr "Theme"
+
+msgid "浅色"
+msgstr "Light"
+
+msgid "深色"
+msgstr "Dark"
+
+msgid "强调色"
+msgstr "Accent color"
+
+msgid "字号"
+msgstr "Text size"
+
+msgid "窗口大小"
+msgstr "Window size"
+
+msgid "恢复默认"
+msgstr "Reset"
+
+msgid "当前版本 {}"
+msgstr "Current version {}"
+
+msgid "检查更新"
+msgstr "Check for updates"
+
+msgid "包含预发布版本"
+msgstr "Include prereleases"
+
+msgid "安装包"
+msgstr "Installer"
+
+msgid "查看 Release"
+msgstr "View releases"
+
+msgid "下载安装"
+msgstr "Download and install"
+
+msgid "Geo 数据"
+msgstr "Geo data"
+
+msgid "更新 Geo 数据"
+msgstr "Update Geo data"
+
+msgid "自动检查更新"
+msgstr "Update check interval"
+
+msgid "0 关闭，默认 360 分钟；Claude 保护期间暂停。"
+msgstr "Default 360 min. Use 0 to disable. Pauses during Claude protection."
+
+msgid "分钟"
+msgstr "min"
+
+msgid "保存"
+msgstr "Save"
+
+msgid "订阅自动更新"
+msgstr "Subscription update interval"
+
+msgid "定时测速"
+msgstr "Latency test interval"
+
+msgid "0 表示关闭"
+msgstr "Use 0 to disable."
+
+msgid "选择一个节点"
+msgstr "Choose a node"
+
+msgid "启动内核以恢复连接"
+msgstr "Start the core to connect"
+
+msgid "TUN  ·  全局网络接管"
+msgstr "TUN · System-wide routing"
+
+msgid "系统代理  ·  按当前规则路由"
+msgstr "System proxy · Route by current rules"
+
+msgid "系统网络"
+msgstr "System network"
+
+msgid "重试启动"
+msgstr "Retry"
+
+msgid "全局"
+msgstr "Global"
+
+msgid "直连"
+msgstr "Direct"
+
+msgid "系统代理"
+msgstr "System proxy"
+
+msgctxt "mode"
+msgid "关闭"
+msgstr "Off"
+
+msgid "关闭"
+msgstr "Close"
+
+msgctxt "verb"
+msgid "更新"
+msgstr "Update"
+
+msgid "↓ 下载速度"
+msgstr "↓ Download"
+
+msgid "↑ 上传速度"
+msgstr "↑ Upload"
+
+msgid "累计 {}"
+msgstr "Total {}"
+
+msgid "活跃连接"
+msgstr "Active connections"
+
+msgid "当前内核连接"
+msgstr "Current core connections"
+
+msgid "本次下载"
+msgstr "Downloaded"
+
+msgid "已隐藏"
+msgstr "Hidden"
+
+msgid "网络信息"
+msgstr "Network information"
+
+msgid "显示 IP 地址"
+msgstr "Show IP address"
+
+msgid "隐藏 IP 地址"
+msgstr "Hide IP address"
+
+msgid "网络检测中"
+msgstr "Checking network"
+
+msgid "重新检测网络"
+msgstr "Check network again"
+
+msgid "服务状态"
+msgstr "Service status"
+
+msgid "{} 条 ›"
+msgstr "{} ›"
+
+msgid "启动内核后查看实时连接"
+msgstr "Start the core to view live connections"
+
+msgid "暂无活跃连接"
+msgstr "No active connections"
+
+msgid "{} 条活跃连接，查看完整列表"
+msgstr "{} active connections · View all"
+
+msgid "切换到宫格视图"
+msgstr "Switch to grid view"
+
+msgid "切换到列表视图"
+msgstr "Switch to list view"
+
+msgid "测速 {}，{}"
+msgstr "Test latency for {}, {}"
+
+msgid "收起"
+msgstr "Hide"
+
+msgid "详情"
+msgstr "Details"
+
+msgid "完整名称：{}"
+msgstr "Full name: {}"
+
+msgid "协议：{}"
+msgstr "Protocol: {}"
+
+msgid "搜索节点或代理组"
+msgstr "Search nodes or proxy groups"
+
+msgid "延迟从低到高"
+msgstr "Lowest latency first"
+
+msgid "延迟从高到低"
+msgstr "Highest latency first"
+
+msgid "名称排序"
+msgstr "Sort by name"
+
+msgid "测速中…"
+msgstr "Testing…"
+
+msgid "组测速"
+msgstr "Test group"
+
+msgid "上一页"
+msgstr "Previous"
+
+msgid "下一页"
+msgstr "Next"
+
+msgid "当前配置没有匹配的代理组"
+msgstr "No matching proxy groups"
+
+msgid "内核启动后显示代理组"
+msgstr "Start the core to view proxy groups"
+
+msgid "分页显示"
+msgstr "Paginate"
+
+msgid "全部代理组"
+msgstr "All proxy groups"
+
+msgid "显示全部"
+msgstr "Show all"
+
+msgid "当前分页显示，切换为显示全部代理组"
+msgstr "Show all proxy groups"
+
+msgid "当前显示全部代理组，切换为每页八组"
+msgstr "Show eight proxy groups per page"
+
+msgid "使用中"
+msgstr "In use"
+
+msgid "使用"
+msgstr "Use"
+
+msgid "编辑"
+msgstr "Edit"
+
+msgid "本地"
+msgstr "Local"
+
+msgid "名称：{}"
+msgstr "Name: {}"
+
+msgid "来源：{}"
+msgstr "Source: {}"
+
+msgid "删除订阅"
+msgstr "Delete subscription"
+
+msgid "粘贴订阅链接"
+msgstr "Paste a subscription URL"
+
+msgid "本地文件"
+msgstr "Local file"
+
+msgid "导入"
+msgstr "Import"
+
+msgid "搜索名称或来源"
+msgstr "Search name or source"
+
+msgid "没有匹配的订阅"
+msgstr "No matching subscriptions"
+
+msgid "导入订阅链接或本地 YAML 配置开始使用"
+msgstr "Import a subscription URL or local YAML file to get started"
+
+msgid "搜索域名、IP、规则或代理链"
+msgstr "Search domain, IP, rule, or proxy chain"
+
+msgid "{} 条活跃连接"
+msgstr "{} active connections"
+
+msgid "收起汇总"
+msgstr "Hide summary"
+
+msgid "流量汇总"
+msgstr "Traffic summary"
+
+msgid "主机"
+msgstr "Host"
+
+msgid "时间"
+msgstr "Time"
+
+msgid "代理链"
+msgstr "Proxy chain"
+
+msgid "匹配规则"
+msgstr "Matched rule"
+
+msgid "下载"
+msgstr "Download"
+
+msgid "累计"
+msgstr "Total"
+
+msgid "上传"
+msgstr "Upload"
+
+msgid "全部"
+msgstr "All"
+
+msgid "信息"
+msgstr "Info"
+
+msgid "警告"
+msgstr "Warning"
+
+msgid "错误"
+msgstr "Error"
+
+msgid "搜索日志"
+msgstr "Search logs"
+
+msgid "全部等级"
+msgstr "All levels"
+
+msgid "导出诊断"
+msgstr "Export diagnostics"
+
+msgid "检查"
+msgstr "Check"
+
+msgid "← 返回设置"
+msgstr "← Settings"
+
+msgid "已移除 {} 项 DNS 覆盖排除项"
+msgstr "{} DNS override exclusions removed"
+
+msgid "一键还原 DNS 覆盖项"
+msgstr "Restore DNS override exclusions"
+
+msgid "example.com 或 +.example.com"
+msgstr "example.com or +.example.com"
+
+msgid "添加"
+msgstr "Add"
+
+msgid "格式：example.com、+.example.com 或 *.example.com；多个用逗号分隔。"
+msgstr "Use example.com, +.example.com, or *.example.com. Separate entries with commas."
+
+msgid "DNS 覆盖项删除后可一键还原，保留自定义项；订阅原有过滤规则仍会生效。"
+msgstr "Restore removed DNS override entries without changing custom entries. Subscription filters remain active."
+
+msgid "删除"
+msgstr "Delete"
+
+msgid "暂无排除项"
+msgstr "No exclusions"
+
+msgid "自定义"
+msgstr "Custom"
+
+msgid "规则详情与操作"
+msgstr "Rule details and actions"
+
+msgid "已启用"
+msgstr "Enabled"
+
+msgid "已停用"
+msgstr "Disabled"
+
+msgid "复制规则原文"
+msgstr "Copy rule"
+
+msgid "停用"
+msgstr "Disable"
+
+msgid "启用"
+msgstr "Enable"
+
+msgid "跨页移动到位置…"
+msgstr "Move to position…"
+
+msgid "恢复订阅顺序"
+msgstr "Restore subscription order"
+
+msgid "尚未应用"
+msgstr "Not applied"
+
+msgid "已载入"
+msgstr "Loaded"
+
+msgid "搜索规则类型、内容或策略"
+msgstr "Search rule type, value, or policy"
+
+msgid "全部来源"
+msgstr "All sources"
+
+msgid "+ 新建规则"
+msgstr "+ New rule"
+
+msgid "拖动手柄排序 · 靠近边缘自动滚动 · Esc 取消 · 右箭头详情"
+msgstr "Drag to reorder · Move near the edge to scroll · Esc cancels · Right arrow opens details"
+
+msgid "没有匹配的规则"
+msgstr "No matching rules"
+
+msgid "● 修改尚未应用"
+msgstr "● Changes not applied"
+
+msgid "放弃"
+msgstr "Discard"
+
+msgid "应用修改"
+msgstr "Apply changes"
+
+msgid "网站检查"
+msgstr "Website check"
+
+msgid "DNS 查询"
+msgstr "DNS lookup"
+
+msgid "连接耗时"
+msgstr "Connection timing"
+
+msgid "TLS 证书"
+msgstr "TLS certificate"
+
+msgid "短时稳定性"
+msgstr "Short-term stability"
+
+msgid "UDP 连通"
+msgstr "UDP connectivity"
+
+msgid "路由追踪"
+msgstr "Traceroute"
+
+msgid "限量下载"
+msgstr "Limited download"
+
+msgid "TCP 端口"
+msgstr "TCP port"
+
+msgid "HTTP 检查"
+msgstr "HTTP check"
+
+msgid "解析、响应与出口"
+msgstr "Resolution, response, and exit"
+
+msgid "系统与内核解析"
+msgstr "System and core resolution"
+
+msgid "TCP、TLS 与首字节"
+msgstr "TCP, TLS, and first byte"
+
+msgid "目标地址族连接能力"
+msgstr "Connectivity by address family"
+
+msgid "证书、域名与有效期"
+msgstr "Certificate, domain, and validity"
+
+msgid "有限次请求与延迟波动"
+msgstr "Limited requests and latency variation"
+
+msgid "UDP 响应与当前线路"
+msgstr "UDP response and current route"
+
+msgid "ICMP 往返与丢包"
+msgstr "ICMP round-trip time and packet loss"
+
+msgid "逐跳响应与未响应"
+msgstr "Hop-by-hop responses"
+
+msgid "有上限的下载速度检查"
+msgstr "Download speed with a size limit"
+
+msgid "指定端口的握手"
+msgstr "Handshake on a specified port"
+
+msgid "方法、状态与安全响应头"
+msgstr "Method, status, and security headers"
+
+msgid "网址"
+msgstr "URL"
+
+msgid "域名"
+msgstr "Domain"
+
+msgid "域名或网址"
+msgstr "Domain or URL"
+
+msgid "DNS 响应目标"
+msgstr "DNS server"
+
+msgid "域名或 IP"
+msgstr "Domain or IP"
+
+msgid "下载网址"
+msgstr "Download URL"
+
+msgid "主机与端口"
+msgstr "Host and port"
+
+msgid "快速定位解析、响应与实际规则；详细分析使用专项工具"
+msgstr "Check resolution, response, and matching rules. Use the individual tools for details."
+
+msgid "查询记录、TTL 和返回码，对照系统与内核解析"
+msgstr "Compare system and core DNS records, TTLs, and response codes."
+
+msgid "分段测量代理建连、TLS 与首字节，明确代理侧处理开销"
+msgstr "Measure proxy connection, TLS, and first-byte timing separately."
+
+msgid "经代理分别连接目标地址族，不代表本机 IPv6 能力"
+msgstr "Connect to each target address family through the proxy."
+
+msgid "仅验证 TLS 握手和证书，不发送 HTTP 请求"
+msgstr "Check the TLS handshake and certificate without an HTTP request."
+
+msgid "分别统计传输失败、HTTP 状态与耗时分布"
+msgstr "Measure transfer failures, HTTP status, and response times."
+
+msgid "经内核 UDP 中继向目标 DNS 服务器发送探针"
+msgstr "Send a probe to the DNS server through the core's UDP relay."
+
+msgid "系统 ICMP 探针，不代表代理节点延迟"
+msgstr "Measure ICMP latency through the system network."
+
+msgid "系统逐跳探针，部分跳不响应属于常见情况"
+msgstr "Trace hops through the system network; some may not respond."
+
+msgid "限时限量测量吞吐，样本不代表线路最大带宽"
+msgstr "Measure throughput with time and size limits."
+
+msgid "经当前代理连接端口，不发送应用数据"
+msgstr "Connect through the current proxy without sending application data."
+
+msgid "分析方法、状态和安全响应头；Cookie 和认证头不展示"
+msgstr "Inspect method, status, and security headers; credentials are hidden."
+
+msgid "次数 · 1～20"
+msgstr "Count · 1–20"
+
+msgid "间隔 · 毫秒"
+msgstr "Interval · ms"
+
+msgid "时限 · 秒"
+msgstr "Timeout · seconds"
+
+msgid "流量上限 · MiB"
+msgstr "Size limit · MiB"
+
+msgid "最大跳数 · 1～16"
+msgstr "Maximum hops · 1–16"
+
+msgid "记录类型"
+msgstr "Record type"
+
+msgid "请求方法"
+msgstr "Method"
+
+msgid "{}，{}"
+msgstr "{}, {}"
+
+msgid "目标检查"
+msgstr "Target checks"
+
+msgid "链路分析"
+msgstr "Connection analysis"
+
+msgid "端口与 HTTP"
+msgstr "Ports and HTTP"
+
+msgid "关闭{}"
+msgstr "Disable {}"
+
+msgid "开启{}"
+msgstr "Enable {}"
+
+msgid "完成"
+msgstr "Done"
+
+msgid "名称"
+msgstr "Name"
+
+msgid "订阅地址或本地文件"
+msgstr "Subscription URL or local file"
+
+msgid "选择文件"
+msgstr "Choose file"
+
+msgid "表单"
+msgstr "Form"
+
+msgid "规则文本"
+msgstr "Rule text"
+
+msgid "类型"
+msgstr "Type"
+
+msgid "匹配内容"
+msgstr "Match"
+
+msgid "策略"
+msgstr "Policy"
+
+msgid "插入位置"
+msgstr "Position"
+
+msgid "启用规则"
+msgstr "Enable rule"
+
+msgid "复制采样脚本"
+msgstr "Copy script"
+
+msgid "导入剪贴板"
+msgstr "Import clipboard"
+
+msgid "关闭回传"
+msgstr "Close callback"
+
+msgid "打开采样页"
+msgstr "Open sample page"
+
+msgid "复制全文"
+msgstr "Copy all"
+
+msgid "复制详情"
+msgstr "Copy details"
+
+msgid "关闭连接"
+msgstr "Close connection"
+
+msgid "全部结果"
+msgstr "All results"
+
+msgid "确认可用"
+msgstr "Available"
+
+msgid "部分可用"
+msgstr "Partially available"
+
+msgid "仅网页可达"
+msgstr "Website reachable"
+
+msgid "信息已识别"
+msgstr "Identified"
+
+msgid "不可用或受限"
+msgstr "Unavailable or restricted"
+
+msgid "结果未确认"
+msgstr "Unconfirmed"
+
+msgid "超时或失败"
+msgstr "Timed out or failed"
+
+msgid "未检测"
+msgstr "Not checked"
+
+msgid "全部地区"
+msgstr "All regions"
+
+msgid "全部识别地区"
+msgstr "All identified regions"
+
+msgid "未识别地区"
+msgstr "Unknown region"
+
+msgid "全部分类"
+msgstr "All categories"
+
+msgid "IP信息"
+msgstr "IP information"
+
+msgid "全球"
+msgstr "Global"
+
+msgid "东南亚"
+msgstr "Southeast Asia"
+
+msgid "体育"
+msgstr "Sports"
+
+msgid "其他"
+msgstr "Other"
+
+msgid "北美"
+msgstr "North America"
+
+msgid "南美"
+msgstr "South America"
+
+msgid "台湾"
+msgstr "Taiwan"
+
+msgid "大洋洲"
+msgstr "Oceania"
+
+msgid "日本"
+msgstr "Japan"
+
+msgid "欧洲"
+msgstr "Europe"
+
+msgid "非洲"
+msgstr "Africa"
+
+msgid "韩国"
+msgstr "South Korea"
+
+msgid "香港"
+msgstr "Hong Kong"

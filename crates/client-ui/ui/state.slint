@@ -22,7 +22,7 @@ export enum Intent {
     claude-start, claude-cancel, claude-close-session, claude-protection, claude-confirm-protection,
     claude-filter, claude-page, claude-guide, claude-browser, claude-copy-script,
     claude-import, claude-export,
-    appearance, text-scale, accent-picker, accent-color, tray-speed, dns-override, fake-ip,
+    appearance, text-scale, accent-picker, accent-color, tray-speed, language, dns-override, fake-ip,
     fake-ip-editor, fake-ip-input, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults, ipv6, udp,
     autostart, mixed-port, save-ports, window-width, window-height,
     reset-window, interval-input, save-interval, subscription-interval-input, save-subscription-interval, update-geo,
@@ -121,6 +121,7 @@ export global UiData {
     in-out property <[Choice]> rule-profiles;
     in-out property <[string]> rule-profile-options;
     in-out property <string> rule-profile;
+    in-out property <string> rule-profile-id;
     in-out property <[string]> rule-types;
     in-out property <[string]> rule-policies;
     in-out property <string> rule-source: "全部来源";
@@ -172,6 +173,7 @@ export global UiData {
     in-out property <string> test-url;
     in-out property <bool> probing;
     in-out property <int> appearance: 2;
+    in-out property <string> language: "system";
     in-out property <int> text-scale: 100;
     in-out property <bool> dark;
     in-out property <bool> autostart;

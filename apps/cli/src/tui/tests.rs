@@ -487,6 +487,27 @@ fn compact_pages_keep_a_separate_title_and_details_identify_the_current_view() {
 }
 
 #[test]
+fn english_navigation_and_command_search_use_the_same_language() {
+    let mut state = State::new(true);
+    state.language = clash_client_core::config::Language::English;
+    state.key(Key::Char('8'));
+    state.query = "export cached yaml".into();
+    assert_eq!(state.items(), vec!["profile export"]);
+    let frame = render::frame(&state, 120, 30);
+    assert!(frame.iter().any(|line| line.text.contains("[8 Commands]")));
+    assert!(
+        frame
+            .iter()
+            .any(|line| line.text.contains("Export cached YAML"))
+    );
+    for columns in [36, 50, 72] {
+        let compact = render::frame(&state, columns, 12);
+        assert_eq!(compact[0].text.trim(), "[Commands]");
+        assert!(compact.iter().all(|line| line.text.width() < columns));
+    }
+}
+
+#[test]
 fn navigation_keeps_all_pages_below_eighty_columns_when_the_labels_fit() {
     let pages = [
         (Page::Home, "1 首页"),

@@ -335,6 +335,17 @@ mod tests {
                 .detail
                 .contains("IPQuery 是、IPLogs 否、Layer3 Intel 是")
         );
+        let stored = serde_json::to_value(&signal).unwrap();
+        let english = signal.display_value_in(crate::config::Language::English);
+        assert!(english.contains("Datacenter or hosting: Yes"));
+        assert!(english.contains("Proxy: Yes"));
+        assert!(english.contains("4 unconfirmed"));
+        let details = signal.explanation_in(crate::config::Language::English);
+        assert!(
+            details.contains("Datacenter or hosting: IPQuery: Yes, IPLogs: No, Layer3 Intel: Yes")
+        );
+        assert!(details.contains("VPN: IPQuery: Not provided"));
+        assert_eq!(stored, serde_json::to_value(&signal).unwrap());
         assert!(!signal.risk);
         report.signals.push(signal);
         assert_eq!(report.counts(), (0, 0, 1));

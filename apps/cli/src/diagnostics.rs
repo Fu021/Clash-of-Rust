@@ -1,27 +1,57 @@
 use crate::{args::Args, backend};
 use anyhow::{Context, Result, ensure};
+use clash_client_core::config::{Language, LanguagePreference};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
 pub(crate) use clash_client_core::support::has_failure;
 
 pub(crate) fn failure_hint(args: Option<&Args>) {
+    let language = args.map_or_else(
+        || LanguagePreference::System.resolve_desktop(),
+        Args::language,
+    );
+    failure_hint_in(args, language);
+}
+
+pub(crate) fn failure_hint_in(args: Option<&Args>, language: Language) {
     static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;
     }
     if args.is_some_and(|args| args.path == "diagnose" && args.get("output").is_some()) {
-        eprintln!("诊断含失败项目。提交 issue 时附上已保存的报告、操作步骤和发生时间。");
-    } else {
-        eprintln!("诊断报告：cor diagnose --output cor-diagnose.json");
-        eprintln!("后台不可达时：cor diagnose --offline --output cor-diagnose.json");
         eprintln!(
-            "沿用原用户及 --user / --data-dir / --resources 参数。提交 issue 时附上报告、操作步骤和发生时间。"
+            "{}",
+            language.text(
+                "诊断含失败项目。提交 issue 时附上已保存的报告、操作步骤和发生时间。",
+                "Diagnostics contain failures. Attach the saved report, steps, and time to your issue."
+            )
+        );
+    } else {
+        eprintln!(
+            "{}cor diagnose --output cor-diagnose.json",
+            language.text("诊断报告：", "Diagnostics: ")
+        );
+        eprintln!(
+            "{}cor diagnose --offline --output cor-diagnose.json",
+            language.text("后台不可达时：", "If the backend is unavailable: ")
+        );
+        eprintln!(
+            "{}",
+            language.text(
+                "沿用原用户及 --user / --data-dir / --resources 参数。提交 issue 时附上报告、操作步骤和发生时间。",
+                "Use the same user and --user / --data-dir / --resources options. Attach the report, steps, and time to your issue."
+            )
         );
     }
     eprintln!(
-        "问题反馈：{}。附加前请检查报告中的敏感信息。",
-        clash_client_core::support::BUG_REPORT_URL
+        "{}{}{}",
+        language.text("问题反馈：", "Report an issue: "),
+        clash_client_core::support::BUG_REPORT_URL,
+        language.text(
+            "。附加前请检查报告中的敏感信息。",
+            ". Review the report for sensitive information before attaching it."
+        )
     );
 }
 
@@ -34,17 +64,25 @@ pub(crate) fn core_logs(lines: Vec<String>, meta: &clash_client_runtime::control
 
 pub(crate) fn validate_output(args: &Args) -> Result<()> {
     if let Some(path) = args.get("output") {
+        let language = args.language();
         let output_path = backend::absolute(path)?;
         let parent = output_path
             .parent()
-            .context("无效报告路径")?
+            .context(language.text("无效报告路径", "Invalid report path"))?
             .canonicalize()
-            .context("诊断报告的父目录必须已经存在")?;
+            .context(language.text(
+                "诊断报告的父目录必须已经存在",
+                "The diagnostic report's parent directory must already exist",
+            ))?;
         let root = backend::data_root(args)?;
         if let Ok(root) = root.canonicalize() {
             ensure!(
                 !parent.starts_with(root),
-                "诊断报告须保存到应用数据目录之外，避免覆盖排障现场"
+                "{}",
+                language.text(
+                    "诊断报告须保存到应用数据目录之外，避免覆盖排障现场",
+                    "Save the diagnostic report outside the application data directory to preserve evidence"
+                )
             );
         }
     }
@@ -52,6 +90,7 @@ pub(crate) fn validate_output(args: &Args) -> Result<()> {
 }
 
 pub(crate) async fn collect(args: &Args) -> Result<Value> {
+    let language = args.language();
     let root = backend::data_root(args)?;
     let explicit_resources = args.get("resources").map(backend::absolute).transpose()?;
     tokio::task::spawn_blocking(move || {
@@ -67,7 +106,7 @@ pub(crate) async fn collect(args: &Args) -> Result<Value> {
         report
     })
     .await
-    .context("本地诊断采集任务失败")
+    .context(language.text("本地诊断采集任务失败", "Local diagnostic collection failed"))
 }
 
 #[cfg(test)]
@@ -91,6 +130,22 @@ mod tests {
         ])
         .unwrap();
         assert!(validate_output(&args).is_err());
+        let english = crate::args::parse(vec![
+            "--lang=en".into(),
+            "diagnose".into(),
+            "--offline".into(),
+            "--data-dir".into(),
+            temporary.path().to_string_lossy().into_owned(),
+            "--output".into(),
+            target.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert!(
+            validate_output(&english)
+                .unwrap_err()
+                .to_string()
+                .contains("outside the application data directory")
+        );
         assert_eq!(std::fs::read(target).unwrap(), b"preserve-this-evidence");
     }
 }

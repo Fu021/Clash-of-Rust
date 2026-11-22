@@ -59,16 +59,39 @@ pub fn select<T>(
 }
 
 pub fn description(version: &str, preview: bool, current: &str) -> String {
+    description_in(
+        version,
+        preview,
+        current,
+        crate::config::Language::SimplifiedChinese,
+    )
+}
+
+pub fn description_in(
+    version: &str,
+    preview: bool,
+    current: &str,
+    language: crate::config::Language,
+) -> String {
     if preview {
-        format!("发现预发布版 {version}")
+        format!(
+            "{} {version}",
+            language.text("发现预发布版", "Pre-release available:")
+        )
     } else if Version::parse(current)
         .ok()
         .zip(Version::parse(version).ok())
         .is_some_and(|(current, target)| target.cmp_precedence(&current).is_lt())
     {
-        format!("可返回正式版 {version}")
+        format!(
+            "{} {version}",
+            language.text("可返回正式版", "Stable release available:")
+        )
     } else {
-        format!("发现新版本 {version}")
+        format!(
+            "{} {version}",
+            language.text("发现新版本", "Update available:")
+        )
     }
 }
 
@@ -141,6 +164,23 @@ mod tests {
             assert!(selected(&releases, current, true).is_none());
         }
         assert_eq!(description("0.6.4", false, "0.999.0"), "可返回正式版 0.6.4");
+    }
+
+    #[test]
+    fn descriptions_translate_the_channel_without_changing_the_version() {
+        use crate::config::Language;
+        assert_eq!(
+            description_in("0.6.4-dev.2", true, "0.6.3", Language::English),
+            "Pre-release available: 0.6.4-dev.2"
+        );
+        assert_eq!(
+            description_in("0.6.4", false, "0.7.0", Language::English),
+            "Stable release available: 0.6.4"
+        );
+        assert_eq!(
+            description_in("0.7.1", false, "0.7.0", Language::English),
+            "Update available: 0.7.1"
+        );
     }
 
     #[test]

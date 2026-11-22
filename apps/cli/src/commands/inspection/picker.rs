@@ -1,17 +1,37 @@
 use anyhow::{Context, Result, ensure};
+use clash_client_core::config::Language;
 use std::io::{BufRead, IsTerminal, Write};
 
-pub(super) fn require_terminal(interactive: bool, machine_output: bool) -> Result<()> {
+pub(super) fn require_terminal(
+    interactive: bool,
+    machine_output: bool,
+    language: Language,
+) -> Result<()> {
     ensure!(
         interactive && !machine_output,
-        "请提供 GROUP NODE；交互选择需要终端，JSON/脚本请使用 cor node select GROUP NODE"
+        "{}",
+        language.text(
+            "请提供 GROUP NODE；交互选择需要终端，JSON/脚本请使用 cor node select GROUP NODE",
+            "Pass GROUP NODE; interactive selection requires a terminal. For JSON or scripts, use cor node select GROUP NODE",
+        )
     );
     Ok(())
 }
 
-pub(super) async fn choose(title: &str, candidates: Vec<String>) -> Result<String> {
-    require_terminal(std::io::stdin().is_terminal(), false)?;
-    ensure!(!candidates.is_empty(), "没有可选择的{title}");
+pub(super) async fn choose(
+    title: &str,
+    candidates: Vec<String>,
+    language: Language,
+) -> Result<String> {
+    require_terminal(std::io::stdin().is_terminal(), false, language)?;
+    ensure!(
+        !candidates.is_empty(),
+        "{}",
+        match language {
+            Language::SimplifiedChinese => format!("没有可选择的{title}"),
+            Language::English => format!("No {title} available"),
+        }
+    );
     let title = title.to_owned();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
@@ -22,10 +42,13 @@ pub(super) async fn choose(title: &str, candidates: Vec<String>) -> Result<Strin
                 &mut std::io::stderr(),
                 &title,
                 &candidates,
+                language,
             );
             let _ = sender.send(result);
         })?;
-    receiver.await.context("交互选择已结束")?
+    receiver
+        .await
+        .context(language.text("交互选择已结束", "Interactive selection ended"))?
 }
 
 fn clean(value: &str) -> String {
@@ -40,6 +63,7 @@ fn pick(
     output: &mut dyn Write,
     title: &str,
     candidates: &[String],
+    language: Language,
 ) -> Result<String> {
     let mut query = String::new();
     loop {
@@ -47,19 +71,34 @@ fn pick(
             .iter()
             .filter(|name| name.to_lowercase().contains(&query))
             .collect();
-        writeln!(output, "{title}（{} 项）", matches.len())?;
+        match language {
+            Language::SimplifiedChinese => writeln!(output, "{title}（{} 项）", matches.len())?,
+            Language::English => writeln!(output, "{title} ({} results)", matches.len())?,
+        }
         for (index, name) in matches.iter().take(50).enumerate() {
             writeln!(output, "  {}. {}", index + 1, clean(name))?;
         }
         writeln!(
             output,
-            "输入编号选择，输入文字筛选，/ 清除筛选，q 取消（最多显示 50 项）"
+            "{}",
+            language.text(
+                "输入编号选择，输入文字筛选，/ 清除筛选，q 取消（最多显示 50 项）",
+                "Enter a number to select, text to filter, / to clear, or q to cancel (up to 50 shown)",
+            )
         )?;
         output.flush()?;
         let mut answer = String::new();
-        ensure!(input.read_line(&mut answer)? > 0, "操作已取消");
+        ensure!(
+            input.read_line(&mut answer)? > 0,
+            "{}",
+            language.text("操作已取消", "Operation cancelled")
+        );
         let answer = answer.trim();
-        ensure!(answer != "q", "操作已取消");
+        ensure!(
+            answer != "q",
+            "{}",
+            language.text("操作已取消", "Operation cancelled")
+        );
         if let Ok(number) = answer.parse::<usize>() {
             if let Some(name) = number
                 .checked_sub(1)
@@ -68,7 +107,11 @@ fn pick(
             {
                 return Ok((*name).clone());
             }
-            writeln!(output, "编号不在当前列表中")?;
+            writeln!(
+                output,
+                "{}",
+                language.text("编号不在当前列表中", "Number is not in the current list")
+            )?;
         } else if answer == "/" {
             query.clear();
         } else if !answer.is_empty() {
@@ -87,7 +130,14 @@ mod tests {
         let names = vec!["🇺🇸 美国 01".into(), "🚀 香港 /2".into(), "DIRECT".into()];
         let mut output = Vec::new();
         assert_eq!(
-            pick(&mut Cursor::new("香港\n1\n"), &mut output, "节点", &names).unwrap(),
+            pick(
+                &mut Cursor::new("香港\n1\n"),
+                &mut output,
+                "节点",
+                &names,
+                Language::SimplifiedChinese
+            )
+            .unwrap(),
             names[1]
         );
         assert!(String::from_utf8(output).unwrap().contains("香港 /2"));
@@ -101,17 +151,53 @@ mod tests {
                 &mut Cursor::new("99\n0\nnothing\n/\n2\n"),
                 &mut Vec::new(),
                 "节点",
-                &names
+                &names,
+                Language::SimplifiedChinese
             )
             .unwrap(),
             "two"
         );
         for input in ["q\n", ""] {
-            assert!(pick(&mut Cursor::new(input), &mut Vec::new(), "节点", &names).is_err());
+            assert!(
+                pick(
+                    &mut Cursor::new(input),
+                    &mut Vec::new(),
+                    "节点",
+                    &names,
+                    Language::SimplifiedChinese
+                )
+                .is_err()
+            );
         }
-        assert!(require_terminal(false, false).is_err());
-        assert!(require_terminal(true, true).is_err());
-        assert!(require_terminal(true, false).is_ok());
+        assert!(require_terminal(false, false, Language::SimplifiedChinese).is_err());
+        assert!(require_terminal(true, true, Language::SimplifiedChinese).is_err());
+        assert!(require_terminal(true, false, Language::SimplifiedChinese).is_ok());
+    }
+
+    #[test]
+    fn english_picker_preserves_user_names_and_localizes_guidance() {
+        let names = vec!["🚀 香港 /2".into(), "DIRECT".into()];
+        let mut output = Vec::new();
+        let selected = pick(
+            &mut Cursor::new("99\n香港\n1\n"),
+            &mut output,
+            "Node",
+            &names,
+            Language::English,
+        )
+        .unwrap();
+        assert_eq!(selected, names[0]);
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Node (2 results)"), "{text}");
+        assert!(text.contains("Enter a number to select"), "{text}");
+        assert!(text.contains("Number is not in the current list"), "{text}");
+        assert!(text.contains("🚀 香港 /2"), "{text}");
+        assert!(
+            require_terminal(false, false, Language::English)
+                .unwrap_err()
+                .to_string()
+                .contains("interactive selection requires a terminal")
+        );
     }
 
     #[test]

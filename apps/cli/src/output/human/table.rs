@@ -1,5 +1,6 @@
-use super::fields::scalar;
+use super::fields::scalar_in;
 use anyhow::Result;
+use clash_client_core::config::Language;
 use serde_json::Value;
 use std::io::Write;
 use unicode_width::UnicodeWidthStr;
@@ -12,14 +13,25 @@ pub(super) fn width() -> usize {
         .clamp(40, 240)
 }
 
+#[cfg(test)]
 pub(super) fn write(
     out: &mut dyn Write,
     headers: &[&str],
     rows: &[Vec<String>],
     available: usize,
 ) -> Result<()> {
+    write_in(out, headers, rows, available, Language::SimplifiedChinese)
+}
+
+pub(super) fn write_in(
+    out: &mut dyn Write,
+    headers: &[&str],
+    rows: &[Vec<String>],
+    available: usize,
+    language: Language,
+) -> Result<()> {
     if rows.is_empty() {
-        writeln!(out, "无记录")?;
+        writeln!(out, "{}", language.text("无记录", "No records"))?;
         return Ok(());
     }
     let mut widths: Vec<_> = headers.iter().map(|s| s.width()).collect();
@@ -37,7 +49,7 @@ pub(super) fn write(
             }
             for (header, cell) in headers.iter().zip(row) {
                 if cell != "—" {
-                    writeln!(out, "{header}：{cell}")?;
+                    writeln!(out, "{header}{}{cell}", language.text("：", ": "))?;
                 }
             }
         }
@@ -71,39 +83,53 @@ fn line(out: &mut dyn Write, row: &[String], widths: &[usize]) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn records(
+pub(super) fn records_in(
     out: &mut dyn Write,
     records: &[Value],
     columns: &[(&str, &str)],
+    language: Language,
 ) -> Result<()> {
     let rows: Vec<Vec<String>> = records
         .iter()
         .map(|record| {
             columns
                 .iter()
-                .map(|(_, key)| scalar(key, &record[*key]))
+                .map(|(_, key)| scalar_in(key, &record[*key], language))
                 .collect()
         })
         .collect();
     let headers: Vec<_> = columns.iter().map(|(label, _)| *label).collect();
-    write(out, &headers, &rows, width())
+    write_in(out, &headers, &rows, width(), language)
 }
 
-pub(super) fn page(out: &mut dyn Write, value: &Value) -> Result<()> {
+pub(super) fn page_in(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> {
     let count = value["items"].as_array().map_or(0, Vec::len);
     let offset = value["offset"].as_u64().unwrap_or(0);
     let total = value["total"].as_u64().unwrap_or(count as u64);
     if count == 0 && total > 0 {
-        writeln!(out, "此页无记录（共 {total} 项，起始位置 {offset}）")?;
+        match language {
+            Language::SimplifiedChinese => {
+                writeln!(out, "此页无记录（共 {total} 项，起始位置 {offset}）")?
+            }
+            Language::English => writeln!(
+                out,
+                "No records on this page ({total} total, offset {offset})"
+            )?,
+        }
     } else if offset > 0 || total > count as u64 {
-        writeln!(
-            out,
-            "显示第 {}–{} 项，共 {total} 项",
-            offset.saturating_add(1),
-            offset.saturating_add(count as u64)
-        )?;
+        let first = offset.saturating_add(1);
+        let last = offset.saturating_add(count as u64);
+        match language {
+            Language::SimplifiedChinese => {
+                writeln!(out, "显示第 {first}–{last} 项，共 {total} 项")?
+            }
+            Language::English => writeln!(out, "Showing {first}–{last} of {total}")?,
+        }
     } else {
-        writeln!(out, "共 {total} 项")?;
+        match language {
+            Language::SimplifiedChinese => writeln!(out, "共 {total} 项")?,
+            Language::English => writeln!(out, "{total} total")?,
+        }
     }
     Ok(())
 }

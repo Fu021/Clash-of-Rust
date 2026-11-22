@@ -108,6 +108,32 @@ fn home_update_states_never_invent_an_installable_package() {
 }
 
 #[test]
+fn english_home_preserves_routes_and_explains_native_updates() {
+    let mut state = state();
+    state.language = clash_client_core::config::Language::English;
+    let mut managed = available(false);
+    managed.package_manager = Some("pacman");
+    home::accept(&mut state, Ok(Some(managed)));
+
+    let screen = content(&state, 120, 40);
+    for expected in [
+        "Core running",
+        "CLI backend",
+        "Reference route: PROXY → AUTO → 🇺🇸 美国 02",
+        "Found release 99.0.0",
+        "For AUR, use an AUR helper",
+        "makepkg -si",
+    ] {
+        assert!(screen.contains(expected), "{screen}");
+    }
+
+    home::accept(&mut state, Ok(None));
+    assert!(content(&state, 120, 40).contains("Up to date on this channel"));
+    home::accept(&mut state, Err("upstream detail".into()));
+    assert!(content(&state, 120, 40).contains("Check failed: upstream detail"));
+}
+
+#[test]
 fn update_installation_is_cancellable_and_keeps_the_displayed_selection() {
     let mut state = state();
     let selected = available(true);
@@ -266,11 +292,20 @@ fn protection_blocks_home_mutations_and_updates_but_keeps_the_unlock_entry() {
     assert!(!state.updates.checking);
     assert!(!home::items(&state).contains(&"update_install"));
     assert!(home::begin_check(&mut state, Instant::now()).is_err());
+    state.language = clash_client_core::config::Language::English;
     for key in ["core", "run_mode", "proxy_mode", "active_profile"] {
         select(&mut state, key);
         state.key(Key::Enter);
         assert!(state.form.is_none(), "{key}");
-        assert!(state.message.is_some(), "{key}");
+        assert!(
+            state
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("Disable Claude protection first"),
+            "{key}: {:?}",
+            state.message
+        );
     }
     select(&mut state, "claude_protection");
     state.key(Key::Enter);

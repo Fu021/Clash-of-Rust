@@ -18,7 +18,7 @@ public final class CoreBridge {
     public static synchronized String start(Context context, String raw, boolean ipv6) throws Exception {
         ApplicationOwners.install(context);
         File home = new File(context.getFilesDir(), "client/runtime");
-        if (!home.isDirectory() && !home.mkdirs()) throw new IOException("无法创建内核目录");
+        if (!home.isDirectory() && !home.mkdirs()) throw new IOException(AppLanguage.current(context).getString(R.string.core_directory_failed));
         // Seed only absent files; keep complete user updates across app upgrades.
         for (String name : new String[]{"GeoIP.dat", "GeoSite.dat", "Country.mmdb", "ASN.mmdb", "geodata.json"}) {
             File target = new File(home, name);
@@ -40,8 +40,8 @@ public final class CoreBridge {
         return home.toString();
     }
 
-    public static synchronized void reload(String raw) throws Exception {
-        if (!started) throw new IOException("内核尚未启动");
+    public static synchronized void reload(Context context, String raw) throws Exception {
+        if (!started) throw new IOException(AppLanguage.current(context).getString(R.string.core_not_started));
         Mobile.reload(raw); lastConfig = raw;
     }
     public static synchronized boolean ready() { return started; }
@@ -57,7 +57,7 @@ public final class CoreBridge {
         File runtime = new File(context.getFilesDir(), "client/runtime/config.yaml");
         File settings = new File(context.getFilesDir(), "client/settings.json");
         if (!runtime.isFile() || !settings.isFile() || runtime.length() > 20 * 1024 * 1024 || settings.length() > 10 * 1024 * 1024)
-            throw new IOException("没有可恢复的内核配置，请打开应用连接");
+            throw new IOException(AppLanguage.current(context).getString(R.string.core_restore_missing));
         JSONObject saved = new JSONObject(new String(Files.readAllBytes(settings.toPath()), StandardCharsets.UTF_8));
         boolean ipv6 = saved.optBoolean("ipv6", true) || saved.optJSONObject("claude_protection") != null;
         start(context, new String(Files.readAllBytes(runtime.toPath()), StandardCharsets.UTF_8), ipv6);
@@ -65,7 +65,7 @@ public final class CoreBridge {
     static boolean protectedMode(Context context) throws Exception {
         File settings = new File(context.getFilesDir(), "client/settings.json");
         if (!settings.isFile()) return false;
-        if (settings.length() > 10 * 1024 * 1024) throw new IOException("保护配置超过大小限制");
+        if (settings.length() > 10 * 1024 * 1024) throw new IOException(AppLanguage.current(context).getString(R.string.protection_settings_large));
         return new JSONObject(new String(Files.readAllBytes(settings.toPath()), StandardCharsets.UTF_8))
             .optJSONObject("claude_protection") != null;
     }

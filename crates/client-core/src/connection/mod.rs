@@ -1,8 +1,9 @@
 //! Connection sampling and ordering without retaining a second metadata snapshot.
 use crate::api::{Connection, ConnectionRates};
+use crate::config::Language;
 use std::{cmp::Ordering, time::Duration};
 mod summary;
-pub use summary::traffic_summary;
+pub use summary::{traffic_summary, traffic_summary_in};
 
 pub fn hostname(connection: &Connection) -> &str {
     if connection.metadata.sniff_host.is_empty() {
@@ -39,6 +40,14 @@ pub async fn resolve_target(
 }
 
 pub fn detail_values(connection: &Connection, resolved: &str) -> Vec<(&'static str, String)> {
+    detail_values_in(connection, resolved, Language::SimplifiedChinese)
+}
+
+pub fn detail_values_in(
+    connection: &Connection,
+    resolved: &str,
+    language: Language,
+) -> Vec<(&'static str, String)> {
     fn bytes(value: u64) -> String {
         let mut size = value as f64;
         let mut index = 0;
@@ -55,28 +64,46 @@ pub fn detail_values(connection: &Connection, resolved: &str) -> Vec<(&'static s
     }
     let rate = |value: Option<u64>| value.map_or_else(|| "—".into(), |v| format!("{}/s", bytes(v)));
     vec![
-        ("连接名称", name(connection).to_owned()),
-        ("域名", connection.metadata.host.to_string()),
-        ("嗅探域名", connection.metadata.sniff_host.to_string()),
         (
-            "目标 IP",
+            language.text("连接名称", "Connection"),
+            name(connection).to_owned(),
+        ),
+        (
+            language.text("域名", "Domain"),
+            connection.metadata.host.to_string(),
+        ),
+        (
+            language.text("嗅探域名", "Sniffed domain"),
+            connection.metadata.sniff_host.to_string(),
+        ),
+        (
+            language.text("目标 IP", "Destination IP"),
             if connection.metadata.destination_ip.is_empty() {
                 resolved.to_owned()
             } else {
                 connection.metadata.destination_ip.to_string()
             },
         ),
-        ("目标端口", connection.metadata.destination_port.to_string()),
-        ("协议", connection.metadata.network.to_string()),
-        ("进程", connection.metadata.process.to_string()),
         (
-            "匹配规则",
+            language.text("目标端口", "Destination port"),
+            connection.metadata.destination_port.to_string(),
+        ),
+        (
+            language.text("协议", "Protocol"),
+            connection.metadata.network.to_string(),
+        ),
+        (
+            language.text("进程", "Process"),
+            connection.metadata.process.to_string(),
+        ),
+        (
+            language.text("匹配规则", "Matched rule"),
             format!("{} {}", connection.rule, connection.rule_payload)
                 .trim()
                 .to_owned(),
         ),
         (
-            "代理链",
+            language.text("代理链", "Proxy chain"),
             connection
                 .chains
                 .iter()
@@ -85,12 +112,30 @@ pub fn detail_values(connection: &Connection, resolved: &str) -> Vec<(&'static s
                 .collect::<Vec<_>>()
                 .join(" → "),
         ),
-        ("上传速度", rate(connection.rates.map(|r| r.upload))),
-        ("下载速度", rate(connection.rates.map(|r| r.download))),
-        ("累计上传", bytes(connection.upload)),
-        ("累计下载", bytes(connection.download)),
-        ("开始时间", connection.start.to_string()),
-        ("连接 ID", connection.id.to_string()),
+        (
+            language.text("上传速度", "Upload speed"),
+            rate(connection.rates.map(|r| r.upload)),
+        ),
+        (
+            language.text("下载速度", "Download speed"),
+            rate(connection.rates.map(|r| r.download)),
+        ),
+        (
+            language.text("累计上传", "Uploaded"),
+            bytes(connection.upload),
+        ),
+        (
+            language.text("累计下载", "Downloaded"),
+            bytes(connection.download),
+        ),
+        (
+            language.text("开始时间", "Started"),
+            connection.start.to_string(),
+        ),
+        (
+            language.text("连接 ID", "Connection ID"),
+            connection.id.to_string(),
+        ),
     ]
 }
 
@@ -359,6 +404,29 @@ mod tests {
         })).unwrap();
         assert_eq!(name(&connection), "mail.google.com");
         assert_eq!(connection.rule_payload.as_str(), "google.com");
+    }
+
+    #[test]
+    fn translated_connection_details_keep_original_values_and_order() {
+        let connection: Connection = serde_json::from_value(serde_json::json!({
+            "id":"example-id",
+            "metadata":{"host":"example.test","sniffHost":"sniffed.test","destinationIP":"192.0.2.1","network":"tcp"},
+            "rule":"DomainSuffix","rulePayload":"test","chains":["日本出口","Proxy"],
+            "upload":1024,"download":4096
+        }))
+        .unwrap();
+        let chinese = detail_values(&connection, "");
+        let english = detail_values_in(&connection, "", Language::English);
+        assert!(
+            chinese
+                .iter()
+                .map(|(_, value)| value)
+                .eq(english.iter().map(|(_, value)| value))
+        );
+        assert!(english.contains(&("Domain", "example.test".into())));
+        assert!(english.contains(&("Sniffed domain", "sniffed.test".into())));
+        assert!(english.contains(&("Proxy chain", "Proxy → 日本出口".into())));
+        assert!(english.contains(&("Connection ID", "example-id".into())));
     }
 
     #[test]
