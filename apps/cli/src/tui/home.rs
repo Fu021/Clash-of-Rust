@@ -367,7 +367,14 @@ fn update_status(state: &State) -> String {
         Some(Ok(None)) => language
             .text("当前通道已是最新版本", "Up to date on this channel")
             .into(),
-        Some(Err(error)) => format!("{}{error}", language.text("检查失败：", "Check failed: ")),
+        Some(Err(error)) => {
+            let detail = clash_client_runtime::update::localize_check_error(error, language);
+            if language == Language::English && detail.starts_with("Update check ") {
+                detail.into_owned()
+            } else {
+                format!("{}{detail}", language.text("检查失败：", "Check failed: "))
+            }
+        }
         None => {
             if state
                 .poll

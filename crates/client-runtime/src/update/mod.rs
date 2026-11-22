@@ -158,6 +158,107 @@ pub struct State {
     download_abort: Option<AbortHandle>,
 }
 
+pub fn localize_check_error(
+    error: &str,
+    language: clash_client_core::config::Language,
+) -> Cow<'_, str> {
+    use clash_client_core::config::Language;
+    if language == Language::SimplifiedChinese {
+        return error.into();
+    }
+    for (prefix, summary) in [
+        ("检查更新失败（已尝试 ", "Update check failed"),
+        ("检查更新超时（已尝试 ", "Update check timed out"),
+    ] {
+        let Some(rest) = error.strip_prefix(prefix) else {
+            continue;
+        };
+        let Some((attempts, detail)) = rest.split_once(" 次）") else {
+            return error.into();
+        };
+        let Ok(count) = attempts.parse::<usize>() else {
+            return error.into();
+        };
+        let detail = if detail.is_empty() {
+            String::new()
+        } else if let Some(detail) = detail.strip_prefix('：') {
+            format!(": {}", localize_check_detail(detail))
+        } else {
+            return error.into();
+        };
+        let unit = if count == 1 { "attempt" } else { "attempts" };
+        return format!("{summary} after {count} {unit}{detail}").into();
+    }
+    localize_check_detail(error)
+}
+
+fn localize_check_detail(error: &str) -> Cow<'_, str> {
+    if let Some(body) = error.strip_suffix("（已尝试可用代理和直连）") {
+        let (prefix, body) = match body.strip_prefix("暂时无法获取预发布版本列表：") {
+            Some(body) => ("Could not get the pre-release list: ", body),
+            None => ("", body),
+        };
+        let details = body
+            .split('；')
+            .map(|detail| localize_check_route(detail).into_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return format!("{prefix}{details} (tried available proxies and direct connections)")
+            .into();
+    }
+    localize_check_route(error)
+}
+
+fn localize_check_route(error: &str) -> Cow<'_, str> {
+    for (prefix, label) in [
+        ("内核代理：", "Core proxy"),
+        ("系统代理：", "System proxy"),
+        ("内核直连：", "Core direct"),
+        ("系统网络：", "System network"),
+        ("直连：", "Direct"),
+    ] {
+        if let Some(detail) = error.strip_prefix(prefix) {
+            return format!("{label}: {}", localize_check_reason(detail)).into();
+        }
+    }
+    localize_check_reason(error)
+}
+
+fn localize_check_reason(error: &str) -> Cow<'_, str> {
+    for (prefix, label) in [
+        ("GitHub API", "GitHub API"),
+        ("Release 订阅", "Release feed"),
+    ] {
+        if let Some(reason) = error.strip_prefix(prefix) {
+            let reason = match reason {
+                "连接超时" => Some("connection timed out"),
+                "证书校验失败，请检查系统时间或代理证书" => Some(
+                    "certificate verification failed; check the system clock or proxy certificate",
+                ),
+                "域名解析失败" => Some("DNS resolution failed"),
+                "代理连接失败" => Some("proxy connection failed"),
+                "网络连接失败" => Some("network connection failed"),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                return format!("{label}: {reason}").into();
+            }
+        }
+    }
+    match error {
+        "GitHub 暂时限制请求，请稍后再试" => {
+            return "GitHub is temporarily rate limiting requests; retry later".into();
+        }
+        "Release 信息格式无效" => return "Release information is invalid".into(),
+        "Release 订阅格式无效" => return "Release feed is invalid".into(),
+        _ => {}
+    }
+    if let Some(status) = error.strip_prefix("GitHub 返回 HTTP ") {
+        return format!("GitHub returned HTTP {status}").into();
+    }
+    install::localize_installation_reason(error)
+}
+
 impl State {
     pub fn status_in(&self, language: clash_client_core::config::Language) -> Cow<'_, str> {
         use clash_client_core::config::Language;
@@ -179,7 +280,12 @@ impl State {
         let translated = if description == "未发现新版本" {
             "No updates found".into()
         } else if let Some(error) = description.strip_prefix("检查失败：") {
-            format!("Check failed: {error}")
+            let error = localize_check_error(error, language);
+            if error.starts_with("Update check ") {
+                error.into_owned()
+            } else {
+                format!("Check failed: {error}")
+            }
         } else if let Some(update) = &self.available {
             let describe = |language| {
                 let mut text = channel::description_in(
@@ -957,6 +1063,44 @@ mod tests {
                 .status_in(Language::English)
                 .ends_with("Check failed: TLS example")
         );
+        let retry = "检查更新失败（已尝试 4 次）：校验文件格式无效: 東京";
+        state.finish(Err(retry.into()));
+        assert!(
+            state.status_in(Language::English).ends_with(
+                "Update check failed after 4 attempts: The checksum file is invalid: 東京"
+            )
+        );
+        assert!(state.status.contains(retry));
+        assert_eq!(
+            localize_check_error("检查更新超时（已尝试 1 次）", Language::English),
+            "Update check timed out after 1 attempt"
+        );
+        assert_eq!(
+            localize_check_error(
+                "检查更新失败（已尝试 4 次）：系统网络：GitHub API网络连接失败；Release 订阅域名解析失败（已尝试可用代理和直连）",
+                Language::English,
+            ),
+            "Update check failed after 4 attempts: System network: GitHub API: network connection failed; Release feed: DNS resolution failed (tried available proxies and direct connections)"
+        );
+        assert_eq!(
+            localize_check_error(
+                "暂时无法获取预发布版本列表：内核代理：外部详情 東京（已尝试可用代理和直连）",
+                Language::English,
+            ),
+            "Could not get the pre-release list: Core proxy: 外部详情 東京 (tried available proxies and direct connections)"
+        );
+        assert_eq!(
+            localize_check_error("检查更新失败（已尝试 x 次）：外部详情", Language::English),
+            "检查更新失败（已尝试 x 次）：外部详情"
+        );
+        assert_eq!(
+            localize_check_error("直连：直连：外部详情", Language::English),
+            "Direct: 直连：外部详情"
+        );
+        assert_eq!(
+            localize_check_error(retry, Language::SimplifiedChinese),
+            retry
+        );
         state.reset_channel();
         assert_eq!(
             state.status_in(Language::English),
@@ -1535,6 +1679,56 @@ mod tests {
         assert!(!directory.exists());
         bad_task.await.unwrap();
         good_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_download_routes_are_localized_without_changing_the_error() {
+        use crate::network::Route;
+        use clash_client_core::config::Language;
+
+        let body = b"valid installer bytes";
+        let expected = clash_client_core::file_hash::hex(Sha256::digest(body));
+        let mut routes = Vec::new();
+        let mut tasks = Vec::new();
+        for label in ["内核代理", "系统代理", "内核直连"] {
+            let (proxy, task) = package_proxy(vec![0; body.len()], expected.clone()).await;
+            routes.push(Route {
+                label,
+                proxy: Some(proxy),
+            });
+            tasks.push(task);
+        }
+        let available = Available {
+            version: "0.4.8".into(),
+            url: format!("{RELEASES_URL}/tag/v0.4.8"),
+            preview: false,
+            package_manager: None,
+            package: Some(Package {
+                asset: Asset {
+                    name: package_name("0.4.8").unwrap(),
+                    size: body.len() as u64,
+                    digest: Some(format!("sha256:{expected}")),
+                },
+                url: "http://download.invalid/package".into(),
+                checksum_url: "http://download.invalid/package.sha256".into(),
+            }),
+        };
+        let error = download_routes(available, &routes, None, |_| {})
+            .await
+            .unwrap_err()
+            .to_string();
+        let message = format!("更新失败：{error}");
+        assert_eq!(
+            localize_installation_message(&message, Language::English),
+            "Update failed: Core proxy: Package SHA256 verification failed; retry; System proxy: Package SHA256 verification failed; retry; Core direct: Package SHA256 verification failed; retry (tried available proxies and direct connections)"
+        );
+        assert_eq!(
+            localize_installation_message(&message, Language::SimplifiedChinese),
+            message
+        );
+        for task in tasks {
+            task.await.unwrap();
+        }
     }
 
     #[test]

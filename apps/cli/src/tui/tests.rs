@@ -364,6 +364,31 @@ fn home_footer_lists_available_actions_and_keeps_tiny_terminals_usable() {
 }
 
 #[test]
+fn english_footer_keeps_page_actions_visible_at_desktop_and_phone_widths() {
+    let mut state = State::new(true);
+    state.language = clash_client_core::config::Language::English;
+    for (page, actions) in [
+        (Page::Home, &["Enter action", "r refresh", "q quit"][..]),
+        (Page::Nodes, &["Enter open", "s sort", "q quit"][..]),
+        (Page::Network, &["o options", "Enter check", "q quit"][..]),
+    ] {
+        state.page = page;
+        for (columns, rows) in [(120, 30), (40, 20)] {
+            let text = render::frame(&state, columns, rows)
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            for action in actions {
+                assert!(text.contains(action), "{columns}×{rows}: {action}\n{text}");
+            }
+            assert!(!text.contains("退出界面保留后台和代理"));
+            assert!(!text.contains("每秒采样，变化时绘制"));
+        }
+    }
+}
+
+#[test]
 fn phone_node_footer_wraps_all_actions_without_losing_the_selected_node() {
     let mut state = State::new(true);
     state.page = Page::Nodes;

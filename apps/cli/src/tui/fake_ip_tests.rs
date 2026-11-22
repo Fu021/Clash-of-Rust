@@ -54,7 +54,14 @@ fn english_exclusion_editor_localizes_confirmation_and_preserves_the_domain() {
         .join("\n");
     assert!(frame.contains("Fake-IP exclusions"));
     assert!(frame.contains("Restore defaults"));
+    assert!(frame.contains("Enter add, disable or restore"));
     state.key(Key::Enter);
+    let frame = render::frame(&state, 120, 40)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(frame.contains("Enter save addition"));
     state.key(Key::Paste("example.test".into()));
     state.key(Key::Enter);
     let (_, description) = state.fake_ip.as_ref().unwrap().pending.as_ref().unwrap();

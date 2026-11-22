@@ -103,6 +103,7 @@ fn english_rule_actions_and_search_keep_stable_rule_ids() {
     ] {
         assert!(content.contains(expected), "{content}");
     }
+    assert!(content.contains("r refresh"));
     state.query = "custom".into();
     let ids = state.items();
     assert_eq!(ids.len(), 3);
@@ -114,6 +115,7 @@ fn english_rule_actions_and_search_keep_stable_rule_ids() {
     for expected in ["Move down", "Disable", "Edit", "Delete"] {
         assert!(content.contains(expected), "{content}");
     }
+    assert!(content.contains("Enter open or confirm"));
     state.key(Key::Enter);
     assert!(
         state

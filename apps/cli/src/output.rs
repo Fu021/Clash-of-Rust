@@ -21,7 +21,7 @@ pub(crate) fn localized_error(
                     )
                     .to_owned()
             } else {
-                message
+                clash_client_runtime::update::localize_check_error(&message, language).into_owned()
             }
         })
         .collect::<Vec<_>>()
@@ -178,6 +178,17 @@ mod tests {
         );
         let unknown = anyhow::anyhow!("节点 東京");
         assert_eq!(localized_error(&unknown, Language::English), "节点 東京");
+        let retry = anyhow::anyhow!("检查更新失败（已尝试 4 次）：校验文件格式无效: 東京")
+            .context("节点 東京");
+        assert_eq!(
+            localized_error(&retry, Language::English),
+            "节点 東京: Update check failed after 4 attempts: The checksum file is invalid: 東京"
+        );
+        let package = anyhow::anyhow!("permission denied").context("无法读取安装包");
+        assert_eq!(
+            localized_error(&package, Language::English),
+            "Could not read the package: permission denied"
+        );
     }
 
     #[test]

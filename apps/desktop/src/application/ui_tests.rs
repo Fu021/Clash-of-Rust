@@ -109,6 +109,16 @@ fn english_update_results_localize_projection_without_changing_failure_state() {
     assert_eq!(data.get_notice(), windows_expected);
     assert_eq!(data.get_update_status(), windows_expected);
     assert_eq!(app.pending_update_failure.as_deref(), Some(windows_failure));
+    let download_failure = "内核代理：安装包 SHA256 校验失败，请重试；系统代理：安装包 SHA256 校验失败，请重试；内核直连：安装包 SHA256 校验失败，请重试（已尝试可用代理和直连）";
+    app.fail_update(download_failure.into());
+    app.present_slint(&data, &mut models);
+    let download_expected = "Update failed: Core proxy: Package SHA256 verification failed; retry; System proxy: Package SHA256 verification failed; retry; Core direct: Package SHA256 verification failed; retry (tried available proxies and direct connections)";
+    assert_eq!(data.get_notice(), download_expected);
+    assert_eq!(data.get_update_status(), download_expected);
+    assert_eq!(
+        app.pending_update_failure.as_deref(),
+        Some(format!("更新失败：{download_failure}").as_str())
+    );
     let _ = app.update(Message::DismissNotice);
     assert!(app.pending_update_failure.is_none());
     assert!(app.updates.failure.is_none());
@@ -123,6 +133,15 @@ fn english_update_results_localize_projection_without_changing_failure_state() {
     app.present_slint(&data, &mut models);
     assert!(data.get_update_status().ends_with("No updates found"));
     assert!(app.updates.status.ends_with("未发现新版本"));
+    assert!(app.updates.begin());
+    let check_id = app.updates.check_id;
+    let reason = "检查更新失败（已尝试 4 次）：校验文件格式无效: 東京";
+    let _ = app.update(Message::UpdateChecked(check_id, Err(reason.into())));
+    app.present_slint(&data, &mut models);
+    let expected = "Update check failed after 4 attempts: The checksum file is invalid: 東京";
+    assert_eq!(data.get_notice(), expected);
+    assert!(data.get_update_status().ends_with(expected));
+    assert!(app.updates.status.contains(reason));
 }
 
 #[test]

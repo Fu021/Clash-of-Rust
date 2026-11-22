@@ -551,6 +551,10 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(error.contains("限制请求") && error.contains("502"));
+        assert_eq!(
+            localize_check_error(&error, clash_client_core::config::Language::English),
+            "Direct: GitHub is temporarily rate limiting requests; retry later; GitHub returned HTTP 502 Bad Gateway (tried available proxies and direct connections)"
+        );
         api_task.await.unwrap();
         feed_task.await.unwrap();
     }

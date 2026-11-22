@@ -51,23 +51,47 @@ fn help(state: &State) -> &'static str {
         && let Some(rules) = &state.rules
     {
         if rules.pending.is_some() {
-            "Enter 确认保存 · Esc 取消 · q 退出"
+            language.text(
+                "Enter 确认保存 · Esc 取消 · q 退出",
+                "Enter confirm save · Esc cancel · q quit",
+            )
         } else if rules.input.as_ref().is_some_and(|input| input.editing) {
-            "输入中 · Enter 检查并保存 · Ctrl+U 清空 · Esc 保留输入 · Ctrl+C 退出"
+            language.text(
+                "输入中 · Enter 检查并保存 · Ctrl+U 清空 · Esc 保留输入 · Ctrl+C 退出",
+                "Enter review and save · Ctrl+U clear · Esc keep input · Ctrl+C quit",
+            )
         } else if rules.input.is_some() {
-            "Enter 编辑 · Esc 返回 · q 退出"
+            language.text(
+                "Enter 编辑 · Esc 返回 · q 退出",
+                "Enter edit · Esc back · q quit",
+            )
         } else if rules.menu.is_some() {
-            "↑↓ 选择操作 · Enter 打开/确认 · Esc 返回 · q 退出"
+            language.text(
+                "↑↓ 选择操作 · Enter 打开/确认 · Esc 返回 · q 退出",
+                "↑↓ select action · Enter open or confirm · Esc back · q quit",
+            )
         } else {
-            "↑↓ 选择 · Enter 打开 · / 搜索 · r 刷新 · q 退出"
+            language.text(
+                "↑↓ 选择 · Enter 打开 · / 搜索 · r 刷新 · q 退出",
+                "↑↓ select · Enter open · / search · r refresh · q quit",
+            )
         }
     } else if let Some(editor) = &state.fake_ip {
         if editor.pending.is_some() {
-            "Enter 确认保存 · Esc 取消 · q 退出"
+            language.text(
+                "Enter 确认保存 · Esc 取消 · q 退出",
+                "Enter confirm save · Esc cancel · q quit",
+            )
         } else if editor.editing {
-            "输入中 · Enter 保存新增项 · Ctrl+U 清空 · Esc 保留输入 · Ctrl+C 退出"
+            language.text(
+                "输入中 · Enter 保存新增项 · Ctrl+U 清空 · Esc 保留输入 · Ctrl+C 退出",
+                "Enter save addition · Ctrl+U clear · Esc keep input · Ctrl+C quit",
+            )
         } else {
-            "↑↓ 选择 · Enter 新增/停用/恢复 · Esc 返回 · q 退出"
+            language.text(
+                "↑↓ 选择 · Enter 新增/停用/恢复 · Esc 返回 · q 退出",
+                "↑↓ select · Enter add, disable or restore · Esc back · q quit",
+            )
         }
     } else if let Some(form) = &state.form {
         if form
@@ -93,13 +117,25 @@ fn help(state: &State) -> &'static str {
             )
         }
     } else if state.connection.is_some() {
-        "↑↓ 详情 · d 解析 · x 关闭 · Esc 返回 · q 退出"
+        language.text(
+            "↑↓ 详情 · d 解析 · x 关闭 · Esc 返回 · q 退出",
+            "↑↓ details · d resolve · x close · Esc back · q quit",
+        )
     } else if state.page == Page::Network {
-        "←→ 切换工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出"
+        language.text(
+            "←→ 切换工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出",
+            "←→ tools · o options · e export · / input · Enter check · ↑↓ results · Esc cancel · q quit",
+        )
     } else if state.page == Page::Nodes {
-        "↑↓ 选择 · Enter 打开 · s 排序 · / 搜索 · Esc 返回 · q 退出"
+        language.text(
+            "↑↓ 选择 · Enter 打开 · s 排序 · / 搜索 · Esc 返回 · q 退出",
+            "↑↓ select · Enter open · s sort · / search · Esc back · q quit",
+        )
     } else if state.page == Page::Home {
-        "↑↓ 选择 · Enter 操作 · r 刷新 · q 退出"
+        language.text(
+            "↑↓ 选择 · Enter 操作 · r 刷新 · q 退出",
+            "↑↓ select · Enter action · r refresh · q quit",
+        )
     } else {
         language.text(
             "↑↓ 选择 · Enter 打开 · / 搜索 · Esc 返回 · q 退出",
@@ -156,7 +192,10 @@ pub(super) fn lines(
         if has_notice(state) {
             &notice
         } else {
-            "退出界面保留后台和代理"
+            state.language.text(
+                "退出界面保留后台和代理",
+                "Quitting keeps the background and proxy running",
+            )
         },
         width,
     );
@@ -180,11 +219,21 @@ pub(super) fn lines(
     if spacious {
         lines.push(line(
             &if state.error.is_some() {
-                "诊断：cor diagnose --output cor-diagnose.json".into()
+                state
+                    .language
+                    .text(
+                        "诊断：cor diagnose --output cor-diagnose.json",
+                        "Diagnostics: cor diagnose --output cor-diagnose.json",
+                    )
+                    .into()
             } else {
                 format!(
-                    "v{} · 本机后台 · 每秒采样，变化时绘制",
-                    clash_client_core::VERSION
+                    "v{} · {}",
+                    clash_client_core::VERSION,
+                    state.language.text(
+                        "本机后台 · 每秒采样，变化时绘制",
+                        "Local backend · samples every second; redraws on change",
+                    )
                 )
             },
             Tone::Muted,

@@ -118,13 +118,13 @@ pub fn localize_installation_message(message: &str, language: Language) -> Cow<'
             })
             .unwrap_or_else(|| (reason, String::new()))
         };
-        let reason = localize_installation_reason(reason);
+        let reason = super::localize_check_detail(reason);
         return format!("Update failed: {reason}{recovery}").into();
     }
     localize_installation_reason(message)
 }
 
-fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
+pub(super) fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
     let translated = match reason {
         "安装授权已取消" => Some("Installation authorization cancelled"),
         "安装已取消" => Some("Installation cancelled"),
@@ -148,6 +148,65 @@ fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
         "安装准备或授权超时，客户端仍在运行，请重试或手动安装" => Some(
             "Installation preparation or authorization timed out; the client is still running; retry or install manually",
         ),
+        "请先使用 EXE 安装程序安装客户端，再使用自动更新" => {
+            Some("Install the client using the EXE installer before using automatic updates")
+        }
+        "请先安装官方 Linux 软件包，再使用自动更新" => {
+            Some("Install the official Linux package before using automatic updates")
+        }
+        "该版本缺少官方 Arch 安装包" => {
+            Some("This release does not contain an official Arch package")
+        }
+        "该版本缺少本平台安装包或校验文件" => {
+            Some("This release does not contain a package or checksum for this platform")
+        }
+        "该版本不支持自动安装，请从 Release 手动升级" => Some(
+            "This release does not support automatic installation; upgrade manually from Releases",
+        ),
+        "安装包已被删除、替换或拦截" => {
+            Some("The package was removed, replaced or blocked")
+        }
+        "安装包必须是普通文件" => Some("The package must be a regular file"),
+        "安装包超过大小限制" => Some("The package exceeds the size limit"),
+        "安装包校验失败，已停止安装" => {
+            Some("Package verification failed; installation stopped")
+        }
+        "安装包 SHA256 校验失败，请重试" => {
+            Some("Package SHA256 verification failed; retry")
+        }
+        "安装包大小与 Release 不一致" => Some("Package size does not match the release"),
+        "安装包下载不完整" => Some("Package download is incomplete"),
+        "无法读取安装包" => Some("Could not read the package"),
+        "安装包路径无效" => Some("The package path is invalid"),
+        "无法锁定安装包目录，请关闭占用程序后重试" => {
+            Some("Could not lock the package directory; close programs using it and retry")
+        }
+        "无法暂存安装包" => Some("Could not stage the package"),
+        "暂存时安装包大小发生变化" => Some("The package size changed while staging"),
+        "无法创建下载目录，请检查磁盘权限" => {
+            Some("Could not create the download directory; check disk permissions")
+        }
+        "无法写入安装包，请检查磁盘空间与权限" => {
+            Some("Could not write the package; check disk space and permissions")
+        }
+        "写入失败，请检查磁盘空间与权限" => {
+            Some("Write failed; check disk space and permissions")
+        }
+        "无法保存安装包" => Some("Could not save the package"),
+        "校验文件格式无效" => Some("The checksum file is invalid"),
+        "校验文件下载失败" => Some("Checksum download failed"),
+        "校验文件下载中断" => Some("Checksum download was interrupted"),
+        "校验文件过大" => Some("The checksum file is too large"),
+        "安装包下载失败" => Some("Package download failed"),
+        "安装包信息查询超时" => Some("Package information request timed out"),
+        "无法读取安装包大小" => Some("Could not read the package size"),
+        "安装包大小无效" => Some("The package size is invalid"),
+        "Release 校验信息不一致" => Some("Release checksum information does not match"),
+        "无法创建下载连接" => Some("Could not create a download connection"),
+        "无法创建更新检查连接" => Some("Could not create an update check connection"),
+        "更新检查超时，请检查代理或稍后重试" => {
+            Some("Update check timed out; check the proxy or retry later")
+        }
         "缺少 pkexec，无法请求安装授权" => {
             Some("pkexec is unavailable; cannot request installation authorization")
         }
@@ -248,6 +307,12 @@ fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
     }
     if let Some(detail) = reason.strip_prefix("DEB 安装失败：") {
         return format!("DEB installation failed: {detail}").into();
+    }
+    if let Some((context, detail)) = reason.split_once(": ") {
+        let translated = localize_installation_reason(context);
+        if translated != context {
+            return format!("{translated}: {detail}").into();
+        }
     }
     reason.into()
 }
@@ -1004,7 +1069,30 @@ mod tests {
 
     #[test]
     fn installation_translation_preserves_unknown_causes_and_package_details() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("package");
+        fs::write(&path, b"tampered").unwrap();
+        let error = match package::open(&path, &"0".repeat(64)) {
+            Ok(_) => panic!("unexpectedly accepted a corrupt package"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            localize_installation_message(&format!("更新失败：{error:#}"), Language::English),
+            "Update failed: Package verification failed; installation stopped"
+        );
         for (message, expected) in [
+            (
+                "更新失败：安装包校验失败，已停止安装",
+                "Update failed: Package verification failed; installation stopped",
+            ),
+            (
+                "更新失败：请先安装官方 Linux 软件包，再使用自动更新",
+                "Update failed: Install the official Linux package before using automatic updates",
+            ),
+            (
+                "更新失败：安装包已被删除、替换或拦截: permission denied",
+                "Update failed: The package was removed, replaced or blocked: permission denied",
+            ),
             (
                 "更新失败：无法获得安装授权，请检查桌面授权服务",
                 "Update failed: Installation authorization failed; check the desktop authorization service",

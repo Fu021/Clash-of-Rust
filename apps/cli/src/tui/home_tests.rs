@@ -131,6 +131,18 @@ fn english_home_preserves_routes_and_explains_native_updates() {
     assert!(content(&state, 120, 40).contains("Up to date on this channel"));
     home::accept(&mut state, Err("upstream detail".into()));
     assert!(content(&state, 120, 40).contains("Check failed: upstream detail"));
+    let reason = "检查更新失败（已尝试 4 次）：校验文件格式无效: 東京";
+    home::accept(&mut state, Err(reason.into()));
+    let screen = content(&state, 160, 40);
+    assert!(
+        screen.contains("Update check failed after 4 attempts: The checksum file is invalid: 東京"),
+        "{screen}"
+    );
+    assert!(!screen.contains("Check failed: Update check failed"));
+    assert_eq!(
+        state.updates.result.as_ref().unwrap().as_ref().unwrap_err(),
+        reason
+    );
 }
 
 #[test]

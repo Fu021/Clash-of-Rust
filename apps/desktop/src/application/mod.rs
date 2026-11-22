@@ -1176,10 +1176,19 @@ impl App {
                     match &result {
                         Err(reason) => {
                             let previous = self.notice_revision;
-                            self.show_notice(format!(
-                                "{}{reason}",
-                                self.presentation_language.text("检查更新失败：", "Update check failed: ")
-                            ), true);
+                            let language = self.presentation_language;
+                            let detail = update::localize_check_error(reason, language);
+                            let notice = if language == Language::English
+                                && detail.starts_with("Update check ")
+                            {
+                                detail.into_owned()
+                            } else {
+                                format!(
+                                    "{}{detail}",
+                                    language.text("检查更新失败：", "Update check failed: ")
+                                )
+                            };
+                            self.show_notice(notice, true);
                             self.update_check_notice_revision =
                                 (self.notice_revision != previous).then_some(self.notice_revision);
                         }
