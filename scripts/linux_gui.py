@@ -30,6 +30,21 @@ from cli_tui import Session
 APP = Path('/opt/clash-of-rust')
 REPORT = ROOT/'target/linux-report'
 ACTION = 'org.clashofrust.tun.authorize'
+DESKTOP_TIMEOUT = 360
+DESKTOP_UPDATE_TIMEOUT = 1050
+PRERELEASE_CONFIRMATION_SECONDS = 3
+UPDATE_LABELS = {
+    'home': ('首页', 'Home'),
+    'settings': ('设置', 'Settings'),
+    'updates': ('更新', 'Updates'),
+    'check': ('检查更新', 'Check for updates'),
+    'download': ('下载安装', 'Download and install'),
+    'prerelease': ('安装预发布版', 'Install pre-release'),
+    'continue': ('继续安装', 'Continue'),
+    'cancelled': ('授权已取消', 'Installation authorization cancelled'),
+    'failed': ('安装失败', 'Installation failed'),
+    'close': ('关闭', 'Close'),
+}
 
 
 def wait_for(description, probe, timeout=45):
@@ -67,20 +82,38 @@ def evaluate(script):
     return json.loads(value) if value else None
 
 
+class FixtureProcess(subprocess.Popen):
+    """Observe exit without releasing the session leader PID before group cleanup."""
+
+    def poll(self):
+        if self.returncode is not None:
+            return self.returncode
+        status = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if status is not None:
+            return status.si_status if status.si_code == os.CLD_EXITED else -status.si_status
+
+    def wait(self, timeout=None):
+        deadline = None if timeout is None else time.monotonic()+timeout
+        while (status := self.poll()) is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            time.sleep(.02)
+        return status
+
+    def reap(self):
+        return super().wait(timeout=5)
+
+
 @contextlib.contextmanager
-def process(command, log, env=None):
-    child = subprocess.Popen(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT,
-                             env=env, start_new_session=True)
+def process(command, log, env=None, *, reap_for_restart=False):
+    launcher, stop = ((subprocess.Popen, stop_child) if reap_for_restart
+                      else (FixtureProcess, stop_process_group))
+    child = launcher(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT,
+                     env=env, start_new_session=True)
     try:
         yield child
     finally:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(child.pid, signal.SIGTERM)
-        try:
-            child.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGKILL)
-            child.wait(timeout=5)
+        cleanup_steps(('stop desktop fixture process', lambda: stop(child)))
 
 
 def authorization_dialog(request, request_log, locate):
@@ -109,6 +142,10 @@ def tun_permissions():
 
 
 def respond_authorization(window, password_file, allow):
+    def require_focus():
+        if window and int(output(['xdotool', 'getactivewindow'])) != int(window, 0):
+            raise RuntimeError('Graphical authorization prompt lost focus')
+
     if window:
         run(['xdotool', 'windowactivate', '--sync', window], timeout=15)
     if allow:
@@ -118,10 +155,13 @@ def respond_authorization(window, password_file, allow):
         if not password.isascii() or not password.isalnum():
             raise ValueError('Invalid disposable account password')
         time.sleep(.3)
+        require_focus()
         run(['xdotool', 'type', '--clearmodifiers', '--delay', '10', '--file', '-'],
             text=True, timeout=15, input=password, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        require_focus()
         run(['xdotool', 'key', 'Return'], timeout=15)
     else:
+        require_focus()
         run(['xdotool', 'key', 'Escape'], timeout=15)
 
 
@@ -439,8 +479,8 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
 
         def visible():
             nonlocal observed, renderer_pids
-            if owner.poll() is not None:
-                raise RuntimeError(f'Installed {backend} GUI owner exited: {owner.returncode}')
+            if (status := owner.poll()) is not None:
+                raise RuntimeError(f'Installed {backend} GUI owner exited: {status}')
             windows = inspect_window() if inspect_window else inspect(backend, evaluate_window)
             if backend == 'wayland':
                 observed = windows
@@ -562,52 +602,302 @@ def read_object(path):
         return {}
 
 
-def recognized_lines(tsv):
+def recognized_lines(tsv, scale=1):
     lines = {}
     for row in csv.DictReader(tsv.splitlines(), delimiter='\t', quoting=csv.QUOTE_NONE):
         if row['level'] != '5' or not row['text'].strip():
             continue
         key = tuple(row[name] for name in ('page_num', 'block_num', 'par_num', 'line_num'))
-        box = tuple(int(row[name]) for name in ('left', 'top', 'width', 'height'))
+        box = tuple(int(row[name])//scale for name in ('left', 'top', 'width', 'height'))
         lines.setdefault(key, []).append((row['text'], box))
     return list(lines.values())
 
 
-def screen_label(lines, label, *, contains=False):
-    def normalize(text):
-        return ''.join(text.split()).replace('–', '-').replace('－', '-')
+def normalize_screen_text(text):
+    return ''.join(text.casefold().split()).replace('–', '-').replace('－', '-')
 
-    wanted = normalize(label)
+
+def screen_groups(words):
+    group = []
+    for word, box in sorted(words, key=lambda entry: entry[1][0]):
+        if group:
+            previous = group[-1][1]
+            if box[0] - (previous[0]+previous[2]) > max(previous[3], box[3]):
+                yield group
+                group = []
+        group.append((word, box))
+    if group:
+        yield group
+
+
+def screen_bounds(words):
+    left = min(box[0] for _, box in words)
+    top = min(box[1] for _, box in words)
+    right = max(box[0]+box[2] for _, box in words)
+    bottom = max(box[1]+box[3] for _, box in words)
+    return left, top, right-left, bottom-top
+
+
+def screen_label(lines, labels, *, contains=False):
+    wanted = tuple(map(normalize_screen_text, labels))
     matches = []
     for words in lines:
-        text = normalize(''.join(word for word, _ in words))
         if contains:
-            if wanted in text:
+            text = normalize_screen_text(''.join(word for word, _ in words))
+            if any(label in text for label in wanted):
                 return True
-        elif wanted == text:
-            left = min(box[0] for _, box in words)
-            top = min(box[1] for _, box in words)
-            right = max(box[0]+box[2] for _, box in words)
-            bottom = max(box[1]+box[3] for _, box in words)
-            matches.append(((left+right)//2, (top+bottom)//2))
+            continue
+        for group in screen_groups(words):
+            if normalize_screen_text(''.join(word for word, _ in group)) in wanted:
+                left, top, width, height = screen_bounds(group)
+                matches.append((left+width//2, top+height//2))
     return min(matches, key=lambda point: point[1], default=None)
 
 
-def update_screen(report, label, *, click=False, timeout=45, evidence=None):
-    image = report/'update-screen.png'
+def screen_version(lines, version):
+    parts = re.split(r'([.+-])', version)
+    expected = r'\s*'.join(re.escape(part) for part in parts)
+    pattern = re.compile(rf'(?<![0-9A-Za-z.+-])(?:v\s*)?{expected}(?![0-9A-Za-z+-]|\s*[.+-]\s*[0-9A-Za-z])')
+    continuation = re.compile(r'(?:[0-9]\s*|[0-9A-Za-z])[.+-]\s+$')
+    for words in lines:
+        line = ' '.join(word for word, _ in words).replace('–', '-').replace('－', '-')
+        if any(not continuation.search(line[:match.start()]) for match in pattern.finditer(line)):
+            return True
+    return False
 
-    def locate():
-        image.unlink(missing_ok=True)
-        run(['scrot', image], timeout=15)
-        result = subprocess.run(['tesseract', image, 'stdout', '--psm', '11', '-l', 'eng+chi_sim', 'tsv'],
-                                capture_output=True, text=True, check=True, timeout=20)
-        return screen_label(recognized_lines(result.stdout), label, contains=not click)
 
-    point = wait_for(f'Graphical update did not display {label!r}', locate, timeout=timeout)
-    if click:
-        run(['xdotool', 'mousemove', *map(str, point), 'click', '1'], timeout=10)
-    if evidence:
-        shutil.copyfile(image, report/evidence)
+def update_window_geometry(window):
+    info = output(['xwininfo', '-id', window])
+    return tuple(int(re.search(rf'^\s*{field}:\s+(-?\d+)', info, re.M)[1])
+                 for field in ('Absolute upper-left X', 'Absolute upper-left Y', 'Width', 'Height'))
+
+
+def recognize_update_screen(image):
+    code = (
+        'from PIL import Image\n'
+        'import sys\n'
+        'image = Image.open(sys.argv[1]).convert("L")\n'
+        'image.resize((image.width*2, image.height*2)).save(sys.stdout.buffer, format="PNG")\n'
+    )
+    enlarged = subprocess.check_output(['/usr/bin/python3', '-c', code, image], timeout=10)
+    result = subprocess.run(['tesseract', 'stdin', 'stdout', '--psm', '11', '-l', 'chi_sim+eng', 'tsv'],
+                            input=enlarged, capture_output=True, check=True, timeout=20,
+                            env=dict(os.environ, OMP_THREAD_LIMIT='1'))
+    return recognized_lines(result.stdout.decode('utf-8'), scale=2)
+
+
+def redact_update_words(lines, version):
+    labels = [label for translations in UPDATE_LABELS.values() for label in translations]
+    allowed = {normalize_screen_text(label): label for label in (*labels, version)}
+    return [
+        {'text': allowed.get(normalize_screen_text(''.join(word for word, _ in group)), '<redacted>'),
+         'box': screen_bounds(group)}
+        for words in lines for group in screen_groups(words)
+    ]
+
+
+def redact_update_image(size, destination, words):
+    code = (
+        'from PIL import Image, ImageDraw\n'
+        'import json, sys\n'
+        'result = Image.new("RGB", tuple(map(int, sys.argv[1:3])), "#dddddd")\n'
+        'draw = ImageDraw.Draw(result)\n'
+        'words = json.load(sys.stdin)\n'
+        'for word in sorted(words, key=lambda word: word["text"] == "<redacted>"):\n'
+        '    x, y, width, height = word["box"]\n'
+        '    if 0 <= x < x+width <= result.width and 0 <= y < y+height <= result.height:\n'
+        '        fill = "#888888" if word["text"] == "<redacted>" else "#265e94"\n'
+        '        draw.rectangle((x, y, x+width-1, y+height-1), fill=fill)\n'
+        'result.save(sys.argv[3])\n'
+    )
+    run(['/usr/bin/python3', '-c', code, *size, destination], input=json.dumps(words),
+        text=True, timeout=10)
+
+
+class UpdateNavigation:
+    def __init__(self, report, version):
+        self.report = report
+        self.version = version
+        self.events = []
+        self.lines = []
+        self.phase = None
+        self.step = 'window'
+        self.window = None
+        self.geometry = None
+
+    def record(self, step, **details):
+        self.events.append({'phase': self.phase, 'step': step, **details})
+        write_json(self.report/'update-navigation.json', self.events)
+
+    def focus(self):
+        try:
+            return int(output(['xdotool', 'getactivewindow']))
+        except (ValueError, subprocess.SubprocessError):
+            return None
+
+    def attach(self, window, *, dismiss_notice=True):
+        self.step = 'window'
+        self.window = int(window, 0)
+        self.geometry = None
+        self.lines = []
+        run(['xdotool', 'windowactivate', '--sync', window], timeout=15)
+        if dismiss_notice:
+            run(['xdotool', 'key', 'Escape'], timeout=10)
+        run(['wmctrl', '-ir', window, '-b', 'add,maximized_vert,maximized_horz'], timeout=15)
+
+        def ready():
+            geometry = update_window_geometry(window)
+            if self.focus() == self.window and geometry[2] >= 1100 and geometry[3] >= 800:
+                return geometry
+
+        self.geometry = wait_for('Graphical update window did not maximize and gain focus', ready, timeout=15)
+        self.record('window', window=self.window, geometry=self.geometry)
+
+    def capture(self):
+        if self.focus() != self.window:
+            return False
+        self.lines = []
+        with tempfile.TemporaryDirectory(prefix='cor-update-frame-', dir=self.report) as temporary:
+            image = Path(temporary)/'update-screen.png'
+            run(['scrot', '-a', ','.join(map(str, self.geometry)), image], timeout=15)
+            if self.focus() != self.window:
+                return False
+            self.lines = recognize_update_screen(image)
+        return True
+
+    def save_frame(self, name, words):
+        if self.lines and self.geometry:
+            redact_update_image(self.geometry[2:], self.report/name, words)
+
+    @contextlib.contextmanager
+    def diagnose_failure(self):
+        try:
+            yield
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as original:
+            try:
+                words = redact_update_words(self.lines, self.version)
+                self.record(self.step, result='failed', window=self.window, geometry=self.geometry,
+                            focused=self.focus(), ocr=words)
+                self.save_frame('update-navigation-failure.png', words)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                original.add_note(f'Could not preserve graphical navigation evidence: {type(error).__name__}')
+            raise
+
+    def input(self, step, point, button=1, repeat=1):
+        self.step = step
+        focused = self.focus()
+        width, height = self.geometry[2:]
+        if focused != self.window or not (0 <= point[0] < width and 0 <= point[1] < height):
+            self.record(step, window=self.window, focused=focused, point=point, result='rejected')
+            raise RuntimeError('Graphical update input target is outside the focused application window')
+        result = 'failed'
+        try:
+            run(['xdotool', 'mousemove', '--window', self.window, *map(str, point),
+                 'click', '--repeat', repeat, '--delay', '70', button], timeout=10)
+            result = 'sent'
+        finally:
+            self.record(step, window=self.window, focused=focused, point=point,
+                        button=button, repeat=repeat, result=result)
+
+    def locate(self, labels, *, region=None, contains=False):
+        if not self.capture():
+            return None
+        lines = self.lines
+        if region:
+            left, top, right, bottom = region
+            lines = [[(word, box) for word, box in words if
+                      left <= box[0]+box[2]//2 < right and top <= box[1]+box[3]//2 < bottom]
+                     for words in lines]
+        return screen_label(lines, labels, contains=contains)
+
+    def wait(self, step, labels, *, click=False, region=None, timeout=45, evidence=None, scroll=False):
+        self.step = step
+        scrolls = 0
+
+        def locate():
+            nonlocal scrolls
+            point = self.locate(labels, region=region, contains=not click)
+            if point is None and scroll and scrolls < 10 and self.focus() == self.window:
+                width, height = self.geometry[2:]
+                self.input('scroll-settings', (width*3//4, height//2), button=5, repeat=3)
+                self.step = step
+                scrolls += 1
+                time.sleep(.35)
+            return point
+
+        point = wait_for(f'Graphical update did not display {labels!r}', locate, timeout=timeout)
+        if click:
+            self.input(step, point)
+        else:
+            self.record(step, result='visible', window=self.window)
+        if evidence:
+            self.save_frame(evidence, redact_update_words(self.lines, self.version))
+
+    def open_settings(self):
+        width, height = self.geometry[2:]
+        header = (60, 44, width, 102)
+        self.input('open-settings', (56, height-62))
+        try:
+            self.wait('settings-page', UPDATE_LABELS['settings'], region=header, timeout=6)
+        except TimeoutError:
+            self.input('open-compact-settings', (30, height-35))
+            self.wait('settings-page', UPDATE_LABELS['settings'], region=header)
+
+    def verify_responsive(self):
+        self.open_settings()
+        width = self.geometry[2]
+        home = self.locate(UPDATE_LABELS['home'], region=(0, 104, 216, 171))
+        self.input('return-home', home or (30, 124))
+        self.wait('home-page', UPDATE_LABELS['home'], region=(60, 44, width, 102))
+
+    def check(self):
+        width, height = self.geometry[2:]
+        header = (60, 44, width, 102)
+        self.open_settings()
+        tab = self.locate(UPDATE_LABELS['updates'], region=header)
+        if tab:
+            self.input('open-updates', tab)
+        else:
+            self.input('reset-settings-scroll', (width*3//4, height//2), button=4, repeat=30)
+        self.wait('check-for-updates', UPDATE_LABELS['check'], click=True, scroll=True)
+
+    def wait_for_published_version(self):
+        self.step = 'published-version'
+        wait_for('Graphical update did not display the exact published version',
+                 lambda: self.capture() and screen_version(self.lines, self.version), timeout=240)
+        self.record(self.step, result='visible', window=self.window)
+        self.save_frame('update-discovered.png', redact_update_words(self.lines, self.version))
+
+    def dismiss_failure(self, status_file, result):
+        self.step = 'dismiss-failure-notice'
+        if self.focus() != self.window:
+            raise RuntimeError('Graphical update notice is outside the focused application window')
+        run(['xdotool', 'key', 'Escape'], timeout=10)
+        if result.get('acknowledged') is False:
+            def acknowledged():
+                status = read_object(status_file)
+                return (status.get('acknowledged') is True
+                        and all(status.get(field) == result.get(field)
+                                for field in ('directory', 'version', 'state', 'updated_at')))
+
+            wait_for('Graphical update failure was not acknowledged', acknowledged, timeout=15)
+        self.record(self.step, result='dismissed', window=self.window)
+
+
+def pending_gui_authorization(status_file, completed_attempts, locate, *, version):
+    status = read_object(status_file)
+    directory = status.get('directory')
+    if not directory or status.get('version') != version:
+        return None
+    if previous := completed_attempts.get(directory):
+        updated_at, last_update = status.get('updated_at'), previous.get('updated_at')
+        if type(updated_at) is not int or type(last_update) is not int or updated_at <= last_update:
+            return None
+    if status.get('state') in ('succeeded', 'failed'):
+        raise RuntimeError('Graphical installation ended before the expected authorization prompt')
+    if status.get('state') == 'installing' and (dialog := locate()):
+        return dialog, status
+    return None
 
 
 def verified_gui_download(status, published, owner, work, data):
@@ -653,6 +943,11 @@ def pkexec_snapshot(request, tool):
 
 def process_status(path):
     return dict(line.split(':', 1) for line in (path/'status').read_text().splitlines() if ':' in line)
+
+
+def process_identity(pid):
+    fields = (Path('/proc')/str(pid)/'stat').read_text().rsplit(')', 1)[1].split()
+    return pid, int(fields[19])
 
 
 def verify_gui_pkexec(package, tool, digest, proc=Path('/proc')):
@@ -734,7 +1029,7 @@ def stopped_gui_core(owner, *, startup):
 
 
 def update_gui_environment(work):
-    return dict(os.environ, SLINT_BACKEND='winit-software', TMPDIR=str(work),
+    return dict(os.environ, SLINT_BACKEND='winit-software', SLINT_SCALE_FACTOR='1', TMPDIR=str(work),
                 LC_ALL='', LC_MESSAGES='zh_CN.UTF-8', LANGUAGE='zh_CN')
 
 
@@ -749,6 +1044,7 @@ def gui_update_session(report, case, checks, locate, restart_agent, password_fil
     env = update_gui_environment(work)
     write_json(data/'settings.json', {'language': 'zh-CN', 'update_prereleases': published['prerelease'],
                                     'update_check_interval_minutes': 0, 'proxy_mode': 'off',
+                                    'theme_mode': 'light', 'dark': False,
                                     'mixed_port': available_mixed_port()})
     profile = report/'fixture.yaml'
     profile.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
@@ -760,7 +1056,11 @@ def gui_update_session(report, case, checks, locate, restart_agent, password_fil
             pid = control.get('pid')
             if control.get('owner') != 'gui' or type(pid) is not int or pid == original:
                 return None
-            for window in inspect('x11'):
+            try:
+                windows = inspect('x11')
+            except subprocess.CalledProcessError:
+                return None
+            for window in windows:
                 try:
                     renderer = output(['xdotool', 'getwindowpid', window['id']])
                     if _renderer(Path('/proc')/renderer, pid):
@@ -792,76 +1092,117 @@ def gui_update_session(report, case, checks, locate, restart_agent, password_fil
                                  else None))
 
     status_file = data/'update-install.json'
-    with (report/'update.log').open('w') as log, process([APP/'clash-of-rust'], log, env) as owner:
-        pid, window = ready()
-        stopped_gui_core(pid, startup=True)
-        cli('profile', 'add', 'GUI update fixture', str(profile))
-        subscriptions = cli('profile', 'list', '--filter', 'GUI update fixture')
-        if len(subscriptions) != 1:
-            raise RuntimeError('Could not seed a subscription in the GUI-owned backend')
-        source = data/'profiles'/f'{subscriptions[0]["id"]}.yaml'
-        settings, digest = read_object(data/'settings.json'), sha256(source)
-        verify_data(case['previous_version'])
-        last_directory = None
+    navigation = UpdateNavigation(report, published['version'])
+    with (report/'update.log').open('w') as log, \
+            process([APP/'clash-of-rust'], log, env, reap_for_restart=True) as owner:
+        navigation.phase = 'startup'
+        with navigation.diagnose_failure():
+            pid, window = ready()
+            stopped_gui_core(pid, startup=True)
+            navigation.step = 'seed-fixture'
+            cli('profile', 'add', 'GUI update fixture', str(profile))
+            subscriptions = cli('profile', 'list', '--filter', 'GUI update fixture')
+            if len(subscriptions) != 1:
+                raise RuntimeError('Could not seed a subscription in the GUI-owned backend')
+            source = data/'profiles'/f'{subscriptions[0]["id"]}.yaml'
+            settings, digest = read_object(data/'settings.json'), sha256(source)
+            verify_data(case['previous_version'])
+        previous_result = None
+        completed_attempts = {}
+        seen_requests = set()
         for phase, failure in (('cancel', '授权已取消'), ('locked', '安装失败'), ('retry', None)):
-            restart_agent()
-            run(['xdotool', 'windowactivate', '--sync', window, 'key', 'Escape'], timeout=15)
-            run(['wmctrl', '-ir', window, '-b', 'add,maximized_vert,maximized_horz'], timeout=15)
-            update_screen(report, '设置', click=True)
-            update_screen(report, '更新', click=True)
-            update_screen(report, '检查更新', click=True)
-            update_screen(report, published['version'], timeout=240,
-                          evidence='update-discovered.png' if phase == 'cancel' else None)
-            checks['version_visible_in_gui'] = True
-            update_screen(report, '下载安装', click=True)
-            if published['prerelease']:
-                update_screen(report, '安装预发布版')
-                update_screen(report, '继续安装', click=True)
-            dialog = wait_for('GUI did not show a graphical installation authorization prompt',
-                              locate, timeout=240)
-            status = read_object(status_file)
-            directory = status.get('directory')
-            if not directory or directory == last_directory or status.get('state') != 'installing':
-                raise RuntimeError('Authorization prompt has no new pending GUI installation')
-            package = verified_gui_download(status, published, pid, work, data)
-            request = verify_gui_pkexec(package, tool, published['sha256'])
-            request_observation(phase, request)
-            checks[phase] = {'download_sha256': published['sha256'], 'graphical_pkexec': tool,
-                             'sealed_download': True}
-            respond_authorization(dialog, password_file, phase != 'cancel')
-            wait_for('Graphical update authorization dialog remained open',
-                     lambda: gtk_authorization_window() is None, timeout=30)
+            navigation.phase = phase
+            with navigation.diagnose_failure():
+                navigation.step = 'authorization-agent'
+                restart_agent()
+                navigation.attach(window)
+                if phase == 'cancel':
+                    navigation.check()
+                    navigation.wait_for_published_version()
+                    checks['version_visible_in_gui'] = True
+                if previous_result and type(previous_result.get('updated_at')) is int:
+                    wait_for('Clock did not advance past the previous installation record',
+                             lambda: int(time.time()) > previous_result['updated_at'], timeout=5)
+                navigation.wait('download-and-install', UPDATE_LABELS['download'], click=True, scroll=True)
+                if published['prerelease']:
+                    navigation.wait('prerelease-confirmation', UPDATE_LABELS['prerelease'])
+                    time.sleep(PRERELEASE_CONFIRMATION_SECONDS)
+                    navigation.wait('confirm-prerelease', UPDATE_LABELS['continue'], click=True)
+                navigation.step = 'authorization-prompt'
+                dialog, status = wait_for(
+                    'GUI did not show a graphical installation authorization prompt',
+                    lambda: pending_gui_authorization(status_file, completed_attempts, locate,
+                                                      version=published['version']), timeout=240)
+                directory = status['directory']
+                navigation.step = 'verify-authorization-request'
+                package = verified_gui_download(status, published, pid, work, data)
+                request = verify_gui_pkexec(package, tool, published['sha256'])
+                identity = process_identity(request)
+                if identity in seen_requests:
+                    raise RuntimeError('Graphical authorization reused a previous pkexec request')
+                seen_requests.add(identity)
+                request_observation(phase, request)
+                checks[phase] = {'download_sha256': published['sha256'], 'graphical_pkexec': tool,
+                                 'sealed_download': True}
+                navigation.step = 'respond-to-authorization'
+                if (locate() != dialog or process_identity(request) != identity
+                        or verify_gui_pkexec(package, tool, published['sha256']) != request):
+                    raise RuntimeError('The verified graphical authorization prompt changed before the response')
+                respond_authorization(dialog, password_file, phase != 'cancel')
+                wait_for('Graphical update authorization dialog remained open',
+                         lambda: locate() != dialog, timeout=30)
 
-            def outcome():
-                owner.poll()
-                result = read_object(status_file)
-                if result.get('directory') == directory and result.get('state') in ('succeeded', 'failed'):
-                    return result
-                return None
+                def outcome():
+                    owner.poll()
+                    result = read_object(status_file)
+                    started, completed = status.get('updated_at'), result.get('updated_at')
+                    if (result.get('directory') == directory and result.get('version') == published['version']
+                            and result.get('state') in ('succeeded', 'failed')
+                            and (type(started) is not int or (type(completed) is int and completed >= started))):
+                        return result
+                    return None
 
-            result = wait_for('No outcome for the graphical installation', outcome, timeout=180)
-            last_directory = directory
-            expected_state = 'failed' if failure else 'succeeded'
-            if (result.get('state') != expected_state or result.get('error') is not bool(failure)
-                    or (failure and failure not in result.get('message', ''))):
-                raise RuntimeError(f'Unexpected graphical update outcome for {phase}: {result.get("message")}')
-            previous_pid = pid
-            if failure:
-                update_screen(report, failure, timeout=30, evidence=f'update-{phase}.png')
-                pid, window = ready()
-            else:
-                pid, window = ready(original=pid)
-            native = case['old_native_version'] if failure else case['new_native_version']
-            verify_installed_package(case['format'], native)
-            reopened = pid != previous_pid
-            stopped_gui_core(pid, startup=reopened)
-            verify_data(case['previous_version'] if failure else published['version'])
-            checks[phase].update(outcome=expected_state, gui_usable=True, gui_reopened=pid != previous_pid,
-                                 installed_native_version=native, native_package_complete=True,
-                                 settings_preserved=True, subscription_preserved=True,
-                                 core_stopped=True, stopped_core_after_startup=reopened)
-            if phase == 'locked':
-                checks[phase]['native_lock_conflict'] = request_observation('release')['lock_conflict']
+                navigation.step = 'installation-outcome'
+                result = wait_for('No outcome for the graphical installation', outcome, timeout=180)
+                previous_result = result
+                completed_attempts[directory] = result
+                expected_state = 'failed' if failure else 'succeeded'
+                if (result.get('state') != expected_state or result.get('error') is not bool(failure)
+                        or result.get('version') != published['version']
+                        or (failure and failure not in result.get('message', ''))):
+                    raise RuntimeError(f'Unexpected graphical update outcome for {phase}')
+                if phase == 'locked':
+                    navigation.step = 'release-native-lock'
+                    checks[phase]['native_lock_conflict'] = request_observation('release')['lock_conflict']
+
+                previous_pid = pid
+                navigation.step = 'recover-gui'
+                pid, window = ready(original=None if failure else pid)
+                if failure:
+                    if pid != previous_pid:
+                        raise RuntimeError('Graphical update failure replaced the original GUI owner')
+                    navigation.attach(window, dismiss_notice=False)
+                    labels = UPDATE_LABELS['cancelled' if phase == 'cancel' else 'failed']
+                    navigation.wait('failure-notice', labels, timeout=30, evidence=f'update-{phase}.png')
+                    navigation.dismiss_failure(status_file, result)
+                else:
+                    navigation.step = 'verify-reopened-window'
+                    navigation.attach(window, dismiss_notice=False)
+                    navigation.verify_responsive()
+                navigation.step = 'verify-installed-state'
+                native = case['old_native_version'] if failure else case['new_native_version']
+                verify_installed_package(case['format'], native)
+                reopened = pid != previous_pid
+                stopped_gui_core(pid, startup=reopened)
+                verify_data(case['previous_version'] if failure else published['version'])
+                checks[phase].update(outcome=expected_state, gui_usable=True, gui_reopened=reopened,
+                                     installed_native_version=native, native_package_complete=True,
+                                     settings_preserved=True, subscription_preserved=True)
+                if reopened:
+                    checks[phase]['core_started_and_stopped_by_fixture_after_reopen'] = True
+                else:
+                    checks[phase]['original_gui_owner_retained'] = True
+                    checks[phase]['core_still_stopped_after_failure'] = True
 
 
 def session():
@@ -869,11 +1210,18 @@ def session():
         raise RuntimeError('GUI must run as an ordinary user')
     report = Path(os.environ['COR_GUI_REPORT'])
     result = {'status': 'running', 'checks': {}}
+    case_file = report.parent/'published-update-case.json'
     try:
         require_logind_session()
         result['checks']['login_session'] = True
         with (report/'desktop.log').open('w') as log, contextlib.ExitStack() as stack:
-            update_case = read_object(report.parent/'published-update-case.json')
+            update_case = read_object(case_file)
+            if case_file.exists():
+                if not update_case.get('exercise_id'):
+                    raise RuntimeError('Missing graphical update exercise identity')
+                for key in ('exercise_id', 'fixture_sha256'):
+                    if key in update_case:
+                        result[key] = update_case[key]
             os.environ['DISPLAY'] = ':91'
             command = ['Xvfb', ':91', '-screen', '0', '1280x900x24', '-nolisten', 'tcp', '-noreset']
             if update_case:
@@ -966,7 +1314,7 @@ def session():
             result['status'] = 'passed'
     except BaseException as error:
         result['status'] = 'failed'
-        result['error'] = str(error)
+        result['error'] = type(error).__name__ if case_file.is_file() else str(error)
         raise
     finally:
         write_json(report/'gui.json', result)
@@ -984,19 +1332,21 @@ def stage_session(directory):
     return scripts/'linux_gui.py'
 
 
-def preserve_report(source, *, update_case=False):
-    destination = REPORT/('desktop-update' if update_case else 'desktop')
+def preserve_report(source, *, update_report=None):
+    destination = update_report if update_report is not None else REPORT/'desktop'
     destination.mkdir(parents=True, exist_ok=True)
-    for name in ('gui.json', 'authentication.log', 'desktop.log', 'x11.log', 'wayland.log',
-                 'dbus-probes.log', 'update.log'):
+    if update_report is not None:
+        names = ('gui.json', 'update-discovered.png', 'update-cancel.png', 'update-locked.png',
+                 'update-navigation.json', 'update-navigation-failure.png')
+    else:
+        names = ('gui.json', 'authentication.log', 'desktop.log', 'x11.log', 'wayland.log',
+                 'dbus-probes.log', 'update.log')
+    for name in names:
         path = source/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, destination/name)
-    if update_case:
-        for name in ('update-discovered.png', 'update-cancel.png', 'update-locked.png'):
-            path = source/name
-            if path.is_file() and not path.is_symlink():
-                shutil.copyfile(path, destination/name)
+    if update_report is not None:
+        return
     for backend in ('x11', 'wayland'):
         profile = source/f'profile-{backend}'
         startup = profile/'desktop-startup.json'
@@ -1022,13 +1372,14 @@ def launch_session():
     try:
         os.execve(command[0], command, env)
     except OSError as error:
-        write_json(Path(env['COR_GUI_REPORT'])/'gui.json',
-                   {'status': 'failed', 'checks': {}, 'error': str(error)})
+        report = Path(env['COR_GUI_REPORT'])
+        reason = type(error).__name__ if (report.parent/'published-update-case.json').is_file() else str(error)
+        write_json(report/'gui.json', {'status': 'failed', 'checks': {}, 'error': reason})
         raise
 
 
 @contextlib.contextmanager
-def fixture_signals():
+def fixture_signals(on_interrupt=None):
     interruption = None
 
     def remember_interruption(number, _frame):
@@ -1040,19 +1391,36 @@ def fixture_signals():
         if interruption is not None:
             raise interruption
 
+    numbers = (signal.SIGINT, signal.SIGTERM, getattr(signal, 'SIGHUP', None))
     handlers = {number: signal.signal(number, remember_interruption)
-                for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+                for number in numbers if number is not None}
+    primary = None
     try:
         yield check_interrupted
     except BaseException as error:
-        if interruption is not None and error is not interruption:
-            error.add_note(str(interruption))
+        primary = error
+        if interruption is None and isinstance(error, KeyboardInterrupt):
+            interruption = error
         raise
-    else:
-        check_interrupted()
     finally:
-        for number, handler in handlers.items():
-            signal.signal(number, handler)
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, handlers)
+        try:
+            for number, handler in handlers.items():
+                signal.signal(number, handler)
+            for number in sorted(signal.sigpending() & (handlers.keys() - mask)):
+                signal.sigwait({number})
+                remember_interruption(number, None)
+            if interruption is not None:
+                try:
+                    if primary is None:
+                        raise interruption
+                    if primary is not interruption:
+                        primary.add_note(str(interruption))
+                finally:
+                    if on_interrupt is not None:
+                        cleanup_steps(('record interrupted update', lambda: on_interrupt(interruption)))
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 
 
 def cleanup_steps(*steps):
@@ -1073,12 +1441,26 @@ def cleanup_steps(*steps):
 
 def stop_desktop_unit(unit):
     result = subprocess.run(['sudo', '-n', '/usr/bin/timeout', '--kill-after=5s', '25s',
-                             'systemctl', 'stop', unit], timeout=35)
+                             'systemctl', 'stop', unit], timeout=35, start_new_session=True)
     if result.returncode:
         state = subprocess.run(['systemctl', 'show', '--property=LoadState', '--property=ActiveState', unit],
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, timeout=10, start_new_session=True)
         if set(state.stdout.splitlines()) != {'LoadState=not-found', 'ActiveState=inactive'}:
             result.check_returncode()
+
+
+def stop_fixture_unit(unit, **properties):
+    expected = {**properties, 'Id': unit, 'Transient': 'yes'}
+    fields = ('LoadState', 'ActiveState', *expected)
+    result = subprocess.run(['systemctl', 'show', '--no-pager', '--property='+','.join(fields), unit],
+                            capture_output=True, text=True, timeout=10, start_new_session=True)
+    state = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+    if state.get('LoadState') == 'not-found' and state.get('ActiveState') == 'inactive':
+        return
+    result.check_returncode()
+    if any(state.get(key) != value for key, value in expected.items()):
+        raise RuntimeError(f'Refusing to stop an unverified fixture unit {unit}')
+    stop_desktop_unit(unit)
 
 
 def stop_child(child):
@@ -1089,6 +1471,22 @@ def stop_child(child):
         except subprocess.TimeoutExpired:
             child.kill()
             child.wait(timeout=10)
+
+
+def stop_process_group(child):
+    if child.returncode is not None:
+        return
+    try:
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if os.getpgid(child.pid) != child.pid or os.getsid(child.pid) != child.pid:
+            raise RuntimeError('The fixture child is not the leader of its own session')
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGTERM)
+            time.sleep(.5)
+            os.killpg(child.pid, signal.SIGKILL)
+    except ChildProcessError as error:
+        raise RuntimeError('The fixture group leader was reaped before cleanup') from error
+    child.reap()
 
 
 def verify_runner_pkexec(pid, uid, tool, proc=Path('/proc')):
@@ -1128,7 +1526,8 @@ def trace_installer(pid, log):
     command = ['sudo', '-n', '/usr/bin/timeout', '--kill-after=5s', '120s',
                '/usr/bin/strace', '-qq', '-y', '-s', '512',
                '-e', 'trace=execve,open,openat,creat,fcntl,exit_group', '-p', str(pid)]
-    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                             start_new_session=True)
     try:
         def attached():
             if child.poll() is not None:
@@ -1157,7 +1556,7 @@ def read_observation_request(path, uid):
     return request if isinstance(request, dict) else {}
 
 
-def run_update_desktop(command, home, unit, package_lock, package_format, uid, user, *, check_interrupted):
+def run_update_desktop(command, home, package_lock, package_format, uid, *, stop_session, check_interrupted):
     request = home/'report'/'update-observation-request.json'
     acknowledgement = home/'update-observation-state.json'
     tool = '/usr/bin/pacman' if package_format == 'pkg' else '/usr/bin/dpkg'
@@ -1165,9 +1564,9 @@ def run_update_desktop(command, home, unit, package_lock, package_format, uid, u
     expected = next(phases)
     state = None
     with contextlib.ExitStack() as lock, (home/'native-lock.log').open('w+') as log:
-        child = subprocess.Popen(command, cwd=home)
+        child = subprocess.Popen(command, cwd=home, start_new_session=True)
         try:
-            deadline = time.monotonic()+1050
+            deadline = time.monotonic()+DESKTOP_UPDATE_TIMEOUT
             while child.poll() is None and time.monotonic() < deadline:
                 check_interrupted()
                 message = read_observation_request(request, uid)
@@ -1193,7 +1592,7 @@ def run_update_desktop(command, home, unit, package_lock, package_format, uid, u
                     acknowledgement.chmod(0o644)
                 time.sleep(.2)
             if child.returncode is None:
-                raise subprocess.TimeoutExpired(command, 1050)
+                raise subprocess.TimeoutExpired(command, DESKTOP_UPDATE_TIMEOUT)
             if child.returncode:
                 raise subprocess.CalledProcessError(child.returncode, command)
             if expected is not None:
@@ -1201,60 +1600,62 @@ def run_update_desktop(command, home, unit, package_lock, package_format, uid, u
         finally:
             if sys.exc_info()[1] is not None:
                 cleanup_steps(('stop desktop client', lambda: stop_child(child)),
-                              ('stop desktop session unit', lambda: stop_desktop_unit(unit)),
-                              ('terminate GUI login session', lambda: stop_gui_user(user)),
-                              ('kill remaining GUI user processes', lambda: kill_gui_user_processes(user)))
+                              ('stop verified desktop session', stop_session))
 
 
 def remove_gui_rule(rule):
-    subprocess.run(['sudo', 'rm', '-f', rule], check=False).check_returncode()
+    subprocess.run(['sudo', 'rm', '-f', rule], check=False, timeout=15,
+                   start_new_session=True).check_returncode()
 
 
-def stop_gui_user(user):
+def stop_gui_user(user, user_home, uid):
+    if gui_account(user, user_home, uid) is None:
+        return
     result = run(['loginctl', 'list-users', '--no-legend', '--no-pager'],
-                 capture_output=True, text=True, timeout=15)
-    if any(row.split()[1:2] == [user] for row in (result.stdout or '').splitlines()):
-        run(['sudo', 'loginctl', 'terminate-user', user], timeout=30)
+                 capture_output=True, text=True, timeout=15, start_new_session=True)
+    if any(row.split()[:2] == [str(uid), user] for row in (result.stdout or '').splitlines()):
+        run(['sudo', 'loginctl', 'terminate-user', user], timeout=30, start_new_session=True)
 
 
-def kill_gui_user_processes(user):
-    for identity in ('-U', '-u'):
-        result = subprocess.run(['sudo', '-n', 'pkill', '-KILL', identity, user], timeout=15)
-        if result.returncode not in (0, 1):
-            result.check_returncode()
-
-
-def delete_gui_user(user, created, user_home):
+def gui_account(user, user_home, uid=None):
     import pwd
 
-    if not created:
-        try:
-            account = pwd.getpwnam(user)
-        except KeyError:
-            return
-        if Path(account.pw_dir) != user_home:
-            raise RuntimeError('Refusing to delete an account outside the disposable fixture')
-    subprocess.run(['sudo', 'userdel', '--remove', user], check=False).check_returncode()
+    try:
+        account = pwd.getpwnam(user)
+    except KeyError:
+        return None
+    if (Path(account.pw_dir) != user_home or account.pw_uid == 0
+            or (uid is not None and account.pw_uid != uid)):
+        raise RuntimeError('Refusing to clean up an account outside the disposable fixture')
+    return account
 
 
-def installed_tests(*, update_case=None, package_lock=None):
+def delete_gui_user(user, user_home, uid):
+    if gui_account(user, user_home, uid) is not None:
+        subprocess.run(['sudo', 'userdel', '--remove', user], check=False, timeout=30,
+                       start_new_session=True).check_returncode()
+
+
+def installed_tests(*, update_case=None, package_lock=None, update_report=None, check_interrupted=None):
     from linux_ci import require_actions
     require_actions()
-    if update_case and (not package_lock or not (
+    if update_case and (not package_lock or update_report is None or not (
             os.environ.get('COR_LINUX_GUEST') == 'true'
             or os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')):
         raise RuntimeError('Graphical update requires a disposable runner or compatibility VM')
     REPORT.mkdir(parents=True, exist_ok=True)
-    user = 'corgui'+str(os.getpid())
+    fixture_id = secrets.token_hex(12)
+    user = 'corgui'+fixture_id
     password = secrets.token_hex(12)
-    with fixture_signals() as check_interrupted:
+    signals = fixture_signals() if check_interrupted is None else contextlib.nullcontext(check_interrupted)
+    with signals as check_interrupted:
         temporary = tempfile.TemporaryDirectory(prefix='cor-desktop-')
         home = Path(temporary.name)
         report = home/'report'
-        created = False
-        user_requested = False
+        uid = None
         rule = None
         unit = None
+        session_cleanup = contextlib.ExitStack()
         try:
             home.chmod(0o755)
             script = stage_session(home)
@@ -1262,12 +1663,15 @@ def installed_tests(*, update_case=None, package_lock=None):
             native = platform.freedesktop_os_release().get('ID') in DISTROS
             groups = [] if native or update_case else ['--groups', 'sudo']
             check_interrupted()
-            user_requested = True
             run(['sudo', 'useradd', '--create-home', *groups,
-                 '--home-dir', home/'home', '--shell', '/bin/bash', user])
-            created = True
+                 '--home-dir', home/'home', '--shell', '/bin/bash', user],
+                timeout=30, start_new_session=True)
+            account = gui_account(user, home/'home')
+            if account is None:
+                raise RuntimeError('The disposable GUI user was not created')
+            uid = account.pw_uid
             check_interrupted()
-            run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True)
+            run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True, timeout=30)
             if update_case or native:
                 from linux_native_guest import distribution
                 if native:
@@ -1286,13 +1690,13 @@ def installed_tests(*, update_case=None, package_lock=None):
                             f' if (action.id === "{action}" && subject.user === "{user}"{extra})'
                             f' return ["unix-user:{user}"];'
                             ' });\n')
-                run(['sudo', 'tee', rule], input=contents, text=True, stdout=subprocess.DEVNULL)
-            run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report])
+                run(['sudo', 'tee', rule], input=contents, text=True, stdout=subprocess.DEVNULL, timeout=15)
+            run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report], timeout=15)
             password_file = home/'password'
             descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, 'w') as stream:
                 stream.write(password)
-            run(['sudo', 'chown', f'{user}:{user}', password_file])
+            run(['sudo', 'chown', f'{user}:{user}', password_file], timeout=15)
             env = {'HOME': str(home/'home'), 'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
                    'XDG_CONFIG_HOME': str(home/'home/.config'),
                    'XDG_CURRENT_DESKTOP': 'GNOME', 'GNOME_SHELL_SESSION_MODE': 'user',
@@ -1302,9 +1706,18 @@ def installed_tests(*, update_case=None, package_lock=None):
                    'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8',
                    'GITHUB_ACTIONS': 'true', 'NO_AT_BRIDGE': '1'}
             # PAM registers a real logind session for the graphical polkit agent.
-            unit = user+'-desktop.service'
+            unit = 'cor-desktop-'+fixture_id+'.service'
+            description = f'Clash of Rust desktop fixture {home}'
+            timeout = DESKTOP_UPDATE_TIMEOUT if update_case else DESKTOP_TIMEOUT
+            session_cleanup.callback(
+                lambda: cleanup_steps(
+                    ('stop verified desktop unit', lambda: stop_fixture_unit(
+                        unit, Description=description, User=user, WorkingDirectory=str(home))),
+                    ('terminate verified GUI login session', lambda: stop_gui_user(user, home/'home', uid))))
             command = ['sudo', 'systemd-run', '--unit='+unit, '--wait', '--collect',
-                       '--quiet', '--property=User='+user, '--property=PAMName=login',
+                       '--quiet', '--description='+description, '--property=User='+user,
+                       '--property=PAMName=login', '--property=KillMode=control-group',
+                       f'--property=RuntimeMaxSec={timeout+120}s',
                        '--property=TimeoutStopSec=15s',
                        '--property=StandardInput=null', '--property=StandardOutput=journal',
                        '--property=StandardError=journal', '--property=WorkingDirectory='+str(home),
@@ -1313,15 +1726,16 @@ def installed_tests(*, update_case=None, package_lock=None):
             try:
                 check_interrupted()
                 if update_case:
-                    run_update_desktop(command, home, unit, package_lock,
-                                       update_case['format'], report.stat().st_uid, user,
+                    run_update_desktop(command, home, package_lock, update_case['format'], uid,
+                                       stop_session=session_cleanup.close,
                                        check_interrupted=check_interrupted)
                 else:
-                    subprocess.run(command, check=True, cwd=home, timeout=360)
+                    subprocess.run(command, check=True, cwd=home, timeout=timeout, start_new_session=True)
                 check_interrupted()
             except subprocess.SubprocessError:
-                journal = 'desktop-update-session-journal.log' if update_case else 'desktop-session-journal.log'
-                with (REPORT/journal).open('w') as log:
+                if update_case:
+                    raise
+                with (REPORT/'desktop-session-journal.log').open('w') as log:
                     with contextlib.suppress(OSError, subprocess.SubprocessError):
                         subprocess.run(['sudo', 'journalctl', '--boot', '--no-pager', '-n', '80',
                                         '--unit', unit, '--unit', 'init.scope',
@@ -1343,20 +1757,15 @@ def installed_tests(*, update_case=None, package_lock=None):
             if rule:
                 steps.append(('remove disposable polkit rule', lambda: remove_gui_rule(rule)))
             if unit:
-                steps.append(('stop desktop session unit', lambda: stop_desktop_unit(unit)))
-            if user_requested:
-                if created:
-                    steps.extend((('terminate GUI login session', lambda: stop_gui_user(user)),
-                                  ('kill remaining GUI user processes', lambda: kill_gui_user_processes(user))))
-                steps.append(('delete disposable GUI user', lambda: delete_gui_user(user, created, home/'home')))
+                steps.append(('stop verified desktop session', session_cleanup.close))
+            if uid is not None:
+                steps.append(('delete disposable GUI user', lambda: delete_gui_user(user, home/'home', uid)))
             steps.append(('recover temporary desktop files', lambda: run(
-                ['sudo', 'chown', '-R', '-h', f'{os.getuid()}:{os.getgid()}', home], timeout=30)))
+                ['sudo', 'chown', '-R', '-h', f'{os.getuid()}:{os.getgid()}', home],
+                timeout=30, start_new_session=True)))
             if report.is_dir():
                 steps.append(('preserve desktop report', lambda: preserve_report(
-                    report, update_case=bool(update_case))))
-            if (home/'native-lock.log').is_file():
-                steps.append(('preserve native lock evidence', lambda: shutil.copyfile(
-                    home/'native-lock.log', REPORT/'desktop-update-native-lock.log')))
+                    report, update_report=update_report)))
             steps.append(('remove desktop fixture directory', temporary.cleanup))
             cleanup_steps(*steps)
 

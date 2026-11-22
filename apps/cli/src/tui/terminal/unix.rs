@@ -1,15 +1,17 @@
 use anyhow::{Context, Result};
+use clash_client_core::config::Language;
 
 pub struct Mode {
     original: libc::termios,
 }
 
 impl Mode {
-    pub fn enter() -> Result<Self> {
+    pub fn enter(language: Language) -> Result<Self> {
         let mut original = std::mem::MaybeUninit::uninit();
         anyhow::ensure!(
             unsafe { libc::tcgetattr(libc::STDIN_FILENO, original.as_mut_ptr()) } == 0,
-            "无法读取终端属性：{}",
+            "{}{}",
+            language.text("无法读取终端属性：", "Could not read terminal attributes: "),
             std::io::Error::last_os_error()
         );
         let original = unsafe { original.assume_init() };
@@ -19,22 +21,24 @@ impl Mode {
         raw.c_cc[libc::VTIME] = 0;
         anyhow::ensure!(
             unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) } == 0,
-            "无法设置终端属性：{}",
+            "{}{}",
+            language.text("无法设置终端属性：", "Could not set terminal attributes: "),
             std::io::Error::last_os_error()
         );
         Ok(Self { original })
     }
 
-    pub fn size(&self) -> Result<(usize, usize)> {
+    pub fn size(&self, language: Language) -> Result<(usize, usize)> {
         let mut size = std::mem::MaybeUninit::<libc::winsize>::uninit();
         if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error()).context("无法读取终端尺寸");
+            return Err(std::io::Error::last_os_error())
+                .context(language.text("无法读取终端尺寸", "Could not read the terminal size"));
         }
         let size = unsafe { size.assume_init() };
         Ok((usize::from(size.ws_col), usize::from(size.ws_row)))
     }
 
-    pub fn read(&mut self) -> Result<Vec<u8>> {
+    pub fn read(&mut self, language: Language) -> Result<Vec<u8>> {
         let mut descriptor = libc::pollfd {
             fd: libc::STDIN_FILENO,
             events: libc::POLLIN,
@@ -50,7 +54,8 @@ impl Mode {
         }
         anyhow::ensure!(
             descriptor.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) == 0,
-            "终端已断开"
+            "{}",
+            language.text("终端已断开", "Terminal disconnected")
         );
         if ready == 0 {
             return Ok(Vec::new());

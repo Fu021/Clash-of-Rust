@@ -195,7 +195,7 @@ pub(super) fn profiles(state: &State, width: usize, height: usize) -> Vec<(Strin
             } else {
                 ""
             },
-            profile.name,
+            crate::output::profile_name(profile, language),
             if profile.builtin {
                 language.text("内置", "Built-in")
             } else if profile.is_local() {
@@ -227,7 +227,7 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
                 .iter()
                 .find(|profile| Some(&profile.id) == poll.meta.settings.active_profile.as_ref())
         })
-        .map(|profile| profile.name.as_str())
+        .map(|profile| crate::output::profile_name(profile, language))
         .unwrap_or(language.text("未选择", "None selected"));
     let header = vec![
         (

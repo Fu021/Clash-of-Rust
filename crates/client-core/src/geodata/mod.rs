@@ -204,19 +204,7 @@ pub async fn download_geo_via(
     routes: &[crate::network::Route],
 ) -> Result<GeoManifest> {
     let routes: Vec<_> = routes.iter().map(DownloadRoute::new).collect();
-    let mut release = None;
-    let mut errors = Vec::new();
-    for route in &routes {
-        match fetch_release(route).await {
-            Ok(value) => {
-                release = Some(value);
-                break;
-            }
-            Err(error) => errors.push(format!("{}：{error:#}", route.label)),
-        }
-    }
-    let release =
-        release.with_context(|| format!("Geo 发布信息获取失败：{}", errors.join("；")))?;
+    let release = fetch_release_via(&routes, RELEASE).await?;
     let mapping = [
         ("geoip.dat", "GeoIP.dat"),
         ("geosite.dat", "GeoSite.dat"),
@@ -278,14 +266,26 @@ fn download_client(route: &crate::network::Route) -> Result<reqwest::Client> {
         .build()?)
 }
 
-async fn fetch_release(route: &DownloadRoute) -> Result<Release> {
+async fn fetch_release_via(routes: &[DownloadRoute], endpoint: &str) -> Result<Release> {
+    let mut errors = Vec::new();
+    for route in routes {
+        match fetch_release(route, endpoint).await {
+            Ok(release) => return Ok(release),
+            Err(error) => errors.push(format!("{}：{error:#}", route.label)),
+        }
+    }
+    bail!("Geo 发布信息获取失败：{}", errors.join("；"));
+}
+
+async fn fetch_release(route: &DownloadRoute, endpoint: &str) -> Result<Release> {
     let mut response = route
         .client()?
-        .get(RELEASE)
+        .get(endpoint)
         .timeout(Duration::from_secs(30))
         .send()
         .await?
         .error_for_status()?;
+    crate::download::require_complete_response(&response)?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if chunk.len() > (1024 * 1024usize).saturating_sub(bytes.len()) {
@@ -674,6 +674,42 @@ mod tests {
             localize_status("custom status", crate::config::Language::English),
             "custom status"
         );
+    }
+
+    #[tokio::test]
+    async fn partial_geo_release_metadata_falls_back_to_the_next_route() {
+        use crate::download::tests::serve_responses;
+
+        let partial = r#"{"tag_name":"partial","published_at":"fixture","assets":[]}"#;
+        let complete = r#"{"tag_name":"complete","published_at":"fixture","assets":[{"name":"geoip.dat","size":3,"browser_download_url":"https://github.com/example"}]}"#;
+        let (proxy, proxy_task) = serve_responses(vec![
+            format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 0-{}/{}\r\n\r\n{partial}",
+                partial.len(),
+                partial.len() - 1,
+                complete.len(),
+            )
+            .into_bytes(),
+        ])
+        .await;
+        let (endpoint, origin_task) = serve_responses(vec![
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{complete}",
+                complete.len()
+            )
+            .into_bytes(),
+        ])
+        .await;
+        let routes: Vec<_> = crate::network::routes(None, Some(proxy))
+            .iter()
+            .map(DownloadRoute::new)
+            .collect();
+        let release = fetch_release_via(&routes, &endpoint).await.unwrap();
+        assert_eq!(release.tag_name, "complete");
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].name, "geoip.dat");
+        proxy_task.await.unwrap();
+        origin_task.await.unwrap();
     }
 
     #[tokio::test]

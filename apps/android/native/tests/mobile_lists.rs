@@ -21,6 +21,8 @@ slint::slint! {
     import { MobileFrame } from "../../../../crates/client-ui/ui/mobile/shared/frame.slint";
     import { MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
     import { MobileData } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
+    export { MobileData, ConnectionDetailSnapshot, ConnectionDetailStatus } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
+    export { DetailItem } from "../../../../crates/client-ui/ui/models.slint";
     import { MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow } from "../../../../crates/client-ui/ui/mobile/shared/pages.slint";
     import { MobileModal } from "../../../../crates/client-ui/ui/mobile/shared/details.slint";
     import { AppearanceSettings } from "../../../../crates/client-ui/ui/mobile/shared/settings.slint";
@@ -136,6 +138,7 @@ slint::slint! {
         preferred-width: 393px; preferred-height: 852px;
         in-out property <float> text-scale <=> Theme.text-scale;
         in-out property <[ConnectionItem]> connections <=> MobileData.connections;
+        in-out property <int> page-index <=> MobileData.connection-page-index;
         in-out property <string> query <=> MobileView.query;
         in-out property <int> detail <=> MobileView.detail;
         in-out property <bool> protected <=> MobileData.protected;
@@ -606,6 +609,244 @@ fn network_toolbox_keeps_menu_input_cancel_and_export_reachable() {
 }
 
 #[test]
+fn mobile_connections_cancel_close_when_a_refresh_replaces_the_pressed_row() {
+    use i_slint_core::{
+        accessibility::{AccessibilityAction, AccessibleStringProperty, accessible_descendents},
+        input::TouchPhase,
+        items::ItemRc,
+        lengths::LogicalPoint,
+        platform::InternalEvent,
+        window::WindowInner,
+    };
+
+    fn close_accessibility_item(item: &ItemRc, position: LogicalPoint) -> Option<ItemRc> {
+        accessible_descendents(item).find_map(|child| {
+            let origin = child.map_to_window(LogicalPoint::zero());
+            let bounds = i_slint_core::lengths::LogicalRect::new(origin, child.geometry().size);
+            if bounds.contains(position)
+                && child
+                    .accessible_string_property(AccessibleStringProperty::Label)
+                    .is_some_and(|label| label == "关闭连接")
+            {
+                Some(child)
+            } else {
+                close_accessibility_item(&child, position)
+            }
+        })
+    }
+
+    let (adapter, clock) = headless(393, 852);
+    let probe = MobileConnectionsProbe::new().unwrap();
+    let original: Vec<_> = (0..12)
+        .map(|index| ConnectionItem {
+            id: index.to_string().into(),
+            host: format!("host-{index}.example:443").into(),
+            ..Default::default()
+        })
+        .collect();
+    let connections = Rc::new(slint::VecModel::from(original.clone()));
+    probe.set_connections(connections.clone().into());
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let observed = targets.clone();
+    let geometry = probe.global::<UiGeometry>();
+    geometry.on_measured(move |key, bounds| {
+        observed
+            .borrow_mut()
+            .insert(key.to_string(), bounds.iter().collect::<Vec<_>>());
+    });
+    geometry.set_enabled(true);
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let observed = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, id, _| observed.borrow_mut().push((intent, id.to_string())));
+    probe.show().unwrap();
+    let render = || {
+        advance(&clock, Duration::ZERO);
+        frame(&adapter, 393, 852);
+        targets.borrow_mut().clear();
+        geometry.set_revision(geometry.get_revision() + 1);
+        advance(&clock, Duration::ZERO);
+    };
+    let touch = |position, phase| {
+        probe
+            .window()
+            .dispatch_event(WindowEvent::internal(InternalEvent::Touch {
+                id: 1,
+                position,
+                phase,
+                event_time: None,
+                history: Default::default(),
+            }));
+    };
+    let close_position = |id: &str| {
+        let measured = targets.borrow();
+        let bounds = &measured[&format!("connection-close:{id}")];
+        LogicalPoint::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.)
+    };
+
+    for (change_after_ms, release_after_ms, shrink) in [
+        (30, 0, false),
+        (30, 250, false),
+        (150, 250, false),
+        (30, 0, true),
+        (30, 250, true),
+        (150, 250, true),
+    ] {
+        connections.set_vec(original.clone());
+        probe.set_page_index(2);
+        render();
+        advance(&clock, Duration::from_millis(300));
+        let position = close_position("0");
+        touch(position, TouchPhase::Started);
+        advance(&clock, Duration::from_millis(change_after_ms));
+
+        connections.set_row_data(0, original[1].clone());
+        if shrink {
+            while connections.row_count() > 1 {
+                connections.remove(connections.row_count() - 1);
+            }
+            probe.set_page_index(1);
+        } else {
+            connections.set_row_data(1, original[0].clone());
+        }
+        render();
+        assert_eq!(close_position("1"), position);
+        advance(&clock, Duration::from_millis(release_after_ms));
+        touch(position, TouchPhase::Ended);
+        assert!(
+            requests.borrow().is_empty(),
+            "refresh after {change_after_ms} ms, release {release_after_ms} ms later (shrink={shrink}): {:?}",
+            requests.borrow()
+        );
+
+        advance(&clock, Duration::from_millis(300));
+        touch(position, TouchPhase::Started);
+        touch(position, TouchPhase::Ended);
+        assert_eq!(
+            requests.borrow_mut().drain(..).collect::<Vec<_>>(),
+            [(MobileIntent::CloseConnection, "1".to_owned())]
+        );
+    }
+
+    let position = close_position("1");
+    for click in 0..3 {
+        touch(position, TouchPhase::Started);
+        for sample in 0..5 {
+            advance(&clock, Duration::from_millis(30));
+            let mut same_connection = connections.row_data(0).unwrap();
+            same_connection.down = format!("{} B/s", click * 5 + sample).into();
+            connections.set_row_data(0, same_connection);
+            render();
+        }
+        touch(position, TouchPhase::Ended);
+        assert_eq!(
+            requests.borrow_mut().drain(..).collect::<Vec<_>>(),
+            [(MobileIntent::CloseConnection, "1".to_owned())]
+        );
+    }
+
+    let press_return = || {
+        let text = slint::platform::Key::Return;
+        probe
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+        probe
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+    };
+    let item_tree = ItemRc::new_root(WindowInner::from_pub(probe.window()).component());
+    let accessible =
+        close_accessibility_item(&item_tree, position).expect("accessible close button");
+    press_return();
+    accessible.accessible_action(&AccessibilityAction::Default);
+    assert_eq!(
+        requests.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [
+            (MobileIntent::CloseConnection, "1".to_owned()),
+            (MobileIntent::CloseConnection, "1".to_owned()),
+        ]
+    );
+
+    let mut updated = connections.row_data(0).unwrap();
+    updated.down = "256 B/s".into();
+    connections.set_row_data(0, updated);
+    render();
+    press_return();
+    accessible.accessible_action(&AccessibilityAction::Default);
+    assert_eq!(
+        requests.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [
+            (MobileIntent::CloseConnection, "1".to_owned()),
+            (MobileIntent::CloseConnection, "1".to_owned()),
+        ],
+        "a speed refresh for the same connection must retain keyboard and accessibility actions"
+    );
+
+    connections.set_row_data(0, original[0].clone());
+    render();
+    advance(&clock, Duration::from_millis(300));
+    assert_eq!(close_position("0"), position);
+    press_return();
+    accessible.accessible_action(&AccessibilityAction::Default);
+    assert!(
+        requests.borrow().is_empty(),
+        "focus and accessibility from before a row replacement must not close the new connection"
+    );
+
+    touch(position, TouchPhase::Started);
+    touch(position, TouchPhase::Ended);
+    let current = close_accessibility_item(&item_tree, position).expect("replacement close button");
+    press_return();
+    current.accessible_action(&AccessibilityAction::Default);
+    assert_eq!(
+        requests.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [
+            (MobileIntent::CloseConnection, "0".to_owned()),
+            (MobileIntent::CloseConnection, "0".to_owned()),
+            (MobileIntent::CloseConnection, "0".to_owned()),
+        ]
+    );
+    probe.set_protected(true);
+    render();
+    press_return();
+    current.accessible_action(&AccessibilityAction::Default);
+    assert!(requests.borrow().is_empty());
+    probe.set_protected(false);
+
+    connections.set_vec(original.clone());
+    render();
+    advance(&clock, Duration::from_millis(300));
+    let position = close_position("2");
+    touch(position, TouchPhase::Started);
+    advance(&clock, Duration::from_millis(30));
+    connections.set_vec(Vec::new());
+    render();
+    advance(&clock, Duration::from_millis(150));
+    connections.set_vec(vec![
+        original[0].clone(),
+        original[1].clone(),
+        original[3].clone(),
+    ]);
+    render();
+    advance(&clock, Duration::from_millis(300));
+    assert_eq!(close_position("3"), position);
+    touch(position, TouchPhase::Ended);
+    assert!(
+        requests.borrow().is_empty(),
+        "a delayed tap must not be replayed onto a new row after the list emptied"
+    );
+    let first_position = close_position("0");
+    touch(first_position, TouchPhase::Started);
+    touch(first_position, TouchPhase::Ended);
+    assert_eq!(
+        requests.borrow().as_slice(),
+        &[(MobileIntent::CloseConnection, "0".to_owned())]
+    );
+    probe.hide().unwrap();
+}
+
+#[test]
 fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
     let (adapter, clock) = headless(393, 852);
     let probe = MobileConnectionsProbe::new().unwrap();
@@ -646,9 +887,9 @@ fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
         });
     probe.show().unwrap();
     let render = || {
-        advance(&clock, Duration::from_millis(300));
         let size = probe.window().size();
         frame(&adapter, size.width as usize, size.height as usize);
+        advance(&clock, Duration::from_millis(300));
         targets.borrow_mut().clear();
         let geometry = probe.global::<UiGeometry>();
         geometry.set_revision(geometry.get_revision().wrapping_add(1));
@@ -697,7 +938,8 @@ fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
         click(&close);
         assert_eq!(
             &*events.borrow(),
-            &[(MobileIntent::CloseConnection, "0".to_owned())]
+            &[(MobileIntent::CloseConnection, "0".to_owned())],
+            "close on the settled {width} × {height} layout"
         );
         assert_eq!(probe.get_detail(), 0);
         probe.set_protected(true);
@@ -1098,6 +1340,314 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
         assert_eq!(probe.get_detail(), 15);
         assert_eq!(probe.get_selected_id().as_str(), "shortcut");
     }
+    probe.hide().unwrap();
+}
+
+#[test]
+fn mobile_connection_details_gate_rows_and_actions_by_id_request_and_status() {
+    let (adapter, clock) = headless(320, 640);
+    let probe = AndroidPreview::new().unwrap();
+    probe.set_preview_page(3);
+    let view = probe.global::<MobileView>();
+    let data = probe.global::<MobileData>();
+    let fixture = data.get_connection_detail();
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let observed = targets.clone();
+    let geometry = probe.global::<UiGeometry>();
+    geometry.on_measured(move |key, bounds| {
+        observed
+            .borrow_mut()
+            .insert(key.to_string(), bounds.iter().collect::<Vec<_>>());
+    });
+    geometry.set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    let dismissals = Rc::new(RefCell::new(Vec::new()));
+    let dismissed = dismissals.clone();
+    probe
+        .global::<MobileActions>()
+        .on_dismiss_connection_detail(move |id, request| {
+            dismissed.borrow_mut().push((id.to_string(), request));
+        });
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, subject, value| {
+            recorded
+                .borrow_mut()
+                .push((intent, subject.to_string(), value.to_string()));
+        });
+    probe.show().unwrap();
+    let render = || {
+        let size = probe.window().size();
+        advance(&clock, Duration::from_millis(100));
+        frame(&adapter, size.width as usize, size.height as usize);
+        targets.borrow_mut().clear();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        advance(&clock, Duration::ZERO);
+        frame(&adapter, size.width as usize, size.height as usize);
+        advance(&clock, Duration::ZERO);
+    };
+    let click = |key: &str| {
+        let bounds = targets.borrow()[key].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            probe.window().dispatch_event(event);
+            advance(&clock, Duration::from_millis(50));
+        }
+    };
+    let copy = "connection-detail-copy";
+    let disconnect = "connection-detail-disconnect";
+    let back = "connection-detail-back";
+    let check_status = |expected| {
+        render();
+        for status in ["rows", "loading", "ended", "unavailable"] {
+            assert_eq!(
+                targets
+                    .borrow()
+                    .contains_key(&format!("connection-detail-{status}")),
+                status == expected,
+                "expected {expected}, checked {status}"
+            );
+        }
+    };
+    let rows = |id: &str, label: &str| -> slint::ModelRc<DetailItem> {
+        Rc::new(slint::VecModel::from(vec![
+            DetailItem {
+                label: "Destination".into(),
+                value: "long-service-name.example.com:443".into(),
+            },
+            DetailItem {
+                label: label.into(),
+                value: id.into(),
+            },
+        ]))
+        .into()
+    };
+    let publish = |id: &str, request, status| {
+        data.set_connection_detail(ConnectionDetailSnapshot {
+            id: id.into(),
+            request,
+            status,
+            rows: rows(id, "Connection ID"),
+        });
+    };
+
+    for (width, height, scale) in [(320, 640, 1.3), (800, 1000, 1.), (1280, 800, 1.)] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        probe.set_text_scale(scale);
+        data.set_connection_detail(fixture.clone());
+        view.set_selected_id("1".into());
+        view.set_connection_detail_request(1);
+        probe.set_preview_detail(5);
+        check_status("rows");
+        dismissals.borrow_mut().clear();
+        click(back);
+        assert_eq!(probe.get_preview_detail(), 0);
+        assert_eq!(*dismissals.borrow(), [("1".to_owned(), 1)]);
+        assert!(view.get_selected_id().is_empty());
+        assert_eq!(data.get_connection_detail().rows.row_count(), 0);
+        render();
+        events.borrow_mut().clear();
+        click("connection-name:2");
+        assert_eq!(probe.get_preview_detail(), 5);
+        let request = view.get_connection_detail_request();
+        assert_eq!(request, fixture.request + 1);
+        assert_eq!(
+            events.borrow().as_slice(),
+            &[(
+                MobileIntent::ConnectionDetail,
+                "2".to_owned(),
+                request.to_string()
+            )]
+        );
+        events.borrow_mut().clear();
+        data.set_connection_details(rows("2", "Connection ID"));
+        publish("1", request, ConnectionDetailStatus::Available);
+        check_status("unavailable");
+        click(copy);
+        click(disconnect);
+        assert!(events.borrow().is_empty());
+
+        publish("2", request - 1, ConnectionDetailStatus::Available);
+        check_status("unavailable");
+        publish("2", request, ConnectionDetailStatus::Loading);
+        check_status("loading");
+        click(copy);
+        click(disconnect);
+        assert!(events.borrow().is_empty());
+
+        publish("2", request, ConnectionDetailStatus::Available);
+        check_status("rows");
+        let bounds = targets.borrow();
+        for target in [copy, disconnect, back] {
+            let area = &bounds[target];
+            assert!(area[0] >= 0. && area[1] >= 0. && area[3] >= 48.);
+            assert!(area[0] + area[2] <= width as f32 + 1.);
+            assert!(area[1] + area[3] <= height as f32 + 1.);
+        }
+        drop(bounds);
+        for (protected, pending, working) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (false, false, false),
+        ] {
+            data.set_protected(protected);
+            data.set_protection_pending(pending);
+            data.set_working(working);
+            render();
+            events.borrow_mut().clear();
+            click(copy);
+            click(disconnect);
+            let mut expected = vec![(MobileIntent::Copy, "connection:2".to_owned(), String::new())];
+            if !(protected || pending || working) {
+                expected.push((MobileIntent::CloseConnection, "2".to_owned(), String::new()));
+            }
+            assert_eq!(*events.borrow(), expected);
+            assert_eq!(probe.get_preview_detail(), 5);
+        }
+
+        events.borrow_mut().clear();
+        for (status, label) in [
+            (ConnectionDetailStatus::Ended, "ended"),
+            (ConnectionDetailStatus::Unavailable, "unavailable"),
+        ] {
+            publish("2", request, status);
+            check_status(label);
+            click(copy);
+            click(disconnect);
+            assert!(events.borrow().is_empty());
+        }
+        publish("2", request, ConnectionDetailStatus::Available);
+        check_status("rows");
+        click(disconnect);
+        data.set_working(true);
+        render();
+        dismissals.borrow_mut().clear();
+        click(back);
+        assert_eq!(probe.get_preview_detail(), 0);
+        assert_eq!(*dismissals.borrow(), [("2".to_owned(), request)]);
+        assert_eq!(
+            *events.borrow(),
+            [(MobileIntent::CloseConnection, "2".to_owned(), String::new())]
+        );
+        data.set_working(false);
+        render();
+        click("connection-name:2");
+        assert_eq!(view.get_connection_detail_request(), request + 1);
+        check_status("unavailable");
+        click(back);
+    }
+
+    events.borrow_mut().clear();
+    data.set_connection_detail_snapshots(false);
+    view.set_selected_id("2".into());
+    probe.set_preview_detail(5);
+    data.set_working(true);
+    data.set_connection_details(slint::ModelRc::default());
+    check_status("unavailable");
+    data.set_working(false);
+    data.set_connection_details(rows("1", "连接 ID"));
+    check_status("unavailable");
+    assert!(!targets.borrow().contains_key(disconnect));
+    click(copy);
+    assert!(events.borrow().is_empty());
+    data.set_connection_details(rows("2", "Connection ID"));
+    check_status("rows");
+    click(copy);
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(MobileIntent::Copy, "connection:2".to_owned(), String::new())]
+    );
+    probe.hide().unwrap();
+}
+
+#[test]
+fn mobile_rule_editor_reselecting_a_mode_preserves_the_unsaved_rule() {
+    let (adapter, clock) = headless(393, 852);
+    let probe = AndroidPreview::new().unwrap();
+    probe.set_preview_page(4);
+    probe.set_preview_detail(2);
+    let view = probe.global::<MobileView>();
+    view.set_rule_kind("IP-CIDR".into());
+    view.set_rule_payload("192.0.2.0/24".into());
+    view.set_rule_policy("REJECT".into());
+    view.set_rule_no_resolve(true);
+    view.set_rule_raw("DOMAIN,original.example.com,DIRECT".into());
+    view.set_draft_dirty(true);
+
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let observed = targets.clone();
+    let geometry = probe.global::<UiGeometry>();
+    geometry.on_measured(move |key, bounds| {
+        observed
+            .borrow_mut()
+            .insert(key.to_string(), bounds.iter().collect::<Vec<_>>());
+    });
+    geometry.set_enabled(true);
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, raw, mode| {
+            captured.borrow_mut().push((intent, raw, mode));
+        });
+    probe.show().unwrap();
+    advance(&clock, Duration::from_millis(300));
+    frame(&adapter, 393, 852);
+    let click = |key: &str| {
+        let bounds = targets.borrow()[key].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            probe.window().dispatch_event(event);
+        }
+        advance(&clock, Duration::from_millis(50));
+    };
+
+    click("rule-editor-form");
+    assert!(
+        requests.borrow().is_empty(),
+        "reselecting Form sent stale rule text to the host"
+    );
+    assert!(!view.get_rule_text_mode());
+    assert!(view.get_draft_dirty());
+
+    click("rule-editor-text");
+    assert!(view.get_rule_text_mode());
+    assert_eq!(
+        view.get_rule_raw().as_str(),
+        "IP-CIDR,192.0.2.0/24,REJECT,no-resolve"
+    );
+    let edited_raw = "DOMAIN,edited.example.com,REJECT";
+    view.set_rule_raw(edited_raw.into());
+    click("rule-editor-text");
+    assert_eq!(view.get_rule_raw().as_str(), edited_raw);
+    assert!(requests.borrow().is_empty());
+
+    click("rule-editor-form");
+    assert_eq!(
+        requests.borrow().as_slice(),
+        &[(MobileIntent::RuleTextMode, edited_raw.into(), "form".into())]
+    );
+    assert!(view.get_rule_text_mode());
     probe.hide().unwrap();
 }
 

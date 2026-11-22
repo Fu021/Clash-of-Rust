@@ -36,6 +36,7 @@ export component AndroidSurface inherits MobileFrame {
     update-progress: AndroidData.update-progress;
     install-update => {
         if MobileData.update-preview {
+            if MobileView.detail == 5 { MobileView.back(); }
             MobileActions.request(MobileIntent.install-update, "", "prepare");
             MobileView.detail = 13;
         } else { MobileActions.request(MobileIntent.install-update, "", ""); }
@@ -48,7 +49,7 @@ export component AndroidSurface inherits MobileFrame {
     if MobileView.page == 5: MobileLogs { }
     if MobileView.page == 6: MobileNetwork { }
     if MobileView.page == 7: MobileIpCheck { }
-    if MobileView.page == 8: MobileAiCheck { }
+    if MobileView.page == 8: MobileAiCheck { protection-retry: AndroidData.protection-retry; }
     if MobileView.page == 9 && !root.standalone-detail: AndroidSettings { }
     if root.standalone-detail && !root.policies-visible: AndroidApplications { }
     if root.standalone-detail && root.policies-visible: AndroidApplicationPolicies { }

@@ -12,6 +12,8 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 pub mod application_rules;
 pub mod overview;
 
+pub const PROTECTION_RECOVERY_FILE: &str = "protection-recovery.json";
+
 pub trait NativeHost: Send + Sync + 'static {
     fn request(&self, value: Value) -> Result<Value>;
     fn notify(&self, title: &str, message: &str, interactive: bool) -> Result<()> {
@@ -39,6 +41,10 @@ pub fn native_response(value: Value) -> Result<Value> {
         anyhow::bail!("{message}");
     }
     Ok(value)
+}
+
+pub fn protection_request_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// Controller I/O runs outside the presentation loop. A host can cancel an old
@@ -116,10 +122,33 @@ impl Session {
         let store = Store::at(root)?;
         core::profile_transaction::recover(&store.root)?;
         core::geodata::recover(&store.runtime())?;
-        let mut settings = store.load_settings()?;
-        let mut profiles = store.migrate_profiles()?;
-        let first_profile = profiles.is_empty();
-        if !profiles.iter().any(Profile::is_default) {
+        let protection_pending =
+            match std::fs::symlink_metadata(store.root.join(PROTECTION_RECOVERY_FILE)) {
+                Ok(_) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error).context("Could not check for protection recovery"),
+            };
+        let mut settings = if protection_pending {
+            read_saved_settings(&store.root)?
+        } else {
+            store.load_settings()?
+        };
+        let mut profiles = store.profiles()?;
+        let first_profile =
+            !protection_pending && profiles.is_empty() && settings.active_profile.is_none();
+        if !first_profile {
+            let has_active = |profiles: &[Profile]| {
+                profiles
+                    .iter()
+                    .any(|profile| Some(&profile.id) == settings.active_profile.as_ref())
+            };
+            ensure!(has_active(&profiles), "当前订阅已丢失");
+            if !protection_pending {
+                profiles = store.migrate_profiles()?;
+                ensure!(has_active(&profiles), "当前订阅已丢失");
+            }
+        }
+        if !protection_pending && !profiles.iter().any(Profile::is_default) {
             let mut tx = core::profile_transaction::Transaction::new(&store.root)?;
             let id = uuid::Uuid::new_v4().to_string();
             profiles.push(Profile {
@@ -151,12 +180,6 @@ impl Session {
                 return Err(error);
             }
         }
-        ensure!(
-            profiles
-                .iter()
-                .any(|p| Some(&p.id) == settings.active_profile.as_ref()),
-            "当前订阅已丢失"
-        );
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
         let draft = ProfileRules::for_profile(&settings, id, false)
             .as_ref()
@@ -207,16 +230,41 @@ impl Session {
     pub fn runtime(&self, settings: &Settings) -> Result<String> {
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
         let raw = core::config::read_profile(&self.store.profile_path(id)?)?;
-        let rules = ProfileRules::for_profile(settings, id, false);
-        let runtime = android_safe_config(&core::config::runtime_config_with_rules(
-            &raw,
-            settings,
-            Some(&rules),
-            false,
-        )?)?;
+        let runtime = mobile_runtime(&raw, settings, id)?;
         self.application_runtime(&raw, &runtime, settings, id)
     }
+
+    pub fn cold_android_runtime(
+        root: &std::path::Path,
+        application_rules_supported: bool,
+    ) -> Result<(String, Settings)> {
+        let store = Store { root: root.into() };
+        let settings = read_saved_settings(root)?;
+        let profile = settings
+            .active_profile
+            .as_deref()
+            .context("Missing active profile")?;
+        let source = core::config::read_profile(&store.profile_path(profile)?)?;
+        let runtime = mobile_runtime(&source, &settings, profile)?;
+        let expected = core::application_rules::runtime(
+            &source,
+            &runtime,
+            &settings,
+            profile,
+            application_rules_supported,
+        )?;
+        let saved =
+            read_saved_configuration(&store.runtime().join("config.yaml"), 20 * 1024 * 1024)?;
+        ensure!(
+            saved == expected.as_bytes(),
+            "The saved runtime configuration does not match the active profile and settings"
+        );
+        Ok((expected, settings))
+    }
     pub fn initialize(&mut self) -> Result<()> {
+        self.initialize_with_protection_sync(true)
+    }
+    fn initialize_with_protection_sync(&mut self, sync: bool) -> Result<()> {
         let native_running = self.native.request(json!({"op":"state"}))?["running"] == true;
         let controller = if native_running {
             None
@@ -253,25 +301,34 @@ impl Session {
         let raw = self.runtime(&self.settings)?;
         drop(controller);
         drop(direct);
-        self.native.request(
-            json!({"op":"initialize","config":raw,"ipv6":effective_ipv6(&self.settings)}),
-        )?;
+        self.native.request(json!({
+            "op":"initialize",
+            "config":raw,
+            "ipv6":effective_ipv6(&self.settings),
+            "connect_from_tile":sync,
+        }))?;
         atomic_write(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
         self.running = true;
         self.route = core::active_route::root(&raw)?;
-        if self.settings.claude_protection.is_some() {
+        if sync && self.settings.claude_protection.is_some() {
             self.native.request(json!({"op":"protection-sync"}))?;
         }
         Ok(())
     }
     pub fn attach_or_initialize(&mut self) -> Result<()> {
+        self.attach_or_initialize_with_protection_sync(true)
+    }
+    pub fn attach_or_initialize_for_protection_recovery(&mut self) -> Result<()> {
+        self.attach_or_initialize_with_protection_sync(false)
+    }
+    fn attach_or_initialize_with_protection_sync(&mut self, sync: bool) -> Result<()> {
         if self.native.request(json!({"op":"state"}))?["running"] != true {
-            return self.initialize();
+            return self.initialize_with_protection_sync(sync);
         }
         // A recreated Activity must not reload a core owned by the VPN service.
         self.route = core::active_route::root(&self.runtime(&self.settings)?)?;
         self.running = true;
-        if self.settings.claude_protection.is_some() {
+        if sync && self.settings.claude_protection.is_some() {
             self.native.request(json!({"op":"protection-sync"}))?;
         }
         Ok(())
@@ -330,6 +387,138 @@ impl Session {
             run_mode,
             ..self.settings.clone()
         })
+    }
+
+    pub fn restore_protection(
+        &mut self,
+        protection: Option<Arc<core::claude_check::protection::Protection>>,
+        run_mode: String,
+    ) -> Result<()> {
+        core::profile_transaction::recover(&self.store.root)?;
+        let saved = read_saved_settings(&self.store.root)?;
+        ensure!(
+            saved.active_profile == self.settings.active_profile,
+            "The active profile changed before protection recovery"
+        );
+        let settings = Settings {
+            claude_protection: protection,
+            run_mode,
+            ..saved.clone()
+        };
+        settings.validate()?;
+        let settings_changed = settings != saved;
+        let pause_guard = self.settings.claude_protection != settings.claude_protection
+            && self.settings.claude_protection.is_some();
+        let api = self.api.reconfigured(&settings)?;
+        let raw = self.runtime(&settings).context("runtime config")?;
+        let route = core::active_route::root(&raw)?;
+        let path = self.store.runtime().join("config.yaml");
+        let runtime_changed = if self.running && !settings_changed {
+            match std::fs::read(&path) {
+                Ok(saved) => saved != raw.as_bytes(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(error) => {
+                    return Err(error).context("Could not read the saved runtime configuration");
+                }
+            }
+        } else {
+            false
+        };
+        if settings_changed || runtime_changed {
+            let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
+            if settings_changed {
+                tx.stage(
+                    &self.store.root.join("settings.json"),
+                    &serde_json::to_vec_pretty(&settings)?,
+                )?;
+            }
+            tx.stage(&path, raw.as_bytes())?;
+            tx.prepare()?;
+            if let Err(error) = tx.commit() {
+                if let Err(restore) = tx.rollback() {
+                    anyhow::bail!("settings commit: {error:#} · settings rollback: {restore:#}");
+                }
+                return Err(error).context("settings commit");
+            }
+        }
+        self.settings = settings;
+        self.api = api;
+        if pause_guard {
+            self.native
+                .request(json!({"op":"protection-pause"}))
+                .context("protection-pause")?;
+        }
+        if self.running {
+            self.native
+                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
+                .context("reload")?;
+        }
+        self.route = route;
+        if self.running {
+            self.native
+                .request(json!({"op":"protection-sync"}))
+                .context("protection-sync")?;
+        }
+        Ok(())
+    }
+
+    pub fn finish_protection_recovery(&self, request: &str, connected: bool) -> Result<()> {
+        let saved = read_saved_settings(&self.store.root)?;
+        ensure!(
+            saved.claude_protection == self.settings.claude_protection
+                && saved.run_mode == self.settings.run_mode
+                && saved.active_profile == self.settings.active_profile,
+            "The saved configuration changed before the protection transition could be confirmed"
+        );
+        let raw = self.runtime(&self.settings)?;
+        ensure!(
+            std::fs::read(self.store.runtime().join("config.yaml"))? == raw.as_bytes(),
+            "The saved runtime configuration does not match the protection settings"
+        );
+        let result = self
+            .native
+            .request(json!({
+                "op": "finish-protection-recovery",
+                "config": raw,
+                "ipv6": effective_ipv6(&self.settings),
+                "request": request,
+                "connected": connected,
+                "desired": self.platform["vpn_desired"],
+                "generation": self.platform["vpn_generation"],
+                "protected": connected && self.settings.claude_protection.is_some(),
+            }))
+            .and_then(Self::check_protection_completion);
+        if result.is_err() && self.protection_recovery_completed(request).unwrap_or(false) {
+            return Ok(());
+        }
+        result
+    }
+
+    pub fn protection_recovery_completed(&self, request: &str) -> Result<bool> {
+        self.native
+            .request(json!({"op":"protection-recovery-receipt", "request":request}))?["committed"]
+            .as_bool()
+            .context("Missing protection recovery receipt")
+    }
+
+    fn check_protection_completion(response: Value) -> Result<()> {
+        ensure!(
+            response["vpn_matches"] == true,
+            "The VPN changed before the protection transition could be confirmed"
+        );
+        ensure!(
+            response["matches"] == true,
+            "The running core configuration does not match the saved settings"
+        );
+        ensure!(
+            response["guard_matches"] == true,
+            "The live protection guard changed before the transition could be confirmed"
+        );
+        ensure!(
+            response["record_cleared"] == true,
+            "Could not remove the verified protection recovery record"
+        );
+        Ok(())
     }
 
     fn apply_settings(&mut self, mut settings: Settings) -> Result<()> {
@@ -976,12 +1165,48 @@ pub fn effective_ipv6(settings: &Settings) -> bool {
     settings.ipv6 || settings.claude_protection.is_some()
 }
 
+fn mobile_runtime(source: &str, settings: &Settings, profile: &str) -> Result<String> {
+    let rules = ProfileRules::for_profile(settings, profile, false);
+    android_safe_config(&core::config::runtime_config_with_rules(
+        source,
+        settings,
+        Some(&rules),
+        false,
+    )?)
+}
+
+fn read_saved_configuration(path: &std::path::Path, limit: u64) -> Result<Vec<u8>> {
+    use std::io::Read as _;
+    let metadata = std::fs::symlink_metadata(path)?;
+    ensure!(
+        metadata.is_file() && metadata.len() <= limit,
+        "Invalid saved configuration"
+    );
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= limit,
+        "Saved configuration exceeds its size limit"
+    );
+    Ok(bytes)
+}
+
+fn read_saved_settings(root: &std::path::Path) -> Result<Settings> {
+    let bytes = read_saved_configuration(&root.join("settings.json"), 10 * 1024 * 1024)
+        .context("Could not read saved settings for protection recovery")?;
+    let mut settings: Settings = serde_json::from_slice(&bytes)?;
+    settings.normalize();
+    settings.validate()?;
+    Ok(settings)
+}
+
 /// Both mobile hosts reuse the desktop overlay, provider resolution and guard.
 pub async fn prepare_protection(
     api: &Api,
     settings: &Settings,
     raw: &str,
-    vpn: bool,
 ) -> Result<core::claude_check::protection::Protection> {
     use crate::core::claude_check::protection::{Previous, Protection};
     let proxies: Proxies = api.get("proxies").await?;
@@ -1059,11 +1284,7 @@ pub async fn prepare_protection(
         node,
         Previous {
             mode: settings.run_mode.clone(),
-            proxy_mode: if vpn {
-                core::model::ProxyMode::Tun
-            } else {
-                core::model::ProxyMode::Off
-            },
+            proxy_mode: core::model::ProxyMode::Off,
             selectors: proxies
                 .proxies
                 .iter()
@@ -1108,6 +1329,82 @@ pub fn android_safe_config(raw: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cold_android_runtime_rejects_valid_but_stale_yaml_and_malformed_settings() {
+        struct Host;
+        impl NativeHost for Host {
+            fn request(&self, _: Value) -> Result<Value> {
+                Ok(json!({"ok":true}))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Host)).unwrap();
+        session
+            .save_profile(None, "Fixture", "", Some("proxies: [{name: Fixture, type: socks5, server: 127.0.0.1, port: 9}]\nrules: ['MATCH,Fixture']\n"))
+            .await.unwrap();
+        let profile = session.profiles.last().unwrap().id.clone();
+        session.activate(&profile).unwrap();
+        let stale = session.runtime(&session.settings).unwrap();
+        let protection = core::protection::Protection::new(
+            profile,
+            "Fixture".into(),
+            core::protection::Previous {
+                mode: "rule".into(),
+                proxy_mode: core::model::ProxyMode::Off,
+                selectors: vec![],
+            },
+        );
+        session
+            .commit_protection(Some(Arc::new(protection)), "rule".into())
+            .unwrap();
+        let path = session.store.runtime().join("config.yaml");
+        let correct = std::fs::read(&path).unwrap();
+        assert!(Session::cold_android_runtime(root.path(), true).is_ok());
+        std::fs::write(&path, &stale).unwrap();
+        assert!(Session::cold_android_runtime(root.path(), true).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), stale);
+        session.running = true;
+        session
+            .restore_protection(session.settings.claude_protection.clone(), "rule".into())
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), correct);
+        let path = root.path().join("settings.json");
+        let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value["claude_protection"] = json!("malformed");
+        std::fs::write(&path, value.to_string()).unwrap();
+        assert!(Session::cold_android_runtime(root.path(), true).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), value.to_string());
+    }
+
+    #[test]
+    fn pending_protection_recovery_does_not_replace_missing_settings_with_defaults() {
+        struct Host;
+        impl NativeHost for Host {
+            fn request(&self, _: Value) -> Result<Value> {
+                panic!("opening storage must not call the host");
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let native = Arc::new(Host);
+        let session = Session::open(root.path().into(), native.clone()).unwrap();
+        let record = root.path().join(PROTECTION_RECOVERY_FILE);
+        std::fs::write(&record, b"original recovery record").unwrap();
+        let saved = root.path().join("settings.json");
+        let original = std::fs::read(&saved).unwrap();
+        std::fs::remove_file(&saved).unwrap();
+        assert!(Session::open(root.path().into(), native).is_err());
+        assert!(!saved.exists());
+        assert!(
+            session
+                .store
+                .profile_path(&session.profile().id)
+                .unwrap()
+                .is_file()
+        );
+        assert_eq!(std::fs::read(record).unwrap(), b"original recovery record");
+        std::fs::write(saved, original).unwrap();
+    }
     #[tokio::test]
     async fn protection_checks_the_actual_global_chain_and_rejects_nested_direct() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1159,7 +1456,6 @@ mod tests {
                 &Api::new(&settings).unwrap(),
                 &settings,
                 "proxies: []\nrules: ['MATCH,Main']\n",
-                false,
             )
             .await;
             server.abort();
@@ -1193,6 +1489,170 @@ mod tests {
         fn request(&self, _: Value) -> Result<Value> {
             Ok(json!({"ok":true}))
         }
+    }
+
+    #[test]
+    fn first_launch_seeds_the_default_with_a_missing_or_empty_profile_index() {
+        for empty_index in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let index = root.path().join("profiles.json");
+            if empty_index {
+                std::fs::write(&index, b"[]").unwrap();
+            }
+
+            let session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+            let id = session.profile().id.as_str();
+            assert!(session.profile().is_default());
+            assert_eq!(session.store.profiles().unwrap().len(), 1);
+            assert_eq!(
+                session
+                    .store
+                    .load_settings()
+                    .unwrap()
+                    .active_profile
+                    .as_deref(),
+                Some(id)
+            );
+            assert_eq!(
+                std::fs::read(session.store.profile_path(id).unwrap()).unwrap(),
+                include_bytes!("../../../resources/default.yaml").as_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_profile_indexes_preserve_the_active_profile_and_live_core() {
+        #[derive(Default)]
+        struct RunningHost(std::sync::Mutex<Vec<String>>);
+        impl NativeHost for RunningHost {
+            fn request(&self, value: Value) -> Result<Value> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(value["op"].as_str().unwrap().to_owned());
+                Ok(json!({"running":true,"vpn":true}))
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(RunningHost::default());
+        let mut original = Session::open(root.path().into(), host.clone()).unwrap();
+        let raw = "# user profile\nproxies: []\nrules: ['MATCH,DIRECT']\n";
+        original
+            .save_profile_content(None, "Imported", "", raw.into(), None)
+            .unwrap();
+        let id = original.profiles.last().unwrap().id.clone();
+        original.activate(&id).unwrap();
+        original.initialize().unwrap();
+        let profile = original.store.profile_path(&id).unwrap();
+        let runtime = original.store.runtime().join("config.yaml");
+        let settings = root.path().join("settings.json");
+        let index = root.path().join("profiles.json");
+        let runtime_bytes = std::fs::read(&runtime).unwrap();
+        let settings_bytes = std::fs::read(&settings).unwrap();
+        let index_bytes = std::fs::read(&index).unwrap();
+        let profile_count = original.profiles.len();
+        let mut incomplete = serde_json::to_value(&original.profiles[..1]).unwrap();
+        incomplete[0]["name"] = json!("Other");
+        incomplete[0]["source"] = json!("");
+        incomplete[0]["builtin"] = json!(false);
+        let incomplete_index = serde_json::to_vec(&incomplete).unwrap();
+        incomplete[0].as_object_mut().unwrap().remove("builtin");
+        let incomplete_legacy_index = serde_json::to_vec(&incomplete).unwrap();
+        drop(original);
+
+        for (contents, reason) in [
+            (None, "当前订阅已丢失"),
+            (Some(b"[]".as_slice()), "当前订阅已丢失"),
+            (Some(incomplete_index.as_slice()), "当前订阅已丢失"),
+            (Some(incomplete_legacy_index.as_slice()), "当前订阅已丢失"),
+            (Some(b"[{invalid index".as_slice()), "订阅索引格式错误"),
+        ] {
+            host.0.lock().unwrap().clear();
+            match contents {
+                Some(bytes) => std::fs::write(&index, bytes).unwrap(),
+                None => std::fs::remove_file(&index).unwrap(),
+            }
+
+            let error = Session::open(root.path().into(), host.clone())
+                .err()
+                .expect("a missing active profile must stop session startup");
+            assert!(error.to_string().contains(reason), "{error:#}");
+            assert_eq!(std::fs::read(&settings).unwrap(), settings_bytes);
+            match contents {
+                Some(bytes) => assert_eq!(std::fs::read(&index).unwrap(), bytes),
+                None => assert_eq!(
+                    std::fs::metadata(&index).unwrap_err().kind(),
+                    std::io::ErrorKind::NotFound
+                ),
+            }
+            assert_eq!(std::fs::read(&profile).unwrap(), raw.as_bytes());
+            assert_eq!(std::fs::read(&runtime).unwrap(), runtime_bytes);
+            assert!(host.0.lock().unwrap().is_empty());
+
+            std::fs::write(&index, &index_bytes).unwrap();
+            let mut reopened = Session::open(root.path().into(), host.clone()).unwrap();
+            reopened.attach_or_initialize().unwrap();
+            reopened.observe_native().unwrap();
+            assert!(reopened.running && reopened.vpn);
+            assert_eq!(reopened.profile().id, id);
+            assert_eq!(reopened.profiles.len(), profile_count);
+            assert_eq!(
+                std::fs::read_dir(profile.parent().unwrap())
+                    .unwrap()
+                    .count(),
+                profile_count
+            );
+            assert_eq!(std::fs::read(&index).unwrap(), index_bytes);
+            assert_eq!(std::fs::read(&settings).unwrap(), settings_bytes);
+            assert_eq!(std::fs::read(&profile).unwrap(), raw.as_bytes());
+            assert_eq!(std::fs::read(&runtime).unwrap(), runtime_bytes);
+            assert_eq!(*host.0.lock().unwrap(), ["state", "state"]);
+        }
+    }
+
+    #[test]
+    fn invalid_settings_are_preserved_and_session_can_open_after_repair() {
+        #[derive(Default)]
+        struct RunningHost(std::sync::Mutex<Vec<String>>);
+        impl NativeHost for RunningHost {
+            fn request(&self, value: Value) -> Result<Value> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(value["op"].as_str().unwrap().to_owned());
+                Ok(json!({"running":true,"vpn":true}))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let native = Arc::new(RunningHost::default());
+        let original = Session::open(root.path().into(), native.clone()).unwrap();
+        let profile = original.store.profile_path(&original.profile().id).unwrap();
+        let profile_bytes = std::fs::read(&profile).unwrap();
+        let runtime = original.store.runtime().join("config.yaml");
+        std::fs::write(&runtime, "existing live config").unwrap();
+        let settings = root.path().join("settings.json");
+        let valid = std::fs::read(&settings).unwrap();
+        let invalid = b"{invalid settings";
+        std::fs::write(&settings, invalid).unwrap();
+
+        assert!(Session::open(root.path().into(), native.clone()).is_err());
+        assert_eq!(std::fs::read(&settings).unwrap(), invalid);
+        assert_eq!(std::fs::read(&profile).unwrap(), profile_bytes);
+        assert!(native.0.lock().unwrap().is_empty());
+
+        std::fs::write(&settings, &valid).unwrap();
+        let mut reopened = Session::open(root.path().into(), native.clone()).unwrap();
+        reopened.attach_or_initialize().unwrap();
+        reopened.observe_native().unwrap();
+        assert!(reopened.running && reopened.vpn);
+        assert_eq!(reopened.profile().id, original.profile().id);
+        assert_eq!(std::fs::read(profile).unwrap(), profile_bytes);
+        assert_eq!(
+            std::fs::read_to_string(runtime).unwrap(),
+            "existing live config"
+        );
+        assert_eq!(*native.0.lock().unwrap(), ["state", "state"]);
     }
 
     #[test]
@@ -1388,6 +1848,11 @@ mod tests {
         assert_eq!(migrated.profile().id, id);
         assert!(migrated.profile().is_default());
         assert!(migrated.store.profiles().unwrap()[0].is_default());
+        let migrated_index: Value = serde_json::from_slice(
+            &std::fs::read(migrated.store.root.join("profiles.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(migrated_index[0]["builtin"], true);
 
         profiles[0].name = "Local configuration".into();
         migrated.store.save_profiles(&profiles).unwrap();
@@ -1789,6 +2254,68 @@ mod tests {
         session.platform = json!({"protection":{"enabled":true,"snapshot":{}}});
         assert!(session.protection_snapshot().is_err());
     }
+
+    #[test]
+    fn protection_restore_updates_the_route_only_after_successful_reload() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct Host {
+            reject_reload: AtomicBool,
+            reject_guard: AtomicBool,
+            operations: std::sync::Mutex<Vec<String>>,
+        }
+        impl NativeHost for Host {
+            fn request(&self, request: Value) -> Result<Value> {
+                let operation = request["op"].as_str().unwrap();
+                self.operations.lock().unwrap().push(operation.into());
+                ensure!(
+                    operation != "reload" || !self.reject_reload.load(Ordering::Relaxed),
+                    "fixture rejected reload"
+                );
+                ensure!(
+                    operation != "protection-sync" || !self.reject_guard.load(Ordering::Relaxed),
+                    "fixture rejected guard sync"
+                );
+                Ok(json!({"ok":true}))
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host {
+            reject_reload: AtomicBool::new(true),
+            reject_guard: AtomicBool::new(true),
+            operations: Default::default(),
+        });
+        let mut session = Session::open(root.path().into(), host.clone()).unwrap();
+        session.running = true;
+        session.route = "Last successful route".into();
+        let mode = session.settings.run_mode.clone();
+        let error = session.restore_protection(None, mode.clone()).unwrap_err();
+        assert!(format!("{error:#}").contains("fixture rejected reload"));
+        assert_eq!(session.route, "Last successful route");
+        host.reject_reload.store(false, Ordering::Relaxed);
+
+        let error = session.restore_protection(None, mode.clone()).unwrap_err();
+        assert!(format!("{error:#}").contains("fixture rejected guard sync"));
+        assert_ne!(session.route, "Last successful route");
+        host.reject_guard.store(false, Ordering::Relaxed);
+        session.restore_protection(None, mode).unwrap();
+        assert_eq!(
+            session.route,
+            core::active_route::root(&session.runtime(&session.settings).unwrap()).unwrap()
+        );
+        assert_eq!(
+            *host.operations.lock().unwrap(),
+            [
+                "reload",
+                "reload",
+                "protection-sync",
+                "reload",
+                "protection-sync"
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn mobile_protection_survives_reopen_and_restores_network_preferences() {
         use crate::core::claude_check::protection::{Previous, Protection};

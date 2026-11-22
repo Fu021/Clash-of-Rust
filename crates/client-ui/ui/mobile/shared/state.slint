@@ -12,7 +12,18 @@ export enum MobileIntent {
     site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-protection, export-report,
     appearance, accent, text-scale, language, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
-export global MobileActions { callback request(MobileIntent, string, string); }
+export global MobileActions {
+    callback request(MobileIntent, string, string);
+    callback dismiss-connection-detail(string, int);
+}
+
+export enum ConnectionDetailStatus { unavailable, loading, available, ended }
+export struct ConnectionDetailSnapshot {
+    id: string,
+    request: int,
+    status: ConnectionDetailStatus,
+    rows: [DetailItem],
+}
 
 export global MobileData {
     in-out property <string> version;
@@ -61,6 +72,8 @@ export global MobileData {
     in-out property <bool> rule-previous;
     in-out property <bool> rule-next;
     in-out property <[DetailItem]> connection-details;
+    in-out property <bool> connection-detail-snapshots;
+    in-out property <ConnectionDetailSnapshot> connection-detail;
     in-out property <[RuleItem]> rules;
     in-out property <[string]> rule-profiles;
     in-out property <string> rule-profile;
@@ -129,6 +142,7 @@ export global MobileView {
     in-out property <int> detail;
     out property <bool> modal: self.detail == 4 || self.detail == 8 || self.detail == 11 || self.detail == 12 || self.detail == 13;
     in-out property <string> selected-id;
+    in-out property <int> connection-detail-request;
     in-out property <string> query;
     in-out property <int> node-sort: 2;
     in-out property <string> connection-sort: "下载速度 ↓";
@@ -201,16 +215,33 @@ export global MobileView {
         if self.draft-dirty {
             self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {
+            self.dismiss-connection-detail();
             if self.page != destination { self.network-open = false; self.query = ""; }
             self.page = destination; self.detail = 0; self.rule-selected = false; self.rule-drag-id = ""; self.rule-drag-target = "";
         }
+    }
+    callback open-connection(string);
+    open-connection(id) => {
+        self.selected-id = id;
+        self.connection-detail-request += 1;
+        MobileActions.request(MobileIntent.connection-detail, id, "" + self.connection-detail-request);
+        self.detail = 5;
+    }
+    function dismiss-connection-detail() {
+        if self.detail != 5 { return; }
+        MobileActions.dismiss-connection-detail(self.selected-id, self.connection-detail-request);
+        self.selected-id = "";
+        MobileData.connection-detail = { id: "", request: 0, status: ConnectionDetailStatus.unavailable, rows: [] };
     }
     callback back();
     back => {
         if MobileData.profile-busy { return; }
         if self.draft-dirty {
             self.pending-page = -1; self.pending-detail = self.detail; self.detail = 12;
-        } else { self.detail = self.detail == 16 ? 6 : 0; }
+        } else {
+            self.dismiss-connection-detail();
+            self.detail = self.detail == 16 ? 6 : 0;
+        }
     }
     callback notify(string);
     notify(message) => { self.notice = message; self.notice-elapsed = 0; self.notice-revision += 1; }

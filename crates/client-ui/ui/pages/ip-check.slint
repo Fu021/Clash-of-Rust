@@ -13,7 +13,7 @@ component CategoryCard inherits ContentPanel {
         Heading { text: IpStatusText.label(root.item.title); }
         Label { text: root.item.count; color: root.item.tone == 2 ? Theme.warning : Theme.accent; horizontal-alignment: right; font-size: 22px * Theme.text-scale; }
     }
-    Caption { text: root.item.detail; }
+    Caption { text: root.item.detail; wrap: word-wrap; }
     Caption { text: @tr("查看分类详情 →"); color: Theme.accent; }
 }
 

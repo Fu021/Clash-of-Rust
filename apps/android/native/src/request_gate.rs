@@ -15,10 +15,14 @@ impl RequestGate {
             .map(|_| ticket)
     }
 
-    pub(crate) fn finish(&self, ticket: u64) {
-        let _ = self
-            .pending
-            .compare_exchange(ticket, 0, Ordering::AcqRel, Ordering::Acquire);
+    pub(crate) fn finish(&self, ticket: u64) -> bool {
+        self.pending
+            .compare_exchange(ticket, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.pending.store(0, Ordering::Release);
     }
 
     pub(crate) fn busy(&self) -> bool {
@@ -43,6 +47,26 @@ mod tests {
         assert!(gate.busy());
         assert!(gate.begin().is_none());
         gate.finish(second);
+        assert!(!gate.busy());
+    }
+
+    #[test]
+    fn queued_geo_result_is_discarded_after_cancellation_even_after_a_new_download_starts() {
+        let gate = RequestGate::default();
+        let (updates, results) = std::sync::mpsc::sync_channel(1);
+        let ticket = gate.begin().unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        let staged_path = stage.path().to_owned();
+        updates.send((ticket, stage)).unwrap();
+
+        gate.cancel();
+        let retry = gate.begin().unwrap();
+        let (queued_ticket, stage) = results.recv().unwrap();
+        assert!(!gate.finish(queued_ticket));
+        drop(stage);
+        assert!(!staged_path.exists());
+        assert!(gate.busy());
+        assert!(gate.finish(retry));
         assert!(!gate.busy());
     }
 }

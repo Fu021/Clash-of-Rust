@@ -982,6 +982,7 @@ class UbuntuVmTests(unittest.TestCase):
                                  side_effect=[('', 0o755), ('', 0o755),
                                               ('cap_net_admin,cap_net_raw=ep', 0o4755)]), \
                     patch.object(linux_gui, 'run', side_effect=run), \
+                    patch.object(linux_gui, 'output', side_effect=['42', '43', '43']), \
                     patch.object(linux_gui.time, 'sleep'):
                 result = linux_gui.verify_authorization(io.StringIO(), password, locate)
             self.assertTrue(result['cancel_preserved_permissions'])
@@ -2546,6 +2547,9 @@ class BuildTests(unittest.TestCase):
                 'crates/client-runtime/src/platform/host_network/linux.rs'
             ])['linux_user_tests'])
             for path in ('crates/client-runtime/src/platform/host_network/ipv6.rs',
+                         'crates/client-core/src/connection/mod.rs',
+                         'crates/client-core/src/controller/mod.rs',
+                         'crates/client-core/src/dns.rs',
                          'crates/client-runtime/src/platform/linux/startup.rs',
                          'crates/client-runtime/src/platform/network/mod.rs',
                          'crates/client-runtime/src/control/network.rs',
@@ -2598,6 +2602,9 @@ class BuildTests(unittest.TestCase):
                          'crates/client-ui/ui/models.slint',
                          'crates/client-ui/ui/preview-network.slint',
                          'resources/fonts/SourceHanSansCN-Regular.otf',
+                         'crates/client-core/src/connection/mod.rs',
+                         'crates/client-core/src/controller/mod.rs',
+                         'crates/client-core/src/dns.rs',
                          'crates/client-core/src/error_message.rs',
                          'crates/client-core/src/subscription/info.rs',
                          'crates/client-core/src/detection/ip/mod.rs'):
@@ -3200,11 +3207,12 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
-        self.assertEqual(len(checks), 6)
+        self.assertEqual(len(checks), 7)
         for package, case in (('clash-client-runtime', 'platform::linux_tun::'),
                               ('clash-client-runtime', 'platform::linux_startup::'),
                               ('clash-client-runtime', 'platform::cli_service::'),
                               ('clash-client-runtime', 'platform::host_network::'),
+                              ('clash-client-runtime', 'engine::startup_tests::'),
                               ('clash-client-runtime', 'control::tests::')):
             self.assertTrue(any(command[command.index('-p')+1] == package and case in command
                                 for command in checks), (package, case))
@@ -4176,7 +4184,7 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             saved = Path(temporary)
             failure = subprocess.CalledProcessError(1, ['systemd-run'])
-            user = 'corgui'+str(os.getpid())
+            user = 'corgui'+'1'*24
             rule = Path('/etc/polkit-1/rules.d')/f'10-{user}.rules'
 
             def execute(command, **kwargs):
@@ -4194,7 +4202,7 @@ class BuildTests(unittest.TestCase):
                         self.assertIn('avc:.*(polkit|chkpwd|shadow|faillock)', command)
                         kwargs['stdout'].write('audit diagnostics\n')
                     else:
-                        self.assertIn(user+'-desktop.service', command)
+                        self.assertIn('cor-desktop-'+'1'*24+'.service', command)
                         kwargs['stdout'].write('session start diagnostics\n')
                 elif command[:2] == ['rpm', '-q']:
                     self.assertIn('liblastlog2', command)
@@ -4205,13 +4213,18 @@ class BuildTests(unittest.TestCase):
                     patch.object(linux_native_guest, 'distribution', return_value='fedora'), \
                     patch.object(platform, 'freedesktop_os_release', return_value={'ID': 'fedora'}), \
                     patch.object(linux_gui, 'REPORT', saved), \
+                    patch.object(linux_gui.secrets, 'token_hex', return_value='1'*24), \
+                    patch.object(linux_gui, 'gui_account', return_value=SimpleNamespace(pw_uid=1234)), \
+                    patch.object(linux_gui, 'stop_fixture_unit'), \
                     patch.object(subprocess, 'run', side_effect=execute) as commands:
                 with self.assertRaises(subprocess.CalledProcessError) as captured:
                     linux_gui.installed_tests()
 
             self.assertIs(captured.exception, failure)
-            commands.assert_any_call(['sudo', 'rm', '-f', rule], check=False)
-            commands.assert_any_call(['sudo', 'userdel', '--remove', user], check=False)
+            commands.assert_any_call(['sudo', 'rm', '-f', rule], check=False, timeout=15,
+                                     start_new_session=True)
+            commands.assert_any_call(['sudo', 'userdel', '--remove', user], check=False, timeout=30,
+                                     start_new_session=True)
             self.assertEqual(json.loads((saved/'desktop/gui.json').read_text()), {'status': 'failed'})
             self.assertEqual((saved/'desktop-session-journal.log').read_text(),
                              'session start diagnostics\npackage version diagnostics\naudit diagnostics\n')
@@ -6835,6 +6848,378 @@ runpy.run_path(str(script), run_name='__main__')
             with self.assertRaises(subprocess.CalledProcessError):
                 android_build.stop_app_before_test()
         self.assertEqual(invoke.call_count,3)
+
+    def test_android_protection_death_selects_only_the_api_36_cor_ci_emulator(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'RUNNER_TEMP': str(Path(temporary).resolve())}):
+            avd_path = Path(os.environ['RUNNER_TEMP'], 'cor-emulator/.android/avd/cor-ci.avd')
+            avd_path.mkdir(parents=True)
+            launch_file = avd_path / android_build.PROTECTION_DEATH_LAUNCH_FILE
+            identity = 'a' * 32 + ':1'
+            launch_file.write_text(identity+'\n')
+            for values in (
+                    ['physical-device'],
+                    ['emulator-5554', '/home/user/personal/cor-ci.avd\nOK\n'],
+                    ['emulator-5554', f'{avd_path}\nOK\n', '31\n'],
+                    ['emulator-5554', f'{avd_path}\nOK\n', '36\n', 'b' * 32 + ':1'],
+                    ['emulator-5554', f'{avd_path}\nOK\n', '36\n', identity, '2\n']):
+                with self.subTest(values=values), \
+                        patch.object(android_build.subprocess, 'check_output', side_effect=values) as probe:
+                    with self.assertRaisesRegex(RuntimeError, 'cor-ci emulator'):
+                        android_build.protection_death_device()
+                    self.assertEqual(probe.call_count, len(values))
+            with patch.object(android_build.subprocess, 'check_output',
+                              side_effect=['emulator-5554\n', f'{avd_path}\nOK\n', '36\n', identity, '1\n']) as probe:
+                device = [android_build.ADB, '-s', 'emulator-5554']
+                self.assertEqual(android_build.protection_death_device(), (device, identity))
+                self.assertEqual(probe.call_args_list[1].args[0], device + ['emu', 'avd', 'path'])
+                self.assertEqual(probe.call_args_list[2].args[0], device + ['shell', 'getprop', 'ro.build.version.sdk'])
+                self.assertEqual(probe.call_args_list[3].args[0],
+                                 device + ['shell', 'cat', android_build.PROTECTION_DEATH_GUEST_LAUNCH])
+                self.assertEqual(probe.call_args.args[0], device + android_build.PROTECTION_DEATH_BOOT_COUNT)
+            launch_file.write_text('b' * 32 + ':1')
+            with patch.object(android_build.subprocess, 'check_output',
+                              return_value=f'{avd_path}\nOK\n') as probe:
+                with self.assertRaisesRegex(RuntimeError, 'current API 36 cor-ci emulator launch'):
+                    android_build.protection_death_device(device, launch_identity=identity)
+                probe.assert_called_once_with(device + ['emu', 'avd', 'path'], text=True, timeout=15)
+
+    def test_android_protection_death_rejects_symlinks_at_each_avd_path_component(self):
+        components = ('runner', 'cor-emulator', '.android', 'avd', 'cor-ci.avd')
+        for index, component in enumerate(components):
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                alias = root.joinpath(*components[:index+1])
+                alias.parent.mkdir(parents=True, exist_ok=True)
+                target = root/'personal'
+                actual = target.joinpath(*components[index+1:])
+                actual.mkdir(parents=True)
+                try:
+                    alias.symlink_to(target, target_is_directory=True)
+                except (NotImplementedError, OSError) as error:
+                    self.skipTest(f'Directory symlinks are unavailable: {error}')
+                (actual/android_build.PROTECTION_DEATH_LAUNCH_FILE).write_text('a' * 32 + ':1')
+                with patch.dict(os.environ, {'RUNNER_TEMP': str(root/'runner')}), \
+                        patch.object(android_build.subprocess, 'check_output') as probe:
+                    with self.assertRaisesRegex(RuntimeError, 'symbolic link'):
+                        android_build.protection_death_device()
+                    probe.assert_not_called()
+
+    def test_android_protection_death_records_launch_only_after_guest_acknowledges_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            avd_path = Path(temporary)
+            launch_file = avd_path/android_build.PROTECTION_DEATH_LAUNCH_FILE
+            device = [android_build.ADB, '-s', 'emulator-5554']
+            token = 'a' * 32
+            identity = token + ':1'
+            with patch.object(android_build, 'cor_ci_device', return_value=device) as select, \
+                    patch.object(android_build.uuid, 'uuid4', return_value=android_build.uuid.UUID(hex=token)), \
+                    patch.object(android_build.subprocess, 'check_output', return_value='1\n') as boot_probe, \
+                    patch.object(android_build, 'run') as run:
+                run.side_effect = subprocess.TimeoutExpired([], 15)
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    android_build.record_protection_death_launch(avd_path, device)
+                self.assertFalse(launch_file.exists())
+                run.side_effect = None
+                android_build.record_protection_death_launch(avd_path, device)
+                self.assertEqual(launch_file.read_text().strip(), identity)
+                self.assertEqual(select.call_args_list, [call(avd_path, device), call(avd_path, device)])
+                boot_probe.assert_called_with(device + android_build.PROTECTION_DEATH_BOOT_COUNT, text=True, timeout=15)
+                run.assert_called_with(
+                    device + ['shell', f'printf %s {identity} > {android_build.PROTECTION_DEATH_GUEST_LAUNCH}'],
+                    timeout=15, capture_output=True, text=True)
+
+    def test_android_protection_death_emulator_entry_records_a_fresh_launch_after_boot(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        for boot_fails in (False, True):
+            with self.subTest(boot_fails=boot_fails), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                avd_path = root/'cor-emulator/.android/avd/cor-ci.avd'
+                avd_path.mkdir(parents=True)
+                launch_file = avd_path/android_build.PROTECTION_DEATH_LAUNCH_FILE
+                launch_file.write_text('old launch')
+
+                def ready(*args):
+                    self.assertFalse(launch_file.exists())
+                    if boot_fails:
+                        raise RuntimeError('boot failed')
+
+                with patch.dict(os.environ, {'RUNNER_TEMP': str(root), 'ANDROID_HOME': str(root/'sdk')}), \
+                        patch.object(sys, 'argv', ['android.py', 'emulator', '--arch', 'x64']), \
+                        patch.object(android_build, 'ROOT', root), \
+                        patch.object(android_build, 'prepare_sdk_manager', return_value=root/'tools'), \
+                        patch.object(android_build, 'prepare_emulator',
+                                     return_value=(root/'emulator', 'system-images;android-36;test;x86_64')), \
+                        patch.object(android_build, 'sdk_emulator_for_avd', return_value=nullcontext()), \
+                        patch.object(android_build, 'configure_emulator_storage'), \
+                        patch.object(android_build.subprocess, 'Popen'), \
+                        patch.object(android_build, 'run') as invoke, \
+                        patch.object(android_build, 'wait_emulator_boot', side_effect=ready), \
+                        patch.object(android_build, 'cor_ci_device', return_value=device) as select, \
+                        patch.object(android_build, 'record_protection_death_launch') as record:
+                    if boot_fails:
+                        with self.assertRaisesRegex(RuntimeError, 'boot failed'):
+                            android_build.main()
+                        select.assert_not_called()
+                        record.assert_not_called()
+                    else:
+                        android_build.main()
+                        select.assert_called_once_with(avd_path)
+                        record.assert_called_once_with(avd_path, device)
+                        shell_calls = [request.args[0] for request in invoke.call_args_list
+                                       if 'shell' in request.args[0]]
+                        self.assertTrue(shell_calls)
+                        self.assertTrue(all(command[:4] == device + ['shell'] for command in shell_calls))
+
+    def test_android_protection_death_requires_signal_evidence_and_a_fresh_process(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        token = 'a' * 32
+        prepared = (f'INSTRUMENTATION_STATUS: cor_death_prepared={token}:101\n'
+                    'INSTRUMENTATION_STATUS_CODE: 2\n'
+                    'INSTRUMENTATION_RESULT: shortMsg=Process crashed.\n'
+                    'INSTRUMENTATION_CODE: 0\n')
+        recovered = (f'INSTRUMENTATION_STATUS: cor_death_observed={token}:101:202\n'
+                     'INSTRUMENTATION_STATUS_CODE: 2\n'
+                     'INSTRUMENTATION_STATUS_CODE: 0\n'
+                     'INSTRUMENTATION_RESULT: stream=\n'
+                     'OK (1 test)\n'
+                     'INSTRUMENTATION_CODE: -1\n')
+        for scenario, expected_error in (
+                ('success', None), ('sticky-restart', None),
+                ('wrong-token', 'expected process death'),
+                ('ordinary-pass', 'expected process death'),
+                ('transport-timeout', 'failed in prepareAndKill'),
+                ('victim-still-running', 'original protection test PID'),
+                ('pid-transport-error', 'original protection test PID'),
+                ('same-pid', 'different process'),
+                ('missing-exit-evidence', 'did not verify both'),
+                ('missing-test-success', 'did not verify both'),
+                ('wrong-recovery-pid', 'did not verify both'),
+                ('failed-recovery', 'did not verify both')):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                report = Path(temporary)
+                status = {'schema': 1, 'passed': False}
+                commands = []
+                pids = iter(['101', '101' if scenario == 'same-pid' else '202'])
+
+                def invoke(command, **kwargs):
+                    commands.append(command)
+                    self.assertEqual(command[:4], device + ['shell'])
+                    args = command[4:]
+                    if args[:2] == ['pm', 'clear']:
+                        return subprocess.CompletedProcess(command, 0, 'Success\n', '')
+                    if args[:2] == ['am', 'start']:
+                        return subprocess.CompletedProcess(command, 0, 'Status: ok\n', '')
+                    if args[0] == 'pidof':
+                        return subprocess.CompletedProcess(command, 0, next(pids)+'\n', '')
+                    self.assertIn(args[:2], (['appops', 'set'], ['pm', 'grant']))
+                    return subprocess.CompletedProcess(command, 0, '', '')
+
+                def evidence(command, timeout):
+                    commands.append(command)
+                    self.assertEqual(command[:4], device + ['shell'])
+                    if command[4] == 'pidof':
+                        if scenario == 'pid-transport-error':
+                            return subprocess.CompletedProcess(command, 1, '', 'error: device offline')
+                        if scenario in ('victim-still-running', 'sticky-restart'):
+                            return subprocess.CompletedProcess(command, 0,
+                                '101\n' if scenario == 'victim-still-running' else '202\n', '')
+                        return subprocess.CompletedProcess(command, 1, '', '')
+                    self.assertEqual(command[4:9], ['am', 'instrument', '-w', '-r', '--no-restart'])
+                    self.assertEqual(command[command.index('death_token')+1], token)
+                    if command[command.index('class')+1].endswith('#prepareAndKill'):
+                        if scenario == 'transport-timeout':
+                            return subprocess.CompletedProcess(command, 255, prepared, 'ADB command timed out')
+                        output = {'wrong-token': prepared.replace(token, 'b' * 32),
+                                  'ordinary-pass': prepared + 'OK (1 test)\n'}.get(scenario, prepared)
+                    else:
+                        self.assertEqual(command[command.index('death_pid')+1], '101')
+                        output = {'missing-exit-evidence': 'OK (1 test)\nINSTRUMENTATION_CODE: -1\n',
+                                  'missing-test-success': recovered.replace('INSTRUMENTATION_STATUS_CODE: 0\n', ''),
+                                  'wrong-recovery-pid': recovered.replace(':202', ':303'),
+                                  'failed-recovery': recovered + 'FAILURES!!!\n'}.get(scenario, recovered)
+                    return subprocess.CompletedProcess(command, 0, output, '')
+
+                with patch.object(android_build, 'run', side_effect=invoke), \
+                        patch.object(android_build, 'adb_evidence_command', side_effect=evidence), \
+                        patch.object(android_build.uuid, 'uuid4', return_value=android_build.uuid.UUID(hex=token)):
+                    if expected_error:
+                        with self.assertRaisesRegex(RuntimeError, expected_error):
+                            android_build.test_protection_process_death(device, report, status)
+                    else:
+                        android_build.test_protection_process_death(device, report, status)
+                phases = [cmd for cmd in commands if 'instrument' in cmd]
+                self.assertTrue(phases)
+                self.assertFalse(any('force-stop' in cmd for cmd in commands))
+                self.assertEqual(sum(cmd[4:6] == ['pm', 'clear'] for cmd in commands), 1)
+                self.assertFalse(status['passed'])
+                self.assertEqual(status.get('recovery_verified', False), expected_error is None)
+                if scenario == 'transport-timeout':
+                    self.assertEqual((report/'prepareAndKill.txt').read_text(), prepared+'ADB command timed out')
+                if not expected_error:
+                    self.assertEqual((status['victim_pid'], status['recovery_pid']), (101, 202))
+                    self.assertEqual(len(phases), 2)
+                    self.assertEqual(commands[commands.index(phases[0])+1][4], 'pidof')
+                    self.assertTrue((report/'recoverAfterDeath.txt').is_file())
+                elif not status.get('prepare_terminated'):
+                    self.assertEqual(len(phases), 1)
+                    self.assertFalse((report/'recoverAfterDeath.txt').exists())
+
+    def test_android_protection_death_only_keeps_instrumentation_and_report_separate(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        token = 'a' * 32
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(android_build, 'ROOT', Path(temporary)), \
+                patch.object(android_build, 'protection_death_device', return_value=(device, token)) as verify, \
+                patch.object(android_build, 'run') as run, \
+                patch.object(android_build, 'device_property', return_value='36') as property_probe, \
+                patch.object(android_build, 'start_test_log') as start_log, \
+                patch.object(android_build, 'finish_test_log', return_value=('', None)) as finish_log, \
+                patch.object(android_build, 'stop_app_before_test') as force_stop, \
+                patch.object(android_build, 'test_protection_process_death') as death, \
+                patch.object(android_build.subprocess, 'run',
+                             return_value=subprocess.CompletedProcess([], 0, 'Success\n', '')) as evidence:
+            app = Path(temporary, 'app.apk')
+            test = Path(temporary, 'test.apk')
+            report = Path(temporary, 'target/android-report/x64/protection-process-death')
+            receipt = report/'process-death-status.json'
+
+            def check_receipt(command, **kwargs):
+                self.assertFalse(json.loads(receipt.read_text())['passed'])
+                return evidence.return_value
+
+            evidence.side_effect = check_receipt
+            android_build.test('x64', app, test, protection_death_only=True)
+            self.assertEqual(run.call_args_list, [call(device + ['install', '-r', path], timeout=60)
+                                                 for path in (app, test)])
+            self.assertEqual(start_log.call_args.args[0], report)
+            self.assertEqual(start_log.call_args.kwargs, {'adb': device})
+            self.assertEqual(finish_log.call_args.kwargs, {'adb': device})
+            self.assertTrue(all(request.kwargs == {'adb': device} for request in property_probe.call_args_list))
+            self.assertEqual(verify.call_args_list, [call(), call(device, launch_identity=token),
+                                                     call(device, launch_identity=token)])
+            self.assertEqual(death.call_args.args[:2], (device, report))
+            force_stop.assert_not_called()
+            self.assertTrue(all(request.args[0][:4] == device + ['shell'] for request in evidence.call_args_list))
+            self.assertTrue(all(request.kwargs['timeout'] == 15 for request in evidence.call_args_list))
+            self.assertTrue(json.loads(receipt.read_text())['passed'])
+
+    def test_android_protection_death_invalidates_stale_success_before_preparation(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        token = 'a' * 32
+        for prerequisite in ('guard', 'first install', 'second install', 'properties', 'log startup'):
+            with self.subTest(prerequisite=prerequisite), tempfile.TemporaryDirectory() as temporary:
+                report = Path(temporary, 'target/android-report/x64/protection-process-death')
+                receipt = report/'process-death-status.json'
+                report.mkdir(parents=True)
+                receipt.write_text('{"passed": true}')
+                previous_reports = ('recoverAfterDeath.txt', 'runtime-status.json',
+                                    'device.json', 'logcat.txt', 'connectivity.txt')
+                for name in previous_reports:
+                    (report/name).write_text('previous result')
+                (report/'unrelated.txt').write_text('keep')
+                error = RuntimeError(prerequisite)
+                with patch.object(android_build, 'ROOT', Path(temporary)), \
+                        patch.object(android_build, 'protection_death_device', return_value=(device, token)) as guard, \
+                        patch.object(android_build, 'run') as install, \
+                        patch.object(android_build, 'device_property', return_value='36') as prop, \
+                        patch.object(android_build, 'start_test_log') as start_log, \
+                        patch.object(android_build, 'cleanup_protection_death') as cleanup:
+                    if prerequisite == 'guard':
+                        guard.side_effect = error
+                    elif prerequisite == 'first install':
+                        install.side_effect = error
+                    elif prerequisite == 'second install':
+                        install.side_effect = [None, error]
+                    elif prerequisite == 'properties':
+                        prop.side_effect = error
+                    else:
+                        start_log.side_effect = error
+                    with self.assertRaises(RuntimeError) as failure:
+                        android_build.test('x64', protection_death_only=True)
+                    self.assertIs(failure.exception, error)
+                    cleanup.assert_not_called()
+                for name in previous_reports:
+                    if name == 'device.json' and prerequisite == 'log startup':
+                        self.assertNotEqual((report/name).read_text(), 'previous result')
+                    else:
+                        self.assertFalse((report/name).exists(), name)
+                self.assertEqual((report/'unrelated.txt').read_text(), 'keep')
+                self.assertEqual(json.loads(receipt.read_text())['error'], prerequisite)
+                self.assertFalse(json.loads(receipt.read_text())['passed'])
+
+    def test_android_protection_death_keeps_original_error_and_cleans_after_evidence(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        token = 'a' * 32
+        package = 'org.clashofrust.android'
+        for scenario in ('phase fails', 'log boundary fails', 'native runtime fails',
+                         'diagnostics fail', 'launch changed'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                report = Path(temporary)
+                original = RuntimeError('phase failed')
+                captured = RuntimeError('log boundary failed') if scenario == 'log boundary fails' else None
+                log = 'Android startup: failed' if scenario == 'native runtime fails' else ''
+                commands = []
+
+                def invoke(command, **kwargs):
+                    commands.append(command)
+                    if ((scenario in ('phase fails', 'diagnostics fail') and command[-1] == 'connectivity')
+                            or (scenario == 'phase fails' and command[-1] == package)):
+                        raise subprocess.TimeoutExpired(command, 15, output=b'partial output', stderr=b'partial error')
+                    return subprocess.CompletedProcess(command, 0, 'Success\n', '')
+
+                with patch.object(android_build, 'protection_death_device',
+                        side_effect=[(device, token), (device, token),
+                                     RuntimeError('launch changed') if scenario == 'launch changed' else (device, token)]), \
+                        patch.object(android_build, 'run'), \
+                        patch.object(android_build, 'device_property', return_value='36'), \
+                        patch.object(android_build, 'start_test_log'), \
+                        patch.object(android_build, 'finish_test_log', return_value=(log, captured)), \
+                        patch.object(android_build, 'test_protection_process_death',
+                                     side_effect=original if scenario == 'phase fails' else None), \
+                        patch.object(android_build.subprocess, 'run', side_effect=invoke):
+                    with self.assertRaises(RuntimeError) as failure:
+                        android_build.run_protection_death_test(Path('app.apk'), Path('test.apk'), report)
+                self.assertTrue(all(command[:4] == device + ['shell'] for command in commands))
+                self.assertEqual(commands[:len(android_build.ANDROID_TEST_DIAGNOSTICS)],
+                    [device + ['shell', *command] for command in android_build.ANDROID_TEST_DIAGNOSTICS.values()])
+                status = json.loads((report/'process-death-status.json').read_text())
+                self.assertFalse(status['passed'])
+                cleanup = json.loads((report/'cleanup-status.json').read_text())
+                if scenario == 'launch changed':
+                    self.assertEqual(cleanup['commands'], {})
+                    self.assertEqual(len(commands), len(android_build.ANDROID_TEST_DIAGNOSTICS))
+                    self.assertIn('launch changed', status['error'])
+                    continue
+                self.assertEqual(commands[-4:], [device + ['shell', *command] for command in (
+                    ['am', 'force-stop', package], ['pm', 'clear', package],
+                    ['appops', 'set', package, 'ACTIVATE_VPN', 'default'],
+                    ['pm', 'revoke', package, 'android.permission.POST_NOTIFICATIONS'])])
+                if scenario == 'phase fails':
+                    self.assertIs(failure.exception, original)
+                    self.assertTrue(any('diagnostics failed' in note for note in status['notes']))
+                    self.assertTrue(any('cleanup failed' in note for note in status['notes']))
+                    self.assertIn('partial output', (report/'connectivity.txt').read_text())
+                    self.assertIn('partial error', cleanup['commands']['force_stop']['stderr'])
+                    self.assertTrue(cleanup['commands']['notifications']['passed'])
+                elif captured is not None:
+                    self.assertIn('log boundary failed', status['error'])
+                elif scenario == 'diagnostics fail':
+                    self.assertIn('connectivity diagnostics failed', status['error'])
+                    self.assertTrue(cleanup['passed'])
+                else:
+                    self.assertIn('Native Android UI/runtime failed', status['error'])
+
+    def test_android_protection_death_timeout_preserves_text_and_raw_adb_output(self):
+        command = [android_build.ADB, 'shell', 'am', 'instrument']
+        for binary in (False, True):
+            with self.subTest(binary=binary), patch.object(android_build.subprocess, 'run',
+                    side_effect=subprocess.TimeoutExpired(command, 15, output=b'prepared\n\xff', stderr=b'warning')):
+                result = android_build.adb_evidence_command(command, 15, binary=binary)
+                self.assertEqual(result.returncode, 255)
+                self.assertEqual(result.stdout, b'prepared\n\xff' if binary else 'prepared\n\ufffd')
+                notice = 'warning\nADB command timed out after 15s'
+                self.assertEqual(result.stderr, notice.encode() if binary else notice)
 
     def test_android_log_stream_requires_a_captured_start_marker_before_running_tests(self):
         with tempfile.TemporaryDirectory() as temporary:

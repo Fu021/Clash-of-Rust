@@ -2,6 +2,7 @@ import { PageSurface } from "../components/motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Label, Caption, Panel, ActionButton, Field, Badge } from "../components/controls.slint";
+import { ControlAccess } from "../components/control-access.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 component SortHeading inherits Rectangle {
     in property <string> label;
@@ -45,6 +46,85 @@ component SortHeading inherits Rectangle {
     }
     TouchArea { mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.connection-sort, root.field, ""); } }
 }
+component ConnectionCloseButton inherits ActionButton {
+    in property <string> connection-id;
+    in property <string> current-id;
+    in property <int> page-offset;
+    property <bool> can-close: root.enabled && !ControlAccess.modal-blocked() && !ControlAccess.notice-blocked()
+        && root.connection-id != "" && root.connection-id == root.current-id && root.page-offset == UiData.page-offset;
+    property <string> target: root.can-close ? root.connection-id + "/" + root.page-offset + "/"
+        + root.absolute-position.x / 1px + "/" + root.absolute-position.y / 1px : "";
+    property <string> settling-target;
+    property <string> settled-target;
+    property <string> pressed-target;
+
+    geometry-key: "connection-close:" + root.connection-id;
+    width: 72px; text: @tr("关闭"); compact: true; quiet: true; danger: true;
+    enabled: !UiData.working && !UiData.protected && !UiData.protection-pending;
+    accessible-enabled: root.can-close;
+    accessible-action-default => { root.clicked(); }
+    selected: press.pressed && root.pressed-target != "" && root.pressed-target == root.target;
+    function wait-for-stable-target() {
+        root.pressed-target = "";
+        root.settled-target = "";
+        root.settling-target = root.target;
+        if root.settling-target != "" {
+            forward-delay.start();
+            forward-delay.restart();
+        } else {
+            forward-delay.stop();
+        }
+    }
+    init => { root.wait-for-stable-target(); }
+    changed target => { root.wait-for-stable-target(); }
+    forward-delay := Timer {
+        interval: 150ms;
+        running: false;
+        triggered => {
+            root.settled-target = root.settling-target;
+            self.stop();
+        }
+    }
+    clicked => {
+        if root.can-close { UiActions.dispatch(Intent.close-connection, root.connection-id, ""); }
+    }
+    press := TouchArea {
+        enabled: !ControlAccess.modal-blocked() && !ControlAccess.notice-blocked();
+        mouse-cursor: root.can-close ? pointer : default;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.pressed-target = root.can-close && root.settled-target == root.target ? root.target : "";
+            } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                root.pressed-target = "";
+            }
+        }
+        clicked => {
+            if root.can-close && root.pressed-target == root.target {
+                root.clicked();
+                root.focus();
+            }
+        }
+    }
+}
+component ConnectionCloseSlot inherits VerticalLayout {
+    in property <string> current-id;
+    in property <int> page-offset;
+    property <string> snapshot-id;
+    property <int> snapshot-offset;
+
+    width: 72px; horizontal-stretch: 0; vertical-stretch: 0;
+    init => {
+        root.snapshot-id = root.current-id;
+        root.snapshot-offset = root.page-offset;
+    }
+    changed current-id => { root.snapshot-id = root.current-id; }
+    changed page-offset => { root.snapshot-offset = root.page-offset; }
+    for close-target in [{ id: root.snapshot-id, offset: root.snapshot-offset }]: ConnectionCloseButton {
+        connection-id: close-target.id;
+        current-id: root.current-id;
+        page-offset: close-target.offset;
+    }
+}
 export component ConnectionsPage inherits PageSurface {
     property <string> sort-field: UiData.connection-sort;
     property <bool> sort-descending: UiData.descending;
@@ -76,7 +156,7 @@ export component ConnectionsPage inherits PageSurface {
                         Rectangle { width: 72px; }
                     }
                 }
-                PageScroll {
+                scroll := PageScroll {
                     content-key: UiData.page-offset + "/" + UiData.query + "/" + UiData.connection-sort + "/" + (UiData.descending ? "desc" : "asc");
                     content-y <=> UiData.scroll-connections;
                     for connection in UiData.connections: Rectangle {
@@ -89,8 +169,15 @@ export component ConnectionsPage inherits PageSurface {
                             VerticalLayout { width: root.rule-column; spacing: 4px; Caption { text: connection.route; } Caption { text: connection.rule; color: Theme.muted; } }
                             VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.down; font-size: Theme.detail-size; } Caption { text: connection.download; color: Theme.muted; } }
                             VerticalLayout { width: root.speed-column; spacing: 4px; Label { text: connection.up; font-size: Theme.detail-size; } Caption { text: connection.upload; color: Theme.muted; } }
-                            ActionButton { width: 72px; text: @tr("关闭"); compact: true; quiet: true; danger: true; enabled: !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-connection, connection.id, ""); } }
+                            ConnectionCloseSlot {
+                                current-id: connection.id;
+                                page-offset: UiData.page-offset;
+                            }
                         }
+                    }
+                    Rectangle {
+                        height: 0px;
+                        TouchArea { y: 0px; height: max(0px, scroll.visible-height - scroll.content-y - parent.y); }
                     }
                 }
             }

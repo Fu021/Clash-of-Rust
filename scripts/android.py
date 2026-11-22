@@ -15,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import uuid
 import zipfile
 
 from build_support import ROOT, download, host_arch, mihomo_go_version, package_version, sha256, write_json, write_mihomo_notice
@@ -28,6 +29,17 @@ ABIS = {
     'x64': ('x86_64', 'x86_64-linux-android', 'x86_64-linux-android', 'amd64'),
 }
 MOBILE_TOOL = '19777044486779222400e9ca16c4306f9c6dbfa9'
+PROTECTION_DEATH_LAUNCH_FILE = 'cor-protection-death-launch'
+PROTECTION_DEATH_GUEST_LAUNCH = '/data/local/tmp/' + PROTECTION_DEATH_LAUNCH_FILE
+PROTECTION_DEATH_BOOT_COUNT = ['shell', 'settings', 'get', 'global', 'boot_count']
+ANDROID_TEST_DIAGNOSTICS = {
+    'connectivity': ['dumpsys', 'connectivity'],
+    'routes': ['ip', 'route', 'show', 'table', 'all'],
+    'vpn': ['dumpsys', 'vpn_management'],
+    'windows': ['dumpsys', 'window', 'windows'],
+    'activities': ['dumpsys', 'activity', 'activities'],
+    'power': ['dumpsys', 'power'],
+}
 GRADLE_BUILD_TASKS = ('assembleRelease', 'assembleReleaseAndroidTest', 'lintRelease')
 LINUX_X64_EMULATOR_ARCHIVES = {
     '37.2.13': ('https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip',
@@ -106,8 +118,8 @@ def commit():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
 
 
-def device_property(name):
-    command = [ADB, 'shell', 'getprop', name]
+def device_property(name, adb=None):
+    command = (adb or [ADB]) + ['shell', 'getprop', name]
     for attempt in range(3):
         try:
             return subprocess.check_output(command, text=True, stderr=subprocess.PIPE, timeout=15).strip()
@@ -601,9 +613,19 @@ def verify_build(root, arch, expected_commit):
 def adb_evidence_command(command, timeout, binary=False):
     try:
         return subprocess.run(command,capture_output=True,text=not binary,timeout=timeout)
-    except subprocess.TimeoutExpired:
-        message=f'ADB command timed out after {timeout}s'
-        return subprocess.CompletedProcess(command,255,b'' if binary else '',message.encode() if binary else message)
+    except subprocess.TimeoutExpired as error:
+        stdout = error.stdout or b''
+        stderr = error.stderr or b''
+        notice = f'ADB command timed out after {timeout}s'
+        if binary:
+            stdout = stdout.encode() if isinstance(stdout, str) else stdout
+            stderr = stderr.encode() if isinstance(stderr, str) else stderr
+            stderr += (b'\n' if stderr else b'') + notice.encode()
+        else:
+            stdout = stdout.decode(errors='replace') if isinstance(stdout, bytes) else stdout
+            stderr = stderr.decode(errors='replace') if isinstance(stderr, bytes) else stderr
+            stderr += ('\n' if stderr else '') + notice
+        return subprocess.CompletedProcess(command, 255, stdout, stderr)
 
 
 def adb_transport_failed(result):
@@ -627,12 +649,13 @@ def record_adb_health(report):
     write_json(report/'adb-transport-health.json',{'schema':1,'observed_at':time.time(),'records':records})
 
 
-def wait_adb_identity(output, expected=None):
+def wait_adb_identity(output, expected=None, adb=None):
+    adb = adb or [ADB]
     for attempt in range(3):
-        connected=adb_evidence_command([ADB,'wait-for-device'],30)
+        connected=adb_evidence_command(adb+['wait-for-device'],30)
         output.append(connected.stdout+connected.stderr)
         if connected.returncode==0:
-            identity=adb_evidence_command([ADB,'shell','id','-u'],15)
+            identity=adb_evidence_command(adb+['shell','id','-u'],15)
             output.append(identity.stdout+identity.stderr)
             uid=identity.stdout.strip()
             if identity.returncode==0 and uid.isdigit() and (expected is None or uid==expected):
@@ -696,13 +719,14 @@ def scoped_test_log(log, marker, end_marker=None):
     raise RuntimeError('Android test log start marker is missing')
 
 
-def start_test_log(report, marker):
+def start_test_log(report, marker, adb=None):
+    adb = adb or [ADB]
     for attempt in range(3):
         with (report/'logcat.raw').open('wb') as output, (report/'logcat-stderr.txt').open('wb') as errors:
-            process=subprocess.Popen([ADB,'logcat','-b','main,system,crash','-v','threadtime'],
+            process=subprocess.Popen(adb+['logcat','-b','main,system,crash','-v','threadtime'],
                                      stdout=output,stderr=errors)
         try:
-            run([ADB,'shell','log','-t','CorAndroidTest',marker],timeout=15,
+            run(adb+['shell','log','-t','CorAndroidTest',marker],timeout=15,
                 capture_output=True,text=True)
             wait_test_log_marker(process,report,marker)
             return process
@@ -763,13 +787,14 @@ def wait_test_log_marker(process, report, marker):
                 time.sleep(0.1)
 
 
-def finish_test_log(process, report, marker):
+def finish_test_log(process, report, marker, adb=None):
+    adb = adb or [ADB]
     error=None
     end_marker=marker+'-end'
     try:
         if process.poll() is not None:
             raise RuntimeError('Android logcat stream exited before test completion')
-        run([ADB,'shell','log','-t','CorAndroidTest',end_marker],timeout=15)
+        run(adb+['shell','log','-t','CorAndroidTest',end_marker],timeout=15)
         wait_test_log_marker(process,report,end_marker)
     except Exception as capture_error:
         error=capture_error
@@ -782,12 +807,12 @@ def finish_test_log(process, report, marker):
     if error is not None:
         recovery=[str(error)]
         record_adb_health(report)
-        if wait_adb_identity(recovery) is not None:
-            boundary=adb_evidence_command([ADB,'shell','log','-t','CorAndroidTest',end_marker],15)
+        if wait_adb_identity(recovery, adb=adb) is not None:
+            boundary=adb_evidence_command(adb+['shell','log','-t','CorAndroidTest',end_marker],15)
             recovery.append(boundary.stdout+boundary.stderr)
             if boundary.returncode == 0:
                 replay=adb_evidence_command(
-                    [ADB,'logcat','-b','main,system,crash','-v','threadtime','-d'],30,binary=True)
+                    adb+['logcat','-b','main,system,crash','-v','threadtime','-d'],30,binary=True)
                 (report/'logcat-recovery.raw').write_bytes(replay.stdout)
                 recovery.append(replay.stderr.decode(errors='replace'))
                 if replay.returncode == 0:
@@ -1043,18 +1068,242 @@ def network_origin_handler():
     return Origin
 
 
+def cor_ci_avd_path():
+    runner_temp = os.environ.get('RUNNER_TEMP')
+    if not runner_temp:
+        raise RuntimeError('Set RUNNER_TEMP to the directory used to launch the disposable cor-ci emulator')
+    path = Path(runner_temp, 'cor-emulator/.android/avd/cor-ci.avd').absolute()
+    if path.resolve() != path:
+        raise RuntimeError('The disposable cor-ci emulator path must not traverse a symbolic link')
+    return path
+
+
+def cor_ci_device(expected_path, device=None):
+    if device is None:
+        serial = subprocess.check_output([ADB, 'get-serialno'], text=True, timeout=15).strip()
+        if not re.fullmatch(r'emulator-\d+', serial):
+            raise RuntimeError('Protection process death requires a disposable cor-ci emulator')
+        device = [ADB, '-s', serial]
+    avd = subprocess.check_output(device + ['emu', 'avd', 'path'], text=True, timeout=15).splitlines()
+    if len(avd) != 2 or avd[1] != 'OK' or Path(avd[0]) != expected_path:
+        raise RuntimeError('Protection process death requires the disposable cor-ci emulator')
+    return device
+
+
+def protection_death_device(device=None, *, launch_identity=None):
+    expected_path = cor_ci_avd_path()
+    launch_file = expected_path / PROTECTION_DEATH_LAUNCH_FILE
+    if launch_file.is_symlink() or not launch_file.is_file():
+        raise RuntimeError('Start the disposable cor-ci emulator with scripts/android.py before testing')
+    saved_launch = launch_file.read_text().strip()
+    token, _, boot_count = saved_launch.partition(':')
+    device = cor_ci_device(expected_path, device)
+    if (not re.fullmatch(r'[0-9a-f]{32}', token) or not re.fullmatch(r'[0-9]+', boot_count) or
+            (launch_identity is not None and saved_launch != launch_identity) or
+            subprocess.check_output(device + ['shell', 'getprop', 'ro.build.version.sdk'],
+                                    text=True, timeout=15).strip() != '36' or
+            subprocess.check_output(device + ['shell', 'cat', PROTECTION_DEATH_GUEST_LAUNCH],
+                                    text=True, timeout=15).strip() != saved_launch or
+            subprocess.check_output(device + PROTECTION_DEATH_BOOT_COUNT,
+                                    text=True, timeout=15).strip() != boot_count):
+        raise RuntimeError('Protection process death requires the current API 36 cor-ci emulator launch')
+    return device, saved_launch
+
+
+def record_protection_death_launch(avd_path, device):
+    cor_ci_device(avd_path, device)
+    boot_count = subprocess.check_output(device + PROTECTION_DEATH_BOOT_COUNT, text=True, timeout=15).strip()
+    if not re.fullmatch(r'[0-9]+', boot_count):
+        raise RuntimeError('Could not identify the API 36 cor-ci emulator boot')
+    launch_identity = f'{uuid.uuid4().hex}:{boot_count}'
+    run(device + ['shell', f'printf %s {launch_identity} > {PROTECTION_DEATH_GUEST_LAUNCH}'],
+        timeout=15, capture_output=True, text=True)
+    (avd_path/PROTECTION_DEATH_LAUNCH_FILE).write_text(launch_identity+'\n')
+
+
+def test_protection_process_death(device, report, status):
+    package = 'org.clashofrust.android'
+    shell = device + ['shell']
+    token = uuid.uuid4().hex
+
+    def command(*args, timeout=15):
+        return run(shell + list(args), capture_output=True, text=True, timeout=timeout).stdout
+
+    def launch():
+        output = command('am', 'start', '-W', '-n', package+'/.MainActivity', timeout=45)
+        if 'Status: ok' not in output.splitlines():
+            raise RuntimeError('Could not launch the Android protection test Activity: '+output.strip())
+
+    def phase(name, *args):
+        result = adb_evidence_command(shell + ['am', 'instrument', '-w', '-r', '--no-restart',
+            '-e', 'class', package+'.ProtectionProcessDeathTest#'+name, '-e', 'death_token', token,
+            *args, package+'.test/androidx.test.runner.AndroidJUnitRunner'], 150)
+        (report/(name+'.txt')).write_text(result.stdout+result.stderr)
+        if result.returncode != 0:
+            raise RuntimeError(f'Protection process death instrumentation failed in {name}')
+        return result.stdout
+
+    if command('pm', 'clear', package).strip() != 'Success':
+        raise RuntimeError('Could not clear the disposable protection test app data')
+    command('appops', 'set', package, 'ACTIVATE_VPN', 'allow')
+    command('pm', 'grant', package, 'android.permission.POST_NOTIFICATIONS')
+    launch()
+    victim = command('pidof', package).strip()
+    if not re.fullmatch(r'[1-9]\d*', victim):
+        raise RuntimeError('Could not identify the original protection test PID')
+    status['victim_pid'] = int(victim)
+    prepared = phase('prepareAndKill').splitlines()
+    if (prepared.count(f'INSTRUMENTATION_STATUS: cor_death_prepared={token}:{victim}') != 1
+            or 'INSTRUMENTATION_RESULT: shortMsg=Process crashed.' not in prepared
+            or 'INSTRUMENTATION_CODE: 0' not in prepared
+            or any(line.strip() in ('OK (1 test)', 'FAILURES!!!') for line in prepared)):
+        raise RuntimeError('The preparation phase did not terminate as the expected process death')
+    processes = adb_evidence_command(shell + ['pidof', package], 15)
+    if (processes.returncode not in (0, 1) or processes.stderr.strip()
+            or (processes.returncode == 0 and not re.fullmatch(r'[1-9]\d*', processes.stdout.strip()))
+            or (processes.returncode == 1 and processes.stdout.strip())
+            or victim in processes.stdout.split()):
+        raise RuntimeError('Could not confirm that the original protection test PID is gone')
+    status['prepare_terminated'] = True
+    write_json(report/'process-death-status.json', status)
+
+    launch()
+    replacement = command('pidof', package).strip()
+    if not re.fullmatch(r'[1-9]\d*', replacement) or replacement == victim:
+        raise RuntimeError('The recovery Activity did not run in a different process')
+    status['recovery_pid'] = int(replacement)
+    recovered = phase('recoverAfterDeath', '-e', 'death_pid', victim).splitlines()
+    summaries = [line.strip() for line in recovered]
+    if (recovered.count(f'INSTRUMENTATION_STATUS: cor_death_observed={token}:{victim}:{replacement}') != 1
+            or 'OK (1 test)' not in summaries
+            or 'INSTRUMENTATION_STATUS_CODE: 0' not in recovered
+            or 'INSTRUMENTATION_CODE: -1' not in recovered
+            or 'FAILURES!!!' in summaries):
+        raise RuntimeError('Recovery instrumentation did not verify both process death and VPN recovery')
+    status['recovery_verified'] = True
+
+
+@contextmanager
+def protection_death_followup(action, *args):
+    try:
+        yield
+    except BaseException as original:
+        try:
+            action(*args)
+        except Exception as error:
+            original.add_note(str(error))
+        raise
+    else:
+        action(*args)
+
+
+def collect_protection_death_evidence(device, report, log_capture, marker):
+    errors = []
+    try:
+        captured_log, log_error = finish_test_log(log_capture, report, marker, adb=device)
+        runtime = runtime_crash_status(captured_log, log_error is None)
+        write_json(report/'runtime-status.json', runtime)
+        if log_error is not None:
+            errors.append(str(log_error))
+        if runtime['application_crashes']:
+            errors.append('Android application crashed; inspect runtime-status.json and logcat')
+        require_native_test_log(captured_log)
+    except Exception as error:
+        errors.append(str(error))
+    for name, command in ANDROID_TEST_DIAGNOSTICS.items():
+        details = adb_evidence_command(device + ['shell', *command], 15)
+        (report/(name+'.txt')).write_text(details.stdout+details.stderr)
+        if details.returncode != 0:
+            errors.append(f'Android {name} diagnostics failed; inspect {name}.txt')
+    if errors:
+        raise RuntimeError('; '.join(errors))
+
+
+def cleanup_protection_death(device, launch_identity, report):
+    package = 'org.clashofrust.android'
+    commands = {
+        'force_stop': ['am', 'force-stop', package],
+        'clear_fixture': ['pm', 'clear', package],
+        'vpn_consent': ['appops', 'set', package, 'ACTIVATE_VPN', 'default'],
+        'notifications': ['pm', 'revoke', package, 'android.permission.POST_NOTIFICATIONS'],
+    }
+    cleanup = {'schema': 1, 'passed': False, 'commands': {}}
+    try:
+        protection_death_device(device, launch_identity=launch_identity)
+        for name, command in commands.items():
+            result = adb_evidence_command(device + ['shell', *command], 15)
+            passed = result.returncode == 0 and (name != 'clear_fixture' or result.stdout.strip() == 'Success')
+            cleanup['commands'][name] = {
+                'passed': passed, 'returncode': result.returncode,
+                'stdout': result.stdout, 'stderr': result.stderr,
+            }
+        cleanup['passed'] = all(result['passed'] for result in cleanup['commands'].values())
+        if not cleanup['passed']:
+            raise RuntimeError('One or more disposable app cleanup commands failed')
+    except Exception as error:
+        cleanup['error'] = str(error)
+        raise RuntimeError(f'Protection process death cleanup failed: {error}') from error
+    finally:
+        write_json(report/'cleanup-status.json', cleanup)
+
+
+def run_protection_death_test(apk, test_apk, report):
+    status = {'schema': 1, 'passed': False}
+    status_path = report/'process-death-status.json'
+    write_json(status_path, status)
+    try:
+        previous_reports = (
+            'prepareAndKill.txt', 'recoverAfterDeath.txt', 'cleanup-status.json',
+            'device.json', 'runtime-status.json', 'adb-transport-health.json',
+            'logcat.raw', 'logcat-stderr.txt', 'logcat.txt', 'logcat-recovery.raw',
+            'logcat-recovered.raw', 'logcat-recovery.txt', 'logcat-recovery-status.json',
+        )
+        for name in previous_reports + tuple(f'{key}.txt' for key in ANDROID_TEST_DIAGNOSTICS):
+            (report/name).unlink(missing_ok=True)
+        device, launch_identity = protection_death_device()
+        status['serial'] = device[-1]
+        run(device+['install', '-r', apk], timeout=60)
+        run(device+['install', '-r', test_apk], timeout=60)
+        properties = {name: device_property(name, adb=device) for name in (
+            'ro.build.version.sdk', 'ro.build.version.release', 'ro.build.fingerprint',
+            'ro.product.manufacturer', 'ro.product.model', 'ro.product.cpu.abi',
+        )}
+        write_json(report/'device.json', properties)
+        marker = f'cor-android-test-{os.getpid()}-{time.time_ns()}'
+        protection_death_device(device, launch_identity=launch_identity)
+        log_capture = start_test_log(report, marker, adb=device)
+        with protection_death_followup(cleanup_protection_death, device, launch_identity, report):
+            with protection_death_followup(collect_protection_death_evidence, device, report, log_capture, marker):
+                test_protection_process_death(device, report, status)
+    except BaseException as error:
+        status['error'] = str(error)
+        if notes := getattr(error, '__notes__', None):
+            status['notes'] = notes
+        try:
+            write_json(status_path, status)
+        except Exception as receipt_error:
+            error.add_note(f'Could not write the process death failure receipt: {receipt_error}')
+        raise
+    status['passed'] = True
+    write_json(status_path, status)
+
+
 def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
          ime_rounds=1, applications_only=False, diagnostics_only=False, basic_only=False,
-         routing_only=False):
+         routing_only=False, protection_death_only=False):
     if not 1 <= ime_rounds <= 3 or ((ime_probe or ime_rounds != 1) and not ime_only):
         raise ValueError('IME probe options require IME-only testing and one to three rounds')
-    if sum((ime_only, applications_only, diagnostics_only, basic_only, routing_only)) > 1:
+    if sum((ime_only, applications_only, diagnostics_only, basic_only, routing_only, protection_death_only)) > 1:
         raise ValueError('Application screenshots, diagnostic verification and input-method tests are separate')
-    network_tests = not (ime_only or applications_only)
     if arch != 'x64':
         return
     apk = apk or ANDROID/'app/build/outputs/apk/release/app-release.apk'
     test_apk = test_apk or ANDROID/'app/build/outputs/apk/androidTest/release/app-release-androidTest.apk'
+    report=ROOT/'target/android-report'/arch
+    if protection_death_only:
+        run_protection_death_test(apk, test_apk, report/'protection-process-death')
+        return
+    network_tests = not (ime_only or applications_only)
     run([ADB,'install','-r',apk])
     run([ADB,'install','-r',test_apk])
     import http.server
@@ -1067,7 +1316,6 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
     # ordering bugs between authorization, protection DNS and VPN startup.
     if network_tests and not routing_only:
         run([ADB,'shell','appops','set','org.clashofrust.android','ACTIVATE_VPN','default'])
-    report=ROOT/'target/android-report'/arch
     if routing_only:
         report = report / 'application-rules'
     if ime_only:
@@ -1220,12 +1468,7 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                                 raise RuntimeError('IME evidence is incomplete: '+str(expected.relative_to(report)))
         except Exception as error:
             capture_error=error
-        diagnostics={'connectivity':['dumpsys','connectivity'],
-                     'routes':['ip','route','show','table','all'],
-                     'vpn':['dumpsys','vpn_management'],
-                     'windows':['dumpsys','window','windows'],
-                     'activities':['dumpsys','activity','activities'],
-                     'power':['dumpsys','power']}
+        diagnostics=ANDROID_TEST_DIAGNOSTICS.copy()
         if ime_only:
             diagnostics['input-method']=['dumpsys','input_method']
         if applications_only:
@@ -1249,6 +1492,10 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                     original.add_note(str(error))
             else:
                 raise RuntimeError('; '.join(map(str,errors)))
+    require_native_test_log(captured_log)
+
+
+def require_native_test_log(captured_log):
     if any(marker in captured_log for marker in
            ('Android startup:', 'Mobile runtime stopped:', 'Recursion detected', 'E RustPanic')):
         raise RuntimeError('Native Android UI/runtime failed; inspect logcat')
@@ -1479,8 +1726,10 @@ def package(arch, run_id, check_only, build=None):
     run([tool/'zipalign','-c','-P','16','4',apk])
     digest=sha256(apk)
     (output/(name+'.sha256')).write_text(digest+'\n')
-    # x64 receives the same emulator proxy/TUN test after final signing.
+    # Collect the normal reports before the process-death test clears app data.
     test(arch,apk,root/'tests/androidTest.apk')
+    if arch == 'x64':
+        test(arch, apk, root/'tests/androidTest.apk', protection_death_only=True)
     artifact=json.loads((root/'source-artifact.json').read_text())
     from build_inputs import package_contents
     write_json(output/'package-receipt.json',{'schema':1,'commit':commit(),'version':package_version(),
@@ -1511,6 +1760,8 @@ def main():
     parser.add_argument('--build',type=Path,help='CI candidate input for package --check or application-preview')
     parser.add_argument('--legacy',action='store_true',help='Use the approved Android 12 IME regression image')
     parser.add_argument('--ime-only',action='store_true',help='Run only the subscription input-method regression')
+    parser.add_argument('--protection-death-only', action='store_true',
+                        help='Run only the protection recovery test on the disposable API 36 cor-ci AVD')
     parser.add_argument('--api',type=int,help='Use an approved Android test image')
     args=parser.parse_args()
     if args.gradle_offline and args.operation != 'build':
@@ -1533,23 +1784,28 @@ def main():
         parser.error('--api applies only to emulator preparation or application-preview and cannot be combined with --legacy')
     if args.ime_only and args.operation!='test':
         parser.error('--ime-only applies only to test')
+    if args.protection_death_only and (args.operation != 'test' or args.ime_only or args.arch != 'x64'):
+        parser.error('--protection-death-only requires test --arch x64 without --ime-only')
     if args.operation=='emulator':
+        avd_path=cor_ci_avd_path()
+        (avd_path/PROTECTION_DEATH_LAUNCH_FILE).unlink(missing_ok=True)
+        avds=avd_path.parent
+        user_home=avds.parent
+        device_root=user_home.parent
         sdk=Path(os.environ['ANDROID_HOME'])
         manager=prepare_sdk_manager()
-        device_root=Path(os.environ['RUNNER_TEMP'])/'cor-emulator'
         emulator,image=prepare_emulator(sdk,manager,device_root,legacy=args.legacy,api=args.api)
-        user_home=device_root/'.android'; avds=user_home/'avd'
         avds.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ANDROID_SDK_ROOT=str(sdk),ANDROID_USER_HOME=str(user_home),
                  ANDROID_AVD_HOME=str(avds),ANDROID_SDK_HOME=str(device_root))
         with sdk_emulator_for_avd(sdk, emulator):
-            run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avds/'cor-ci.avd',
+            run([manager/'avdmanager','create','avd','--force','--name','cor-ci','--path',avd_path,
                  '--device','pixel_6','--package',image],input='no\n',text=True,env=env)
         report=ROOT/'target/android-report/x64'; report.mkdir(parents=True,exist_ok=True)
         if args.legacy or args.api is not None:
             report=report/(('ime-api-' if args.legacy else 'api-')+image.split(';')[1].removeprefix('android-'))
             report.mkdir(parents=True,exist_ok=True)
-        configure_emulator_storage(avds/'cor-ci.avd',report)
+        configure_emulator_storage(avd_path,report)
         cores=min(4,os.cpu_count() or 1)
         print(f'Disposable Android emulator: 4096 MiB RAM, {cores} virtual CPUs',flush=True)
         with (report/'emulator.txt').open('w') as log:
@@ -1558,21 +1814,26 @@ def main():
                 env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         run([ADB,'start-server'],env=env,timeout=30)
         wait_emulator_boot(process,env,report)
-        run([ADB,'shell','settings','put','global','private_dns_mode','off'])
-        run([ADB,'shell','input','keyevent','KEYCODE_WAKEUP'])
-        run([ADB,'shell','wm','dismiss-keyguard'])
+        protection_death_image = image.startswith('system-images;android-36;')
+        adb = cor_ci_device(avd_path) if protection_death_image else [ADB]
+        run(adb+['shell','settings','put','global','private_dns_mode','off'])
+        run(adb+['shell','input','keyevent','KEYCODE_WAKEUP'])
+        run(adb+['shell','wm','dismiss-keyguard'])
         if args.legacy:
             prepare_emulator_input_method(report)
         if args.legacy or args.api is not None:
-            run([ADB,'shell','wm','size','1080x2400'])
-            run([ADB,'shell','wm','density','440'])
+            run(adb+['shell','wm','size','1080x2400'])
+            run(adb+['shell','wm','density','440'])
         # Standard UI-test setup: the launcher's animated input sink can outlive
         # Activity.onResume. Keep system transitions deterministic in CI only.
         for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
-            run([ADB,'shell','settings','put','global',setting,'0'])
+            run(adb+['shell','settings','put','global',setting,'0'])
+        if protection_death_image:
+            record_protection_death_launch(avd_path, adb)
     elif args.operation=='build': build(args.arch, gradle_offline=args.gradle_offline)
     elif args.operation=='export': export_build(args.arch)
-    elif args.operation=='test': test(args.arch,ime_only=args.ime_only)
+    elif args.operation=='test':
+        test(args.arch, ime_only=args.ime_only, protection_death_only=args.protection_death_only)
     elif args.operation=='application-preview':
         application_preview(args.build, args.api, args.verify_diagnostics,
                             args.compatibility, args.screenshots, args.verify_application_rules)

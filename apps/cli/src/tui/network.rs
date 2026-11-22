@@ -27,6 +27,83 @@ impl Export {
     }
 }
 
+pub(super) fn refresh_result(state: &mut State) {
+    match &state.network_outcome {
+        Some(Ok(report)) => state.network_results = report.lines_in(state.language),
+        Some(Err(error)) => {
+            let language = state.language;
+            let label = language.text("检查失败", "Check failed");
+            let detail = check_error_detail(error, language);
+            state.network_results = vec![format!("{label} · {detail}")];
+            state.selected = 0;
+        }
+        None => {}
+    }
+}
+
+pub(super) fn relocalize_result(state: &mut State, width: usize) {
+    if state.network_outcome.is_some() {
+        let previous = rows(state, width);
+        let anchor = previous.get(state.selected);
+        refresh_result(state);
+        restore_scroll(state, anchor, width);
+    }
+}
+
+fn check_error_detail(error: &anyhow::Error, language: Language) -> String {
+    let detail = crate::output::localized_error(error, language);
+    let context = if error.is::<crate::backend::Unavailable>() {
+        Some((
+            "存活的后台暂时不可达，请先保留排障现场",
+            "The running backend is temporarily unreachable; preserve the diagnostic state",
+        ))
+    } else if error.is::<tokio::time::error::Elapsed>() {
+        Some((
+            "读取当前用户后台状态超过 5 秒",
+            "Reading the current user's backend status exceeded 5 seconds",
+        ))
+    } else {
+        None
+    };
+    if let Some((chinese, english)) = context
+        && let Some(cause) = [chinese, english]
+            .into_iter()
+            .find_map(|prefix| detail.strip_prefix(prefix)?.strip_prefix(": "))
+    {
+        return format!("{}: {cause}", language.text(chinese, english));
+    }
+    detail
+}
+
+pub(super) fn export_failure(error: &anyhow::Error, language: Language) -> String {
+    if language == Language::SimplifiedChinese {
+        return format!("导出失败，路径和报告保留：{error:#}");
+    }
+    let detail = error
+        .chain()
+        .map(|cause| {
+            let message = cause.to_string();
+            if message == "无效文件路径" {
+                return "Invalid file path".into();
+            }
+            let Some((context, path)) = message.split_once('：') else {
+                return message;
+            };
+            let translated = match context {
+                "无法创建文件目录" => "Could not create the directory",
+                "无法创建保存临时文件" => "Could not create a temporary file for",
+                "写入文件失败" => "Could not write the file",
+                "同步文件失败" => "Could not sync the file",
+                "保存文件失败" => "Could not save the file",
+                _ => return message,
+            };
+            format!("{translated}: {path}")
+        })
+        .collect::<Vec<_>>()
+        .join(": ");
+    format!("Export failed; path and report retained: {detail}")
+}
+
 pub(super) fn title(tool: Tool, language: Language) -> &'static str {
     language.text(
         tool.title(),
@@ -175,8 +252,8 @@ pub(super) fn prepare_export(state: &State) -> Result<Export> {
     Ok(Export {
         path: crate::backend::absolute(path)?,
         report: state
-            .network_report
-            .clone()
+            .network_report()
+            .cloned()
             .context(language.text("没有可导出的检查报告", "No report is available to export"))?,
     })
 }
@@ -237,8 +314,7 @@ pub(super) fn apply(state: &mut State) -> Result<()> {
     state.network_options = options;
     state.query = target;
     state.selected = 0;
-    state.network_results.clear();
-    state.network_report = None;
+    state.clear_network_outcome();
     state.form = None;
     state.message = Some(
         language
@@ -327,11 +403,15 @@ pub(super) fn scroll(state: &mut State, width: usize, down: bool) {
 
 pub(super) fn resize(state: &mut State, old_width: usize, new_width: usize) {
     let old = rows(state, old_width);
-    let Some(anchor) = old.get(state.selected) else {
+    restore_scroll(state, old.get(state.selected), new_width);
+}
+
+fn restore_scroll(state: &mut State, anchor: Option<&Row>, width: usize) {
+    let Some(anchor) = anchor else {
         state.selected = 0;
         return;
     };
-    state.selected = rows(state, new_width)
+    state.selected = rows(state, width)
         .iter()
         .rposition(|row| {
             row.entry < anchor.entry || row.entry == anchor.entry && row.offset <= anchor.offset

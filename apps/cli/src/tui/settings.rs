@@ -1,4 +1,5 @@
 use super::form::{self, Form};
+use super::model::Page;
 use anyhow::{Context, Result, ensure};
 use clash_client_core::{
     config::{Language, LanguagePreference},
@@ -205,7 +206,7 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
             .find(|profile| Some(&profile.id) == poll.meta.settings.active_profile.as_ref())
             .map_or_else(
                 || language.text("尚未选择", "None selected").into(),
-                |profile| profile.name.clone(),
+                |profile| crate::output::profile_name(profile, language).into(),
             ),
         "tui_node_sort" => match language {
             Language::SimplifiedChinese => poll.meta.settings.tui_node_sort.to_string(),
@@ -310,18 +311,19 @@ pub(super) fn apply_language(
     args: &mut crate::args::Args,
 ) {
     state.language_preference = preference;
-    state.language = preference.resolve_desktop();
-    args.options
-        .insert("lang".into(), state.language.tag().into());
-    if let Some(report) = &state.network_report {
-        state.network_results = report.lines_in(state.language);
-    }
+    state.set_language(preference.resolve_desktop());
+    set_session_language(args, state.language);
+}
+
+pub(super) fn set_session_language(args: &mut crate::args::Args, language: Language) {
+    args.options.insert("lang".into(), language.tag().into());
 }
 
 pub(super) fn sync_language(
     state: &mut super::model::State,
     args: &mut crate::args::Args,
     follow_preference: bool,
+    width: usize,
 ) -> bool {
     if !follow_preference
         || state.form.is_some()
@@ -330,6 +332,9 @@ pub(super) fn sync_language(
         return false;
     }
     apply_language(state, state.language_preference, args);
+    if state.page == Page::Network {
+        super::network::relocalize_result(state, width);
+    }
     true
 }
 
@@ -429,7 +434,12 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
                         .meta
                         .profiles
                         .iter()
-                        .map(|profile| (profile.id.clone(), profile.name.clone()))
+                        .map(|profile| {
+                            (
+                                profile.id.clone(),
+                                crate::output::profile_name(profile, language).into(),
+                            )
+                        })
                         .collect();
                 }
             }

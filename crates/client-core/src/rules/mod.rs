@@ -1,10 +1,11 @@
 //! Per-subscription edits. Original YAML is never rewritten; identities survive
 //! subscription updates without copying the subscription's rule text into settings.
-use crate::config::{SUBSCRIPTION_RULES, Settings, parse_profile};
+use crate::config::{Language, SUBSCRIPTION_RULES, Settings, parse_profile};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
@@ -177,6 +178,51 @@ impl Document {
         }
         (rows, warnings)
     }
+}
+
+pub fn warning_in(warning: &str, language: Language) -> Cow<'_, str> {
+    if language != Language::English {
+        return warning.into();
+    }
+    for (prefix, suffix, english_prefix, english_suffix) in [
+        (
+            "有 ",
+            " 条自定义规则已包含在订阅或其他规则中，保留原规则，不重复加入。",
+            "Skipped duplicate custom rules already present in the subscription or other rules (",
+            ").",
+        ),
+        (
+            "订阅更新后有 ",
+            " 条原规则已删除或更改；旧排序引用已跳过，可恢复订阅顺序重新整理。",
+            "Skipped stale ordering references (",
+            ") to subscription rules that were removed or changed. Restore the subscription order to reorder the rules.",
+        ),
+        (
+            "MATCH 之后有 ",
+            " 条规则不会被匹配，请检查顺序。",
+            "Rules after MATCH will never be evaluated (",
+            " affected). Check the rule order.",
+        ),
+    ] {
+        if let Some(count) = warning
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(suffix))
+            && !count.is_empty()
+            && count.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return format!("{english_prefix}{count}{english_suffix}").into();
+        }
+    }
+    if let Some(policy) = warning
+        .strip_prefix("订阅中未找到策略“")
+        .and_then(|value| value.strip_suffix("”，请确认名称或改选策略；应用时会再次校验。"))
+    {
+        return format!(
+            "Policy “{policy}” was not found in the subscription. Check its name or choose another policy. It will be validated again when you apply the rules."
+        )
+        .into();
+    }
+    warning.into()
 }
 
 pub struct Parts<'a> {
@@ -457,6 +503,39 @@ pub fn apply(map: &mut Mapping, draft: &ProfileRules, builtin: bool) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warnings_translate_at_presentation_and_preserve_unknown_text() {
+        let cases = [
+            (
+                "有 12 条自定义规则已包含在订阅或其他规则中，保留原规则，不重复加入。",
+                "Skipped duplicate custom rules already present in the subscription or other rules (12).",
+            ),
+            (
+                "订阅更新后有 2 条原规则已删除或更改；旧排序引用已跳过，可恢复订阅顺序重新整理。",
+                "Skipped stale ordering references (2) to subscription rules that were removed or changed. Restore the subscription order to reorder the rules.",
+            ),
+            (
+                "MATCH 之后有 3 条规则不会被匹配，请检查顺序。",
+                "Rules after MATCH will never be evaluated (3 affected). Check the rule order.",
+            ),
+            (
+                "订阅中未找到策略“店铺“香港”；東京”，请确认名称或改选策略；应用时会再次校验。",
+                "Policy “店铺“香港”；東京” was not found in the subscription. Check its name or choose another policy. It will be validated again when you apply the rules.",
+            ),
+        ];
+        for (raw, english) in cases {
+            assert_eq!(warning_in(raw, Language::SimplifiedChinese), raw);
+            assert_eq!(warning_in(raw, Language::English), english);
+        }
+        for raw in [
+            "订阅更新后有供应商提示；请保留原文",
+            "MATCH 之后有 不明 条规则不会被匹配，请检查顺序。",
+        ] {
+            assert_eq!(warning_in(raw, Language::English), raw);
+        }
+    }
+
     fn document(rules: &[&str]) -> Document {
         let raw =
             yaml_serde::to_string(&serde_json::json!({"proxies": [], "rules": rules})).unwrap();

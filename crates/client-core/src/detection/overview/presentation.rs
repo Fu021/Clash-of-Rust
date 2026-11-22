@@ -224,8 +224,10 @@ impl View<'_> {
                         language,
                     );
                     let flag = crate::countries::flag_emoji(&result.country);
-                    let mut entry = item("exit", exit_title, &self.address(address), &country, 1)
-                        .with_delay(result.millis);
+                    let mut entry = item("exit", exit_title, &self.address(address), &country, 1);
+                    if let Some(millis) = result.response_millis() {
+                        entry = entry.with_delay(millis);
+                    }
                     entry.flag = flag.unwrap_or_default();
                     entry.fogged = self.hidden;
                     entry
@@ -400,7 +402,8 @@ mod tests {
             state: ip_check::State::Identified,
             summary: "198.51.100.7".into(),
             country: "🇩🇪 德国".into(),
-            millis: 42,
+            millis: Some(42),
+            authentication_check_skipped: false,
             detail: String::new(),
             target_exit: None,
         }));

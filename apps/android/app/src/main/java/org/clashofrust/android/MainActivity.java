@@ -18,6 +18,7 @@ import org.json.JSONObject;
 public final class MainActivity extends NativeActivity {
     static { System.loadLibrary("clash_mobile"); }
     private static final int VPN = 10, OPEN = 11, SAVE = 12, NOTIFICATIONS = 13;
+    private static final String VPN_STATE = "org.clashofrust.android.vpn-state";
     private volatile boolean vpnPrompt;
     private boolean vpnReconfigure;
     private String vpnStartRequest;
@@ -45,6 +46,15 @@ public final class MainActivity extends NativeActivity {
         boolean dark = Appearance.dark(this, Appearance.mode(this));
         setTheme(dark ? R.style.ClientDark : R.style.ClientLight);
         tileConnect=VpnTileService.CONNECT.equals(getIntent().getAction());
+        Bundle vpn = state == null ? null : state.getBundle(VPN_STATE);
+        if (vpn != null) {
+            vpnPrompt = vpn.getBoolean("prompt");
+            vpnReconfigure = vpn.getBoolean("reconfigure");
+            vpnStartRequest = vpn.getString("start-request");
+            vpnAuthorizationOnly = vpn.getBoolean("authorization-only");
+            vpnAuthorizationRequest = vpn.getLong("authorization-request");
+            if (vpnPrompt && !vpnAuthorizationOnly) TunnelService.resumeRequest(this, vpnStartRequest);
+        }
         super.onCreate(state);
         IncidentNotifications.opened(this, getIntent());
         try { networkOverview = new NetworkOverview(this); }
@@ -56,6 +66,16 @@ public final class MainActivity extends NativeActivity {
         // owns navigation and dialog dismissal.
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT + 1, this::handleBack);
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        Bundle vpn = new Bundle();
+        vpn.putBoolean("prompt", vpnPrompt);
+        vpn.putBoolean("reconfigure", vpnReconfigure);
+        vpn.putString("start-request", vpnStartRequest);
+        vpn.putBoolean("authorization-only", vpnAuthorizationOnly);
+        vpn.putLong("authorization-request", vpnAuthorizationRequest);
+        state.putBundle(VPN_STATE, vpn);
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
@@ -110,6 +130,7 @@ public final class MainActivity extends NativeActivity {
     }
     @Override protected void onPause() { emit("visible", false); super.onPause(); }
     @Override protected void onDestroy() {
+        if (isFinishing()) TunnelService.cancelStart(this, vpnStartRequest);
         NetworkOverview current = networkOverview;
         networkOverview = null;
         if (current != null) current.close();
@@ -126,15 +147,38 @@ public final class MainActivity extends NativeActivity {
             JSONObject data = new JSONObject(input);
             String op = data.getString("op");
             switch (op) {
-                case "initialize": CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6")); runOnUiThread(this::connectFromTile); break;
-                case "reload": CoreBridge.reload(this, data.getString("config")); CoreBridge.setIpv6(data.getBoolean("ipv6")); break;
-                case "state": return CoreBridge.state()
-                    .put("network_revision",networkRevision())
-                    .put("font_sizes",systemFontSizes())
-                    .put("dark", Appearance.systemDark(this))
-                    .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
-                    .put("incident_notifications", IncidentNotifications.state(this))
-                    .put("application_scope",ApplicationRouting.load(this).summary(this)).toString();
+                case "initialize":
+                    CoreBridge.start(this, data.getString("config"), data.getBoolean("ipv6"));
+                    if (data.optBoolean("connect_from_tile", true)) runOnUiThread(this::connectFromTile);
+                    break;
+                case "reload": CoreBridge.reload(this, data.getString("config"), data.getBoolean("ipv6")); break;
+                case "finish-protection-recovery": {
+                    Boolean desired = data.isNull("desired") ? null : data.getBoolean("desired");
+                    return TunnelService.finishRecovery(this, data.getString("request"),
+                        data.getBoolean("connected"), desired, data.getLong("generation"),
+                        data.getString("config"), data.getBoolean("ipv6"), data.getBoolean("protected")).toString();
+                }
+                case "protection-recovery-receipt": return new JSONObject().put(
+                    "committed", TunnelService.recoveryCommitted(this, data.getString("request"))).toString();
+                case "reserve-vpn-recovery": {
+                    Boolean desired = data.isNull("desired") ? null : data.getBoolean("desired");
+                    String token = data.getString("token");
+                    TunnelService.reserveRecovery(this, token, data.getBoolean("connected"),
+                        desired, data.getLong("generation"));
+                    return new JSONObject().put("token", token).toString();
+                }
+                case "release-vpn-recovery": TunnelService.releaseRecovery(data.getString("token")); break;
+                case "hold-vpn-recovery": TunnelService.holdRecovery(this); break;
+                case "state": {
+                    TunnelService.refreshNotificationChannel(AppLanguage.current(this));
+                    return CoreBridge.state(this)
+                        .put("network_revision",networkRevision())
+                        .put("font_sizes",systemFontSizes())
+                        .put("dark", Appearance.systemDark(this))
+                        .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
+                        .put("incident_notifications", IncidentNotifications.state(this))
+                        .put("application_scope",ApplicationRouting.load(this).summary(this)).toString();
+                }
                 case "network-info": {
                     NetworkOverview current = networkOverview;
                     if (current == null) throw new IOException(AppLanguage.current(this).getString(R.string.network_info_pending));
@@ -142,9 +186,14 @@ public final class MainActivity extends NativeActivity {
                 }
                 case "connect":
                 case "reconnect": {
-                    if (vpnPrompt) break;
-                    String request = TunnelService.prepareStart(this);
                     boolean reconfigure = op.equals("reconnect");
+                    if (vpnPrompt) {
+                        if (reconfigure) throw new IOException(AppLanguage.current(this).getString(R.string.vpn_authorization_pending));
+                        break;
+                    }
+                    String request = TunnelService.prepareStart(this);
+                    if (request == null)
+                        throw new IOException(AppLanguage.current(this).getString(R.string.protection_unconfirmed));
                     TunnelService.clearError();
                     runOnUiThread(() -> prepareVpn(reconfigure, request));
                     break;
@@ -166,11 +215,13 @@ public final class MainActivity extends NativeActivity {
                     break;
                 }
                 case "disconnect": TunnelService.stop(this); break;
+                case "restore-vpn": {
+                    Boolean live = data.isNull("connected") ? null : data.getBoolean("connected");
+                    Boolean desired = data.isNull("desired") ? null : data.getBoolean("desired");
+                    return TunnelService.restoreNetwork(this, data.getString("request"), live, desired).toString();
+                }
                 case "protection-sync": ProtectionRuntime.sync(this); break;
                 case "protection-pause": ProtectionRuntime.pause(this); break;
-                case "vpn-plan":
-                    getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", data.getBoolean("enabled")).commit();
-                    break;
                 case "appearance": return Appearance.startup(this).put("font_sizes",systemFontSizes()).toString();
                 case "page-views": {
                     SharedPreferences views = getSharedPreferences("page-views", MODE_PRIVATE);
@@ -296,8 +347,7 @@ public final class MainActivity extends NativeActivity {
             }
             return new JSONObject().put("ok", true).toString();
         } catch (Exception error) {
-            try { return new JSONObject().put("error", error.toString()).toString(); }
-            catch (Exception impossible) { return "{\"error\":\"Android request failed\"}"; }
+            return "{\"error\":" + JSONObject.quote(error.toString()) + "}";
         }
     }
 
@@ -363,33 +413,47 @@ public final class MainActivity extends NativeActivity {
             vpnPrompt = false;
             vpnAuthorizationOnly = false;
             vpnAuthorizationRequest = 0;
-            authorizationResult(request, false, error.toString());
+            authorizationResult(request, false, AppLanguage.current(this).getString(R.string.vpn_authorization_open_failed, error));
         }
     }
-    private void prepareVpn(boolean reconfigure, String request) {
+    void prepareVpn(boolean reconfigure, String request) {
         if (!TunnelService.current(this, request)) return;
-        if (vpnPrompt || (TunnelService.connected() && !reconfigure)) return;
-        if (!CoreBridge.ready()) { emit("error", AppLanguage.current(this).getString(R.string.core_start_first)); return; }
-        Intent permission = VpnService.prepare(this);
-        vpnReconfigure = reconfigure;
-        vpnStartRequest = request;
-        if (permission == null) startVpn(); else {
-            vpnPrompt = true;
-            startActivityForResult(permission, VPN);
+        if (isFinishing() || isDestroyed() || vpnPrompt || (TunnelService.connected() && !reconfigure)) {
+            TunnelService.cancelStart(this, request);
+            return;
+        }
+        try {
+            if (!CoreBridge.ready()) throw new IllegalStateException(AppLanguage.current(this).getString(R.string.core_start_first));
+            Intent permission = VpnService.prepare(this);
+            vpnReconfigure = reconfigure;
+            vpnStartRequest = request;
+            if (permission == null) startVpn(); else {
+                vpnPrompt = true;
+                startActivityForResult(permission, VPN);
+            }
+        } catch (RuntimeException error) {
+            vpnPrompt = false;
+            vpnReconfigure = false;
+            vpnStartRequest = null;
+            TunnelService.cancelStart(this, request);
+            emit("error", error.toString());
         }
     }
     private void startVpn() {
         String request = vpnStartRequest;
         vpnStartRequest = null;
         if (!TunnelService.current(this, request)) { vpnReconfigure = false; return; }
-        TunnelService.start(this, vpnReconfigure, request);
+        boolean reconfigure = vpnReconfigure;
         vpnReconfigure = false;
+        try { TunnelService.start(this, reconfigure, request); }
+        catch (RuntimeException error) { emit("error", error.toString()); return; }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 14);
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == VPN) {
+            if (!vpnPrompt) return;
             vpnPrompt = false;
             if (vpnAuthorizationOnly) {
                 long pending = vpnAuthorizationRequest;
@@ -403,6 +467,7 @@ public final class MainActivity extends NativeActivity {
             }
             if (result == RESULT_OK) startVpn(); else {
                 vpnReconfigure = false;
+                TunnelService.cancelStart(this, vpnStartRequest);
                 vpnStartRequest = null;
                 emit("vpn-cancelled", true);
                 emit("error", AppLanguage.current(this).getString(R.string.vpn_authorization_cancelled_short));
@@ -448,7 +513,8 @@ public final class MainActivity extends NativeActivity {
                 android.util.Log.e("ClashOfRust",
                     (request == SAVE ? "DOCUMENT_EXPORT_FAILED" : "DOCUMENT_IMPORT_FAILED")
                         + " (" + error.getClass().getSimpleName() + ")");
-                emit(request == SAVE ? "export-error" : "error", error.toString());
+                emit(request == SAVE ? "export-error" : "error", AppLanguage.current(this).getString(
+                    request == SAVE ? R.string.export_failed : R.string.import_failed, error));
             }
         });
         worker.shutdown();
@@ -460,7 +526,7 @@ public final class MainActivity extends NativeActivity {
             notificationTitle = null; notificationMessage = null;
             if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED && title != null && message != null) {
                 try { SystemNotifications.show(this, title, message); }
-                catch (Exception error) { emit("error", error.toString()); }
+                catch (Exception error) { emit("error", AppLanguage.current(this).getString(R.string.notification_send_failed, error)); }
             } else emit("notice", AppLanguage.current(this).getString(R.string.notification_permission_denied));
         }
     }

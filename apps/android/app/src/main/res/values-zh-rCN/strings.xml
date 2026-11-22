@@ -33,6 +33,8 @@
     <string name="notification_invalid_type">错误通知类型无效</string>
     <string name="notification_permission">请允许 Clash of Rust 发送系统通知</string>
     <string name="notification_invalid_content">系统通知内容无效</string>
+    <string name="notification_host_unavailable">系统通知尚未就绪</string>
+    <string name="notification_send_failed">无法发送系统通知：%1$s</string>
     <string name="notification_disabled">系统已关闭应用通知，请在通知设置中允许</string>
     <string name="notification_protection_channel">Claude 保护与通知测试</string>
     <string name="notification_protection_disabled">系统已关闭 Claude 保护通知，请在通知设置中允许</string>
@@ -52,13 +54,17 @@
     <string name="export_open_failed">无法打开保存位置：%1$s</string>
     <string name="export_expired">导出内容已失效</string>
     <string name="export_write_failed">无法写入所选文件</string>
+    <string name="export_failed">无法导出文件：%1$s</string>
     <string name="export_complete">文件已导出</string>
     <string name="import_read_failed">无法读取所选文件</string>
+    <string name="import_failed">无法导入文件：%1$s</string>
     <string name="import_too_large">订阅超过 10 MiB</string>
     <string name="import_default_name">导入配置</string>
     <string name="vpn_authorization_pending">已有 VPN 授权正在进行</string>
+    <string name="vpn_authorization_open_failed">无法打开 VPN 授权：%1$s</string>
     <string name="vpn_authorization_cancelled">VPN 授权已取消或失效</string>
     <string name="vpn_authorization_cancelled_short">VPN 授权已取消</string>
+    <string name="vpn_plan_save_failed">无法保存 VPN 连接计划。</string>
     <string name="vpn_route_pending">系统尚未完成 VPN 路由切换</string>
     <string name="vpn_wait_before_save">VPN 正在连接，请稍后保存</string>
     <string name="core_start_first">请先启动内核</string>

@@ -119,10 +119,10 @@ pub static COMMANDS: &[Spec] = &[
         "profile list",
         "列出订阅；来源中的凭据默认脱敏",
         "List subscriptions. Source credentials are redacted by default.",
-        "profile list [--filter TEXT --all-users]",
+        "profile list [--filter TEXT --all-users --output FILE]",
         0,
         0,
-        "filter all-users"
+        "filter all-users output"
     ),
     command!(
         "profile add",
@@ -414,8 +414,8 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "dns",
-        "查询系统或经内核代理的 DNS",
-        "Look up DNS records using system DNS or the proxy core.",
+        "查询内核或系统 DNS",
+        "Look up addresses using core or system DNS.",
         "dns DOMAIN [--system]",
         1,
         1,
@@ -1378,7 +1378,7 @@ fn option_help(key: &str, language: Language) -> String {
         "unset" => "输出清除代理环境变量的语句",
         "url" => "HTTP/HTTPS 诊断地址",
         "host" => "诊断域名，默认 github.com",
-        "system" => "使用本机系统 DNS，默认使用内核/代理 DNS",
+        "system" => "使用本机系统 DNS，默认使用内核 DNS",
         "category" => "检测分类，例如 AI、全球、日本",
         "offline" => "仅收集本机信息，不请求外部检测服务",
         "open" => "在默认浏览器打开本机采样入口",
@@ -1439,7 +1439,7 @@ fn option_help(key: &str, language: Language) -> String {
         "unset" => "Print shell commands to clear proxy environment variables.",
         "url" => "HTTP or HTTPS diagnostics URL.",
         "host" => "Diagnostics hostname (default: github.com).",
-        "system" => "Use system DNS instead of the proxy core's DNS.",
+        "system" => "Use system DNS. The default is core DNS.",
         "category" => "Check category, such as AI, 全球, or 日本.",
         "offline" => "Collect local information without contacting external check services.",
         "open" => "Open the local probe in the default browser.",

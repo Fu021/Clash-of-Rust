@@ -20,6 +20,8 @@ Windows 平台路径变化沿用更新专项，并在两种原生架构上运行
 
 常规 CI 的运行时集成验证聚焦系统代理/TUN：真实授权、代理转发、TUN 实际流量、DNS 和断开后的路由恢复。各平台仍编译发行程序、执行 Clippy 和校验候选安装包，但不再构建和运行全部 Rust 测试程序；Python 构建与产物契约检查保留一次。三个 Android job 保留宿主请求门禁及会话退出的小型回归，完整移动源码回归在应用分流专项或扩展模式执行。Android 应用分流或其测试入口发生变化时自动追加分流专项；Linux 多用户/TUN 相关入口发生变化时追加隔离用户专项。更新、CLI 维护或控制交接相关路径变化时，六种桌面启用更新模块回归，Windows/macOS 验证锁外交接；平台安装回归见[候选包验收](install-validation.md#平台范围)。桌面界面或窗口宿主发生变化时，Linux x64 追加桌面组件和窗口回归；移动界面及共享组件变化时，Android x64 在自己的 job 执行移动软件窗口回归。共享组件变化可选择两端，但分别编译与测试；这些测试不替代真实窗口和真机验收。变更范围无法判定时保守运行扩展测试，选取结果写入 job summary。
 
+共享连接详情、控制器与 DNS 解析代码变化时，同样选择 Linux CLI、桌面界面和 Android 移动界面的相关回归，各端仍在各自作业构建。
+
 设置、保护判定或控制接口变化时，Linux x64 专项覆盖共享设置白名单和后台控制门禁；共享设置、保护规则或移动会话变化时，Android x64 分别执行移动界面、会话与分流回归。移动强调色真实点击覆盖保护关闭、切换中和已开启；后台门禁在对应任务中执行。
 
 需要完整源码、窗口、应用分流、多用户及其他既有回归时，可手动运行 CI 并设置 `extended_tests=true`；各专项测试入口保留，不删除断言。常规 CI 不覆盖完整 UI、存储、单元测试或全部生命周期，绿色结果不能当作这些专项也已通过。键盘、键盘高度、Back 编辑和多版本截图继续使用单独手动入口，不随常规 CI、loop 或打包自动重跑。
@@ -107,6 +109,8 @@ DEB 安装验收前，编译容器与 Linux 兼容 runner 共用签名 APT 索�
 - 桌面后台、界面程序、`cor` 和网络助手一起导出，并在同一 runner 生成安装包，执行[安装验收](install-validation.md)。构建附件上传后用实际 id/digest 和本地归档校验暂存，不再次下载，也不额外申请 macOS runner。Android 在候选 APK 上执行代理/TUN 集成，不对同一开发签名包重复测试。九组候选包、SHA256、安装收据与源码附件保留 3 天，全部必需 job 成功才能发布。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带必要的 `core_integration` 测试程序，不上传源码单元测试程序。桌面构建产物采用 schema 3，只与同一提交配套使用。
 
 Android x86_64 使用 Android 16（API 36）模拟器验证真实 VPN 授权、代理请求、TUN 流量、DNS 和断开恢复。[应用分流](../android-application-routing.md#范围与验证)相关变化或扩展模式会追加三种分流模式；完整授权取消、Activity 重建与冷磁贴归扩展模式。选中移动界面回归时，x64 作业安装软件渲染测试所需的字体开发库，并启用 `mobile-ui-tests` 执行宿主界面 Clippy 和测试。三个作业分别对各自 Android 目标执行 Clippy 和编译。ARM64/ARMv7 完成 Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
+
+Android x64 候选包收集常规报告后运行保护恢复的两阶段回归。单独运行时，用同一个 `RUNNER_TEMP` 启动可丢弃的 API 36 `cor-ci` AVD 和执行 `python3 scripts/android.py test --arch x64 --protection-death-only`。每轮先将回执设为失败，并清除该夹具上一次生成的报告。脚本核对模拟器序列号、AVD 路径、API、启动标识和启动计数，拒绝经过符号链接的 AVD 路径；验证通过后清除测试应用的数据并预授予 VPN 同意。第一阶段使用虚构本地配置建立 TUN，写入模拟的中断记录，再向应用自身进程发送 SIGKILL。两阶段均用 `am instrument --no-restart`，阶段之间只确认旧 PID 消失并打开应用。第二阶段在新 PID 中核对 Android 退出历史里的 SIGKILL，检查冷启动保持暂停，再点击重试并验证原配置、TUN 和保存的 VPN 计划恢复。测试阶段成功或失败后先采集证据，再重新核对同一模拟器并有界清理应用数据与授权；清理失败附在原始错误后，日志和清理全部通过才写入成功回执。`target/android-report/x64/protection-process-death/` 保留两阶段输出、状态、清理结果和日志。夹具覆盖中断记录落盘之后的进程死亡与显式恢复，保护启用事务的真实中断点、保护 DNS 和厂商系统行为仍需独立验证。
 
 常规测试、输入法专项及打包共用模拟器准备入口。当前[模拟器实现](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)会将首次启动的 API 24+ userdata 提高到至少 6 GiB，并要求分区大小的 1.2 倍空闲；因此配置显式使用 6144 MiB，再为测试留出 1 GiB，启动前合计要求约 8.2 GiB。此前 3072 MiB / 4 GiB 的预检遗漏了这一最低值，`1139dcc` 的 x64 仍在约 5255 MiB 空闲时被模拟器要求 7372.8 MiB 而拒绝，不能把配置写入或较宽裕 runner 的偶然成功当作修复。
 

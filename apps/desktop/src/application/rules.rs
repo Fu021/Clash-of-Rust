@@ -205,6 +205,14 @@ pub struct State {
     pub(super) pending_profile: Option<ProfileChoice>,
 }
 impl State {
+    pub(super) fn warning_text(&self, language: Language) -> String {
+        self.warnings
+            .iter()
+            .map(|warning| rule_manager::warning_in(warning, language))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn clear_selection(&mut self) {
         self.selected = None;
     }

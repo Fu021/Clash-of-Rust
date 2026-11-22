@@ -3,8 +3,6 @@ package org.clashofrust.android;
 import android.content.Context;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 
 /** Foreground VPN service owns enforcement; no Activity reference is retained. */
@@ -27,13 +25,14 @@ final class ProtectionRuntime {
         if (response.has("error")) throw new IOException(response.getString("error"));
     }
     static synchronized void sync(Context owner) throws Exception {
+        sync(owner, TunnelService.connected());
+    }
+    static synchronized void sync(Context owner, boolean vpnPrepared) throws Exception {
         context = owner.getApplicationContext();
-        if (!TunnelService.connected()) { pause(owner); return; }
-        File path = new File(context.getFilesDir(), "client/settings.json");
-        if (path.length() > 10 * 1024 * 1024) throw new IOException(AppLanguage.current(context).getString(R.string.protection_settings_large));
-        JSONObject settings = path.isFile() ? new JSONObject(new String(Files.readAllBytes(path.toPath()), StandardCharsets.UTF_8)) : new JSONObject();
-        JSONObject protection = settings.optJSONObject("claude_protection");
-        boolean enabled = protection != null && TunnelService.connected();
+        if (!vpnPrepared) { pause(owner); return; }
+        JSONObject settings = CoreBridge.savedSettings(context);
+        JSONObject protection = CoreBridge.savedProtection(settings);
+        boolean enabled = protection != null;
         configured = protection != null;
         JSONObject config = new JSONObject().put("enabled", enabled);
         if (enabled) config.put("node", protection.getString("node"))
@@ -43,6 +42,13 @@ final class ProtectionRuntime {
         if (response.has("error")) throw new IOException(response.getString("error"));
     }
     static JSONObject state() throws Exception { return new JSONObject(nativeState()); }
+    static boolean guardMatches(boolean enabled) throws Exception {
+        JSONObject guard = state();
+        JSONObject snapshot = guard.optJSONObject("snapshot");
+        return Boolean.valueOf(enabled).equals(guard.opt("enabled"))
+            && snapshot != null && "".equals(snapshot.opt("error"))
+            && (!enabled || Boolean.TRUE.equals(snapshot.opt("connected")));
+    }
     static String notificationLabel(Context context, boolean configured, int health) {
         if (!configured) return "";
         switch (health) {
@@ -52,6 +58,9 @@ final class ProtectionRuntime {
         }
     }
     static String notificationStatus(Context context) {
+        if (TunnelService.recoveryRequired(context) || TunnelService.forwardingHeld()
+            || (configured && !TunnelService.error().isEmpty()))
+            return context.getString(R.string.protection_unconfirmed);
         return configured ? notificationLabel(context, true, notificationHealth()) : "";
     }
     static String language() {
@@ -64,12 +73,13 @@ final class ProtectionRuntime {
     // JNI calls this off the UI thread, including when the Activity is closed.
     static String notify(String title, String message) {
         try {
-            if (context == null) throw new IllegalStateException("通知宿主尚未就绪");
-            SystemNotifications.show(context, title, message);
+            Context owner = context;
+            if (owner == null) throw new IllegalStateException(AppLanguage.current(ClientApplication.instance())
+                .getString(R.string.notification_host_unavailable));
+            SystemNotifications.show(owner, title, message);
             return "{\"ok\":true}";
         } catch (Exception error) {
-            try { return new JSONObject().put("error", error.toString()).toString(); }
-            catch (Exception ignored) { return "{\"error\":\"系统通知失败\"}"; }
+            return "{\"error\":" + JSONObject.quote(error.toString()) + "}";
         }
     }
 }

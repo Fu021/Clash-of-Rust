@@ -5,7 +5,10 @@ use super::{
 };
 use crate::args::Args;
 use anyhow::Result;
-use clash_client_core::config::Language;
+use clash_client_core::{
+    config::Language,
+    ip_report::{self, Counts, Status},
+};
 use serde_json::Value;
 use std::io::Write;
 
@@ -40,20 +43,54 @@ fn group_kind(row: &Value, language: Language) -> String {
 }
 
 pub(super) fn ip_results(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> {
-    let cells = rows(&value["results"])
+    let results = rows(&value["results"]);
+    let mut counts = Counts::default();
+    for row in results {
+        let status = match row["state"].as_str() {
+            Some("Confirmed") => Status::Available,
+            Some("Partial") => Status::Partial,
+            Some("Reachable") => Status::Reachable,
+            Some("Identified") => Status::Identified,
+            Some("Restricted") => Status::Restricted,
+            Some("Failed") => Status::Failed,
+            _ => Status::Unknown,
+        };
+        counts.0[status as usize] += 1;
+    }
+    let total = counts.total();
+    let heading = match language {
+        Language::SimplifiedChinese => format!("IP 检测完成 · 共 {total} 项"),
+        Language::English => format!("IP check complete · Total {total}"),
+    };
+    let summary = counts.summary_in(language);
+    if summary.is_empty() {
+        writeln!(out, "{heading}")?;
+    } else {
+        writeln!(out, "{heading} · {summary}")?;
+    }
+    let cells = results
         .iter()
         .map(|row| {
-            let summary = if row["summary"].as_str().is_none_or(str::is_empty) {
+            let skipped = row["authentication_check_skipped"].as_bool() == Some(true);
+            let summary = if skipped {
+                ip_report::authentication_check_skipped_in(language).into()
+            } else if row["summary"].as_str().is_none_or(str::is_empty) {
                 text_in(row, "detail", language)
             } else {
                 text_in(row, "summary", language)
             };
+            let duration = if skipped {
+                ip_report::no_response_measurement_in(language).into()
+            } else {
+                text_in(row, "millis", language)
+            };
+            let country = text_in(row, "country", language);
             vec![
                 text_in(row, "name", language),
                 text_in(row, "state", language),
                 summary,
-                text_in(row, "country", language),
-                text_in(row, "millis", language),
+                ip_report::country_in(&country, skipped, language).into(),
+                duration,
             ]
         })
         .collect::<Vec<_>>();
@@ -70,7 +107,7 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value, language: Language)
         table::width(),
         language,
     )?;
-    let exits = rows(&value["results"])
+    let exits = results
         .iter()
         .filter(|row| row.get("target_exit").is_some())
         .collect::<Vec<_>>();
@@ -497,4 +534,79 @@ pub(super) fn connections(out: &mut dyn Write, value: &Value, language: Language
         table::page_in(out, value, language)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ip_results_summarize_each_status_independently() {
+        let report = serde_json::json!({"total": 8, "confirmed_available": 1, "non_red": 6, "results": [
+            {"state":"Confirmed"},
+            {"state":"Partial"},
+            {"state":"Reachable"},
+            {"state":"Identified"},
+            {"state":"Restricted"},
+            {"state":"Unknown"},
+            {"state":"Unknown","authentication_check_skipped":true},
+            {"state":"Failed"}
+        ]});
+        for (language, expected) in [
+            (
+                Language::SimplifiedChinese,
+                "IP 检测完成 · 共 8 项 · 确认可用 1 · 部分可用 1 · 仅网页可达 1 · 信息已识别 1 · 不可用或受限 1 · 结果未确认 2 · 超时或失败 1",
+            ),
+            (
+                Language::English,
+                "IP check complete · Total 8 · Available 1 · Partially available 1 · Website reachable 1 · Identified 1 · Unavailable or restricted 1 · Unconfirmed 2 · Timed out or failed 1",
+            ),
+        ] {
+            let mut output = Vec::new();
+            ip_results(&mut output, &report, language).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.lines().next(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn ip_results_distinguish_skipped_authentication_from_legacy_durations() {
+        let report = serde_json::json!({"total": 3, "confirmed_available": 0, "non_red": 2, "results": [
+            {"name":"Skipped","state":"Unknown","summary":"opaque summary",
+             "country":"未提供","detail":"opaque detail","millis":null,"authentication_check_skipped":true},
+            {"name":"Legacy zero","state":"Unknown","summary":"未执行认证检测","country":"未提供","millis":0},
+            {"name":"Legacy failure","state":"Failed","detail":"fixture error","millis":null}
+        ]});
+        for (language, duration, reason, summary) in [
+            (
+                Language::SimplifiedChinese,
+                "无响应测量",
+                "未执行认证检测",
+                "IP 检测完成 · 共 3 项 · 结果未确认 2 · 超时或失败 1",
+            ),
+            (
+                Language::English,
+                "No response measurement",
+                "Authentication check was not run",
+                "IP check complete · Total 3 · Unconfirmed 2 · Timed out or failed 1",
+            ),
+        ] {
+            let mut output = Vec::new();
+            ip_results(&mut output, &report, language).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.lines().next(), Some(summary));
+            assert_eq!(output.matches(duration).count(), 1, "{output}");
+            assert!(output.contains(reason), "{output}");
+            assert_eq!(output.matches("0 ms").count(), 1, "{output}");
+            assert!(output.contains("fixture error"), "{output}");
+            assert!(!output.contains("opaque summary"), "{output}");
+            if language == Language::English {
+                assert_eq!(output.matches("Not provided").count(), 1, "{output}");
+                assert_eq!(output.matches("未提供").count(), 1, "{output}");
+            } else {
+                assert_eq!(output.matches("未提供").count(), 2, "{output}");
+            }
+        }
+        assert_eq!(report["non_red"], 2);
+    }
 }

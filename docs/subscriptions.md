@@ -24,6 +24,8 @@
 
 内置默认配置使用持久化的 `builtin` 身份，不再依赖显示名称。首次读取旧索引时按原名称与本地 `default.yaml` 来源迁移；旧 Android 空来源记录还须与随包默认 YAML 内容一致。迁移保留 ID、活动配置与原文件，之后改名或资源路径变化不改变身份；普通配置即使使用相同名称也不会被重新识别为默认直连。
 
+已有活动订阅时，索引丢失、为空、损坏或缺少活动项会报告错误并保留原设置和订阅文件，不会改用默认直连。修复索引后可重新附着已有内核。
+
 ## 自动更新
 
 桌面 GUI、`cor` 后台与 Android 共用 `subscription_update_interval_minutes`，默认 360 分钟，范围 0–10080；0 关闭。桌面和 Android 设置页可修改，CLI 使用 `cor config set subscription_update_interval_minutes 360`。该间隔与节点定时测速独立。

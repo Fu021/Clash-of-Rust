@@ -20,6 +20,14 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "订阅下载失败" => "Subscription download failed",
         "订阅下载超时" => "Subscription download timed out",
+        "下载响应不完整（HTTP 206）" => "Incomplete download response (HTTP 206)",
+        "下载中断或超时" => "Download interrupted or timed out",
+        "下载等待响应超时" => "Download response timed out",
+        "下载超过 30 秒没有收到数据" => "No download data received for 30 seconds",
+        "下载持续低于 32 KiB/s" => "Download stayed below 32 KiB/s",
+        "下载速度持续下降" => "Download speed remained low after a drop",
+        "检查更新失败" => "Update check failed",
+        "下载更新失败" => "Update download failed",
         "无法创建订阅下载连接" => "Could not create the subscription download connection",
         "订阅超过 10 MiB 限制" => "Subscription exceeds the 10 MiB limit",
         "订阅在下载期间已改变，已保留现有配置" => {
@@ -108,10 +116,43 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "请选择规则策略" => "Select a rule policy",
         "规则内容不能为空" => "Rule content cannot be empty",
+        "请先打开规则编辑器" => "Open the rule editor first",
+        "逻辑规则等复杂类型请使用规则文本编辑。" => {
+            "Use the text editor for logical and other complex rules."
+        }
+        "自定义规则不能超过 1000 条" => "Custom rules cannot exceed 1,000 entries",
         "插入位置应为正整数" => "The insertion position must be a positive integer",
         "请先开启 DNS 覆盖" => "Enable DNS override first",
         "请先开启 DNS 覆盖，再启用 Fake-IP" => "Enable DNS override before Fake-IP",
         "请先关闭 Claude 保护" => "Disable Claude protection first",
+        "正在切换保护，等待接管验证完成" => {
+            "Switching protection; waiting for verification"
+        }
+        "内核未运行，Claude 保护尚未生效" => {
+            "The core is not running; Claude protection is not active"
+        }
+        "TUN 未连接，Claude 保护接管未就绪" => {
+            "TUN is not connected; Claude protection is not ready"
+        }
+        "正在确认保护连接与实时拦截状态" => {
+            "Checking the protection connection and live blocking"
+        }
+        "控制接口暂不可用，实时拦截未确认；保护规则仍保留。" => {
+            "Control interface unavailable; protection rules retained."
+        }
+        "实时拦截已停止，请重新开启 Claude 保护。" => {
+            "Live blocking stopped; restart Claude protection."
+        }
+        "异常连接关闭失败" => "Failed to close an unexpected connection",
+        "异常连接关闭失败，请检查内核状态。" => {
+            "Failed to close an unexpected connection; check the core."
+        }
+        "连接已处理，但系统通知失败" => {
+            "Connection handled; system notification failed"
+        }
+        "连接已处理，但系统通知任务失败" => {
+            "Connection handled; system notification task failed"
+        }
         "请先关闭 Claude 保护，再修改 Fake-IP" => {
             "Disable Claude protection before changing Fake-IP"
         }
@@ -195,12 +236,41 @@ fn english(message: &str) -> Option<&'static str> {
     })
 }
 
+fn localize_routes(message: &str) -> Option<String> {
+    message
+        .split('；')
+        .map(|part| {
+            [
+                ("内核代理：", "Core proxy"),
+                ("系统代理：", "System proxy"),
+                ("内核直连：", "Core direct"),
+                ("系统网络：", "System network"),
+                ("直连：", "Direct"),
+            ]
+            .into_iter()
+            .find_map(|(prefix, label)| {
+                part.strip_prefix(prefix)
+                    .map(|detail| format!("{label}: {}", localize(detail, Language::English)))
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join("; "))
+}
+
 pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
     if language != Language::English {
         return Cow::Borrowed(message);
     }
     if let Some(translated) = english(message) {
         return Cow::Borrowed(translated);
+    }
+    if let Some(body) = message.strip_suffix("（已尝试可用代理和直连）")
+        && let Some(details) = localize_routes(body)
+    {
+        return format!("{details} (tried available proxies and direct connections)").into();
+    }
+    if let Some(details) = localize_routes(message) {
+        return details.into();
     }
     for delimiter in ["：", ": "] {
         if let Some((prefix, detail)) = message.split_once(delimiter)
@@ -224,6 +294,61 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
     Cow::Borrowed(message)
 }
 
+pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
+    if language != Language::English {
+        return Cow::Borrowed(message);
+    }
+    let (summary, detail) = message
+        .split_once(": ")
+        .map_or((message, None), |(summary, detail)| (summary, Some(detail)));
+    let translated = match summary {
+        "当前用户后台未运行" => "The current user's backend is not running",
+        "当前用户内核未运行" => "The current user's core is not running",
+        "连接当前用户后台超过 5 秒；可用 --offline 保存本地现场" => {
+            "Connecting to the current user's backend timed out after 5 seconds (use --offline to save local diagnostics)"
+        }
+        "无法确定应用数据目录" => "Could not determine the application data directory",
+        "本机控制端点文件无效" => "Invalid local control endpoint file",
+        "本机控制端点必须归当前用户所有且仅当前用户可读写" => {
+            "The current user must own the local control endpoint and have exclusive read and write access"
+        }
+        "本机控制端点文件过大" => "Local control endpoint file is too large",
+        "本机控制协议不兼容，请升级客户端或退出旧版 GUI／cor 后台后重试" => {
+            "Incompatible local control protocol. Update the client or quit the older GUI or cor backend, then try again"
+        }
+        "无法检查后台的占用锁" => "Could not check the backend lock",
+        "后台响应超过 32 MiB 限制" => "Backend response exceeds the 32 MiB limit",
+        "单项检测超过 15 秒" => "Probe timed out after 15 seconds",
+        "DNS 查询请输入域名，例如 github.com" => {
+            "Enter a domain name for DNS lookup, for example github.com"
+        }
+        "未查到目标地址" => "No addresses found for the target",
+        "请输入 HTTP/HTTPS 地址" => "Enter an HTTP/HTTPS URL",
+        "测试地址不支持嵌入用户名密码" => "Test URLs cannot include credentials",
+        "IP 查询响应过大" => "IP lookup response is too large",
+        "IP 查询响应不是有效 UTF-8 文本" => "IP lookup response is not valid UTF-8 text",
+        "IP 查询响应不是有效 IP 地址或包含有效 ip 字段的 JSON" => {
+            "IP lookup response must be a valid IP address or JSON with a valid ip field"
+        }
+        _ => {
+            if let Some(status) = message
+                .strip_prefix("IP 查询返回 HTTP ")
+                .and_then(|status| status.strip_suffix("，未获得有效出口地址"))
+                && reqwest::StatusCode::from_bytes(status.as_bytes())
+                    .is_ok_and(|code| !code.is_success())
+            {
+                return format!("IP lookup returned HTTP {status} without a valid exit address")
+                    .into();
+            }
+            return Cow::Borrowed(message);
+        }
+    };
+    match detail {
+        Some(detail) => format!("{translated}: {detail}").into(),
+        None => Cow::Borrowed(translated),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +363,10 @@ mod tests {
                 "The configuration has no proxies or proxy-providers",
             ),
             (rule.to_string(), "Rule content cannot be empty"),
+            (
+                "自定义规则不能超过 1000 条".into(),
+                "Custom rules cannot exceed 1,000 entries",
+            ),
         ] {
             assert_eq!(localize(&error, Language::English), expected);
             assert_eq!(localize(&error, Language::SimplifiedChinese), error);
@@ -276,5 +405,42 @@ mod tests {
             assert_eq!(localize(message, Language::English), expected);
             assert_eq!(localize(message, Language::SimplifiedChinese), message);
         }
+    }
+
+    #[test]
+    fn download_route_failures_follow_the_display_language() {
+        for (message, expected) in [
+            (
+                "内核代理：下载响应不完整（HTTP 206）；直连：下载响应不完整（HTTP 206）（已尝试可用代理和直连）",
+                "Core proxy: Incomplete download response (HTTP 206); Direct: Incomplete download response (HTTP 206) (tried available proxies and direct connections)",
+            ),
+            (
+                "Geo 更新失败：Geo 发布信息获取失败：系统网络：下载响应不完整（HTTP 206）",
+                "Geo update failed: Could not retrieve Geo release information: System network: Incomplete download response (HTTP 206)",
+            ),
+            (
+                "下载更新失败：系统代理：下载中断或超时: 東京",
+                "Update download failed: System proxy: Download interrupted or timed out: 東京",
+            ),
+        ] {
+            assert_eq!(localize(message, Language::English), expected);
+            assert_eq!(localize(message, Language::SimplifiedChinese), message);
+        }
+        let external = "外部提供方：東京；直连：下载响应不完整（HTTP 206）";
+        assert_eq!(localize(external, Language::English), external);
+    }
+
+    #[test]
+    fn protection_errors_translate_only_the_application_prefix() {
+        let message = "连接已处理，但系统通知失败：通知已禁用 · example";
+        assert_eq!(
+            localize(message, Language::English),
+            "Connection handled; system notification failed: 通知已禁用 · example"
+        );
+        assert_eq!(localize(message, Language::SimplifiedChinese), message);
+        assert_eq!(
+            localize("正在确认保护连接与实时拦截状态", Language::English),
+            "Checking the protection connection and live blocking"
+        );
     }
 }

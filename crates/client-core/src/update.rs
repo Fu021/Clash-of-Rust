@@ -112,6 +112,7 @@ async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8
         "更新服务器返回 HTTP {}",
         response.status()
     );
+    crate::download::require_complete_response(&response)?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         ensure!(bytes.len() + chunk.len() <= limit, "更新信息超过大小限制");
@@ -270,13 +271,23 @@ pub async fn download(
     port: Option<crate::network::DownloadPorts>,
     path: &Path,
     api: Option<&crate::api::Api>,
+    progress: impl FnMut(Progress),
+) -> Result<()> {
+    let routes = crate::network::download_routes(port, None);
+    download_via(package, &routes, path, api, progress).await
+}
+
+async fn download_via(
+    package: &Package,
+    routes: &[crate::network::Route],
+    path: &Path,
+    api: Option<&crate::api::Api>,
     mut progress: impl FnMut(Progress),
 ) -> Result<()> {
     ensure!(package.size > 0 && package.size <= LIMIT, "安装包大小无效");
     let parent = path.parent().context("更新缓存路径无效")?;
     tokio::fs::create_dir_all(parent).await?;
     let mut errors = Vec::new();
-    let routes = crate::network::download_routes(port, None);
     for (index, route) in routes.iter().enumerate() {
         let has_fallback = index + 1 < routes.len();
         for attempt in 0..2 {
@@ -575,6 +586,101 @@ mod tests {
         }
         assert!(checksum(format!("{digest}  other.apk").as_bytes(), "update.apk").is_err());
         assert!(checksum(b"not a digest", "update.apk").is_err());
+    }
+
+    #[tokio::test]
+    async fn partial_checksum_restarts_the_download_on_the_next_route() {
+        use crate::download::tests::serve_responses;
+
+        let body = "verified APK fixture";
+        let expected = crate::file_hash::hex(Sha256::digest(body.as_bytes()));
+        let full_checksum = format!("{expected}  update.apk\n");
+        let package_wire = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes();
+        let partial_checksum = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 64\r\nContent-Range: bytes 0-63/{}\r\nConnection: close\r\n\r\n{expected}",
+            full_checksum.len()
+        )
+        .into_bytes();
+        let (proxy, proxy_task) =
+            serve_responses(vec![partial_checksum, package_wire.clone()]).await;
+        let (origin, origin_task) = serve_responses(vec![
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{full_checksum}",
+                full_checksum.len()
+            )
+            .into_bytes(),
+            package_wire,
+        ])
+        .await;
+        let package = Package {
+            version: "0.6.3".into(),
+            preview: false,
+            name: "update.apk".into(),
+            size: body.len() as u64,
+            url: format!("{origin}/update.apk"),
+            checksum_url: format!("{origin}/update.apk.sha256"),
+            digest: Some(format!("sha256:{expected}")),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(&package.name);
+        let routes = crate::network::routes(None, Some(proxy));
+        let mut attempts = Vec::new();
+        download_via(&package, &routes, &path, None, |progress| {
+            if progress.received == 0 {
+                attempts.push(progress.route);
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(attempts, [routes[0].label, routes[1].label]);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), body);
+        origin_task.await.unwrap();
+        proxy_task.abort();
+        assert!(proxy_task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn partial_android_release_list_does_not_hide_an_update_on_the_next_route() {
+        use crate::download::tests::serve_responses;
+
+        let name = "Clash-of-Rust-0.6.3-android-arm64.apk";
+        let body = serde_json::json!([{
+            "tag_name": "v0.6.3", "draft": false, "prerelease": false,
+            "assets": [
+                {"name": name, "size": 42},
+                {"name": format!("{name}.sha256"), "size": 64}
+            ]
+        }])
+        .to_string();
+        let (proxy, proxy_task) = serve_responses(vec![
+            format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: 2\r\nContent-Range: bytes 0-1/{}\r\n\r\n[]",
+                body.len()
+            )
+            .into_bytes(),
+        ])
+        .await;
+        let (endpoint, origin_task) = serve_responses(vec![
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes(),
+        ])
+        .await;
+        let routes = crate::network::routes(None, Some(proxy));
+        let package = check_once("0.6.2", "android-arm64.apk", &routes, &endpoint)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(package.version, "0.6.3");
+        assert_eq!(package.name, name);
+        proxy_task.await.unwrap();
+        origin_task.await.unwrap();
     }
 
     #[tokio::test]

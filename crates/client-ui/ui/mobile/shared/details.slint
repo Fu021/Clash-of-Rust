@@ -1,10 +1,72 @@
 import { PageSurface, Presence } from "../../components/motion.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme, AccentPalette } from "../../theme/palette.slint";
-import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent, ConnectionDetailSnapshot, ConnectionDetailStatus } from "state.slint";
+import { DetailItem } from "../../models.slint";
+import { GeometryTarget } from "../../components/geometry.slint";
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MRow, MDivider, MField, MSelect, MTag, MScroll, MCopyButton, MSwitch } from "controls.slint";
 import { MobileFakeIp, MobileRuleActions, MobileSiteResults } from "editors.slint";
 import { MobileReport } from "reports.slint";
+
+export component MobileConnectionDetails inherits VerticalLayout {
+    in property <string> selected-id;
+    in property <int> request;
+    in property <ConnectionDetailSnapshot> snapshot;
+    in property <bool> close-supported;
+    property <bool> narrow: root.width < 460px * Theme.text-scale;
+    property <ConnectionDetailStatus> status:
+        root.selected-id != "" && root.snapshot.id == root.selected-id && root.snapshot.request == root.request
+        && (root.snapshot.status != ConnectionDetailStatus.available || root.snapshot.rows.length > 0)
+            ? root.snapshot.status : ConnectionDetailStatus.unavailable;
+    property <bool> available: root.status == ConnectionDetailStatus.available;
+    spacing: MobileTypography.gap;
+
+    MScroll {
+        content-key: root.selected-id + "/" + root.request;
+        if root.available: rows-card := MCard {
+            GeometryTarget {
+                key: "connection-detail-rows";
+                bounds: [rows-card.absolute-position.x, rows-card.absolute-position.y, rows-card.width, rows-card.height];
+            }
+            for row[index] in root.snapshot.rows: VerticalLayout {
+                spacing: MobileTypography.small-gap;
+                MSmall { text: row.label; }
+                MParagraph { text: row.value; }
+                if index + 1 < root.snapshot.rows.length: MDivider { }
+            }
+        }
+        if !root.available: status-card := MCard {
+            GeometryTarget {
+                key: root.status == ConnectionDetailStatus.loading ? "connection-detail-loading"
+                    : root.status == ConnectionDetailStatus.ended ? "connection-detail-ended" : "connection-detail-unavailable";
+                bounds: [status-card.absolute-position.x, status-card.absolute-position.y, status-card.width, status-card.height];
+            }
+            MParagraph {
+                text: root.status == ConnectionDetailStatus.loading ? @tr("正在加载连接详情…")
+                    : root.status == ConnectionDetailStatus.ended ? @tr("此连接已结束，详情不再保留。")
+                    : @tr("连接详情暂不可用。");
+            }
+        }
+    }
+    GridLayout {
+        spacing: MobileTypography.small-gap; vertical-stretch: 0;
+        MCopyButton {
+            col: 0; row: 0; geometry-key: "connection-detail-copy";
+            label: @tr("复制详情"); value: root.available ? "connection:" + root.snapshot.id : "";
+            enabled: root.available;
+        }
+        if root.close-supported: MButton {
+            col: root.narrow ? 0 : 1; row: root.narrow ? 1 : 0; colspan: root.narrow ? 2 : 1;
+            geometry-key: "connection-detail-disconnect"; text: @tr("关闭连接"); danger: true;
+            enabled: root.available && !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
+            clicked => { MobileActions.request(MobileIntent.close-connection, root.snapshot.id, ""); }
+        }
+        MButton {
+            col: root.narrow || !root.close-supported ? 1 : 2; row: 0;
+            geometry-key: "connection-detail-back"; text: @tr("返回"); clicked => { MobileView.back(); }
+        }
+    }
+}
 
 component MobileEditorActions inherits HorizontalLayout {
     spacing: MobileTypography.small-gap;
@@ -23,34 +85,56 @@ component MobileEditorActions inherits HorizontalLayout {
 
 export component MobileDetails inherits PageSurface {
     motion-revision: MobileView.detail;
+    property <[DetailItem]> legacy-rows: MobileData.connection-details;
+    property <DetailItem> legacy-identity: root.legacy-rows.length > 0
+        ? root.legacy-rows[root.legacy-rows.length - 1] : { label: "", value: "" };
+    property <bool> legacy-matches: root.legacy-identity.value != "" && root.legacy-identity.value == MobileView.selected-id
+        && (root.legacy-identity.label == "连接 ID" || root.legacy-identity.label == "Connection ID");
     property <bool> scrolling-editor-actions: root.height < 200px * MobileTypography.density;
     property <bool> supports-no-resolve: MobileView.rule-kind == "GEOIP" || MobileView.rule-kind == "IP-CIDR" || MobileView.rule-kind == "IP-CIDR6" || MobileView.rule-kind == "IP-ASN" || MobileView.rule-kind == "RULE-SET";
     property <string> rule-line: (MobileView.rule-kind == "MATCH" ? "MATCH," + MobileView.rule-policy : MobileView.rule-kind + "," + MobileView.rule-payload + "," + MobileView.rule-policy) + (root.supports-no-resolve && MobileView.rule-no-resolve ? ",no-resolve" : "");
     if MobileView.detail == 14: MobileFakeIp { }
     if MobileView.detail == 15: MobileRuleActions { }
     if MobileView.detail == 6: MobileSiteResults { }
-    if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6: VerticalLayout { spacing: MobileTypography.gap;
+    if MobileView.detail == 5: MobileConnectionDetails {
+        width: parent.width; height: parent.height;
+        selected-id: MobileView.selected-id; request: MobileView.connection-detail-request;
+        close-supported: MobileData.connection-detail-snapshots;
+        snapshot: MobileData.connection-detail-snapshots ? MobileData.connection-detail
+            : { id: root.legacy-identity.value, request: self.request,
+                status: root.legacy-matches ? ConnectionDetailStatus.available : ConnectionDetailStatus.unavailable,
+                rows: root.legacy-matches ? root.legacy-rows : [] };
+    }
+    if MobileView.detail != 14 && MobileView.detail != 15 && MobileView.detail != 6 && MobileView.detail != 5: VerticalLayout { spacing: MobileTypography.gap;
         details-scroll := MScroll {
             content-key: MobileView.detail + "/" + MobileView.selected-id + "/" + MobileView.category + "/" + MobileView.claude-section + "/" + MobileView.site-status + "/" + MobileView.log-message;
             property <[length]> viewport: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
             changed viewport => { MobileView.profile-editor-viewport = self.viewport; }
             init => { MobileView.profile-editor-viewport = self.viewport; }
             VerticalLayout { width: root.width; alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
-            if MobileView.detail == 5: MCard {
-                for row[i] in MobileData.connection-details: VerticalLayout { spacing: MobileTypography.small-gap;
-                    MSmall { text: row.label; }
-                    MParagraph { text: row.value; }
-                    if i < MobileData.connection-details.length - 1: MDivider { }
-                }
-            }
             if MobileView.detail == 10: MCard {
                 MTag { text: @tr("完整日志"); tone: 4; }
                 MParagraph { text: MobileView.log-message; }
             }
             if MobileView.detail == 2: MCard {
                 HorizontalLayout { spacing: MobileTypography.small-gap;
-                    MButton { text: @tr("表单"); selected: !MobileView.rule-text-mode; clicked => { MobileActions.request(MobileIntent.rule-text-mode, MobileView.rule-raw, "form"); } }
-                    MButton { text: @tr("规则文本"); selected: MobileView.rule-text-mode; clicked => { if !MobileView.rule-text-mode { MobileView.rule-raw = root.rule-line; } MobileView.rule-text-mode = true; } }
+                    MButton {
+                        geometry-key: "rule-editor-form"; text: @tr("表单"); selected: !MobileView.rule-text-mode;
+                        clicked => {
+                            if MobileView.rule-text-mode {
+                                MobileActions.request(MobileIntent.rule-text-mode, MobileView.rule-raw, "form");
+                            }
+                        }
+                    }
+                    MButton {
+                        geometry-key: "rule-editor-text"; text: @tr("规则文本"); selected: MobileView.rule-text-mode;
+                        clicked => {
+                            if !MobileView.rule-text-mode {
+                                MobileView.rule-raw = root.rule-line;
+                                MobileView.rule-text-mode = true;
+                            }
+                        }
+                    }
                 }
                 if !MobileView.rule-text-mode: VerticalLayout { spacing: MobileTypography.gap;
                     MSmall { text: @tr("规则类型"); }
@@ -131,10 +215,8 @@ export component MobileDetails inherits PageSurface {
             }
             if root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }
         } }
-        if MobileView.detail == 5 || MobileView.detail == 10: HorizontalLayout { spacing: MobileTypography.small-gap;
-            MCopyButton { label: MobileView.detail == 5 ? @tr("复制详情") : @tr("复制全文");
-                value: MobileView.detail == 10 ? MobileView.log-message : "connection:" + MobileView.selected-id;
-            }
+        if MobileView.detail == 10: HorizontalLayout { spacing: MobileTypography.small-gap;
+            MCopyButton { label: @tr("复制全文"); value: MobileView.log-message; }
             MButton { text: @tr("关闭"); clicked => { MobileView.back(); } }
         }
         if !root.scrolling-editor-actions && (MobileView.detail == 2 || MobileView.detail == 3): MobileEditorActions { rule-line: root.rule-line; }

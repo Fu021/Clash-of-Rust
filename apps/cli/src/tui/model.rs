@@ -158,7 +158,7 @@ pub(super) struct State {
     pub saving: bool,
     pub demo: bool,
     pub network_results: Vec<String>,
-    pub network_report: Option<clash_client_core::network_tools::Report>,
+    pub network_outcome: Option<Result<clash_client_core::network_tools::Report>>,
     pub network_tool: usize,
     pub network_options: clash_client_core::network_tools::Options,
     pub form: Option<Form>,
@@ -189,7 +189,7 @@ impl State {
             saving: false,
             demo,
             network_results: Vec::new(),
-            network_report: None,
+            network_outcome: None,
             network_tool: 0,
             network_options: Default::default(),
             form: None,
@@ -287,6 +287,26 @@ impl State {
         self.execution = None;
     }
 
+    pub fn network_report(&self) -> Option<&clash_client_core::network_tools::Report> {
+        self.network_outcome.as_ref()?.as_ref().ok()
+    }
+
+    pub fn clear_network_outcome(&mut self) {
+        self.network_results.clear();
+        self.network_outcome = None;
+    }
+
+    pub fn set_language(&mut self, language: Language) {
+        if self.page == Page::Profiles {
+            let selected = self.selected_node();
+            self.language = language;
+            self.selected = 0;
+            self.restore_selected_node(selected.as_deref());
+        } else {
+            self.language = language;
+        }
+    }
+
     pub fn release_page(&mut self) {
         self.poll = self.demo.then(demo_poll);
         self.group = None;
@@ -299,8 +319,7 @@ impl State {
         self.selected = 0;
         self.confirmation = None;
         self.message = None;
-        self.network_results.clear();
-        self.network_report = None;
+        self.clear_network_outcome();
         self.network_options = Default::default();
         self.form = None;
         self.fake_ip = None;
@@ -367,8 +386,9 @@ impl State {
                 .profiles
                 .iter()
                 .filter(|profile| {
-                    profile.name.to_lowercase().contains(&query)
-                        || profile.id.to_lowercase().contains(&query)
+                    let display_name = crate::output::profile_name(profile, self.language);
+                    profile.id.to_lowercase().contains(&query)
+                        || crate::output::profile_name_matches(profile, display_name, &query)
                 })
                 .map(|profile| profile.id.as_str())
                 .collect(),
@@ -647,7 +667,7 @@ impl State {
                             .text("演示模式：未导出文件", "Demo mode: no file exported")
                             .into(),
                     );
-                } else if self.network_report.is_some() {
+                } else if self.network_report().is_some() {
                     self.message = None;
                     self.form = Some(super::network::export_editor(self.language));
                 } else {
@@ -714,15 +734,13 @@ impl State {
                     (self.network_tool + count - 1) % count
                 };
                 self.selected = 0;
-                self.network_results.clear();
-                self.network_report = None;
+                self.clear_network_outcome();
                 self.network_options = Default::default();
                 self.message = None;
                 return Action::CancelNetwork;
             }
             Key::Escape if self.page == Page::Network => {
-                self.network_results.clear();
-                self.network_report = None;
+                self.clear_network_outcome();
                 self.selected = 0;
                 self.message = None;
                 return Action::CancelNetwork;
@@ -740,8 +758,7 @@ impl State {
             Key::Char('/') if self.page != Page::Home => {
                 if self.page == Page::Network {
                     self.query.clear();
-                    self.network_results.clear();
-                    self.network_report = None;
+                    self.clear_network_outcome();
                 }
                 self.searching = true;
             }
@@ -796,8 +813,7 @@ impl State {
                     return Action::None;
                 }
                 self.selected = 0;
-                self.network_results.clear();
-                self.network_report = None;
+                self.clear_network_outcome();
                 self.message = None;
                 if self.demo {
                     if self.network_tool != 0 {

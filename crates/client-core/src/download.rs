@@ -1,5 +1,5 @@
-//! Shared bounds for streamed Geo and installer bodies.
-use anyhow::{Context, Result};
+//! Shared bounds for streamed subscriptions, Geo data, and installers.
+use anyhow::{Context, Result, ensure};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -25,6 +25,14 @@ impl std::error::Error for SlowTransfer {}
 
 pub async fn response(request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
     response_with_timeout(request, STALL_TIMEOUT).await
+}
+
+pub fn require_complete_response(response: &reqwest::Response) -> Result<()> {
+    ensure!(
+        response.status() != reqwest::StatusCode::PARTIAL_CONTENT,
+        "下载响应不完整（HTTP 206）"
+    );
+    Ok(())
 }
 
 async fn response_with_timeout(
@@ -87,6 +95,7 @@ pub struct Watchdog {
     sample_started: Instant,
     sample_bytes: u64,
     peak_bytes_per_second: f64,
+    last_returned: Option<Instant>,
 }
 
 impl Watchdog {
@@ -99,6 +108,7 @@ impl Watchdog {
             sample_started: now,
             sample_bytes: 0,
             peak_bytes_per_second: 0.0,
+            last_returned: None,
         }
     }
 
@@ -141,9 +151,22 @@ impl Watchdog {
         &mut self,
         response: &mut reqwest::Response,
     ) -> Result<Option<impl AsRef<[u8]> + Send + use<>>> {
+        self.chunk_with_idle_timeout(response, STALL_TIMEOUT).await
+    }
+
+    async fn chunk_with_idle_timeout(
+        &mut self,
+        response: &mut reqwest::Response,
+        idle_timeout: Duration,
+    ) -> Result<Option<impl AsRef<[u8]> + Send + use<>>> {
+        require_complete_response(response)?;
+        if let Some(last_returned) = self.last_returned.take() {
+            let processing_time = Instant::now().duration_since(last_returned);
+            self.window_started += processing_time;
+            self.sample_started += processing_time;
+        }
         // reqwest's per-read timeout alone cannot detect a trickle of tiny chunks.
-        self.check_window(Instant::now())?;
-        let idle_deadline = Instant::now() + STALL_TIMEOUT;
+        let idle_deadline = Instant::now() + idle_timeout;
         loop {
             let deadline = if self.retry_slow {
                 idle_deadline.min(self.window_started + SPEED_WINDOW)
@@ -154,7 +177,10 @@ impl Watchdog {
                 Ok(result) => {
                     let chunk = result.context("下载中断或超时")?;
                     if let Some(bytes) = &chunk {
-                        self.record(bytes.len() as u64, Instant::now());
+                        let now = Instant::now();
+                        self.record(bytes.len() as u64, now);
+                        self.check_window(now)?;
+                        self.last_returned = Some(now);
                     }
                     return Ok(chunk);
                 }
@@ -174,8 +200,294 @@ impl Watchdog {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) async fn serve_responses(
+        responses: Vec<Vec<u8>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for wire in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let size = socket.read(&mut buffer).await.unwrap();
+                    assert!(size > 0 && request.len() + size <= 8192);
+                    request.extend_from_slice(&buffer[..size]);
+                }
+                socket.write_all(&wire).await.unwrap();
+            }
+        });
+        (format!("http://{address}"), server)
+    }
+
+    #[tokio::test]
+    async fn partial_subscription_response_falls_back_to_a_complete_download() {
+        let (proxy, partial) = serve_responses(vec![
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 12\r\nContent-Range: bytes 0-11/29\r\nsubscription-userinfo: upload=1\r\n\r\nproxies: []\n".to_vec(),
+        ])
+        .await;
+        let (origin, complete) = serve_responses(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 29\r\nsubscription-userinfo: upload=2\r\n\r\nproxies: []\nproxy-groups: []\n".to_vec(),
+        ])
+        .await;
+        let url = reqwest::Url::parse(&origin).unwrap();
+        let routes = crate::network::routes(None, Some(proxy));
+        let (raw, usage) = crate::subscription::download_routes(&url, &routes)
+            .await
+            .unwrap();
+        assert_eq!(raw, "proxies: []\nproxy-groups: []\n");
+        assert_eq!(usage.as_deref(), Some("upload=2"));
+        partial.await.unwrap();
+        complete.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn truncated_subscription_reconnects_then_uses_the_next_route() {
+        for truncated in [
+            b"HTTP/1.1 200 OK\r\nContent-Length: 29\r\nConnection: close\r\nsubscription-userinfo: upload=1\r\n\r\nproxies: []\n".as_slice(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nsubscription-userinfo: upload=1\r\n\r\nc\r\nproxies: []\n\r\n".as_slice(),
+        ] {
+            let (proxy, interrupted) =
+                serve_responses(vec![truncated.to_vec(), truncated.to_vec()]).await;
+            let (origin, complete) = serve_responses(vec![
+                b"HTTP/1.1 200 OK\r\nContent-Length: 29\r\nsubscription-userinfo: upload=2\r\n\r\nproxies: []\nproxy-groups: []\n".to_vec(),
+            ])
+            .await;
+            let url = reqwest::Url::parse(&origin).unwrap();
+            let routes = crate::network::routes(None, Some(proxy));
+            let (raw, usage) = tokio::time::timeout(
+                Duration::from_secs(5),
+                crate::subscription::download_routes(&url, &routes),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(raw, "proxies: []\nproxy-groups: []\n");
+            assert_eq!(usage.as_deref(), Some("upload=2"));
+            tokio::time::timeout(Duration::from_secs(2), interrupted)
+                .await
+                .expect("the interrupted route should be attempted twice")
+                .unwrap();
+            complete.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn watchdog_rejects_a_partial_response_before_reading_its_body() {
+        let (origin, server) = serve_responses(vec![
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 0-3/8\r\n\r\ndone".to_vec(),
+        ])
+        .await;
+        let mut response = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(origin),
+        )
+        .await
+        .unwrap();
+        let mut watchdog = Watchdog::new(false);
+        let error = match watchdog.chunk(&mut response).await {
+            Err(error) => error,
+            Ok(_) => panic!("HTTP 206 must not be accepted as a complete response"),
+        };
+        assert!(error.to_string().contains("HTTP 206"), "{error:#}");
+        assert!(!retry_same_route(&error, 0));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn final_slow_route_still_times_out_when_the_body_stops() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\na")
+                .await
+                .unwrap();
+            match socket.read(&mut request).await {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) => {}
+                result => panic!("download connection remained open: {result:?}"),
+            }
+        });
+        let mut response = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}/package")),
+        )
+        .await
+        .unwrap();
+        let mut watchdog = Watchdog::new(false);
+        assert_eq!(
+            watchdog
+                .chunk(&mut response)
+                .await
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            b"a"
+        );
+        let processing_time = SPEED_WINDOW + Duration::from_secs(1);
+        watchdog.window_started -= processing_time;
+        watchdog.sample_started -= processing_time;
+        watchdog.last_returned = watchdog
+            .last_returned
+            .map(|instant| instant - processing_time);
+        let started = Instant::now();
+        let idle_timeout = Duration::from_millis(100);
+        let error = match tokio::time::timeout(
+            Duration::from_secs(3),
+            watchdog.chunk_with_idle_timeout(&mut response, idle_timeout),
+        )
+        .await
+        .unwrap()
+        {
+            Err(error) => error,
+            Ok(_) => panic!("stalled download must time out"),
+        };
+        assert!(started.elapsed() >= idle_timeout);
+        assert!(error.to_string().contains("没有收到数据"), "{error:#}");
+        assert!(retryable(&error));
+        drop(response);
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn completed_body_does_not_retry_when_the_caller_checks_eof_after_the_speed_window() {
+        let (origin, server) = serve_responses(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone".to_vec(),
+        ])
+        .await;
+        let mut response = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(origin),
+        )
+        .await
+        .unwrap();
+        let mut watchdog = Watchdog::new(true);
+        let bytes = watchdog.chunk(&mut response).await.unwrap().unwrap();
+        assert_eq!(bytes.as_ref(), b"done");
+
+        watchdog.window_started = Instant::now() - SPEED_WINDOW;
+        assert!(watchdog.chunk(&mut response).await.unwrap().is_none());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn caller_processing_time_does_not_trigger_a_slow_download_retry() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (resume, resume_rx) = tokio::sync::oneshot::channel();
+        let (sent, sent_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nfirst")
+                .await
+                .unwrap();
+            resume_rx.await.unwrap();
+            socket.write_all(b"end").await.unwrap();
+            sent.send(()).unwrap();
+        });
+        let mut response = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}/package")),
+        )
+        .await
+        .unwrap();
+        let mut watchdog = Watchdog::new(true);
+        assert_eq!(
+            watchdog
+                .chunk(&mut response)
+                .await
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            b"first"
+        );
+        let processing_time = SPEED_WINDOW + Duration::from_secs(1);
+        watchdog.window_started -= processing_time;
+        watchdog.sample_started -= processing_time;
+        watchdog.last_returned = watchdog
+            .last_returned
+            .map(|instant| instant - processing_time);
+        resume.send(()).unwrap();
+        sent_rx.await.unwrap();
+
+        assert_eq!(
+            watchdog
+                .chunk(&mut response)
+                .await
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            b"end"
+        );
+        assert!(watchdog.chunk(&mut response).await.unwrap().is_none());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_ready_chunk_counts_toward_the_expired_speed_window() {
+        let body = vec![b'.'; 8 * 1024];
+        let mut wire =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        wire.extend_from_slice(&body);
+        let (origin, server) = serve_responses(vec![wire]).await;
+        let mut response = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(origin),
+        )
+        .await
+        .unwrap();
+        let mut watchdog = Watchdog::new(true);
+        watchdog.window_started = Instant::now() - SPEED_WINDOW;
+        watchdog.window_bytes = MIN_BYTES_PER_SECOND * SPEED_WINDOW.as_secs() - 1;
+
+        let mut received = Vec::new();
+        let first = watchdog.chunk(&mut response).await.unwrap().unwrap();
+        assert_eq!(watchdog.window_bytes, 0);
+        received.extend_from_slice(first.as_ref());
+        while let Some(chunk) = watchdog.chunk(&mut response).await.unwrap() {
+            received.extend_from_slice(chunk.as_ref());
+        }
+        assert_eq!(received, body);
+        server.await.unwrap();
+    }
 
     #[tokio::test]
     async fn tls_eof_keeps_the_transport_cause_available_for_bounded_reconnect() {

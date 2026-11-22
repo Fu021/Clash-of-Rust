@@ -33,10 +33,12 @@ public final class VpnTileService extends TileService {
     private void update() {
         Tile tile=getQsTile();
         if (tile!=null) {
-            tile.setState(TunnelService.connected() || TunnelService.pending()?Tile.STATE_ACTIVE:Tile.STATE_INACTIVE);
+            boolean recovery = TunnelService.recoveryRequired(this) || TunnelService.forwardingHeld();
+            tile.setState(!recovery && (TunnelService.connected() || TunnelService.pending()) ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
             tile.setLabel("Clash of Rust");
             if (Build.VERSION.SDK_INT>=29) tile.setSubtitle(AppLanguage.current(this).getString(
-                TunnelService.connected()?R.string.vpn_connected:TunnelService.pending()?R.string.vpn_connecting:R.string.vpn_disconnected));
+                recovery ? R.string.protection_unconfirmed : TunnelService.connected() ? R.string.vpn_connected
+                    : TunnelService.pending() ? R.string.vpn_connecting : R.string.vpn_disconnected));
             tile.updateTile();
         }
     }
@@ -46,7 +48,8 @@ public final class VpnTileService extends TileService {
     }
     @SuppressWarnings("deprecation")
     private void toggle() {
-        if (TunnelService.connected() || TunnelService.pending()) {
+        boolean recovery = TunnelService.recoveryRequired(this) || TunnelService.forwardingHeld();
+        if (!recovery && (TunnelService.connected() || TunnelService.pending())) {
             try {
                 if (CoreBridge.protectedMode(this)) {
                     Context localized=AppLanguage.current(this);
@@ -59,12 +62,12 @@ public final class VpnTileService extends TileService {
             }
             TunnelService.stop(this); return;
         }
-        if (VpnService.prepare(this)==null && (CoreBridge.ready() || CoreBridge.restorable(this))) {
+        if (!recovery && VpnService.prepare(this)==null && (CoreBridge.ready() || CoreBridge.restorable(this))) {
             // TunnelService restores the persisted core itself. A cold process
             // is not a reason to bring the Activity in front of the user's app.
             TunnelService.start(this,false);
         } else {
-            Intent open=new Intent(this,MainActivity.class).setAction(CONNECT)
+            Intent open=new Intent(this,MainActivity.class).setAction(recovery ? Intent.ACTION_MAIN : CONNECT)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
             if (Build.VERSION.SDK_INT>=34) startActivityAndCollapse(PendingIntent.getActivity(this,3,open,
                 PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT));

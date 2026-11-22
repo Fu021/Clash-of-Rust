@@ -185,12 +185,12 @@ export component Preview inherits AppWindow {
         UiData.network-results = PreviewNetwork.results(root.preview-network-tool);
         UiData.node-sort = 2;
         UiData.sites-started = true; UiData.site-progress = "完成 182 / 182"; UiData.site-fraction = 1;
-        UiData.site-counts = [{id: "确认可用", label: "确认可用 74"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 47"}];
+        UiData.site-counts = [{id: "确认可用", label: "确认可用 73"}, {id: "部分可用", label: "部分可用 1"}, {id: "仅网页可达", label: "仅网页可达 20"}, {id: "信息已识别", label: "信息已识别 5"}, {id: "不可用或受限", label: "不可用或受限 36"}, {id: "结果未确认", label: "结果未确认 47"}];
         UiData.site-summary = "Cloudflare 探针出口：203.0.113.42 · 各平台识别到 6 个地区";
         UiData.site-exit-country = "香港"; UiData.site-exit-flagged = true; UiData.site-exit-flag = "🇨🇳";
         UiData.site-category = "全部分类"; UiData.site-status = "全部结果"; UiData.site-region = "全部识别地区";
         UiData.site-category-options = ["全部分类", "AI", "流媒体", "社交"];
-        UiData.site-status-options = ["全部结果", "确认可用", "仅网页可达", "信息已识别", "不可用或受限", "结果未确认"];
+        UiData.site-status-options = ["全部结果", "确认可用", "部分可用", "仅网页可达", "信息已识别", "不可用或受限", "结果未确认"];
         UiData.site-region-options = ["全部识别地区", "未识别地区", "德国", "香港", "台湾"];
         UiData.site-results = [
             {id: "chatgpt", title: "ChatGPT", value: "仅网页可达 · 固定演示结果", detail: "同域出口：203.0.113.13 · 美国", country: "美国", flag: "🇺🇸", flagged: true, source: "美国", tone: 2, delay: "1295 ms", delay-tone: 3},
@@ -200,9 +200,9 @@ export component Preview inherits AppWindow {
             {id: "netflix", title: "Netflix", value: "确认可用 · 固定演示结果", country: "香港", flag: "🇨🇳", flagged: true, source: "香港", tone: 1, delay: "128 ms", delay-tone: 1}
         ];
         UiData.categories = [
-            {left: {id: "AI", title: "AI", count: "3 / 4", detail: "确认可用 2 · 网页可达 1 · 受限 1", tone: 2}, right: {id: "全球", title: "全球", count: "16 / 19", detail: "确认可用 14 · 网页可达 2 · 受限 3", tone: 2}},
-            {left: {id: "日本", title: "日本", count: "8 / 12", detail: "确认可用 6 · 网页可达 2 · 受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "9 / 13", detail: "确认可用 8 · 网页可达 1 · 受限 4", tone: 2}},
-            {left: {id: "欧洲", title: "欧洲", count: "12 / 12", detail: "确认可用 12 · 网页可达 0 · 受限 0", tone: 1}, right: {id: "台湾", title: "台湾", count: "8 / 13", detail: "确认可用 8 · 网页可达 0 · 受限 5", tone: 2}}];
+            {left: {id: "AI", title: "AI", count: "4", detail: "确认可用 1 · 部分可用 1 · 仅网页可达 1 · 结果未确认 1", tone: 1}, right: {id: "全球", title: "全球", count: "19", detail: "确认可用 14 · 仅网页可达 2 · 不可用或受限 3", tone: 2}},
+            {left: {id: "日本", title: "日本", count: "12", detail: "确认可用 6 · 仅网页可达 2 · 不可用或受限 4", tone: 2}, right: {id: "香港", title: "香港", count: "13", detail: "确认可用 8 · 仅网页可达 1 · 不可用或受限 4", tone: 2}},
+            {left: {id: "欧洲", title: "欧洲", count: "12", detail: "确认可用 12", tone: 1}, right: {id: "台湾", title: "台湾", count: "13", detail: "确认可用 8 · 不可用或受限 5", tone: 2}}];
         UiData.claude-normal = "5"; UiData.claude-risk = "3"; UiData.claude-clues = "5";
         UiData.claude-status = "检测完成 · 浏览器自动采样已回传";
         root.refresh-report();

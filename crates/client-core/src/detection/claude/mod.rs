@@ -676,31 +676,36 @@ pub async fn locate(client: &Client, ip: &str) -> Option<(String, String)> {
 
 pub fn public_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => {
-            !(ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.octets()[0] == 0
-                || ip.octets()[0] >= 240
-                || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
-                || (ip.octets()[0] == 198 && matches!(ip.octets()[1], 18 | 19)))
-        }
+        IpAddr::V4(ip) => match ip.octets() {
+            [192, 0, 0, 9 | 10] => true,
+            [0 | 224..=255, ..]
+            | [100, 64..=127, ..]
+            | [192, 0, 0, _]
+            | [192, 88, 99, _]
+            | [198, 18 | 19, ..] => false,
+            _ => {
+                !(ip.is_private()
+                    || ip.is_loopback()
+                    || ip.is_link_local()
+                    || ip.is_documentation())
+            }
+        },
         IpAddr::V6(ip) => {
             if let Some(v4) = ip.to_ipv4_mapped() {
                 return public_ip(IpAddr::V4(v4));
             }
-            let octets = ip.octets();
-            octets[0] & 0xe0 == 0x20
-                && !(ip.is_loopback()
-                    || ip.is_unspecified()
-                    || ip.is_multicast()
-                    || octets[0] & 0xfe == 0xfc
-                    || (octets[0] == 0xfe && octets[1] & 0xc0 == 0x80)
-                    || (octets[..4] == [0x20, 0x01, 0x0d, 0xb8]))
+            match ip.segments() {
+                [0x64, 0xff9b, 0, 0, 0, 0, high, low] => {
+                    let bits = (u32::from(high) << 16) | u32::from(low);
+                    public_ip(IpAddr::V4(std::net::Ipv4Addr::from_bits(bits)))
+                }
+                [0x2001, 1, 0, 0, 0, 0, 0, 1..=3]
+                | [0x2001, 3, ..]
+                | [0x2001, 4, 0x112, ..]
+                | [0x2001, 0x20..=0x3f, ..] => true,
+                [0x2001, 0..=0x1ff | 0xdb8, ..] | [0x2002, ..] | [0x3fff, 0..=0xfff, ..] => false,
+                [first, ..] => (0x2000..=0x3fff).contains(&first),
+            }
         }
     }
 }
@@ -1063,6 +1068,56 @@ mod tests {
             "challenge page",
         ] {
             assert!(parse_trace(body, "claude.ai").is_none());
+        }
+    }
+
+    #[test]
+    fn public_ip_honors_iana_special_use_ranges_and_more_specific_exceptions() {
+        for (fixture, expected) in [
+            ("192.0.0.8", false),
+            ("192.0.0.9", true),
+            ("192.0.0.10", true),
+            ("192.0.0.11", false),
+            ("192.0.0.170", false),
+            ("192.88.99.1", false),
+            ("192.88.99.2", false),
+            ("192.31.196.1", true),
+            ("192.52.193.1", true),
+            ("192.175.48.1", true),
+            ("224.0.0.1", false),
+            ("240.0.0.1", false),
+            ("255.255.255.255", false),
+            ("::ffff:192.0.0.8", false),
+            ("::ffff:192.0.0.9", true),
+            ("64:ff9b::192.0.0.9", true),
+            ("64:ff9b::192.0.0.8", false),
+            ("64:ff9b:1::192.0.0.9", false),
+            ("100::1", false),
+            ("100:0:0:1::1", false),
+            ("2001::1", false),
+            ("2001:1::1", true),
+            ("2001:1::2", true),
+            ("2001:1::3", true),
+            ("2001:1::4", false),
+            ("2001:2::1", false),
+            ("2001:3::1", true),
+            ("2001:4:112::1", true),
+            ("2001:4:113::1", false),
+            ("2001:10::1", false),
+            ("2001:20::1", true),
+            ("2001:3f::1", true),
+            ("2001:40::1", false),
+            ("2001:200::1", true),
+            ("2001:db8::1", false),
+            ("2002::1", false),
+            ("2620:4f:8000::1", true),
+            ("3fff::1", false),
+            ("3fff:fff::1", false),
+            ("3fff:1000::1", true),
+            ("5f00::1", false),
+            ("ff0e::1", false),
+        ] {
+            assert_eq!(public_ip(fixture.parse().unwrap()), expected, "{fixture}");
         }
     }
     #[test]

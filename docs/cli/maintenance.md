@@ -13,7 +13,7 @@ GUI、CLI 与 TUI 的网络工具、参数、平台限制和错误结果见[网�
 | `config check` | 校验实际合并配置 |
 | `config effective [-o FILE]` | 查看运行配置；完整内容需 `--show-secrets` |
 | `diagnose [--url URL --host DOMAIN --offline -o FILE] [--all-users]` | 网络检测或离线现场采集；Linux root 用 `--all-users` 只读核对跨用户 TUN 持有进程；[报告与日志边界](runtime.md#故障反馈与诊断报告) |
-| `dns DOMAIN [--system]` | 默认内核/代理解析，显式 `--system` 使用系统解析 |
+| `dns DOMAIN [--system]` | 默认只查内核，显式 `--system` 使用系统解析 |
 | `network check URL` | 与界面共享网址检查：系统与内核 DNS、代理端口、网站响应及本次请求线路；支持 `--json` |
 | `ip-check list [--category NAME --filter TEXT]` | 查看内置检测项目与 ID |
 | `ip-check [ID] [--category NAME -o FILE]` | 全部、分类或单项测试；最多同时执行 3 项 |
@@ -33,7 +33,9 @@ GUI、CLI 与 TUI 的网络工具、参数、平台限制和错误结果见[网�
 
 检测完成的退出码为 0，可用性与风险应读取报告字段，不能只看退出码。检测报告表示真实观察结果；单项检测失败记为 Failed，不将网络失败当作“可用”。浏览器采样需要用户打开本机入口，在没有真实浏览器的 SSH 会话中不会伪造 WebRTC/指纹结果。报告不读取 Claude 账户 Cookie、令牌或登录内容。项目审计使用 CLI 所在的当前工作目录和终端环境，不套用 GUI/后台启动时的环境。
 
-`ip-check` 的 Claude 和 ChatGPT 同域探针可显示各自出口；没有有效结果时保持未确认，JSON 的 `target_exit` 为空。测量及隐私边界见[原生 IP 与平台检测](../../resources/ip-check/SOURCE.md)。
+`ip-check` 各服务可显示对应的同域探针出口；没有有效结果时保持未确认，JSON 的 `target_exit` 为空。通用出口查询直接显示查询结果。测量及隐私边界见[原生 IP 与平台检测](../../resources/ip-check/SOURCE.md)。
+
+`dns` 的查询路径见[保护与 DNS](../claude-protection.md#dns-与-tailscale)。默认查询成功后，JSON 保留历史来源值 `core/proxy`，文本显示「内核 DNS」。
 
 `diagnose` 不会启动后台或恢复 TUN；后台未运行时仍检查系统 DNS、无代理环境变量的系统路由 HTTP，以及 Linux 的示例目标路由。内核运行时再检查其 DNS、本地代理和 IPv4/IPv6 出口。`--host` 和 `--url` 可指定故障服务的域名与 HTTP(S) 地址；返回 401、403 等也只是 HTTP 状态，不表示该服务已可登录或正常使用。报告只列出常见代理环境变量是否存在，不显示其值。两个路径的结果、域名及路由可能不同；故障排查和手动刷新边界见[联网恢复](../agent-failures/network-recovery.md#长时间运行后的服务不可达)。
 

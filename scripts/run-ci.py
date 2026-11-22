@@ -48,6 +48,7 @@ def main():
                 ('clash-client-runtime', ['--lib'], 'platform::linux_startup::'),
                 ('clash-client-runtime', ['--lib'], 'platform::cli_service::'),
                 ('clash-client-runtime', ['--lib'], 'platform::host_network::'),
+                ('clash-client-runtime', ['--lib'], 'engine::startup_tests::'),
                 ('clash-client-runtime', ['--lib'], 'control::tests::'),
                 ('clash-cli', ['--bin', 'cor'], '')):
             run(['cargo', 'test', '-p', package, *target, '--release', '--locked',
@@ -90,6 +91,7 @@ def main():
                      'application::ui_tests::subscription_usage_changes_language_without_altering_metadata',
                      'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
                      'application::ui_tests::english_desktop_validation_and_errors_follow_language',
+                     'application::ui_tests::rule_warnings_follow_the_desktop_language_without_changing_rule_data',
                      'application::ui_tests::english_shared_errors_are_projected_without_changing_drafts_or_evidence',
                      'application::ui_tests::geo_failure_follows_the_current_language_and_keeps_external_details',
                      'application::ui_tests::profile_edit_closes_on_success_independently_of_presentation_language',
@@ -138,6 +140,7 @@ def main():
                 ('clash-client-core', ['--lib'], ['']),
                 ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::',
                                                'output::tests::localized_errors_translate_known_protection_message_and_preserve_external_values',
+                                               'output::tests::english_network_check_preserves_probe_errors_and_route_data',
                                                'output::tests::english_network_report_translates_known_evidence_without_rewriting_external_values']),
                 ('clash-client-runtime', ['--lib'],
                  ['control::dispatch::tests::', 'control::transport::tests::']

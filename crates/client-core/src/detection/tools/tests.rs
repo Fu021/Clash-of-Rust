@@ -318,6 +318,102 @@ fn english_network_results_translate_generated_values_only() {
     }
 }
 
+#[test]
+fn english_website_check_translates_only_known_probe_details() {
+    for (label, code, detail, expected) in [
+        (
+            "HTTPS",
+            "not_observed",
+            "内核未运行，未发起请求",
+            "Core is not running; request not sent",
+        ),
+        (
+            "内核 DNS",
+            "probe_failed",
+            "未查到目标地址",
+            "No addresses found for the target",
+        ),
+        (
+            "内核 DNS",
+            "probe_failed",
+            "未查到目标地址：外部错误",
+            "未查到目标地址：外部错误",
+        ),
+        (
+            "系统 DNS",
+            "ok",
+            "192.0.2.1、2001:db8::1",
+            "192.0.2.1, 2001:db8::1",
+        ),
+        ("内核 DNS", "ok", "地址、外部字段", "地址、外部字段"),
+        (
+            "实际线路",
+            "ok",
+            "東京节点 · 命中 DOMAIN (example.test)",
+            "東京节点 · 命中 DOMAIN (example.test)",
+        ),
+    ] {
+        assert_eq!(
+            entry_detail_in(label, detail, code, Language::English),
+            expected
+        );
+        assert_eq!(
+            entry_detail_in(label, detail, code, Language::SimplifiedChinese),
+            detail
+        );
+    }
+    let addresses: Vec<_> = (1..=16).map(|index| format!("192.0.2.{index}")).collect();
+    assert_eq!(
+        entry_detail_in(
+            "系统 DNS",
+            &format!("{}（另有 2 项）", addresses.join("、")),
+            "ok",
+            Language::English,
+        ),
+        format!("{} (2 more)", addresses.join(", "))
+    );
+}
+
+#[test]
+fn english_route_uses_structured_translation_without_changing_exported_evidence() {
+    let report = Report {
+        schema: 1,
+        tool: Tool::Website,
+        target: "https://example.test".into(),
+        elapsed_ms: 1,
+        status: "complete",
+        entries: vec![from_check(
+            "实际线路",
+            probe::DiagnosticCheck {
+                success: Some(true),
+                detail: "节点 · 命中 名称 · 命中 DomainSuffix (规则 · 命中 原文)".into(),
+                detail_english: Some(
+                    "节点 · 命中 名称 · Matched DomainSuffix (规则 · 命中 原文)".into(),
+                ),
+            },
+        )],
+    };
+    let original = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        report.lines_in(Language::SimplifiedChinese)[2],
+        "实际线路 · 节点 · 命中 名称 · 命中 DomainSuffix (规则 · 命中 原文)"
+    );
+    assert_eq!(
+        report.lines_in(Language::English)[2],
+        "Route · 节点 · 命中 名称 · Matched DomainSuffix (规则 · 命中 原文)"
+    );
+    assert_eq!(serde_json::to_value(&report).unwrap(), original);
+    assert!(original["entries"][0].get("detail_english").is_none());
+
+    let mut display = report.clone();
+    display.localize_route_for_display(Language::English);
+    assert_eq!(
+        display.entries[0].detail,
+        "节点 · 命中 名称 · Matched DomainSuffix (规则 · 命中 原文)"
+    );
+    assert_eq!(serde_json::to_value(&report).unwrap(), original);
+}
+
 #[tokio::test]
 async fn protection_rejects_raw_probes_before_opening_any_socket() {
     for tool in [Tool::Udp, Tool::Ping, Tool::Trace] {

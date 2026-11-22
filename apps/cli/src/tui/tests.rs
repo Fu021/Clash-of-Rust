@@ -1,8 +1,9 @@
 use super::{
     input::{Decoder, Key, Utf16Decoder},
     model::{Action, Page, State, Target, demo_poll},
-    render,
+    operation_failure, render,
 };
+use clash_client_core::config::Language;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 #[path = "fake_ip_tests.rs"]
@@ -29,6 +30,20 @@ fn prototype_preserves_machine_commands_and_rejects_machine_output_for_ui() {
         assert!(crate::args::parse(input.into_iter().map(str::to_string)).is_ok());
     }
     assert!(crate::args::parse(["ui", "--json"].into_iter().map(str::to_string)).is_err());
+}
+
+#[test]
+fn command_failure_localizes_known_context_and_preserves_external_detail() {
+    let detail = "上游响应：示例名称；原始详情";
+    let error = anyhow::anyhow!("{detail}").context("订阅下载失败");
+    assert_eq!(
+        operation_failure(&error, Language::English),
+        format!("Operation failed: Subscription download failed: {detail}")
+    );
+    assert_eq!(
+        operation_failure(&error, Language::SimplifiedChinese),
+        format!("操作失败：订阅下载失败: {detail}")
+    );
 }
 
 #[test]

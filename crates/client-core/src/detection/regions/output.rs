@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
+use crate::ip_report::NATIVE_REGION_DETAIL_PREFIX;
 fn strip_ansi(text: &str) -> String {
     let mut chars = text.chars().peekable();
     let mut output = String::new();
@@ -76,8 +77,9 @@ pub(super) fn parse_output(text: &str) -> CheckResult {
         state,
         summary: summary.into(),
         country,
-        millis: 0,
-        detail: format!("原生地区检测结果：{value}"),
+        millis: None,
+        authentication_check_skipped: false,
+        detail: format!("{NATIVE_REGION_DETAIL_PREFIX}{value}"),
         target_exit: None,
     }
 }
@@ -88,17 +90,72 @@ mod tests {
 
     #[test]
     fn result_semantics_keep_region_partial_access_and_failures_distinct() {
-        for (output, state) in [
-            ("Platform: JP", State::Identified),
-            ("Platform: Yes (Region: JP)", State::Confirmed),
-            ("Platform: Originals Only", State::Partial),
-            ("Platform: Web Only", State::Partial),
-            ("Platform: Web Reachable", State::Reachable),
-            ("Platform: No (Unsupported Region)", State::Restricted),
-            ("Platform: Failed (Network Connection)", State::Failed),
-            ("Platform: Unexpected response", State::Unknown),
+        use crate::{
+            config::Language,
+            ip_report::{self, Status},
+        };
+
+        let service = Service {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            group: "Fixture".into(),
+            url: "https://fixture.example".into(),
+        };
+        for (evidence, state, english_summary) in [
+            ("JP", State::Identified, "Region identified"),
+            ("Yes (Region: JP)", State::Confirmed, "Available"),
+            ("Originals Only", State::Partial, "Originals only"),
+            ("Web Only", State::Partial, "Website only"),
+            ("Web Reachable", State::Reachable, "Website reachable"),
+            (
+                "No (Unsupported Region)",
+                State::Restricted,
+                "Unsupported region",
+            ),
+            (
+                "No (Disallowed ISP)",
+                State::Restricted,
+                "Exit network restricted",
+            ),
+            (
+                "No (Blocked)",
+                State::Unknown,
+                "Request blocked · Unconfirmed",
+            ),
+            ("No", State::Restricted, "Unavailable or restricted"),
+            ("Failed (Network Connection)", State::Failed, "Check failed"),
+            (
+                "Unexpected response",
+                State::Unknown,
+                "Check failed or result unconfirmed",
+            ),
+            ("上游原始结果", State::Unknown, "Check information returned"),
         ] {
-            assert_eq!(parse_output(output).state, state, "{output}");
+            let result = parse_output(&format!("Platform: {evidence}"));
+            assert_eq!(result.state, state, "{evidence}");
+            let outcome = Ok(result);
+            let result = outcome.as_ref().unwrap();
+            let status = Status::of(Some(&outcome));
+            assert_eq!(
+                status.summary_in(&result.summary, Language::English),
+                english_summary
+            );
+            assert_eq!(
+                status.summary_in(&result.summary, Language::SimplifiedChinese),
+                result.summary
+            );
+            let raw_detail = format!("原生地区检测结果：{evidence}");
+            assert_eq!(
+                ip_report::detail_in(&service, &outcome, Language::English),
+                format!("Native region check result: {evidence}")
+            );
+            assert_eq!(
+                ip_report::detail_in(&service, &outcome, Language::SimplifiedChinese),
+                raw_detail
+            );
+            let json = crate::support::ip_result(result);
+            assert_eq!(json["summary"], result.summary);
+            assert_eq!(json["detail"], raw_detail);
         }
     }
 }

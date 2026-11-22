@@ -1,8 +1,127 @@
 //! A small aggregate over the single set of platform results.
+use crate::config::Language;
 use crate::ip_check::{self, CheckResult, State};
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 pub type ResultSlot = Option<Result<CheckResult, String>>;
+pub(crate) const NATIVE_REGION_DETAIL_PREFIX: &str = "原生地区检测结果：";
+
+pub fn no_response_measurement_in(language: Language) -> &'static str {
+    language.text("无响应测量", "No response measurement")
+}
+
+pub fn authentication_check_skipped_in(language: Language) -> &'static str {
+    language.text("未执行认证检测", "Authentication check was not run")
+}
+
+pub fn country_in(country: &str, authentication_check_skipped: bool, language: Language) -> &str {
+    if authentication_check_skipped && country == "未提供" {
+        language.text("未提供", "Not provided")
+    } else {
+        country
+    }
+}
+
+pub fn response_duration_in(result: &CheckResult, language: Language) -> String {
+    if result.authentication_check_skipped {
+        no_response_measurement_in(language).into()
+    } else {
+        result
+            .response_millis()
+            .map_or_else(String::new, |millis| format!("{millis} ms"))
+    }
+}
+
+pub fn list_detail_in(
+    service: &ip_check::Service,
+    outcome: Option<&Result<CheckResult, String>>,
+    language: Language,
+) -> String {
+    let exit = target_exit_detail_in(service, outcome, language);
+    if matches!(outcome, Some(Ok(result)) if result.authentication_check_skipped) {
+        with_target_exit(no_response_measurement_in(language), exit).into_owned()
+    } else {
+        exit.unwrap_or_default()
+    }
+}
+
+pub fn detail_in<'a>(
+    service: &ip_check::Service,
+    outcome: &'a Result<CheckResult, String>,
+    language: Language,
+) -> Cow<'a, str> {
+    match outcome {
+        Ok(result) if result.authentication_check_skipped => with_target_exit(
+            authentication_check_skipped_in(language),
+            target_exit_detail_in(service, Some(outcome), language),
+        ),
+        Ok(result) if language == Language::English => {
+            let observed = result.target_exit.as_ref();
+            if let Some(host) = ip_check::target_host(service)
+                && observed.is_none_or(|exit| exit.host == host)
+                && let Some(evidence) = result
+                    .detail
+                    .strip_suffix(&ip_check::target_exit_evidence_suffix(&host, observed))
+            {
+                let evidence = english_check_detail(service, result, evidence);
+                let value =
+                    observed.map_or_else(|| "Unconfirmed".to_owned(), |exit| exit.ip.to_string());
+                return Cow::Owned(format!(
+                    "{evidence}\nSame-domain probe exit ({host}): {value}"
+                ));
+            }
+            english_check_detail(service, result, &result.detail)
+        }
+        Ok(result) => Cow::Borrowed(&result.detail),
+        Err(error) => Cow::Borrowed(error),
+    }
+}
+
+fn english_check_detail<'a>(
+    service: &ip_check::Service,
+    result: &CheckResult,
+    detail: &'a str,
+) -> Cow<'a, str> {
+    if result.state == State::Failed && result.summary == ip_check::PLATFORM_ERROR_WITH_EXIT_SUMMARY
+    {
+        return Cow::Borrowed(detail);
+    }
+    if let Some(evidence) = detail.strip_prefix(NATIVE_REGION_DETAIL_PREFIX) {
+        return Cow::Owned(format!("Native region check result: {evidence}"));
+    }
+    if service.id == "github"
+        && let Some((status, phrase)) = detail
+            .strip_prefix("HTTP ")
+            .and_then(|detail| detail.split_once(" · "))
+        && reqwest::StatusCode::from_bytes(status.as_bytes()).is_ok()
+    {
+        let english = match phrase {
+            ip_check::BASIC_HTTP_DETAIL => "Basic HTTP response check",
+            ip_check::REGIONAL_HTTP_DETAIL => "Service reported a regional restriction",
+            _ => return Cow::Borrowed(detail),
+        };
+        return Cow::Owned(format!("HTTP {status} · {english}"));
+    }
+    if service.id == "exit-ip"
+        && let Some((family, status)) = detail
+            .strip_prefix(ip_check::EXIT_IP_DETAIL_PREFIX)
+            .and_then(|detail| detail.split_once(" · HTTP "))
+        && matches!(family, "IPv4" | "IPv6")
+        && reqwest::StatusCode::from_bytes(status.as_bytes()).is_ok_and(|code| code.is_success())
+    {
+        return Cow::Owned(format!(
+            "Core egress IP observed by Cloudflare · {family} · HTTP {status}"
+        ));
+    }
+    Cow::Borrowed(detail)
+}
+
+fn with_target_exit(text: &str, exit: Option<String>) -> Cow<'_, str> {
+    match exit {
+        Some(exit) => Cow::Owned(format!("{text}\n{exit}")),
+        None => Cow::Borrowed(text),
+    }
+}
 
 pub fn target_exit_detail(
     service: &ip_check::Service,
@@ -164,10 +283,38 @@ impl Status {
     }
 
     pub fn summary_in(self, summary: &str, language: crate::config::Language) -> &str {
-        if language == crate::config::Language::English && self.summary_is_generic(summary) {
-            self.label_in(language)
-        } else {
-            summary
+        if language != Language::English {
+            return summary;
+        }
+        if self.summary_is_generic(summary) {
+            return self.label_in(language);
+        }
+        match (self, summary) {
+            (Self::Available, "可用") => self.label_in(language),
+            (Self::Partial, "仅网页可用") => "Website only",
+            (Self::Partial, "仅自制内容") => "Originals only",
+            (Self::Reachable, "可达 · 解锁未确认") => "Reachable · Unlock unconfirmed",
+            (Self::Identified, "已识别地区") => "Region identified",
+            (Self::Identified, "已获取地区或网络信息") => {
+                "Region or network information retrieved"
+            }
+            (Self::Restricted, "地区不支持") => "Unsupported region",
+            (Self::Restricted, "出口网络受限") => "Exit network restricted",
+            (Self::Restricted, "地区受限") => "Region restricted",
+            (Self::Restricted, "访问受限") => "Access restricted",
+            (Self::Restricted, "请求限流") => "Rate limited",
+            (Self::Unknown, "检测失败或结果未确认") => {
+                "Check failed or result unconfirmed"
+            }
+            (Self::Unknown, "请求被拦截，未确认") => "Request blocked · Unconfirmed",
+            (Self::Unknown, "已返回检测信息") => "Check information returned",
+            (Self::Unknown, "验证拦截，未确认") => "Browser verification blocked the check",
+            (Self::Unknown, "请求被拒绝，未确认") => "Request denied · Unconfirmed",
+            (Self::Unknown, "未确认可用性") => "Availability unconfirmed",
+            (Self::Failed, "检测失败") => "Check failed",
+            (Self::Failed, "请求失败，未确认") => "Request failed · Unconfirmed",
+            (Self::Failed, "检测失败，未确认") => "Check failed · Unconfirmed",
+            _ => summary,
         }
     }
 }
@@ -194,7 +341,18 @@ impl Counts {
         self.total() - self.count(Status::Untested)
     }
 
-    /// Green and yellow outcomes; this is not a count of confirmed unlocks.
+    pub fn summary_in(&self, language: Language) -> String {
+        Status::ALL
+            .into_iter()
+            .filter_map(|status| {
+                let count = self.count(status);
+                (count > 0).then(|| format!("{} {count}", status.label_in(language)))
+            })
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    /// Historical CLI JSON v1 aggregate.
     pub fn non_red(&self) -> usize {
         self.count(Status::Available)
             + self.count(Status::Partial)
@@ -221,7 +379,8 @@ impl Report {
             categories: Vec::with_capacity(15),
         };
         for (index, service) in ip_check::services().iter().enumerate() {
-            let status = Status::of(results.get(index).and_then(Option::as_ref));
+            let outcome = results.get(index).and_then(Option::as_ref);
+            let status = Status::of(outcome);
             report.totals.0[status as usize] += 1;
             let category = match report
                 .categories
@@ -252,7 +411,8 @@ mod tests {
             state,
             summary: String::new(),
             country: String::new(),
-            millis: 1,
+            millis: Some(1),
+            authentication_check_skipped: false,
             detail: String::new(),
             target_exit: None,
         }))
@@ -278,6 +438,54 @@ mod tests {
             Status::Reachable.summary_in("网页可达", Language::SimplifiedChinese),
             "网页可达"
         );
+    }
+
+    #[test]
+    fn application_check_summaries_are_translated_only_as_whole_known_values() {
+        for (status, raw, english) in [
+            (
+                Status::Reachable,
+                "可达 · 解锁未确认",
+                "Reachable · Unlock unconfirmed",
+            ),
+            (
+                Status::Identified,
+                "已获取地区或网络信息",
+                "Region or network information retrieved",
+            ),
+            (Status::Restricted, "地区受限", "Region restricted"),
+            (Status::Restricted, "访问受限", "Access restricted"),
+            (Status::Restricted, "请求限流", "Rate limited"),
+            (
+                Status::Unknown,
+                "验证拦截，未确认",
+                "Browser verification blocked the check",
+            ),
+            (
+                Status::Unknown,
+                "请求被拒绝，未确认",
+                "Request denied · Unconfirmed",
+            ),
+            (Status::Unknown, "未确认可用性", "Availability unconfirmed"),
+            (
+                Status::Failed,
+                "请求失败，未确认",
+                "Request failed · Unconfirmed",
+            ),
+            (
+                Status::Failed,
+                "检测失败，未确认",
+                "Check failed · Unconfirmed",
+            ),
+            (
+                Status::Partial,
+                "仅自制内容（上游摘要）",
+                "仅自制内容（上游摘要）",
+            ),
+        ] {
+            assert_eq!(status.summary_in(raw, Language::English), english);
+            assert_eq!(status.summary_in(raw, Language::SimplifiedChinese), raw);
+        }
     }
 
     #[test]
@@ -428,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn category_numerator_includes_green_and_yellow_but_excludes_red_and_pending() {
+    fn legacy_non_red_includes_identified_and_unknown_but_excludes_failures_and_pending() {
         let mut results: Vec<ResultSlot> = std::iter::repeat_with(|| None)
             .take(ip_check::services().len())
             .collect();
@@ -452,5 +660,21 @@ mod tests {
         assert_eq!(counts.non_red(), 5);
         assert_eq!(counts.completed(), 7);
         assert_eq!(counts.total(), 8);
+
+        results[3] = result(State::Unknown);
+        results[4] = result(State::Unknown);
+        let Some(Ok(skipped)) = &mut results[4] else {
+            unreachable!();
+        };
+        skipped.authentication_check_skipped = true;
+        let report = Report::from_results(&results);
+        let ai = report.categories.iter().find(|c| c.name == "AI").unwrap();
+        assert_eq!(ai.counts.count(Status::Unknown), 2);
+        assert_eq!(ai.counts.completed(), 4);
+        assert_eq!(ai.counts.non_red(), 4);
+        assert_eq!(
+            ai.counts.summary_in(Language::SimplifiedChinese),
+            "确认可用 1 · 仅网页可达 1 · 结果未确认 2"
+        );
     }
 }

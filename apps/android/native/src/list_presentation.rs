@@ -1,7 +1,8 @@
 use clash_mobile_runtime::core::{
+    api::Connection,
     config::{Language, Profile},
-    connection::{Field, Sort},
-    error_message,
+    connection::{Field, Sort, matches_query},
+    error_message, rule_manager,
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -70,6 +71,52 @@ pub(crate) struct Page<T> {
     pub items: Vec<T>,
     pub index: usize,
     pub total: usize,
+}
+
+pub(crate) const CONNECTION_PAGE_SIZE: usize = 50;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ConnectionPageCursor {
+    index: usize,
+    revision: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct ConnectionPager {
+    cursor: ConnectionPageCursor,
+}
+
+impl ConnectionPager {
+    pub(crate) fn reset(&mut self) {
+        self.cursor.index = 0;
+        self.cursor.revision = self.cursor.revision.wrapping_add(1);
+    }
+
+    pub(crate) fn turn(&mut self, displayed: ConnectionPageCursor, direction: isize) {
+        if displayed.revision == self.cursor.revision {
+            self.cursor.index = displayed.index.saturating_add_signed(direction);
+        }
+    }
+
+    pub(crate) fn cursor(&self) -> ConnectionPageCursor {
+        self.cursor
+    }
+
+    pub(crate) fn project<'a>(
+        &mut self,
+        connections: &'a [Connection],
+        lower_query: &str,
+        sort: Sort,
+    ) -> Page<&'a Connection> {
+        let mut matches: Vec<_> = connections
+            .iter()
+            .filter(|row| matches_query(row, lower_query))
+            .collect();
+        matches.sort_by(|left, right| sort.compare(left, right));
+        let page = page(matches, self.cursor.index, CONNECTION_PAGE_SIZE, true);
+        self.cursor.index = page.index;
+        page
+    }
 }
 
 pub(crate) fn contains_query(value: &str, lower_query: &str) -> bool {
@@ -181,10 +228,36 @@ pub(crate) fn logs(
         .collect()
 }
 
+pub(crate) fn rule_warning(warnings: &[String], language: Language) -> String {
+    warnings
+        .iter()
+        .map(|warning| rule_manager::warning_in(warning, language))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clash_mobile_runtime::core::api::{Connection, ConnectionRates, Metadata};
+
+    #[test]
+    fn rule_warning_projection_uses_the_selected_language_and_preserves_raw_warnings() {
+        let warnings = [
+            "MATCH 之后有 2 条规则不会被匹配，请检查顺序。".to_owned(),
+            "provider warning: 東京".to_owned(),
+        ];
+        let original = warnings.clone();
+        assert_eq!(
+            rule_warning(&warnings, Language::SimplifiedChinese),
+            "MATCH 之后有 2 条规则不会被匹配，请检查顺序。\nprovider warning: 東京",
+        );
+        assert_eq!(
+            rule_warning(&warnings, Language::English),
+            "Rules after MATCH will never be evaluated (2 affected). Check the rule order.\nprovider warning: 東京",
+        );
+        assert_eq!(warnings, original);
+    }
 
     #[test]
     fn searches_ascii_and_unicode_without_changing_the_source() {
@@ -421,5 +494,96 @@ mod tests {
         rows.sort_by(|left, right| connection_sort("默认顺序").compare(left, right));
         assert_eq!(rows[0].id.as_ref(), "later");
         assert_eq!(rows[1].id.as_ref(), "earlier");
+    }
+
+    #[test]
+    fn connection_pages_follow_shrinking_results_and_turn_from_the_displayed_index() {
+        let rows: Vec<_> = (0..125)
+            .map(|index| Connection {
+                id: index.to_string().into(),
+                ..Default::default()
+            })
+            .collect();
+        let sort = connection_sort("默认顺序");
+        let mut pager = ConnectionPager::default();
+        let first = pager.project(&rows, "", sort);
+        assert_eq!((first.index, first.total, first.items.len()), (0, 125, 50));
+        let first_cursor = pager.cursor();
+        pager.turn(first_cursor, 1);
+        pager.turn(first_cursor, 1);
+        assert_eq!(pager.project(&rows, "", sort).index, 1);
+        pager.turn(pager.cursor(), 1);
+        assert_eq!(pager.project(&rows, "", sort).items[0].id.as_ref(), "100");
+
+        let old_display = pager.cursor();
+        let shrunk = pager.project(&rows[..65], "", sort);
+        assert_eq!(
+            (shrunk.index, shrunk.total, shrunk.items.len()),
+            (1, 65, 15)
+        );
+        assert_eq!(pager.cursor().index, shrunk.index);
+        pager.turn(old_display, -1);
+        assert_eq!(pager.project(&rows[..65], "", sort).index, 1);
+
+        let shrunk_display = pager.cursor();
+        pager.turn(shrunk_display, -1);
+        let previous = pager.project(&rows[..65], "", sort);
+        assert_eq!(previous.index, 0);
+        assert_eq!(previous.items[0].id.as_ref(), "0");
+
+        pager.turn(pager.cursor(), 1);
+        assert_eq!(pager.project(&rows[..65], "", sort).index, 1);
+        assert_eq!(pager.project(&[], "", sort).index, 0);
+        assert_eq!(pager.project(&rows, "", sort).index, 0);
+    }
+
+    #[test]
+    fn connection_sort_and_filter_resets_reject_turns_from_an_old_view() {
+        let mut rows: Vec<_> = (0..125)
+            .map(|index| Connection {
+                id: index.to_string().into(),
+                metadata: Metadata {
+                    host: if index == 124 {
+                        "other.test"
+                    } else {
+                        "match.test"
+                    }
+                    .into(),
+                    ..Default::default()
+                },
+                download: index,
+                ..Default::default()
+            })
+            .collect();
+        rows.reverse();
+        let mut pager = ConnectionPager::default();
+        let original = connection_sort("默认顺序");
+        assert_eq!(pager.project(&rows, "", original).index, 0);
+        pager.turn(pager.cursor(), 1);
+        assert_eq!(pager.project(&rows, "", original).index, 1);
+        let before_query = pager.cursor();
+
+        pager.reset();
+        pager.turn(before_query, 1);
+        let filtered = pager.project(&rows, "match.test", original);
+        assert_eq!((filtered.index, filtered.total), (0, 124));
+        assert_eq!(filtered.items[0].id.as_ref(), "123");
+        pager.turn(pager.cursor(), 1);
+        assert_eq!(pager.project(&rows, "match.test", original).index, 1);
+        let before_sort = pager.cursor();
+
+        pager.reset();
+        pager.turn(before_sort, 1);
+        let ascending = connection_sort("下载量 ↑");
+        let sorted = pager.project(&rows, "match.test", ascending);
+        assert_eq!((sorted.index, sorted.total), (0, 124));
+        assert_eq!(sorted.items[0].id.as_ref(), "0");
+        pager.turn(pager.cursor(), 1);
+        assert_eq!(
+            pager.project(&rows, "match.test", ascending).items[0]
+                .id
+                .as_ref(),
+            "50"
+        );
     }
 }

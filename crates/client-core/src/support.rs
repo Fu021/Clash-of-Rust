@@ -20,6 +20,17 @@ pub fn incident(message: &str, critical: bool) -> Value {
     json!({"error":message,"time":timestamp(),"level":if critical {"critical"} else {"recoverable"}})
 }
 
+pub fn ip_result(result: &crate::ip_check::CheckResult) -> Value {
+    let mut row = json!({
+        "state":format!("{:?}",result.state),"summary":result.summary,
+        "country":result.country,"millis":result.response_millis(),"detail":result.detail
+    });
+    if result.authentication_check_skipped {
+        row["authentication_check_skipped"] = json!(true);
+    }
+    row
+}
+
 pub fn ip_results(results: &[crate::ip_report::ResultSlot]) -> Value {
     let services = crate::ip_check::services();
     Value::Array(
@@ -28,10 +39,7 @@ pub fn ip_results(results: &[crate::ip_report::ResultSlot]) -> Value {
             .enumerate()
             .map(|(index, result)| {
                 let mut row = match result {
-                    Some(Ok(result)) => json!({
-                        "state":format!("{:?}",result.state),"summary":result.summary,
-                        "country":result.country,"millis":result.response_millis(),"detail":result.detail
-                    }),
+                    Some(Ok(result)) => ip_result(result),
                     Some(Err(error)) => json!({"state":"failed","error":error}),
                     None => json!({"state":"pending"}),
                 };
@@ -536,7 +544,8 @@ mod tests {
                 state: crate::ip_check::State::Partial,
                 summary: "partial".into(),
                 country: String::new(),
-                millis: 12,
+                millis: Some(12),
+                authentication_check_skipped: false,
                 detail: "sampling incomplete".into(),
                 target_exit: None,
             })),
@@ -548,6 +557,47 @@ mod tests {
         assert_eq!(report[1]["error"], "connection timed out");
         assert_eq!(report[2]["state"], "pending");
         assert!(!report[0]["service"].is_null());
+    }
+
+    #[test]
+    fn ip_report_preserves_json_duration_types_and_adds_only_the_skip_marker() {
+        let measured = crate::ip_check::CheckResult {
+            state: crate::ip_check::State::Unknown,
+            summary: "fixture".into(),
+            country: String::new(),
+            millis: Some(0),
+            authentication_check_skipped: false,
+            detail: "未执行认证检测 · 原始证据".into(),
+            target_exit: None,
+        };
+        let mut skipped = measured.clone();
+        skipped.authentication_check_skipped = true;
+        assert_eq!(skipped.response_millis(), None);
+        assert_eq!(measured.response_millis(), Some(0));
+        let failed_after_response = crate::ip_check::CheckResult {
+            state: crate::ip_check::State::Failed,
+            ..measured.clone()
+        };
+        let failed_without_response = crate::ip_check::CheckResult {
+            millis: None,
+            ..failed_after_response.clone()
+        };
+        let report = redact(ip_results(&[
+            Some(Ok(skipped)),
+            Some(Ok(measured)),
+            Some(Ok(failed_without_response)),
+            Some(Ok(failed_after_response)),
+        ]));
+        assert_eq!(report[0]["authentication_check_skipped"], true);
+        assert_eq!(report[0].get("millis"), Some(&Value::Null));
+        assert_eq!(report[1]["millis"], 0);
+        assert_eq!(report[2].get("millis"), Some(&Value::Null));
+        assert_eq!(report[3]["millis"], 0);
+        for row in [&report[1], &report[2], &report[3]] {
+            assert!(row.get("authentication_check_skipped").is_none());
+        }
+        assert_eq!(report[0]["detail"], "未执行认证检测 · 原始证据");
+        assert_eq!(report[1]["detail"], report[0]["detail"]);
     }
 
     #[test]

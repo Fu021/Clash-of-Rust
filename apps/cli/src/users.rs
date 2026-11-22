@@ -275,10 +275,14 @@ mod linux {
 
     pub(super) fn profiles(args: &Args) -> Result<Value> {
         ensure!(platform::is_elevated(), "只有 root 可以查看跨用户订阅");
+        profiles_for_accounts(args, accounts(None)?)
+    }
+
+    fn profiles_for_accounts(args: &Args, accounts: Vec<Account>) -> Result<Value> {
         let filter = args.get("filter").unwrap_or("").to_lowercase();
         let mut rows = Vec::new();
         let mut seen = BTreeSet::new();
-        for account in accounts(None)? {
+        for account in accounts {
             if !seen.insert(account.uid) {
                 continue;
             }
@@ -292,15 +296,22 @@ mod linux {
             let settings =
                 read_index(&root.join("settings.json"), account.uid)?.unwrap_or_default();
             for profile in profiles {
-                if !profile.name.to_lowercase().contains(&filter)
-                    && !profile.id.contains(&filter)
+                if !crate::output::profile_list_matches(args, &profile, &filter)
                     && !account.name.to_lowercase().contains(&filter)
                 {
                     continue;
                 }
-                rows.push(json!({"id":profile.id,"name":profile.name,"owner":account.name,
-                    "uid":account.uid,"data_dir":root,"active":settings["active_profile"]==profile.id,
-                    "source":profile.source,"updated":profile.updated,"usage":profile.usage}));
+                rows.push(json!({
+                    "id": profile.id,
+                    "name": crate::output::profile_list_name(args, &profile),
+                    "owner": account.name,
+                    "uid": account.uid,
+                    "data_dir": root,
+                    "active": settings["active_profile"] == profile.id,
+                    "source": profile.source,
+                    "updated": profile.updated,
+                    "usage": profile.usage,
+                }));
             }
         }
         Ok(json!(rows))
@@ -369,6 +380,65 @@ mod linux {
                 &exe
             ));
         }
+
+        #[test]
+        fn cross_user_profile_list_preserves_raw_export_names_and_filters() {
+            let home = tempfile::tempdir().unwrap();
+            let data = home.path().join(".local/share/clashofrust");
+            std::fs::create_dir_all(&data).unwrap();
+            let profiles = json!([
+                {"id":"builtin","name":"默认直连","source":"default.yaml","updated":0,"builtin":true},
+                {"id":"imported","name":"默认直连","source":"/imports/default.yaml","updated":0,"builtin":false}
+            ]);
+            std::fs::write(data.join("profiles.json"), profiles.to_string()).unwrap();
+            let args = |options: &[&str]| {
+                crate::args::parse(
+                    ["profile", "list", "--all-users", "--lang=en", "--quiet"]
+                        .into_iter()
+                        .chain(options.iter().copied())
+                        .map(str::to_owned),
+                )
+                .unwrap()
+            };
+            let list = |args: &Args| {
+                profiles_for_accounts(
+                    args,
+                    vec![Account {
+                        name: "fixture".into(),
+                        uid: data.metadata().unwrap().uid(),
+                        home: home.path().to_owned(),
+                    }],
+                )
+                .unwrap()
+            };
+            let human = list(&args(&["--filter=Default direct"]));
+            assert_eq!(human.as_array().unwrap().len(), 1);
+            assert_eq!(human[0]["id"], "builtin");
+            assert_eq!(human[0]["name"], "Default direct");
+
+            let output = home.path().join("export.json");
+            let path = output.to_str().unwrap();
+            let raw = args(&["--output", path, "--filter=默认直连"]);
+            crate::output::emit(&raw, list(&raw)).unwrap();
+            let saved: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+            assert_eq!(saved["command"], "profile list");
+            assert_eq!(saved["data"].as_array().unwrap().len(), 2);
+            for (entry, id) in saved["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(["builtin", "imported"])
+            {
+                assert_eq!(entry["id"], id);
+                assert_eq!(entry["name"], "默认直连");
+                assert_eq!(entry["owner"], "fixture");
+            }
+            let alias = args(&["--output", path, "--filter=Default direct"]);
+            crate::output::emit(&alias, list(&alias)).unwrap();
+            let saved: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(saved["data"], json!([]));
+        }
+
         #[test]
         fn inventory_never_follows_symlinks_or_creates_missing_data() {
             let dir = tempfile::tempdir().unwrap();

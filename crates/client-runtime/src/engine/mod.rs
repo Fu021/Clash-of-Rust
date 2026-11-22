@@ -283,9 +283,16 @@ impl Engine {
         }
         let mut settings = settings?;
         #[cfg(target_os = "macos")]
+        platform::macos::service::protection_dns(false).context("恢复上次运行的系统 DNS 失败")?;
+        let mut profiles = store.profiles()?;
+        if let Some(active) = settings.active_profile.as_deref() {
+            ensure!(
+                profiles.iter().any(|profile| profile.id == active),
+                "当前订阅已丢失"
+            );
+        }
+        #[cfg(target_os = "macos")]
         {
-            platform::macos::service::protection_dns(false)
-                .context("恢复上次运行的系统 DNS 失败")?;
             if let Some(protection) = &mut settings.claude_protection {
                 let protection = Arc::make_mut(protection);
                 protection.system_dns = platform::macos::dns::system_servers()?;
@@ -296,7 +303,6 @@ impl Engine {
                 store.save_settings(&settings)?;
             }
         }
-        let mut profiles = store.migrate_profiles()?;
         if profiles.is_empty() {
             let raw = read_profile(&resources.join("default.yaml"))
                 .context("默认配置缺失，请重新安装")?;
@@ -314,6 +320,14 @@ impl Engine {
             store.save_profiles(&profiles)?;
             settings.active_profile = Some(id);
             store.save_settings(&settings)?;
+        } else {
+            profiles = store.migrate_profiles()?;
+            if let Some(active) = settings.active_profile.as_deref() {
+                ensure!(
+                    profiles.iter().any(|profile| profile.id == active),
+                    "当前订阅已丢失"
+                );
+            }
         }
         let api = Api::new(&settings)?;
         Ok(Self {
@@ -2690,6 +2704,119 @@ fn validation_error_detail(error: &str) -> &str {
     }
     let start = error.char_indices().rev().nth(2047).map_or(0, |(i, _)| i);
     &error[start..]
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod startup_tests {
+    use super::*;
+
+    #[test]
+    fn missing_empty_or_invalid_profile_index_preserves_the_active_subscription() {
+        let directory = tempfile::tempdir().unwrap();
+        let resources = directory.path().join("resources");
+        std::fs::create_dir(&resources).unwrap();
+        std::fs::write(resources.join("mihomo"), b"fixture").unwrap();
+        std::fs::write(
+            resources.join("default.yaml"),
+            include_bytes!("../../../../resources/default.yaml"),
+        )
+        .unwrap();
+        let files = assets::GEO_FILES
+            .iter()
+            .map(|name| {
+                let path = resources.join(name);
+                std::fs::write(&path, b"fixture").unwrap();
+                let (sha256, size) = assets::hash_file(&path).unwrap();
+                assets::GeoFile {
+                    name: (*name).into(),
+                    source: String::new(),
+                    sha256,
+                    size,
+                }
+            })
+            .collect();
+        let manifest = assets::GeoManifest {
+            version: "fixture".into(),
+            updated: 0,
+            installed_at: None,
+            files,
+        };
+        std::fs::write(
+            resources.join(assets::MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let store = Store::at(directory.path().join("data")).unwrap();
+        let mut engine = Engine::with_resources(store.clone(), resources.clone()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let profile = store.profile_path(&id).unwrap();
+        let raw = b"proxies: []\nrules: ['MATCH,DIRECT']\n";
+        std::fs::write(&profile, raw).unwrap();
+        engine.profiles.push(Profile {
+            builtin: false,
+            id: id.clone(),
+            name: "Fixture".into(),
+            source: String::new(),
+            updated: 0,
+            usage: None,
+        });
+        engine.settings.active_profile = Some(id.clone());
+        store.save_profiles(&engine.profiles).unwrap();
+        store.save_settings(&engine.settings).unwrap();
+        drop(engine);
+        let settings = store.root.join("settings.json");
+        let index = store.root.join("profiles.json");
+        let runtime = store.runtime().join("config.yaml");
+        std::fs::write(&runtime, b"existing runtime").unwrap();
+        let settings_bytes = std::fs::read(&settings).unwrap();
+        let index_bytes = std::fs::read(&index).unwrap();
+        let mut incomplete_records: Vec<serde_json::Value> =
+            serde_json::from_slice(&index_bytes).unwrap();
+        incomplete_records.retain(|record| record["id"] != id);
+        let incomplete_index = serde_json::to_vec(&incomplete_records).unwrap();
+        for record in &mut incomplete_records {
+            record.as_object_mut().unwrap().remove("builtin");
+        }
+        let incomplete_legacy_index = serde_json::to_vec(&incomplete_records).unwrap();
+
+        for (contents, reason) in [
+            (None, "当前订阅已丢失"),
+            (Some(b"[]".as_slice()), "当前订阅已丢失"),
+            (Some(incomplete_index.as_slice()), "当前订阅已丢失"),
+            (Some(incomplete_legacy_index.as_slice()), "当前订阅已丢失"),
+            (Some(b"[{invalid index".as_slice()), "订阅索引格式错误"),
+        ] {
+            match contents {
+                Some(bytes) => std::fs::write(&index, bytes).unwrap(),
+                None => std::fs::remove_file(&index).unwrap(),
+            }
+            let error = Engine::with_resources(store.clone(), resources.clone())
+                .err()
+                .expect("an active subscription without its index must not be replaced");
+            assert!(error.to_string().contains(reason), "{error:#}");
+            assert_eq!(std::fs::read(&settings).unwrap(), settings_bytes);
+            assert_eq!(std::fs::read(&profile).unwrap(), raw);
+            assert_eq!(std::fs::read(&runtime).unwrap(), b"existing runtime");
+            match contents {
+                Some(bytes) => assert_eq!(std::fs::read(&index).unwrap(), bytes),
+                None => assert!(!index.exists()),
+            }
+            std::fs::write(&index, &index_bytes).unwrap();
+            let restored = Engine::with_resources(store.clone(), resources.clone()).unwrap();
+            assert_eq!(
+                restored.settings.active_profile.as_deref(),
+                Some(id.as_str())
+            );
+        }
+        let mut without_selection = store.load_settings().unwrap();
+        without_selection.active_profile = None;
+        store.save_settings(&without_selection).unwrap();
+        std::fs::write(&index, &incomplete_index).unwrap();
+        let restored = Engine::with_resources(store.clone(), resources).unwrap();
+        assert_eq!(restored.settings.active_profile, None);
+        assert_eq!(std::fs::read(&profile).unwrap(), raw);
+        assert_eq!(std::fs::read(&runtime).unwrap(), b"existing runtime");
+    }
 }
 
 #[cfg(test)]

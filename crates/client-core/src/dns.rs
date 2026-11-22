@@ -1,7 +1,7 @@
-//! Bounded address lookups for connection details, without a system-DNS fallback.
+//! Address filtering and merging for the controller resolver.
 use anyhow::{Result, bail};
 use serde::Deserialize;
-use std::{net::IpAddr, time::Duration};
+use std::net::IpAddr;
 
 #[derive(Deserialize)]
 pub(crate) struct Answer {
@@ -52,39 +52,6 @@ pub(crate) fn combine(v4: Result<Vec<IpAddr>>, v6: Result<Vec<IpAddr>>) -> Resul
         bail!("未查到目标地址");
     }
     Ok(addresses)
-}
-
-/// Public encrypted resolver, transported through the running local proxy.
-/// HTTPS URLs use literal IPs, so this cannot leak a bootstrap lookup to the OS.
-pub async fn through_proxy(host: &str, port: u16) -> Result<Vec<IpAddr>> {
-    let client = crate::network::client_builder()
-        .no_proxy()
-        .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
-        .timeout(Duration::from_secs(6))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
-    let query = |kind: &'static str| {
-        let client = &client;
-        async move {
-            let mut response = client
-                .get("https://1.1.1.1/dns-query")
-                .query(&[("name", host), ("type", kind)])
-                .header(reqwest::header::ACCEPT, "application/dns-json")
-                .send()
-                .await?
-                .error_for_status()?;
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await? {
-                if bytes.len() + chunk.len() > 64 * 1024 {
-                    bail!("DNS 响应过大");
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            serde_json::from_slice::<Answer>(&bytes)?.addresses()
-        }
-    };
-    let (v4, v6) = tokio::join!(query("A"), query("AAAA"));
-    combine(v4, v6)
 }
 
 #[cfg(test)]

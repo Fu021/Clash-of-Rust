@@ -1,9 +1,9 @@
 use crate::tui::{
     input::Key,
     model::{Action, Page, State, demo_poll},
-    network, render,
+    network, render, settings,
 };
-use clash_client_core::config::Language;
+use clash_client_core::config::{Language, LanguagePreference};
 use clash_client_core::network_tools::{Entry, Options, Report, Tool};
 use unicode_width::UnicodeWidthStr;
 
@@ -290,7 +290,173 @@ fn completed_report() -> Report {
             detail: "证书过期".into(),
             success: Some(false),
             code: "tls_certificate_expired",
+            detail_english: None,
         }],
+    }
+}
+
+#[tokio::test]
+async fn network_failure_follows_external_language_changes_and_preserves_the_error_chain() {
+    use LanguagePreference::{English, SimplifiedChinese};
+
+    let external = "上游响应：示例原文；keep punctuation";
+    let timeout = tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>())
+        .await
+        .unwrap_err();
+    let timeout_detail = timeout.to_string();
+    for (error, chinese, english, detail) in [
+        (
+            anyhow::anyhow!("{external}").context("订阅下载失败"),
+            "订阅下载失败",
+            "Subscription download failed",
+            external,
+        ),
+        (
+            anyhow::anyhow!("{external}").context(crate::backend::Unavailable(
+                "The running backend is temporarily unreachable; preserve the diagnostic state"
+                    .into(),
+            )),
+            "存活的后台暂时不可达，请先保留排障现场",
+            "The running backend is temporarily unreachable; preserve the diagnostic state",
+            external,
+        ),
+        (
+            anyhow::Error::new(timeout).context("读取当前用户后台状态超过 5 秒"),
+            "读取当前用户后台状态超过 5 秒",
+            "Reading the current user's backend status exceeded 5 seconds",
+            &timeout_detail,
+        ),
+    ] {
+        let mut state = state(Tool::Http);
+        state.key(Key::Escape);
+        let mut args = crate::args::parse(["ui"].into_iter().map(str::to_owned)).unwrap();
+        let original = format!("{error:#}");
+        state.network_outcome = Some(Err(error));
+        network::refresh_result(&mut state);
+        for (preference, label, context, changed) in [
+            (SimplifiedChinese, "检查失败", chinese, false),
+            (English, "Check failed", english, true),
+            (SimplifiedChinese, "检查失败", chinese, true),
+        ] {
+            let mut poll = demo_poll();
+            poll.meta.settings.language = preference;
+            state.accept(Some(poll));
+            assert_eq!(
+                settings::sync_language(&mut state, &mut args, true, 158),
+                changed
+            );
+            let expected = format!("{label} · {context}: {detail}");
+            assert_eq!(state.network_results, [expected.as_str()]);
+            assert!(
+                render::frame(&state, 180, 30)
+                    .iter()
+                    .any(|line| line.text.contains(&expected))
+            );
+            let error = state
+                .network_outcome
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap_err();
+            assert_eq!(format!("{error:#}"), original);
+            assert_eq!(error.root_cause().to_string(), detail);
+            assert!(state.network_report().is_none());
+            network::scroll(&mut state, 24, true);
+        }
+        state.key(Key::Char('e'));
+        assert!(state.form.is_none());
+        state.key(Key::Escape);
+        let mut poll = demo_poll();
+        poll.meta.settings.language = English;
+        state.accept(Some(poll));
+        assert!(settings::sync_language(&mut state, &mut args, true, 158));
+        assert!(state.network_outcome.is_none());
+        assert!(state.network_results.is_empty());
+    }
+}
+
+#[test]
+fn external_language_changes_preserve_the_network_report_and_open_export_draft() {
+    let mut state = state(Tool::Http);
+    state.key(Key::Escape);
+    let mut args = crate::args::parse(["ui"].into_iter().map(str::to_owned)).unwrap();
+    let report = completed_report();
+    let original = serde_json::to_value(&report).unwrap();
+    state.network_outcome = Some(Ok(report));
+    network::refresh_result(&mut state);
+    assert!(state.network_results[0].starts_with("检查状态 · 失败"));
+
+    let path = "示例：未保存报告.json";
+    state.key(Key::Char('e'));
+    state.key(Key::Enter);
+    state.key(Key::Clear);
+    state.key(Key::Paste(path.into()));
+    let mut poll = demo_poll();
+    poll.meta.settings.language = LanguagePreference::English;
+    state.accept(Some(poll));
+    assert!(!settings::sync_language(&mut state, &mut args, true, 158));
+    assert_eq!(state.language, Language::SimplifiedChinese);
+    assert_eq!(state.form.as_ref().unwrap().draft, path);
+    assert!(state.form.as_ref().unwrap().editing);
+    assert!(state.network_results[0].starts_with("检查状态 · 失败"));
+
+    state.key(Key::Enter);
+    assert_eq!(state.form.as_ref().unwrap().fields[0].value, path);
+    assert!(!settings::sync_language(&mut state, &mut args, true, 158));
+    state.key(Key::Escape);
+    assert!(settings::sync_language(&mut state, &mut args, true, 158));
+    assert!(state.network_results[0].starts_with("Status · Failed"));
+    assert_eq!(
+        serde_json::to_value(state.network_report().unwrap()).unwrap(),
+        original
+    );
+
+    let mut poll = demo_poll();
+    poll.meta.settings.language = LanguagePreference::SimplifiedChinese;
+    state.accept(Some(poll));
+    assert!(settings::sync_language(&mut state, &mut args, true, 158));
+    assert!(state.network_results[0].starts_with("检查状态 · 失败"));
+    assert_eq!(
+        serde_json::to_value(state.network_report().unwrap()).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn language_switch_keeps_the_same_network_entry_at_the_top() {
+    let mut state = state(Tool::Http);
+    state.key(Key::Escape);
+    let mut args = crate::args::parse(["ui"].into_iter().map(str::to_owned)).unwrap();
+    let mut report = completed_report();
+    report.entries[0].detail_english = Some("Preserve the diagnostic details. ".repeat(8));
+    report.entries.push(Entry {
+        label: "EVIDENCE".into(),
+        detail: "external".into(),
+        success: None,
+        code: "information",
+        detail_english: None,
+    });
+    state.network_outcome = Some(Ok(report));
+    network::refresh_result(&mut state);
+    let width = 31;
+    let anchor = "EVIDENCE · external";
+    state.selected = network::rows(&state, width)
+        .iter()
+        .position(|row| row.text == anchor)
+        .unwrap();
+    let chinese_offset = state.selected;
+    for preference in [
+        LanguagePreference::English,
+        LanguagePreference::SimplifiedChinese,
+    ] {
+        state.language_preference = preference;
+        assert!(settings::sync_language(&mut state, &mut args, true, width));
+        assert_eq!(network::rows(&state, width)[state.selected].text, anchor);
+        if preference == LanguagePreference::English {
+            assert!(state.selected > chinese_offset);
+        } else {
+            assert_eq!(state.selected, chinese_offset);
+        }
     }
 }
 
@@ -300,7 +466,7 @@ fn export_saves_the_existing_report_with_codes_status_and_measured_time() {
     let path = directory.path().join("network.json");
     let mut state = state(Tool::Http);
     state.key(Key::Escape);
-    state.network_report = Some(completed_report());
+    state.network_outcome = Some(Ok(completed_report()));
     state.key(Key::Char('e'));
     state.form.as_mut().unwrap().fields[0].value = path.display().to_string();
     network::prepare_export(&state).unwrap().save().unwrap();
@@ -309,7 +475,7 @@ fn export_saves_the_existing_report_with_codes_status_and_measured_time() {
     assert_eq!(value["command"], "network http");
     assert_eq!(
         value["data"],
-        serde_json::to_value(state.network_report.as_ref().unwrap()).unwrap()
+        serde_json::to_value(state.network_report().unwrap()).unwrap()
     );
     assert_eq!(value["data"]["status"], "failed");
     assert_eq!(value["data"]["elapsed_ms"], 123);
@@ -323,20 +489,31 @@ fn export_saves_the_existing_report_with_codes_status_and_measured_time() {
 #[test]
 fn export_failure_keeps_the_report_and_path_and_navigation_releases_the_report() {
     let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("用户路径：保存文件失败");
+    std::fs::create_dir(&destination).unwrap();
     let mut state = state(Tool::Http);
     state.key(Key::Escape);
-    state.network_report = Some(completed_report());
+    state.network_outcome = Some(Ok(completed_report()));
     state.key(Key::Char('e'));
-    state.form.as_mut().unwrap().fields[0].value = directory.path().display().to_string();
-    assert!(network::prepare_export(&state).unwrap().save().is_err());
+    let path = destination.display().to_string();
+    state.form.as_mut().unwrap().fields[0].value = path.clone();
+    let error = network::prepare_export(&state).unwrap().save().unwrap_err();
+    let system_detail = error.root_cause().to_string();
     assert_eq!(
-        state.form.as_ref().unwrap().fields[0].value,
-        directory.path().display().to_string()
+        network::export_failure(&error, Language::English),
+        format!(
+            "Export failed; path and report retained: Could not save the file: {path}: {system_detail}"
+        )
     );
-    assert_eq!(state.network_report.as_ref().unwrap().elapsed_ms, 123);
+    assert_eq!(
+        network::export_failure(&error, Language::SimplifiedChinese),
+        format!("导出失败，路径和报告保留：保存文件失败：{path}: {system_detail}")
+    );
+    assert_eq!(state.form.as_ref().unwrap().fields[0].value, path);
+    assert_eq!(state.network_report().unwrap().elapsed_ms, 123);
     state.key(Key::Escape);
     state.key(Key::Char('['));
-    assert!(state.network_report.is_none());
+    assert!(state.network_report().is_none());
 }
 
 #[test]
@@ -347,7 +524,7 @@ fn empty_and_demo_results_cannot_export_or_create_files() {
     assert!(state.form.is_none());
     assert!(state.message.as_ref().unwrap().contains("先完成一次检查"));
     state.demo = true;
-    state.network_report = Some(completed_report());
+    state.network_outcome = Some(Ok(completed_report()));
     state.key(Key::Char('e'));
     assert!(state.form.is_none());
     assert!(state.message.as_ref().unwrap().contains("未导出"));

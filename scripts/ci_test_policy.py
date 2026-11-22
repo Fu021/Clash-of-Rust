@@ -75,6 +75,10 @@ def select(paths, extended=False):
     )
     linux = any(
         path.startswith(('apps/cli/src/',
+                         'crates/client-core/src/connection/',
+                         'crates/client-core/src/controller/',
+                         'crates/client-core/src/dns.rs',
+                         'crates/client-core/src/rules/',
                          'crates/client-runtime/src/platform/linux/tun/',
                          'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'crates/client-runtime/src/platform/linux/startup.rs',
@@ -84,7 +88,7 @@ def select(paths, extended=False):
                     'scripts/ci_test_policy.py', 'apps/desktop/tests/core_integration.rs',
                     'apps/desktop/tests/support/protected_dns.rs',
                     'apps/desktop/tests/support/proxy_benchmark.rs',
-                    'scripts/proxy_benchmark.py')
+                    'scripts/proxy_benchmark.py', 'crates/client-runtime/src/engine/mod.rs')
         or path.startswith('crates/client-runtime/src/platform/network/')
         or path in ('crates/client-runtime/src/control/network.rs',
                     'crates/client-runtime/src/engine/recovery.rs')
@@ -103,6 +107,9 @@ def select(paths, extended=False):
         (path.startswith('crates/client-ui/') and not path.startswith('crates/client-ui/ui/mobile/'))
         or path.startswith(('apps/desktop-ui/', 'crates/desktop-protocol/', 'vendor/winit/',
                          'apps/desktop/src/application/', 'crates/client-core/src/config/',
+                         'crates/client-core/src/connection/', 'crates/client-core/src/controller/',
+                         'crates/client-core/src/dns.rs',
+                         'crates/client-core/src/rules/',
                          'crates/client-core/src/protection/', 'crates/client-runtime/src/control/',
                          'crates/client-core/src/error_message.rs',
                          'crates/client-core/src/subscription/info.rs',
@@ -121,6 +128,9 @@ def select(paths, extended=False):
         or path.startswith(('crates/client-ui/ui/mobile/', 'crates/client-ui/ui/theme/',
                          'crates/client-ui/ui/icons/', 'apps/android/native/', 'resources/fonts/',
                          'crates/mobile-ffi/src/', 'crates/client-core/src/config/',
+                         'crates/client-core/src/connection/', 'crates/client-core/src/controller/',
+                         'crates/client-core/src/dns.rs',
+                         'crates/client-core/src/rules/',
                          'crates/client-core/src/protection/', 'crates/client-core/src/detection/',
                          'crates/client-core/src/error_message.rs',
                          'crates/client-core/src/subscription/info.rs',

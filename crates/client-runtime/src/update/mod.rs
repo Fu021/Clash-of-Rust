@@ -978,6 +978,7 @@ async fn release_bytes(mut response: reqwest::Response) -> Result<Vec<u8>> {
     if !status.is_success() {
         bail!("GitHub 返回 HTTP {status}");
     }
+    clash_client_core::download::require_complete_response(&response)?;
     if response
         .content_length()
         .is_some_and(|size| size > RESPONSE_LIMIT as u64)

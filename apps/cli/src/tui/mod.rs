@@ -29,8 +29,8 @@ enum Reply {
     Snapshot(Option<Box<Poll>>, Option<catalog::Shortcuts>),
     Saved(Box<Poll>, Option<catalog::Shortcuts>),
     LanguageSaved(LanguagePreference),
-    Network(Box<Result<clash_client_core::network_tools::Report, String>>),
-    Exported(Result<String, String>),
+    Network(Box<Result<clash_client_core::network_tools::Report>>),
+    Exported(Result<String>),
 }
 
 struct Request<T = Reply>(JoinHandle<Result<T>>);
@@ -237,6 +237,14 @@ async fn save_command(
     ))?
 }
 
+fn operation_failure(error: &anyhow::Error, language: Language) -> String {
+    format!(
+        "{}{}",
+        language.text("操作失败：", "Operation failed: "),
+        crate::output::localized_error(error, language)
+    )
+}
+
 pub async fn run(args: &Args) -> Result<()> {
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
@@ -246,11 +254,15 @@ pub async fn run(args: &Args) -> Result<()> {
             "cor ui requires an interactive terminal; scripts can use cor --json status"
         )
     );
-    let mut terminal = Some(terminal::Terminal::enter(!args.flag("no-color"))?);
+    let mut terminal = Some(terminal::Terminal::enter(
+        !args.flag("no-color"),
+        args.language(),
+    )?);
     let mut current_args = args.clone();
     let mut follow_preference = !args.flag("lang") && !args.flag("demo");
     let mut state = State::new(args.flag("demo"));
     state.language = args.language();
+    settings::set_session_language(&mut current_args, state.language);
     let settings_root = (!state.demo)
         .then(|| backend::data_root(args).ok())
         .flatten();
@@ -264,7 +276,7 @@ pub async fn run(args: &Args) -> Result<()> {
     let mut dirty = true;
     let mut previous_size = (0, 0);
     loop {
-        let size = terminal.as_ref().unwrap().size()?;
+        let size = terminal.as_ref().unwrap().size(state.language)?;
         if size != previous_size {
             if state.page == Page::Network && previous_size != (0, 0) {
                 network::resize(
@@ -277,7 +289,7 @@ pub async fn run(args: &Args) -> Result<()> {
             dirty = true;
         }
         let keys = input.feed(
-            &terminal.as_mut().unwrap().read()?,
+            &terminal.as_mut().unwrap().read(state.language)?,
             std::time::Instant::now(),
         );
         for key in keys {
@@ -312,9 +324,7 @@ pub async fn run(args: &Args) -> Result<()> {
                                 state.message = None;
                                 request = Some(Request(tokio::spawn(async move {
                                     Ok(Reply::Exported(
-                                        tokio::task::spawn_blocking(move || export.save())
-                                            .await?
-                                            .map_err(|error| format!("{error:#}")),
+                                        tokio::task::spawn_blocking(move || export.save()).await?,
                                     ))
                                 })));
                             }
@@ -369,10 +379,7 @@ pub async fn run(args: &Args) -> Result<()> {
                             state.language.text("命令已完成", "Command completed")
                         ),
                         Err(error) => {
-                            eprintln!(
-                                "\n{}{error:#}",
-                                state.language.text("操作失败：", "Operation failed: ")
-                            );
+                            eprintln!("\n{}", operation_failure(&error, state.language));
                             crate::diagnostics::failure_hint(Some(&operation));
                         }
                     }
@@ -381,7 +388,10 @@ pub async fn run(args: &Args) -> Result<()> {
                         "Press Enter to return to the TUI, or Ctrl+C to exit: ",
                     ))
                     .await?;
-                    terminal = Some(terminal::Terminal::enter(!args.flag("no-color"))?);
+                    terminal = Some(terminal::Terminal::enter(
+                        !args.flag("no-color"),
+                        state.language,
+                    )?);
                     input = input::Decoder::default();
                     state.form = None;
                     state.execution = None;
@@ -464,8 +474,7 @@ pub async fn run(args: &Args) -> Result<()> {
                             crate::commands::inspection::network_tool(
                                 &args, tool, &target, options,
                             )
-                            .await
-                            .map_err(|error| format!("{error:#}")),
+                            .await,
                         )))
                     })));
                 }
@@ -614,19 +623,10 @@ pub async fn run(args: &Args) -> Result<()> {
                         settings::language_display(preference, state.language)
                     ));
                 }
-                Ok(Ok(Reply::Network(result))) => match *result {
-                    Ok(report) => {
-                        state.network_results = report.lines_in(state.language);
-                        state.network_report = Some(report);
-                    }
-                    Err(error) => {
-                        state.network_results = vec![format!(
-                            "{} · {error}",
-                            state.language.text("检查失败", "Check failed")
-                        )];
-                        state.network_report = None;
-                    }
-                },
+                Ok(Ok(Reply::Network(result))) => {
+                    state.network_outcome = Some(*result);
+                    network::refresh_result(&mut state);
+                }
                 Ok(Ok(Reply::Exported(result))) => match result {
                     Ok(path) => {
                         state.form = None;
@@ -636,13 +636,7 @@ pub async fn run(args: &Args) -> Result<()> {
                         ));
                     }
                     Err(error) => {
-                        state.message = Some(format!(
-                            "{}{error}",
-                            state.language.text(
-                                "导出失败，路径和报告保留：",
-                                "Export failed; path and report retained: "
-                            )
-                        ));
+                        state.message = Some(network::export_failure(&error, state.language));
                     }
                 },
                 Ok(Err(error)) => {
@@ -674,7 +668,12 @@ pub async fn run(args: &Args) -> Result<()> {
             last_refresh = tokio::time::Instant::now();
             dirty = true;
         }
-        if settings::sync_language(&mut state, &mut current_args, follow_preference) {
+        if settings::sync_language(
+            &mut state,
+            &mut current_args,
+            follow_preference,
+            render::content_width(size.0, size.1),
+        ) {
             dirty = true;
         }
         if home::sync(&mut state) {

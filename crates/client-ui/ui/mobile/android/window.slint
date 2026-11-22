@@ -4,6 +4,7 @@ import { MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidActions, AndroidIntent, AndroidData } from "state.slint";
 import { Theme } from "../../theme/palette.slint";
 export { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+export { ConnectionDetailSnapshot, ConnectionDetailStatus } from "../shared/state.slint";
 export { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
 export { ApplicationItem, ApplicationPolicyItem, ApplicationPolicyApp } from "state.slint";
 export { Theme } from "../../theme/palette.slint";
@@ -44,7 +45,10 @@ export component AndroidWindow inherits Window {
             // The platform hides the IME on Back; do not also navigate away
             // from the editor or open its discard-draft dialog.
         }
-        else if MobileView.modal { MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0; }
+        else if MobileView.modal {
+            if MobileView.detail == 13 { MobileActions.request(MobileIntent.install-update, "", "cancel"); }
+            MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0;
+        }
         else if MobileView.detail>0 {surface.go-back();}
         else if MobileView.page!=0 { MobileView.navigate(0); }
         else { AndroidActions.request(AndroidIntent.background, ""); }

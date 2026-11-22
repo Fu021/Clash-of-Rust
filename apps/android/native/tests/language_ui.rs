@@ -541,3 +541,95 @@ fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
     );
     window.hide().unwrap();
 }
+
+#[test]
+fn opening_preview_update_dismisses_the_active_connection_detail() {
+    let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
+    adapter.set_size(slint::PhysicalSize::new(393, 852));
+    let window = AndroidWindow::new().unwrap();
+    window.global::<Motion>().set_enabled(false);
+    window.global::<AndroidData>().set_update_available(true);
+    window.global::<MobileData>().set_update_preview(true);
+    let targets = Rc::new(RefCell::new(BTreeMap::<String, Vec<f32>>::new()));
+    let captured_targets = targets.clone();
+    let geometry = window.global::<UiGeometry>();
+    geometry.on_measured(move |key, bounds| {
+        captured_targets
+            .borrow_mut()
+            .insert(key.to_string(), bounds.iter().collect());
+    });
+    geometry.set_enabled(true);
+    let dismissed = Rc::new(RefCell::new(Vec::<(String, i32)>::new()));
+    let captured_dismissed = dismissed.clone();
+    let updates = Rc::new(RefCell::new(Vec::<String>::new()));
+    let captured_updates = updates.clone();
+    window
+        .global::<MobileActions>()
+        .on_request(move |intent, _, action| {
+            if intent == MobileIntent::InstallUpdate {
+                captured_updates.borrow_mut().push(action.to_string());
+            }
+        });
+    window
+        .global::<MobileActions>()
+        .on_dismiss_connection_detail(move |id, request| {
+            captured_dismissed
+                .borrow_mut()
+                .push((id.to_string(), request));
+        });
+    let view = window.global::<MobileView>();
+    view.invoke_navigate(3);
+    window.show().unwrap();
+    let mut pixels = vec![slint::Rgb8Pixel::default(); 393 * 852];
+    let mut render = || {
+        slint::platform::update_timers_and_animations();
+        window.window().request_redraw();
+        adapter.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 393);
+        });
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        slint::platform::update_timers_and_animations();
+        window.window().request_redraw();
+        adapter.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 393);
+        });
+    };
+    for use_system_back in [false, true] {
+        view.invoke_open_connection("fixture-connection".into());
+        let request = view.get_connection_detail_request();
+        assert_eq!(window.get_current_detail(), 5);
+        render();
+        let install = targets.borrow()["mobile-update-install"].clone();
+        click(
+            window.window(),
+            install[0] + install[2] / 2.,
+            install[1] + install[3] / 2.,
+        );
+        render();
+        assert_eq!(window.get_current_detail(), 13);
+        assert_eq!(
+            dismissed.borrow().last(),
+            Some(&("fixture-connection".into(), request))
+        );
+        assert!(view.get_selected_id().is_empty());
+        if use_system_back {
+            window.invoke_native_back();
+        } else {
+            let cancel = targets.borrow()["mobile-modal-cancel"].clone();
+            click(
+                window.window(),
+                cancel[0] + cancel[2] / 2.,
+                cancel[1] + cancel[3] / 2.,
+            );
+        }
+        render();
+        assert_eq!(window.get_current_detail(), 0);
+    }
+    assert_eq!(dismissed.borrow().len(), 2);
+    assert_eq!(
+        updates.borrow().as_slice(),
+        ["prepare", "cancel", "prepare", "cancel"]
+    );
+    window.hide().unwrap();
+}

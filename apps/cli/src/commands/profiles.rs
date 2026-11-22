@@ -8,8 +8,22 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
     match args.path.as_str() {
         "profile list" => {
             let filter = args.get("filter").unwrap_or("").to_lowercase();
-            output::emit(args,json!(meta.profiles.iter().filter(|p|p.name.to_lowercase().contains(&filter)||p.id.contains(&filter))
-                .map(|p|json!({"id":p.id,"name":p.name,"active":meta.settings.active_profile.as_deref()==Some(&p.id),"source":p.source,"updated":p.updated,"usage":p.usage})).collect::<Vec<_>>()))
+            let rows: Vec<_> = meta
+                .profiles
+                .iter()
+                .filter(|profile| output::profile_list_matches(args, profile, &filter))
+                .map(|profile| {
+                    json!({
+                        "id": profile.id,
+                        "name": output::profile_list_name(args, profile),
+                        "active": meta.settings.active_profile.as_deref() == Some(&profile.id),
+                        "source": profile.source,
+                        "updated": profile.updated,
+                        "usage": profile.usage,
+                    })
+                })
+                .collect();
+            output::emit(args, json!(rows))
         }
         "profile directory" => {
             output::emit(args, json!(backend::store(args)?.root.join("profiles")))

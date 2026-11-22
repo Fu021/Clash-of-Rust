@@ -1,9 +1,40 @@
 use crate::args::Args;
 use anyhow::{Result, ensure};
+use clash_client_core::config::{Language, Profile};
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Write};
 mod human;
 pub(crate) use clash_client_core::support::redact;
+
+pub(crate) fn writes_json(args: &Args) -> bool {
+    args.get("output").is_some() || args.flag("json") || args.flag("jsonl")
+}
+
+pub(crate) fn profile_name(profile: &Profile, language: Language) -> &str {
+    if profile.is_default() && profile.name == "默认直连" {
+        language.text(&profile.name, "Default direct")
+    } else {
+        &profile.name
+    }
+}
+
+pub(crate) fn profile_list_name<'a>(args: &Args, profile: &'a Profile) -> &'a str {
+    if writes_json(args) {
+        &profile.name
+    } else {
+        profile_name(profile, args.language())
+    }
+}
+
+pub(crate) fn profile_name_matches(profile: &Profile, display_name: &str, filter: &str) -> bool {
+    profile.name.to_lowercase().contains(filter)
+        || (display_name != profile.name && display_name.to_lowercase().contains(filter))
+}
+
+pub(crate) fn profile_list_matches(args: &Args, profile: &Profile, filter: &str) -> bool {
+    profile.id.contains(filter)
+        || profile_name_matches(profile, profile_list_name(args, profile), filter)
+}
 
 pub(crate) fn localized_error(
     error: &anyhow::Error,
@@ -13,6 +44,22 @@ pub(crate) fn localized_error(
         .chain()
         .map(|cause| {
             let message = cause.to_string();
+            if language == Language::English {
+                let translated = match message.as_str() {
+                    "请输入有效的网站地址" => Some("Enter a valid website address"),
+                    "请输入域名或 HTTP/HTTPS 地址" => {
+                        Some("Enter a domain or HTTP/HTTPS URL")
+                    }
+                    "请输入 HTTP/HTTPS 地址" => Some("Enter an HTTP/HTTPS URL"),
+                    "测试地址不支持嵌入用户名密码" => {
+                        Some("Test URLs cannot include credentials")
+                    }
+                    _ => None,
+                };
+                if let Some(translated) = translated {
+                    return translated.into();
+                }
+            }
             let translated = clash_client_core::error_message::localize(&message, language);
             if translated != message {
                 translated.into_owned()
@@ -81,7 +128,7 @@ fn needs_failure_hint(args: &Args, value: &Value) -> bool {
 }
 
 fn write_output(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
-    if args.flag("json") || args.flag("jsonl") {
+    if writes_json(args) {
         serde_json::to_writer(
             &mut *out,
             &json!({"schema":1,"command":args.path,"data":value}),
@@ -246,6 +293,33 @@ mod tests {
         let mut out = Vec::new();
         write_output(&mut out, &args, &redact(value)).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn english_network_check_preserves_probe_errors_and_route_data() {
+        let value = json!({
+            "target":"http://example.test",
+            "system_dns":{"success":true,"detail":"192.0.2.1、2001:db8::1"},
+            "core_dns":{"success":false,"detail":"未查到目标地址"},
+            "proxy":{"success":false,"detail":"端口不可连接：外部错误 東京"},
+            "https":{"success":false,"detail":"外部 TLS 错误；東京"},
+            "http":{"success":true,"detail":"HTTP 200 · 42 ms"},
+            "response":{"success":true,"detail":"HTTP（HTTPS 不可达）"},
+            "route":{"success":true,"detail":"東京节点 · 命中 DOMAIN (example.test)"}
+        });
+        let english = render_in(&["network", "check", "example.test"], value, "en");
+        for line in [
+            "Target: http://example.test",
+            "System DNS: 192.0.2.1, 2001:db8::1",
+            "Core DNS: No addresses found for the target",
+            "Local proxy: Port unreachable: 外部错误 東京",
+            "HTTPS: 外部 TLS 错误；東京",
+            "HTTP: HTTP 200 · 42 ms",
+            "Protocol: HTTP (HTTPS unreachable)",
+            "Route: 東京节点 · 命中 DOMAIN (example.test)",
+        ] {
+            assert!(english.lines().any(|output| output == line), "{english}");
+        }
     }
 
     #[test]

@@ -96,8 +96,8 @@ component ConnectionFeed inherits HomeConnections {
     caption-size: MobileTypography.font-size(12); control-size: 48px;
     open-all => { MobileView.navigate(3); }
     item-selected(id) => {
-        MobileView.navigate(3); MobileView.selected-id = id;
-        MobileActions.request(MobileIntent.connection-detail, id, ""); MobileView.detail = 5;
+        MobileView.navigate(3);
+        MobileView.open-connection(id);
     }
 }
 export component MobileHome inherits PageSurface {
@@ -385,6 +385,86 @@ component ConnectionsToolbar inherits VerticalLayout {
         MSmall { col: 0; row: 1; colspan: parent.narrow ? 1 : 2; text: @tr("{} 条活跃连接", MobileData.connection-count); preferred-width: 0px; }
     }
 }
+component ConnectionCloseButton inherits MButton {
+    in property <string> connection-id;
+    in property <string> current-id;
+    in property <int> page-index;
+    property <bool> can-close: root.enabled && !MobileView.modal && !MobileView.notice-modal
+        && root.connection-id != "" && root.connection-id == root.current-id && root.page-index == MobileData.connection-page-index;
+    property <string> target: root.can-close ? root.connection-id + "/" + root.page-index + "/"
+        + root.absolute-position.x / 1px + "/" + root.absolute-position.y / 1px : "";
+    property <string> settling-target;
+    property <string> settled-target;
+    property <string> pressed-target;
+
+    geometry-key: "connection-close:" + root.connection-id;
+    text: "×"; quiet: true; danger: true; accessible-role: button; accessible-label: @tr("关闭连接");
+    enabled: !MobileData.protected && !MobileData.protection-pending;
+    selected: press.pressed && root.pressed-target != "" && root.pressed-target == root.target;
+    function wait-for-stable-target() {
+        root.pressed-target = "";
+        root.settled-target = "";
+        root.settling-target = root.target;
+        if root.settling-target != "" {
+            forward-delay.start();
+            forward-delay.restart();
+        } else {
+            forward-delay.stop();
+        }
+    }
+    init => { root.wait-for-stable-target(); }
+    changed target => { root.wait-for-stable-target(); }
+    forward-delay := Timer {
+        interval: 150ms;
+        running: false;
+        triggered => {
+            root.settled-target = root.settling-target;
+            self.stop();
+        }
+    }
+    clicked => {
+        if root.can-close { MobileActions.request(MobileIntent.close-connection, root.connection-id, ""); }
+    }
+    press := TouchArea {
+        enabled: !MobileView.modal && !MobileView.notice-modal;
+        mouse-cursor: root.can-close ? pointer : default;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.pressed-target = root.can-close && root.settled-target == root.target ? root.target : "";
+            } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                root.pressed-target = "";
+            }
+        }
+        clicked => {
+            if root.can-close && root.pressed-target == root.target {
+                root.clicked();
+                root.focus();
+            }
+        }
+    }
+}
+
+component ConnectionCloseSlot inherits VerticalLayout {
+    in property <string> current-id;
+    in property <int> page-index;
+    property <string> snapshot-id;
+    property <int> snapshot-page;
+
+    width: 48px; horizontal-stretch: 0; vertical-stretch: 0;
+    init => {
+        root.snapshot-id = root.current-id;
+        root.snapshot-page = root.page-index;
+    }
+    changed current-id => { root.snapshot-id = root.current-id; }
+    changed page-index => { root.snapshot-page = root.page-index; }
+    for close-target in [{ id: root.snapshot-id, offset: root.snapshot-page }]: ConnectionCloseButton {
+        width: parent.width;
+        connection-id: close-target.id;
+        current-id: root.current-id;
+        page-index: close-target.offset;
+    }
+}
+
 component ConnectionsRow inherits Rectangle {
     in property <ConnectionItem> item;
     in property <bool> last;
@@ -395,8 +475,8 @@ component ConnectionsRow inherits Rectangle {
     background: MobileView.detail == 5 && MobileView.selected-id == root.item.id ? Theme.accent-wash : Theme.surface;
     TouchArea { enabled: !MobileView.modal && !MobileView.notice-modal; mouse-cursor: pointer;
         accessible-role: button; accessible-label: @tr("查看连接详情：{}", root.item.host);
-        accessible-action-default => { MobileView.selected-id = root.item.id; MobileActions.request(MobileIntent.connection-detail, root.item.id, ""); MobileView.detail = 5; }
-        clicked => { MobileView.selected-id = root.item.id; MobileActions.request(MobileIntent.connection-detail, root.item.id, ""); MobileView.detail = 5; }
+        accessible-action-default => { MobileView.open-connection(root.item.id); }
+        clicked => { MobileView.open-connection(root.item.id); }
     }
     content := GridLayout { x: 12px; y: 10px; width: parent.width - 24px; height: self.preferred-height; spacing: 8px;
         identity := VerticalLayout { col: 0; row: 0; colspan: root.stacked ? 3 : 1; spacing: 5px; min-width: 0px; preferred-width: 0px; horizontal-stretch: 2;
@@ -418,15 +498,9 @@ component ConnectionsRow inherits Rectangle {
             MSmall { text: "↑ " + root.item.up; }
             MSmall { text: root.item.upload; color: Theme.muted; font-size: MobileTypography.font-size(12); }
         }
-        Rectangle { col: root.stacked ? 3 : 4; row: 0;
-            width: 48px; height: close-action.height; horizontal-stretch: 0; vertical-stretch: 0;
-            TouchArea { enabled: !MobileView.modal && !MobileView.notice-modal; }
-            close-action := MButton {
-                geometry-key: "connection-close:" + root.item.id;
-                text: "×"; quiet: true; width: parent.width; danger: true; accessible-role: button; accessible-label: @tr("关闭连接");
-                enabled: !MobileData.protected && !MobileData.protection-pending;
-                clicked => { MobileActions.request(MobileIntent.close-connection, root.item.id, ""); }
-            }
+        ConnectionCloseSlot { col: root.stacked ? 3 : 4; row: 0;
+            current-id: root.item.id;
+            page-index: MobileData.connection-page-index;
         }
     }
     if !root.last: MDivider { y: parent.height - 1px; width: parent.width; }
@@ -434,6 +508,7 @@ component ConnectionsRow inherits Rectangle {
 component ConnectionsFooter inherits HorizontalLayout {
     alignment: start; vertical-stretch: 0;
     MPagination {
+        geometry-key: "connections-pagination";
         status: MobileData.connection-page;
         previous-enabled: MobileData.connection-previous; next-enabled: MobileData.connection-next;
         compact: root.width >= 640px; horizontal-stretch: self.compact ? 0 : 1;
@@ -442,6 +517,7 @@ component ConnectionsFooter inherits HorizontalLayout {
 }
 export component MobileConnections inherits PageSurface {
     property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25 || MobileView.keyboard-inset > 0px;
+    property <int> last-list-index: max(1, MobileData.connections.length) + (root.scrolling-footer ? 1 : 0);
     VerticalLayout { spacing: MobileTypography.gap;
         Panel {
             GeometryTarget { key: "connections-card"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
@@ -449,12 +525,18 @@ export component MobileConnections inherits PageSurface {
             clip: true;
             list := ListView { x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
                 content-key: MobileData.connection-page-index + "/" + MobileView.query + "/" + MobileView.connection-sort;
-                for index in max(1, MobileData.connections.length) + (root.scrolling-footer ? 2 : 1): Rectangle {
+                for index in root.last-list-index + 1: Rectangle {
                     height: index == 0 ? header.header-height : content.preferred-height;
+                    TouchArea {
+                        y: 0px;
+                        height: index == root.last-list-index
+                            ? max(parent.height, list.visible-height - list.content-y - parent.y)
+                            : parent.height;
+                    }
                     content := VerticalLayout { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; alignment: start; spacing: 0px;
                         if index > 0 && index <= MobileData.connections.length: ConnectionsRow { item: MobileData.connections[index - 1]; last: index == MobileData.connections.length; }
                         if index == 1 && MobileData.connections.length == 0: MSmall { text: @tr("没有匹配的连接"); height: 64px; horizontal-alignment: center; }
-                        if root.scrolling-footer && index == max(1, MobileData.connections.length) + 1: ConnectionsFooter { }
+                        if root.scrolling-footer && index == root.last-list-index: ConnectionsFooter { }
                     }
                 }
             }
@@ -829,6 +911,7 @@ export component MobileIpCheck inherits PageSurface {
     } }
 }
 component MobileProtection inherits MCard {
+            in property <bool> retry-available;
             selected: MobileData.protected;
             MToolHeading { title: MobileData.protection-supported ? @tr("Claude 保护") : @tr("Claude 保护 · 暂未开放"); icon: @image-url("../../icons/ai.svg");
             MSwitch { width: 48px; horizontal-stretch: 0; checked: MobileData.protected; enabled: MobileData.protection-supported && !MobileData.protection-pending;
@@ -837,12 +920,17 @@ component MobileProtection inherits MCard {
             }
             MSmall { text: MobileData.protection-status != "" ? MobileData.protection-status : @tr("固定节点 · VPN · 代理 DNS · 实时拦截"); wrap: word-wrap; }
             if MobileData.protection-pending: MProgress { indeterminate: true; }
+            if root.retry-available: MButton {
+                geometry-key: "retry-protection"; text: @tr("重试"); enabled: !MobileData.working;
+                clicked => { MobileActions.request(MobileIntent.restart-core, "", ""); }
+            }
             MSmall { text: @tr("可能影响其他应用与国内网站；关闭后恢复原状态。"); color: Theme.warning; wrap: word-wrap; }
 }
 export component MobileAiCheck inherits PageSurface {
+    in property <bool> protection-retry;
     property <bool> compact-actions: root.width < 440px || Theme.text-scale > 1.25;
     MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
-        MobileProtection { }
+        MobileProtection { retry-available: root.protection-retry; }
         GridLayout { spacing: MobileTypography.small-gap;
             MHeading { col: 0; row: 0; text: MobileData.claude-busy ? @tr("正在检测…") : @tr("地区线索检测"); }
             HorizontalLayout {

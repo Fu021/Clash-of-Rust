@@ -453,7 +453,7 @@ fn review(state: &mut State, change: RuleChange, description: String) {
             state.rules.as_mut().unwrap().pending = Some(pending);
             state.message = None;
         }
-        Err(error) => state.message = Some(format!("{error:#}")),
+        Err(error) => state.message = Some(crate::output::localized_error(&error, state.language)),
     }
 }
 
@@ -621,7 +621,10 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
             Tone::Muted,
         ));
         if let Some(warning) = browser.warnings.first() {
-            lines.push((warning.clone(), Tone::Warning));
+            lines.push((
+                rule_manager::warning_in(warning, language).into(),
+                Tone::Warning,
+            ));
         }
         let mut header = wrapped(lines, width);
         header.truncate(height.saturating_sub(1));

@@ -630,6 +630,85 @@ fn wrapped_operation_rows_preserve_descriptions_commands_and_keyboard_selection(
 }
 
 #[test]
+fn profile_list_localizes_only_the_builtin_default_name() {
+    use clash_client_core::config::{Language, Profile};
+
+    let mut state = State::new(true);
+    state.page = Page::Profiles;
+    let poll = state.poll.as_mut().unwrap();
+    poll.meta.settings.active_profile = Some("builtin".into());
+    poll.meta.profiles = [
+        ("builtin", "默认直连", "/resources/default.yaml", true),
+        ("imported", "默认直连", "/imports/default.yaml", false),
+        ("remote", "旅行节点", "https://example.test/sub", false),
+        ("renamed", "自定义直连", "/resources/default.yaml", true),
+    ]
+    .into_iter()
+    .map(|(id, name, source, builtin)| Profile {
+        id: id.into(),
+        name: name.into(),
+        source: source.into(),
+        updated: 0,
+        usage: None,
+        builtin,
+    })
+    .collect();
+
+    for (language, expected) in [
+        (
+            Language::English,
+            [
+                "[Current] Default direct · Built-in",
+                "默认直连 · Local",
+                "旅行节点 · Remote",
+                "自定义直连 · Built-in",
+            ],
+        ),
+        (
+            Language::SimplifiedChinese,
+            [
+                "[当前] 默认直连 · 内置",
+                "默认直连 · 本地",
+                "旅行节点 · 远程",
+                "自定义直连 · 内置",
+            ],
+        ),
+    ] {
+        state.language = language;
+        let frame = render::frame(&state, 120, 30);
+        for text in expected {
+            assert!(frame.iter().any(|line| line.text.contains(text)), "{text}");
+        }
+        assert_eq!(state.items(), ["builtin", "imported", "remote", "renamed"]);
+        state.key(Key::Enter);
+        let form = state.form.as_ref().unwrap();
+        assert_eq!(form.fields[0].value, "builtin");
+        assert_eq!(
+            form.visible_value(0),
+            language.text("默认直连", "Default direct")
+        );
+        state.key(Key::Right);
+        let form = state.form.as_ref().unwrap();
+        assert_eq!(form.fields[0].value, "imported");
+        assert_eq!(form.visible_value(0), "默认直连");
+        state.key(Key::Escape);
+    }
+    state.language = Language::English;
+    state.key(Key::Char('/'));
+    state.key(Key::Paste("默认直连".into()));
+    assert_eq!(state.items(), ["builtin", "imported"]);
+    state.key(Key::Clear);
+    state.key(Key::Paste("dEfAuLt DiReCt".into()));
+    assert_eq!(state.items(), ["builtin"]);
+    state.language = Language::SimplifiedChinese;
+    assert!(state.items().is_empty());
+    state.language = Language::English;
+    state.key(Key::Clear);
+    state.key(Key::Paste("IMPORTED".into()));
+    assert_eq!(state.items(), ["imported"]);
+}
+
+#[test]
 fn long_profile_node_and_connection_names_wrap_and_keep_the_original_target() {
     use unicode_width::UnicodeWidthStr;
     let compact = |text: &str| {

@@ -146,6 +146,54 @@ fn english_home_preserves_routes_and_explains_native_updates() {
 }
 
 #[test]
+fn home_localizes_the_builtin_subscription_name_and_preserves_imported_names() {
+    use clash_client_core::config::{Language, Profile};
+
+    for (builtin, source, name, english_name) in [
+        (
+            true,
+            "/resources/default.yaml",
+            "默认直连",
+            "Default direct",
+        ),
+        (
+            false,
+            "https://example.test/subscription",
+            "默认直连",
+            "默认直连",
+        ),
+        (false, "/imports/travel.yaml", "旅行节点", "旅行节点"),
+        (true, "/resources/default.yaml", "本机直连", "本机直连"),
+    ] {
+        let mut state = State::new(false);
+        let mut poll = demo_poll();
+        let id = "active-profile";
+        poll.meta.profiles.push(Profile {
+            id: id.into(),
+            name: name.into(),
+            source: source.into(),
+            updated: 0,
+            usage: None,
+            builtin,
+        });
+        poll.meta.settings.active_profile = Some(id.into());
+        state.accept(Some(poll));
+
+        state.language = Language::English;
+        let screen = content(&state, 120, 40);
+        assert!(
+            screen.contains(&format!("Active subscription · {english_name}")),
+            "{screen}"
+        );
+
+        state.language = Language::SimplifiedChinese;
+        let screen = content(&state, 120, 40);
+        assert!(screen.contains(&format!("当前订阅 · {name}")), "{screen}");
+        assert_eq!(state.poll.as_ref().unwrap().meta.profiles[0].name, name);
+    }
+}
+
+#[test]
 fn update_installation_is_cancellable_and_keeps_the_displayed_selection() {
     let mut state = state();
     let selected = available(true);

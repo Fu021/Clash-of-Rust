@@ -20,7 +20,10 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         "logs" | "logs clear" | "logs export" => logs(args).await,
         "diagnose" | "dns" => diagnose(args).await,
         "network check" => {
-            let report = network_check(args, &args.positional[0]).await?;
+            let mut report = network_check(args, &args.positional[0]).await?;
+            if !output::writes_json(args) {
+                report.localize_route_for_display(args.language());
+            }
             output::emit(args, serde_json::to_value(report)?)
         }
         "network explain" | "network rule" => {
@@ -63,13 +66,16 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
             use clash_client_core::network_tools::Tool;
             let tool = Tool::parse(path.trim_start_matches("network "))?;
             let options = network_options(args);
-            let report = network_tool(
+            let mut report = network_tool(
                 args,
                 tool,
                 args.positional.first().map_or("", String::as_str),
                 options,
             )
             .await?;
+            if !output::writes_json(args) {
+                report.localize_route_for_display(args.language());
+            }
             let failed = matches!(report.status, "failed" | "unavailable");
             output::emit(args, serde_json::to_value(report)?)?;
             ensure!(
@@ -682,13 +688,7 @@ async fn diagnose(args: &Args) -> Result<()> {
     if args.path == "dns" {
         let meta = backend::live(args).await?;
         let api = Api::new(&meta.settings)?;
-        let domain = &args.positional[0];
-        let answers = match api.resolve_domain(domain).await {
-            Ok(a) => a,
-            Err(_) => {
-                clash_client_core::dns::through_proxy(domain, meta.settings.mixed_port).await?
-            }
-        };
+        let answers = api.resolve_domain(&args.positional[0]).await?;
         return output::emit(args, json!({"source":"core/proxy","answers":answers}));
     }
     let host = args.get("host").unwrap_or("github.com");
@@ -858,29 +858,24 @@ async fn ip(args: &Args) -> Result<()> {
                 break;
             };
             tasks.spawn(async move {
-                let mut row = json!({"id":service.id,"name":service.name,"category":service.group});
                 let outcome = ip_check::check(&service.id, port)
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let status = Status::of(Some(&outcome));
+                let mut row = match &outcome {
+                    Ok(result) => clash_client_core::support::ip_result(result),
+                    Err(error) => json!({"state":"Failed","detail":error}),
+                };
+                row["id"] = json!(service.id);
+                row["name"] = json!(service.name);
+                row["category"] = json!(service.group);
                 if ip_check::target_host(service).is_some() {
-                    row["target_exit"] = Value::Null;
-                }
-                match outcome {
-                    Ok(result) => {
-                        row["millis"] = json!(result.response_millis());
-                        row["state"] = json!(format!("{:?}", result.state));
-                        row["summary"] = json!(result.summary);
-                        row["country"] = json!(result.country);
-                        row["detail"] = json!(result.detail);
-                        if row.get("target_exit").is_some() {
-                            row["target_exit"] = json!(result.target_exit);
-                        }
-                    }
-                    Err(error) => {
-                        row["state"] = json!("Failed");
-                        row["detail"] = json!(format!("{error:#}"));
-                    }
+                    row["target_exit"] = json!(
+                        outcome
+                            .as_ref()
+                            .ok()
+                            .and_then(|result| result.target_exit.as_ref())
+                    );
                 }
                 (row, status)
             });

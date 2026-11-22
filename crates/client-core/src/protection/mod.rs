@@ -278,6 +278,14 @@ pub struct Previous {
     pub selectors: Vec<(String, String)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MobileVpnPlan {
+    Unset,
+    Disabled,
+    Enabled,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Protection {
     pub profile_id: String,
@@ -301,6 +309,8 @@ pub struct Protection {
     pub fixed_groups: std::collections::BTreeMap<String, String>,
     pub route: String,
     pub previous: Previous,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_mobile_vpn_plan: Option<MobileVpnPlan>,
 }
 impl Protection {
     /// Preserve global routing; a direct-mode start still needs the rule overlay.
@@ -323,6 +333,7 @@ impl Protection {
             mac_dns_port: None,
             locked_groups: Default::default(),
             fixed_groups: Default::default(),
+            previous_mobile_vpn_plan: None,
             route: format!("COR-Claude-{}", uuid::Uuid::new_v4().simple()),
             previous,
         }

@@ -4,8 +4,39 @@
 // No shell interpreter or external utility is used at runtime.
 use super::*;
 
-pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
-    match id {
+pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<Option<String>> {
+    let output = match id {
+        "MediaUnlockTest_DisneyPlus"
+        | "MediaUnlockTest_ESPNPlus"
+        | "MediaUnlockTest_NeonTV"
+        | "MediaUnlockTest_HBOMax"
+        | "MediaUnlockTest_NLZIET"
+        | "MediaUnlockTest_EurosportRO"
+        | "MediaUnlockTest_OptusSports"
+        | "MediaUnlockTest_HuluUS"
+        | "MediaUnlockTest_Catchplay"
+        | "MediaUnlockTest_TrueID"
+        | "MediaUnlockTest_EPIX"
+        | "MediaUnlockTest_Joyn"
+        | "MediaUnlockTest_SetantaSports"
+        | "MediaUnlockTest_TVer"
+        | "MediaUnlockTest_Tving"
+        | "MediaUnlockTest_Wavve"
+        | "MediaUnlockTest_DMM"
+        | "MediaUnlockTest_encoreTVB"
+        | "MediaUnlockTest_SKY_DE"
+        | "MediaUnlockTest_MaoriTV"
+        | "MediaUnlockTest_SpotvNow"
+        | "MediaUnlockTest_NetflixCDN"
+        | "MediaUnlockTest_7plus"
+        | "MediaUnlockTest_NaverTV"
+        | "MediaUnlockTest_TV360"
+        | "MediaUnlockTest_KPlus"
+        | "MediaUnlockTest_ofiii"
+        | "MediaUnlockTest_NowE"
+        | "MediaUnlockTest_ViuTV"
+        | "MediaUnlockTest_4GTV"
+        | "MediaUnlockTest_Channel5" => return Ok(None),
         r#"MediaUnlockTest_ChatGPT"# => mediaunlocktest_chatgpt(ctx).await,
         r#"AIUnlockTest_Claude"# => aiunlocktest_claude(ctx).await,
         r#"AIUnlockTest_Gemini_location"# => aiunlocktest_gemini_location(ctx).await,
@@ -13,13 +44,11 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"MediaUnlockTest_PrimeVideo_Region"# => mediaunlocktest_primevideo_region(ctx).await,
         r#"MediaUnlockTest_BilibiliAnimeNew"# => mediaunlocktest_bilibilianimenew(ctx).await,
         r#"MediaUnlockTest_Dazn"# => mediaunlocktest_dazn(ctx).await,
-        r#"MediaUnlockTest_DisneyPlus"# => mediaunlocktest_disneyplus(ctx).await,
         r#"MediaUnlockTest_Google"# => mediaunlocktest_google(ctx).await,
         r#"MediaUnlockTest_HotStar"# => mediaunlocktest_hotstar(ctx).await,
         r#"MediaUnlockTest_Instagram.Music"# => mediaunlocktest_instagram_music(ctx).await,
         r#"MediaUnlockTest_iQYI_Region"# => mediaunlocktest_iqyi_region(ctx).await,
         r#"MediaUnlockTest_Netflix"# => mediaunlocktest_netflix(ctx).await,
-        r#"MediaUnlockTest_NetflixCDN"# => mediaunlocktest_netflixcdn(ctx).await,
         r#"MediaUnlockTest_Spotify"# => mediaunlocktest_spotify(ctx).await,
         r#"GameTest_Steam"# => gametest_steam(ctx).await,
         r#"MediaUnlockTest_Tiktok"# => mediaunlocktest_tiktok(ctx).await,
@@ -28,25 +57,19 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"MediaUnlockTest_Wikipedia_Editable"# => mediaunlocktest_wikipedia_editable(ctx).await,
         r#"MediaUnlockTest_YouTube_Premium"# => mediaunlocktest_youtube_premium(ctx).await,
         r#"MediaUnlockTest_YouTube_CDN"# => mediaunlocktest_youtube_cdn(ctx).await,
-        r#"MediaUnlockTest_4GTV"# => mediaunlocktest_4gtv(ctx).await,
         r#"MediaUnlockTest_BahamutAnime"# => mediaunlocktest_bahamutanime(ctx).await,
         r#"MediaUnlockTest_BilibiliTW"# => mediaunlocktest_bilibilitw(ctx).await,
-        r#"MediaUnlockTest_Catchplay"# => mediaunlocktest_catchplay(ctx).await,
         r#"MediaUnlockTest_FridayVideo"# => mediaunlocktest_fridayvideo(ctx).await,
         r#"MediaUnlockTest_HamiVideo"# => mediaunlocktest_hamivideo(ctx).await,
         r#"MediaUnlockTest_HBOGO_ASIA"# => mediaunlocktest_hbogo_asia(ctx).await,
-        r#"MediaUnlockTest_HBOMax"# => mediaunlocktest_hbomax(ctx).await,
         r#"MediaUnlockTest_KKTV"# => mediaunlocktest_kktv(ctx).await,
         r#"MediaUnlockTest_LineTV.TW"# => mediaunlocktest_linetv_tw(ctx).await,
         r#"MediaUnlockTest_LiTV"# => mediaunlocktest_litv(ctx).await,
         r#"MediaUnlockTest_MyVideo"# => mediaunlocktest_myvideo(ctx).await,
-        r#"MediaUnlockTest_ofiii"# => mediaunlocktest_ofiii(ctx).await,
         r#"MediaUnlockTest_BilibiliHKMCTW"# => mediaunlocktest_bilibilihkmctw(ctx).await,
         r#"MediaUnlockTest_HoyTV"# => mediaunlocktest_hoytv(ctx).await,
         r#"MediaUnlockTest_MyTVSuper"# => mediaunlocktest_mytvsuper(ctx).await,
         r#"MediaUnlockTest_NBATV"# => mediaunlocktest_nbatv(ctx).await,
-        r#"MediaUnlockTest_NowE"# => mediaunlocktest_nowe(ctx).await,
-        r#"MediaUnlockTest_ViuTV"# => mediaunlocktest_viutv(ctx).await,
         r#"MediaUnlockTest_AbemaTV_IPTest"# => mediaunlocktest_abematv_iptest(ctx).await,
         r#"MediaUnlockTest_AnimeFesta"# => mediaunlocktest_animefesta(ctx).await,
         r#"MediaUnlockTest_DAnimeStore"# => mediaunlocktest_danimestore(ctx).await,
@@ -72,7 +95,6 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"MediaUnlockTest_RakutenMagazine"# => mediaunlocktest_rakutenmagazine(ctx).await,
         r#"MediaUnlockTest_RakutenTVJP"# => mediaunlocktest_rakutentvjp(ctx).await,
         r#"MediaUnlockTest_Telasa"# => mediaunlocktest_telasa(ctx).await,
-        r#"MediaUnlockTest_TVer"# => mediaunlocktest_tver(ctx).await,
         r#"MediaUnlockTest_unext"# => mediaunlocktest_unext(ctx).await,
         r#"MediaUnlockTest_VideoMarket"# => mediaunlocktest_videomarket(ctx).await,
         r#"MediaUnlockTest_wowow"# => mediaunlocktest_wowow(ctx).await,
@@ -86,13 +108,9 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"MediaUnlockTest_CWTV"# => mediaunlocktest_cwtv(ctx).await,
         r#"MediaUnlockTest_ATTNOW"# => mediaunlocktest_attnow(ctx).await,
         r#"MediaUnlockTest_DiscoveryPlus"# => mediaunlocktest_discoveryplus(ctx).await,
-        r#"MediaUnlockTest_encoreTVB"# => mediaunlocktest_encoretvb(ctx).await,
-        r#"MediaUnlockTest_EPIX"# => mediaunlocktest_epix(ctx).await,
-        r#"MediaUnlockTest_ESPNPlus"# => mediaunlocktest_espnplus(ctx).await,
         r#"MediaUnlockTest_Fox"# => mediaunlocktest_fox(ctx).await,
         r#"MediaUnlockTest_FuboTV"# => mediaunlocktest_fubotv(ctx).await,
         r#"MediaUnlockTest_FXNOW"# => mediaunlocktest_fxnow(ctx).await,
-        r#"MediaUnlockTest_HuluUS"# => mediaunlocktest_huluus(ctx).await,
         r#"MediaUnlockTest_KBSAmerican"# => mediaunlocktest_kbsamerican(ctx).await,
         r#"MediaUnlockTest_KOCOWA"# => mediaunlocktest_kocowa(ctx).await,
         r#"MediaUnlockTest_MathsSpot"# => mediaunlocktest_mathsspot(ctx).await,
@@ -114,40 +132,31 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"MediaUnlockTest_BBCiPLAYER"# => mediaunlocktest_bbciplayer(ctx).await,
         r#"MediaUnlockTest_CanalPlus"# => mediaunlocktest_canalplus(ctx).await,
         r#"MediaUnlockTest_Channel4"# => mediaunlocktest_channel4(ctx).await,
-        r#"MediaUnlockTest_Channel5"# => mediaunlocktest_channel5(ctx).await,
         r#"MediaUnlockTest_DiscoveryPlusUK"# => mediaunlocktest_discoveryplusuk(ctx).await,
         r#"MediaUnlockTest_Eurosport"# => mediaunlocktest_eurosport(ctx).await,
         r#"MediaUnlockTest_FranceTV"# => mediaunlocktest_francetv(ctx).await,
         r#"MediaUnlockTest_HBO_Nordic"# => mediaunlocktest_hbo_nordic(ctx).await,
         r#"MediaUnlockTest_HBO_Spain"# => mediaunlocktest_hbo_spain(ctx).await,
         r#"MediaUnlockTest_ITVHUB"# => mediaunlocktest_itvhub(ctx).await,
-        r#"MediaUnlockTest_Joyn"# => mediaunlocktest_joyn(ctx).await,
         r#"MediaUnlockTest_MegogoTV"# => mediaunlocktest_megogotv(ctx).await,
         r#"MediaUnlockTest_Molotov"# => mediaunlocktest_molotov(ctx).await,
         r#"MediaUnlockTest_MoviStarPlus"# => mediaunlocktest_movistarplus(ctx).await,
-        r#"MediaUnlockTest_NLZIET"# => mediaunlocktest_nlziet(ctx).await,
         r#"MediaUnlockTest_NPO_Start_Plus"# => mediaunlocktest_npo_start_plus(ctx).await,
         r#"MediaUnlockTest_RaiPlay"# => mediaunlocktest_raiplay(ctx).await,
         r#"MediaUnlockTest_RakutenTV"# => mediaunlocktest_rakutentv(ctx).await,
         r#"MediaUnlockTest_Salto"# => mediaunlocktest_salto(ctx).await,
-        r#"MediaUnlockTest_SetantaSports"# => mediaunlocktest_setantasports(ctx).await,
         r#"MediaUnlockTest_Sky_CH"# => mediaunlocktest_sky_ch(ctx).await,
-        r#"MediaUnlockTest_SKY_DE"# => mediaunlocktest_sky_de(ctx).await,
         r#"MediaUnlockTest_SkyGo"# => mediaunlocktest_skygo(ctx).await,
         r#"MediaUnlockTest_SkyShowTime"# => mediaunlocktest_skyshowtime(ctx).await,
         r#"MediaUnlockTest_Viaplay"# => mediaunlocktest_viaplay(ctx).await,
         r#"MediaUnlockTest_videoland"# => mediaunlocktest_videoland(ctx).await,
         r#"MediaUnlockTest_ZDF"# => mediaunlocktest_zdf(ctx).await,
-        r#"MediaUnlockTest_7plus"# => mediaunlocktest_7plus(ctx).await,
         r#"MediaUnlockTest_ABCiView"# => mediaunlocktest_abciview(ctx).await,
         r#"MediaUnlockTest_Binge"# => mediaunlocktest_binge(ctx).await,
         r#"MediaUnlockTest_Channel10"# => mediaunlocktest_channel10(ctx).await,
         r#"MediaUnlockTest_Channel9"# => mediaunlocktest_channel9(ctx).await,
         r#"MediaUnlockTest_Docplay"# => mediaunlocktest_docplay(ctx).await,
         r#"MediaUnlockTest_KayoSports"# => mediaunlocktest_kayosports(ctx).await,
-        r#"MediaUnlockTest_MaoriTV"# => mediaunlocktest_maoritv(ctx).await,
-        r#"MediaUnlockTest_NeonTV"# => mediaunlocktest_neontv(ctx).await,
-        r#"MediaUnlockTest_OptusSports"# => mediaunlocktest_optussports(ctx).await,
         r#"MediaUnlockTest_SBSonDemand"# => mediaunlocktest_sbsondemand(ctx).await,
         r#"MediaUnlockTest_SkyGONZ"# => mediaunlocktest_skygonz(ctx).await,
         r#"MediaUnlockTest_Stan"# => mediaunlocktest_stan(ctx).await,
@@ -155,17 +164,12 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"MediaUnlockTest_Afreeca"# => mediaunlocktest_afreeca(ctx).await,
         r#"MediaUnlockTest_CoupangPlay"# => mediaunlocktest_coupangplay(ctx).await,
         r#"MediaUnlockTest_KBSDomestic"# => mediaunlocktest_kbsdomestic(ctx).await,
-        r#"MediaUnlockTest_NaverTV"# => mediaunlocktest_navertv(ctx).await,
         r#"MediaUnlockTest_PandaTV"# => mediaunlocktest_pandatv(ctx).await,
-        r#"MediaUnlockTest_SpotvNow"# => mediaunlocktest_spotvnow(ctx).await,
-        r#"MediaUnlockTest_Tving"# => mediaunlocktest_tving(ctx).await,
-        r#"MediaUnlockTest_Wavve"# => mediaunlocktest_wavve(ctx).await,
         r#"MediaUnlockTest_AISPlay"# => mediaunlocktest_aisplay(ctx).await,
         r#"MediaUnlockTest_beIN_Sports"# => mediaunlocktest_bein_sports(ctx).await,
         r#"MediaUnlockTest_ClipTV"# => mediaunlocktest_cliptv(ctx).await,
         r#"MediaUnlockTest_GalaxyPlay"# => mediaunlocktest_galaxyplay(ctx).await,
         r#"MediaUnlockTest_JioCinema"# => mediaunlocktest_jiocinema(ctx).await,
-        r#"MediaUnlockTest_KPlus"# => mediaunlocktest_kplus(ctx).await,
         r#"MediaUnlockTest_meWATCH"# => mediaunlocktest_mewatch(ctx).await,
         r#"MediaUnlockTest_MXPlayer"# => mediaunlocktest_mxplayer(ctx).await,
         r#"MediaUnlockTest_MYTV"# => mediaunlocktest_mytv(ctx).await,
@@ -173,21 +177,18 @@ pub(super) async fn execute(id: &str, ctx: &mut Context) -> Result<String> {
         r#"MediaUnlockTest_Sooka"# => mediaunlocktest_sooka(ctx).await,
         r#"MediaUnlockTest_StarhubTVPlus"# => mediaunlocktest_starhubtvplus(ctx).await,
         r#"MediaUnlockTest_TataPlay"# => mediaunlocktest_tataplay(ctx).await,
-        r#"MediaUnlockTest_TrueID"# => mediaunlocktest_trueid(ctx).await,
-        r#"MediaUnlockTest_TV360"# => mediaunlocktest_tv360(ctx).await,
         r#"MediaUnlockTest_Vidio"# => mediaunlocktest_vidio(ctx).await,
         r#"MediaUnlockTest_VTVcab"# => mediaunlocktest_vtvcab(ctx).await,
         r#"MediaUnlockTest_Zee5"# => mediaunlocktest_zee5(ctx).await,
         r#"MediaUnlockTest_DStv"# => mediaunlocktest_dstv(ctx).await,
         r#"MediaUnlockTest_BeinConnect"# => mediaunlocktest_beinconnect(ctx).await,
-        r#"MediaUnlockTest_EurosportRO"# => mediaunlocktest_eurosportro(ctx).await,
         r#"MediaUnlockTest_MolaTV"# => mediaunlocktest_molatv(ctx).await,
         r#"MediaUnlockTest_CineMax"# => mediaunlocktest_cinemax(ctx).await,
-        r#"MediaUnlockTest_DMM"# => mediaunlocktest_dmm(ctx).await,
         r#"MediaUnlockTest_HBONow"# => mediaunlocktest_hbonow(ctx).await,
         r#"MediaUnlockTest_HBO_Portugal"# => mediaunlocktest_hbo_portugal(ctx).await,
         _ => bail!("检测项目不存在"),
-    }
+    }?;
+    Ok(Some(output))
 }
 
 async fn mediaunlocktest_chatgpt(ctx: &mut Context) -> Result<String> {
@@ -742,7 +743,7 @@ async fn mediaunlocktest_primevideo_region(ctx: &mut Context) -> Result<String> 
         );
         return Ok(output);
     }
-    v.set(r#"tmpresult1"#, ctx.request(Request { url: r#"https://ab9f7h23rcdn.eu.api.amazonvideo.com/cdp/appleedge/getDataByTransform/v1/apple/detail/vod/v1.kt?itemId=amzn1.dv.gti.e6b39984-2bb6-f7d0-33e4-08ec574947f0&deviceId=6F97F9CCFA2243F1A3C44BD3C7F7908E&deviceTypeId=A3JTVZS31ZJ340&density=2x&firmware=10.6800.16104.3&format=json&enabledFeatures=denarius.location.gen4.daric.siglos.siglosPartnerBilling.contentDescriptors.contentDescriptorsV2.productPlacement.zeno.seriesSearch.tapsV2.dateTimeLocalization.multiSourcedEvents.mseEventLevelOffers.liveWatchModal.lbv.daapi.maturityRatingDecoration.seasonTrailer.cleanSlate.xbdModalV2.xbdModalVdp.playbackPinV2.exploreTab.reactions.progBadging.atfEpTimeVis.prereleaseCx.vppaConsent.episodicRelease.movieVam.movieVamCatalog&journeyIngressContext=8%7CEgRzdm9k&osLocale=zh_Hans_CN&timeZoneId=Asia%2FShanghai&uxLocale=zh_CN"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), r#"PrimeVideo/10.68 (iPad; iOS 18.3.2; Scale/2.00)"#.to_owned()]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    v.set(r#"tmpresult1"#, ctx.request(Request { url: format!(r#"https://ab9f7h23rcdn.eu.api.amazonvideo.com/cdp/appleedge/getDataByTransform/v1/apple/detail/vod/v1.kt?itemId=amzn1.dv.gti.e6b39984-2bb6-f7d0-33e4-08ec574947f0&deviceId={}&deviceTypeId=A3JTVZS31ZJ340&density=2x&firmware=10.6800.16104.3&format=json&enabledFeatures=denarius.location.gen4.daric.siglos.siglosPartnerBilling.contentDescriptors.contentDescriptorsV2.productPlacement.zeno.seriesSearch.tapsV2.dateTimeLocalization.multiSourcedEvents.mseEventLevelOffers.liveWatchModal.lbv.daapi.maturityRatingDecoration.seasonTrailer.cleanSlate.xbdModalV2.xbdModalVdp.playbackPinV2.exploreTab.reactions.progBadging.atfEpTimeVis.prereleaseCx.vppaConsent.episodicRelease.movieVam.movieVamCatalog&journeyIngressContext=8%7CEgRzdm9k&osLocale=zh_Hans_CN&timeZoneId=Asia%2FShanghai&uxLocale=zh_CN"#, random_id()), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), r#"PrimeVideo/10.68 (iPad; iOS 18.3.2; Scale/2.00)"#.to_owned()]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
     if (matches_pattern(&v.get(r#"tmpresult1"#), &r#"curl*"#.to_owned())) {
         output = decode_escapes(
             &[[
@@ -1102,306 +1103,6 @@ async fn mediaunlocktest_dazn(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_disneyplus(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"PreAssertion"#, ctx.request(Request { url: r#"https://disney.api.edge.bamgrid.com/devices"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"authorization: Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84"#.to_owned())?, header_pair(&r#"content-type: application/json; charset=UTF-8"#.to_owned())?], body: Some([r#"{"deviceFamily":"browser","applicationRuntime":"chrome","deviceProfile":"windows","attributes":{}}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"PreAssertion"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection[1])"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"assertion"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"PreAssertion"#)].join(" "), &".")?,
-                &[r#"assertion"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"PreDisneyCookie"#,
-        replace_text(
-            &[v.get(r#"Media_Cookie"#)].join(" "),
-            &[r#"-n"#.to_owned(), r#"1p"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"disneycookie"#,
-        replace_text(
-            &[v.get(r#"PreDisneyCookie"#)].join(" "),
-            &[[
-                r#"s/DISNEYASSERTION/"#.to_owned(),
-                v.get(r#"assertion"#),
-                r#"/g"#.to_owned(),
-            ]
-            .concat()],
-        )?,
-    );
-    v.set(r#"TokenContent"#, ctx.request(Request { url: r#"https://disney.api.edge.bamgrid.com/token"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"authorization: Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84"#.to_owned())?], body: Some([v.get(r#"disneycookie"#)].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"TokenContent"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection[2])"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"isBanned"#,
-        select_lines(
-            &json_field(&[v.get(r#"TokenContent"#)].join(" "), &".")?,
-            &[r#"forbidden-location"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"is403"#,
-        select_lines(
-            &[v.get(r#"TokenContent"#)].join(" "),
-            &[r#"403 ERROR"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"isBanned"#)).is_empty()) || (!(v.get(r#"is403"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No (Banned)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"fakecontent"#,
-        replace_text(
-            &[v.get(r#"Media_Cookie"#)].join(" "),
-            &[r#"-n"#.to_owned(), r#"8p"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"refreshToken"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"TokenContent"#)].join(" "), &".")?,
-                    &[r#"refresh_token"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"disneycontent"#,
-        replace_text(
-            &[v.get(r#"fakecontent"#)].join(" "),
-            &[[
-                r#"s/ILOVEDISNEY/"#.to_owned(),
-                v.get(r#"refreshToken"#),
-                r#"/g"#.to_owned(),
-            ]
-            .concat()],
-        )?,
-    );
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://disney.api.edge.bamgrid.com/graph/v1/device/graphql"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"authorization: ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84"#.to_owned())?], body: Some([v.get(r#"disneycontent"#)].join("&")), follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection[3])"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"previewchecktmp"#,
-        ctx.request(Request {
-            url: r#"https://www.disneyplus.com"#.to_owned(),
-            method: r#"GET"#.to_owned(),
-            headers: vec![],
-            body: None,
-            follow: true,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: true,
-            timeout: 10,
-            writeout: r#"%{url_effective}\n"#.to_owned(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    if (matches_pattern(&v.get(r#"previewchecktmp"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection[4])"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"previewcheck"#,
-        select_lines(
-            &[v.get(r#"previewchecktmp"#)].join(" "),
-            &[r#"preview"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"isUnavailable"#,
-        select_lines(
-            &[v.get(r#"previewcheck"#)].join(" "),
-            &[r#"unavailable"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"region"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                &[r#"countryCode"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"inSupportedLocation"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"inSupportedLocation"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f1"#.to_owned(), r#"-d,"#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"region"#) == r#"JP"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes (Region: JP)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (!(v.get(r#"region"#)).is_empty())
-        && (v.get(r#"inSupportedLocation"#) == r#"false"#.to_owned())
-        && ((v.get(r#"isUnavailable"#)).is_empty())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Yellow"#),
-                r#"Available For [Disney+ "#.to_owned(),
-                v.get(r#"region"#),
-                r#"] Soon"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (!(v.get(r#"region"#)).is_empty()) && (!(v.get(r#"isUnavailable"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No (Unavailable)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (!(v.get(r#"region"#)).is_empty())
-        && (v.get(r#"inSupportedLocation"#) == r#"true"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes (Region: "#.to_owned(),
-                v.get(r#"region"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if ((v.get(r#"region"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No (Unknown)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Disney+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
-}
-
 async fn mediaunlocktest_google(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
@@ -1626,7 +1327,7 @@ async fn mediaunlocktest_hotstar(ctx: &mut Context) -> Result<String> {
 async fn mediaunlocktest_instagram_music(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://www.instagram.com/graphql/query"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: Some([r#"av=0&__d=www&__user=0&__a=1&__req=3&__hs=19876.HYP%3Ainstagram_web_pkg.2.1..0.0&dpr=1&__ccg=UNKNOWN&__rev=1013915830&__s=e0krj4%3Ay7ob1k%3Arsdf9x&__hsi=7375722728458088454&__dyn=7xeUjG1mxu1syUbFp40NonwgU7SbzEdF8aUco2qwJw5ux609vCwjE1xoswaq0yE7i0n24oaEd86a3a1YwBgao6C0Mo2iyo7u3i4U2zxe2GewGwso88cobEaU2eUlwhEe87q7U1bobpEbUGdwtU662O0z8c86-3u2WE5B0bK1Iwqo5q1IQp1yUoxe4UrAwCAxW6Uf9EO6VU8U&__csr=gpgJOllNq9nP9ROd9bqTh-GEzh_jppaAGmAyGprFoBkVqmh2QHF28y-GBrgHV9aByaQ8XiyUCl7GX-bl12UHx2gxp8GUSuaBVAGCXK48zHKHUG2mi669G8KcjAgCEW8yax911u6V5yE01mJPw2mpU4yu1I8030e56OmawtxxkaDwkEGu0yQ0eYwdfw6NyGiG2Cae2S0Z80gvwsU2ACkE020ww3UU&__comet_req=7&lsd=AVpOeIV9Tzw&jazoest=2984&__spin_r=1013915830&__spin_b=trunk&__spin_t=1717294270&fb_api_caller_class=RelayModern&fb_api_req_friendly_name=PolarisPostActionLoadPostQueryQuery&variables=%7B%22shortcode%22%3A%22C2YEAdOh9AB%22%2C%22fetch_comment_count%22%3A0%2C%22parent_comment_count%22%3A0%2C%22child_comment_count%22%3A0%2C%22fetch_like_count%22%3A0%2C%22fetch_tagged_user_count%22%3Anull%2C%22fetch_preview_comment_count%22%3A0%2C%22has_threaded_comments%22%3Atrue%2C%22hoisted_comment_id%22%3Anull%2C%22hoisted_reply_id%22%3Anull%7D&server_timestamps=true&doc_id=25531498899829322"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://www.instagram.com/graphql/query"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: Some([r#"fb_api_caller_class=RelayModern&fb_api_req_friendly_name=PolarisPostActionLoadPostQueryQuery&variables=%7B%22shortcode%22%3A%22C2YEAdOh9AB%22%2C%22fetch_comment_count%22%3A0%2C%22parent_comment_count%22%3A0%2C%22child_comment_count%22%3A0%2C%22fetch_like_count%22%3A0%2C%22fetch_tagged_user_count%22%3Anull%2C%22fetch_preview_comment_count%22%3A0%2C%22has_threaded_comments%22%3Atrue%2C%22hoisted_comment_id%22%3Anull%2C%22hoisted_reply_id%22%3Anull%7D&server_timestamps=true&doc_id=25531498899829322"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
     if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
         output = decode_escapes(
             &[[
@@ -1678,7 +1379,7 @@ async fn mediaunlocktest_instagram_music(ctx: &mut Context) -> Result<String> {
             &[[
                 r#"\r Instagram Licensed Music:\t\t"#.to_owned(),
                 v.get(r#"Font_Red"#),
-                r#"No  (Failed)"#.to_owned(),
+                r#"Failed (Unexpected Result)"#.to_owned(),
                 v.get(r#"Font_Suffix"#),
                 r#"\n"#.to_owned(),
             ]
@@ -1976,221 +1677,6 @@ async fn mediaunlocktest_netflix(ctx: &mut Context) -> Result<String> {
         .concat()]
         .join(" "),
     );
-    Ok(output)
-}
-
-async fn mediaunlocktest_netflixcdn(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    if (v.get(r#"1"#) == r#"6"#.to_owned()) {
-        v.set(
-            r#"nf_web_ip"#,
-            select_fields(
-                &take_lines(
-                    &ctx.resolve_host(&r#"www.netflix.com"#.to_owned(), &r#"ahostsv6"#.to_owned())
-                        .await?,
-                    &[r#"-1"#.to_owned()],
-                )?,
-                &[r#"{print $1}"#.to_owned()],
-            )?,
-        );
-    } else {
-        v.set(
-            r#"nf_web_ip"#,
-            select_fields(
-                &take_lines(
-                    &ctx.resolve_host(&r#"www.netflix.com"#.to_owned(), &r#"ahostsv4"#.to_owned())
-                        .await?,
-                    &[r#"-1"#.to_owned()],
-                )?,
-                &[r#"{print $1}"#.to_owned()],
-            )?,
-        );
-    }
-    if (!(!(v.get(r#"nf_web_ip"#)).is_empty())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Netflix Preferred CDN:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Null"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        v.set(
-            r#"nf_web_isp"#,
-            ctx.detect_isp(&v.get(r#"nf_web_ip"#)).await?,
-        );
-        if (!(matches_pattern(&v.get(r#"nf_web_isp"#), &r#"*Amazon*"#.to_owned())))
-            && (!(matches_pattern(&v.get(r#"nf_web_isp"#), &r#"*Netflix*"#.to_owned())))
-        {
-            output = decode_escapes(
-                &[[
-                    r#"\r Netflix Preferred CDN:\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Yellow"#),
-                    r#"Hijacked with ["#.to_owned(),
-                    v.get(r#"nf_web_isp"#),
-                    r#"]"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        }
-    }
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api.fast.com/netflix/speedtest/v2?https=true&token=YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm&urlCount=1"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Netflix Preferred CDN:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"isp"#,
-        json_field(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &r#".client.isp"#.to_owned(),
-        )?,
-    );
-    v.set(
-        r#"target_city"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".targets[0].location.city"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"target_country"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".targets[0].location.country"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"isp"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".client.isp"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"target_url"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".targets[0].url"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"target_fqdn"#,
-        select_fields(
-            &select_fields(
-                &[v.get(r#"target_url"#)].join(" "),
-                &[r#"-F/"#.to_owned(), r#"{print $3}"#.to_owned()],
-            )?,
-            &[r#"-F."#.to_owned(), r#"{print $1}"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"isp"#)).is_empty())
-        && (v.get(r#"isp"#) != r#"null"#.to_owned())
-        && (matches_pattern(&v.get(r#"target_url"#), &r#"*isp.1.oca*"#.to_owned()))
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Netflix Preferred CDN:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Yellow"#),
-                v.get(r#"isp"#),
-                r#"'s OCAs in "#.to_owned(),
-                v.get(r#"target_city"#),
-                r#","#.to_owned(),
-                v.get(r#"target_country"#),
-                r#" ("#.to_owned(),
-                v.get(r#"target_fqdn"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    if (matches_pattern(&v.get(r#"target_url"#), &r#"*isp.1.oca*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Netflix Preferred CDN:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Yellow"#),
-                r#"ISP's OCAs in "#.to_owned(),
-                v.get(r#"target_city"#),
-                r#","#.to_owned(),
-                v.get(r#"target_country"#),
-                r#" ("#.to_owned(),
-                v.get(r#"target_fqdn"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    if (!(v.get(r#"target_city"#)).is_empty()) && (!(v.get(r#"target_city"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Netflix Preferred CDN:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                v.get(r#"target_city"#),
-                r#","#.to_owned(),
-                v.get(r#"target_country"#),
-                r#" ("#.to_owned(),
-                v.get(r#"target_fqdn"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r Netflix Preferred CDN:\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    return Ok(output);
     Ok(output)
 }
 
@@ -2787,9 +2273,8 @@ async fn mediaunlocktest_wikipedia_editable(ctx: &mut Context) -> Result<String>
 async fn mediaunlocktest_youtube_premium(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
-    v.set(r#"tmpresult1"#, ctx.request(Request { url: r#"https://www.youtube.com/premium"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"Accept-Language: en"#.to_owned())?, [r#"cookie"#.to_owned(), r#"YSC=BiCUU3-5Gdk; CONSENT=YES+cb.20220301-11-p0.en+FX+700; GPS=1; VISITOR_INFO1_LIVE=4VwPMkB7W5A; PREF=tz=Asia.Shanghai; _gcl_au=1.1.1809531354.1646633279"#.to_owned()]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
     v.set(
-        r#"tmpresult2"#,
+        r#"tmpresult"#,
         ctx.request(Request {
             url: r#"https://www.youtube.com/premium"#.to_owned(),
             method: r#"GET"#.to_owned(),
@@ -2811,15 +2296,6 @@ async fn mediaunlocktest_youtube_premium(ctx: &mut Context) -> Result<String> {
             tls13: false,
         })
         .await?,
-    );
-    v.set(
-        r#"tmpresult"#,
-        [
-            v.get(r#"tmpresult1"#),
-            r#":"#.to_owned(),
-            v.get(r#"tmpresult2"#),
-        ]
-        .concat(),
     );
     if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
         output = decode_escapes(
@@ -2941,7 +2417,7 @@ async fn mediaunlocktest_youtube_premium(ctx: &mut Context) -> Result<String> {
                 &[[
                     r#"\r YouTube Premium:\t\t\t"#.to_owned(),
                     v.get(r#"Font_Red"#),
-                    r#"No"#.to_owned(),
+                    r#"Failed (Unexpected Result)"#.to_owned(),
                     v.get(r#"Font_Suffix"#),
                     r#" \n"#.to_owned(),
                 ]
@@ -3156,80 +2632,6 @@ async fn mediaunlocktest_youtube_cdn(ctx: &mut Context) -> Result<String> {
         .join(" "),
     );
     return Ok(output);
-    Ok(output)
-}
-
-async fn mediaunlocktest_4gtv(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api2.4gtv.tv//Vod/GetVodUrl3"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: Some([r#"value=D33jXJ0JVFkBqV%2BZSi1mhPltbejAbPYbDnyI9hmfqjKaQwRQdj7ZKZRAdb16%2FRUrE8vGXLFfNKBLKJv%2BfDSiD%2BZJlUa5Msps2P4IWuTrUP1%2BCnS255YfRadf%2BKLUhIPj"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r 4GTV.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"checkfailed"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"Success"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f1"#.to_owned(), r#"-d,"#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"checkfailed"#) == r#"false"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r 4GTV.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"checkfailed"#) == r#"true"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r 4GTV.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r 4GTV.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
     Ok(output)
 }
 
@@ -3483,110 +2885,6 @@ async fn mediaunlocktest_bilibilitw(ctx: &mut Context) -> Result<String> {
             .concat()]
             .join(" "),
         );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_catchplay(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://sunapi.catchplay.com/geo"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"authorization: Basic NTQ3MzM0NDgtYTU3Yi00MjU2LWE4MTEtMzdlYzNkNjJmM2E0Ok90QzR3elJRR2hLQ01sSDc2VEoy"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r CatchPlay+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"code"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"region"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"isoCode"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"result"#)).is_empty()) {
-        if (v.get(r#"result"#) == r#"0"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r CatchPlay+:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Green"#),
-                    r#"Yes (Region: "#.to_owned(),
-                    v.get(r#"region"#),
-                    r#")"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else if (v.get(r#"result"#) == r#"100016"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r CatchPlay+:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"No"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else {
-            output = decode_escapes(
-                &[[
-                    r#"\r CatchPlay+:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"Failed"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        }
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r CatchPlay+:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
     }
     Ok(output)
 }
@@ -3847,228 +3145,6 @@ async fn mediaunlocktest_hbogo_asia(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_hbomax(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"GetToken"#, ctx.request(Request { url: r#"https://default.any-any.prd.api.hbomax.com/token?realm=bolt&deviceId=afbb5daa-c327-461d-9460-d8e4b3ee4a1f"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"x-device-info: beam/5.0.0 (desktop/desktop; Windows/10; afbb5daa-c327-461d-9460-d8e4b3ee4a1f/da0cdd94-5a39-42ef-aa68-54cbc1b852c3)"#.to_owned())?, header_pair(&r#"x-disco-client: WEB:10.15.7:dotcom-hbomax:7.7.0"#.to_owned())?, header_pair(&r#"x-disco-params: realm=bolt,bid=beam,features=ar"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"GetToken"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r HBO Max:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"Token"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"GetToken"#)].join(" "),
-                &r#".data.attributes.token"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(r#"APITemp"#, ctx.request(Request { url: r#"https://default.any-any.prd.api.hbomax.com/session-context/headwaiter/v1/bootstrap"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"x-disco-client: WEB:10.15.7:dotcom-hbomax:7.7.0"#.to_owned())?, header_pair(&r#"x-disco-params: realm=bolt,bid=beam,features=ar"#.to_owned())?, [r#"cookie"#.to_owned(), [r#"st="#.to_owned(), v.get(r#"Token"#)].concat()]], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    v.set(
-        r#"domain"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"APITemp"#)].join(" "),
-                &r#".routing.domain"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"tenant"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"APITemp"#)].join(" "),
-                &r#".routing.tenant"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"env"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"APITemp"#)].join(" "),
-                &r#".routing.env"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"homeMarket"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"APITemp"#)].join(" "),
-                &r#".routing.homeMarket"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"tmpresult"#,
-        ctx.request(Request {
-            url: [
-                r#"https://default."#.to_owned(),
-                v.get(r#"tenant"#),
-                r#"-"#.to_owned(),
-                v.get(r#"homeMarket"#),
-                r#"."#.to_owned(),
-                v.get(r#"env"#),
-                r#"."#.to_owned(),
-                v.get(r#"domain"#),
-                r#"/users/me"#.to_owned(),
-            ]
-            .concat(),
-            method: r#"GET"#.to_owned(),
-            headers: vec![
-                header_pair(&r#"x-disco-client: WEB:10.15.7:dotcom-hbomax:7.7.0"#.to_owned())?,
-                header_pair(&r#"x-disco-params: realm=bolt,bid=beam,features=ar"#.to_owned())?,
-                [
-                    r#"cookie"#.to_owned(),
-                    [r#"st="#.to_owned(), v.get(r#"Token"#)].concat(),
-                ],
-            ],
-            body: None,
-            follow: false,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    v.set(
-        r#"result"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".data.attributes.currentLocationTerritory"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"availableRegion"#,
-        map_characters(
-            &(unique_lines(&sort_lines(&split_fields(
-                &split_fields(
-                    &select_lines(
-                        &ctx.request(Request {
-                            url: r#"https://www.hbomax.com/"#.to_owned(),
-                            method: r#"GET"#.to_owned(),
-                            headers: vec![],
-                            body: None,
-                            follow: true,
-                            headers_only: false,
-                            include_headers: false,
-                            fail_status: false,
-                            discard_body: false,
-                            timeout: 10,
-                            writeout: String::new(),
-                            cookie_store: false,
-                            cookie_load: false,
-                            retries: 0,
-                            tls13: false,
-                        })
-                        .await?,
-                        &[
-                            r#"-woP"#.to_owned(),
-                            r#""url":"/[a-z]{2}/[a-z]{2}""#.to_owned(),
-                        ],
-                    )?,
-                    &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-                )?,
-                &[r#"-f2"#.to_owned(), r#"-d/"#.to_owned()],
-            )?)))
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" "),
-            &[r#"a-z"#.to_owned(), r#"A-Z"#.to_owned()],
-        )?,
-    );
-    v.set(r#"isVPN"#, ctx.request(Request { url: r#"https://default.any-any.prd.api.hbomax.com/any/playback/v1/playbackInfo"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"cookie"#.to_owned(), r#"st=eyJhbGciOiJSUzI1NiJ9.eyJqdGkiOiJ0b2tlbi0wOWQxOTg4Yy1mZmUzLTQxMDEtOWI5My0yNDU1ZTkyNGQ1YjYiLCJpc3MiOiJmcGEtaXNzdWVyIiwic3ViIjoiVVNFUklEOmJvbHQ6YjYzOTgxZWQtNzA2MC00ZGYwLThkZGItZjA2YjFkNWRjZWVkIiwiaWF0IjoxNzQzODQwMzgwLCJleHAiOjIwNTkyMDAzODAsInR5cGUiOiJBQ0NFU1NfVE9LRU4iLCJzdWJkaXZpc2lvbiI6ImJlYW1fYW1lciIsInNjb3BlIjoiZGVmYXVsdCIsImlpZCI6IjQwYTgzZjNlLTY4OTktNDE3Mi1hMWY2LWJjZDVjN2ZkNjA4NSIsInZlcnNpb24iOiJ2MyIsImFub255bW91cyI6ZmFsc2UsImRldmljZUlkIjoiNWY3YzViZjQtYjc4Ny00NDRjLWJhYTYtMzU5MzgwYWFiM2RmIn0.f5HTgIV2v0nQQDp5LQG0xqLrxyACdvnMDiWO_viX_CUGqtc5ncSjp_LgM30QFkkMnINFhzKEGRpsZvb-o3Pj_Z39uRBr5LCeiCPR7ssV-_SXyRFVRRDEB2lpxyz7jmdD1SxvA06HnEwTbZQzlbZ7g9GXq02yNdEfHlqYEh_4WF88UbXfeieYTd4TH7kwN1RE50NfQUS6f0WmzpAbpiULyd87mpTeynchFNMMz-YHVzZ_-nDW6geihXc3tS0FKVSR8fdOSPQFzEYOLCfhInufiPahiXI-OKF89aShAqM-y4Hx_eukGnsq3mO5wa3unnqVr9Kzc61BIhHh1Hs2bqYiYg;"#.to_owned()], header_pair(&r#"x-disco-client: WEB:10.15.7:dotcom-hbomax:7.7.0"#.to_owned())?, header_pair(&r#"x-disco-params: realm=bolt,bid=beam,features=ar"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(
-        &v.get(r#"availableRegion"#),
-        &[r#"*"#.to_owned(), v.get(r#"result"#), r#"*"#.to_owned()].concat(),
-    )) && (!(v.get(r#"result"#)).is_empty())
-    {
-        if (matches_pattern(&v.get(r#"isVPN"#), &r#"*VPN*"#.to_owned())) {
-            output = decode_escapes(
-                &[[
-                    r#"\r HBO Max:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"No  (VPN Detected;Region: "#.to_owned(),
-                    v.get(r#"result"#),
-                    r#")"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        }
-        output = decode_escapes(
-            &[[
-                r#"\r HBO Max:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes (Region: "#.to_owned(),
-                v.get(r#"result"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r HBO Max:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r HBO Max:\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed (Network Connection)"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    return Ok(output);
-    Ok(output)
-}
-
 async fn mediaunlocktest_kktv(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
@@ -4226,88 +3302,27 @@ async fn mediaunlocktest_linetv_tw(ctx: &mut Context) -> Result<String> {
 }
 
 async fn mediaunlocktest_litv(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://www.litv.tv/api/get-urls-no-auth"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"content-type: application/json"#.to_owned())?], body: Some([r#"{"AssetId":"iNEWS","MediaType":"channel","puid":"b0b59472-72eb-4e06-b0b1-591716e4f9a4"}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r LiTV:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        json_field(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &r#".error.code"#.to_owned(),
-        )?,
+    let mut request = Request::get("https://www.litv.tv/api/get-urls-no-auth");
+    request.method = "POST".into();
+    request.timeout = 10;
+    request
+        .headers
+        .push(header_pair("Content-Type: application/json")?);
+    request.body = Some(
+        serde_json::json!({
+            "AssetId": "iNEWS",
+            "MediaType": "channel",
+            "puid": uuid::Uuid::new_v4().to_string(),
+        })
+        .to_string(),
     );
-    if (v.get(r#"result"#) != r#"null"#.to_owned()) {
-        if (v.get(r#"result"#) == r#"42000087"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r LiTV:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"No"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else if (v.get(r#"result"#) == r#"42000075"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r LiTV:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Green"#),
-                    r#"Yes"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else {
-            output = decode_escapes(
-                &[[
-                    r#"\r LiTV:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"Unknown (Code: "#.to_owned(),
-                    v.get(r#"result"#),
-                    r#")"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        }
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r LiTV:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
+    let body = ctx.request(request).await?;
+    let result = match json_field(&body, ".error.code").as_deref() {
+        Ok("42000087") => "No",
+        Ok("42000075") if !ctx.denied => "Yes",
+        _ => "Unknown",
+    };
+    Ok(format!("LiTV: {result}"))
 }
 
 async fn mediaunlocktest_myvideo(ctx: &mut Context) -> Result<String> {
@@ -4409,65 +3424,6 @@ async fn mediaunlocktest_myvideo(ctx: &mut Context) -> Result<String> {
         .join(" "),
     );
     return Ok(output);
-    Ok(output)
-}
-
-async fn mediaunlocktest_ofiii(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"result"#, ctx.request(Request { url: r#"https://cdi.ofiii.com/ofiii_cdi/video/urls?device_type=pc&device_id=450b705c-7a08-49e9-9297-10ec0c8624b0&media_type=comic&asset_id=vod68157-020015M001&project_num=OFWEB00&puid=7a9c18b9-eecc-499b-afd2-e905bf04f5a4"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: true, timeout: 10, writeout: r#"%{http_code}"#.to_owned(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (v.get(r#"result"#) == r#"000"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r ofiii:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    if (v.get(r#"result"#) == r#"200"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r ofiii:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r ofiii:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r ofiii:\t\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
     Ok(output)
 }
 
@@ -4761,169 +3717,6 @@ async fn mediaunlocktest_nbatv(ctx: &mut Context) -> Result<String> {
                 r#"\r NBA TV:\t\t\t\t"#.to_owned(),
                 v.get(r#"Font_Green"#),
                 r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_nowe(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"result"#, split_fields(&select_fields(&select_lines(&json_field(&ctx.request(Request { url: r#"https://webtvapi.nowe.com/16/1/getVodURL"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"Content-Type: application/json"#.to_owned())?], body: Some([r#"{"contentId":"202105121370235","contentType":"Vod","pin":"","deviceId":"W-60b8d30a-9294-d251-617b-6oagagn3","deviceType":"WEB"}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?, &".")?, &[r#"responseCode"#.to_owned()])?, &[r#"{print $2}"#.to_owned()])?, &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()])?);
-    if (v.get(r#"result"#) == r#"NOT_LOGIN"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Now E:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"SUCCESS"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Now E:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"PRODUCT_INFORMATION_INCOMPLETE"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Now E:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"GEO_CHECK_FAIL"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Now E:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Now E:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Unexpected Result: "#.to_owned(),
-                v.get(r#"result"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r Now E:\t\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed (Network Connection)"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    return Ok(output);
-    Ok(output)
-}
-
-async fn mediaunlocktest_viutv(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api.viu.now.com/p8/3/getLiveURL"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"Content-Type: application/json"#.to_owned())?], body: Some([r#"{"callerReferenceNo":"20210726112323","contentId":"099","contentType":"Channel","channelno":"099","mode":"prod","deviceId":"29b3cb117a635d5b56","deviceType":"ANDROID_WEB"}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if ((v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Viu.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"responseCode"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"result"#) == r#"SUCCESS"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Viu.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"GEO_CHECK_FAIL"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Viu.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Viu.TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Unexpected Result: "#.to_owned(),
-                v.get(r#"result"#),
-                r#")"#.to_owned(),
                 v.get(r#"Font_Suffix"#),
                 r#"\n"#.to_owned(),
             ]
@@ -6005,7 +4798,7 @@ async fn mediaunlocktest_mgstage(ctx: &mut Context) -> Result<String> {
 async fn mediaunlocktest_mora(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
-    v.set(r#"result"#, ctx.request(Request { url: r#"https://mora.jp/buy?__requestToken=1713764407153&returnUrl=https%3A%2F%2Fmora.jp%2Fpackage%2F43000087%2FTFDS01006B00Z%2F%3Ffmid%3DTOPRNKS%26trackMaterialNo%3D31168909&fromMoraUx=false&deleteMaterial="#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"host: mora.jp"#.to_owned())?], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: true, timeout: 10, writeout: r#"%{http_code}"#.to_owned(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    v.set(r#"result"#, ctx.request(Request { url: format!(r#"https://mora.jp/buy?__requestToken={}&returnUrl=https%3A%2F%2Fmora.jp%2Fpackage%2F43000087%2FTFDS01006B00Z%2F%3Ffmid%3DTOPRNKS%26trackMaterialNo%3D31168909&fromMoraUx=false&deleteMaterial="#, timestamp(true)), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"host: mora.jp"#.to_owned())?], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: true, timeout: 10, writeout: r#"%{http_code}"#.to_owned(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
     if (v.get(r#"result"#) == r#"000"#.to_owned()) {
         output = decode_escapes(
             &[[
@@ -6309,64 +5102,27 @@ async fn mediaunlocktest_niconico(ctx: &mut Context) -> Result<String> {
 }
 
 async fn mediaunlocktest_paravi(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api.paravi.jp/api/v1/playback/auth"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"Content-Type: application/json"#.to_owned())?], body: Some([r#"{"meta_id":17414,"vuid":"3b64a775a4e38d90cc43ea4c7214702b","device_code":1,"app_id":1}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Paravi:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"type"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
+    let mut request = Request::get("https://api.paravi.jp/api/v1/playback/auth");
+    request.method = "POST".into();
+    request.timeout = 10;
+    request
+        .headers
+        .push(header_pair("Content-Type: application/json")?);
+    request.body = Some(
+        serde_json::json!({
+            "meta_id": 17414,
+            "vuid": random_id(),
+            "device_code": 1,
+            "app_id": 1,
+        })
+        .to_string(),
     );
-    if (v.get(r#"result"#) == r#"Forbidden"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Paravi:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"Unauthorized"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Paravi:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
+    let body = ctx.request(request).await?;
+    let result = match json_field(&body, ".type").as_deref() {
+        Ok(r#""Unauthorized""#) => "Web Reachable",
+        _ => "Unknown",
+    };
+    Ok(format!("Paravi: {result}"))
 }
 
 async fn mediaunlocktest_umajp(ctx: &mut Context) -> Result<String> {
@@ -6861,9 +5617,10 @@ async fn mediaunlocktest_telasa(ctx: &mut Context) -> Result<String> {
             url: r#"https://api-videopass-anon.kddi-video.com/v1/playback/system_status"#
                 .to_owned(),
             method: r#"GET"#.to_owned(),
-            headers: vec![header_pair(
-                &r#"X-Device-ID: d36f8e6b-e344-4f5e-9a55-90aeb3403799"#.to_owned(),
-            )?],
+            headers: vec![header_pair(&format!(
+                "X-Device-ID: {}",
+                uuid::Uuid::new_v4().hyphenated()
+            ))?],
             body: None,
             follow: false,
             headers_only: false,
@@ -6954,193 +5711,31 @@ async fn mediaunlocktest_telasa(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_tver(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(
-        r#"tmpresult"#,
-        ctx.request(Request {
-            url:
-                r#"https://playback.api.streaks.jp/v1/projects/tver-simul-ntv/medias/ref:simul-ntv"#
-                    .to_owned(),
-            method: r#"GET"#.to_owned(),
-            headers: vec![
-                [r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)],
-                header_pair(&r#"x-streaks-api-key: ntv"#.to_owned())?,
-            ],
-            body: None,
-            follow: true,
-            headers_only: false,
-            include_headers: false,
-            fail_status: true,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r TVer:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"*project_id*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r TVer:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"*403*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r TVer:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r TVer:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Unknown"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
 async fn mediaunlocktest_unext(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://cc.unext.jp/?zxuid=1b64984ecc23&zxemp=29854391&operationName=cosmo_getPlaylistUrl&variables=%7B%22code%22%3A%22ED00440417%22%2C%22playMode%22%3A%22caption%22%2C%22bitrateLow%22%3A192%2C%22bitrateHigh%22%3Anull%2C%22validationOnly%22%3Afalse%7D&extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%22a2309e22a6819ff747cf9a389dd78db35fa3c386fac1d53461061ba20fa44e34%22%7D%7D"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"Content-Type: application/json"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if ((v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r U-NEXT:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"resultStatus"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-d"#.to_owned(), r#","#.to_owned(), r#"-f1"#.to_owned()],
-        )?,
+    let mut request = Request::get(
+        "https://cc.unext.jp/?operationName=cosmo_getPlaylistUrl&variables=%7B%22code%22%3A%22ED00440417%22%2C%22playMode%22%3A%22caption%22%2C%22bitrateLow%22%3A192%2C%22bitrateHigh%22%3Anull%2C%22validationOnly%22%3Afalse%7D&extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%22a2309e22a6819ff747cf9a389dd78db35fa3c386fac1d53461061ba20fa44e34%22%7D%7D",
     );
-    if (!(v.get(r#"result"#)).is_empty()) {
-        if (v.get(r#"result"#) == r#"475"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r U-NEXT:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Green"#),
-                    r#"Yes"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else if (v.get(r#"result"#) == r#"200"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r U-NEXT:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Green"#),
-                    r#"Yes"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else if (v.get(r#"result"#) == r#"467"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r U-NEXT:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"No"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else {
-            output = decode_escapes(
-                &[[
-                    r#"\r U-NEXT:\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"Failed (Unexpected Result: "#.to_owned(),
-                    v.get(r#"result"#),
-                    r#")"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        }
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r U-NEXT:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
+    request.timeout = 10;
+    request
+        .headers
+        .push(header_pair("Content-Type: application/json")?);
+    let body = ctx.request(request).await?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+    let status = parsed.as_ref().and_then(|root| {
+        root.get("resultStatus").or_else(|| {
+            root.get("data")?
+                .as_object()?
+                .values()
+                .find_map(|value| value.get("resultStatus"))
+        })
+    });
+    let result = match status.and_then(serde_json::Value::as_u64) {
+        Some(200) if !ctx.denied => "Yes",
+        Some(475) if !ctx.denied => "Web Reachable",
+        Some(467) => "No",
+        _ => "Unknown",
+    };
+    Ok(format!("U-NEXT: {result}"))
 }
 
 async fn mediaunlocktest_videomarket(ctx: &mut Context) -> Result<String> {
@@ -8110,7 +6705,7 @@ async fn mediaunlocktest_attnow(ctx: &mut Context) -> Result<String> {
 async fn mediaunlocktest_discoveryplus(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
-    v.set(r#"GetToken"#, ctx.request(Request { url: r#"https://us1-prod-direct.discoveryplus.com/token?deviceId=d1a4a5d25212400d1e6985984604d740&realm=go&shortlived=true"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    v.set(r#"GetToken"#, ctx.request(Request { url: format!(r#"https://us1-prod-direct.discoveryplus.com/token?deviceId={}&realm=go&shortlived=true"#, random_id()), method: r#"GET"#.to_owned(), headers: vec![], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
     if (matches_pattern(&v.get(r#"GetToken"#), &r#"curl*"#.to_owned()))
         && (v.get(r#"1"#) == r#"6"#.to_owned())
     {
@@ -8150,7 +6745,33 @@ async fn mediaunlocktest_discoveryplus(ctx: &mut Context) -> Result<String> {
             &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
         )?,
     );
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://us1-prod-direct.discoveryplus.com/users/me"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"cookie"#.to_owned(), [r#"_gcl_au=1.1.858579665.1632206782; _rdt_uuid=1632206782474.6a9ad4f2-8ef7-4a49-9d60-e071bce45e88; _scid=d154b864-8b7e-4f46-90e0-8b56cff67d05; _pin_unauth=dWlkPU1qWTRNR1ZoTlRBdE1tSXdNaTAwTW1Nd0xUbGxORFV0WWpZMU0yVXdPV1l6WldFeQ; _sctr=1|1632153600000; aam_fw=aam%3D9354365%3Baam%3D9040990; aam_uuid=24382050115125439381416006538140778858; st="#.to_owned(), v.get(r#"Token"#), r#"; gi_ls=0; _uetvid=a25161a01aa711ec92d47775379d5e4d; AMCV_BC501253513148ED0A490D45%40AdobeOrg=-1124106680%7CMCIDTS%7C18894%7CMCMID%7C24223296309793747161435877577673078228%7CMCAAMLH-1633011393%7C9%7CMCAAMB-1633011393%7CRKhpRz8krg2tLO6pguXWp5olkAcUniQYPHaMWWgdJ3xzPWQmdj0y%7CMCOPTOUT-1632413793s%7CNONE%7CvVersion%7C5.2.0; ass=19ef15da-95d6-4b1d-8fa2-e9e099c9cc38.1632408400.1632406594"#.to_owned()].concat()]], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    if v.get(r#"Token"#).is_empty() {
+        return Ok("Discovery+: Failed (Unexpected Result)".to_owned());
+    }
+    v.set(
+        r#"tmpresult"#,
+        ctx.request(Request {
+            url: r#"https://us1-prod-direct.discoveryplus.com/users/me"#.to_owned(),
+            method: r#"GET"#.to_owned(),
+            headers: vec![[
+                r#"cookie"#.to_owned(),
+                [r#"st="#.to_owned(), v.get(r#"Token"#)].concat(),
+            ]],
+            body: None,
+            follow: false,
+            headers_only: false,
+            include_headers: false,
+            fail_status: false,
+            discard_body: false,
+            timeout: 10,
+            writeout: String::new(),
+            cookie_store: false,
+            cookie_load: false,
+            retries: 0,
+            tls13: false,
+        })
+        .await?,
+    );
     v.set(
         r#"result"#,
         split_fields(
@@ -8161,6 +6782,9 @@ async fn mediaunlocktest_discoveryplus(ctx: &mut Context) -> Result<String> {
             &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
         )?,
     );
+    if v.get(r#"result"#).is_empty() {
+        return Ok("Discovery+: Failed (Unexpected Result)".to_owned());
+    }
     if (v.get(r#"result"#) == r#"us"#.to_owned()) {
         output = decode_escapes(
             &[[
@@ -8203,403 +6827,119 @@ async fn mediaunlocktest_discoveryplus(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_encoretvb(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://edge.api.brightcove.com/playback/v1/accounts/5324042807001/videos/6005570109001"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"Accept: application/json;pk=BCpkADawqM2Gpjj8SlY2mj4FgJJMfUpxTNtHWXOItY1PvamzxGstJbsgc-zFOHkCVcKeeOhPUd9MNHEGJoVy1By1Hrlh9rOXArC5M5MTcChJGU6maC8qhQ4Y8W-QYtvi8Nq34bUb9IOvoKBLeNF4D9Avskfe9rtMoEjj6ImXu_i4oIhYS0dx7x1AgHvtAaZFFhq3LBGtR-ZcsSqxNzVg-4PRUI9zcytQkk_YJXndNSfhVdmYmnxkgx1XXisGv1FG5GOmEK4jZ_Ih0riX5icFnHrgniADr4bA2G7TYh4OeGBrYLyFN_BDOvq3nFGrXVWrTLhaYyjxOr4rZqJPKK2ybmMsq466Ke1ZtE-wNQ"#.to_owned())?, header_pair(&r#"Origin: https://www.encoretvb.com"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r encoreTVB:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                &[r#"error_subcode"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"result"#) == r#"CLIENT_GEO"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r encoreTVB:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        "?",
-        if (select_lines(
-            &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-            &[r#"account_id"#.to_owned()],
-        )?)
-        .is_empty()
-        {
-            "1"
-        } else {
-            "0"
-        }
-        .to_owned(),
-    );
-    if (number(&v.get(r#"?"#)) == number(&r#"0"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r encoreTVB:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r encoreTVB:\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    return Ok(output);
-    Ok(output)
-}
-
-async fn mediaunlocktest_epix(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpToken"#, ctx.request(Request { url: r#"https://api.epix.com/v2/sessions"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"Content-Type: application/json"#.to_owned())?], body: Some([r#"{"device":{"guid":"e2add88e-2d92-4392-9724-326c2336013b","format":"console","os":"web","app_version":"1.0.2","model":"browser","manufacturer":"google"},"apikey":"53e208a9bbaee479903f43b39d7301f7","oauth":{"token":null}}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if ((v.get(r#"tmpToken"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Epix:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpToken"#), &r#"error code*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Epix:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"EpixToken"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpToken"#)].join(" "), &".")?,
-                &[r#"session_token"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api.epix.com/graphql"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"content-type: application/json"#.to_owned())?, header_pair(&[r#"x-session-token: "#.to_owned(), v.get(r#"EpixToken"#)].concat())?], body: Some([r#"${"operationName":"PlayFlow","variables":{"id":"bW92aWU7MjExNDc=","supportedActions":["open_url","show_notice","start_billing","play_content","log_in","noop","confirm_provider","unlinked_provider"],"streamTypes":[{"encryptionScheme":"CBCS","packagingSystem":"DASH"},{"encryptionScheme":"CENC","packagingSystem":"DASH"},{"encryptionScheme":"NONE","packagingSystem":"HLS"},{"encryptionScheme":"SAMPLE_AES","packagingSystem":"HLS"}]},"query":"fragment ShowNotice on ShowNotice {\\n  type\\n  actions {\\n    continuationContext\\n    text\\n    __typename\\n  }\\n  description\\n  title\\n  __typename\\n}\\n\\nfragment OpenUrl on OpenUrl {\\n  type\\n  url\\n  __typename\\n}\\n\\nfragment Content on Content {\\n  title\\n  __typename\\n}\\n\\nfragment Movie on Movie {\\n  id\\n  shortName\\n  __typename\\n}\\n\\nfragment Episode on Episode {\\n  id\\n  series {\\n    shortName\\n    __typename\\n  }\\n  seasonNumber\\n  number\\n  __typename\\n}\\n\\nfragment Preroll on Preroll {\\n  id\\n  __typename\\n}\\n\\nfragment ContentUnion on ContentUnion {\\n  ...Content\\n  ...Movie\\n  ...Episode\\n  ...Preroll\\n  __typename\\n}\\n\\nfragment PlayContent on PlayContent {\\n  type\\n  continuationContext\\n  heartbeatToken\\n  currentItem {\\n    content {\\n      ...ContentUnion\\n      __typename\\n    }\\n    __typename\\n  }\\n  nextItem {\\n    content {\\n      ...ContentUnion\\n      __typename\\n    }\\n    showNotice {\\n      ...ShowNotice\\n      __typename\\n    }\\n    showNoticeAt\\n    __typename\\n  }\\n  amazonPlaybackData {\\n    pid\\n    playbackToken\\n    materialType\\n    __typename\\n  }\\n  playheadPosition\\n  vizbeeStreamInfo {\\n    customStreamInfo\\n    __typename\\n  }\\n  closedCaptions {\\n    ttml {\\n      location\\n      __typename\\n    }\\n    vtt {\\n      location\\n      __typename\\n    }\\n    xml {\\n      location\\n      __typename\\n    }\\n    __typename\\n  }\\n  hints {\\n    duration\\n    seekAllowed\\n    trackingEnabled\\n    trackingId\\n    __typename\\n  }\\n  streams(types: $streamTypes) {\\n    playlistUrl\\n    closedCaptionsEmbedded\\n    packagingSystem\\n    encryptionScheme\\n    videoQuality {\\n      height\\n      width\\n      __typename\\n    }\\n    widevine {\\n      authenticationToken\\n      licenseServerUrl\\n      __typename\\n    }\\n    playready {\\n      authenticationToken\\n      licenseServerUrl\\n      __typename\\n    }\\n    fairplay {\\n      authenticationToken\\n      certificateUrl\\n      licenseServerUrl\\n      __typename\\n    }\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment StartBilling on StartBilling {\\n  type\\n  __typename\\n}\\n\\nfragment LogIn on LogIn {\\n  type\\n  __typename\\n}\\n\\nfragment Noop on Noop {\\n  type\\n  __typename\\n}\\n\\nfragment PreviewContent on PreviewContent {\\n  type\\n  title\\n  description\\n  stream {\\n    sources {\\n      hls {\\n        location\\n        __typename\\n      }\\n      __typename\\n    }\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment ConfirmProvider on ConfirmProvider {\\n  type\\n  __typename\\n}\\n\\nfragment UnlinkedProvider on UnlinkedProvider {\\n  type\\n  __typename\\n}\\n\\nquery PlayFlow($id: String\u0021, $supportedActions: [PlayFlowActionEnum\u0021]\u0021, $context: String, $behavior: BehaviorEnum = DEFAULT, $streamTypes: [StreamDefinition\u0021]) {\\n  playFlow(\\n    id: $id\\n    supportedActions: $supportedActions\\n    context: $context\\n    behavior: $behavior\\n  ) {\\n    ...ShowNotice\\n    ...OpenUrl\\n    ...PlayContent\\n    ...StartBilling\\n    ...LogIn\\n    ...Noop\\n    ...PreviewContent\\n    ...ConfirmProvider\\n    ...UnlinkedProvider\\n    __typename\\n  }\\n}"}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    v.set(
-        r#"isBlocked"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"MGM+ is only available in the United States"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"isOK"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"StartBilling"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"isBlocked"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r MGM+:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (!(v.get(r#"isOK"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r MGM+:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r MGM+:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_espnplus(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(
-        r#"espncookie"#,
-        replace_text(
-            &[v.get(r#"Media_Cookie"#)].join(" "),
-            &[r#"-n"#.to_owned(), r#"11p"#.to_owned()],
-        )?,
-    );
-    v.set(r#"TokenContent"#, ctx.request(Request { url: r#"https://espn.api.edge.bamgrid.com/token"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"authorization: Bearer ZXNwbiZicm93c2VyJjEuMC4w.ptUt7QxsteaRruuPmGZFaJByOoqKvDP2a5YkInHrc7c"#.to_owned())?], body: Some([v.get(r#"espncookie"#)].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    v.set(
-        r#"isBanned"#,
-        select_lines(
-            &json_field(&[v.get(r#"TokenContent"#)].join(" "), &".")?,
-            &[r#"forbidden-location"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"is403"#,
-        select_lines(
-            &[v.get(r#"TokenContent"#)].join(" "),
-            &[r#"403 ERROR"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"isBanned"#)).is_empty()) || (!(v.get(r#"is403"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r ESPN+:"#.to_owned(),
-                v.get(r#"Font_SkyBlue"#),
-                r#"[Sponsored by Jam]"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"fakecontent"#,
-        replace_text(
-            &[v.get(r#"Media_Cookie"#)].join(" "),
-            &[r#"-n"#.to_owned(), r#"10p"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"refreshToken"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"TokenContent"#)].join(" "), &".")?,
-                    &[r#"refresh_token"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"espncontent"#,
-        replace_text(
-            &[v.get(r#"fakecontent"#)].join(" "),
-            &[[
-                r#"s/ILOVESTAR/"#.to_owned(),
-                v.get(r#"refreshToken"#),
-                r#"/g"#.to_owned(),
-            ]
-            .concat()],
-        )?,
-    );
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://espn.api.edge.bamgrid.com/graph/v1/device/graphql"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"authorization: ZXNwbiZicm93c2VyJjEuMC4w.ptUt7QxsteaRruuPmGZFaJByOoqKvDP2a5YkInHrc7c"#.to_owned())?], body: Some([v.get(r#"espncontent"#)].join("&")), follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r ESPN+:"#.to_owned(),
-                v.get(r#"Font_SkyBlue"#),
-                r#"[Sponsored by Jam]"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"region"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                &[r#"countryCode"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"inSupportedLocation"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"inSupportedLocation"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f1"#.to_owned(), r#"-d,"#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"region"#) == r#"US"#.to_owned())
-        && (v.get(r#"inSupportedLocation"#) == r#"true"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r ESPN+:"#.to_owned(),
-                v.get(r#"Font_SkyBlue"#),
-                r#"[Sponsored by Jam]"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r ESPN+:"#.to_owned(),
-                v.get(r#"Font_SkyBlue"#),
-                r#"[Sponsored by Jam]"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
-}
+const TS_PACKET_SIZE: usize = 188;
+const FOX_TS_PREFIX: usize = TS_PACKET_SIZE * 3;
+const FOX_HLS_PREFIX: usize = 8 * 1024;
 
 async fn mediaunlocktest_fox(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"result"#, ctx.request(Request { url: r#"https://x-live-fox-stgec.uplynk.com/ausw/slices/8d1/d8e6eec26bf544f084bad49a7fa2eac5/8d1de292bcc943a6b886d029e6c0dc87/G00000000.ts?pbs=c61e60ee63ce43359679fb9f65d21564&cloud=aws&si=0"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: true, timeout: 10, writeout: r#"%{http_code}"#.to_owned(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (v.get(r#"result"#) == r#"000"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r FOX:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else if (v.get(r#"result"#) == r#"200"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r FOX:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else if (v.get(r#"result"#) == r#"403"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r FOX:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r FOX:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Unexpected Result: "#.to_owned(),
-                v.get(r#"result"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
+    let mut request = Request::get(
+        "https://x-live-fox-stgec.uplynk.com/ausw/slices/8d1/d8e6eec26bf544f084bad49a7fa2eac5/8d1de292bcc943a6b886d029e6c0dc87/G00000000.ts?cloud=aws&si=0",
+    );
+    request.timeout = 10;
+    request.follow = true;
+    let prefix = PrefixRead {
+        status: StatusCode::OK,
+        limit_for_first_byte: |first| {
+            if first == b'#' {
+                FOX_HLS_PREFIX
+            } else {
+                FOX_TS_PREFIX
+            }
+        },
+    };
+    if let Ok(response) = ctx.request_bytes(request, Some(prefix)).await {
+        ctx.failed |= response.status.as_u16() >= 400;
+        if response.status == StatusCode::OK
+            && (fox_ts_prefix(&response.body) || fox_hls_prefix(&response))
+        {
+            return Ok("FOX: Yes".into());
+        }
     }
-    Ok(output)
+    Ok("FOX: Unknown".into())
+}
+
+fn fox_ts_prefix(body: &[u8]) -> bool {
+    body.len() == FOX_TS_PREFIX
+        && body.chunks_exact(TS_PACKET_SIZE).all(|packet| {
+            packet[0] == 0x47
+                && packet[1] & 0x80 == 0
+                && match (packet[3] >> 4) & 0x03 {
+                    1 => true,
+                    2 => usize::from(packet[4]) == TS_PACKET_SIZE - 5,
+                    3 => usize::from(packet[4]) < TS_PACKET_SIZE - 5,
+                    _ => false,
+                }
+        })
+}
+
+fn fox_hls_prefix(response: &ByteResponse) -> bool {
+    let body = &response.body;
+    let complete_bytes = if response.end == BodyEnd::Complete {
+        body.len()
+    } else {
+        body.iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |at| at + 1)
+    };
+    let Ok(playlist) = std::str::from_utf8(&body[..complete_bytes]) else {
+        return false;
+    };
+    let mut lines = playlist.lines();
+    if lines.next() != Some("#EXTM3U") {
+        return false;
+    }
+    let mut expects_uri = false;
+    for line in lines {
+        if let Some(info) = line.strip_prefix("#EXTINF:") {
+            expects_uri = info.split_once(',').is_some_and(|(duration, _)| {
+                duration
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
+                    && duration.parse::<f64>().is_ok_and(f64::is_finite)
+            });
+        } else if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
+            expects_uri = attributes
+                .split('"')
+                .step_by(2)
+                .flat_map(|attributes| attributes.split(','))
+                .filter_map(|attribute| attribute.strip_prefix("BANDWIDTH="))
+                .any(|value| {
+                    value.bytes().all(|byte| byte.is_ascii_digit())
+                        && value.parse::<u64>().is_ok_and(|bandwidth| bandwidth > 0)
+                });
+        } else if !line.is_empty()
+            && !line.starts_with('#')
+            && std::mem::take(&mut expects_uri)
+            && fox_hls_uri(&response.url, line)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn fox_hls_uri(base: &Url, uri: &str) -> bool {
+    if !uri.contains(['.', '/', '?'])
+        || !uri
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._~:/?[]@!$&'()*+,;=%".contains(&byte))
+        || uri.bytes().enumerate().any(|(index, byte)| {
+            byte == b'%'
+                && !uri
+                    .as_bytes()
+                    .get(index + 1..index + 3)
+                    .is_some_and(|digits| digits.iter().all(u8::is_ascii_hexdigit))
+        })
+    {
+        return false;
+    }
+    base.join(uri).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && (!url.path().ends_with('/') || url.query().is_some_and(|query| !query.is_empty()))
+    })
 }
 
 async fn mediaunlocktest_fubotv(ctx: &mut Context) -> Result<String> {
@@ -8755,93 +7095,6 @@ async fn mediaunlocktest_fxnow(ctx: &mut Context) -> Result<String> {
             .concat()]
             .join(" "),
         );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_huluus(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://auth.hulu.com/v4/web/password/authenticate"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"cookie: _h_csrf_id=b0b3da20eccdc796dd61d9145a095be4927a2ff56821ad4d3f91804fd6f918ea"#.to_owned())?], body: Some([r#"csrf=fdc1427eccde53326e27d7575c436595e28299dc420232ff26075ca06bbb28ed&password=Jam0.5cm~&scenario=web_password_login&user_email=me%40jamchoi.cc"#.to_owned()].join("&")), follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Hulu:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".error.name"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    match v.get(r#"result"#).as_str() {
-        r#"LOGIN_FORBIDDEN"# => {
-            output = decode_escapes(
-                &[[
-                    r#"\r Hulu:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Green"#),
-                    r#"Yes"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-        }
-        r#"GEO_BLOCKED"# => {
-            output = decode_escapes(
-                &[[
-                    r#"\r Hulu:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"No"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-        }
-        r#""# => {
-            output = decode_escapes(
-                &[[
-                    r#"\r Hulu:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"Failed (Error: PAGE ERROR)"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-        }
-        _ => {
-            output = decode_escapes(
-                &[[
-                    r#"\r Hulu:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"Failed (Error: "#.to_owned(),
-                    v.get(r#"result"#),
-                    r#")"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-        }
     }
     Ok(output)
 }
@@ -9093,8 +7346,8 @@ async fn mediaunlocktest_mathsspot(ctx: &mut Context) -> Result<String> {
             &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
         )?,
     );
-    v.set(r#"host"#, ctx.request(Request { url: [r#"https://mathsspot.com/2/api/play/v1/startSession?uaId=ua-KzV6fgcCBHQDU9DHCt2uG&uaSessionId=uasess-IdEux1e80EUstUlnnnHG0&appId=5349&initialOrientation=landscape&utmSource=NA&utmMedium=NA&utmCampaign=NA&deviceType=&playToken="#.to_owned(), v.get(r#"playtoken"#), r#"&deepLinkUrl=&accessCode="#.to_owned()].concat(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    v.set(r#"tmpresult2"#, ctx.request(Request { url: [r#"https://mathsspot.com/2/api/play/v1/startSession?uaId=ua-KzV6fgcCBHQDU9DHCt2uG&uaSessionId=uasess-IdEux1e80EUstUlnnnHG0&appId=5349&initialOrientation=landscape&utmSource=NA&utmMedium=NA&utmCampaign=NA&deviceType=&playToken="#.to_owned(), v.get(r#"playtoken"#), r#"&deepLinkUrl=&accessCode="#.to_owned()].concat(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&[r#"x-ngg-fe-version: "#.to_owned(), v.get(r#"host"#)].concat())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    v.set(r#"host"#, ctx.request(Request { url: [r#"https://mathsspot.com/2/api/play/v1/startSession?appId=5349&initialOrientation=landscape&utmSource=NA&utmMedium=NA&utmCampaign=NA&deviceType=&playToken="#.to_owned(), v.get(r#"playtoken"#), r#"&deepLinkUrl=&accessCode="#.to_owned()].concat(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    v.set(r#"tmpresult2"#, ctx.request(Request { url: [r#"https://mathsspot.com/2/api/play/v1/startSession?appId=5349&initialOrientation=landscape&utmSource=NA&utmMedium=NA&utmCampaign=NA&deviceType=&playToken="#.to_owned(), v.get(r#"playtoken"#), r#"&deepLinkUrl=&accessCode="#.to_owned()].concat(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&[r#"x-ngg-fe-version: "#.to_owned(), v.get(r#"host"#)].concat())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
     if (matches_pattern(&v.get(r#"host"#), &r#"curl*"#.to_owned()))
         || (matches_pattern(&v.get(r#"tmpresult2"#), &r#"curl*"#.to_owned()))
     {
@@ -10787,105 +9040,10 @@ async fn mediaunlocktest_channel4(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_channel5(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"Timestamp"#, timestamp(false));
-    v.set(
-        r#"tmpresult"#,
-        ctx.request(Request {
-            url: [
-                r#"https://cassie.channel5.com/api/v2/live_media/my5desktopng/C5.json?timestamp="#
-                    .to_owned(),
-                v.get(r#"Timestamp"#),
-                r#"&auth=0_rZDiY0hp_TNcDyk2uD-Kl40HqDbXs7hOawxyqPnbI"#.to_owned(),
-            ]
-            .concat(),
-            method: r#"GET"#.to_owned(),
-            headers: vec![],
-            body: None,
-            follow: true,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                &[r#"code"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    if ((v.get(r#"result"#)).is_empty()) && (v.get(r#"1"#) == r#"6"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Channel 5:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else if (v.get(r#"result"#) == r#"4003"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Channel 5:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else if (!(v.get(r#"result"#)).is_empty()) && (v.get(r#"result"#) != r#"4003"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Channel 5:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Channel 5:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Unexpected Result: "#.to_owned(),
-                v.get(r#"result"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
 async fn mediaunlocktest_discoveryplusuk(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
-    v.set(r#"GetToken"#, ctx.request(Request { url: r#"https://disco-api.discoveryplus.co.uk/token?realm=questuk&deviceId=61ee588b07c4df08c02861ecc1366a592c4ad02d08e8228ecfee67501d98bf47&shortlived=true"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
+    v.set(r#"GetToken"#, ctx.request(Request { url: format!(r#"https://disco-api.discoveryplus.co.uk/token?realm=questuk&deviceId={}{}&shortlived=true"#, random_id(), random_id()), method: r#"GET"#.to_owned(), headers: vec![], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
     if (matches_pattern(&v.get(r#"GetToken"#), &r#"curl*"#.to_owned()))
         && (v.get(r#"1"#) == r#"6"#.to_owned())
     {
@@ -10925,6 +9083,9 @@ async fn mediaunlocktest_discoveryplusuk(ctx: &mut Context) -> Result<String> {
             &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
         )?,
     );
+    if v.get(r#"Token"#).is_empty() {
+        return Ok("Discovery+ UK: Failed (Unexpected Result)".to_owned());
+    }
     v.set(
         r#"tmpresult"#,
         ctx.request(Request {
@@ -10959,6 +9120,9 @@ async fn mediaunlocktest_discoveryplusuk(ctx: &mut Context) -> Result<String> {
             &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
         )?,
     );
+    if v.get(r#"result"#).is_empty() {
+        return Ok("Discovery+ UK: Failed (Unexpected Result)".to_owned());
+    }
     if (v.get(r#"result"#) == r#"gb"#.to_owned()) {
         output = decode_escapes(
             &[[
@@ -11430,193 +9594,20 @@ async fn mediaunlocktest_itvhub(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_joyn(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpauth"#, ctx.request(Request { url: r#"https://auth.joyn.de/auth/anonymous"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![header_pair(&r#"Content-Type: application/json"#.to_owned())?], body: Some([r#"{"client_id":"b74b9f27-a994-4c45-b7eb-5b81b1c856e7","client_name":"web","anon_device_id":"b74b9f27-a994-4c45-b7eb-5b81b1c856e7"}"#.to_owned()].join("&")), follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if ((v.get(r#"tmpauth"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Joyn:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"auth"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpauth"#)].join(" "), &".")?,
-                    &[r#"access_token"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"result"#,
-        ctx.request(Request {
-            url: r#"https://api.joyn.de/content/entitlement-token"#.to_owned(),
-            method: r#"POST"#.to_owned(),
-            headers: vec![
-                header_pair(&r#"x-api-key: 36lp1t4wto5uu2i2nk57ywy9on1ns5yg"#.to_owned())?,
-                header_pair(&r#"content-type: application/json"#.to_owned())?,
-                header_pair(&[r#"authorization: Bearer "#.to_owned(), v.get(r#"auth"#)].concat())?,
-            ],
-            body: Some(
-                [r#"{"content_id":"daserste-de-hd","content_type":"LIVE"}"#.to_owned()].join("&"),
-            ),
-            follow: false,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    if (!(v.get(r#"result"#)).is_empty()) {
-        v.set(
-            r#"isBlock"#,
-            split_fields(
-                &select_fields(
-                    &select_lines(
-                        &json_field(&[v.get(r#"result"#)].join(" "), &".")?,
-                        &[r#"code"#.to_owned()],
-                    )?,
-                    &[r#"{print $2}"#.to_owned()],
-                )?,
-                &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-            )?,
-        );
-        if (v.get(r#"isBlock"#) == r#"ENT_AssetNotAvailableInCountry"#.to_owned()) {
-            output = decode_escapes(
-                &[[
-                    r#"\r Joyn:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Red"#),
-                    r#"No"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        } else {
-            output = decode_escapes(
-                &[[
-                    r#"\r Joyn:\t\t\t\t\t"#.to_owned(),
-                    v.get(r#"Font_Green"#),
-                    r#"Yes"#.to_owned(),
-                    v.get(r#"Font_Suffix"#),
-                    r#"\n"#.to_owned(),
-                ]
-                .concat()]
-                .join(" "),
-            );
-            return Ok(output);
-        }
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Joyn:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
-}
-
 async fn mediaunlocktest_megogotv(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://ctx.playfamily.ru/screenapi/v4/preparepurchase/web/1?elementId=0b974dc3-d4c5-4291-9df5-81a8132f67c5&elementAlias=51459024&elementType=GAME&withUpgradeSubscriptionReturnAmount=true&forceSvod=true&includeProductsForUpsale=false&sid=mDRnXOffdh_l2sBCyUIlbA"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"X-SCRAPI-CLIENT-TS: 1627391624026"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if ((v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Megogo TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"status"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f1"#.to_owned(), r#"-d,"#.to_owned()],
-        )?,
+    let mut request = Request::get(
+        "https://ctx.playfamily.ru/screenapi/v4/preparepurchase/web/1?elementId=0b974dc3-d4c5-4291-9df5-81a8132f67c5&elementAlias=51459024&elementType=GAME&withUpgradeSubscriptionReturnAmount=true&forceSvod=true&includeProductsForUpsale=false",
     );
-    if (v.get(r#"result"#) == r#"0"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Megogo TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"502"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Megogo TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Megogo TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
+    request.timeout = 10;
+    request
+        .headers
+        .push(["X-SCRAPI-CLIENT-TS".into(), timestamp(true)]);
+    let body = ctx.request(request).await?;
+    let result = match json_field(&body, ".status").as_deref() {
+        Ok("0") if !ctx.denied => "Yes",
+        _ => "Unknown",
+    };
+    Ok(format!("Megogo TV: {result}"))
 }
 
 async fn mediaunlocktest_molotov(ctx: &mut Context) -> Result<String> {
@@ -11818,67 +9809,6 @@ async fn mediaunlocktest_movistarplus(ctx: &mut Context) -> Result<String> {
             .concat()]
             .join(" "),
         );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_nlziet(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api.nlziet.nl/v7/stream/handshake/Widevine/Dash/VOD/rzIL9rb-TkSn-ek_wBmvaw?playerName=BitmovinWeb"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"accept: application/json, text/plain, */*"#.to_owned())?, header_pair(&r#"accept-language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"#.to_owned())?, header_pair(&r#"authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IkM4M0YzQUFGOTRCOTM0ODA2NkQwRjZDRTNEODhGQkREIiwidHlwIjoiYXQrand0In0.eyJuYmYiOjE3MTIxMjY0NTMsImV4cCI6MTcxMjE1NTI0OCwiaXNzIjoiaHR0cHM6Ly9pZC5ubHppZXQubmwiLCJhdWQiOiJhcGkiLCJjbGllbnRfaWQiOiJ0cmlwbGUtd2ViIiwic3ViIjoiMDAzMTZiNGEtMDAwMC0wMDAwLWNhZmUtZjFkZTA1ZGVlZmVlIiwiYXV0aF90aW1lIjoxNzEyMTI2NDUzLCJpZHAiOiJsb2NhbCIsImVtYWlsIjoibXVsdGkuZG5zMUBvdXRsb29rLmNvbSIsInVzZXJJZCI6IjMyMzg3MzAiLCJjdXN0b21lcklkIjoiMCIsImRldmljZUlkZW50aWZpZXIiOiJJZGVudGl6aWV0LTI0NWJiNmYzLWM2ZjktNDNjZS05ODhmLTgxNDc2OTcwM2E5OCIsImV4dGVybmFsVXNlcklkIjoiZTM1ZjdkMzktMjQ0ZC00ZTkzLWFkOTItNGFjYzVjNGY0NGNlIiwicHJvZmlsZUlkIjoiMjdDMzM3RjktOTRDRS00NjBDLTlBNjktMTlDNjlCRTYwQUIzIiwicHJvZmlsZUNvbG9yIjoiRkY0MjdDIiwicHJvZmlsZVR5cGUiOiJBZHVsdCIsIm5hbWUiOiJTdHJlYW1pbmciLCJqdGkiOiI4Q0M1QzYzNkJGRjg3MEE2REJBOERBNUMwQTk0RUZDRiIsImlhdCI6MTcxMjEyNjQ1Mywic2NvcGUiOlsiYXBpIiwib3BlbmlkIl0sImFtciI6WyJwcm9maWxlIiwicHdkIl19.bk-ziFPJM00bpE7TcgPmIYFFx-2Q5N3BkUzEvQ_dDMK9O1F9f7DEe-Qzmnb5ym7ChlnXwrCV3QyOOA24hu_gCrlNlD7-vI3XGZR-54zFD-F7cRDOoL-1-iO_10tmgwb5Io-svY0bn0EDYKeRxYYBi0w_3bFVFDM2CxxA6tWeBYIfN5rCSzBHd3RPPjYtqX-sogyh_5W_7KJ83GK5kpsywT3mz8q7Cs1mtKs9QA1-o01N0RvTxZAcfzsHg3-qGgLnvaAuZ_XqRK9kLWqJWeJTWKWtUI6OlPex22sY3keKFpfZnUtFv-BvkCM6tvbIlMZAClk3lhI8rMFAWDpUcbcS3w"#.to_owned())?, header_pair(&r#"nlziet-appname: WebApp"#.to_owned())?, header_pair(&r#"nlziet-appversion: 5.43.24"#.to_owned())?, header_pair(&r#"origin: https://app.nlziet.nl"#.to_owned())?, header_pair(&r#"referer: https://app.nlziet.nl/"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    v.set(
-        r#"isBlocked"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"CountryNotAllowed"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"isOK"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"streamSessionId"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"isBlocked"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r NLZIET:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (!(v.get(r#"isOK"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r NLZIET:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r NLZIET:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
     }
     Ok(output)
 }
@@ -12239,158 +10169,6 @@ async fn mediaunlocktest_salto(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_setantasports(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(
-        r#"tmpresult"#,
-        ctx.request(Request {
-            url: r#"https://dce-frontoffice.imggaming.com/api/v2/consent-prompt"#.to_owned(),
-            method: r#"GET"#.to_owned(),
-            headers: vec![
-                header_pair(&r#"Realm: dce.adjara"#.to_owned())?,
-                header_pair(&r#"x-api-key: 857a1e5d-e35e-4fdf-805b-a87b6f8364bf"#.to_owned())?,
-            ],
-            body: None,
-            follow: false,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    v.set(
-        r#"tmpresult1"#,
-        ctx.request(Request {
-            url: r#"https://dce-frontoffice.imggaming.com/api/v3/i18n/country-codes"#.to_owned(),
-            method: r#"GET"#.to_owned(),
-            headers: vec![
-                header_pair(&r#"Realm: dce.adjara"#.to_owned())?,
-                header_pair(&r#"x-api-key: 857a1e5d-e35e-4fdf-805b-a87b6f8364bf"#.to_owned())?,
-            ],
-            body: None,
-            follow: false,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Setanta Sports:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Setanta Sports:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                    &[r#"outsideAllowedTerritories"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f1"#.to_owned(), r#"-d,"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"region"#,
-        split_fields(
-            &select_fields(
-                &select_lines(
-                    &json_field(&[v.get(r#"tmpresult1"#)].join(" "), &".")?,
-                    &[r#"callerCountryCode"#.to_owned()],
-                )?,
-                &[r#"{print $2}"#.to_owned()],
-            )?,
-            &[r#"-f2"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"result"#) == r#"true"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Setanta Sports:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No  (Region: "#.to_owned(),
-                v.get(r#"region"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"false"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Setanta Sports:\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes (Region: "#.to_owned(),
-                v.get(r#"region"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r Setanta Sports:\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed "#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    return Ok(output);
-    Ok(output)
-}
-
 async fn mediaunlocktest_sky_ch(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
@@ -12475,76 +10253,6 @@ async fn mediaunlocktest_sky_ch(ctx: &mut Context) -> Result<String> {
         .join(" "),
     );
     return Ok(output);
-    Ok(output)
-}
-
-async fn mediaunlocktest_sky_de(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://edge.api.brightcove.com/playback/v1/accounts/1050888051001/videos/6247131490001"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"Accept: application/json;pk=BCpkADawqM0OXCLe4eIkpyuir8Ssf3kIQAM62a1KMa4-1_vTOWQIxoHHD4-oL-dPmlp-rLoS-WIAcaAMKuZVMR57QY4uLAmP4Ov3V416hHbqr0GNNtzVXamJ6d4-rA3Xi98W-8wtypdEyjGEZNepUCt3D7UdMthbsG-Ean3V4cafT4nZX03st5HlyK1chp51SfA-vKcAOhHZ4_Oa9TTN61tEH6YqML9PWGyKrbuN5myICcGsFzP3R2aOF8c5rPCHT2ZAiG7MoavHx8WMjhfB0QdBr2fphX24CSpUKlcjEnQJnBiA1AdLg9iyReWrAdQylX4Eyhw5OwKiCGJznfgY6BDtbUmeq1I9r9RfmhP5bfxVGjILSEFZgXbMqGOvYdrdare0aW2fTCxeHdHt0vyKOWTC6CS1lrGJF2sFPKn1T1csjVR8s4MODqCBY1PTbHY4A9aZ-2MDJUVJDkOK52hGej6aXE5b9N9_xOT2B9wbXL1B1ZB4JLjeAdBuVtaUOJ44N0aCd8Ns0o02E1APxucQqrjnEociLFNB0Bobe1nkGt3PS74IQcs-eBvWYSpolldMH6TKLu8JqgdnM4WIp3FZtTWJRADgAmvF9tVDUG9pcJoRx_CZ4im-rn-AzN3FeOQrM4rTlU3Q8YhSmyEIoxYYqsFDwbFlhsAcvqQkgaElYtuciCL5i3U8N4W9rIhPhQJzsPafmLdWxBP_FXicyek25GHFdQzCiT8nf1o860Jv2cHQ4xUNcnP-9blIkLy9JmuB2RgUXOHzWsrLGGW6hq9wLUtqwEoxcEAAcNJgmoC0k8HE-Ga-NHXng6EFWnqiOg_mZ_MDd7gmHrrKLkQV"#.to_owned())?, header_pair(&r#"Origin: https://www.sky.de"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if ((v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Sky DE:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                &[r#"error_subcode"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"result"#) == r#"CLIENT_GEO"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Sky DE:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if ((v.get(r#"result"#)).is_empty()) && (!(v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Sky DE:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Sky DE:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
     Ok(output)
 }
 
@@ -12916,69 +10624,6 @@ async fn mediaunlocktest_zdf(ctx: &mut Context) -> Result<String> {
             .concat()]
             .join(" "),
         );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_7plus(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"result1"#, ctx.request(Request { url: r#"https://7plus-sevennetwork.akamaized.net/media/v1/dash/live/cenc/5303576322001/68dca38b-85d7-4dae-b1c5-c88acc58d51c/f4ea4711-514e-4cad-824f-e0c87db0a614/225ec0a0-ef18-4b7c-8fd6-8dcdd16cf03a/1x/segment0.m4f?akamai_token=exp=1672500385~acl=/media/v1/dash/live/cenc/5303576322001/68dca38b-85d7-4dae-b1c5-c88acc58d51c/f4ea4711-514e-4cad-824f-e0c87db0a614/*~hmac=800e1e1d1943addf12b71339277c637c7211582fe12d148e486ae40d6549dbde"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: true, timeout: 10, writeout: r#"%{http_code}"#.to_owned(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"result1"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r 7plus:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"result1"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r 7plus:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    if (v.get(r#"result1"#) == r#"200"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r 7plus:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r 7plus:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
     }
     Ok(output)
 }
@@ -13465,229 +11110,6 @@ async fn mediaunlocktest_kayosports(ctx: &mut Context) -> Result<String> {
         output = decode_escapes(
             &[[
                 r#"\r Kayo Sports:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Unexpected Result: "#.to_owned(),
-                v.get(r#"result"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_maoritv(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://edge.api.brightcove.com/playback/v1/accounts/1614493167001/videos/6275380737001"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"Accept: application/json;pk=BCpkADawqM2E9yW4lLgKIEIV5majz5djzZCIqJiYMkP5yYaYdF6AQYq4isPId1ZLtQdGnK1ErLYG0-r1N-3DzAEdbfvw9SFdDWz_i09pLp8Njx1ybslyIXid-X_Dx31b7-PLdQhJCws-vk6Y"#.to_owned())?, header_pair(&r#"Origin: https://www.maoritelevision.com"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if ((v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Maori TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                &[r#"error_subcode"#.to_owned()],
-            )?,
-            &[r#"-f4"#.to_owned(), r#"-d""#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"result"#) == r#"CLIENT_GEO"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Maori TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if ((v.get(r#"result"#)).is_empty()) && (!(v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Maori TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Maori TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_neontv(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(
-        r#"NeonHeader"#,
-        replace_text(
-            &[v.get(r#"Media_Cookie"#)].join(" "),
-            &[r#"-n"#.to_owned(), r#"12p"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"NeonContent"#,
-        replace_text(
-            &[v.get(r#"Media_Cookie"#)].join(" "),
-            &[r#"-n"#.to_owned(), r#"13p"#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"tmpresult"#,
-        ctx.request(Request {
-            url: r#"https://api.neontv.co.nz/api/client/gql?"#.to_owned(),
-            method: r#"POST"#.to_owned(),
-            headers: vec![
-                header_pair(&r#"content-type: application/json"#.to_owned())?,
-                header_pair(&v.get(r#"NeonHeader"#))?,
-            ],
-            body: Some([v.get(r#"NeonContent"#)].join("&")),
-            follow: false,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    if ((v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Neon TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"RESTRICTED_GEOLOCATION"#.to_owned()],
-        )?,
-    );
-    if ((v.get(r#"result"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Neon TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Neon TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_optussports(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"result"#, ctx.request(Request { url: r#"https://sport.optus.com.au/api/userauth/validate/web/username/restriction.check@gmail.com"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: true, timeout: 10, writeout: r#"%{http_code}"#.to_owned(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (v.get(r#"result"#) == r#"000"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Optus Sports:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"200"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Optus Sports:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result"#) == r#"403"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Optus Sports:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Optus Sports:\t\t\t\t"#.to_owned(),
                 v.get(r#"Font_Red"#),
                 r#"Failed (Unexpected Result: "#.to_owned(),
                 v.get(r#"result"#),
@@ -14275,157 +11697,6 @@ async fn mediaunlocktest_kbsdomestic(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_navertv(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"ts"#, timestamp(true));
-    v.set(r#"base_url"#, r#"https://apis.naver.com/"#.to_owned());
-    v.set(
-        r#"key"#,
-        r#"nbxvs5nwNG9QKEWK0ADjYA4JZoujF4gHcIwvoCxFTPAeamq5eemvt5IWAYXxrbYM"#.to_owned(),
-    );
-    v.set(
-        r#"sign_text"#,
-        [
-            r#"https://apis.naver.com/now_web2/now_web_api/v1/clips/31030608/play-info"#.to_owned(),
-            v.get(r#"ts"#),
-        ]
-        .concat(),
-    );
-    v.set(
-        r#"signature"#,
-        sign_sha1(&v.get(r#"sign_text"#), &v.get(r#"key"#))?,
-    );
-    v.set(r#"signature_encoded"#, replace_text(&v.get(r#"signature"#), &[r#"s/ /%20/g;s/!/%21/g;s/"/%22/g;s/#/%23/g;s/\$/%24/g;s/\&/%26/g;s/'/%27/g;s/(/%28/g;s/)/%29/g;s/\*/%2a/g;s/+/%2b/g;s/,/%2c/g;s/\//%2f/g;s/:/%3a/g;s/;/%3b/g;s/=/%3d/g;s/?/%3f/g;s/@/%40/g;s/\[/%5b/g;s/\]/%5d/g"#.to_owned()])?);
-    v.set(
-        r#"req_url"#,
-        [
-            v.get(r#"base_url"#),
-            r#"now_web2/now_web_api/v1/clips/31030608/play-info?msgpad="#.to_owned(),
-            v.get(r#"ts"#),
-            r#"&md="#.to_owned(),
-            v.get(r#"signature_encoded"#),
-        ]
-        .concat(),
-    );
-    v.set(
-        r#"tmpresult"#,
-        ctx.request(Request {
-            url: v.get(r#"req_url"#),
-            method: r#"GET"#.to_owned(),
-            headers: vec![
-                [r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)],
-                header_pair(&r#"host: apis.naver.com"#.to_owned())?,
-                header_pair(&r#"connection: keep-alive"#.to_owned())?,
-                header_pair(&[r#"sec-ch-ua: "#.to_owned(), v.get(r#"UA_SecCHUA"#)].concat())?,
-                header_pair(&r#"accept: application/json, text/plain, */*"#.to_owned())?,
-                header_pair(&r#"sec-ch-ua-mobile: ?0"#.to_owned())?,
-                header_pair(&r#"sec-ch-ua-platform: "Windows""#.to_owned())?,
-                header_pair(&r#"origin: https://tv.naver.com"#.to_owned())?,
-                header_pair(&r#"sec-fetch-site: same-site"#.to_owned())?,
-                header_pair(&r#"sec-fetch-mode: cors"#.to_owned())?,
-                header_pair(&r#"sec-fetch-dest: empty"#.to_owned())?,
-                header_pair(&r#"referer: https://tv.naver.com/v/31030608"#.to_owned())?,
-                header_pair(&r#"accept-language: en,zh-CN;q=0.9,zh;q=0.8"#.to_owned())?,
-            ],
-            body: None,
-            follow: false,
-            headers_only: false,
-            include_headers: false,
-            fail_status: false,
-            discard_body: false,
-            timeout: 10,
-            writeout: String::new(),
-            cookie_store: false,
-            cookie_load: false,
-            retries: 0,
-            tls13: false,
-        })
-        .await?,
-    );
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Naver TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Naver TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"playable"#,
-        split_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-                &[r#"-o"#.to_owned(), r#""playable": *"[^"]*""#.to_owned()],
-            )?,
-            &[r#"-d""#.to_owned(), r#"-f4"#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"playable"#) == r#"NOT_COUNTRY_AVAILABLE"#.to_owned())
-        && (!(v.get(r#"playable"#)).is_empty())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Naver TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Naver TV:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r Naver TV:\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    return Ok(output);
-    Ok(output)
-}
-
 async fn mediaunlocktest_pandatv(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
@@ -14509,230 +11780,6 @@ async fn mediaunlocktest_pandatv(ctx: &mut Context) -> Result<String> {
                 r#"Unknown (Code: "#.to_owned(),
                 v.get(r#"result1"#),
                 r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_spotvnow(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://edge.api.brightcove.com/playback/v1/accounts/5764318566001/videos/6349973203112"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"accept: application/json;pk=BCpkADawqM0U3mi_PT566m5lvtapzMq3Uy7ICGGjGB6v4Ske7ZX_ynzj8ePedQJhH36nym_5mbvSYeyyHOOdUsZovyg2XlhV6rRspyYPw_USVNLaR0fB_AAL2HSQlfuetIPiEzbUs1tpNF9NtQxt3BAPvXdOAsvy1ltLPWMVzJHiw9slpLRgI2NUufc"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r SPOTV NOW:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r SPOTV NOW:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".[0].error_subcode"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    v.set(
-        r#"region"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".[0].client_geo"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"result"#) == r#"CLIENT_GEO"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r SPOTV NOW:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No  (Region: "#.to_owned(),
-                v.get(r#"region"#).to_uppercase(),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if ((v.get(r#"result"#)).is_empty()) && (!(v.get(r#"tmpresult"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r SPOTV NOW:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r SPOTV NOW:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_tving(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api.tving.com/v2a/media/stream/info?apiKey=1e7952d0917d6aab1f0293a063697610&mediaCode=RV60891248"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Tving:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Tving:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result1"#,
-        select_lines(
-            &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-            &[r#"play"#.to_owned()],
-        )?,
-    );
-    if ((v.get(r#"result1"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Tving:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Tving:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_wavve(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"result1"#, ctx.request(Request { url: r#"https://apis.wavve.com/fz/streaming?device=pc&partner=pooq&apikey=E5F3E0D30947AA5440556471321BB6D9&credential=none&service=wavve&pooqzone=none&region=kor&drm=pr&targetage=all&contentid=MV_C3001_C300000012559&contenttype=movie&hdr=sdr&videocodec=avc&audiocodec=ac3&issurround=n&format=normal&withinsubtitle=n&action=dash&protocol=dash&quality=auto&deviceModelId=Windows%2010&guid=1a8e9c88-6a3b-11ed-8584-eed06ef80652&lastplayid=none&authtype=cookie&isabr=y&ishevc=n"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: true, discard_body: true, timeout: 10, writeout: r#"%{http_code}"#.to_owned(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (v.get(r#"result1"#) == r#"000"#.to_owned()) && (v.get(r#"1"#) == r#"6"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Wavve:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (v.get(r#"result1"#) == r#"000"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Wavve:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    if (v.get(r#"result1"#) == r#"200"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Wavve:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Wavve:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
                 v.get(r#"Font_Suffix"#),
                 r#"\n"#.to_owned(),
             ]
@@ -15163,94 +12210,6 @@ async fn mediaunlocktest_jiocinema(ctx: &mut Context) -> Result<String> {
     output = decode_escapes(
         &[[
             r#"\r Jio Cinema:\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    Ok(output)
-}
-
-async fn mediaunlocktest_kplus(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://tvapi-sgn.solocoo.tv/v1/provision"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: Some([r#"{"osVersion":"Windows 10","deviceModel":"Edge","deviceType":"PC","deviceSerial":"w7ab83550-c0aa-11ee-bf07-531681e47537","deviceOem":"Edge","devicePrettyName":"Edge 121.0.0.0","appVersion":"11.0","language":"en_US","brand":"vstv","featureLevel":5}"#.to_owned()].join("&")), follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r K+:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r K+:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"region"#,
-        map_characters(
-            &json_field(
-                &[v.get(r#"tmpresult"#)].join(" "),
-                &r#".session.geoCountryCode"#.to_owned(),
-            )?,
-            &[r#"-d"#.to_owned(), r#"""#.to_owned()],
-        )?,
-    );
-    if (v.get(r#"region"#) == r#"VN"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r K+:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes (Region:"#.to_owned(),
-                v.get(r#"region"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r K+:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No  (Region:"#.to_owned(),
-                v.get(r#"region"#),
-                r#")"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r K+:\t\t\t\t\t"#.to_owned(),
             v.get(r#"Font_Red"#),
             r#"Failed"#.to_owned(),
             v.get(r#"Font_Suffix"#),
@@ -15921,171 +12880,6 @@ async fn mediaunlocktest_tataplay(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_trueid(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"result"#, ctx.request(Request { url: r#"https://movie.trueid.net/apis/auth/checkedplay"#.to_owned(), method: r#"POST"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"Authorization: Basic YmJjNjI5Yzk3OTEzMDNhMmNjYzcyMWQzYTJlNGRkOGFiZWZkN2ZhNzoxMzAzYTJjY2M3MjFkM2EyZTRkZDhhYmVmZDdmYTc="#.to_owned())?], body: Some([r#"{"lang":"th","cmsId":"gROjxLzNBJb6","contentType":"movie"}"#.to_owned()].join("&")), follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"result"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r TrueID:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"result"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r TrueID:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result1"#,
-        select_fields(
-            &select_lines(
-                &json_field(&[v.get(r#"result"#)].join(" "), &".")?,
-                &[r#"billboardType"#.to_owned()],
-            )?,
-            &[r#"{print $2}"#.to_owned()],
-        )?,
-    );
-    if (matches_pattern(&v.get(r#"result1"#), &r#"*GEO_BLOCK*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r TrueID:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r TrueID:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r TrueID:\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    Ok(output)
-}
-
-async fn mediaunlocktest_tv360(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://tv360.vn/public/v1/composite/get-link?sq=CJSkRii71PAn41F9A2OlJSTxkOTDBl8uip04KFxqJc6iAmCPOt52q12a9hpwORZGjayWYrJSGjwYdG7Jy2NqPA%3D%3D&secured=true"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)]], body: None, follow: true, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r TV360:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r TV360:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"errcode"#,
-        json_field(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &r#".errorCode"#.to_owned(),
-        )?,
-    );
-    if (v.get(r#"errcode"#) == r#"310"#.to_owned()) {
-        output = decode_escapes(
-            &[[
-                r#"\r TV360:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r TV360:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r TV360:\t\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed"#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    Ok(output)
-}
-
 async fn mediaunlocktest_vidio(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
@@ -16577,88 +13371,6 @@ async fn mediaunlocktest_beinconnect(ctx: &mut Context) -> Result<String> {
     Ok(output)
 }
 
-async fn mediaunlocktest_eurosportro(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://eu3-prod-direct.eurosport.ro/playback/v2/videoPlaybackInfo/sourceSystemId/eurosport-vid1560178?usePreAuth=true"#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![header_pair(&r#"Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJVU0VSSUQ6ZXVyb3Nwb3J0OjlkMWU3MmYyLTdkYjItNDE2Yy1iNmIyLTAwZjQyMWRiN2M4NiIsImp0aSI6InRva2VuLTc0MDU0ZDE3LWFhNWUtNGI0ZS04MDM4LTM3NTE4YjBiMzE4OCIsImFub255bW91cyI6dHJ1ZSwiaWF0IjoxNjM0NjM0MzY0fQ.T7X_JOyvAr3-spU_6wh07re4W-fmbCxZdGaUSZiu1mw"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned()))
-        && (v.get(r#"1"#) == r#"6"#.to_owned())
-    {
-        output = decode_escapes(
-            &[[
-                r#"\r Eurosport RO:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"IPv6 Not Support"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r Eurosport RO:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"result"#,
-        select_lines(
-            &json_field(&[v.get(r#"tmpresult"#)].join(" "), &".")?,
-            &[r#"access.denied.geoblocked"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"result"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r Eurosport RO:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r Eurosport RO:\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    output = decode_escapes(
-        &[[
-            r#"\r Eurosport RO:\t\t\t\t"#.to_owned(),
-            v.get(r#"Font_Red"#),
-            r#"Failed "#.to_owned(),
-            v.get(r#"Font_Suffix"#),
-            r#"\n"#.to_owned(),
-        ]
-        .concat()]
-        .join(" "),
-    );
-    return Ok(output);
-    Ok(output)
-}
-
 async fn mediaunlocktest_molatv(ctx: &mut Context) -> Result<String> {
     let mut v = Variables::new();
     let mut output = String::new();
@@ -16820,82 +13532,6 @@ async fn mediaunlocktest_cinemax(ctx: &mut Context) -> Result<String> {
                 r#"\r CineMax Go:\t\t\t\t"#.to_owned(),
                 v.get(r#"Font_Red"#),
                 r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    Ok(output)
-}
-
-async fn mediaunlocktest_dmm(ctx: &mut Context) -> Result<String> {
-    let mut v = Variables::new();
-    let mut output = String::new();
-    v.set(r#"tmpresult"#, ctx.request(Request { url: r#"https://api-p.videomarket.jp/v3/api/play/keyauth?playKey=4c9e93baa7ca1fc0b63ccf418275afc2&deviceType=3&bitRate=0&loginFlag=0&connType="#.to_owned(), method: r#"GET"#.to_owned(), headers: vec![[r#"user-agent"#.to_owned(), v.get(r#"UA_Browser"#)], header_pair(&r#"X-Authorization: 2bCf81eLJWOnHuqg6nNaPZJWfnuniPTKz9GXv5IS"#.to_owned())?], body: None, follow: false, headers_only: false, include_headers: false, fail_status: false, discard_body: false, timeout: 10, writeout: String::new(), cookie_store: false, cookie_load: false, retries: 0, tls13: false }).await?);
-    if (matches_pattern(&v.get(r#"tmpresult"#), &r#"curl*"#.to_owned())) {
-        output = decode_escapes(
-            &[[
-                r#"\r DMM:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Failed (Network Connection)"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"checkfailed"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"Access is denied"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"checkfailed"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r DMM:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"No"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    }
-    v.set(
-        r#"checksuccess"#,
-        select_lines(
-            &[v.get(r#"tmpresult"#)].join(" "),
-            &[r#"PlayKey has expired"#.to_owned()],
-        )?,
-    );
-    if (!(v.get(r#"checksuccess"#)).is_empty()) {
-        output = decode_escapes(
-            &[[
-                r#"\r DMM:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Green"#),
-                r#"Yes"#.to_owned(),
-                v.get(r#"Font_Suffix"#),
-                r#"\n"#.to_owned(),
-            ]
-            .concat()]
-            .join(" "),
-        );
-        return Ok(output);
-    } else {
-        output = decode_escapes(
-            &[[
-                r#"\r DMM:\t\t\t\t\t"#.to_owned(),
-                v.get(r#"Font_Red"#),
-                r#"Unsupported"#.to_owned(),
                 v.get(r#"Font_Suffix"#),
                 r#"\n"#.to_owned(),
             ]

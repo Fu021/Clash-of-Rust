@@ -29,6 +29,7 @@ fn network_report_is_replaced_and_late_results_cannot_reappear_after_navigation(
             detail: "示例响应".into(),
             success: Some(true),
             code: "ok",
+            detail_english: None,
         })
         .collect(),
     };
@@ -74,6 +75,7 @@ fn english_network_report_displays_translated_status_and_preserves_raw_evidence(
             detail: "系统解析失败或超时".into(),
             success: Some(false),
             code: "dns_failed",
+            detail_english: None,
         }],
     };
     let _ = app.update(Message::ProbeDone(generation, Ok(report)));
@@ -106,6 +108,7 @@ fn network_report_follows_language_changes_from_another_client() {
             detail: "保留原始值".into(),
             success: Some(false),
             code: "dns_failed",
+            detail_english: None,
         }],
     };
     let generation = app.network_test_generation;
@@ -659,7 +662,8 @@ fn home_overview_reports_host_exit_dns_and_each_service_without_overclaiming() {
             state: ip_check::State::Identified,
             summary: "203.0.113.2".into(),
             country: "🇩🇪 德国".into(),
-            millis: 188,
+            millis: Some(188),
+            authentication_check_skipped: false,
             detail: String::new(),
             target_exit: None,
         }),
@@ -1017,6 +1021,85 @@ fn dropping_rules_uses_identities_in_the_full_draft_and_ignores_stale_rows() {
     app.working = true;
     let _ = app.ui_intent(Intent::RuleDrop, &before[0], &before[1]);
     assert_eq!(app.rule_state.draft, draft);
+}
+
+#[test]
+fn rule_warnings_follow_the_desktop_language_without_changing_rule_data() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Rules);
+    app.profiles[0].name = "机场订阅 · 原名".into();
+    let document = rule_manager::Document::from_raw(
+        "fixture",
+        false,
+        "proxies: []\nrules: ['DOMAIN,duplicate.test,DIRECT', 'MATCH,DIRECT', 'DOMAIN,hidden.test,DIRECT']\n",
+    )
+    .unwrap();
+    let policy = "店铺“香港”；東京";
+    let mut order = vec!["s:removed-rule".into()];
+    order.extend(document.original.iter().map(|row| row.id.clone()));
+    let draft = Arc::new(ProfileRules {
+        custom: vec![
+            rule_manager::CustomRule {
+                id: "duplicate".into(),
+                rule: "DOMAIN,duplicate.test,DIRECT".into(),
+                enabled: true,
+            },
+            rule_manager::CustomRule {
+                id: "missing-policy".into(),
+                rule: format!("DOMAIN,policy.test,{policy}"),
+                enabled: true,
+            },
+        ],
+        order,
+        ..Default::default()
+    });
+    let mut reply = synchronized_reply(&app);
+    reply.settings.language = LanguagePreference::SimplifiedChinese;
+    reply
+        .settings
+        .rule_profiles
+        .insert("fixture".into(), draft.clone());
+    reply.rule_document = Some(Arc::new(document));
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert_eq!(app.rule_state.warnings.len(), 4);
+    let unknown = "订阅更新后有供应商提示；请保留原文";
+    app.rule_state.warnings.push(unknown.into());
+    let raw = app.rule_state.warnings.clone();
+    let chinese = [
+        "有 1 条自定义规则已包含在订阅或其他规则中，保留原规则，不重复加入。",
+        "订阅更新后有 1 条原规则已删除或更改；旧排序引用已跳过，可恢复订阅顺序重新整理。",
+        "MATCH 之后有 1 条规则不会被匹配，请检查顺序。",
+        "订阅中未找到策略“店铺“香港”；東京”，请确认名称或改选策略；应用时会再次校验。",
+        unknown,
+    ]
+    .join("\n");
+    let english = [
+        "Skipped duplicate custom rules already present in the subscription or other rules (1).",
+        "Skipped stale ordering references (1) to subscription rules that were removed or changed. Restore the subscription order to reorder the rules.",
+        "Rules after MATCH will never be evaluated (1 affected). Check the rule order.",
+        "Policy “店铺“香港”；東京” was not found in the subscription. Check its name or choose another policy. It will be validated again when you apply the rules.",
+        unknown,
+    ]
+    .join("\n");
+
+    for (language, expected) in [
+        (LanguagePreference::SimplifiedChinese, &chinese),
+        (LanguagePreference::English, &english),
+        (LanguagePreference::SimplifiedChinese, &chinese),
+    ] {
+        let mut reply = synchronized_reply(&app);
+        reply.settings.language = language;
+        let _ = app.update(Message::Finished(Box::new(reply)));
+        app.present_slint(&data, &mut models);
+        assert_eq!(data.get_rule_warning().as_str(), expected);
+        assert_eq!(data.get_rule_profile(), "机场订阅 · 原名");
+        assert_eq!(app.rule_state.warnings, raw);
+        assert!(Arc::ptr_eq(&app.rule_state.draft, &draft));
+    }
 }
 
 #[test]
@@ -1457,7 +1540,8 @@ fn ip_response_times_preserve_availability_and_use_independent_latency_tones() {
             summary: "Confirmed service".into(),
             country: String::new(),
             detail: String::new(),
-            millis,
+            millis: Some(millis),
+            authentication_check_skipped: false,
             target_exit: None,
         })));
     }
@@ -2864,7 +2948,8 @@ fn ip_report_uses_emoji_in_summary_rows_and_details() {
         state: ip_check::State::Identified,
         summary: "203.0.113.2".into(),
         country: "🇩🇪 德国".into(),
-        millis: 4,
+        millis: Some(4),
+        authentication_check_skipped: false,
         detail: String::new(),
         target_exit: None,
     })));
@@ -2899,7 +2984,8 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         state: ip_check::State::Identified,
         summary: "203.0.113.42".into(),
         country: "香港".into(),
-        millis: 4,
+        millis: Some(4),
+        authentication_check_skipped: false,
         detail: String::new(),
         target_exit: None,
     }));
@@ -2913,7 +2999,8 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         state: ip_check::State::Reachable,
         summary: "网页可达".into(),
         country: String::new(),
-        millis: 12,
+        millis: Some(12),
+        authentication_check_skipped: false,
         detail: String::new(),
         target_exit: Some(ip_check::TargetExit {
             host: "claude.ai".into(),
@@ -2925,7 +3012,8 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         state: ip_check::State::Confirmed,
         summary: "确认可用".into(),
         country: "美国".into(),
-        millis: 218,
+        millis: Some(218),
+        authentication_check_skipped: false,
         detail: String::new(),
         target_exit: Some(ip_check::TargetExit {
             host: "chatgpt.com".into(),
@@ -2990,7 +3078,8 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
         state: ip_check::State::Confirmed,
         summary: "确认可用".into(),
         country: "美国".into(),
-        millis: 150,
+        millis: Some(150),
+        authentication_check_skipped: false,
         detail: String::new(),
         target_exit: Some(ip_check::TargetExit {
             host: "www.netflix.com".into(),
@@ -3027,6 +3116,186 @@ fn ip_report_shows_each_target_exit_and_its_measurement_state() {
 }
 
 #[test]
+fn ip_report_localizes_details_and_preserves_raw_evidence_in_both_languages() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Websites);
+    app.site_show_results = true;
+    let (index, service) = ip_check::services()
+        .iter()
+        .enumerate()
+        .find(|(_, service)| service.id == "MediaUnlockTest_DisneyPlus")
+        .unwrap();
+    app.site_category = CategoryFilter::Group(&service.group);
+    app.site_results.resize_with(index + 1, || None);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+
+    let evidence = "Originals Only (上游原文)";
+    let detail = format!("原生地区检测结果：{evidence}");
+    app.site_results[index] = Some(Ok(ip_check::CheckResult {
+        state: ip_check::State::Partial,
+        summary: "仅自制内容".into(),
+        country: "🇯🇵 日本".into(),
+        millis: Some(0),
+        authentication_check_skipped: false,
+        detail,
+        target_exit: None,
+    }));
+    let _ = app.ui_intent(Intent::SiteDetail, &service.id, "");
+
+    for (language, country, summary, row_value, prefix) in [
+        (
+            Language::SimplifiedChinese,
+            "日本",
+            "仅自制内容",
+            "部分可用 · 仅自制内容",
+            "原生地区检测结果：",
+        ),
+        (
+            Language::English,
+            "Japan",
+            "Originals only",
+            "Partially available · Originals only",
+            "Native region check result: ",
+        ),
+    ] {
+        app.presentation_language = language;
+        app.present_slint(&data, &mut models);
+        let row = data
+            .get_site_results()
+            .iter()
+            .find(|row| row.id == service.id.as_str())
+            .unwrap();
+        let description = format!("{summary}\n0 ms\n\n{prefix}{evidence}");
+        assert_eq!(data.get_modal(), 11);
+        assert_eq!(row.value, row_value);
+        assert_eq!(data.get_modal_country(), country);
+        assert_eq!(data.get_modal_flag(), "🇯🇵");
+        assert_eq!(data.get_modal_description(), description);
+        assert_eq!(data.get_modal_copy(), format!("{country}\n{description}"));
+    }
+
+    let Ok(result) = app.site_results[index].as_mut().unwrap() else {
+        unreachable!();
+    };
+    result.state = ip_check::State::Unknown;
+    result.summary = "平台自定义摘要".into();
+    result.detail = "原始说明：提到原生地区检测结果，但不是固定前缀".into();
+    for language in [Language::SimplifiedChinese, Language::English] {
+        app.presentation_language = language;
+        app.present_slint(&data, &mut models);
+        assert_eq!(
+            data.get_modal_description(),
+            "平台自定义摘要\n0 ms\n\n原始说明：提到原生地区检测结果，但不是固定前缀"
+        );
+    }
+}
+
+#[test]
+fn ip_report_projects_skipped_authentication_and_real_zero_in_both_languages() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Websites);
+    app.site_show_results = true;
+    let service = ip_check::services()
+        .iter()
+        .find(|service| service.id == "MediaUnlockTest_DisneyPlus")
+        .unwrap();
+    app.site_category = CategoryFilter::Group(&service.group);
+    app.site_status = StatusFilter::Status(Status::Unknown);
+    let index = ip_check::services()
+        .iter()
+        .position(|entry| entry.id == service.id)
+        .unwrap();
+    app.site_results
+        .resize_with(ip_check::services().len(), || None);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let _ = app.ui_intent(Intent::SiteDetail, &service.id, "");
+    for (language, status, duration, reason, exit) in [
+        (
+            Language::SimplifiedChinese,
+            "结果未确认",
+            "无响应测量",
+            "未执行认证检测",
+            "同域出口：",
+        ),
+        (
+            Language::English,
+            "Unconfirmed",
+            "No response measurement",
+            "Authentication check was not run",
+            "Same-domain exit: ",
+        ),
+    ] {
+        app.presentation_language = language;
+        for skipped in [true, false] {
+            app.site_results[index] = Some(Ok(ip_check::CheckResult {
+                state: ip_check::State::Unknown,
+                summary: "fixture".into(),
+                country: "未提供".into(),
+                millis: Some(0),
+                authentication_check_skipped: skipped,
+                detail: "fixture evidence".into(),
+                target_exit: None,
+            }));
+            app.present_slint(&data, &mut models);
+            let row = data
+                .get_site_results()
+                .iter()
+                .find(|row| row.id == service.id.as_str())
+                .unwrap();
+            let detail = data.get_modal_description();
+            let category = data
+                .get_categories()
+                .iter()
+                .flat_map(|pair| [pair.left, pair.right])
+                .find(|category| category.id == service.group.as_str())
+                .unwrap();
+            let category_total = ip_check::services()
+                .iter()
+                .filter(|item| item.group == service.group)
+                .count();
+            assert_eq!(category.count, format!("{category_total}"));
+            let pending = category_total - 1;
+            assert_eq!(
+                category.detail,
+                match language {
+                    Language::SimplifiedChinese => format!("结果未确认 1 · 未检测 {pending}"),
+                    Language::English => format!("Unconfirmed 1 · Not checked {pending}"),
+                }
+            );
+            let country = if skipped && language == Language::English {
+                "Not provided"
+            } else {
+                "未提供"
+            };
+            assert_eq!(row.source, country);
+            assert_eq!(data.get_modal_country(), country);
+            assert!(row.detail.contains(exit));
+            if skipped {
+                assert_eq!(row.value, status);
+                assert_eq!(detail.lines().next(), Some(status));
+                assert_eq!(data.get_modal_copy(), format!("{country}\n{detail}"));
+                assert!(row.delay.is_empty());
+                assert_eq!(row.delay_tone, 4);
+                assert!(row.detail.contains(duration));
+                assert!(detail.contains(duration) && detail.contains(reason));
+                assert!(!detail.contains("0 ms"));
+            } else {
+                assert_eq!(row.delay, "0 ms");
+                assert_eq!(row.delay_tone, 1);
+                assert!(detail.contains("0 ms") && detail.contains("fixture evidence"));
+                assert!(!row.detail.contains(duration));
+            }
+        }
+    }
+}
+
+#[test]
 fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
     ui_testing::initialize(950, 700);
     for (country, expected) in [
@@ -3039,7 +3308,8 @@ fn ip_report_uses_the_china_flag_for_hong_kong_macao_and_taiwan() {
             state: ip_check::State::Identified,
             summary: "203.0.113.2".into(),
             country: country.into(),
-            millis: 4,
+            millis: Some(4),
+            authentication_check_skipped: false,
             detail: String::new(),
             target_exit: None,
         })));
@@ -4434,6 +4704,26 @@ fn english_shared_errors_are_projected_without_changing_drafts_or_evidence() {
     assert_eq!(editor.raw, "DOMAIN,,DIRECT");
     assert_eq!(editor.error, "规则内容不能为空");
 
+    let complex = "AND,((DOMAIN,a.test),(NETWORK,TCP)),REJECT";
+    let _ = app.ui_intent(Intent::RuleRaw, complex, "");
+    let _ = app.ui_intent(Intent::RuleTextMode, "false", "");
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_modal_error(),
+        "Use the text editor for logical and other complex rules."
+    );
+    let editor = app.rule_state.editor.as_ref().unwrap();
+    assert!(editor.text_mode);
+    assert_eq!(editor.raw, complex);
+    assert_eq!(editor.error, "逻辑规则等复杂类型请使用规则文本编辑。");
+
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_modal_error(),
+        "逻辑规则等复杂类型请使用规则文本编辑。"
+    );
+    app.presentation_language = Language::English;
     app.rule_state.editor = None;
     let failure = "订阅更新失败，已保留原配置与运行状态：YAML 配置格式错误: 東京；provider";
     app.show_notice(failure.into(), true);
@@ -4516,7 +4806,8 @@ fn failed_subscription_update_keeps_measurements_and_reports_until_a_successful_
         state: ip_check::State::Identified,
         summary: "203.0.113.2".into(),
         country: String::new(),
-        millis: 4,
+        millis: Some(4),
+        authentication_check_skipped: false,
         detail: String::new(),
         target_exit: None,
     })));
@@ -5105,6 +5396,27 @@ fn every_page_projects_protection_readiness_and_discards_unconfirmed_success() {
             assert_eq!(data.get_protection_health(), expected as i32);
         }
     }
+    app.page = Page::Home;
+    let failure = "连接已处理，但系统通知失败：notification disabled";
+    app.snapshot.protection_status =
+        status::Status::observe(true, false, true, true, Some((true, failure)));
+    app.presentation_language = clash_client_core::config::Language::English;
+    let data = clash_desktop_protocol::UiData::default();
+    app.present(
+        &data,
+        &mut clash_desktop_protocol::models::ViewModels::default(),
+    );
+    assert_eq!(
+        data.get_protection_message(),
+        "Connection handled; system notification failed: notification disabled"
+    );
+    assert_eq!(app.snapshot.protection_status.message, failure);
+    app.presentation_language = clash_client_core::config::Language::SimplifiedChinese;
+    app.present(
+        &data,
+        &mut clash_desktop_protocol::models::ViewModels::default(),
+    );
+    assert_eq!(data.get_protection_message(), failure);
     let mut reply = synchronized_reply(&app);
     reply.snapshot = None;
     let _ = app.update(Message::Finished(Box::new(reply)));

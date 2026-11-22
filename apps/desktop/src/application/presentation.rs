@@ -824,7 +824,7 @@ impl App {
         data.set_rule_selected(state.selected.is_some());
         data.set_rule_custom(state.selected_custom().is_some());
         data.set_rule_source(state.filter.to_string().into());
-        data.set_rule_warning(state.warnings.join("\n").into());
+        data.set_rule_warning(state.warning_text(language).into());
         data.set_rule_detail(
             state
                 .selected_index()
@@ -1045,35 +1045,17 @@ impl App {
         let categories: Vec<_> = report
             .categories
             .into_iter()
-            .map(|category| CategoryItem {
-                id: category.name.into(),
-                title: category.name.into(),
-                count: format!(
-                    "{} / {}",
-                    category.counts.non_red(),
-                    category.counts.total()
-                )
-                .into(),
-                detail: match language {
-                    Language::SimplifiedChinese => format!(
-                        "确认可用 {} · 网页可达 {} · 受限 {}",
-                        category.counts.count(Status::Available),
-                        category.counts.count(Status::Reachable),
-                        category.counts.count(Status::Restricted)
-                    ),
-                    Language::English => format!(
-                        "Available {} · Reachable {} · Restricted {}",
-                        category.counts.count(Status::Available),
-                        category.counts.count(Status::Reachable),
-                        category.counts.count(Status::Restricted)
-                    ),
+            .map(|category| {
+                let counts = &category.counts;
+                let has_failure =
+                    counts.count(Status::Restricted) + counts.count(Status::Failed) > 0;
+                CategoryItem {
+                    id: category.name.into(),
+                    title: category.name.into(),
+                    count: counts.total().to_string().into(),
+                    detail: counts.summary_in(language).into(),
+                    tone: if has_failure { 2 } else { 1 },
                 }
-                .into(),
-                tone: if category.counts.non_red() == category.counts.total() {
-                    1
-                } else {
-                    2
-                },
             })
             .collect();
         reconcile(
@@ -1100,39 +1082,20 @@ impl App {
                     let service = &ip_check::services()[index];
                     let result = self.site_result(index);
                     let status = Status::of(result);
-                    let (country, flag) = result
-                        .and_then(|result| result.as_ref().ok())
-                        .map_or(("", None), |result| {
-                            clash_of_rust::flags::label(&result.country)
-                        });
+                    let measured = result.and_then(|result| result.as_ref().ok());
+                    let country =
+                        measured.map_or("", |result| site_result_country(result, language));
+                    let flag = measured
+                        .and_then(|result| clash_of_rust::flags::flag_emoji(&result.country));
                     ReportItem {
                         country: String::new().into(),
                         flag: flag.clone().unwrap_or_default().into(),
                         flagged: flag.is_some(),
                         id: service.id.as_str().into(),
                         title: service.name.as_str().into(),
-                        value: match result {
-                            Some(Ok(result)) if status.summary_is_generic(&result.summary) => {
-                                status.label_in(language).to_owned()
-                            }
-                            Some(Ok(result)) => {
-                                format!("{} · {}", status.label_in(language), result.summary)
-                            }
-                            Some(Err(error)) => error.clone(),
-                            None => status.label_in(language).to_owned(),
-                        }
-                        .into(),
-                        detail: ip_report::target_exit_detail_in(service, result, language)
-                            .unwrap_or_default()
-                            .into(),
-                        source: if language == Language::English {
-                            clash_client_core::countries::country_code(country)
-                                .and_then(clash_client_core::countries::english_name)
-                                .unwrap_or(country)
-                        } else {
-                            country
-                        }
-                        .into(),
+                        value: site_result_value(result, status, language).as_ref().into(),
+                        detail: ip_report::list_detail_in(service, result, language).into(),
+                        source: country.into(),
                         status_label: status.to_string().into(),
                         tone: tone(status),
                         delay: result
@@ -1169,7 +1132,11 @@ impl App {
             status
         };
         data.set_protection_health(health.state as i32);
-        data.set_protection_message(health.message.into());
+        data.set_protection_message(
+            clash_client_core::error_message::localize(&health.message, self.presentation_language)
+                .as_ref()
+                .into(),
+        );
     }
 
     fn present_claude(&self, data: &UiData, models: &ViewModels) {
@@ -1542,15 +1509,24 @@ impl App {
             data.set_modal_title(service.name.as_str().into());
             data.set_modal_description(
                 match self.site_result(index) {
-                    Some(Ok(result)) => {
-                        let (country, flag) = clash_of_rust::flags::label(&result.country);
+                    Some(outcome @ Ok(result)) => {
+                        let country = site_result_country(result, language);
+                        let flag = clash_of_rust::flags::flag_emoji(&result.country);
                         data.set_modal_country(country.into());
                         data.set_modal_flagged(flag.is_some());
                         data.set_modal_flag(flag.unwrap_or_default().into());
-                        let latency = result
-                            .response_millis()
-                            .map_or(String::new(), |millis| format!("\n{millis} ms"));
-                        format!("{}{}\n\n{}", result.summary, latency, result.detail)
+                        let summary = if result.authentication_check_skipped {
+                            Status::Unknown.label_in(language)
+                        } else {
+                            Status::of(Some(outcome)).summary_in(&result.summary, language)
+                        };
+                        let duration = ip_report::response_duration_in(result, language);
+                        let detail = ip_report::detail_in(service, outcome, language);
+                        if duration.is_empty() {
+                            format!("{summary}\n\n{detail}")
+                        } else {
+                            format!("{summary}\n{duration}\n\n{detail}")
+                        }
                     }
                     Some(Err(error)) => error.clone(),
                     None => language.text("尚未完成检测", "Check not completed").into(),

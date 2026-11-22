@@ -1,4 +1,6 @@
 //! Human-readable presentation only; command results and JSON schemas stay intact.
+#[cfg(test)]
+mod diagnose_tests;
 mod fields;
 mod lists;
 mod table;
@@ -101,32 +103,55 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 &text_in(value, "target", language),
                 language,
             )?;
-            for (chinese, english, key) in [
-                ("系统 DNS", "System DNS", "system_dns"),
-                ("内核 DNS", "Core DNS", "core_dns"),
-                ("本机代理", "Local proxy", "proxy"),
-                ("HTTPS", "HTTPS", "https"),
-                ("HTTP", "HTTP", "http"),
-                ("采用协议", "Protocol", "response"),
-                ("实际线路", "Route", "route"),
+            use clash_client_core::network_tools::{entry_detail_in, entry_label_in};
+            for (label, key) in [
+                ("系统 DNS", "system_dns"),
+                ("内核 DNS", "core_dns"),
+                ("本机代理", "proxy"),
+                ("HTTPS", "https"),
+                ("HTTP", "http"),
+                ("采用协议", "response"),
+                ("实际线路", "route"),
             ] {
+                let check = &value[key];
+                let code = match check["success"].as_bool() {
+                    Some(true) => "ok",
+                    Some(false) => "probe_failed",
+                    None => "not_observed",
+                };
+                let detail = check["detail"]
+                    .as_str()
+                    .filter(|detail| !detail.is_empty())
+                    .unwrap_or("—");
                 field_in(
                     out,
-                    language.text(chinese, english),
-                    &text_in(&value[key], "detail", language),
+                    &entry_label_in(label, language),
+                    &clean(&entry_detail_in(label, detail, code, language)),
                     language,
                 )?;
             }
             Ok(())
         }
         path if path.starts_with("network ") => {
+            let entries = value["entries"].as_array();
+            let target = if value["target"] == "未检查"
+                && entries.is_some_and(|entries| {
+                    entries.iter().any(|entry| {
+                        matches!(entry["code"].as_str(), Some("invalid_target" | "invalid_options"))
+                    })
+                })
+            {
+                language.text("未检查", "Not checked").into()
+            } else {
+                text_in(value, "target", language)
+            };
             field_in(
                 out,
                 language.text("目标", "Target"),
-                &text_in(value, "target", language),
+                &target,
                 language,
             )?;
-            if let Some(entries) = value["entries"].as_array() {
+            if let Some(entries) = entries {
                 for entry in entries {
                     let label = entry["label"].as_str().filter(|value| !value.is_empty()).unwrap_or("—");
                     let detail = entry["detail"].as_str().filter(|value| !value.is_empty()).unwrap_or("—");
@@ -565,22 +590,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             ],
             language,
         ),
-        "ip-check" => {
-            let total = text_in(value, "total", language);
-            let confirmed = text_in(value, "confirmed_available", language);
-            let available = text_in(value, "non_red", language);
-            match language {
-                Language::SimplifiedChinese => writeln!(
-                    out,
-                    "IP 检测完成：共 {total} 项，确认可用 {confirmed} 项，可用或部分可用 {available} 项"
-                )?,
-                Language::English => writeln!(
-                    out,
-                    "IP check complete: {total} total, {confirmed} confirmed, {available} available or partially available"
-                )?,
-            }
-            lists::ip_results(out, value, language)
-        }
+        "ip-check" => lists::ip_results(out, value, language),
         "claude check" | "claude browser" if !args.flag("details") => {
             claude_summary(out, &args.path, value, language)
         }
@@ -840,6 +850,8 @@ fn network_notice(out: &mut dyn Write, value: &Value, language: Language) -> Res
 }
 
 fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> {
+    use clash_client_core::error_message::localize_diagnostic;
+
     if value["offline"] == true {
         for (chinese, english, key) in [
             ("客户端版本", "Client version", "version"),
@@ -888,7 +900,11 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
                 .collect::<Vec<_>>()
                 .join(language.text("、", ", "))
         } else if let Some(error) = result["Err"].as_str() {
-            format!("{}{}", language.text("失败：", "Failed: "), clean(error))
+            format!(
+                "{}{}",
+                language.text("失败：", "Failed: "),
+                clean(&localize_diagnostic(error, language))
+            )
         } else {
             language.text("未检测", "Not checked").to_owned()
         };
@@ -905,13 +921,25 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
         ("代理 IPv6 出口", "Proxy IPv6 exit", "ipv6"),
     ] {
         let probe = &value[key];
+        let status = &probe["status"];
         let description = if let Some(error) = probe["error"].as_str() {
-            format!("{}{}", language.text("失败：", "Failed: "), clean(error))
-        } else if probe["status"].is_number() {
             format!(
-                "{} · {} · {}",
+                "{}{}",
+                language.text("失败：", "Failed: "),
+                clean(&localize_diagnostic(error, language))
+            )
+        } else if status.is_number() {
+            let detail = text_in(probe, "detail", language);
+            let detail = if language == Language::English
+                && detail == format!("HTTP {status} · 响应头耗时，不是 ICMP 延迟")
+            {
+                format!("HTTP {status} · Response header time, not ICMP latency")
+            } else {
+                detail
+            };
+            format!(
+                "{} · {detail} · {}",
                 text_in(probe, "url", language),
-                text_in(probe, "detail", language),
                 text_in(probe, "millis", language)
             )
         } else {
@@ -923,7 +951,7 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
         field_in(
             out,
             language.text("后台", "Background"),
-            &clean(error),
+            &clean(&localize_diagnostic(error, language)),
             language,
         )?;
     }

@@ -37,6 +37,8 @@ REPORT = ROOT/'target/linux-report'
 KVM_GET_API_VERSION = 0xAE00
 KVM_CREATE_VM = 0xAE01
 KVM_API_VERSION = 12
+PUBLISHED_UPDATE_CLEANUP_SECONDS = 420
+PUBLISHED_UPDATE_TRANSPORT_SECONDS = 60
 
 
 def text(url, headers=None):
@@ -820,6 +822,11 @@ def compatibility_command(target, python):
             '--expect-linux', target.os_release_id, target.os_release_version, '--expect-arch', target.arch]
 
 
+def published_update_command(python, fixture, deadline):
+    return ['/usr/bin/timeout', '--signal=TERM', f'--kill-after={PUBLISHED_UPDATE_CLEANUP_SECONDS}',
+            str(deadline), python, 'scripts/linux_update_compatibility.py', fixture]
+
+
 def hosted_test(package_run_id, target, fixture=None):
     started = time.monotonic()
     result = {'distribution': target.family, 'version_id': target.release, 'arch': target.arch,
@@ -834,8 +841,9 @@ def hosted_test(package_run_id, target, fixture=None):
         environment.pop('GITHUB_TOKEN', None)
         run(compatibility_command(target, sys.executable), env=environment, timeout=1500)
         if fixture:
-            run([sys.executable, ROOT/'scripts/linux_update_compatibility.py', fixture],
-                env=environment, timeout=1800)
+            deadline = 1800
+            run(published_update_command(sys.executable, fixture, deadline), env=environment,
+                timeout=deadline + PUBLISHED_UPDATE_CLEANUP_SECONDS + PUBLISHED_UPDATE_TRANSPORT_SECONDS)
         result['success'] = True
     finally:
         result['seconds'] = round(time.monotonic() - started, 3)
@@ -962,9 +970,12 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             print(f'{guest.target.distribution} {guest.target.release}: verifying published update', flush=True)
             phase_started = time.monotonic()
             try:
-                guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
-                             'scripts/linux_update_compatibility.py target/linux-update-fixture',
-                             timeout=2400 if slow_guest else 1800)
+                deadline = 2400 if slow_guest else 1800
+                command = published_update_command('/opt/cor-test-python/bin/python3',
+                                                   'target/linux-update-fixture', deadline)
+                guest.remote(guest.environment + shlex.join(command),
+                             timeout=deadline + PUBLISHED_UPDATE_CLEANUP_SECONDS
+                             + PUBLISHED_UPDATE_TRANSPORT_SECONDS)
             finally:
                 timings['published_update'] = round(time.monotonic() - phase_started, 3)
         if guest.target.family == 'arch':

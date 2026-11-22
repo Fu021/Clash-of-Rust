@@ -1,5 +1,6 @@
 use crate::tui::input::Utf16Decoder;
 use anyhow::{Result, ensure};
+use clash_client_core::config::Language;
 use windows_sys::Win32::{
     Foundation::HANDLE,
     System::Console::{
@@ -20,7 +21,7 @@ pub struct Mode {
 }
 
 impl Mode {
-    pub fn enter() -> Result<Self> {
+    pub fn enter(language: Language) -> Result<Self> {
         let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
         let output = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
         let mut input_mode = 0;
@@ -28,7 +29,8 @@ impl Mode {
         ensure!(
             unsafe { GetConsoleMode(input, &mut input_mode) } != 0
                 && unsafe { GetConsoleMode(output, &mut output_mode) } != 0,
-            "无法读取控制台模式：{}",
+            "{}{}",
+            language.text("无法读取控制台模式：", "Could not read console mode: "),
             std::io::Error::last_os_error()
         );
         let mode = Self {
@@ -49,23 +51,32 @@ impl Mode {
                             | ENABLE_QUICK_EDIT_MODE),
                 )
             } != 0,
-            "无法设置控制台输入：{}",
+            "{}{}",
+            language.text(
+                "无法设置控制台输入：",
+                "Could not configure console input: "
+            ),
             std::io::Error::last_os_error()
         );
         ensure!(
             unsafe { SetConsoleMode(output, output_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) }
                 != 0,
-            "当前控制台不支持 ANSI 输出：{}",
+            "{}{}",
+            language.text(
+                "当前控制台不支持 ANSI 输出：",
+                "This console does not support ANSI output: ",
+            ),
             std::io::Error::last_os_error()
         );
         Ok(mode)
     }
 
-    pub fn size(&self) -> Result<(usize, usize)> {
+    pub fn size(&self, language: Language) -> Result<(usize, usize)> {
         let mut info = std::mem::MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFO>::uninit();
         ensure!(
             unsafe { GetConsoleScreenBufferInfo(self.output, info.as_mut_ptr()) } != 0,
-            "无法读取控制台尺寸：{}",
+            "{}{}",
+            language.text("无法读取控制台尺寸：", "Could not read the console size: "),
             std::io::Error::last_os_error()
         );
         let info = unsafe { info.assume_init() };
@@ -75,11 +86,12 @@ impl Mode {
         ))
     }
 
-    pub fn read(&mut self) -> Result<Vec<u8>> {
+    pub fn read(&mut self, language: Language) -> Result<Vec<u8>> {
         let mut available = 0;
         ensure!(
             unsafe { GetNumberOfConsoleInputEvents(self.input, &mut available) } != 0,
-            "控制台输入已断开：{}",
+            "{}{}",
+            language.text("控制台输入已断开：", "Console input disconnected: "),
             std::io::Error::last_os_error()
         );
         let mut bytes = Vec::new();
@@ -88,7 +100,8 @@ impl Mode {
             let mut read = 0;
             ensure!(
                 unsafe { ReadConsoleInputW(self.input, record.as_mut_ptr(), 1, &mut read) } != 0,
-                "读取控制台输入失败：{}",
+                "{}{}",
+                language.text("读取控制台输入失败：", "Could not read console input: "),
                 std::io::Error::last_os_error()
             );
             if read == 0 {

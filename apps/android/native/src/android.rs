@@ -1,6 +1,20 @@
 use crate::{
-    list_presentation::{self, LogMessage},
+    connection_detail::{
+        self, CONNECTIONS_PAGE, Detail, Selection as ConnectionSelection, Status as DetailStatus,
+    },
+    list_presentation::{
+        self, CONNECTION_PAGE_SIZE, ConnectionPageCursor, ConnectionPager, LogMessage,
+    },
+    protection_presentation,
     request_gate::RequestGate,
+    settings_input, site_report,
+    startup_events::{
+        NativeEventReceiver, NativeEvents, StartupEvents, StartupRecovery, next_vpn_authorization,
+        vpn_authorization_result,
+    },
+    startup_protection::{
+        RetryOutcome, RollbackProgress, SavedProtectionRecovery, VpnBaseline, VpnTransition,
+    },
 };
 use anyhow::{Context, Result, ensure};
 use clash_mobile_runtime::{NativeHost, Session, Snapshot, core};
@@ -19,10 +33,10 @@ use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, LazyLock, Mutex},
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 #[path = "application_policies.rs"]
 mod application_policies;
@@ -36,12 +50,12 @@ mod language_ui;
 mod live_language;
 
 slint::include_modules!();
-static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
-static AUTHORIZATION_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static EVENTS: LazyLock<NativeEvents> = LazyLock::new(NativeEvents::new);
 // Also included in exported diagnostics. Contains view counts/status, never URLs or secrets.
 static PRESENTATION: Mutex<String> = Mutex::new(String::new());
 static FIRST_APPEARANCE: Mutex<Option<(bool, i32)>> = Mutex::new(None);
 static UI_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SESSION_ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static UI_LIFETIME: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
 // NativeActivity can recreate an Activity before the previous native thread
@@ -59,6 +73,7 @@ impl Drop for UiLifetime {
 }
 thread_local! {
     static UI_THREAD_LIFETIME: UiLifetime = const { UiLifetime };
+    static DISPLAYED_CONNECTION_PAGE: std::cell::Cell<Option<ConnectionPageCursor>> = const { std::cell::Cell::new(None) };
     static DIAGNOSTIC_WINDOW: std::cell::RefCell<Option<slint::Weak<AndroidWindow>>> = const { std::cell::RefCell::new(None) };
     static DIAGNOSTIC_GEOMETRY: std::cell::RefCell<BTreeMap<String, Vec<f32>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
 }
@@ -135,6 +150,32 @@ impl NativeHost for AndroidHost {
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_clashofrust_android_CoreBridge_nativeColdRuntime(
+    mut unowned_env: EnvUnowned<'_>,
+    _: JClass<'_>,
+    root: JString<'_>,
+    application_rules_supported: jni::sys::jboolean,
+) -> jni::sys::jstring {
+    unowned_env
+        .with_env(|env| {
+            let root = root.try_to_string(env)?;
+            let response = match Session::cold_android_runtime(
+                std::path::Path::new(&root),
+                application_rules_supported != 0,
+            ) {
+                Ok((raw, settings)) => json!({
+                    "config":raw,
+                    "ipv6":clash_mobile_runtime::effective_ipv6(&settings),
+                    "protected":settings.claude_protection.is_some(),
+                }),
+                Err(error) => json!({"error":format!("{error:#}")}),
+            };
+            env.new_string(response.to_string()).map(JString::into_raw)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeEvent(
     mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,
@@ -142,11 +183,9 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeEvent(
 ) {
     unowned_env
         .with_env(|env| -> jni::errors::Result<()> {
-            let value = text.try_to_string(env)?;
-            if let Ok(sender) = EVENTS.lock()
-                && let Some(sender) = sender.as_ref()
-            {
-                let _ = sender.try_send(value);
+            match serde_json::from_str(&text.try_to_string(env)?) {
+                Ok(event) => EVENTS.dispatch(event),
+                Err(error) => log::warn!("Invalid Android event: {error}"),
             }
             Ok(())
         })
@@ -229,17 +268,25 @@ struct Request {
     a: String,
     b: String,
     selected: String,
+    connection_page: Option<ConnectionPageCursor>,
     profile_ticket: Option<u64>,
 }
 struct ProtectionChange {
-    before: config::Settings,
-    before_vpn: bool,
-    enabled: bool,
-    generation: Option<u64>,
+    kind: ProtectionChangeKind,
+    transition: Option<VpnTransition>,
     deadline: std::time::Instant,
     verified: bool,
-    authorization: Option<(u64, core::claude_check::protection::Protection)>,
-    auto_check: bool,
+    authorization: Option<(i64, ProtectionAuthorization)>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProtectionChangeKind {
+    Enable,
+    Restore,
+    Disable,
+}
+enum ProtectionAuthorization {
+    Enable(core::claude_check::protection::Protection),
+    Restore,
 }
 struct State {
     session: Session,
@@ -249,7 +296,6 @@ struct State {
     overview_epoch: u64,
     page: i32,
     query: String,
-    selected: String,
     notice: String,
     notice_error: bool,
     notice_critical: bool,
@@ -261,12 +307,14 @@ struct State {
     logs: VecDeque<(String, LogMessage)>,
     log_level: String,
     connection_sort: String,
-    connection_address: (String, String),
+    connection_detail: Option<Detail>,
     ip_results: Vec<core::ip_report::ResultSlot>,
     claude: Option<core::claude_check::Report>,
     claude_status: String,
     protection_change: Option<ProtectionChange>,
+    saved_protection_recovery: SavedProtectionRecovery,
     protection_status: String,
+    protection_rollback_error: Option<String>,
     guard_snapshot: core::claude_check::guard::Snapshot,
     protection_observed: bool,
     category: String,
@@ -294,7 +342,7 @@ struct State {
     group_expansion: BTreeMap<String, bool>,
     group_page: usize,
     profile_page: usize,
-    connection_page: usize,
+    connection_page: ConnectionPager,
     rule_page: usize,
     rule_rows: Option<Vec<rule_manager::Row>>,
     rule_warnings: Vec<String>,
@@ -314,6 +362,7 @@ struct State {
 #[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {
     await_previous_ui();
+    SESSION_ATTEMPTS.store(0, std::sync::atomic::Ordering::Release);
     if let Ok(mut snapshot) = PRESENTATION.lock() {
         snapshot.clear();
         UI_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
@@ -376,7 +425,15 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
             || key.starts_with("application-polic")
             || matches!(
                 key.as_str(),
-                "nodes-view" | "profiles-view" | "rule-shortcuts-open"
+                "nodes-view"
+                    | "profiles-view"
+                    | "connections-pagination:next"
+                    | "connections-pagination:previous"
+                    | "connections-sort"
+                    | "option:connections-sort/1"
+                    | "rule-shortcuts-open"
+                    | "notice-retry-core"
+                    | "retry-core"
             ))
         {
             return;
@@ -410,18 +467,48 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         .global::<MobileData>()
         .set_version(core::VERSION.into());
     window.global::<MobileData>().set_protection_supported(true);
+    window
+        .global::<MobileData>()
+        .set_connection_detail_snapshots(true);
+    window.global::<MobileData>().set_working(true);
     let (commands, receive) = mpsc::channel::<Request>(32);
+    let (show_detail, visible_detail) = watch::channel(None);
+    let dismiss_detail = show_detail.clone();
+    window
+        .global::<MobileActions>()
+        .on_dismiss_connection_detail(move |id, request| {
+            connection_detail::dismiss(&dismiss_detail, id.as_str(), request);
+        });
     let profile_gate = Arc::new(RequestGate::default());
-    let (events, native_events) = mpsc::channel::<String>(16);
-    if let Ok(mut sender) = EVENTS.lock() {
-        *sender = Some(events);
-    }
+    let recovery = Arc::new(StartupRecovery::default());
+    let (native_events, visibility) = EVENTS.connect();
     let weak = window.as_weak();
     let gate = profile_gate.clone();
+    let startup_recovery = recovery.clone();
     window
         .global::<MobileActions>()
         .on_request(move |intent, a, b| {
             let Some(ui) = weak.upgrade() else { return };
+            let mut startup_retry = false;
+            if !startup_recovery.ready() {
+                match intent {
+                    MobileIntent::Navigate => {
+                        startup_recovery.navigate(ui.get_current_page());
+                        if startup_recovery.opening() {
+                            return;
+                        }
+                    }
+                    MobileIntent::RestartCore => {
+                        if !startup_recovery.retry() {
+                            return;
+                        }
+                        startup_retry = true;
+                    }
+                    MobileIntent::ExportDiagnostics | MobileIntent::ReportIssue
+                        if !startup_recovery.opening() => {}
+                    _ => return,
+                }
+            }
             let profile_ticket = if matches!(
                 intent,
                 MobileIntent::SaveProfile
@@ -444,16 +531,41 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                         MobileIntent::Navigate | MobileIntent::Query | MobileIntent::RuleTextMode
                     ),
             );
-            if commands
-                .try_send(Request {
+            let detail_request = if intent == MobileIntent::ConnectionDetail {
+                b.as_str()
+                    .parse::<i32>()
+                    .ok()
+                    .map(|request| (a.clone(), request))
+            } else {
+                None
+            };
+            if let Ok(command) = commands.try_reserve() {
+                if let Some((id, request)) = detail_request {
+                    show_detail.send_replace(Some(ConnectionSelection {
+                        id: id.to_string(),
+                        request,
+                    }));
+                    connection_detail::ui::begin_loading(&ui, id, request);
+                }
+                command.send(Request {
                     intent,
                     a: a.into(),
                     b: b.into(),
                     selected: ui.get_selected_id().into(),
+                    connection_page: if intent == MobileIntent::ConnectionPage {
+                        DISPLAYED_CONNECTION_PAGE.get()
+                    } else {
+                        None
+                    },
                     profile_ticket,
-                })
-                .is_err()
-            {
+                });
+            } else {
+                if detail_request.is_some() {
+                    show_detail.send_replace(None);
+                }
+                if startup_retry {
+                    startup_recovery.fail();
+                }
                 if let Some(ticket) = profile_ticket {
                     gate.finish(ticket);
                 }
@@ -470,11 +582,15 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
             }
         });
     let host = native.clone();
+    let startup_recovery = recovery.clone();
     let routing_window = window.as_weak();
     let application_editor = Arc::new(Mutex::new(application_routing::Editor::default()));
     window
         .global::<AndroidActions>()
         .on_request(move |intent, value| {
+            if !startup_recovery.ready() && intent != AndroidIntent::Background {
+                return;
+            }
             if application_routing::handles(intent) {
                 if let Some(ui) = routing_window.upgrade()
                     && let Err(error) = application_routing::request(
@@ -517,17 +633,40 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                 .enable_all()
                 .build()?;
             runtime.block_on(async {
+                let mut receive = receive;
+                let mut native_events = native_events;
                 tokio::select! {
                     biased;
                     _ = stopped => Ok(()),
-                    result = run_loop(
-                        Startup { root, update_path, language },
-                        native,
-                        receive,
-                        native_events,
-                        weak,
-                        profile_gate,
-                    ) => result,
+                    result = async {
+                        let mut startup = Startup { root, update_path, language };
+                        let Some(session) = open_session(
+                            &startup,
+                            &native,
+                            &mut receive,
+                            &mut native_events,
+                            &weak,
+                            &profile_gate,
+                            &recovery,
+                        ).await? else {
+                            return Ok(());
+                        };
+                        startup.language = live_language::resolve(
+                            session.session.settings.language,
+                            native.as_ref(),
+                        );
+                        run_loop(
+                            startup,
+                            session,
+                            receive,
+                            native_events,
+                            visibility,
+                            visible_detail,
+                            weak,
+                            profile_gate,
+                            recovery,
+                        ).await
+                    } => result,
                 }
             })
         })();
@@ -536,9 +675,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         }
     })?;
     let result = window.run();
-    if let Ok(mut sender) = EVENTS.lock() {
-        *sender = None;
-    }
+    EVENTS.disconnect();
     drop(worker);
     result?;
     Ok(())
@@ -563,19 +700,28 @@ enum Update {
         serde_json::Value,
         std::result::Result<bool, String>,
     ),
-    Snapshot(u64, std::result::Result<Snapshot, String>),
+    Snapshot(
+        u64,
+        Option<ConnectionSelection>,
+        std::result::Result<Snapshot, String>,
+    ),
     Ip(u64, usize, core::ip_report::ResultSlot),
     IpDone(u64),
     Claude(u64, std::result::Result<core::claude_check::Report, String>),
     Protection(std::result::Result<core::claude_check::protection::Protection, String>),
-    ProtectionVerified(std::time::Instant, std::result::Result<(), String>),
-    Address(u64, String, String),
+    ProtectionVerified(String, std::result::Result<(), String>),
+    ProtectionRollbackVerified(String, Result<()>),
+    Address(
+        ConnectionSelection,
+        connection_detail::AddressRequest,
+        String,
+    ),
     NetworkProbe(
         u64,
         std::result::Result<core::network_tools::Report, String>,
     ),
     Log(String, String),
-    Geo(std::result::Result<tempfile::TempDir, String>),
+    Geo(u64, std::result::Result<tempfile::TempDir, String>),
     Checked(
         u64,
         std::result::Result<Option<core::update::Package>, String>,
@@ -589,40 +735,213 @@ struct Startup {
     update_path: PathBuf,
     language: config::Language,
 }
+
+struct OpenedSession {
+    session: Session,
+    incidents: VecDeque<Value>,
+    pending_events: StartupEvents,
+    recovered: bool,
+}
+
+fn show_startup_failure(
+    weak: &slint::Weak<AndroidWindow>,
+    profile_gate: &Arc<RequestGate>,
+    recovery: &Arc<StartupRecovery>,
+    error: String,
+    detail: Option<String>,
+    attempt_failed: bool,
+) -> Result<()> {
+    let weak = weak.clone();
+    let gate = profile_gate.clone();
+    let recovery = recovery.clone();
+    slint::invoke_from_event_loop(move || {
+        if let Some(ui) = weak.upgrade() {
+            if attempt_failed {
+                recovery.fail();
+            }
+            let language = language_ui::current(&ui);
+            let message = crate::startup_presentation::failure(&error, detail.as_deref(), language);
+            let data = ui.global::<MobileData>();
+            data.set_profile_busy(gate.busy());
+            data.set_working(recovery.opening() || gate.busy());
+            let view = ui.global::<MobileView>();
+            view.set_notice_error(true);
+            view.set_notice_critical(true);
+            view.set_notice_recover_network(false);
+            ui.invoke_notify(message.into());
+        }
+    })?;
+    Ok(())
+}
+
+async fn open_session(
+    startup: &Startup,
+    native: &Arc<AndroidHost>,
+    receive: &mut mpsc::Receiver<Request>,
+    native_events: &mut NativeEventReceiver,
+    weak: &slint::Weak<AndroidWindow>,
+    profile_gate: &Arc<RequestGate>,
+    recovery: &Arc<StartupRecovery>,
+) -> Result<Option<OpenedSession>> {
+    let mut failed = false;
+    let mut incidents = VecDeque::new();
+    let mut pending_events = StartupEvents::default();
+    loop {
+        SESSION_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Release);
+        let error = match Session::open(startup.root.clone(), native.clone()) {
+            Ok(session) => {
+                return Ok(Some(OpenedSession {
+                    session,
+                    incidents,
+                    pending_events,
+                    recovered: failed,
+                }));
+            }
+            Err(error) => format!("{error:#}"),
+        };
+        failed = true;
+        log::error!("Mobile session initialization failed: {error}");
+        incidents.push_back(core::support::incident(&error, true));
+        if incidents.len() > 20 {
+            incidents.pop_front();
+        }
+        if let Err(notification_error) =
+            native.request(json!({"op":"notify-incident","critical":true}))
+        {
+            log::warn!("Incident notification unavailable: {notification_error:#}");
+        }
+        show_startup_failure(weak, profile_gate, recovery, error.clone(), None, true)?;
+        loop {
+            let request = tokio::select! {
+                request = receive.recv() => {
+                    let Some(request) = request else {
+                        return Ok(None);
+                    };
+                    request
+                }
+                Some(event) = native_events.recv() => {
+                    match event["event"].as_str() {
+                        Some("back") => {
+                            let weak = weak.clone();
+                            slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = weak.upgrade() {
+                                    ui.invoke_native_back();
+                                }
+                            })?;
+                        }
+                        Some("export-error" | "export-notice" | "link-error") => {
+                            let detail = event["value"].as_str().map(str::to_owned);
+                            show_startup_failure(weak, profile_gate, recovery, error.clone(), detail, false)?;
+                        }
+                        _ => pending_events.record(event),
+                    }
+                    continue;
+                }
+            };
+            if let Some(ticket) = request.profile_ticket {
+                profile_gate.finish(ticket);
+            }
+            if request.intent == MobileIntent::RestartCore {
+                break;
+            }
+            let detail = if matches!(
+                request.intent,
+                MobileIntent::ExportDiagnostics | MobileIntent::ReportIssue
+            ) {
+                let result = async {
+                    let root = startup.root.clone();
+                    let context = json!({
+                        "error": error.clone(),
+                        "events": incidents.clone(),
+                        "platform": native.request(json!({"op":"diagnostics"}))
+                            .map_err(|error| format!("{error:#}")),
+                    });
+                    let report = tokio::task::spawn_blocking(move || {
+                        core::support::issue_report(&root, context, vec![])
+                    })
+                    .await?;
+                    if request.intent == MobileIntent::ReportIssue {
+                        native.request(json!({
+                            "op":"open-url","url":core::support::issue_draft_url(&report)
+                        }))?;
+                    } else {
+                        native.request(json!({
+                            "op":"export","name":"cor-diagnose.json",
+                            "content":serde_json::to_string_pretty(&report)?
+                        }))?;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        let weak = weak.clone();
+                        let recovery = recovery.clone();
+                        let gate = profile_gate.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                ui.global::<MobileData>()
+                                    .set_working(recovery.opening() || gate.busy());
+                            }
+                        })?;
+                        continue;
+                    }
+                    Err(error) => Some(format!("{error:#}")),
+                }
+            } else {
+                None
+            };
+            show_startup_failure(weak, profile_gate, recovery, error.clone(), detail, false)?;
+        }
+    }
+}
+
 async fn run_loop(
     startup: Startup,
-    native: Arc<AndroidHost>,
+    opened: OpenedSession,
     mut receive: mpsc::Receiver<Request>,
-    mut native_events: mpsc::Receiver<String>,
+    mut native_events: NativeEventReceiver,
+    mut visibility: watch::Receiver<bool>,
+    mut visible_detail: watch::Receiver<Option<ConnectionSelection>>,
     weak: slint::Weak<AndroidWindow>,
     profile_gate: Arc<RequestGate>,
+    recovery: Arc<StartupRecovery>,
 ) -> Result<()> {
+    let OpenedSession {
+        session,
+        incidents,
+        mut pending_events,
+        mut recovered,
+    } = opened;
+    let saved_protection_recovery =
+        SavedProtectionRecovery::for_process(&session.store.root, startup.language);
     let mut state = State {
-        session: Session::open(startup.root, native)?,
+        session,
         presentation_language: startup.language,
         overview: Default::default(),
         overview_epoch: 0,
         application_policies: Default::default(),
-        page: 0,
+        page: recovery.page(),
         query: String::new(),
-        selected: String::new(),
         notice: String::new(),
         notice_error: false,
         notice_critical: false,
         notice_network_recovery: false,
         notice_followup: false,
-        issue_events: VecDeque::new(),
+        issue_events: incidents,
         system_incidents: crate::incident_delivery::Delivery::default(),
         copied: Default::default(),
         logs: VecDeque::new(),
         log_level: "全部等级".into(),
         connection_sort: "下载速度 ↓".into(),
-        connection_address: Default::default(),
+        connection_detail: None,
         ip_results: vec![None; core::ip_check::services().len()],
         claude: None,
         claude_status: startup.language.text("尚未检测", "Not checked").into(),
         protection_change: None,
+        saved_protection_recovery,
         protection_status: String::new(),
+        protection_rollback_error: None,
         guard_snapshot: Default::default(),
         protection_observed: false,
         category: "AI".into(),
@@ -635,7 +954,7 @@ async fn run_loop(
         claude_generation: 0,
         detecting: false,
         generation: 0,
-        visible: true,
+        visible: *visibility.borrow_and_update(),
         completed: None,
         probe: Default::default(),
         probe_busy: false,
@@ -653,7 +972,7 @@ async fn run_loop(
         group_expansion: BTreeMap::new(),
         group_page: 0,
         profile_page: 0,
-        connection_page: 0,
+        connection_page: ConnectionPager::default(),
         rule_page: 0,
         rule_rows: None,
         rule_warnings: Vec::new(),
@@ -672,7 +991,15 @@ async fn run_loop(
         update_generation: 0,
         update_confirmation: None,
     };
-    if let Err(error) = state.session.attach_or_initialize() {
+    if let Some(error) = state.saved_protection_recovery.last_error() {
+        present_rollback(&mut state, RollbackProgress::Failed(error));
+    }
+    let attached = if state.saved_protection_recovery.is_active() {
+        state.session.observe_native()
+    } else {
+        state.session.attach_or_initialize()
+    };
+    if let Err(error) = attached {
         state.notice = format!(
             "{}{error:#}",
             state
@@ -690,53 +1017,17 @@ async fn run_loop(
         state.geo =
             core::geodata::localize_status(&manifest.display_status(), state.presentation_language);
     }
-    state.session.observe_native()?;
-    if state.session.settings.claude_protection.is_some()
-        && (!state.session.vpn
-            || !state.session.platform["protection"]["enabled"]
-                .as_bool()
-                .unwrap_or(false))
-    {
-        let mut before = state.session.settings.clone();
-        let saved = before.claude_protection.take().expect("saved protection");
-        before.run_mode = saved.previous.mode.clone();
-        state.protection_change = Some(ProtectionChange {
-            before,
-            before_vpn: saved.previous.proxy_mode == core::model::ProxyMode::Tun,
-            enabled: true,
-            generation: Some(
-                state.session.platform["vpn_generation"]
-                    .as_u64()
-                    .unwrap_or(0),
-            ),
-            deadline: std::time::Instant::now() + Duration::from_secs(120),
-            verified: false,
-            authorization: None,
-            auto_check: false,
-        });
-        state.protection_status = state
-            .presentation_language
-            .text("正在恢复保护 VPN…", "Restoring the protected VPN…")
-            .into();
-        if let Err(error) = state.session.native.request(json!({"op":"reconnect"})) {
-            let reason = format!(
-                "{}{error:#}",
-                state
-                    .presentation_language
-                    .text("保护恢复失败：", "Failed to restore protection: ")
-            );
-            rollback_protection(&mut state, &reason)?;
-        }
-    }
+    let mut restore_protection = state.session.settings.claude_protection.is_some();
     let (updates, mut update_rx) = mpsc::channel::<Update>(32);
     let (overview_send, mut overview_rx) = mpsc::channel(16);
     let mut checks: Option<tokio::task::JoinHandle<()>> = None;
     let mut claude_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut protection_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut protection_dns_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut rollback_dns_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut address_job: Option<tokio::task::JoinHandle<()>> = None;
-    let mut address_generation = 0u64;
     let mut log_job: Option<tokio::task::JoinHandle<()>> = None;
+    let geo_gate = RequestGate::default();
     let mut geo_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut log_port = 0;
     let mut last_delay = std::time::Instant::now();
@@ -759,19 +1050,26 @@ async fn run_loop(
     loop {
         let mut immediate = false;
         let mut refresh_requested = false;
+        let mut protection_reservation_released = false;
         let mut profile_completed = None;
         let mut overview_refresh = false;
         tokio::select! {
             value = receive.recv() => {
                 let Some(request) = value else { break; };
+                let intent = request.intent;
+                if intent == MobileIntent::ConnectionDetail
+                    && !visible_detail.borrow().as_ref().is_some_and(|visible| {
+                        visible.id == request.a && Some(visible.request) == request.b.parse().ok()
+                    })
+                {
+                    continue;
+                }
                 profile_completed = request.profile_ticket;
                 if profile_completed.is_some() {
                     subscription_generation = subscription_generation.wrapping_add(1);
                     if let Some(job) = subscription_job.take() { job.abort(); let _ = job.await; }
                 }
-                state.selected = request.selected.clone();
                 immediate = true;
-                let intent = request.intent;
                 if matches!(intent, MobileIntent::Connect | MobileIntent::Disconnect
                     | MobileIntent::RestartCore | MobileIntent::Mode | MobileIntent::SelectNode
                     | MobileIntent::ActivateProfile | MobileIntent::UpdateProfile | MobileIntent::SaveProfile
@@ -799,6 +1097,18 @@ async fn run_loop(
                     state.probe_codes.clear();
                     state.probe_busy = false;
                 }
+                if intent == MobileIntent::ClaudeProtection
+                    || (intent == MobileIntent::RestartCore && state.saved_protection_recovery.is_active())
+                {
+                    if let Some(job) = checks.take() { job.abort(); let _ = job.await; }
+                    state.generation = state.generation.wrapping_add(1);
+                    state.detecting = false;
+                    if let Some(job) = claude_job.take() { job.abort(); let _ = job.await; }
+                    state.claude_generation = state.claude_generation.wrapping_add(1);
+                    state.claude_busy = false;
+                    if let Some(job) = address_job.take() { job.abort(); let _ = job.await; }
+                    if let Some(job) = recovery_job.take() { job.abort(); let _ = job.await; }
+                }
                 let edited_profile = match intent {
                     MobileIntent::UpdateProfile => Some(request.a.as_str()),
                     MobileIntent::SaveProfile => Some(request.selected.as_str()),
@@ -807,28 +1117,10 @@ async fn run_loop(
                 let subscription_affects_active = edited_profile.is_some_and(|id| {
                     state.session.settings.active_profile.as_deref() == Some(id)
                 });
-                if matches!(intent, MobileIntent::Navigate | MobileIntent::ConnectionDetail) {
-                    if let Some(job) = address_job.take() { job.abort(); }
-                    address_generation = address_generation.wrapping_add(1);
-                    state.connection_address = Default::default();
-                    if intent == MobileIntent::ConnectionDetail
-                        && let Some(connection) = state.session.connections.connections.iter()
-                            .find(|c|c.id.as_ref() == request.a)
-                        && connection.metadata.destination_ip.is_empty()
-                    {
-                        let host = core::connection::hostname(connection).trim_end_matches('.').to_owned();
-                        if !host.is_empty() {
-                            let api = state.session.api.clone();
-                            let port = state.session.settings.mixed_port;
-                            let id = request.a.clone();
-                            let generation = address_generation;
-                            let send = updates.clone();
-                            address_job = Some(tokio::spawn(async move {
-                                let value = core::connection::resolve_target(&api, &host, port).await.unwrap_or_default();
-                                let _ = send.send(Update::Address(generation, id, value)).await;
-                            }));
-                        }
-                    }
+                if intent == MobileIntent::ConnectionDetail
+                    && let Some(job) = address_job.take()
+                {
+                    job.abort();
                 }
                 if matches!(intent, MobileIntent::RuleSelect | MobileIntent::RuleSave | MobileIntent::RuleMove
                     | MobileIntent::RuleDelete | MobileIntent::RuleDrop | MobileIntent::RuleEnable | MobileIntent::RuleRestore | MobileIntent::RuleApply | MobileIntent::RuleDiscard
@@ -836,12 +1128,34 @@ async fn run_loop(
                     | MobileIntent::SaveProfile | MobileIntent::DeleteProfile) {
                     state.rule_rows = None;
                 }
-                if intent == MobileIntent::OverviewRefresh {
+                if matches!(intent, MobileIntent::Probe | MobileIntent::SiteStart | MobileIntent::SiteRetest
+                    | MobileIntent::SiteProbe | MobileIntent::NodeDelay | MobileIntent::GroupDelay
+                    | MobileIntent::DelayAll | MobileIntent::ClaudeStart)
+                    && !can_run_active_probe(&state)
+                {
+                    let message = state.presentation_language.text(
+                        "保护切换或恢复待处理，网络检测已暂停",
+                        "Network checks are paused while a protection change or recovery is pending",
+                    );
+                    if intent == MobileIntent::Probe {
+                        state.probe = vec![message.into()];
+                        state.probe_codes.clear();
+                    } else if intent == MobileIntent::ClaudeStart {
+                        state.claude_status = message.into();
+                    } else {
+                        state.notice = message.into();
+                        state.notice_error = true;
+                    }
+                } else if intent == MobileIntent::OverviewRefresh {
                     overview_refresh = true;
                 } else if intent == MobileIntent::OverviewPrivacy {
                     state.overview.toggle_privacy();
                 } else if intent == MobileIntent::Navigate {
                     let page: i32 = request.a.parse()?;
+                    if page != CONNECTIONS_PAGE {
+                        if let Some(job) = address_job.take() { job.abort(); }
+                        state.connection_detail = None;
+                    }
                     if state.page == 6 && page != 6 {
                         network_generation = network_generation.wrapping_add(1);
                         if let Some(job) = network_job.take() { job.abort(); }
@@ -859,7 +1173,7 @@ async fn run_loop(
                     state.group_expansion.clear();
                     state.group_page = 0;
                     state.profile_page = 0;
-                    state.connection_page = 0;
+                    state.connection_page.reset();
                     state.rule_page = 0;
                     if let Some(job) = refresh_job.take() { job.abort(); }
                     refresh_generation += 1;
@@ -894,9 +1208,7 @@ async fn run_loop(
                         state.probe_codes = vec!["cancelled"];
                     }
                 } else if intent == MobileIntent::Probe {
-                    if state.protection_change.is_some() {
-                        state.probe = vec![state.presentation_language.text("Claude 保护切换中，请稍后重试", "Claude protection is changing; try again shortly").into()];
-                    } else if network_job.is_none() && state.page == 6 {
+                    if network_job.is_none() && state.page == 6 {
                         state.probe = Default::default();
                         state.probe_codes.clear();
                         state.probe_busy = true;
@@ -905,8 +1217,7 @@ async fn run_loop(
                         let target = request.a;
                         let port = state.session.running.then_some(state.session.settings.mixed_port);
                         let api = port.map(|_| state.session.api.clone());
-                        let protected = state.session.settings.claude_protection.is_some()
-                            || state.protection_change.is_some();
+                        let protected = state.session.settings.claude_protection.is_some();
                         let tool = core::network_tools::Tool::at(state.network_tool).unwrap_or(core::network_tools::Tool::Website);
                         let environment = core::network_tools::Environment {
                             port, api, protected, udp_enabled: state.session.settings.udp,
@@ -970,7 +1281,7 @@ async fn run_loop(
                         }
                     }
                 } else if intent == MobileIntent::UpdateGeo {
-                    if !blocked_during_protection(&mut state) && !state.geo_updating {
+                    if !blocked_during_protection(&mut state) && let Some(ticket) = geo_gate.begin() {
                         state.geo_updating=true;
                         let runtime=state.session.store.runtime();
                         let port=state.session.running.then_some(state.session.settings.download_ports());
@@ -981,7 +1292,7 @@ async fn run_loop(
                                 core::geodata::download_geo(staged.path(),port).await?;
                                 Ok::<_,anyhow::Error>(staged)
                             }.await.map_err(|e|format!("{e:#}"));
-                            let _=send.send(Update::Geo(result)).await;
+                            let _=send.send(Update::Geo(ticket, result)).await;
                         }));
                     }
                 } else if matches!(intent, MobileIntent::SiteStart | MobileIntent::SiteRetest | MobileIntent::SiteProbe) {
@@ -1022,7 +1333,9 @@ async fn run_loop(
                         delay_job=Some(start_delay(&mut state,scope,updates.clone()));
                     }
                 } else if intent == MobileIntent::ClaudeProtection && request.a == "true" {
-                    if state.protection_change.is_none() && state.session.settings.claude_protection.is_none() {
+                    if state.protection_change.is_none() && state.session.settings.claude_protection.is_none()
+                        && !state.saved_protection_recovery.is_active() {
+                        geo_gate.cancel();
                         cancel_delay(&mut state,&mut delay_job);
                         state.update_generation = state.update_generation.wrapping_add(1);
                         if let Some(job) = update_job.take() { job.abort(); let _ = job.await; }
@@ -1035,21 +1348,20 @@ async fn run_loop(
                         if let Some(job) = subscription_job.take() { job.abort(); let _ = job.await; }
                         if let Some(job) = protection_dns_job.take() { job.abort(); }
                         state.protection_change = Some(ProtectionChange {
-                            before: state.session.settings.clone(), before_vpn: state.session.vpn, enabled: true,
-                            generation: None, deadline: std::time::Instant::now()+Duration::from_secs(120),
+                            kind: ProtectionChangeKind::Enable,
+                            transition: None, deadline: std::time::Instant::now()+Duration::from_secs(120),
                             verified: false,
                             authorization: None,
-                            auto_check: true,
                         });
                         state.protection_status=state.presentation_language.text("正在确认当前代理节点…", "Checking the current proxy node…").into();
                         let api=state.session.api.clone();let settings=state.session.settings.clone();
                         let language=state.presentation_language;
-                        let raw=state.session.raw();let vpn=state.session.vpn;let send=updates.clone();
+                        let raw=state.session.raw();let send=updates.clone();
                         protection_job=Some(tokio::spawn(async move {
                             let result=async {
                                 let raw=raw?;
                                 tokio::time::timeout(Duration::from_secs(20),
-                                    clash_mobile_runtime::prepare_protection(&api,&settings,&raw,vpn))
+                                    clash_mobile_runtime::prepare_protection(&api,&settings,&raw))
                                     .await.context(language.text("确认保护节点超时", "Timed out checking the protected node"))?
                             }.await.map_err(|error|format!("{error:#}"));
                             let _=send.send(Update::Protection(result)).await;
@@ -1061,9 +1373,28 @@ async fn run_loop(
                     state.notice_error = false;
                     state.notice_critical = false;
                     state.notice_followup = matches!(intent, MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::ReportIssue);
+                    let recovering_protection = intent == MobileIntent::RestartCore
+                        && state.saved_protection_recovery.is_active();
                     match handle(&mut state, request).await {
                         Ok(()) => {
-                            state.completed = Some(intent);
+                            if !recovering_protection
+                                && (intent != MobileIntent::RestartCore
+                                    || state.protection_rollback_error.is_none())
+                            {
+                                state.completed = Some(intent);
+                            }
+                            if matches!(intent, MobileIntent::CloseConnection | MobileIntent::CloseAll)
+                                && state.connection_detail.as_ref().is_some_and(|detail| detail.status() == DetailStatus::Loading)
+                                && let Some(job) = address_job.take()
+                            {
+                                job.abort();
+                            }
+                            if intent == MobileIntent::RestartCore {
+                                restore_protection = !recovering_protection
+                                    && state.session.settings.claude_protection.is_some();
+                                protection_reservation_released = recovering_protection
+                                    && !state.saved_protection_recovery.is_active();
+                            }
                             if subscription_affects_active {
                                 reset_subscription_results(&mut state, &mut checks, &mut claude_job);
                             }
@@ -1072,7 +1403,7 @@ async fn run_loop(
                                 |MobileIntent::DnsOverride|MobileIntent::FakeIp|MobileIntent::FakeIpAdd|MobileIntent::FakeIpRemove|MobileIntent::FakeIpRestoreDefaults|MobileIntent::Ipv6|MobileIntent::Udp|MobileIntent::SavePorts
                                 |MobileIntent::ClaudeProtection) {cancel_delay(&mut state,&mut delay_job);}
                             if !matches!(intent, MobileIntent::Query | MobileIntent::Copy | MobileIntent::ConnectionSort
-                                | MobileIntent::ConnectionDetail | MobileIntent::ConnectionPage | MobileIntent::RulePage
+                                | MobileIntent::ConnectionPage | MobileIntent::RulePage
                                 | MobileIntent::LogLevel | MobileIntent::ClearLogs | MobileIntent::ExportLogs | MobileIntent::ExportDiagnostics | MobileIntent::CopyDiagnostics | MobileIntent::ReportIssue | MobileIntent::RuleTextMode
                                 | MobileIntent::RuleSelect | MobileIntent::RuleEdit | MobileIntent::RuleSave
                                 | MobileIntent::RuleMove | MobileIntent::RuleDelete | MobileIntent::RuleShortcut
@@ -1096,18 +1427,26 @@ async fn run_loop(
                     }
                 }
             }
-            value = native_events.recv() => {
-                if let Some(value) = value {
-                    immediate = true;
-                    refresh_requested = true;
-                    let event = serde_json::from_str::<Value>(&value).ok();
-                    if event.as_ref().is_some_and(|event|event["event"]=="back") {
-                        let weak=weak.clone();slint::invoke_from_event_loop(move||{if let Some(ui)=weak.upgrade(){ui.invoke_native_back();}})?;
-                    } else if let Err(error) = native_event(&mut state,&value).await {
-                        state.notice=format!("{error:#}");state.notice_error=true;
-                        state.notice_critical=event.as_ref().is_some_and(|event|
-                            matches!(event["event"].as_str(),Some("vpn-authorized"|"vpn-cancelled")));
-                    }
+            Ok(()) = visibility.changed() => {
+                immediate = true;
+                refresh_requested = true;
+            }
+            Ok(()) = visible_detail.changed() => {
+                connection_detail::discard_hidden(
+                    &mut state.connection_detail,
+                    &mut address_job,
+                    visible_detail.borrow_and_update().as_ref(),
+                );
+                immediate = true;
+            }
+            Some(event) = pending_events.next(&mut native_events) => {
+                immediate = true;
+                refresh_requested = true;
+                if event["event"] == "back" {
+                    let weak=weak.clone();slint::invoke_from_event_loop(move||{if let Some(ui)=weak.upgrade(){ui.invoke_native_back();}})?;
+                } else if let Err(error) = native_event(&mut state,&event).await {
+                    state.notice=format!("{error:#}");state.notice_error=true;
+                    state.notice_critical=event["event"]=="vpn-authorized";
                 }
             }
             Some(event) = overview_rx.recv() => {
@@ -1129,30 +1468,44 @@ async fn run_loop(
                             }
                         }
                     }
-                    Some(Update::ProtectionVerified(token, result)) => {
+                    Some(Update::ProtectionVerified(request, result)) => {
                         if let Some(change) = state.protection_change.as_mut()
-                            && change.deadline == token {
+                            && change.transition.as_ref().is_some_and(|transition| transition.request == request) {
                             protection_dns_job = None;
                             match result {
                                 Ok(()) => change.verified = true,
                                 Err(error) => {
                                     let prefix = state.presentation_language.text("保护验证失败：", "Protection verification failed: ");
                                     let reason = format!("{prefix}{error}");
-                                    if let Err(restore) = rollback_protection(&mut state, &reason) {
-                                        state.notice = format!("{reason}{}{restore:#}", state.presentation_language.text("；恢复失败：", "; recovery failed: "));
-                                        state.notice_error = true;
-                                        state.notice_critical = true;
-                                    }
+                                    rollback_protection(&mut state, &reason);
                                 }
                             }
                             refresh_requested = true;
                             immediate = true;
                         }
                     }
-                    Some(Update::Address(generation, id, value)) if generation == address_generation => {
-                        address_job = None;
-                        state.connection_address = (id, value);
+                    Some(Update::ProtectionRollbackVerified(request, result)) => {
+                        rollback_dns_job = None;
+                        if state.session.observe_native().is_ok() {
+                            let progress = state.saved_protection_recovery.verified(
+                                &state.session, &request, result,
+                            );
+                            present_rollback(&mut state, progress);
+                        }
                         immediate = true;
+                        refresh_requested = true;
+                    }
+                    Some(Update::Address(selection, request, value)) => {
+                        if connection_detail::accept_address(
+                            &mut state.connection_detail,
+                            &mut address_job,
+                            visible_detail.borrow().as_ref(),
+                            &selection,
+                            &request,
+                            value,
+                        ) {
+                            immediate = true;
+                        }
                     }
                     Some(Update::NetworkProbe(generation, result))
                         if generation == network_generation && state.page == 6 => {
@@ -1193,7 +1546,7 @@ async fn run_loop(
                                 state.notice_network_recovery = unavailable;
                                 state.notice_error=failed > 0;
                                 if unavailable && state.session.vpn && recovery_job.is_none()
-                                    && state.protection_change.is_none()
+                                    && can_run_active_probe(&state)
                                     && state.session.settings.claude_protection.is_none() {
                                     let api = state.session.api.clone();
                                     let settings = serde_json::to_value(&state.session.settings)?;
@@ -1216,7 +1569,7 @@ async fn run_loop(
                     }
                     Some(Update::Unreachable(generation, vpn_generation, settings, result)) if generation == state.delay_generation => {
                         recovery_job = None;
-                        if state.session.vpn && state.protection_change.is_none()
+                        if state.session.vpn && can_run_active_probe(&state)
                             && state.session.settings.claude_protection.is_none()
                             && serde_json::to_value(&state.session.settings)? == settings
                             && state.session.platform["vpn_generation"].as_u64().unwrap_or(0) == vpn_generation {
@@ -1234,17 +1587,45 @@ async fn run_loop(
                             refresh_requested = true;
                         }
                     }
-                    Some(Update::Snapshot(generation, result)) if generation == refresh_generation => {
+                    Some(Update::Snapshot(generation, selection, result)) if generation == refresh_generation => {
                         refresh_job = None;
                         immediate = true;
                         match result {
                             Ok(snapshot) => {
                                 state.session.apply_snapshot(snapshot);
+                                if let Some(selection) = selection
+                                    && Some(&selection) == visible_detail.borrow().as_ref()
+                                    && let Some(detail) = state.connection_detail.as_mut()
+                                    && detail.confirm(&selection, &state.session.connections.connections)
+                                {
+                                    if detail.status() == DetailStatus::Ended || !detail.needs_address() {
+                                        if let Some(job) = address_job.take() { job.abort(); }
+                                    } else if crate::startup_protection::active_probe_allowed(
+                                        state.protection_change.is_some() || state.session.platform["vpn_held"] == true,
+                                        &state.saved_protection_recovery)
+                                        && let Some(request) = detail.begin_address()
+                                    {
+                                        if let Some(job) = address_job.take() { job.abort(); }
+                                        let api = state.session.api.clone();
+                                        let port = state.session.settings.mixed_port;
+                                        let send = updates.clone();
+                                        address_job = Some(tokio::spawn(async move {
+                                            let value = core::connection::resolve_target(&api, &request.host, port).await.unwrap_or_default();
+                                            let _ = send.send(Update::Address(selection, request, value)).await;
+                                        }));
+                                    }
+                                }
                                 let members=state.session.proxies.proxies.values().flat_map(|p|p.all.iter().map(|n|n.as_str()))
                                     .collect::<std::collections::BTreeSet<_>>();
                                 state.node_delays.retain(|name,_|state.session.proxies.proxies.contains_key(name.as_str())||members.contains(name.as_str()));
                             }
                             Err(error) => {
+                                if let Some(selection) = selection.as_ref()
+                                    && Some(selection) == visible_detail.borrow().as_ref()
+                                    && let Some(detail) = state.connection_detail.as_mut()
+                                {
+                                    detail.refresh_failed(selection);
+                                }
                                 let message = LogMessage::StatusRefreshFailed(error);
                                 if state.logs.back().is_none_or(|(_,old)| old != &message) {
                                     log::warn!("{}", message.display(state.presentation_language));
@@ -1270,25 +1651,27 @@ async fn run_loop(
                             ensure!(state.protection_change.is_some(), "{}", state.presentation_language.text("保护操作已取消", "Protection change cancelled"));
                             ensure!(state.session.settings.active_profile.as_deref()==Some(protection.profile_id.as_str()),
                                 "{}", state.presentation_language.text("订阅已变化，请重新开启保护", "The subscription changed; enable protection again"));
-                            let request=AUTHORIZATION_REQUEST.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                            let request=next_vpn_authorization(&state.session.store.root)?;
                             state.protection_change.as_mut().expect("pending protection")
-                                .authorization=Some((request,protection));
+                                .authorization=Some((request,ProtectionAuthorization::Enable(protection)));
                             state.protection_status=state.presentation_language.text("正在等待 VPN 授权，当前网络设置保持不变…", "Waiting for VPN authorization; current network settings are unchanged…").into();
-                            state.session.native.request(json!({"op":"authorize-vpn","request":request}))?;
+                            request_vpn_authorization(&state.session, state.presentation_language, request)?;
                             Ok(())
                         })();
                         if let Err(error)=applied {
                             let reason = format!("{}{error:#}", state.presentation_language.text("保护开启失败：", "Failed to enable protection: "));
-                            if let Err(restore)=rollback_protection(&mut state,&reason) {
-                                state.notice=format!("{reason}{}{restore:#}", state.presentation_language.text("；恢复失败：", "; recovery failed: "));
-                                state.notice_error=true;
-                                state.notice_critical=true;
-                            }
+                            rollback_protection(&mut state,&reason);
                         }
                         refresh_requested=true;
                     }
                     Some(Update::Log(level,message)) => state.logs.push_back((level,message.into())),
-                    Some(Update::Geo(result))=> {
+                    Some(Update::Geo(ticket, result)) if geo_gate.finish(ticket) => {
+                        state.geo_updating = false;
+                        geo_job = None;
+                        if state.protection_change.is_some() || state.session.settings.claude_protection.is_some()
+                            || state.saved_protection_recovery.is_active() {
+                            continue;
+                        }
                         network_generation = network_generation.wrapping_add(1);
                         if let Some(job) = network_job.take() { job.abort(); }
                         state.probe = Default::default();
@@ -1297,7 +1680,6 @@ async fn run_loop(
                         if let Some(job) = refresh_job.take() { job.abort(); }
                         refresh_generation += 1;
                         refresh_requested = true;
-                        state.geo_updating=false;geo_job=None;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
                             Ok(manifest)=> {state.geo=core::geodata::localize_status(&manifest.display_status(), state.presentation_language);state.notice=state.presentation_language.text("Geo 数据已更新", "Geo data updated").into();},
                             Err(error)=>{state.notice=format!("Geo 更新失败：{error}");state.notice_error=true;},
@@ -1374,6 +1756,7 @@ async fn run_loop(
                     let _ = job.await;
                 }
                 if subscription_job.is_none() && !profile_gate.busy() && state.protection_change.is_none()
+                    && !state.saved_protection_recovery.is_active()
                     && last_subscription_check.elapsed() >= Duration::from_secs(30) {
                     last_subscription_check = std::time::Instant::now();
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
@@ -1398,14 +1781,16 @@ async fn run_loop(
                 }
                 if update_schedule.due(state.session.settings.update_check_interval_minutes, std::time::Instant::now())
                     && state.session.running && !state.update_busy
-                    && state.session.settings.claude_protection.is_none() && state.protection_change.is_none() {
+                    && state.session.settings.claude_protection.is_none() && state.protection_change.is_none()
+                    && !state.saved_protection_recovery.is_active() {
                     update_schedule.checked(std::time::Instant::now());state.update_busy=true;state.update_downloading=false;state.update_status=state.presentation_language.text("正在检查更新…", "Checking for updates…").into();
                     state.update_generation = state.update_generation.wrapping_add(1);
                     state.update_confirmation = None;
                     update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
                 }
                 let minutes=state.session.settings.delay_interval_minutes;
-                if state.session.running && state.protection_change.is_none() && minutes>0
+                if state.session.running && minutes>0
+                    && can_run_active_probe(&state)
                     && last_delay.elapsed()>=Duration::from_secs(minutes as u64*60) && state.delay_scope.is_none()
                     && recovery_job.is_none() {
                     last_delay=std::time::Instant::now();
@@ -1413,6 +1798,15 @@ async fn run_loop(
                 }
                 refresh_requested = true;
             }
+        }
+        if !recovery.ready() {
+            state.page = recovery.page();
+        }
+        let visible = *visibility.borrow_and_update();
+        if state.visible != visible {
+            state.visible = visible;
+            immediate = true;
+            refresh_requested = true;
         }
         if refresh_requested {
             let was_running = state.session.running;
@@ -1426,6 +1820,60 @@ async fn run_loop(
                     false
                 }
             };
+            if state.saved_protection_recovery.is_active()
+                && !state.saved_protection_recovery.is_applying()
+            {
+                restore_protection = false;
+                let progress = state
+                    .saved_protection_recovery
+                    .poll(state.protection_observed.then_some(&state.session));
+                match progress {
+                    RollbackProgress::VerifyProtection {
+                        request,
+                        check_dns: true,
+                    } => {
+                        if rollback_dns_job.is_none() {
+                            let api = state.session.api.clone();
+                            let language = state.presentation_language;
+                            let sender = updates.clone();
+                            rollback_dns_job = Some(tokio::spawn(async move {
+                                let result = tokio::time::timeout(
+                                    Duration::from_secs(40),
+                                    api.finish_protection_enable(),
+                                )
+                                .await
+                                .context(
+                                    language
+                                        .text("保护验证超时", "Protection verification timed out"),
+                                )
+                                .and_then(|result| result);
+                                let _ = sender
+                                    .send(Update::ProtectionRollbackVerified(request, result))
+                                    .await;
+                            }));
+                        }
+                    }
+                    RollbackProgress::VerifyProtection {
+                        request,
+                        check_dns: false,
+                    } => {
+                        let progress = state.saved_protection_recovery.verified(
+                            &state.session,
+                            &request,
+                            Ok(()),
+                        );
+                        present_rollback(&mut state, progress);
+                    }
+                    other => {
+                        if let Some(job) = rollback_dns_job.take() {
+                            job.abort();
+                        }
+                        present_rollback(&mut state, other);
+                    }
+                }
+            } else if restore_protection && state.protection_observed && state.session.running {
+                restore_protection = !restore_saved_protection(&mut state);
+            }
             if was_running && !state.session.running {
                 state.notice = state.presentation_language.text("内核已意外停止，请导出诊断后重试启动。", "The core stopped unexpectedly. Export diagnostics, then try starting it again.").into();
                 state.notice_error = true;
@@ -1455,20 +1903,19 @@ async fn run_loop(
                 job.abort();
             }
             if let Some(change) = &state.protection_change
-                && change.enabled
                 && !change.verified
                 && protection_dns_job.is_none()
-                && change.generation.is_some_and(|old| {
-                    state.session.platform["vpn_generation"]
-                        .as_u64()
-                        .unwrap_or(0)
-                        > old
-                })
-                && state.session.vpn
-                && state.guard_snapshot.connected
+                && state.protection_observed
+                && let Some(transition) = &change.transition
+                && let RollbackProgress::VerifyProtection {
+                    request,
+                    check_dns: true,
+                } = transition.poll(
+                    &state.session,
+                    state.session.settings.claude_protection.is_some(),
+                )
             {
                 let api = state.session.api.clone();
-                let token = change.deadline;
                 let send = updates.clone();
                 state.protection_status = state.presentation_language.text("正在关闭旧连接并验证保护节点与加密 DNS…", "Closing old connections and checking the protected node and encrypted DNS…").into();
                 protection_dns_job = Some(tokio::spawn(async move {
@@ -1476,7 +1923,7 @@ async fn run_loop(
                         .finish_protection_enable()
                         .await
                         .map_err(|error| format!("{error:#}"));
-                    let _ = send.send(Update::ProtectionVerified(token, result)).await;
+                    let _ = send.send(Update::ProtectionVerified(request, result)).await;
                 }));
             }
             if !state.session.running || (!state.visible && !state.session.vpn) {
@@ -1485,9 +1932,22 @@ async fn run_loop(
                 }
                 refresh_generation += 1;
                 state.session.clear_snapshot();
+                if !state.session.running {
+                    if let Some(job) = address_job.take() {
+                        job.abort();
+                    }
+                    if let Some(detail) = state.connection_detail.as_mut() {
+                        detail.core_stopped();
+                    }
+                }
             } else if state.session.running && refresh_job.is_none() {
                 let api = state.session.api.clone();
                 let page = if state.visible { state.page } else { -1 };
+                let selection = state
+                    .connection_detail
+                    .as_ref()
+                    .and_then(|detail| detail.selection_for_refresh(page))
+                    .filter(|selection| Some(selection) == visible_detail.borrow().as_ref());
                 let refresh_route = state.visible && state.session.proxies.proxies.is_empty();
                 let generation = refresh_generation;
                 let send = updates.clone();
@@ -1503,7 +1963,9 @@ async fn run_loop(
                     )
                     .and_then(|result| result)
                     .map_err(|error| format!("{error:#}"));
-                    let _ = send.send(Update::Snapshot(generation, result)).await;
+                    let _ = send
+                        .send(Update::Snapshot(generation, selection, result))
+                        .await;
                 }));
             }
         }
@@ -1625,7 +2087,7 @@ async fn run_loop(
             state.notice_critical = incident["critical"].as_bool().unwrap_or(false);
             system_notice = true;
         }
-        let view = project(&state);
+        let view = project(&mut state);
         state.completed = None;
         state.rule_form = None;
         state.rule_editor = None;
@@ -1660,13 +2122,26 @@ async fn run_loop(
         let gate = profile_gate.clone();
         let incident_sequence = system_notice.then_some(sequence);
         let incident_acknowledgement = updates.clone();
+        let recovery = recovery.clone();
+        let clear_startup_notice = std::mem::take(&mut recovered);
         slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
                 if let Some(ticket) = profile_completed {
                     gate.finish(ticket);
                 }
                 ui.global::<MobileData>().set_profile_busy(gate.busy());
+                if clear_startup_notice || protection_reservation_released {
+                    let view = ui.global::<MobileView>();
+                    view.set_notice_error(false);
+                    view.set_notice_critical(false);
+                    view.set_notice_recover_network(false);
+                    view.set_notice("".into());
+                }
+                let page = view.page;
                 apply(&ui, view);
+                if ui.get_current_page() == page {
+                    recovery.publish(page);
+                }
                 if !notice.is_empty() {
                     let current = ui.global::<MobileView>();
                     let presented = if !current.get_notice().is_empty()
@@ -1716,6 +2191,9 @@ async fn run_loop(
         job.abort();
     }
     if let Some(job) = protection_dns_job {
+        job.abort();
+    }
+    if let Some(job) = rollback_dns_job {
         job.abort();
     }
     if let Some(job) = log_job {
@@ -1769,56 +2247,169 @@ fn start_update_check(
     })
 }
 
-fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
+fn protected_vpn_attached(session: &Session) -> bool {
+    session.vpn
+        && session.platform["vpn_held"] == false
+        && session.platform["vpn_transition_pending"] == false
+        && session.platform["protection"]["enabled"] == true
+        && session.platform["protection"]["snapshot"]["connected"] == true
+        && session.platform["protection"]["snapshot"]["error"].as_str() == Some("")
+}
+
+fn can_run_active_probe(state: &State) -> bool {
+    crate::startup_protection::active_probe_allowed(
+        state.protection_change.is_some() || state.session.platform["vpn_held"] == true,
+        &state.saved_protection_recovery,
+    )
+}
+
+fn restore_saved_protection(state: &mut State) -> bool {
+    if state.protection_change.is_some() || state.session.settings.claude_protection.is_none() {
+        return true;
+    }
+    if VpnBaseline::capture(&state.session).is_none() {
+        return false;
+    }
+    if state.protection_rollback_error.is_none() && protected_vpn_attached(&state.session) {
+        return true;
+    }
+    let language = state.presentation_language;
+    state.protection_status = language
+        .text("正在恢复保护 VPN…", "Restoring the protected VPN…")
+        .into();
+    let result = (|| -> Result<()> {
+        let request = next_vpn_authorization(&state.session.store.root)?;
+        state.protection_change = Some(ProtectionChange {
+            kind: ProtectionChangeKind::Restore,
+            transition: None,
+            deadline: std::time::Instant::now() + Duration::from_secs(120),
+            verified: false,
+            authorization: Some((request, ProtectionAuthorization::Restore)),
+        });
+        request_vpn_authorization(&state.session, language, request)
+    })();
+    if let Err(error) = result {
+        let reason = format!(
+            "{}{error:#}",
+            language.text("保护恢复失败：", "Failed to restore protection: ")
+        );
+        rollback_protection(state, &reason);
+    }
+    true
+}
+
+fn request_vpn_authorization(
+    session: &Session,
+    language: config::Language,
+    request: i64,
+) -> Result<()> {
+    ensure!(
+        EVENTS.expect_authorization(request),
+        "{}",
+        language.text("VPN 授权入口不可用", "VPN authorization is unavailable")
+    );
+    session
+        .native
+        .request(json!({"op":"authorize-vpn","request":request}))?;
+    Ok(())
+}
+
+fn rollback_protection(state: &mut State, reason: &str) {
+    let mut failures = Vec::new();
     if let Some(change) = state.protection_change.take() {
         if let Some((request, _)) = change.authorization {
-            state
+            EVENTS.cancel_authorization(request);
+            if let Err(error) = state
                 .session
                 .native
-                .request(json!({"op":"cancel-vpn-authorization","request":request}))?;
+                .request(json!({"op":"cancel-vpn-authorization","request":request}))
+            {
+                failures.push(format!("cancel-vpn-authorization: {error:#}"));
+            }
         }
-        if change.generation.is_some() {
-            let mut previous = state.session.settings.clone();
-            previous.claude_protection = change.before.claude_protection;
-            previous.run_mode = change.before.run_mode;
-            state
-                .session
-                .native
-                .request(json!({"op":"vpn-plan","enabled":change.before_vpn}))?;
-            state
-                .session
-                .commit_protection(previous.claude_protection, previous.run_mode)?;
-            state
-                .session
-                .native
-                .request(json!({"op":if change.before_vpn {"reconnect"} else {"disconnect"}}))?;
+        if state.saved_protection_recovery.is_applying() {
+            let result = state.saved_protection_recovery.rollback(&mut state.session);
+            if let Err(error) = result {
+                failures.push(format!("{error:#}"));
+            }
         }
     }
-    state.protection_status = reason.to_owned();
-    state.notice = reason.to_owned();
+    let failed = !failures.is_empty();
+    let message = if failed {
+        format!(
+            "{reason}{}{}",
+            state
+                .presentation_language
+                .text("；恢复失败：", "; recovery failed: "),
+            failures.join(" · ")
+        )
+    } else {
+        reason.to_owned()
+    };
+    if failed {
+        state.protection_rollback_error = Some(message.clone());
+    }
+    state.protection_status = message.clone();
+    state.notice = message.clone();
     state.notice_error = true;
+    state.notice_critical = failed;
     state
         .logs
-        .push_back(("WARN".into(), reason.to_owned().into()));
-    Ok(())
+        .push_back((if failed { "ERROR" } else { "WARN" }.into(), message.into()));
+}
+
+fn present_rollback(state: &mut State, progress: RollbackProgress) {
+    let language = state.presentation_language;
+    match progress {
+        RollbackProgress::Restored => {
+            state.protection_rollback_error = None;
+            state.protection_status.clear();
+        }
+        RollbackProgress::Failed(error) => {
+            let message = format!(
+                "{}{error}",
+                language.text(
+                    "恢复原网络状态失败：",
+                    "Failed to restore the previous network state: "
+                )
+            );
+            if state.protection_rollback_error.as_deref() != Some(message.as_str()) {
+                state.notice = message.clone();
+                state.notice_error = true;
+                state.notice_critical = true;
+                state.protection_rollback_error = Some(message.clone());
+            }
+            state.protection_status = message;
+        }
+        RollbackProgress::Pending => {
+            state.protection_status = language
+                .text(
+                    "正在恢复原网络状态…",
+                    "Restoring the previous network state…",
+                )
+                .into();
+        }
+        RollbackProgress::Idle | RollbackProgress::VerifyProtection { .. } => {}
+    }
 }
 
 /// Returns true only after a user-requested enable has completed successfully.
 fn observe_protection(state: &mut State) -> Result<bool> {
+    if state.saved_protection_recovery.is_active() && !state.saved_protection_recovery.is_applying()
+    {
+        return Ok(false);
+    }
     let language = state.presentation_language;
     if state
         .protection_change
         .as_ref()
         .is_some_and(|change| std::time::Instant::now() >= change.deadline)
     {
-        return rollback_protection(
+        rollback_protection(
             state,
-            language.text(
-                "保护切换超时，已恢复原状态",
-                "Protection change timed out; previous state restored",
-            ),
-        )
-        .map(|_| false);
+            language.text("保护切换超时", "Protection change timed out"),
+        );
+        return Ok(false);
     }
     match state.session.protection_snapshot() {
         Ok(Some(snapshot)) => state.guard_snapshot = snapshot,
@@ -1844,72 +2435,86 @@ fn observe_protection(state: &mut State) -> Result<bool> {
     let native = &state.session.platform["protection"];
     let active = native["enabled"].as_bool().unwrap_or(false);
     if let Some(change) = &state.protection_change {
-        if change.generation.is_none() {
+        let Some(transition) = &change.transition else {
+            return Ok(false);
+        };
+        if !state.protection_observed {
             return Ok(false);
         }
-        let error = state.session.platform["vpn_error"].as_str().unwrap_or("");
-        if change.enabled && !error.is_empty() {
-            let message = format!(
-                "{}{error}",
-                language.text("保护 VPN 连接失败：", "Protected VPN connection failed: ")
-            );
-            return rollback_protection(state, &message).map(|_| false);
-        }
-        let desired = change.enabled
-            || change
-                .before
-                .claude_protection
-                .as_ref()
-                .is_some_and(|saved| saved.previous.proxy_mode == core::model::ProxyMode::Tun);
-        let generation = state.session.platform["vpn_generation"]
-            .as_u64()
-            .unwrap_or(0);
-        let ready = if desired {
-            state.session.vpn
-                && generation > change.generation.unwrap_or(0)
-                && (!change.enabled
-                    || (active && state.guard_snapshot.connected && change.verified))
-        } else {
-            !state.session.vpn && !active
+        let enabled = change.kind != ProtectionChangeKind::Disable;
+        let ready = match transition.poll(&state.session, enabled) {
+            RollbackProgress::Failed(error) => {
+                rollback_protection(state, &error);
+                return Ok(false);
+            }
+            RollbackProgress::VerifyProtection { check_dns, .. } => !check_dns || change.verified,
+            _ => false,
         };
         if ready {
-            let enabled = change.enabled;
-            let auto_check = enabled && change.auto_check;
+            if let Err(error) =
+                state
+                    .saved_protection_recovery
+                    .finish(&state.session, transition, change.verified)
+            {
+                rollback_protection(state, &format!("{error:#}"));
+                return Ok(false);
+            }
+            let auto_check = change.kind == ProtectionChangeKind::Enable;
+            let target_vpn = transition.target_connected();
             state.protection_change = None;
-            state.notice = if enabled {
+            state.protection_rollback_error = None;
+            state.protection_observed = state.session.observe_native().is_ok();
+            let live = state.protection_observed && protected_vpn_attached(&state.session);
+            let vpn_confirmed = state.protection_observed
+                && state.session.vpn == target_vpn
+                && state.session.platform["vpn_held"] == false
+                && state.session.platform["vpn_transition_pending"] == false
+                && state.session.platform["vpn_error"].as_str() == Some("");
+            state.notice = if enabled && live {
                 language.text("Claude 保护已开启", "Claude protection enabled")
-            } else {
+            } else if enabled {
+                language.text(
+                    "保护已保存，实时状态待确认",
+                    "Protection saved; live status unconfirmed",
+                )
+            } else if vpn_confirmed {
                 language.text(
                     "Claude 保护已关闭，原网络状态已恢复",
                     "Claude protection disabled; previous network state restored",
                 )
+            } else {
+                language.text(
+                    "Claude 保护已关闭，VPN 状态待确认",
+                    "Claude protection disabled; VPN state unconfirmed",
+                )
             }
             .into();
             state.protection_status = state.notice.clone();
-            return Ok(auto_check);
+            return Ok(auto_check && live);
         }
     } else if let Some(protection) = &state.session.settings.claude_protection {
-        state.protection_status = if !state.session.vpn || !active {
-            language
-                .text(
-                    "保护已配置，实时拦截未运行；请重新连接 VPN",
-                    "Protection configured, but live blocking is stopped; reconnect the VPN",
-                )
-                .into()
-        } else if !state.guard_snapshot.error.is_empty() {
-            state.guard_snapshot.error.clone()
-        } else {
-            match language {
-                config::Language::SimplifiedChinese => format!(
-                    "保护节点：{} · 已拦截 {} 条",
-                    protection.node, state.guard_snapshot.blocked
-                ),
-                config::Language::English => format!(
-                    "Protected node: {} · Blocked {}",
-                    protection.node, state.guard_snapshot.blocked
-                ),
-            }
-        };
+        state.protection_status =
+            if !state.session.vpn || state.session.platform["vpn_held"] != false || !active {
+                language
+                    .text(
+                        "保护已配置，实时拦截未运行；请重新连接 VPN",
+                        "Protection configured, but live blocking is stopped; reconnect the VPN",
+                    )
+                    .into()
+            } else if !state.guard_snapshot.error.is_empty() {
+                state.guard_snapshot.error.clone()
+            } else {
+                match language {
+                    config::Language::SimplifiedChinese => format!(
+                        "保护节点：{} · 已拦截 {} 条",
+                        protection.node, state.guard_snapshot.blocked
+                    ),
+                    config::Language::English => format!(
+                        "Protected node: {} · Blocked {}",
+                        protection.node, state.guard_snapshot.blocked
+                    ),
+                }
+            };
     }
     Ok(false)
 }
@@ -1978,75 +2583,85 @@ fn start_claude_check(
     }));
 }
 
-async fn native_event(state: &mut State, raw: &str) -> Result<()> {
+async fn native_event(state: &mut State, value: &Value) -> Result<()> {
     let language = state.presentation_language;
-    let value: Value = serde_json::from_str(raw)?;
     match value["event"].as_str().unwrap_or("") {
         "vpn-authorized" => {
-            let result = &value["value"];
-            let request = result["request"].as_u64();
-            let matches = state
+            let result = state
                 .protection_change
                 .as_ref()
                 .and_then(|change| change.authorization.as_ref())
-                .is_some_and(|(pending, _)| Some(*pending) == request);
-            if !matches {
+                .and_then(|(request, _)| vpn_authorization_result(value, *request));
+            let Some(result) = result else {
                 return Ok(());
-            }
+            };
             if state
                 .protection_change
                 .as_ref()
                 .is_some_and(|change| std::time::Instant::now() >= change.deadline)
             {
-                return rollback_protection(
+                rollback_protection(
                     state,
-                    language.text(
-                        "VPN 授权等待超时，原网络状态未改变",
-                        "VPN authorization timed out; previous network state preserved",
-                    ),
+                    language.text("VPN 授权等待超时", "VPN authorization timed out"),
                 );
+                return Ok(());
             }
             if !result["granted"].as_bool().unwrap_or(false) {
                 let reason = result["error"]
                     .as_str()
                     .filter(|text| !text.is_empty())
                     .unwrap_or(language.text("VPN 授权已取消", "VPN authorization cancelled"));
-                return rollback_protection(state, reason);
+                rollback_protection(state, reason);
+                return Ok(());
             }
             let applied = (|| -> Result<()> {
+                let retry = state.protection_rollback_error.is_some();
                 let change = state
                     .protection_change
                     .as_mut()
                     .expect("pending authorization");
-                let (_, protection) = change.authorization.take().expect("matching authorization");
-                ensure!(
-                    state.session.settings.active_profile.as_deref()
-                        == Some(protection.profile_id.as_str()),
-                    "{}",
-                    language.text(
-                        "订阅已变化，请重新开启保护",
-                        "The subscription changed; enable protection again",
-                    )
-                );
-                let before = state.session.settings.clone();
-                change.before = before.clone();
-                change.generation = Some(
-                    state.session.platform["vpn_generation"]
-                        .as_u64()
-                        .unwrap_or(0),
-                );
+                let (_, authorization) =
+                    change.authorization.take().expect("matching authorization");
+                match &authorization {
+                    ProtectionAuthorization::Enable(protection) => {
+                        ensure!(
+                            state.session.settings.active_profile.as_deref()
+                                == Some(protection.profile_id.as_str()),
+                            "{}",
+                            language.text(
+                                "订阅已变化，请重新开启保护",
+                                "The subscription changed; enable protection again",
+                            )
+                        );
+                    }
+                    ProtectionAuthorization::Restore => {}
+                }
+                state.session.observe_native()?;
+                let before_vpn = VpnBaseline::capture(&state.session).context(language.text(
+                    "VPN 状态正在切换，请重试",
+                    "The VPN state is changing. Try again.",
+                ))?;
+                state
+                    .saved_protection_recovery
+                    .begin(&state.session, before_vpn)?;
                 change.deadline = std::time::Instant::now() + Duration::from_secs(120);
-                let mut next = before;
-                next.claude_protection = Some(Arc::new(protection));
-                state
-                    .session
-                    .commit_protection(next.claude_protection, next.run_mode)?;
-                state
-                    .session
-                    .native
-                    .request(json!({"op":"vpn-plan","enabled":true}))?;
+                if let ProtectionAuthorization::Enable(mut protection) = authorization {
+                    before_vpn.save_for_disable(&mut protection);
+                    state.session.commit_protection(
+                        Some(Arc::new(protection)),
+                        state.session.settings.run_mode.clone(),
+                    )?;
+                } else if retry {
+                    state.session.restore_protection(
+                        state.session.settings.claude_protection.clone(),
+                        state.session.settings.run_mode.clone(),
+                    )?;
+                }
                 state.guard_snapshot = Default::default();
-                state.session.native.request(json!({"op":"reconnect"}))?;
+                change.transition = Some(VpnTransition::apply(
+                    &state.session,
+                    VpnBaseline::target(true),
+                )?);
                 state.protection_status = language
                     .text("正在连接保护 VPN…", "Connecting protected VPN…")
                     .into();
@@ -2059,18 +2674,8 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
                         "{}{error:#}",
                         language.text("保护开启失败：", "Failed to enable protection: ")
                     ),
-                )?;
+                );
             }
-        }
-        "vpn-cancelled" => rollback_protection(
-            state,
-            language.text(
-                "VPN 授权已取消，已恢复原状态",
-                "VPN authorization cancelled; previous state restored",
-            ),
-        )?,
-        "visible" => {
-            state.visible = value["value"].as_bool().unwrap_or(true);
         }
         "vpn" => {
             state.session.vpn = value["value"].as_bool().unwrap_or(false);
@@ -2088,6 +2693,14 @@ async fn native_event(state: &mut State, raw: &str) -> Result<()> {
             );
         }
         "file" => {
+            ensure!(
+                !state.saved_protection_recovery.is_active(),
+                "{}",
+                language.text(
+                    "请等待原网络状态恢复",
+                    "Wait for the previous network state to be restored"
+                )
+            );
             let base = value["value"]["name"]
                 .as_str()
                 .unwrap_or(language.text("导入配置", "Imported configuration"));
@@ -2130,21 +2743,19 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         a,
         b,
         selected,
+        connection_page,
         profile_ticket: _,
     } = request;
     if intent == MobileIntent::Navigate {
         state.application_policies.clear();
     }
-    if state.session.settings.claude_protection.is_some() || state.protection_change.is_some() {
-        ensure!(
-            mobile_allowed_during_protection(intent, &a),
-            "{}",
-            language.text(
-                core::protection::READ_ONLY_NOTICE,
-                "Disable Claude protection first; network changes and updates are locked while protection is active",
-            )
-        );
-    }
+    crate::protection_intent::check(
+        intent,
+        &a,
+        state.session.settings.claude_protection.is_some(),
+        state.protection_change.is_some() || state.saved_protection_recovery.is_active(),
+        language,
+    )?;
     if (state.session.settings.claude_protection.is_some() || state.protection_change.is_some())
         && (matches!(
             intent,
@@ -2165,7 +2776,9 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         return Ok(());
     }
     ensure!(
-        state.protection_change.is_none()
+        (state.protection_change.is_none()
+            && (!state.saved_protection_recovery.is_active()
+                || intent != MobileIntent::ClaudeProtection))
             || !matches!(
                 intent,
                 MobileIntent::Connect
@@ -2217,10 +2830,19 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             )?;
         }
         MobileIntent::RestartCore => {
-            if session.settings.claude_protection.is_some() {
-                session.attach_or_initialize()?;
-            } else {
+            if state.saved_protection_recovery.is_active() {
+                match state.saved_protection_recovery.retry(session)? {
+                    RetryOutcome::ReservationReleased | RetryOutcome::FinalizationConfirmed => {
+                        state.protection_rollback_error = None;
+                        state.protection_status.clear();
+                        state.notice.clear();
+                    }
+                    RetryOutcome::RollbackPending => {}
+                }
+            } else if session.settings.claude_protection.is_none() {
                 session.initialize()?;
+            } else if state.protection_rollback_error.is_none() {
+                session.attach_or_initialize()?;
             }
         }
         MobileIntent::Mode => {
@@ -2260,7 +2882,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 )
             );
             let mut next = session.settings.clone();
-            next.mixed_port = a.parse()?;
+            next.mixed_port = settings_input::parse_number(&a)?;
             session.commit_settings(next)?;
             state.notice = language.text("端口已保存", "Port saved").into();
         }
@@ -2276,7 +2898,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             state.node_pages.clear();
             state.group_page = 0;
             state.profile_page = 0;
-            state.connection_page = 0;
+            state.connection_page.reset();
             state.rule_page = 0;
         }
         MobileIntent::NodePage => {
@@ -2303,7 +2925,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             state.profile_page = 0;
         }
         MobileIntent::ConnectionPage => {
-            state.connection_page = state.connection_page.saturating_add_signed(a.parse()?)
+            if state.page == 3
+                && let Some(displayed) = connection_page
+            {
+                state.connection_page.turn(displayed, a.parse()?);
+            }
         }
         MobileIntent::RulePage => {
             state.rule_page = state.rule_page.saturating_add_signed(a.parse()?)
@@ -2361,25 +2987,41 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.update_profile(&a).await?;
             state.notice = language.text("订阅已更新", "Subscription updated").into();
         }
-        MobileIntent::CloseConnection => session.api.close_connection(&a).await?,
-        MobileIntent::CloseAll => session.api.close_connections().await?,
-        MobileIntent::ConnectionSort => state.connection_sort = a,
-        MobileIntent::ConnectionDetail => state.selected = a,
+        MobileIntent::CloseConnection => {
+            session.api.close_connection(&a).await?;
+            if let Some(detail) = state.connection_detail.as_mut() {
+                detail.wait_for_close_confirmation(&a);
+            }
+        }
+        MobileIntent::CloseAll => {
+            session.api.close_connections().await?;
+            if let Some(detail) = state.connection_detail.as_mut() {
+                detail.wait_for_all_close_confirmation();
+            }
+        }
+        MobileIntent::ConnectionSort => {
+            if a != state.connection_sort {
+                state.connection_sort = a;
+                state.connection_page.reset();
+            }
+        }
+        MobileIntent::ConnectionDetail => {
+            state.connection_detail = Some(Detail::new(ConnectionSelection {
+                id: a,
+                request: b.parse()?,
+            }));
+        }
         MobileIntent::Copy => {
             let key = a.clone();
             let text = if let Some(id) = a.strip_prefix("connection:") {
-                let c = session
-                    .connections
-                    .connections
-                    .iter()
-                    .find(|c| c.id.as_ref() == id)
-                    .context(language.text("该连接已结束", "This connection has ended"))?;
-                let resolved = if state.connection_address.0 == id {
-                    state.connection_address.1.as_str()
-                } else {
-                    ""
-                };
-                core::connection::detail_values_in(c, resolved, language)
+                state
+                    .connection_detail
+                    .as_ref()
+                    .filter(|detail| detail.selection.id == id)
+                    .and_then(|detail| detail.values(language))
+                    .context(
+                        language.text("连接详情暂不可用。", "Connection details are unavailable."),
+                    )?
                     .into_iter()
                     .map(|(label, value)| {
                         format!("{label}: {}", if value.is_empty() { "—" } else { &value })
@@ -2677,7 +3319,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         }
         MobileIntent::Interval => {
             let mut next = session.settings.clone();
-            next.delay_interval_minutes = a.parse()?;
+            next.delay_interval_minutes = settings_input::parse_number(&a)?;
             session.store.save_settings(&next)?;
             session.settings = next;
         }
@@ -2739,17 +3381,19 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 "{}",
                 language.text("保护操作无效", "Invalid protection action")
             );
-            let desired = saved.previous.proxy_mode == core::model::ProxyMode::Tun;
-            let before = session.settings.clone();
+            let target = VpnBaseline::target_for_disable(&saved);
+            session.observe_native()?;
+            let before_vpn = VpnBaseline::capture(session).context(language.text(
+                "VPN 状态正在切换，请重试",
+                "The VPN state is changing. Try again.",
+            ))?;
+            state.saved_protection_recovery.begin(session, before_vpn)?;
             state.protection_change = Some(ProtectionChange {
-                before: before.clone(),
-                before_vpn: session.vpn,
-                enabled: false,
-                generation: Some(session.platform["vpn_generation"].as_u64().unwrap_or(0)),
+                kind: ProtectionChangeKind::Disable,
+                transition: None,
                 deadline: std::time::Instant::now() + Duration::from_secs(30),
                 verified: false,
                 authorization: None,
-                auto_check: false,
             });
             state.protection_status = language
                 .text(
@@ -2758,13 +3402,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 )
                 .into();
             let result = async {
-                session
-                    .native
-                    .request(json!({"op":"vpn-plan","enabled":desired}))?;
-                let mut next = before;
-                next.claude_protection = None;
-                next.run_mode = saved.previous.mode.clone();
-                session.commit_protection(next.claude_protection, next.run_mode)?;
+                session.commit_protection(None, saved.previous.mode.clone())?;
                 session
                     .api
                     .restore_automatic_groups(&saved.locked_groups, &saved.fixed_groups)
@@ -2780,20 +3418,26 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     }
                 }
                 session.api.close_connections().await?;
-                session
-                    .native
-                    .request(json!({"op":if desired{"reconnect"}else{"disconnect"}}))?;
-                Ok::<_, anyhow::Error>(())
+                VpnTransition::apply(session, target)
             }
             .await;
-            if let Err(error) = result {
-                rollback_protection(
-                    state,
-                    &format!(
-                        "{}{error:#}",
-                        language.text("关闭保护失败：", "Failed to disable protection: ")
-                    ),
-                )?;
+            match result {
+                Ok(transition) => {
+                    state
+                        .protection_change
+                        .as_mut()
+                        .expect("pending protection disable")
+                        .transition = Some(transition);
+                }
+                Err(error) => {
+                    rollback_protection(
+                        state,
+                        &format!(
+                            "{}{error:#}",
+                            language.text("关闭保护失败：", "Failed to disable protection: ")
+                        ),
+                    );
+                }
             }
         }
         _ => {}
@@ -2802,7 +3446,10 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
 }
 
 fn blocked_during_protection(state: &mut State) -> bool {
-    if state.session.settings.claude_protection.is_none() && state.protection_change.is_none() {
+    if state.session.settings.claude_protection.is_none()
+        && state.protection_change.is_none()
+        && !state.saved_protection_recovery.is_active()
+    {
         return false;
     }
     state.notice = state
@@ -2814,65 +3461,6 @@ fn blocked_during_protection(state: &mut State) -> bool {
         .into();
     state.notice_error = true;
     true
-}
-
-fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
-    matches!(
-        intent,
-        MobileIntent::Navigate
-            | MobileIntent::RestartCore
-            | MobileIntent::Appearance
-            | MobileIntent::Accent
-            | MobileIntent::TextScale
-            | MobileIntent::Language
-            | MobileIntent::NodeSort
-            | MobileIntent::ClearLogs
-            | MobileIntent::OverviewRefresh
-            | MobileIntent::OverviewPrivacy
-            | MobileIntent::Query
-            | MobileIntent::NodePage
-            | MobileIntent::GroupExpansion
-            | MobileIntent::GroupPage
-            | MobileIntent::GroupPagination
-            | MobileIntent::ProfilePage
-            | MobileIntent::ProfilePagination
-            | MobileIntent::ConnectionPage
-            | MobileIntent::RulePage
-            | MobileIntent::RuleFilter
-            | MobileIntent::RuleSelect
-            | MobileIntent::ConnectionSort
-            | MobileIntent::ConnectionDetail
-            | MobileIntent::Copy
-            | MobileIntent::LogLevel
-            | MobileIntent::ExportLogs
-            | MobileIntent::ExportDiagnostics
-            | MobileIntent::CopyDiagnostics
-            | MobileIntent::ReportIssue
-            | MobileIntent::Probe
-            | MobileIntent::NetworkTool
-            | MobileIntent::ProbeCancel
-            | MobileIntent::SiteStart
-            | MobileIntent::SiteCancel
-            | MobileIntent::SiteCategory
-            | MobileIntent::SiteFilter
-            | MobileIntent::SiteRetest
-            | MobileIntent::SiteProbe
-            | MobileIntent::SiteDetail
-            | MobileIntent::ClaudeStart
-            | MobileIntent::ClaudeCancel
-            | MobileIntent::ExportReport
-            | MobileIntent::NodeDelay
-            | MobileIntent::GroupDelay
-            | MobileIntent::DelayAll
-            | MobileIntent::SystemNotification
-            | MobileIntent::CancelUpdate
-            | MobileIntent::OpenRelease
-    ) || (intent == MobileIntent::ClaudeProtection && value == "false")
-        || (intent == MobileIntent::ApplicationPolicy
-            && matches!(
-                value,
-                "open" | "refresh" | "query" | "filter" | "system" | "edit" | "cancel" | "close"
-            ))
 }
 
 fn rows<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
@@ -2973,6 +3561,11 @@ struct GroupView {
     page: usize,
     testing: bool,
 }
+struct ConnectionDetailProjection {
+    selection: ConnectionSelection,
+    status: DetailStatus,
+    rows: Vec<(&'static str, String)>,
+}
 struct Projection {
     language: config::Language,
     application_policies: application_policies::View,
@@ -2998,7 +3591,7 @@ struct Projection {
     dirty: bool,
     rule_warning: String,
     logs: Vec<(String, String)>,
-    details: Vec<(String, String)>,
+    connection_detail: Option<ConnectionDetailProjection>,
     rates: (String, String),
     platform: Value,
     rule_profile: String,
@@ -3020,6 +3613,7 @@ struct Projection {
     group_page: (usize, usize),
     profile_page: (usize, usize),
     connection_page: (usize, usize),
+    connection_cursor: ConnectionPageCursor,
     rule_page: (usize, usize),
     rule_form: Option<RuleForm>,
     rule_editor: Option<RuleEditor>,
@@ -3036,6 +3630,7 @@ struct Projection {
     site_summary: String,
     claude_status: String,
     protection_pending: bool,
+    protection_retry: bool,
     protection_status: String,
     protection_health: core::protection::status::Status,
 }
@@ -3053,7 +3648,7 @@ struct ReportRow {
     block_tone: i32,
     block_items: i32,
 }
-fn project(state: &State) -> Projection {
+fn project(state: &mut State) -> Projection {
     let s = &state.session;
     let language = state.presentation_language;
     let query = state.query.to_lowercase();
@@ -3166,25 +3761,17 @@ fn project(state: &State) -> Projection {
     };
     let rules = state.rule_rows.as_deref().unwrap_or_default();
     let saved = rule_manager::ProfileRules::for_profile(&s.settings, &s.rule_profile, false);
-    let mut connections = s
-        .connections
-        .connections
-        .iter()
-        .filter(|_| matches!(state.page, 0 | 3))
-        .filter(|c| core::connection::matches_query(c, &query))
-        .collect::<Vec<_>>();
-    let sort = list_presentation::connection_sort(&state.connection_sort);
-    connections.sort_by(|a, b| sort.compare(a, b));
-    let connection_count = connections.len();
-    let connection_page = state
-        .connection_page
-        .min(connection_count.saturating_sub(1) / 50);
-    let connections = connections
-        .into_iter()
-        .skip(connection_page * 50)
-        .take(50)
-        .cloned()
-        .collect();
+    let connections = state.connection_page.project(
+        if matches!(state.page, 0 | 3) {
+            &s.connections.connections
+        } else {
+            &[]
+        },
+        &query,
+        list_presentation::connection_sort(&state.connection_sort),
+    );
+    let connection_page = (connections.index, connections.total);
+    let connections = connections.items.into_iter().cloned().collect();
     let rules = rules
         .iter()
         .enumerate()
@@ -3201,50 +3788,20 @@ fn project(state: &State) -> Projection {
         .take(100)
         .map(|(index, row)| (index, row.clone()))
         .collect();
-    let mut details = vec![];
-    if let Some(c) = s
-        .connections
-        .connections
-        .iter()
-        .find(|c| c.id.as_ref() == state.selected)
-    {
-        let resolved = if state.connection_address.0 == c.id.as_ref() {
-            state.connection_address.1.as_str()
-        } else {
-            ""
-        };
-        details = core::connection::detail_values_in(c, resolved, language)
-            .into_iter()
-            .map(|(label, value)| (label.into(), value))
-            .collect();
-    }
+    let connection_detail =
+        state
+            .connection_detail
+            .as_ref()
+            .map(|detail| ConnectionDetailProjection {
+                selection: detail.selection.clone(),
+                status: detail.status(),
+                rows: detail.values(language).unwrap_or_default(),
+            });
     let report = core::ip_report::Report::from_results(&state.ip_results);
     let categories = report
         .categories
         .iter()
-        .map(|c| {
-            (
-                c.name.to_owned(),
-                format!("{} / {}", c.counts.non_red(), c.counts.total()),
-                match language {
-                    config::Language::SimplifiedChinese => format!(
-                        "可用与部分可达 {} · 其他 {}",
-                        c.counts.non_red(),
-                        c.counts.total() - c.counts.non_red()
-                    ),
-                    config::Language::English => format!(
-                        "Available or reachable {} · Other {}",
-                        c.counts.non_red(),
-                        c.counts.total() - c.counts.non_red()
-                    ),
-                },
-                if c.counts.non_red() == c.counts.total() {
-                    1
-                } else {
-                    2
-                },
-            )
-        })
+        .map(|category| site_report::category_row(category, language))
         .collect();
     let mut sites = vec![];
     let mut site_regions = std::collections::BTreeSet::new();
@@ -3263,7 +3820,12 @@ fn project(state: &State) -> Projection {
         }
         let (value, detail, country, tone) = match slot {
             Some(Ok(value)) => (
-                status.summary_in(&value.summary, language).to_owned(),
+                if value.authentication_check_skipped {
+                    status.label_in(language)
+                } else {
+                    status.summary_in(&value.summary, language)
+                }
+                .to_owned(),
                 value.detail.clone(),
                 value.country.clone(),
                 match value.state {
@@ -3291,22 +3853,7 @@ fn project(state: &State) -> Projection {
             site_regions.insert(country.clone());
         }
         if service.id == state.site_selected {
-            site_details = vec![
-                (
-                    language.text("平台", "Service").into(),
-                    service.name.clone(),
-                ),
-                (language.text("结果", "Result").into(), value.clone()),
-                (language.text("详情", "Details").into(), detail.clone()),
-                (
-                    language.text("分类", "Category").into(),
-                    service.group.clone(),
-                ),
-                (
-                    language.text("地区", "Region").into(),
-                    core::countries::localized_name(&country, language),
-                ),
-            ];
+            site_details = site_report::detail_rows(service, slot, &value, &country, language);
         }
         if state.category != "all" && service.group != state.category {
             continue;
@@ -3326,22 +3873,11 @@ fn project(state: &State) -> Projection {
             id: service.id.clone(),
             title: service.name.clone(),
             value,
-            detail: core::ip_report::target_exit_detail_in(service, slot, language)
-                .unwrap_or_default(),
+            detail: core::ip_report::list_detail_in(service, slot, language),
             source: service.group.clone(),
             status_label: status,
             tone,
-            country_label: match language {
-                config::Language::SimplifiedChinese => {
-                    core::probe::country_name(&country).unwrap_or_else(|| country.clone())
-                }
-                config::Language::English => {
-                    core::countries::country_code(core::countries::country_text(&country))
-                        .and_then(core::countries::english_name)
-                        .unwrap_or(&country)
-                        .to_owned()
-                }
-            },
+            country_label: site_report::country_label(slot, &country, language),
             country,
             millis: slot
                 .and_then(|result| result.as_ref().ok())
@@ -3558,6 +4094,48 @@ fn project(state: &State) -> Projection {
         claude_rows.extend(block.rows);
     }
     claude_headers.extend(claude_rows);
+    let protection_error = state
+        .protection_rollback_error
+        .as_deref()
+        .filter(|_| state.protection_change.is_none());
+    let protection_pending = state.protection_change.is_some()
+        || (state.saved_protection_recovery.is_active() && protection_error.is_none());
+    let protection_health = if let Some(error) = protection_error {
+        core::protection::status::Status {
+            state: core::protection::status::State::Error,
+            message: error.to_owned(),
+        }
+    } else {
+        core::protection::status::Status::observe(
+            guard_enabled,
+            protection_pending,
+            s.running,
+            s.vpn
+                && s.platform["vpn_held"] == false
+                && s.platform["vpn_transition_pending"] == false,
+            state.protection_observed.then_some((
+                guard.connected,
+                if !guard.error.is_empty() {
+                    &guard.error
+                } else if !s.platform["protection"]["enabled"]
+                    .as_bool()
+                    .unwrap_or(false)
+                {
+                    language.text(
+                        "实时拦截未运行，请重新连接 VPN",
+                        "Live blocking is not running; reconnect the VPN",
+                    )
+                } else {
+                    ""
+                },
+            )),
+        )
+    };
+    let (protection_status, protection_health) = protection_presentation::project(
+        protection_error.unwrap_or(&state.protection_status),
+        protection_health,
+        language,
+    );
     Projection {
         language,
         application_policies: state.application_policies.view(s, language),
@@ -3611,7 +4189,8 @@ fn project(state: &State) -> Projection {
         group_page,
         profile_page,
         rules,
-        connection_page: (connection_page, connection_count),
+        connection_page,
+        connection_cursor: state.connection_page.cursor(),
         rule_page: (rule_page, rule_count),
         rule_form: state.rule_form.clone(),
         rule_editor: state.rule_editor.clone(),
@@ -3634,49 +4213,14 @@ fn project(state: &State) -> Projection {
             .map_or(3, |consent| consent.remaining() as i32),
         geo_updating: state.geo_updating,
         delay_busy: state.delay_scope.is_some(),
-        site_summary: match language {
-            config::Language::SimplifiedChinese => format!(
-                "确认可用 {} · 网页可达 {} · 受限 {} · 失败 {}",
-                report.totals.count(core::ip_report::Status::Available),
-                report.totals.count(core::ip_report::Status::Partial)
-                    + report.totals.count(core::ip_report::Status::Reachable),
-                report.totals.count(core::ip_report::Status::Restricted),
-                report.totals.count(core::ip_report::Status::Failed)
-            ),
-            config::Language::English => format!(
-                "Available {} · Reachable {} · Restricted {} · Failed {}",
-                report.totals.count(core::ip_report::Status::Available),
-                report.totals.count(core::ip_report::Status::Partial)
-                    + report.totals.count(core::ip_report::Status::Reachable),
-                report.totals.count(core::ip_report::Status::Restricted),
-                report.totals.count(core::ip_report::Status::Failed)
-            ),
-        },
+        site_summary: report.totals.summary_in(language),
         claude_status: state.claude_status.clone(),
-        protection_pending: state.protection_change.is_some(),
-        protection_status: state.protection_status.clone(),
-        protection_health: core::protection::status::Status::observe(
-            s.settings.claude_protection.is_some(),
-            state.protection_change.is_some(),
-            s.running,
-            s.vpn,
-            state.protection_observed.then_some((
-                state.guard_snapshot.connected,
-                if !state.guard_snapshot.error.is_empty() {
-                    &state.guard_snapshot.error
-                } else if !s.platform["protection"]["enabled"]
-                    .as_bool()
-                    .unwrap_or(false)
-                {
-                    language.text(
-                        "实时拦截未运行，请重新连接 VPN",
-                        "Live blocking is not running; reconnect the VPN",
-                    )
-                } else {
-                    ""
-                },
-            )),
-        ),
+        protection_pending,
+        protection_retry: !protection_pending
+            && (protection_error.is_some()
+                || (guard_enabled && (!s.running || !protected_vpn_attached(s)))),
+        protection_status,
+        protection_health,
         policies: document.map(|d| d.policies.clone()).unwrap_or_default(),
         shortcuts: std::array::from_fn(|index| {
             document.is_some_and(|doc| doc.included[index] || s.draft.enabled[index])
@@ -3685,13 +4229,13 @@ fn project(state: &State) -> Projection {
             document.is_some_and(|doc| !doc.builtin && !doc.included[index])
         }),
         dirty: s.draft != *saved,
-        rule_warning: state.rule_warnings.join("\n"),
+        rule_warning: list_presentation::rule_warning(&state.rule_warnings, language),
         logs: if state.page == 5 {
             list_presentation::logs(&state.logs, &state.log_level, &query, language)
         } else {
             Vec::new()
         },
-        details,
+        connection_detail,
     }
 }
 
@@ -3931,7 +4475,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         }
     }
     for (page, count, size, rules) in [
-        (p.connection_page.0, p.connection_page.1, 50, false),
+        (
+            p.connection_page.0,
+            p.connection_page.1,
+            CONNECTION_PAGE_SIZE,
+            false,
+        ),
         (p.rule_page.0, p.rule_page.1, 100, true),
     ] {
         let label = match language {
@@ -3956,6 +4505,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             data.set_connection_page_index(page as i32);
             data.set_connection_previous(page > 0);
             data.set_connection_next((page + 1) * size < count);
+            DISPLAYED_CONNECTION_PAGE.set(Some(p.connection_cursor));
         }
     }
     if p.completed == Some(MobileIntent::RuleTextMode) {
@@ -3998,6 +4548,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_download_rate(p.rates.1.into());
     data.set_rule_profile(p.rule_profile.into());
     let android = ui.global::<AndroidData>();
+    android.set_protection_retry(p.protection_retry);
     android.set_update_status(p.update_status.into());
     android.set_update_busy(p.update_busy);
     android.set_update_downloading(p.update_downloading);
@@ -4211,10 +4762,22 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         data.get_rule_policies(),
         rows(p.policies.into_iter().map(Into::into).collect()),
     ));
-    data.set_connection_details(stable(
-        data.get_connection_details(),
-        rows(
-            p.details
+    if let Some(detail) = p.connection_detail
+        && ui.get_current_detail() == 5
+        && detail.selection.matches(
+            ui.get_selected_id().as_str(),
+            view.get_connection_detail_request(),
+        )
+    {
+        let status = match detail.status {
+            DetailStatus::Unavailable => ConnectionDetailStatus::Unavailable,
+            DetailStatus::Loading => ConnectionDetailStatus::Loading,
+            DetailStatus::Available => ConnectionDetailStatus::Available,
+            DetailStatus::Ended => ConnectionDetailStatus::Ended,
+        };
+        let next = rows(
+            detail
+                .rows
                 .into_iter()
                 .map(|(label, value)| DetailItem {
                     label: label.into(),
@@ -4225,8 +4788,24 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     },
                 })
                 .collect(),
-        ),
-    ));
+        );
+        let previous = data.get_connection_detail();
+        let rows = if detail
+            .selection
+            .matches(previous.id.as_str(), previous.request)
+            && previous.status == status
+        {
+            stable(previous.rows, next)
+        } else {
+            next
+        };
+        data.set_connection_detail(ConnectionDetailSnapshot {
+            id: detail.selection.id.into(),
+            request: detail.selection.request,
+            status,
+            rows,
+        });
+    }
     data.set_profiles(stable(
         data.get_profiles(),
         rows(
@@ -4471,10 +5050,17 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
     let scale = ui.window().scale_factor();
     let size = ui.window().size();
     let mut snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
+            "session_attempts":SESSION_ATTEMPTS.load(std::sync::atomic::Ordering::Acquire),
+            "language":data.get_language().as_str(),"presentation_language":data.get_presentation_language().as_str(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "working":data.get_working(),"profile_busy":data.get_profile_busy(),
             "draft_dirty":view.get_draft_dirty(),"modal":view.get_modal(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
+            "connections":data.get_connections().row_count(),
+            "connection_page":data.get_connection_page_index(),"connection_next":data.get_connection_next(),
+            "connection_previous":data.get_connection_previous(),
+            "connection_sort":view.get_connection_sort().as_str(),
+            "protected":data.get_protected(),"protection_pending":data.get_protection_pending(),
             "rule_profiles":data.get_rule_profiles().row_count(),
             "vpn_pending":data.get_vpn_pending(),
             "delay_busy":data.get_delay_busy(),
@@ -4484,7 +5070,7 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "safe_top":view.get_safe_top(),"safe_bottom":view.get_safe_bottom(),
             "keyboard_inset":view.get_keyboard_inset(),
             "notice_active":!view.get_notice().is_empty(),"notice_error":view.get_notice_error(),
-            "notice_modal":view.get_notice_modal()});
+            "notice_modal":view.get_notice_modal(),"notice_revision":view.get_notice_revision()});
     let targets = json!({
             "notice_close_target":ui.get_notice_close_target().iter().collect::<Vec<_>>(),
             "profile_add_target":view.get_profile_add_target().iter().collect::<Vec<_>>(),

@@ -542,6 +542,21 @@ mod tests {
                 .contains("Failed to close an unexpected connection")
         );
 
+        snapshot.error = "连接已处理，但系统通知失败：notification disabled".into();
+        let original = serde_json::to_value(&snapshot).unwrap();
+        let signal = report_signal(&snapshot);
+        assert!(
+            signal
+                .display_value_in(Language::English)
+                .contains("Connection handled; system notification failed: notification disabled")
+        );
+        assert!(
+            signal
+                .detail_in(Language::English)
+                .contains("Connection handled; system notification failed: notification disabled")
+        );
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), original);
+
         snapshot.error.clear();
         snapshot.blocked = 0;
         assert!(!report_signal(&snapshot).risk);

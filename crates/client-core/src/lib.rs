@@ -10,7 +10,7 @@ pub mod config;
 pub mod connection;
 #[path = "model/countries.rs"]
 pub mod countries;
-pub mod dns;
+mod dns;
 pub mod download;
 pub mod error_message;
 #[path = "storage/hash.rs"]

@@ -322,6 +322,9 @@ pub(super) fn detail(label: &str, value: &str, code: &str, language: Language) -
         ("系统 DNS" | "内核 DNS", "probe_failed", "未返回 IP 地址") => {
             "No IP addresses returned"
         }
+        ("内核 DNS", "probe_failed", "未查到目标地址") => {
+            "No addresses found for the target"
+        }
         ("内核 DNS", "probe_failed", "查询超时") => "DNS query timed out",
         ("本机代理", "not_observed", "内核未运行") => "Core is not running",
         ("本机代理", "probe_failed", "端口连接超时") => "Proxy port connection timed out",
@@ -505,6 +508,29 @@ fn dynamic_detail(label: &str, value: &str, code: &str) -> Option<String> {
             let address = value.strip_suffix("（IP 目标，无需解析）")?;
             address.parse::<std::net::IpAddr>().ok()?;
             Some(format!("{address} (IP target; no DNS lookup)"))
+        }
+        ("系统 DNS" | "内核 DNS", "ok") => {
+            let (addresses, extra) = match value.split_once("（另有 ") {
+                Some((addresses, extra)) => {
+                    let count = extra.strip_suffix(" 项）")?;
+                    if !digits(count) || count.starts_with('0') {
+                        return None;
+                    }
+                    (addresses, Some(count))
+                }
+                None => (value, None),
+            };
+            if !addresses
+                .split('、')
+                .all(|address| address.parse::<std::net::IpAddr>().is_ok())
+            {
+                return None;
+            }
+            let addresses = addresses.replace('、', ", ");
+            Some(match extra {
+                Some(count) => format!("{addresses} ({count} more)"),
+                None => addresses,
+            })
         }
         ("本机代理", "ok") => {
             let millis = value.strip_prefix("端口可连接 · ")?.strip_suffix(" ms")?;

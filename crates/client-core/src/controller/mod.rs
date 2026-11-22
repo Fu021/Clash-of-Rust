@@ -610,6 +610,7 @@ impl Api {
         Ok(Self {
             client: crate::network::client_builder()
                 .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
                 .pool_max_idle_per_host(0)
                 .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(8))
@@ -774,8 +775,7 @@ impl Api {
         .await?;
         self.close_connections().await
     }
-    /// Query real upstream addresses; the controller endpoint bypasses fake-IP.
-    /// Never fall back to the host's plaintext system resolver here.
+    /// Query addresses through the controller with the core's DNS policy.
     pub async fn resolve_domain(&self, host: &str) -> Result<Vec<std::net::IpAddr>> {
         let query = |kind: &'static str| async move {
             let mut url = self.url(&["dns", "query"])?;
@@ -1615,6 +1615,41 @@ rules: ['MATCH,group']\n";
             api.resolve_domain("example.test").await.unwrap(),
             ["203.0.113.2".parse::<std::net::IpAddr>().unwrap()]
         );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn connection_dns_rejects_controller_redirects() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let controller = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = redirect.local_addr().unwrap();
+        let api = Api::new(&Settings {
+            controller_port: controller.local_addr().unwrap().port(),
+            ..Default::default()
+        })
+        .unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = controller.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let size = stream.read(&mut request).await.unwrap();
+                assert!(request[..size].starts_with(b"GET /dns/query?name=fixture.test&type="));
+                let response = format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target}/?name=fixture.test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let result = tokio::select! {
+            result = tokio::time::timeout(Duration::from_secs(3), api.resolve_domain("fixture.test")) => result.unwrap(),
+            _ = redirect.accept() => panic!("DNS lookup followed a controller redirect"),
+        };
+        assert!(result.is_err());
         server.await.unwrap();
     }
 

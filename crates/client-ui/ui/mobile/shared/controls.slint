@@ -474,7 +474,7 @@ export component MNotice inherits Rectangle {
                 y: floor(index / root.action-columns) * (actions.row-height + actions.gap);
                 width: actions.button-width; height: actions.row-height;
                 modal-control: true; notice-control: true; quiet: true; compact: true;
-                geometry-key: index == 2 && root.can-restart ? "notice-retry-core" : "";
+                geometry-key: index == 0 ? "preview-notice-export-diagnostics" : index == 2 && root.can-restart ? "notice-retry-core" : "";
                 text: index == root.action-count - 1 ? @tr("关闭") : index == 0 ? @tr("导出诊断") : index == 1 ? @tr("新建 Issue") : root.can-restart ? @tr("重试启动") : @tr("关闭代理");
                 enabled: index != 2 || !root.has-recovery || !MobileData.working;
                 clicked => {

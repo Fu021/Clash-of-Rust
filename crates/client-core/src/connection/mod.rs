@@ -11,30 +11,25 @@ pub fn hostname(connection: &Connection) -> &str {
     }
 }
 
-/// A selected connection may omit its remote address. Both hosts use the core
-/// resolver and encrypted proxy fallback, never the host's plaintext resolver.
+/// Resolve a missing remote address through the core controller.
+/// The mixed-port argument is retained for existing callers.
 pub async fn resolve_target(
     api: &crate::api::Api,
     host: &str,
-    port: u16,
+    _mixed_port: u16,
 ) -> anyhow::Result<String> {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return Ok(ip.to_string());
     }
     anyhow::ensure!(!host.is_empty(), "域名为空");
-    tokio::time::timeout(Duration::from_secs(16), async {
-        let ips = match api.resolve_domain(host).await {
-            Ok(ips) => ips,
-            Err(_) => crate::dns::through_proxy(host, port).await?,
-        };
-        Ok(ips
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n"))
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("目标地址查询超时"))?
+    let ips = tokio::time::timeout(Duration::from_secs(16), api.resolve_domain(host))
+        .await
+        .map_err(|_| anyhow::anyhow!("目标地址查询超时"))??;
+    Ok(ips
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 pub fn detail_values(connection: &Connection, resolved: &str) -> Vec<(&'static str, String)> {
@@ -286,6 +281,45 @@ pub fn matches_query(connection: &Connection, lower_query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn target_resolution_stays_on_the_controller_when_dns_fails() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let controller = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mixed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mixed_port = mixed.local_addr().unwrap().port();
+        let api = crate::api::Api::new(&crate::config::Settings {
+            controller_port: controller.local_addr().unwrap().port(),
+            mixed_port,
+            ..Default::default()
+        })
+        .unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = controller.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let size = stream.read(&mut request).await.unwrap();
+                assert!(request[..size].starts_with(b"GET /dns/query?name=fixture.test&type="));
+                stream
+                    .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
+        let result = tokio::select! {
+            result = tokio::time::timeout(
+                Duration::from_secs(3),
+                resolve_target(&api, "fixture.test", mixed_port)
+            ) => result.unwrap(),
+            _ = mixed.accept() => panic!("DNS lookup contacted the mixed port"),
+        };
+        assert!(result.is_err());
+        server.await.unwrap();
+    }
 
     fn row(id: &str, download: u64) -> Connection {
         Connection {

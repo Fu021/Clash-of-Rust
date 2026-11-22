@@ -253,7 +253,8 @@ fn external_language_changes_follow_preferences_without_losing_drafts_or_overrid
     assert!(!settings::sync_language(
         &mut state,
         &mut current_args,
-        false
+        false,
+        77
     ));
     assert_eq!(state.language, SimplifiedChinese);
 
@@ -265,20 +266,27 @@ fn external_language_changes_follow_preferences_without_losing_drafts_or_overrid
     assert!(!settings::sync_language(
         &mut state,
         &mut current_args,
-        true
+        true,
+        77
     ));
     assert_eq!(state.form.as_ref().unwrap().draft, "unfinished");
     assert_eq!(state.language, SimplifiedChinese);
 
     state.form = None;
-    assert!(settings::sync_language(&mut state, &mut current_args, true));
+    assert!(settings::sync_language(
+        &mut state,
+        &mut current_args,
+        true,
+        77
+    ));
     assert_eq!(state.language, English);
     assert_eq!(current_args.get("lang"), Some("en"));
     assert_eq!(state.query, "example");
     assert!(!settings::sync_language(
         &mut state,
         &mut current_args,
-        true
+        true,
+        77
     ));
 }
 
@@ -336,6 +344,40 @@ async fn offline_language_save_preserves_settings_and_respects_the_owner_lock() 
     assert_eq!(saved.language, LanguagePreference::SimplifiedChinese);
     assert_eq!(saved.ipv6, original.ipv6);
     assert!(!root.join("control.json").exists());
+}
+
+#[test]
+fn language_sync_retains_the_selected_subscription_when_display_matches_change() {
+    use clash_client_core::config::{LanguagePreference, Profile};
+
+    let mut state = State::new(false);
+    state.page = Page::Profiles;
+    state.language = SimplifiedChinese;
+    state.query = "default direct".into();
+    let mut poll = demo_poll();
+    poll.meta.profiles = [
+        ("builtin", "默认直连", true),
+        ("added", "Default direct plan", false),
+    ]
+    .into_iter()
+    .map(|(id, name, builtin)| Profile {
+        id: id.into(),
+        name: name.into(),
+        source: "default.yaml".into(),
+        updated: 0,
+        usage: None,
+        builtin,
+    })
+    .collect();
+    poll.meta.settings.language = LanguagePreference::English;
+    state.accept(Some(poll));
+    assert_eq!(state.items(), ["added"]);
+
+    assert!(settings::sync_language(&mut state, &mut args(), true, 77));
+    assert_eq!(state.items(), ["builtin", "added"]);
+    assert_eq!(state.items()[state.selected], "added");
+    state.key(Key::Enter);
+    assert_eq!(state.form.as_ref().unwrap().fields[0].value, "added");
 }
 
 #[test]

@@ -46,6 +46,7 @@ use rules as rules_view;
 use runtime as desktop_runtime;
 use runtime::Task;
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
@@ -3060,8 +3061,9 @@ impl App {
         {
             return false;
         }
-        if let StatusFilter::Status(status) = self.site_status
-            && Status::of(result) != status
+        let status = Status::of(result);
+        if let StatusFilter::Status(filter) = self.site_status
+            && status != filter
         {
             return false;
         }
@@ -3071,15 +3073,22 @@ impl App {
             RegionFilter::Country(code) if ip_report::region(result) != Some(code) => return false,
             _ => {}
         }
+        let language = self.presentation_language;
+        let country = result
+            .and_then(|result| result.as_ref().ok())
+            .map(|result| site_result_country(result, language))
+            .filter(|country| !country.is_empty())
+            .unwrap_or_else(|| language.text("未识别", "Unknown"));
         contains_query(&service.name, query)
             || contains_query(&service.group, query)
+            || contains_query(status.label_in(language), query)
+            || contains_query(&site_result_value(result, status, language), query)
+            || contains_query(country, query)
             || match result {
                 Some(Ok(result)) => {
                     contains_query(&result.summary, query) || contains_query(&result.country, query)
                 }
-                Some(Err(error)) => {
-                    contains_query("超时或失败", query) || contains_query(error, query)
-                }
+                Some(Err(_)) => contains_query("超时或失败", query),
                 None => contains_query("未检测 等待检测 检测中", query),
             }
     }
@@ -3096,6 +3105,46 @@ impl App {
         self.mixed_port.trim().parse::<u16>() != Ok(self.settings.mixed_port)
     }
 }
+fn site_result_value(
+    result: Option<&Result<ip_check::CheckResult, String>>,
+    status: Status,
+    language: Language,
+) -> Cow<'_, str> {
+    let label = status.label_in(language);
+    match result {
+        Some(Ok(result))
+            if result.authentication_check_skipped
+                || status.summary_is_generic(&result.summary) =>
+        {
+            Cow::Borrowed(label)
+        }
+        Some(Ok(result)) => {
+            let summary = status.summary_in(&result.summary, language);
+            if summary == label {
+                Cow::Borrowed(label)
+            } else {
+                Cow::Owned(format!("{label} · {summary}"))
+            }
+        }
+        Some(Err(error)) => Cow::Borrowed(error),
+        None => Cow::Borrowed(label),
+    }
+}
+
+fn site_result_country(result: &ip_check::CheckResult, language: Language) -> &str {
+    let country = clash_of_rust::flags::country_text(ip_report::country_in(
+        &result.country,
+        result.authentication_check_skipped,
+        language,
+    ));
+    match language {
+        Language::SimplifiedChinese => country,
+        Language::English => clash_client_core::countries::country_code(country)
+            .and_then(clash_client_core::countries::english_name)
+            .unwrap_or(country),
+    }
+}
+
 fn bytes(value: u64) -> String {
     if value < 1024 {
         format!("{value} B")
@@ -3810,7 +3859,8 @@ mod dev2_tests {
             state,
             summary: "可用".into(),
             country: country.into(),
-            millis: 20,
+            millis: Some(20),
+            authentication_check_skipped: false,
             detail: "test evidence".into(),
             target_exit: None,
         })
@@ -3894,6 +3944,52 @@ mod dev2_tests {
                 .completed(),
             2
         );
+    }
+
+    #[test]
+    fn site_search_matches_the_displayed_result_and_region_in_both_languages() {
+        let mut app = app();
+        app.site_results
+            .resize_with(ip_check::services().len(), || None);
+        let index = ip_check::services()
+            .iter()
+            .position(|service| service.id == "MediaUnlockTest_DisneyPlus")
+            .unwrap();
+        let mut unconfirmed = result(ip_check::State::Unknown, "未提供").unwrap();
+        unconfirmed.summary = "未确认可用性".into();
+        for (language, region, skipped_region, missing_region, summary) in [
+            (
+                Language::SimplifiedChinese,
+                "美国",
+                "未提供",
+                "未识别",
+                "未确认可用性",
+            ),
+            (
+                Language::English,
+                "united states",
+                "not provided",
+                "unknown",
+                "availability unconfirmed",
+            ),
+        ] {
+            app.presentation_language = language;
+            let status = Status::Unknown.label_in(language).to_lowercase();
+            unconfirmed.authentication_check_skipped = true;
+            unconfirmed.country = "未提供".into();
+            app.site_results[index] = Some(Ok(unconfirmed.clone()));
+            assert!(app.site_matches(index, &status), "{status}");
+            assert!(app.site_matches(index, skipped_region), "{skipped_region}");
+            unconfirmed.authentication_check_skipped = false;
+            unconfirmed.country = "美国".into();
+            app.site_results[index] = Some(Ok(unconfirmed.clone()));
+            assert!(app.site_matches(index, &format!("{status} · {summary}")));
+            assert!(app.site_matches(index, region), "{region}");
+            assert!(app.site_matches(0, missing_region), "{missing_region}");
+        }
+        assert!(app.site_matches(index, "未确认可用性"));
+        assert!(app.site_matches(0, "not checked"));
+        assert!(!app.site_matches(index, "unrelated"));
     }
 
     #[test]

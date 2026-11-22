@@ -94,6 +94,7 @@ async fn download_agent(
         let message = format!("订阅服务器返回 HTTP {status}");
         bail!(message);
     }
+    crate::download::require_complete_response(&response)?;
     if response
         .content_length()
         .is_some_and(|size| size > LIMIT as u64)
@@ -186,6 +187,31 @@ mod tests {
             "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid clash-of-rust"
         );
         assert!(request.contains("application/yaml"));
+    }
+
+    #[tokio::test]
+    async fn partial_responses_keep_the_safe_cause_when_all_routes_fail() {
+        let wire = b"HTTP/1.1 206 Partial Content\r\nContent-Length: 12\r\nContent-Range: bytes 0-11/29\r\n\r\nproxies: []\n";
+        let (proxy, proxy_task) = server(wire.to_vec()).await;
+        let (origin, origin_task) = server(wire.to_vec()).await;
+        let url = Url::parse(&format!("{origin}/private-subscription?token=fixture")).unwrap();
+        let error = download_routes(&url, &routes(None, Some(proxy)))
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert_eq!(message.matches("下载响应不完整（HTTP 206）").count(), 2);
+        assert!(!message.contains("private-subscription"));
+        assert!(!message.contains("token=fixture"));
+        assert_eq!(
+            crate::error_message::localize(&message, crate::config::Language::English),
+            "System proxy: Incomplete download response (HTTP 206); Direct: Incomplete download response (HTTP 206) (tried available proxies and direct connections)"
+        );
+        assert_eq!(
+            crate::error_message::localize(&message, crate::config::Language::SimplifiedChinese),
+            message
+        );
+        proxy_task.await.unwrap();
+        origin_task.await.unwrap();
     }
 
     #[tokio::test]

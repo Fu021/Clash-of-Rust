@@ -100,6 +100,18 @@ class CliTuiTests(unittest.TestCase):
                 self.assertTrue(plan['linux_user_tests'])
                 self.assertFalse(plan['extended_tests'])
 
+    def test_shared_rule_changes_select_desktop_terminal_and_mobile_checks(self):
+        plan = ci_test_policy.select(['crates/client-core/src/rules/mod.rs'])
+        self.assertTrue(plan['linux_user_tests'])
+        self.assertTrue(plan['desktop_ui_tests'])
+        self.assertTrue(plan['mobile_ui_tests'])
+        self.assertFalse(plan['extended_tests'])
+
+    def test_desktop_engine_changes_select_linux_startup_checks(self):
+        plan = ci_test_policy.select(['crates/client-runtime/src/engine/mod.rs'])
+        self.assertTrue(plan['linux_user_tests'])
+        self.assertFalse(plan['extended_tests'])
+
     def test_wait_matches_the_setting_row_instead_of_an_unrelated_value(self):
         if os.name != 'posix':
             self.skipTest('PTY requires Unix')

@@ -15,6 +15,12 @@ final class SystemNotifications {
         return Build.VERSION.SDK_INT < 33
             || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
     }
+    static void renameChannel(NotificationManager manager, NotificationChannel channel, String name) {
+        if (channel != null && !android.text.TextUtils.equals(channel.getName(), name)) {
+            channel.setName(name);
+            manager.createNotificationChannel(channel);
+        }
+    }
     @android.annotation.SuppressLint("MissingPermission") // Explicitly checked before notify.
     static void show(Context context, String title, String message) {
         Context localized = AppLanguage.current(context);

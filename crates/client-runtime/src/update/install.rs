@@ -176,6 +176,7 @@ pub(super) fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
         }
         "安装包大小与 Release 不一致" => Some("Package size does not match the release"),
         "安装包下载不完整" => Some("Package download is incomplete"),
+        "下载响应不完整（HTTP 206）" => Some("Incomplete download response (HTTP 206)"),
         "下载持续低于 32 KiB/s" => Some("Download stayed below 32 KiB/s"),
         "下载速度持续下降" => Some("Download speed remained low after a drop"),
         "无法读取安装包" => Some("Could not read the package"),
@@ -1101,6 +1102,10 @@ mod tests {
             (
                 "更新失败：安装包校验失败，已停止安装",
                 "Update failed: Package verification failed; installation stopped",
+            ),
+            (
+                "更新失败：直连：下载响应不完整（HTTP 206）（已尝试可用代理和直连）",
+                "Update failed: Direct: Incomplete download response (HTTP 206) (tried available proxies and direct connections)",
             ),
             (
                 "更新失败：请先安装官方 Linux 软件包，再使用自动更新",

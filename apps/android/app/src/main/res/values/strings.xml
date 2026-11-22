@@ -33,6 +33,8 @@
     <string name="notification_invalid_type">Invalid notification type</string>
     <string name="notification_permission">Allow Clash of Rust to send notifications.</string>
     <string name="notification_invalid_content">Invalid notification content</string>
+    <string name="notification_host_unavailable">Notifications are not ready yet.</string>
+    <string name="notification_send_failed">Could not send the notification: %1$s</string>
     <string name="notification_disabled">Notifications are disabled. Allow them in system settings.</string>
     <string name="notification_protection_channel">Claude protection and notification test</string>
     <string name="notification_protection_disabled">Claude protection notifications are disabled. Allow them in system settings.</string>
@@ -52,13 +54,17 @@
     <string name="export_open_failed">Could not open the save location: %1$s</string>
     <string name="export_expired">The export content is no longer available.</string>
     <string name="export_write_failed">Could not write the selected file.</string>
+    <string name="export_failed">Could not export the file: %1$s</string>
     <string name="export_complete">File exported</string>
     <string name="import_read_failed">Could not read the selected file.</string>
+    <string name="import_failed">Could not import the file: %1$s</string>
     <string name="import_too_large">The subscription exceeds 10 MiB.</string>
     <string name="import_default_name">Imported configuration</string>
     <string name="vpn_authorization_pending">A VPN authorization request is already in progress.</string>
+    <string name="vpn_authorization_open_failed">Could not open VPN authorization: %1$s</string>
     <string name="vpn_authorization_cancelled">VPN authorization was cancelled or expired.</string>
     <string name="vpn_authorization_cancelled_short">VPN authorization cancelled</string>
+    <string name="vpn_plan_save_failed">Could not save the VPN connection plan.</string>
     <string name="vpn_route_pending">The system has not finished switching VPN routes.</string>
     <string name="vpn_wait_before_save">VPN is connecting. Save after it connects.</string>
     <string name="core_start_first">Start the core first.</string>

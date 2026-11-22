@@ -46,6 +46,8 @@ pub fn diagnostic_url(input: &str) -> Result<Url> {
 pub struct DiagnosticCheck {
     pub success: Option<bool>,
     pub detail: String,
+    #[serde(skip)]
+    pub detail_english: Option<String>,
 }
 
 impl DiagnosticCheck {
@@ -53,6 +55,7 @@ impl DiagnosticCheck {
         Self {
             success: Some(true),
             detail: detail.into(),
+            detail_english: None,
         }
     }
 
@@ -60,6 +63,7 @@ impl DiagnosticCheck {
         Self {
             success: Some(false),
             detail: detail.into(),
+            detail_english: None,
         }
     }
 
@@ -67,6 +71,7 @@ impl DiagnosticCheck {
         Self {
             success: None,
             detail: detail.into(),
+            detail_english: None,
         }
     }
 }
@@ -84,6 +89,14 @@ pub struct NetworkReport {
 }
 
 impl NetworkReport {
+    pub fn localize_route_for_display(&mut self, language: crate::config::Language) {
+        if language == crate::config::Language::English
+            && let Some(detail) = &self.route.detail_english
+        {
+            self.route.detail.clone_from(detail);
+        }
+    }
+
     pub fn lines(&self) -> Vec<String> {
         [
             ("目标", self.target.as_str()),
@@ -167,16 +180,7 @@ async fn protocol_check(
         Ok((status, millis, route)) => {
             let response = DiagnosticCheck::success(format!("HTTP {status} · {millis} ms"));
             let route = match route {
-                Some(route) => {
-                    let rule = match (route.rule.is_empty(), route.rule_payload.is_empty()) {
-                        (true, _) => String::new(),
-                        (false, true) => format!(" · 命中 {}", route.rule),
-                        (false, false) => {
-                            format!(" · 命中 {} ({})", route.rule, route.rule_payload)
-                        }
-                    };
-                    DiagnosticCheck::success(format!("{}{rule}", route.chain))
-                }
+                Some(route) => route_check(&route.chain, &route.rule, &route.rule_payload),
                 None => DiagnosticCheck::unavailable("未捕获到此请求的连接记录"),
             };
             (response, route)
@@ -186,6 +190,20 @@ async fn protocol_check(
             DiagnosticCheck::unavailable("请求未完成，无法确认线路"),
         ),
     }
+}
+
+fn route_check(chain: &str, rule: &str, rule_payload: &str) -> DiagnosticCheck {
+    if rule.is_empty() {
+        return DiagnosticCheck::success(chain);
+    }
+    let rule = if rule_payload.is_empty() {
+        rule.to_owned()
+    } else {
+        format!("{rule} ({rule_payload})")
+    };
+    let mut check = DiagnosticCheck::success(format!("{chain} · 命中 {rule}"));
+    check.detail_english = Some(format!("{chain} · Matched {rule}"));
+    check
 }
 
 pub async fn diagnose(
@@ -561,6 +579,53 @@ mod tests {
     }
 
     #[test]
+    fn route_translation_preserves_names_and_serialized_evidence() {
+        let check = route_check("节点 · 命中 名称", "DomainSuffix", "规则 · 命中 原文");
+        assert_eq!(
+            check.detail,
+            "节点 · 命中 名称 · 命中 DomainSuffix (规则 · 命中 原文)"
+        );
+        assert_eq!(
+            check.detail_english.as_deref(),
+            Some("节点 · 命中 名称 · Matched DomainSuffix (规则 · 命中 原文)")
+        );
+        assert_eq!(
+            serde_json::to_value(&check).unwrap(),
+            serde_json::json!({
+                "success": true,
+                "detail": "节点 · 命中 名称 · 命中 DomainSuffix (规则 · 命中 原文)"
+            })
+        );
+        let report = NetworkReport {
+            target: "https://example.test".into(),
+            system_dns: DiagnosticCheck::unavailable(""),
+            core_dns: DiagnosticCheck::unavailable(""),
+            proxy: DiagnosticCheck::unavailable(""),
+            https: DiagnosticCheck::unavailable(""),
+            http: DiagnosticCheck::unavailable(""),
+            response: DiagnosticCheck::unavailable(""),
+            route: check,
+        };
+        let original = serde_json::to_value(&report).unwrap();
+        let mut display = report.clone();
+        display.localize_route_for_display(crate::config::Language::SimplifiedChinese);
+        assert_eq!(serde_json::to_value(&display).unwrap(), original);
+        display.localize_route_for_display(crate::config::Language::English);
+        assert_eq!(
+            display.route.detail,
+            "节点 · 命中 名称 · Matched DomainSuffix (规则 · 命中 原文)"
+        );
+        assert_eq!(serde_json::to_value(&report).unwrap(), original);
+        assert_eq!(
+            route_check("节点 · 命中 名称", "DomainSuffix", "")
+                .detail_english
+                .as_deref(),
+            Some("节点 · 命中 名称 · Matched DomainSuffix")
+        );
+        assert_eq!(route_check("节点 · 命中 名称", "", "").detail_english, None);
+    }
+
+    #[test]
     fn protocol_selection_prefers_https_responses_and_keeps_the_matching_route() {
         for https_status in [200, 301, 403, 500] {
             let (target, response, route) = select_protocol(
@@ -589,6 +654,7 @@ mod tests {
             let failed = || DiagnosticCheck {
                 success,
                 detail: "不可用".into(),
+                detail_english: None,
             };
             let (_, response, route) = select_protocol(
                 "https://example.test".into(),

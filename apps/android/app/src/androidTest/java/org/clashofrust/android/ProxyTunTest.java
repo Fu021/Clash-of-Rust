@@ -1363,6 +1363,60 @@ public class ProxyTunTest {
         });
         previewNavigate(0);
     }
+
+    private static void awaitConnectionPage(int page, boolean next) throws Exception {
+        await("Connections did not show page " + (page + 1), () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("live") && ui.optInt("page", -1) == 3
+                && ui.optInt("connection_page", -1) == page && ui.optInt("connections") > 0
+                && ui.optBoolean("connection_previous") == (page > 0)
+                && ui.optBoolean("connection_next") == next && !ui.optBoolean("working");
+        });
+    }
+
+    private static void verifyConnectionPagination(int mixedPort) throws Exception {
+        java.util.List<Socket> clients = new java.util.ArrayList<>();
+        java.util.List<Socket> peers = new java.util.ArrayList<>();
+        try (ServerSocket origin = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))) {
+            origin.setSoTimeout(5000);
+            String authority = "127.0.0.1:" + origin.getLocalPort();
+            byte[] request = ("GET http://" + authority + "/pagination HTTP/1.1\r\nHost: "
+                + authority + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
+            for (int index = 0; index < 101; index++) {
+                Socket client = new Socket(java.net.Proxy.NO_PROXY);
+                clients.add(client);
+                client.connect(new InetSocketAddress("127.0.0.1", mixedPort), 5000);
+                client.getOutputStream().write(request);
+                peers.add(origin.accept());
+            }
+            previewTool(3);
+            awaitConnectionPage(0, true);
+            previewTarget("connections-pagination:next");
+            awaitConnectionPage(1, true);
+            previewTarget("connections-pagination:next");
+            awaitConnectionPage(2, false);
+
+            for (int index = 60; index < clients.size(); index++) {
+                clients.get(index).close();
+                peers.get(index).close();
+            }
+            awaitConnectionPage(1, false);
+            previewTarget("connections-pagination:previous");
+            awaitConnectionPage(0, true);
+
+            previewTarget("connections-pagination:next");
+            awaitConnectionPage(1, false);
+            previewTarget("connections-sort");
+            previewTarget("option:connections-sort/1");
+            awaitConnectionPage(0, true);
+            assertEquals("下载速度 ↑", MainActivity.diagnostics().getString("connection_sort"));
+            previewNavigate(0);
+        } finally {
+            for (Socket client : clients) client.close();
+            for (Socket peer : peers) peer.close();
+        }
+    }
+
     private static void setPageView(String target, String field, boolean list) throws Exception {
         await("Page view did not change: " + field, () -> {
             JSONObject ui = MainActivity.diagnostics();
@@ -2266,18 +2320,7 @@ public class ProxyTunTest {
             () -> !inStage(androidx.test.runner.lifecycle.Stage.RESUMED, false));
         assertTrue(directory.isDirectory() || directory.mkdirs());
         File destination = new File(directory, name + ".json");
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
-            activity.onActivityResult(12, android.app.Activity.RESULT_OK,
-                new Intent().setData(Uri.fromFile(destination))));
-        await("Diagnostic export did not finish writing valid JSON", () -> {
-            String failed = (String)failure.get(activity);
-            assertNull("Diagnostic export failed: " + failed, failed);
-            if (!destination.isFile()) return false;
-            try {
-                new JSONObject(new String(java.nio.file.Files.readAllBytes(destination.toPath()), StandardCharsets.UTF_8));
-                return true;
-            } catch (JSONException error) { return false; }
-        });
+        saveDiagnosticReport(activity, destination, expected, failure);
         closeDiagnosticPicker();
         waitForAppWindow();
         String saved = new String(java.nio.file.Files.readAllBytes(destination.toPath()), StandardCharsets.UTF_8);
@@ -2414,13 +2457,409 @@ public class ProxyTunTest {
         }
     }
 
+    private static void startAfterInvalidSettings(Context context) throws Exception {
+        File settings = new File(context.getFilesDir(), "client/settings.json");
+        byte[] saved = java.nio.file.Files.readAllBytes(settings.toPath());
+        String systemLanguage = AppLanguage.resolve("system",
+            android.content.res.Resources.getSystem().getConfiguration().getLocales());
+        String repairedLanguage = systemLanguage.equals("en") ? "zh-CN" : "en";
+        byte[] repaired = new JSONObject(new String(saved, StandardCharsets.UTF_8))
+            .put("language", repairedLanguage).toString().getBytes(StandardCharsets.UTF_8);
+        byte[] invalid = "{invalid settings".getBytes(StandardCharsets.UTF_8);
+        boolean restored = false;
+        try {
+            java.nio.file.Files.write(settings.toPath(), invalid);
+            context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+            waitForAppWindow();
+            await("Invalid settings did not produce a retryable startup error", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optBoolean("live") && ui.optBoolean("notice_modal")
+                    && ui.optBoolean("notice_error") && !ui.optBoolean("working")
+                    && previewBounds(ui, "notice-retry-core") != null;
+            });
+            assertFalse("A damaged configuration must not start the core", CoreBridge.ready());
+            assertArrayEquals("Startup must preserve the invalid settings", invalid,
+                java.nio.file.Files.readAllBytes(settings.toPath()));
+            long attempts = MainActivity.diagnostics().getLong("session_attempts");
+            tapStartupRetry();
+            await("Retrying invalid settings lost the startup error", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optBoolean("notice_modal") && ui.optBoolean("notice_error")
+                    && !ui.optBoolean("working") && ui.optLong("session_attempts") > attempts;
+            });
+            assertArrayEquals("A failed retry must preserve the invalid settings", invalid,
+                java.nio.file.Files.readAllBytes(settings.toPath()));
+            verifyStartupDiagnostics(context);
+            dismissStartupError();
+            long dismissedAttempts = MainActivity.diagnostics().getLong("session_attempts");
+            tapStartupRetry("retry-core", false);
+            await("Home retry did not restore the startup error", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optBoolean("notice_modal") && ui.optBoolean("notice_error")
+                    && !ui.optBoolean("working") && ui.optLong("session_attempts") > dismissedAttempts;
+            });
+            assertArrayEquals("Dismissing and retrying must preserve the invalid settings", invalid,
+                java.nio.file.Files.readAllBytes(settings.toPath()));
+            dismissStartupError();
+            await("Could not navigate to Settings while startup had failed", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                if (ui.optBoolean("live") && ui.optInt("page", -1) == 9
+                        && ui.optBoolean("notice_modal") && !ui.optBoolean("working")) return true;
+                tryStartupTarget("preview-nav:9", false);
+                return false;
+            });
+            java.nio.file.Files.write(settings.toPath(), repaired);
+            restored = true;
+            long beforeRecovery = MainActivity.diagnostics().getLong("session_attempts");
+            long coreGeneration = CoreBridge.generation();
+            tapStartupRetry();
+            await("Recovery did not update Settings in the repaired language", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optBoolean("live") && ui.optInt("page", -1) == 9
+                    && ui.optBoolean("core_running") && !ui.optBoolean("notice_modal")
+                    && !ui.optBoolean("working") && repairedLanguage.equals(ui.optString("language"))
+                    && repairedLanguage.equals(ui.optString("presentation_language"));
+            });
+            assertTrue(CoreBridge.ready());
+            assertEquals("Recovery reopened the session more than once", beforeRecovery + 1,
+                MainActivity.diagnostics().getLong("session_attempts"));
+            assertEquals("Recovery initialized the core more than once",
+                coreGeneration + 1, CoreBridge.generation());
+            previewNavigate(0);
+        } finally {
+            if (!restored) java.nio.file.Files.write(settings.toPath(), saved);
+        }
+    }
+
+    private static void dismissStartupError() throws Exception {
+        shell("input keyevent KEYCODE_BACK");
+        await("Back did not close the startup error", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("live") && !ui.optBoolean("notice_modal");
+        });
+    }
+
+    private static void tapStartupRetry() throws Exception {
+        tapStartupRetry("notice-retry-core", true);
+    }
+
+    private static void tapStartupRetry(String name, boolean modal) throws Exception {
+        long attempts = MainActivity.diagnostics().getLong("session_attempts");
+        await("Startup retry did not run: " + name, () -> {
+            if (MainActivity.diagnostics().optLong("session_attempts") > attempts) return true;
+            tryStartupTarget(name, modal);
+            return false;
+        });
+    }
+
+    private static boolean tryStartupTarget(String name, boolean modal) throws Exception {
+        if (!inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true)) return false;
+        JSONObject ui = MainActivity.diagnostics();
+        JSONArray bounds = previewBounds(ui, name);
+        if (!ui.optBoolean("live") || ui.optBoolean("notice_modal") != modal
+                || ui.optBoolean("working") || bounds == null || bounds.length() != 4
+                || bounds.optDouble(2) <= 0 || bounds.optDouble(3) <= 0) return false;
+        float scale = (float) ui.getDouble("scale");
+        int[] origin = windowOrigin();
+        return tryTap(origin[0] + (float) (bounds.getDouble(0) + bounds.getDouble(2) / 2) * scale,
+            origin[1] + (float) (bounds.getDouble(1) + bounds.getDouble(3) / 2) * scale);
+    }
+
+    private static void saveDiagnosticReport(MainActivity activity, File destination, String expected,
+            java.lang.reflect.Field failure) throws Exception {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+            activity.onActivityResult(12, android.app.Activity.RESULT_OK,
+                new Intent().setData(Uri.fromFile(destination))));
+        byte[] expectedBytes = expected.getBytes(StandardCharsets.UTF_8);
+        await("Diagnostic export did not finish writing the report", () -> {
+            assertNull("Diagnostic export failed", failure.get(activity));
+            return destination.isFile() && java.util.Arrays.equals(expectedBytes,
+                java.nio.file.Files.readAllBytes(destination.toPath()));
+        });
+    }
+
+    private static void verifyStartupDiagnostics(Context context) throws Exception {
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        int revision = MainActivity.diagnostics().getInt("notice_revision");
+        java.lang.reflect.Field pending = MainActivity.class.getDeclaredField("exportContent");
+        pending.setAccessible(true);
+        java.lang.reflect.Field failure = MainActivity.class.getDeclaredField("documentFailure");
+        failure.setAccessible(true);
+        java.util.concurrent.atomic.AtomicReference<String> content = new java.util.concurrent.atomic.AtomicReference<>();
+        await("Startup diagnostics did not reach the document picker", () -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                try { content.set((String) pending.get(activity)); }
+                catch (IllegalAccessException error) { throw new AssertionError(error); }
+            });
+            if (content.get() != null) return true;
+            tryStartupTarget("preview-notice-export-diagnostics", true);
+            return false;
+        });
+        await("The startup diagnostic document picker did not open",
+            () -> !inStage(androidx.test.runner.lifecycle.Stage.RESUMED, false));
+        File destination = File.createTempFile("startup-diagnostics-", ".json", context.getCacheDir());
+        try {
+            saveDiagnosticReport(activity, destination, content.get(), failure);
+            String saved = new String(java.nio.file.Files.readAllBytes(destination.toPath()),
+                StandardCharsets.UTF_8);
+            JSONObject report = new JSONObject(saved);
+            assertEquals("diagnose", report.getString("command"));
+            assertEquals("withheld", report.getJSONObject("data").getJSONObject("context").getString("state"));
+            assertFalse("Invalid settings leaked into the diagnostic report", saved.contains("{invalid settings"));
+        } finally {
+            java.nio.file.Files.deleteIfExists(destination.toPath());
+            closeDiagnosticPicker();
+        }
+        waitForAppWindow();
+        await("Saving diagnostics did not acknowledge the export in the startup error", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("live") && ui.optBoolean("notice_modal") && ui.optBoolean("notice_error")
+                && !ui.optBoolean("working") && ui.optInt("notice_revision") > revision;
+        });
+    }
+
+    private static void recoverWithRunningVpn(Context context) throws Exception {
+        File settings = new File(context.getFilesDir(), "client/settings.json");
+        File runtime = new File(context.getFilesDir(), "client/runtime/config.yaml");
+        byte[] savedSettings = java.nio.file.Files.readAllBytes(settings.toPath());
+        byte[] savedRuntime = java.nio.file.Files.readAllBytes(runtime.toPath());
+        byte[] invalid = "{invalid settings".getBytes(StandardCharsets.UTF_8);
+        long coreGeneration = CoreBridge.generation();
+        long vpnGeneration = TunnelService.generation();
+        long uiGeneration = MainActivity.diagnostics().getLong("ui_generation");
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        boolean repaired = false;
+        try {
+            java.nio.file.Files.write(settings.toPath(), invalid);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::recreate);
+            await("Recreated Activity did not expose its startup error with VPN running", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optBoolean("live") && ui.optLong("ui_generation") > uiGeneration
+                    && ui.optBoolean("notice_modal") && ui.optBoolean("notice_error")
+                    && !ui.optBoolean("working");
+            });
+            assertTrue("Starting with corrupt settings stopped the existing VPN", TunnelService.connected());
+            assertArrayEquals(invalid, java.nio.file.Files.readAllBytes(settings.toPath()));
+            java.nio.file.Files.write(settings.toPath(), savedSettings);
+            repaired = true;
+            waitForAppWindow();
+            tapStartupRetry();
+            await("Recovery did not attach the existing core and VPN", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                return ui.optBoolean("live") && ui.optBoolean("core_running") && ui.optBoolean("vpn")
+                    && !ui.optBoolean("notice_modal") && !ui.optBoolean("working");
+            });
+            assertEquals("Recovering the UI reloaded the existing core", coreGeneration, CoreBridge.generation());
+            assertEquals("Recovering the UI rebuilt the existing VPN", vpnGeneration, TunnelService.generation());
+            assertArrayEquals(savedRuntime, java.nio.file.Files.readAllBytes(runtime.toPath()));
+            assertArrayEquals(savedSettings, java.nio.file.Files.readAllBytes(settings.toPath()));
+        } finally {
+            if (!repaired) java.nio.file.Files.write(settings.toPath(), savedSettings);
+        }
+    }
+
+    private static void awaitProtectionDenial(long request, int previousNotice) throws Exception {
+        authorization(request, "denied");
+        waitForAppWindow();
+        await("Authorization denial did not return to saved protection", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("live") && ui.optBoolean("protected")
+                && !ui.optBoolean("protection_pending") && !ui.optBoolean("working")
+                && ui.optBoolean("notice_error") && ui.optInt("notice_revision") > previousNotice;
+        });
+    }
+
+    private static long awaitNewAuthorization(long previous, String status) throws Exception {
+        long[] request = new long[1];
+        await("Protection did not request new VPN authorization with state " + status, () -> {
+            JSONObject authorization = MainActivity.authorizationState();
+            request[0] = authorization.optLong("request");
+            return request[0] < 0 && request[0] != previous && status.equals(authorization.optString("status"));
+        });
+        return request[0];
+    }
+
+    private static void setVpnPrompt(MainActivity activity, java.lang.reflect.Field prompt, boolean busy) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            try { prompt.setBoolean(activity, busy); }
+            catch (IllegalAccessException error) { throw new AssertionError(error); }
+        });
+    }
+
+    private static MainActivity recreateDuringVpnPrompt(MainActivity previous) throws Exception {
+        java.lang.reflect.Field prompt = MainActivity.class.getDeclaredField("vpnPrompt");
+        prompt.setAccessible(true);
+        java.util.concurrent.atomic.AtomicReference<MainActivity> replacement =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(previous::recreate);
+        await("Activity was not recreated with its pending VPN consent", () -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                for (androidx.test.runner.lifecycle.Stage stage : androidx.test.runner.lifecycle.Stage.values()) {
+                    for (android.app.Activity candidate : androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+                            .getInstance().getActivitiesInStage(stage)) {
+                        if (!(candidate instanceof MainActivity) || candidate == previous || candidate.isDestroyed()) continue;
+                        try {
+                            if (prompt.getBoolean(candidate)) replacement.set((MainActivity) candidate);
+                        } catch (IllegalAccessException error) { throw new AssertionError(error); }
+                    }
+                }
+            });
+            return replacement.get() != null;
+        });
+        return replacement.get();
+    }
+
+    private static void verifyVpnConsentRecreation(Context context) throws Exception {
+        String original = CoreBridge.config();
+        long coreGeneration = CoreBridge.generation();
+        for (int index = 0; index < 2; index++) {
+            boolean allow = index == 1;
+            assertNotNull("VPN consent must be requested before recreation", VpnService.prepare(context));
+            MainActivity activity = resumedActivity();
+            assertNotNull(activity);
+            long request = allow ? Long.MIN_VALUE : 701;
+            activity.request(new JSONObject().put("op", "authorize-vpn").put("request", request).toString());
+            authorization(request, "pending");
+            MainActivity replacement = recreateDuringVpnPrompt(activity);
+            long busy = 801 + index;
+            replacement.request(new JSONObject().put("op", "authorize-vpn").put("request", busy).toString());
+            authorization(busy, "denied");
+            assertEquals(AppLanguage.current(context).getString(R.string.vpn_authorization_pending),
+                MainActivity.authorizationState().getString("error"));
+            consent(allow);
+            authorization(request, allow ? "granted" : "denied");
+            assertFalse("Authorization alone started the VPN", TunnelService.connected());
+            assertEquals(original, CoreBridge.config());
+            assertEquals(coreGeneration, CoreBridge.generation());
+            if (allow) shell("appops set org.clashofrust.android ACTIVATE_VPN default");
+            waitForAppWindow();
+        }
+
+        assertNotNull(VpnService.prepare(context));
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        activity.request("{\"op\":\"connect\"}");
+        await("Ordinary VPN consent did not open", () ->
+            consentRoot(InstrumentationRegistry.getInstrumentation().getUiAutomation()) != null);
+        MainActivity replacement = recreateDuringVpnPrompt(activity);
+        replacement.request("{\"op\":\"authorize-vpn\",\"request\":803}");
+        authorization(803, "denied");
+        consent(true);
+        try {
+            await("Ordinary consent did not start the VPN after recreation", () -> {
+                if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
+                return TunnelService.connected();
+            });
+            assertEquals(original, CoreBridge.config());
+            assertEquals(coreGeneration, CoreBridge.generation());
+        } finally {
+            TunnelService.stop(context);
+        }
+        awaitDirectRecovery(context.getSystemService(ConnectivityManager.class));
+        shell("appops set org.clashofrust.android ACTIVATE_VPN default");
+        waitForAppWindow();
+    }
+
+    private static void verifySavedProtectionCanRetry(Context context) throws Exception {
+        assertNotNull("Protection retry needs the Android consent dialog", VpnService.prepare(context));
+        File settings = new File(context.getFilesDir(), "client/settings.json");
+        byte[] original = java.nio.file.Files.readAllBytes(settings.toPath());
+        JSONObject saved = new JSONObject(new String(original, StandardCharsets.UTF_8));
+        saved.put("claude_protection", new JSONObject()
+            .put("profile_id", saved.getString("active_profile")).put("node", "CI-TUN-origin")
+            .put("route", "CI-saved-protection")
+            .put("previous", new JSONObject().put("mode", saved.getString("run_mode"))
+                .put("proxy_mode", "off").put("selectors", new JSONArray())));
+        byte[] protectedSettings = saved.toString().getBytes(StandardCharsets.UTF_8);
+        String originalConfig = CoreBridge.config();
+        long coreGeneration = CoreBridge.generation();
+        long vpnGeneration = TunnelService.generation();
+        long uiGeneration = MainActivity.diagnostics().getLong("ui_generation");
+        long previous = MainActivity.authorizationState().optLong("request");
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        java.lang.reflect.Field prompt = MainActivity.class.getDeclaredField("vpnPrompt");
+        prompt.setAccessible(true);
+        try {
+            java.nio.file.Files.write(settings.toPath(), protectedSettings);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::recreate);
+            long initial = awaitNewAuthorization(previous, "pending");
+            int[] beforeInitialDenial = new int[1];
+            await("The replacement Activity did not expose its notice state", () -> {
+                JSONObject ui = MainActivity.diagnostics();
+                if (!ui.optBoolean("live") || ui.optLong("ui_generation") <= uiGeneration) return false;
+                beforeInitialDenial[0] = ui.getInt("notice_revision");
+                return true;
+            });
+            consent(false);
+            awaitProtectionDenial(initial, beforeInitialDenial[0]);
+            assertArrayEquals(protectedSettings, java.nio.file.Files.readAllBytes(settings.toPath()));
+
+            dismissErrorDialogIfPresent(false);
+            previewTool(8);
+            MainActivity recovering = resumedActivity();
+            assertNotNull(recovering);
+            int beforeBusy = MainActivity.diagnostics().getInt("notice_revision");
+            setVpnPrompt(recovering, prompt, true);
+            long busy;
+            try {
+                previewTarget("retry-protection");
+                busy = awaitNewAuthorization(initial, "denied");
+                assertEquals(AppLanguage.current(context).getString(R.string.vpn_authorization_pending),
+                    MainActivity.authorizationState().getString("error"));
+                awaitProtectionDenial(busy, beforeBusy);
+            } finally {
+                setVpnPrompt(recovering, prompt, false);
+            }
+            assertArrayEquals(protectedSettings, java.nio.file.Files.readAllBytes(settings.toPath()));
+
+            int beforeRetry = MainActivity.diagnostics().getInt("notice_revision");
+            previewTarget("retry-protection");
+            long retried = awaitNewAuthorization(busy, "pending");
+            assertTrue("Retry reused the earlier authorization identity", retried < initial);
+            File sequence = new File(context.getFilesDir(), "client/vpn-authorization-sequence");
+            assertEquals(retried, Long.parseLong(new String(
+                java.nio.file.Files.readAllBytes(sequence.toPath()), StandardCharsets.UTF_8)));
+            for (long stale : new long[]{1, initial}) {
+                MainActivity.emit("vpn-authorized", new JSONObject().put("request", stale)
+                    .put("granted", true).put("error", ""));
+            }
+            consent(false);
+            awaitProtectionDenial(retried, beforeRetry);
+            assertArrayEquals(protectedSettings, java.nio.file.Files.readAllBytes(settings.toPath()));
+            assertFalse("Denied authorization connected the VPN", TunnelService.connected());
+            assertEquals(vpnGeneration, TunnelService.generation());
+            assertEquals(coreGeneration, CoreBridge.generation());
+            assertEquals(originalConfig, CoreBridge.config());
+        } finally {
+            java.nio.file.Files.write(settings.toPath(), original);
+            if ("pending".equals(MainActivity.authorizationState().optString("status"))) {
+                consent(false);
+            }
+            MainActivity recovering = resumedActivity();
+            if (recovering != null) {
+                long generation = MainActivity.diagnostics().optLong("ui_generation");
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(recovering::recreate);
+                await("Restored settings did not reopen without the protection fixture", () -> {
+                    JSONObject ui = MainActivity.diagnostics();
+                    return ui.optBoolean("live") && ui.optLong("ui_generation") > generation
+                        && ui.optBoolean("core_running") && !ui.optBoolean("protected");
+                });
+            }
+        }
+    }
+
     @Test public void basicSystemProxyAndTun() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        NativePresentationTest.verify(context);
         notificationShowsModeAndNodeWithOptionalSpeeds();
         heldResponseClassifiesTruncationAsTransportFailure();
-        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         persistNetworkProfile(context);
         assertTrue(context.getSharedPreferences("page-views", Context.MODE_PRIVATE).edit().clear().commit());
-        context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        startAfterInvalidSettings(context);
         await("Native UI did not start its core", CoreBridge::ready);
         await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
         waitForAppWindow();
@@ -2438,6 +2877,11 @@ public class ProxyTunTest {
         previewNavigate(0);
         String raw = CoreBridge.config();
         assertNetworkProfile(raw);
+        int mixed = Integer.parseInt(value(raw, "mixed-port"));
+        verifyConnectionPagination(mixed);
+        verifySavedProtectionCanRetry(context);
+        waitForAppWindow();
+        verifyVpnConsentRecreation(context);
         MainActivity activity = resumedActivity();
         assertNotNull(activity);
         assertNotNull("Test must start without pre-granted VPN consent", VpnService.prepare(context));
@@ -2448,7 +2892,6 @@ public class ProxyTunTest {
         assertNull(VpnService.prepare(context));
         String secret = value(raw, "secret");
         String controller = value(raw, "external-controller");
-        int mixed = Integer.parseInt(value(raw, "mixed-port"));
         java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", mixed));
         assertEquals("cor-android-network-ok", read(URI.create("http://10.0.2.2:18081/probe").toURL(), proxy, null));
         noTunRoute();
@@ -2479,6 +2922,8 @@ public class ProxyTunTest {
                 assertEquals("MTU diagnostics must respect the Android API version",
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q, networks.getJSONObject(index).has("mtu"));
             }
+            recoverWithRunningVpn(context);
+            tunResolvesAndCarriesHttp();
         } finally {
             TunnelService.stop(context);
         }

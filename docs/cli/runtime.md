@@ -61,7 +61,7 @@ Linux 服务器可直接安装现有 DEB 并在 SSH 中使用 `cor`，无需启�
 | 命令 | 作用 |
 | --- | --- |
 | `connection list [--watch --interval 1]` | 连接域名、线路、流量、双向速度 |
-| `connection show ID` | 完整字段；目标 IP 缺失时按需经内核/加密代理解析补充 |
+| `connection show ID` | 完整字段。目标 IP 缺失时按需通过[内核 DNS](../claude-protection.md#dns-与-tailscale)补查 |
 | `connection close ID` | 关闭一条连接 |
 | `connection close --all --yes` | 关闭全部连接 |
 | `logs [--follow --level warning --filter TEXT --limit 100]` | 不做终端宽度截断，按等级/文本过滤，可实时跟随 |

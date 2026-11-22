@@ -425,7 +425,7 @@ fn guard_summary(value: &str) -> String {
         "异常连接关闭失败，请检查内核状态。" => {
             "Failed to close an unexpected connection; check the core."
         }
-        _ => value,
+        _ => return crate::error_message::localize(value, Language::English).into_owned(),
     }
     .to_owned()
 }

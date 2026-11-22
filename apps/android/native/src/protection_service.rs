@@ -1,4 +1,5 @@
 //! Process-scoped enforcement, independent of the Slint Activity's lifetime.
+use crate::protection_service_state::acknowledge_stopped_pause;
 use anyhow::{Context, Result};
 use clash_mobile_runtime::{core, native_response};
 use jni::{
@@ -127,11 +128,7 @@ fn configure(env: &mut Env<'_>, class: JClass<'_>, value: JString<'_>) -> Result
     let mut commands = COMMANDS
         .lock()
         .map_err(|_| anyhow::anyhow!("保护服务锁不可用"))?;
-    if !configuration.enabled
-        && commands
-            .as_ref()
-            .is_none_or(mpsc::UnboundedSender::is_closed)
-    {
+    if acknowledge_stopped_pause(configuration.enabled, commands.as_ref(), &STATE)? {
         return Ok(());
     }
     if commands
@@ -146,7 +143,7 @@ fn configure(env: &mut Env<'_>, class: JClass<'_>, value: JString<'_>) -> Result
         std::thread::Builder::new().name("claude-protection".into()).spawn(move || {
             let result = (|| -> Result<()> {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-                runtime.block_on(async move {
+                runtime.block_on(async {
                     let mut current = None;
                     let mut guard: Option<core::claude_check::guard::Guard> = None;
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));

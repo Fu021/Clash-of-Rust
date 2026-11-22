@@ -61,6 +61,251 @@ fn help_uses_the_saved_language_and_accepts_a_read_only_override() {
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
 }
 
+#[tokio::test]
+async fn dns_uses_only_the_controller_and_preserves_machine_output() {
+    use clash_client_core::config::atomic_write;
+    use clash_client_runtime::control::PROTOCOL;
+    use serde_json::{Value, json};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let controller = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mixed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let token = "a".repeat(64);
+    let endpoint = json!({
+        "protocol": PROTOCOL, "port": backend.local_addr().unwrap().port(),
+        "pid": std::process::id(), "owner": "daemon", "token": token,
+    });
+    atomic_write(
+        &root.path().join("control.json"),
+        &serde_json::to_vec(&endpoint).unwrap(),
+    )
+    .unwrap();
+    let meta = json!({
+        "profiles": [], "running": true, "version": "test", "owner": "daemon", "executable": "",
+        "geo": {"version": "test", "updated": 0, "files": []},
+        "settings": {
+            "controller_port": controller.local_addr().unwrap().port(),
+            "mixed_port": mixed.local_addr().unwrap().port(),
+        },
+    });
+    let backend = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = backend.accept().await.unwrap();
+            let size = stream.read_u32().await.unwrap();
+            let mut request = vec![0; size as usize];
+            stream.read_exact(&mut request).await.unwrap();
+            let request: Value = serde_json::from_slice(&request).unwrap();
+            assert!(request["token"] == token);
+            let result = match request["operation"]["command"].as_str() {
+                Some("meta") => &meta,
+                Some("start") => &Value::Null,
+                _ => panic!("unexpected backend command"),
+            };
+            let response = serde_json::to_vec(&json!({"result": result})).unwrap();
+            stream.write_u32(response.len() as u32).await.unwrap();
+            stream.write_all(&response).await.unwrap();
+        }
+    });
+    let controller = tokio::spawn(async move {
+        for index in 0..4 {
+            let (mut stream, _) = controller.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let size = stream.read(&mut request).await.unwrap();
+            assert!(request[..size].starts_with(b"GET /dns/query?name=fixture.test&type="));
+            let (status, body) = if index < 2 {
+                ("503 Service Unavailable", "")
+            } else {
+                (
+                    "200 OK",
+                    r#"{"Status":0,"Answer":[{"type":1,"data":"203.0.113.5"}]}"#,
+                )
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    for expected_success in [false, true] {
+        let mut command = tokio::process::Command::from(cor());
+        command
+            .args(["--json", "dns", "fixture.test", "--timeout=2", "--data-dir"])
+            .arg(root.path())
+            .kill_on_drop(true);
+        let output = tokio::select! {
+            output = tokio::time::timeout(std::time::Duration::from_secs(5), command.output()) => output.unwrap().unwrap(),
+            _ = mixed.accept() => panic!("cor dns contacted the mixed port"),
+        };
+        assert_eq!(output.status.success(), expected_success);
+        if expected_success {
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                report,
+                json!({
+                    "schema": 1,
+                    "command": "dns",
+                    "data": {"source": "core/proxy", "answers": ["203.0.113.5"]},
+                })
+            );
+        } else {
+            assert!(output.stdout.is_empty());
+        }
+    }
+    controller.await.unwrap();
+    backend.abort();
+}
+
+#[tokio::test]
+async fn profile_list_localizes_human_output_and_preserves_machine_output() {
+    use clash_client_core::config::atomic_write;
+    use clash_client_runtime::control::PROTOCOL;
+    use serde_json::{Value, json};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let token = "a".repeat(64);
+    let endpoint = json!({
+        "protocol": PROTOCOL, "port": port, "pid": std::process::id(),
+        "owner": "daemon", "token": token,
+    });
+    atomic_write(
+        &root.path().join("control.json"),
+        &serde_json::to_vec(&endpoint).unwrap(),
+    )
+    .unwrap();
+    let rows = [
+        ("builtin", "默认直连", "/resources/default.yaml", true),
+        ("imported", "默认直连", "/imports/default.yaml", false),
+        ("custom", "旅行节点", "/imports/travel.yaml", false),
+        ("renamed", "自定义直连", "/resources/default.yaml", true),
+    ];
+    let expected_rows: Vec<_> = rows
+        .iter()
+        .map(|(id, name, source, _)| {
+            json!({"id": id, "name": name, "source": source, "active": *id == "builtin",
+                "updated": 0, "usage": null})
+        })
+        .collect();
+    let profiles: Vec<_> = expected_rows
+        .iter()
+        .zip(rows)
+        .map(|(row, (_, _, _, builtin))| {
+            let mut profile = row.clone();
+            profile["builtin"] = json!(builtin);
+            profile
+        })
+        .collect();
+    let reply = serde_json::to_vec(&json!({"result": {
+        "profiles": profiles, "settings": {"active_profile": "builtin"}, "running": false,
+        "geo": {"version": "test", "updated": 0, "files": []},
+        "version": "test", "owner": "daemon", "executable": ""
+    }}))
+    .unwrap();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let size = stream.read_u32().await.unwrap();
+            let mut request = vec![0; size as usize];
+            stream.read_exact(&mut request).await.unwrap();
+            let request: Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(request["token"], token);
+            assert_eq!(request["operation"]["command"], "meta");
+            stream.write_u32(reply.len() as u32).await.unwrap();
+            stream.write_all(&reply).await.unwrap();
+        }
+    });
+    let list = |options: &[&str]| {
+        let mut command = cor();
+        command
+            .args(["profile", "list", "--timeout=2", "--data-dir"])
+            .arg(root.path())
+            .args(options);
+        async move {
+            let result = tokio::process::Command::from(command)
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            String::from_utf8(result.stdout).unwrap()
+        }
+    };
+    let export = root.path().join("profiles-export.json");
+    let export = export.to_str().unwrap();
+    let english = list(&["--lang=en"]).await;
+    assert!(
+        english.starts_with("[Current] Default direct\n"),
+        "{english}"
+    );
+    for name in ["默认直连", "旅行节点", "自定义直连"] {
+        assert!(english.lines().any(|line| line == name), "{english}");
+    }
+    let chinese = list(&["--lang=zh-CN"]).await;
+    assert!(chinese.starts_with("[当前] 默认直连\n"), "{chinese}");
+    let expected = json!({"schema": 1, "command": "profile list", "data": expected_rows});
+    for format in ["--json", "--jsonl"] {
+        let text = list(&["--lang=en", format]).await;
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+    }
+    assert!(list(&["--lang=en", "--output", export]).await.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(export).unwrap()).unwrap(),
+        expected
+    );
+
+    let by_display_name = list(&["--lang=en", "--filter=dEfAuLt DiReCt"]).await;
+    assert!(by_display_name.contains("ID: builtin"), "{by_display_name}");
+    assert!(
+        !by_display_name.contains("ID: imported"),
+        "{by_display_name}"
+    );
+    let by_original_name = list(&["--lang=en", "--filter=默认直连"]).await;
+    assert!(
+        by_original_name.contains("ID: builtin"),
+        "{by_original_name}"
+    );
+    assert!(
+        by_original_name.contains("ID: imported"),
+        "{by_original_name}"
+    );
+    let filtered = list(&["--lang=en", "--json", "--filter=默认直连"]).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&filtered).unwrap()["data"],
+        json!(expected_rows[..2])
+    );
+    for format in ["--json", "--jsonl"] {
+        let text = list(&["--lang=en", format, "--filter=Default direct"]).await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["data"],
+            json!([])
+        );
+    }
+    assert!(
+        list(&["--lang=en", "--output", export, "--filter=Default direct"])
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(export).unwrap()).unwrap()["data"],
+        json!([])
+    );
+    server.abort();
+}
+
 #[test]
 fn usage_errors_follow_the_selected_language_without_initializing_the_backend() {
     let root = tempfile::tempdir().unwrap();
@@ -398,6 +643,110 @@ fn update_status_localizes_known_results_without_changing_saved_or_json_messages
         assert_eq!(std::fs::read(&path).unwrap(), saved);
         assert!(!root.path().join("control.json").exists());
     }
+}
+
+#[test]
+fn network_check_localizes_offline_output_and_preserves_json() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("unused");
+    let check = |options: &[&str]| {
+        let result = cor()
+            .args(["network", "check", "example.test", "--data-dir"])
+            .arg(&data)
+            .args(options)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+
+    let english = check(&["--lang=en"]);
+    assert_eq!(
+        english.lines().collect::<Vec<_>>(),
+        [
+            "Target: https://example.test",
+            "System DNS: System resolver not queried while protection is active or unknown",
+            "Core DNS: Core is not running or its control interface is unavailable",
+            "Local proxy: Core is not running",
+            "HTTPS: Core is not running; request not sent",
+            "HTTP: Core is not running; request not sent",
+            "Protocol: Not checked",
+            "Route: No test connection established",
+        ]
+    );
+    assert!(check(&["--lang=zh-CN"]).contains("实际线路：未建立检测连接"));
+
+    let json = check(&["--lang=en", "--json"]);
+    assert_eq!(json, check(&["--lang=zh-CN", "--json"]));
+    let report: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(report["schema"], 1);
+    assert_eq!(report["command"], "network check");
+    for protocol in ["https", "http"] {
+        assert_eq!(
+            report["data"][protocol],
+            serde_json::json!({"success": null, "detail": "内核未运行，未发起请求"})
+        );
+    }
+    assert_eq!(
+        report["data"]["route"],
+        serde_json::json!({"success": null, "detail": "未建立检测连接"})
+    );
+    assert!(!data.exists());
+}
+
+#[test]
+fn invalid_network_target_localizes_human_output_and_preserves_machine_output() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("unused");
+    let check = |tool: &str, options: &[&str]| {
+        let result = cor()
+            .args(["network", tool, "ftp://example.test", "--data-dir"])
+            .arg(&data)
+            .args(options)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        result
+    };
+    let english = check("http", &["--lang=en"]);
+    assert!(
+        String::from_utf8(english.stdout)
+            .unwrap()
+            .starts_with("Target: Not checked\n")
+    );
+    let chinese = check("http", &["--lang=zh-CN"]);
+    assert!(
+        String::from_utf8(chinese.stdout)
+            .unwrap()
+            .starts_with("目标：未检查\n")
+    );
+    let raw = |format: &str| {
+        let result = check("http", &["--lang=en", format]);
+        let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(value["data"]["target"], "未检查");
+        assert_eq!(value["data"]["entries"][0]["code"], "invalid_target");
+    };
+    raw("--json");
+    raw("--jsonl");
+    let export = root.path().join("report.json");
+    let result = check("http", &["--lang=en", "--output", export.to_str().unwrap()]);
+    assert!(result.stdout.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(export).unwrap()).unwrap();
+    assert_eq!(value["data"]["target"], "未检查");
+    assert_eq!(value["data"]["entries"][0]["code"], "invalid_target");
+
+    let invalid = check("check", &["--lang=en"]);
+    assert!(invalid.stdout.is_empty());
+    let error = String::from_utf8(invalid.stderr).unwrap();
+    assert!(
+        error.starts_with("cor: Enter a domain or HTTP/HTTPS URL: Enter an HTTP/HTTPS URL\n"),
+        "{error}"
+    );
+    assert!(!data.exists());
 }
 
 #[test]

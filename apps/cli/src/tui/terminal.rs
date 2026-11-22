@@ -1,5 +1,6 @@
 use super::render::{Line, Tone};
 use anyhow::{Result, ensure};
+use clash_client_core::config::Language;
 use std::io::Write;
 
 #[cfg(unix)]
@@ -16,13 +17,17 @@ pub(super) struct Terminal {
 }
 
 impl Terminal {
-    pub fn enter(color: bool) -> Result<Self> {
+    pub fn enter(color: bool, language: Language) -> Result<Self> {
         ensure!(
             std::env::var("TERM").as_deref() != Ok("dumb"),
-            "当前终端不支持 TUI；请使用 cor status"
+            "{}",
+            language.text(
+                "当前终端不支持 TUI；请使用 cor status",
+                "This terminal does not support the TUI; use cor status",
+            )
         );
         let terminal = Self {
-            mode: platform::Mode::enter()?,
+            mode: platform::Mode::enter(language)?,
             previous: Vec::new(),
             color: color && std::env::var_os("NO_COLOR").is_none(),
         };
@@ -32,12 +37,12 @@ impl Terminal {
         Ok(terminal)
     }
 
-    pub fn size(&self) -> Result<(usize, usize)> {
-        self.mode.size()
+    pub fn size(&self, language: Language) -> Result<(usize, usize)> {
+        self.mode.size(language)
     }
 
-    pub fn read(&mut self) -> Result<Vec<u8>> {
-        self.mode.read()
+    pub fn read(&mut self, language: Language) -> Result<Vec<u8>> {
+        self.mode.read(language)
     }
 
     pub fn draw(&mut self, frame: &[Line]) -> Result<()> {

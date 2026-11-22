@@ -766,6 +766,15 @@ msgstr "Saving subscription…"
 msgid "复制详情"
 msgstr "Copy details"
 
+msgid "正在加载连接详情…"
+msgstr "Loading connection details…"
+
+msgid "此连接已结束，详情不再保留。"
+msgstr "This connection has ended. Its details are no longer available."
+
+msgid "连接详情暂不可用。"
+msgstr "Connection details are temporarily unavailable."
+
 msgid "复制全文"
 msgstr "Copy all"
 

@@ -1,6 +1,7 @@
 """Verify an installed Linux client's update against a published release."""
 import base64
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,6 @@ import platform
 import re
 import secrets
 import selectors
-import signal
 import subprocess
 import sys
 import tempfile
@@ -23,11 +23,22 @@ from workflow_artifacts import fetch_package_inputs, release_module
 APP = Path('/opt/clash-of-rust')
 REPORT = ROOT/'target/linux-report/published-update.json'
 GUI_REPORT = REPORT.with_name('published-gui-update.json')
+INSTALL_ENV = ('HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE',
+               'LC_MESSAGES', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+               'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'GITHUB_ACTIONS',
+               'COR_LINUX_GUEST', 'COR_LINUX_APT_CACHE', 'RUNNER_ENVIRONMENT')
 
 
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def version_precedence(version):
+    base, separator, prerelease = validate_version(version).partition('-')
+    identifiers = tuple((0, len(part), part) if part.isdigit() else (1, 0, part)
+                        for part in prerelease.split('.')) if separator else ()
+    return tuple(map(int, base.split('.'))), not separator, identifiers
 
 
 def previous_version(client, commit):
@@ -93,7 +104,8 @@ def prepare(client, old_run_id, tag, package_format, arch, directory):
             'Previous fixture must come from a successful push CI')
     version = previous_version(client, commit)
     published = release_asset(client, tag, package_format, arch)
-    require(version != published['version'], 'Previous and published versions must differ')
+    require(version_precedence(published['version']) > version_precedence(version),
+            'Published version must be newer than the previous version')
     directory.mkdir(parents=True, exist_ok=False)
     source = directory/'source'
     fetch_package_inputs(client, old_run_id, arch, source, commit, old_run_id,
@@ -130,17 +142,133 @@ def fixture_package(directory, fixture):
     return package
 
 
-def invoke(command, *, timeout=120, check=True):
-    result = subprocess.run(list(map(str, command)), capture_output=True, text=True,
-                            stdin=subprocess.DEVNULL, timeout=timeout)
+def installation_command(command, unit, description, timeout):
+    return ['sudo', '-n', '/usr/bin/systemd-run', '--scope', '--quiet', '--unit='+unit,
+            '--description='+description,
+            '--property=KillMode=control-group', '--property=TimeoutStopSec=5s',
+            f'--property=RuntimeMaxSec={timeout+120}s', '--',
+            '/usr/bin/setpriv', '--reuid', str(os.getuid()), '--regid', str(os.getgid()), '--init-groups',
+            sys.executable, '-I', '-B', '-c',
+            'import json, os, sys\n'
+            'from pathlib import Path\n'
+            'with open("/proc/self/cgroup") as groups:\n'
+            '    memberships = [line.rstrip().split(":", 2) for line in groups]\n'
+            'for _, controllers, group in memberships:\n'
+            '    if controllers not in ("", "name=systemd") or not group.endswith("/" + sys.argv[1]): continue\n'
+            '    for mount in ("", "unified", "systemd"):\n'
+            '        directory = Path("/sys/fs/cgroup") / mount / group.lstrip("/")\n'
+            '        procs = directory / "cgroup.procs"\n'
+            '        if procs.is_file() and str(os.getpid()) in procs.read_text().splitlines():\n'
+            '            print(directory, flush=True)\n'
+            '            break\n'
+            '    else: continue\n'
+            '    break\n'
+            'else: sys.exit("Missing installation cgroup")\n'
+            'payload = sys.stdin.read()\n'
+            'if not payload: sys.exit(125)\n'
+            'with open(os.devnull, "rb") as null: os.dup2(null.fileno(), 0)\n'
+            'os.execvpe(sys.argv[2], sys.argv[2:], json.loads(payload))',
+            unit, *command]
+
+
+def confirm_installation_scope(child, unit, checkpoint):
+    with selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic()+15
+        while True:
+            checkpoint()
+            if selector.select(.2):
+                ready = os.read(child.stdout.fileno(), 4096).decode()
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Installation command did not enter its dedicated cgroup')
+    cgroup = Path(ready.rstrip('\n'))
+    require(ready.count('\n') == 1 and ready.endswith('\n') and cgroup.name == unit
+            and cgroup.is_relative_to('/sys/fs/cgroup') and '..' not in cgroup.parts,
+            'Installation command did not enter its dedicated cgroup')
+    return cgroup
+
+
+def stop_installation_scope(unit, description, cgroup):
+    from linux_gui import stop_fixture_unit
+
+    stop_fixture_unit(unit, Description=description)
+    if cgroup is not None:
+        try:
+            events = (cgroup/'cgroup.events').read_text().splitlines()
+        except FileNotFoundError:
+            require(not any(path.read_text().strip() for path in cgroup.rglob('cgroup.procs')),
+                    'Installation cgroup still contains processes')
+        else:
+            require('populated 0' in events, 'Installation cgroup still contains processes')
+
+
+def invoke(command, *, timeout=120, check=True, start_new_session=False, check_interrupted=None,
+           installation_scope=None):
+    command = list(map(str, command))
+    if check_interrupted is None and installation_scope is None:
+        result = subprocess.run(command, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                timeout=timeout, start_new_session=start_new_session)
+    else:
+        from linux_gui import FixtureProcess, cleanup_steps, stop_process_group
+
+        checkpoint = check_interrupted or (lambda: None)
+        checkpoint()
+        with ExitStack() as streams:
+            launch = command
+            stdin = subprocess.DEVNULL
+            if installation_scope is not None:
+                unit = 'cor-install-' + secrets.token_hex(16) + '.scope'
+                description = 'Clash of Rust installation fixture ' + secrets.token_hex(16)
+                launch = installation_command(command, unit, description, timeout)
+                stdin = subprocess.PIPE
+            child = FixtureProcess(launch, stdin=stdin, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, start_new_session=True)
+            streams.callback(child.stdout.close)
+            streams.callback(child.stderr.close)
+            payload = None
+            try:
+                if installation_scope is not None:
+                    streams.callback(child.stdin.close)
+                    cgroup = None
+                    installation_scope.callback(
+                        cleanup_steps, ('stop installation cgroup',
+                                        lambda: stop_installation_scope(unit, description, cgroup)))
+                    cgroup = confirm_installation_scope(child, unit, checkpoint)
+                    checkpoint()
+                    payload = json.dumps({key: os.environ[key] for key in INSTALL_ENV if key in os.environ})
+                deadline = time.monotonic() + timeout
+                while True:
+                    remaining = deadline - time.monotonic()
+                    try:
+                        stdout, stderr = child.communicate(input=payload, timeout=max(0, min(.25, remaining)))
+                        break
+                    except subprocess.TimeoutExpired:
+                        payload = None
+                        checkpoint()
+                        if time.monotonic() >= deadline:
+                            raise subprocess.TimeoutExpired(command, timeout) from None
+                checkpoint()
+                result = subprocess.CompletedProcess(command, child.poll(), stdout, stderr)
+            except BaseException:
+                if installation_scope is not None:
+                    cleanup_steps(('close isolated installation input', child.stdin.close),
+                                  ('stop isolated installation', installation_scope.close))
+                cleanup_steps(('reap update command process group', lambda: stop_process_group(child)))
+                raise
+            if installation_scope is None:
+                cleanup_steps(('reap update command process group', lambda: stop_process_group(child)))
+            else:
+                child.reap()
     if check and result.returncode:
         raise RuntimeError(f'Command failed ({result.returncode}): {(result.stdout + result.stderr)[-4000:]}')
     return result
 
 
-def cli(data, *arguments, timeout=120, check=True):
+def cli(data, *arguments, timeout=120, check=True, check_interrupted=None, installation_scope=None):
     result = invoke([APP/'cor', '--data-dir', data, '--resources', APP/'resources',
-                     '--json', *arguments], timeout=timeout, check=check)
+                     '--json', *arguments], timeout=timeout, check=check,
+                    check_interrupted=check_interrupted, installation_scope=installation_scope)
     if not check:
         return result
     return json.loads(result.stdout)['data']
@@ -153,18 +281,6 @@ def endpoint(data):
         return None
 
 
-def stop_fixture_daemon(data):
-    pid = endpoint(data)
-    if type(pid) is not int or pid <= 1:
-        return
-    try:
-        command = (Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\0')
-        if command and command[0] == os.fsencode(APP/'cor') and os.fsencode(data) in command:
-            os.kill(pid, signal.SIGTERM)
-    except OSError:
-        return
-
-
 def wait_for(probe, description, timeout=60):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -175,7 +291,20 @@ def wait_for(probe, description, timeout=60):
     raise TimeoutError(description)
 
 
-def install_previous(package_format, package):
+def run_installation(code, *arguments, check_interrupted):
+    with ExitStack() as scope:
+        invoke([sys.executable, '-I', '-B', '-c',
+                'import sys\nsys.path.insert(0, sys.argv.pop(1))\n'+code,
+                Path(__file__).resolve().parent, *arguments], timeout=1200,
+               check_interrupted=check_interrupted, installation_scope=scope)
+
+
+def install_previous(package_format, package, *, check_interrupted=None):
+    if check_interrupted is not None:
+        return run_installation(
+            'from pathlib import Path\nfrom linux_update_compatibility import install_previous\n'
+            'install_previous(sys.argv[1], Path(sys.argv[2]))',
+            package_format, package, check_interrupted=check_interrupted)
     if package_format == 'deb':
         from linux_apt import OPTIONS, install, privileged
         privileged([*OPTIONS, 'purge', '-y', 'clash-of-rust'], 300)
@@ -193,6 +322,13 @@ def install_previous(package_format, package):
 def installed_version(package_format):
     if package_format == 'deb':
         return invoke(['dpkg-query', '--show', '--showformat=${Version}', 'clash-of-rust']).stdout.strip()
+    if package_format == 'rpm':
+        name, epoch, version = invoke([
+            'rpm', '-q', '--qf', '%{NAME}\n%{EPOCHNUM}\n%{VERSION}-%{RELEASE}', 'clash-of-rust',
+        ], timeout=15).stdout.splitlines()
+        require(name == 'clash-of-rust' and epoch == '0',
+                'Installed RPM identity or epoch differs from the release packages')
+        return version
     from linux_native_guest import package_version
     return package_version()
 
@@ -201,6 +337,23 @@ def expected_version(package_format, version):
     if package_format == 'deb':
         return deb_version(version)
     return native_version(version, '~' if package_format == 'rpm' else 'pre.') + '-1'
+
+
+def verify_upgrade_order(fixture):
+    previous, published = (fixture[key]['version'] for key in ('previous', 'published'))
+    require(version_precedence(published) > version_precedence(previous),
+            'Published version must be newer than the previous version')
+    package_format = fixture['format']
+    old_native = expected_version(package_format, previous)
+    new_native = expected_version(package_format, published)
+    if package_format == 'deb':
+        require(invoke(['dpkg', '--compare-versions', old_native, 'lt', new_native], timeout=15,
+                       check=False).returncode == 0,
+                f'DEB package manager did not order {old_native} before {new_native}')
+    else:
+        from linux_native_guest import verify_upgrade_order as verify_native_upgrade_order
+
+        verify_native_upgrade_order(old_native, new_native)
 
 
 def gui_target(package_format, arch):
@@ -274,7 +427,7 @@ else:
     command = ['sudo', '-n', '/usr/bin/python3', '-I', '-c', worker]
     with tempfile.TemporaryFile(mode='w+b') as errors:
         child = subprocess.Popen([*command, package_format, marker], stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=errors)
+                                 stdout=subprocess.PIPE, stderr=errors, start_new_session=True)
         acquired = False
 
         def details():
@@ -302,73 +455,159 @@ else:
                 def remove_owned_lock():
                     if child.poll() is None:
                         raise RuntimeError('Package lock helper survived and may still own the native lock')
-                    invoke([*command, 'cleanup', marker], timeout=15)
+                    invoke([*command, 'cleanup', marker], timeout=15, start_new_session=True)
                 steps.append(('remove owned Arch database lock', remove_owned_lock))
             steps.append(('close package lock status pipe', child.stdout.close))
             cleanup_steps(*steps)
 
 
-def exercise_gui(fixture, old_package):
+def update_receipt(fixture):
+    return {'schema': 1, 'status': 'running', 'format': fixture['format'],
+            'previous': fixture['previous'], 'published': fixture['published'], 'checks': {}}
+
+
+def write_receipt(path, receipt):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    require(not path.is_symlink(), 'The update receipt path is a symbolic link')
+    with tempfile.TemporaryDirectory(prefix='.cor-update-receipt-', dir=path.parent) as directory:
+        staged = Path(directory)/path.name
+        write_json(staged, receipt)
+        staged.replace(path)
+
+
+def write_gui_receipt(receipt):
+    write_receipt(GUI_REPORT, receipt)
+
+
+def interrupt_receipts(identity, error):
+    from linux_gui import cleanup_steps, read_object
+
+    failure = {**identity, 'status': 'failed', 'failed_step': 'interrupted',
+               'error': type(error).__name__}
+
+    def record(path):
+        current = read_object(path) if not path.is_symlink() else {}
+        if current.get('exercise_id') == identity['exercise_id']:
+            write_receipt(path, {**current, **failure})
+
+    def record_desktop():
+        gui = read_object(GUI_REPORT) if not GUI_REPORT.is_symlink() else {}
+        name = gui.get('desktop_report')
+        if (gui.get('exercise_id') != identity['exercise_id'] or not isinstance(name, str)
+                or not re.fullmatch(r'desktop-update-[a-z0-9_]+', name)):
+            return
+        directory = GUI_REPORT.parent/name
+        path = directory/'gui.json'
+        if not directory.is_symlink() and not path.is_symlink():
+            desktop = read_object(path)
+            if all(desktop.get(key) == value for key, value in identity.items()):
+                write_receipt(path, {**desktop, **failure})
+
+    cleanup_steps(('invalidate terminal receipt', lambda: record(REPORT)),
+                  ('invalidate graphical receipt', lambda: record(GUI_REPORT)),
+                  ('invalidate desktop receipt', record_desktop))
+
+
+def verify_desktop_receipt(desktop, identity, package_format, digest, old_version, new_version):
+    require(isinstance(desktop, dict) and desktop.get('status') == 'passed'
+            and all(desktop.get(key) == value for key, value in identity.items()),
+            'No passing graphical update session report for this exercise')
+    checks = desktop['checks']
+    tool = {'deb': '/usr/bin/dpkg', 'pkg': '/usr/bin/pacman'}[package_format]
+    require(checks.get('version_visible_in_gui') is True, 'Published version was not visible in the GUI')
+    for phase, version, outcome in (('cancel', old_version, 'failed'), ('locked', old_version, 'failed'),
+                                    ('retry', new_version, 'succeeded')):
+        result = checks.get(phase, {})
+        require(result.get('outcome') == outcome and result.get('installed_native_version') == version
+                and result.get('download_sha256') == digest and result.get('graphical_pkexec') == tool
+                and all(result.get(key) is True for key in ('gui_usable', 'sealed_download',
+                        'native_package_complete', 'settings_preserved', 'subscription_preserved')),
+                f'Incomplete graphical update evidence for {phase}')
+    require(all(checks[phase].get('original_gui_owner_retained') is True
+                and checks[phase].get('core_still_stopped_after_failure') is True
+                for phase in ('cancel', 'locked'))
+            and checks['locked'].get('native_lock_conflict')
+            and checks['retry'].get('gui_reopened') is True
+            and checks['retry'].get('core_started_and_stopped_by_fixture_after_reopen') is True,
+            'Incomplete graphical installation failure or reopen evidence')
+    return checks
+
+
+def exercise_gui(fixture, old_package, *, check_interrupted=None, run_identity=None):
     from linux_gui import installed_tests, verify_installed_package
 
     require_disposable_update_runner()
     package_format = fixture['format']
     require(gui_target(package_format, fixture['arch']), 'No graphical update target on this runner')
     previous, published = fixture['previous'], fixture['published']
-    report = {'schema': 1, 'status': 'failed', 'format': package_format,
-              'previous': previous, 'published': published, 'checks': {}}
+    identity = run_identity or {'exercise_id': secrets.token_hex(16)}
+    report = {**update_receipt(fixture), **identity}
+    checkpoint = check_interrupted or (lambda: None)
+    step = 'prepare-desktop'
     try:
+        GUI_REPORT.parent.mkdir(parents=True, exist_ok=True)
+        desktop_report = Path(tempfile.mkdtemp(prefix='desktop-update-', dir=GUI_REPORT.parent))
+        report['desktop_report'] = desktop_report.name
+        write_gui_receipt(report)
+        checkpoint()
         if package_format == 'deb':
-            from linux_apt import install
-            install(['xvfb', 'xauth', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
-                     'policykit-1-gnome', 'fonts-noto-cjk', 'scrot', 'tesseract-ocr',
-                     'tesseract-ocr-chi-sim', 'tesseract-ocr-eng', 'strace'])
+            run_installation('from linux_apt import install\ninstall(sys.argv[1:])',
+                             'xvfb', 'xauth', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
+                             'policykit-1-gnome', 'fonts-noto-cjk', 'scrot', 'tesseract-ocr',
+                             'tesseract-ocr-chi-sim', 'tesseract-ocr-eng', 'python3-pil', 'strace',
+                             check_interrupted=checkpoint)
         else:
-            from linux_native_guest import install_dependencies
-            install_dependencies(['xorg-server-xvfb', 'xorg-xauth', 'xorg-xdpyinfo', 'xorg-xwininfo',
-                                  'xdotool', 'wmctrl', 'openbox', 'mate-polkit', 'noto-fonts-cjk',
-                                  'scrot', 'tesseract', 'tesseract-data-chi_sim', 'tesseract-data-eng', 'strace'])
+            run_installation('from linux_native_guest import install_dependencies\n'
+                             'install_dependencies(sys.argv[1:])',
+                             'xorg-server-xvfb', 'xorg-xauth', 'xorg-xdpyinfo', 'xorg-xwininfo',
+                             'xdotool', 'wmctrl', 'openbox', 'mate-polkit', 'noto-fonts-cjk',
+                             'scrot', 'tesseract', 'tesseract-data-chi_sim', 'tesseract-data-eng',
+                             'python-pillow', 'strace', check_interrupted=checkpoint)
+            checkpoint()
             if Path('/usr/lib/systemd/system/polkit-agent-helper.socket').is_file():
-                invoke(['sudo', '-n', 'systemctl', 'start', 'polkit-agent-helper.socket'])
-        install_previous(package_format, old_package)
+                invoke(['sudo', '-n', 'systemctl', 'start', 'polkit-agent-helper.socket'],
+                       check_interrupted=checkpoint)
+        checkpoint()
+        step = 'install-previous'
+        install_previous(package_format, old_package, check_interrupted=checkpoint)
+        checkpoint()
         old_version = expected_version(package_format, previous['version'])
+        new_version = expected_version(package_format, published['version'])
         verify_installed_package(package_format, old_version)
         report['checks']['previous_package_installed'] = True
+        step = 'verify-published-checksum'
         with tempfile.TemporaryDirectory(prefix='cor-gui-update-checksum-') as temporary:
             checksum = Path(temporary)/'package.sha256'
             download(published['checksum_url'], checksum, digest=published['checksum_sha256'])
             require(checksum.read_text(encoding='ascii').strip() == published['sha256'],
                     'The published checksum differs from the package digest')
         report['checks']['published_checksum_verified'] = True
+        step = 'desktop-session'
+        checkpoint()
         installed_tests(update_case={
+            **identity,
             'format': package_format, 'published': published, 'previous_version': previous['version'],
             'old_native_version': old_version,
-            'new_native_version': expected_version(package_format, published['version']),
-        }, package_lock=lambda: package_manager_lock(package_format))
-        desktop = json.loads((GUI_REPORT.parent/'desktop-update'/'gui.json').read_text())
-        checks = desktop.get('checks', {})
-        require(desktop.get('status') == 'passed'
-                and checks.get('version_visible_in_gui') is True
-                and checks.get('cancel', {}).get('outcome') == 'failed'
-                and checks.get('locked', {}).get('outcome') == 'failed'
-                and checks['locked'].get('native_lock_conflict')
-                and checks.get('retry', {}).get('outcome') == 'succeeded'
-                and checks['retry'].get('gui_reopened') is True,
-                'No passing graphical update session report')
-        report['checks'].update(checks)
-        verify_installed_package(package_format, expected_version(package_format, published['version']))
+            'new_native_version': new_version,
+        }, package_lock=lambda: package_manager_lock(package_format), update_report=desktop_report,
+            check_interrupted=check_interrupted)
+        checkpoint()
+        desktop = json.loads((desktop_report/'gui.json').read_text())
+        report['checks'].update(verify_desktop_receipt(
+            desktop, identity, package_format, published['sha256'], old_version, new_version))
+        step = 'verify-updated-package'
+        verify_installed_package(package_format, new_version)
+        checkpoint()
         report['status'] = 'passed'
     except BaseException as error:
-        report['error'] = f'{type(error).__name__}: {error}'
-        if getattr(error, '__notes__', None):
-            report['error_notes'] = error.__notes__
+        report.update(status='failed', failed_step=step, error=type(error).__name__)
         raise
     finally:
-        write_json(GUI_REPORT, report)
+        write_gui_receipt(report)
 
 
 @contextmanager
-def terminal_authorization():
+def terminal_authorization(*, check_interrupted=None):
     import pwd
     user = pwd.getpwuid(os.geteuid()).pw_name
     require(re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_.-]*\$?', user) is not None,
@@ -380,13 +619,14 @@ def terminal_authorization():
         source = directory/'sudoers'
         source.write_text(f'Defaults:{user} verifypw=never\n')
         source.chmod(0o644)
-        invoke(['sudo', '-n', 'visudo', '-cf', source])
-        invoke(['sudo', '-n', 'install', '-m', '0440', source, destination])
+        invoke(['sudo', '-n', 'visudo', '-cf', source], check_interrupted=check_interrupted)
         try:
-            invoke(['sudo', '-n', '-v'])
+            invoke(['sudo', '-n', 'install', '-m', '0440', source, destination],
+                   check_interrupted=check_interrupted)
+            invoke(['sudo', '-n', '-v'], check_interrupted=check_interrupted)
             yield
         finally:
-            invoke(['sudo', '-n', 'rm', '-f', '--', destination])
+            invoke(['sudo', '-n', 'rm', '-f', '--', destination], timeout=15, start_new_session=True)
 
 
 def require_disposable_update_runner():
@@ -396,19 +636,19 @@ def require_disposable_update_runner():
         raise RuntimeError('Published update tests require a disposable Actions runner or compatibility VM')
 
 
-def exercise_cli(directory):
+def exercise_cli(fixture, old_package, *, check_interrupted=None, run_identity=None):
+    from linux_gui import stop_child
+
     require_disposable_update_runner()
-    fixture = json.loads((directory/'fixture.json').read_text())
+    checkpoint = check_interrupted or (lambda: None)
     package_format = fixture['format']
-    require(fixture.get('schema') == 1 and fixture['arch'] == host_arch()
-            and package_format in ('deb', 'rpm', 'pkg'), 'Update fixture is incompatible')
-    old_package = fixture_package(directory, fixture)
     previous, published = fixture['previous'], fixture['published']
-    report = {'schema': 1, 'status': 'failed', 'format': package_format,
-              'previous': previous, 'published': published, 'checks': {}}
+    report = {**update_receipt(fixture), **(run_identity or {}), 'status': 'failed'}
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     try:
-        install_previous(package_format, old_package)
+        checkpoint()
+        install_previous(package_format, old_package, check_interrupted=checkpoint)
+        checkpoint()
         require(installed_version(package_format) == expected_version(package_format, previous['version']),
                 'The previous package was not installed')
         report['checks']['previous_package_installed'] = True
@@ -420,9 +660,10 @@ def exercise_cli(directory):
             require(checksum.read_text(encoding='ascii').strip() == published['sha256'],
                     'The published checksum differs from the package digest')
             report['checks']['published_checksum_verified'] = True
+            checkpoint()
             fixture_file = work/'fixture.yaml'
             fixture_file.write_text("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\n")
-            with (work/'daemon.log').open('w') as log:
+            with (work/'daemon.log').open('w') as log, ExitStack() as installation:
                 daemon = subprocess.Popen(
                     [APP/'cor', '--data-dir', data, '--resources', APP/'resources',
                      'run', '--no-core', '--quiet'],
@@ -438,7 +679,8 @@ def exercise_cli(directory):
                     profile = data/'profiles'/f'{profiles[0]["id"]}.yaml'
                     profile_digest = sha256(profile)
                     previous_settings = json.loads((data/'settings.json').read_text())
-                    available = cli(data, 'update', 'check', timeout=300)
+                    available = cli(data, 'update', 'check', timeout=300, check_interrupted=check_interrupted)
+                    checkpoint()
                     require(available.get('available') is True
                             and available.get('version') == published['version']
                             and available.get('preview') is published['prerelease'],
@@ -449,16 +691,19 @@ def exercise_cli(directory):
                         manager = 'dnf' if distro == 'fedora' else 'zypper'
                         require(available.get('package') is None and available.get('package_manager') == manager,
                                 'RPM update did not report the expected package manager')
-                        refused = cli(data, 'update', 'install', '--yes', check=False, timeout=300)
+                        refused = cli(data, 'update', 'install', '--yes', check=False, timeout=300,
+                                      check_interrupted=check_interrupted)
                         require(refused.returncode != 0 and manager in refused.stdout + refused.stderr,
                                 'RPM installation did not direct the user to its package manager')
                         report['checks']['package_manager_hint'] = True
                         candidate = work/published['package']
                         download(published['url'], candidate, digest=published['sha256'])
-                        from linux_native_guest import install_package
-                        install_package(candidate)
-                        os.kill(original, signal.SIGTERM)
-                        daemon.wait(timeout=30)
+                        checkpoint()
+                        run_installation('from pathlib import Path\nfrom linux_native_guest import install_package\n'
+                                         'install_package(Path(sys.argv[1]))', candidate,
+                                         check_interrupted=checkpoint)
+                        require(daemon.pid == original, 'Endpoint did not belong to the fixture backend')
+                        stop_child(daemon)
                         daemon = subprocess.Popen(
                             [APP/'cor', '--data-dir', data, '--resources', APP/'resources',
                              'run', '--no-core', '--quiet'],
@@ -472,14 +717,19 @@ def exercise_cli(directory):
                                 and available.get('package_manager') is None,
                                 'The client selected an unexpected update package')
                         downloaded = work/published['package']
-                        result = cli(data, 'update', 'download', '--output', downloaded, timeout=600)
+                        result = cli(data, 'update', 'download', '--output', downloaded, timeout=600,
+                                     check_interrupted=check_interrupted)
                         require(result.get('sha256') == published['sha256']
                                 and sha256(downloaded) == published['sha256'],
                                 'The downloaded update differs from the published package')
                         report['checks']['published_download_verified'] = True
-                        authorization = terminal_authorization() if package_format == 'deb' else nullcontext()
+                        checkpoint()
+                        authorization = (terminal_authorization(check_interrupted=checkpoint)
+                                         if package_format == 'deb' else nullcontext())
                         with authorization:
-                            cli(data, 'update', 'install', '--yes', '--no-start', timeout=900)
+                            cli(data, 'update', 'install', '--yes', '--no-start', timeout=900,
+                                check_interrupted=checkpoint, installation_scope=installation)
+                        checkpoint()
                         status = cli(data, 'update', 'status')
                         require(status.get('state') == 'succeeded' and status.get('error') is False,
                                 'The application did not report a successful installation')
@@ -504,30 +754,59 @@ def exercise_cli(directory):
                     require(status['version'] == published['version'], 'The backend did not run the updated version')
                     require(status['running'] is False, 'The update started the stopped core')
                     report['checks']['version_and_user_data_preserved'] = True
-                    report['checks']['stopped_core_preserved'] = True
+                    stopped_check = ('fixture_restarted_backend_without_core' if package_format == 'rpm'
+                                     else 'stopped_core_preserved')
+                    report['checks'][stopped_check] = True
                 finally:
-                    stop_fixture_daemon(data)
-                    if daemon.poll() is None:
-                        daemon.terminate()
-                    try:
-                        daemon.wait(timeout=30)
-                    except subprocess.TimeoutExpired:
-                        daemon.kill()
-                        daemon.wait(timeout=10)
+                    stop_child(daemon)
+        checkpoint()
         report['status'] = 'passed'
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
         report['error'] = f'{type(error).__name__}: {error}'
         raise
     finally:
-        write_json(REPORT, report)
-
-    return fixture, old_package
+        write_receipt(REPORT, report)
 
 
 def exercise(directory):
-    fixture, old_package = exercise_cli(directory)
-    if gui_target(fixture['format'], fixture['arch']):
-        exercise_gui(fixture, old_package)
+    from linux_gui import fixture_signals
+
+    require_disposable_update_runner()
+    identity = {'exercise_id': secrets.token_hex(16)}
+    with fixture_signals(lambda error: interrupt_receipts(identity, error)) as check_interrupted:
+        receipt = {'schema': 1, 'status': 'running', 'checks': {}, **identity}
+        write_gui_receipt(receipt)
+        write_receipt(REPORT, receipt)
+        step = 'fixture'
+        try:
+            raw = (directory/'fixture.json').read_bytes()
+            identity['fixture_sha256'] = hashlib.sha256(raw).hexdigest()
+            fixture = json.loads(raw)
+            require(isinstance(fixture, dict) and fixture.get('schema') == 1
+                    and fixture['arch'] == host_arch() and fixture['format'] in ('deb', 'rpm', 'pkg'),
+                    'Update fixture is incompatible')
+            report_base = {**update_receipt(fixture), **identity}
+            graphical = gui_target(fixture['format'], fixture['arch'])
+            check_interrupted()
+            old_package = fixture_package(directory, fixture)
+            receipt = report_base
+            verify_upgrade_order(fixture)
+            check_interrupted()
+            write_gui_receipt(receipt)
+            step = 'terminal-update'
+            exercise_cli(fixture, old_package, check_interrupted=check_interrupted, run_identity=identity)
+            check_interrupted()
+        except BaseException as error:
+            receipt = {**receipt, **identity, 'status': 'failed', 'failed_step': step,
+                       'error': type(error).__name__}
+            write_gui_receipt(receipt)
+            if step == 'fixture':
+                write_receipt(REPORT, receipt)
+            raise
+        if graphical:
+            exercise_gui(fixture, old_package, check_interrupted=check_interrupted, run_identity=identity)
+        else:
+            write_gui_receipt({**receipt, 'status': 'skipped'})
 
 
 if __name__ == '__main__':

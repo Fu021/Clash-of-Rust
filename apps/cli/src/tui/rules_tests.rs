@@ -4,7 +4,10 @@ use crate::tui::{
     model::{Action, Page, State, demo_poll},
     render, rules,
 };
-use clash_client_core::rule_manager::{self, CustomRule, Document, ProfileRules};
+use clash_client_core::{
+    config::Language,
+    rule_manager::{self, CustomRule, Document, ProfileRules},
+};
 use clash_client_runtime::control::Command;
 use std::{sync::Arc, time::Instant};
 
@@ -89,8 +92,6 @@ fn rule_sources_have_discoverable_actions_and_subscription_rows_only_move() {
 
 #[test]
 fn english_rule_actions_and_search_keep_stable_rule_ids() {
-    use clash_client_core::config::Language;
-
     let mut state = browser();
     state.language = Language::English;
     let content = text(&state, 80, 24);
@@ -128,6 +129,22 @@ fn english_rule_actions_and_search_keep_stable_rule_ids() {
             .1
             .contains("rule:")
     );
+}
+
+#[test]
+fn rule_warning_follows_language_without_modifying_the_original() {
+    let mut state = browser();
+    let raw = "MATCH 之后有 1 条规则不会被匹配，请检查顺序。";
+    state.rules.as_mut().unwrap().warnings = vec![raw.into()];
+    state.language = Language::English;
+    let english = text(&state, 120, 24);
+    assert!(
+        english.contains("Rules after MATCH will never be evaluated (1 affected)."),
+        "{english}"
+    );
+    assert_eq!(state.rules.as_ref().unwrap().warnings, [raw]);
+    state.language = Language::SimplifiedChinese;
+    assert!(text(&state, 120, 24).contains(raw));
 }
 
 #[test]
@@ -185,22 +202,47 @@ fn rule_additions_use_the_shared_validator_and_atomic_revision_without_modifying
 }
 
 #[test]
-fn invalid_and_duplicate_rules_preserve_input_and_do_not_create_partial_changes() {
-    for raw in [
-        "INVALID",
-        "DOMAIN,custom.test,DIRECT",
-        "DOMAIN,original.test,DIRECT",
+fn invalid_and_duplicate_rules_display_localized_errors_and_preserve_input() {
+    for (raw, chinese, english) in [
+        (
+            "DOMAIN,,节点 東京；候选",
+            "规则内容不能为空",
+            "Rule content cannot be empty",
+        ),
+        (
+            "DOMAIN,custom.test,DIRECT",
+            "已有相同的启用规则，请修改原规则或调整顺序",
+            "An identical rule is already enabled; edit it or change its order",
+        ),
+        (
+            "DOMAIN,original.test,DIRECT",
+            "已有相同的启用规则，请修改原规则或调整顺序",
+            "An identical rule is already enabled; edit it or change its order",
+        ),
     ] {
-        let mut state = browser();
-        state.selected = 1;
-        state.key(Key::Enter);
-        state.key(Key::Paste(raw.into()));
-        state.key(Key::Enter);
-        let browser = state.rules.as_ref().unwrap();
-        assert!(browser.pending.is_none(), "{raw}");
-        assert_eq!(browser.input.as_ref().unwrap().raw, raw);
-        assert_eq!(browser.saved.custom.len(), 1);
-        assert!(state.message.is_some());
+        for language in [Language::English, Language::SimplifiedChinese] {
+            let mut state = browser();
+            state.language = language;
+            let saved = Arc::clone(&state.rules.as_ref().unwrap().saved);
+            state.selected = 1;
+            state.key(Key::Enter);
+            state.key(Key::Paste(raw.into()));
+            assert!(matches!(state.key(Key::Enter), Action::None));
+            let browser = state.rules.as_ref().unwrap();
+            assert!(browser.pending.is_none(), "{raw}");
+            assert_eq!(browser.input.as_ref().unwrap().raw, raw);
+            assert_eq!(browser.saved, saved);
+            assert_eq!(
+                state.poll.as_ref().unwrap().meta.settings.rule_profiles["profile"],
+                saved
+            );
+            let frame = text(&state, 160, 30);
+            assert!(frame.contains(raw), "{frame}");
+            assert!(frame.contains(language.text(chinese, english)), "{frame}");
+            if language == Language::English {
+                assert!(!frame.contains(chinese), "{frame}");
+            }
+        }
     }
 }
 

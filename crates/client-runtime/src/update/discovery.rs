@@ -532,6 +532,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_desktop_release_list_does_not_hide_an_update_on_the_next_route() {
+        let body = br#"[{"tag_name":"v0.4.8","draft":false,"prerelease":false}]"#;
+        let range = format!("Content-Range: bytes 0-1/{}\r\n", body.len());
+        let (proxy, proxy_task) = server("206 Partial Content", b"[]", &range).await;
+        let (api, api_task) = server("200 OK", body, "").await;
+        let route_list = routes(None, Some(proxy));
+        let (available, latest_route) = discover(&route_list, &api, &api, "0.4.7").await.unwrap();
+        assert_eq!(available.unwrap().version, "0.4.8");
+        assert!(latest_route.is_none());
+        assert!(proxy_task.await.unwrap().starts_with(&format!("GET {api}")));
+        assert!(api_task.await.unwrap().starts_with("GET / HTTP/1.1"));
+    }
+
+    #[tokio::test]
     async fn blocked_api_uses_stable_redirect_and_reports_both_errors_if_unavailable() {
         let route_list = routes(None, None);
         let (api, api_task) = server("403 Forbidden", b"", "").await;

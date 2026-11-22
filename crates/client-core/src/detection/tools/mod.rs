@@ -266,6 +266,8 @@ pub struct Entry {
     pub detail: String,
     pub success: Option<bool>,
     pub code: &'static str,
+    #[serde(skip)]
+    pub detail_english: Option<String>,
 }
 
 impl Entry {
@@ -280,6 +282,7 @@ impl Entry {
             detail: bounded(&detail.into(), 2048),
             success,
             code,
+            detail_english: None,
         }
     }
 
@@ -307,6 +310,16 @@ pub struct Report {
 }
 
 impl Report {
+    pub fn localize_route_for_display(&mut self, language: Language) {
+        if language == Language::English {
+            for entry in &mut self.entries {
+                if let Some(detail) = &entry.detail_english {
+                    entry.detail.clone_from(detail);
+                }
+            }
+        }
+    }
+
     pub fn lines(&self) -> Vec<String> {
         self.lines_in(Language::SimplifiedChinese)
     }
@@ -345,7 +358,13 @@ impl Report {
             format!(
                 "{} · {}",
                 entry_label_in(&entry.label, language),
-                entry_detail_in(&entry.label, &entry.detail, entry.code, language)
+                if language == Language::English {
+                    entry.detail_english.clone().unwrap_or_else(|| {
+                        entry_detail_in(&entry.label, &entry.detail, entry.code, language)
+                    })
+                } else {
+                    entry_detail_in(&entry.label, &entry.detail, entry.code, language)
+                }
             )
         }))
         .collect()
@@ -503,7 +522,7 @@ pub async fn run(
 }
 
 fn from_check(label: &str, check: probe::DiagnosticCheck) -> Entry {
-    Entry::new(
+    let mut entry = Entry::new(
         label,
         check.detail,
         check.success,
@@ -512,7 +531,9 @@ fn from_check(label: &str, check: probe::DiagnosticCheck) -> Entry {
             Some(false) => "probe_failed",
             None => "not_observed",
         },
-    )
+    );
+    entry.detail_english = check.detail_english.map(|detail| bounded(&detail, 2048));
+    entry
 }
 
 fn proxy_port(context: &Environment) -> Result<u16> {
