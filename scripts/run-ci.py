@@ -86,6 +86,7 @@ def main():
                      'application::ui_tests::ip_report_shows_each_target_exit_and_its_measurement_state',
                      'application::ui_tests::ip_category_status_and_region_popups_drive_report_filters',
                      'application::ui_tests::desktop_language_menu_dispatches_stable_tags_in_both_catalogs',
+                     'application::ui_tests::subscription_usage_changes_language_without_altering_metadata',
                      'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
                      'application::ui_tests::english_desktop_validation_and_errors_follow_language',
                      'application::ui_tests::english_shared_errors_are_projected_without_changing_drafts_or_evidence',

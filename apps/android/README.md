@@ -70,6 +70,8 @@ python3 scripts/android.py build --arch arm64
 
 本地 Android Rust 产物默认写入 `target/mobile`，与桌面目录分离；可设置 `CARGO_TARGET_DIR` 指向其他独立目录。APK 输出到 `apps/android/app/build/outputs/apk/release/`；其他架构使用 `armv7` / `x64` 并安装相应 Rust target。本地构建可通过 `ANDROID_KEYSTORE_PATH`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 指定自己的 PKCS12 签名；未签名的 Release APK 不能直接安装。密钥与密码不应提交到仓库。
 
+本地也可使用 Android 模拟器验证交互；先核对宿主架构、工具支持与加速条件，并将代理和 TUN 测试限制在可丢弃的隔离环境。任务结束后的设备和构建产物按[磁盘管理](../../docs/workflows/local-development.md#本地-rust-构建与磁盘管理)清理；仍需同提交 CI 和适用的兼容验证。
+
 ## CI 与打包
 
 使用 CI / Publish Release 时无需在本地安装 Android 工具链。

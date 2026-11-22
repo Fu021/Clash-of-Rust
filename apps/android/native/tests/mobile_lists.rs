@@ -2782,6 +2782,13 @@ fn mobile_group_search_and_pagination_remain_available_during_protection() {
         .on_request(move |intent, first, second| {
             recorded.borrow_mut().push((intent, first, second))
         });
+    let view_changes = Rc::new(RefCell::new(Vec::new()));
+    let recorded_views = view_changes.clone();
+    groups
+        .global::<MobileView>()
+        .on_page_views_changed(move |nodes, profiles| {
+            recorded_views.borrow_mut().push((nodes, profiles))
+        });
     groups.show().unwrap();
     let render = || {
         targets.borrow_mut().clear();
@@ -2809,6 +2816,10 @@ fn mobile_group_search_and_pagination_remain_available_during_protection() {
     };
     advance(&clock, Duration::from_secs(1));
     render();
+    click("nodes-view");
+    click("nodes-view");
+    assert_eq!(*view_changes.borrow(), [(true, false), (false, false)]);
+    assert!(events.borrow().is_empty());
     click("groups-pagination");
     assert_eq!(
         events.borrow().last().unwrap(),
@@ -3034,6 +3045,13 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
         .on_request(move |intent, first, second| {
             recorded.borrow_mut().push((intent, first, second))
         });
+    let view_changes = Rc::new(RefCell::new(Vec::new()));
+    let recorded_views = view_changes.clone();
+    profiles
+        .global::<MobileView>()
+        .on_page_views_changed(move |nodes, profiles| {
+            recorded_views.borrow_mut().push((nodes, profiles))
+        });
     profiles.show().unwrap();
     let render = || {
         targets.borrow_mut().clear();
@@ -3128,6 +3146,8 @@ fn mobile_subscriptions_reflow_and_keep_local_profile_actions() {
     click("profile-detail:imported");
     click("profiles-view");
     assert!(profiles.get_list_view());
+    assert_eq!(*view_changes.borrow(), [(false, true)]);
+    assert!(events.borrow().is_empty());
     let mut renamed = profile_items.row_data(0).unwrap();
     renamed.name = "A very long subscription name ".repeat(8).into();
     profile_items.set_row_data(0, renamed);

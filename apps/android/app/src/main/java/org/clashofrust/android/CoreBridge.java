@@ -13,6 +13,7 @@ public final class CoreBridge {
     private static boolean started;
     private static String lastConfig = "";
     private static boolean ipv6Enabled = true;
+    private static long generation;
     private CoreBridge() {}
 
     public static synchronized String start(Context context, String raw, boolean ipv6) throws Exception {
@@ -35,6 +36,7 @@ public final class CoreBridge {
             }
         }
         if (started) Mobile.reload(raw); else { Mobile.start(home.toString(), raw); started = true; }
+        generation++;
         lastConfig = raw;
         ipv6Enabled = ipv6;
         return home.toString();
@@ -42,7 +44,7 @@ public final class CoreBridge {
 
     public static synchronized void reload(Context context, String raw) throws Exception {
         if (!started) throw new IOException(AppLanguage.current(context).getString(R.string.core_not_started));
-        Mobile.reload(raw); lastConfig = raw;
+        Mobile.reload(raw); generation++; lastConfig = raw;
     }
     public static synchronized boolean ready() { return started; }
     static boolean restorable(Context context) {
@@ -70,6 +72,7 @@ public final class CoreBridge {
             .optJSONObject("claude_protection") != null;
     }
     public static synchronized String config() { return lastConfig; }
+    static synchronized long generation() { return generation; }
     public static synchronized boolean ipv6() { return ipv6Enabled; }
     public static synchronized void setIpv6(boolean enabled) { ipv6Enabled = enabled; }
     public static JSONObject state() throws Exception {

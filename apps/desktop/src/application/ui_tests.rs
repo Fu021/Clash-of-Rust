@@ -1702,6 +1702,39 @@ fn subscription_search_filters_names_and_sources_without_replacing_the_model() {
 }
 
 #[test]
+fn subscription_usage_changes_language_without_altering_metadata() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Profiles);
+    let usage = "upload=1048576; download=2147483648; total=3221225472; expire=0";
+    app.profiles[0].source = "https://example.test/subscription".into();
+    app.profiles[0].usage = Some(usage.into());
+    app.settings.language = LanguagePreference::SimplifiedChinese;
+    app.presentation_language = Language::SimplifiedChinese;
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let rows = data.get_profiles();
+    assert_eq!(rows.row_data(0).unwrap().detail, "已用 2/3 GiB · 不限期");
+    for (language, expected) in [
+        (LanguagePreference::English, "Used 2/3 GiB · No expiry"),
+        (
+            LanguagePreference::SimplifiedChinese,
+            "已用 2/3 GiB · 不限期",
+        ),
+    ] {
+        let mut reply = synchronized_reply(&app);
+        reply.settings.language = language;
+        let _ = app.update(Message::Finished(Box::new(reply)));
+        app.present_slint(&data, &mut models);
+        assert_eq!(rows, data.get_profiles());
+        assert_eq!(rows.row_data(0).unwrap().detail, expected);
+        assert_eq!(app.profiles[0].usage.as_deref(), Some(usage));
+    }
+}
+
+#[test]
 fn subscription_forms_use_the_available_width_without_truncating_stored_input() {
     let surface = ui_testing::initialize(950, 700);
     let window = AppWindow::new().unwrap();

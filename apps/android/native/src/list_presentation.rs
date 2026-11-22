@@ -1,8 +1,67 @@
 use clash_mobile_runtime::core::{
-    config::Profile,
+    config::{Language, Profile},
     connection::{Field, Sort},
 };
 use std::collections::{BTreeMap, VecDeque};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LogMessage {
+    Raw(String),
+    NodesUnreachable,
+    StatusRefreshFailed(String),
+    SubscriptionUpdateFailed,
+    SubscriptionDownloadFailed(String),
+    SubscriptionPrepareFailed,
+}
+
+impl From<String> for LogMessage {
+    fn from(value: String) -> Self {
+        Self::Raw(value)
+    }
+}
+
+impl From<&str> for LogMessage {
+    fn from(value: &str) -> Self {
+        Self::Raw(value.into())
+    }
+}
+
+impl LogMessage {
+    pub(crate) fn display(&self, language: Language) -> String {
+        match self {
+            Self::Raw(value) => value.clone(),
+            Self::NodesUnreachable => language
+                .text(
+                    "全部节点经两个独立目标复测仍不可达，VPN 保持连接",
+                    "All nodes remain unreachable after two independent checks; VPN stays connected",
+                )
+                .into(),
+            Self::StatusRefreshFailed(detail) => format!(
+                "{}{detail}",
+                language.text("状态刷新失败：", "Status refresh failed: ")
+            ),
+            Self::SubscriptionUpdateFailed => language
+                .text(
+                    "订阅定时更新失败，已保留原配置与运行状态",
+                    "Scheduled subscription update failed; configuration and connection preserved",
+                )
+                .into(),
+            Self::SubscriptionDownloadFailed(detail) => format!(
+                "{}{detail}",
+                language.text(
+                    "订阅定时下载失败，已保留原配置与运行状态：",
+                    "Scheduled subscription download failed; configuration and connection preserved: "
+                )
+            ),
+            Self::SubscriptionPrepareFailed => language
+                .text(
+                    "订阅定时更新失败，已保留原配置",
+                    "Scheduled subscription update failed; configuration preserved",
+                )
+                .into(),
+        }
+    }
+}
 
 pub(crate) struct Page<T> {
     pub items: Vec<T>,
@@ -101,17 +160,21 @@ pub(crate) fn profiles<'a>(
 }
 
 pub(crate) fn logs(
-    entries: &VecDeque<(String, String)>,
+    entries: &VecDeque<(String, LogMessage)>,
     level: &str,
     lower_query: &str,
+    language: Language,
 ) -> Vec<(String, String)> {
     entries
         .iter()
         .rev()
-        .filter(|(entry_level, line)| {
-            (level == "全部等级" || entry_level == level) && contains_query(line, lower_query)
+        .filter_map(|(entry_level, message)| {
+            if level != "全部等级" && entry_level != level {
+                return None;
+            }
+            let line = message.display(language);
+            contains_query(&line, lower_query).then(|| (entry_level.clone(), line))
         })
-        .cloned()
         .collect()
 }
 
@@ -225,20 +288,71 @@ mod tests {
             ("WARN".into(), "Latest EXAMPLE".into()),
         ]);
         assert_eq!(
-            logs(&entries, "全部等级", "example"),
+            logs(&entries, "全部等级", "example", Language::English),
             [
                 ("WARN".into(), "Latest EXAMPLE".into()),
                 ("INFO".into(), "first example".into()),
             ]
         );
         assert_eq!(
-            logs(&entries, "WARN", ""),
+            logs(&entries, "WARN", "", Language::English),
             [
                 ("WARN".into(), "Latest EXAMPLE".into()),
                 ("WARN".into(), "unrelated".into()),
             ]
         );
-        assert_eq!(entries.front().unwrap().1, "first example");
+        assert_eq!(
+            entries.front().unwrap().1,
+            LogMessage::Raw("first example".into())
+        );
+    }
+
+    #[test]
+    fn app_logs_follow_language_and_leave_external_messages_unchanged() {
+        let entries = VecDeque::from([
+            ("WARN".into(), LogMessage::NodesUnreachable),
+            (
+                "WARN".into(),
+                LogMessage::SubscriptionDownloadFailed("provider 原始错误".into()),
+            ),
+            (
+                "WARN".into(),
+                LogMessage::Raw("订阅定时更新失败，已保留原配置".into()),
+            ),
+        ]);
+        let original = entries.clone();
+        let english = logs(&entries, "全部等级", "", Language::English);
+        assert_eq!(english[0].1, "订阅定时更新失败，已保留原配置");
+        assert_eq!(
+            english[1].1,
+            "Scheduled subscription download failed; configuration and connection preserved: provider 原始错误"
+        );
+        assert!(english[2].1.starts_with("All nodes remain unreachable"));
+        let chinese = logs(&entries, "WARN", "订阅", Language::SimplifiedChinese);
+        assert_eq!(chinese.len(), 2);
+        assert!(chinese[0].1.starts_with("订阅定时更新失败"));
+        assert!(chinese[1].1.ends_with("provider 原始错误"));
+        assert_eq!(entries, original);
+        for (message, chinese, english) in [
+            (
+                LogMessage::StatusRefreshFailed("timeout".into()),
+                "状态刷新失败：timeout",
+                "Status refresh failed: timeout",
+            ),
+            (
+                LogMessage::SubscriptionUpdateFailed,
+                "订阅定时更新失败，已保留原配置与运行状态",
+                "Scheduled subscription update failed; configuration and connection preserved",
+            ),
+            (
+                LogMessage::SubscriptionPrepareFailed,
+                "订阅定时更新失败，已保留原配置",
+                "Scheduled subscription update failed; configuration preserved",
+            ),
+        ] {
+            assert_eq!(message.display(Language::SimplifiedChinese), chinese);
+            assert_eq!(message.display(Language::English), english);
+        }
     }
 
     #[test]

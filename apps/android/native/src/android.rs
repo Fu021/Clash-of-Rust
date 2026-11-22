@@ -1,4 +1,7 @@
-use crate::{list_presentation, request_gate::RequestGate};
+use crate::{
+    list_presentation::{self, LogMessage},
+    request_gate::RequestGate,
+};
 use anyhow::{Context, Result, ensure};
 use clash_mobile_runtime::{NativeHost, Session, Snapshot, core};
 use core::{api, config, proxy_order, rule_manager};
@@ -255,7 +258,7 @@ struct State {
     issue_events: VecDeque<Value>,
     system_incidents: crate::incident_delivery::Delivery,
     copied: (i32, Arc<str>),
-    logs: VecDeque<(String, String)>,
+    logs: VecDeque<(String, LogMessage)>,
     log_level: String,
     connection_sort: String,
     connection_address: (String, String),
@@ -344,6 +347,26 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
     let window = AndroidWindow::new()?;
     language_ui::apply(&window, language)?;
     language_ui::install(&window);
+    let views = window.global::<PageViews>();
+    match native.request(json!({"op":"page-views"})) {
+        Ok(saved) => {
+            views.set_nodes_list(saved["nodes_list"].as_bool().unwrap_or(false));
+            views.set_profiles_list(saved["profiles_list"].as_bool().unwrap_or(false));
+        }
+        Err(error) => log::warn!("Could not restore page views: {error:#}"),
+    }
+    let view_host = native.clone();
+    window
+        .global::<MobileView>()
+        .on_page_views_changed(move |nodes_list, profiles_list| {
+            if let Err(error) = view_host.request(json!({
+                "op":"save-page-views",
+                "nodes_list":nodes_list,
+                "profiles_list":profiles_list,
+            })) {
+                log::warn!("Could not save page views: {error:#}");
+            }
+        });
     window
         .global::<MobileData>()
         .set_language(preference.tag().into());
@@ -659,7 +682,9 @@ async fn run_loop(
         state.notice_error = true;
         state.notice_critical = true;
         log::error!("{}", state.notice);
-        state.logs.push_back(("ERROR".into(), state.notice.clone()));
+        state
+            .logs
+            .push_back(("ERROR".into(), state.notice.clone().into()));
     }
     if let Ok(manifest) = core::geodata::read_manifest(&state.session.store.runtime()) {
         state.geo =
@@ -1066,7 +1091,7 @@ async fn run_loop(
                             state.notice_error = true;
                             state.notice_critical = intent == MobileIntent::RestartCore;
                             log::error!("{}",state.notice);
-                            state.logs.push_back(("ERROR".into(),state.notice.clone()));
+                            state.logs.push_back(("ERROR".into(),state.notice.clone().into()));
                         }
                     }
                 }
@@ -1197,7 +1222,7 @@ async fn run_loop(
                             && state.session.platform["vpn_generation"].as_u64().unwrap_or(0) == vpn_generation {
                             match result {
                                 Ok(true) => {
-                                    state.logs.push_back(("WARN".into(), "全部节点经两个独立目标复测仍不可达，VPN 保持连接".into()));
+                                    state.logs.push_back(("WARN".into(), LogMessage::NodesUnreachable));
                                     state.notice = state.presentation_language.text("全部节点不可达，VPN 仍连接。请更换节点；更新失败后会自动尝试直连。", "All nodes are unreachable; the VPN remains connected. Choose another node; failed updates will retry directly.").into();
                                     state.notice_network_recovery = true;
                                 },
@@ -1220,9 +1245,9 @@ async fn run_loop(
                                 state.node_delays.retain(|name,_|state.session.proxies.proxies.contains_key(name.as_str())||members.contains(name.as_str()));
                             }
                             Err(error) => {
-                                let message = format!("状态刷新失败：{error}");
+                                let message = LogMessage::StatusRefreshFailed(error);
                                 if state.logs.back().is_none_or(|(_,old)| old != &message) {
-                                    log::warn!("{message}");
+                                    log::warn!("{}", message.display(state.presentation_language));
                                     state.logs.push_back(("WARN".into(), message));
                                 }
                             }
@@ -1262,7 +1287,7 @@ async fn run_loop(
                         }
                         refresh_requested=true;
                     }
-                    Some(Update::Log(level,message)) => state.logs.push_back((level,message)),
+                    Some(Update::Log(level,message)) => state.logs.push_back((level,message.into())),
                     Some(Update::Geo(result))=> {
                         network_generation = network_generation.wrapping_add(1);
                         if let Some(job) = network_job.take() { job.abort(); }
@@ -1295,7 +1320,7 @@ async fn run_loop(
                                         immediate = true;
                                     }
                                     Ok(false) => {}
-                                    Err(_) => state.logs.push_back(("WARN".into(), "订阅定时更新失败，已保留原配置与运行状态".into())),
+                                    Err(_) => state.logs.push_back(("WARN".into(), LogMessage::SubscriptionUpdateFailed)),
                                 },
                                 Err(error) => {
                                     if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
@@ -1303,7 +1328,7 @@ async fn run_loop(
                                         state.notice = format!("{}{message}", state.presentation_language.text("订阅定时更新失败，已保留原配置与运行状态：", "Scheduled subscription update failed; the existing configuration and connection are preserved: "));
                                         state.notice_error = true;
                                     }
-                                    state.logs.push_back(("WARN".into(), format!("订阅定时下载失败，已保留原配置与运行状态：{error}")));
+                                    state.logs.push_back(("WARN".into(), LogMessage::SubscriptionDownloadFailed(error.to_string())));
                                 },
                             }
                         }
@@ -1367,7 +1392,7 @@ async fn run_loop(
                                     let _ = sender.send(Update::Subscription(generation, pending, result)).await;
                                 }));
                             }
-                            Err(_) => state.logs.push_back(("WARN".into(), "订阅定时更新失败，已保留原配置".into())),
+                            Err(_) => state.logs.push_back(("WARN".into(), LogMessage::SubscriptionPrepareFailed)),
                         }
                     }
                 }
@@ -1394,9 +1419,10 @@ async fn run_loop(
             state.protection_observed = match state.session.observe_native() {
                 Ok(()) => true,
                 Err(error) => {
-                    state
-                        .logs
-                        .push_back(("WARN".into(), format!("状态刷新失败：{error:#}")));
+                    state.logs.push_back((
+                        "WARN".into(),
+                        LogMessage::StatusRefreshFailed(format!("{error:#}")),
+                    ));
                     false
                 }
             };
@@ -1418,7 +1444,9 @@ async fn run_loop(
                     );
                     state.notice_error = true;
                     state.notice_critical = true;
-                    state.logs.push_back(("ERROR".into(), state.notice.clone()));
+                    state
+                        .logs
+                        .push_back(("ERROR".into(), state.notice.clone().into()));
                 }
             }
             if state.protection_change.is_none()
@@ -1769,7 +1797,9 @@ fn rollback_protection(state: &mut State, reason: &str) -> Result<()> {
     state.protection_status = reason.to_owned();
     state.notice = reason.to_owned();
     state.notice_error = true;
-    state.logs.push_back(("WARN".into(), reason.to_owned()));
+    state
+        .logs
+        .push_back(("WARN".into(), reason.to_owned().into()));
     Ok(())
 }
 
@@ -1803,7 +1833,9 @@ fn observe_protection(state: &mut State) -> Result<bool> {
                 )
             );
             if state.protection_status != message {
-                state.logs.push_back(("WARN".into(), message.clone()));
+                state
+                    .logs
+                    .push_back(("WARN".into(), message.clone().into()));
             }
             state.protection_status = message;
             return Ok(false);
@@ -2366,7 +2398,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::ExportLogs => {
             session.native.request(json!({"op":"export","name":"clash-of-rust-logs.txt",
                 "content":format!("Android UI: {}\n{}",PRESENTATION.lock().map(|s|s.clone()).unwrap_or_default(),
-                    state.logs.iter().map(|(level,line)|format!("[{level}] {line}")).collect::<Vec<_>>().join("\n"))}))?;
+                    state.logs.iter().map(|(level,line)|format!("[{level}] {}", line.display(language))).collect::<Vec<_>>().join("\n"))}))?;
         }
         MobileIntent::ExportDiagnostics
         | MobileIntent::CopyDiagnostics
@@ -2385,7 +2417,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             let lines = state
                 .logs
                 .iter()
-                .map(|(level, line)| format!("[{level}] {line}"))
+                .map(|(level, line)| format!("[{level}] {}", line.display(language)))
                 .collect();
             let report = tokio::task::spawn_blocking(move || {
                 core::support::issue_report(&root, context, lines)
@@ -3655,7 +3687,7 @@ fn project(state: &State) -> Projection {
         dirty: s.draft != *saved,
         rule_warning: state.rule_warnings.join("\n"),
         logs: if state.page == 5 {
-            list_presentation::logs(&state.logs, &state.log_level, &query)
+            list_presentation::logs(&state.logs, &state.log_level, &query, language)
         } else {
             Vec::new()
         },
@@ -4210,8 +4242,12 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                         detail: if local {
                             language.text("本地配置", "Local configuration").into()
                         } else {
-                            core::subscription::summary(profile.usage.as_deref(), profile.updated)
-                                .into()
+                            core::subscription::summary(
+                                profile.usage.as_deref(),
+                                profile.updated,
+                                language,
+                            )
+                            .into()
                         },
                         active: p.settings.active_profile.as_deref() == Some(&profile.id),
                         local,

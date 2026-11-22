@@ -193,6 +193,131 @@ fn english_network_display_keeps_serialized_evidence_and_external_values() {
     );
 }
 
+#[test]
+fn english_dns_report_translates_generated_fields_without_changing_evidence() {
+    let entries = http::dns_entries(
+        &serde_json::json!({
+            "Status": 0,
+            "AA": true,
+            "Answer": [
+                {"type": 1, "TTL": 60, "data": "保留原文"},
+                {"type": 16, "TTL": 0, "data": "hidden"}
+            ]
+        }),
+        "A",
+    )
+    .unwrap();
+    let report = Report {
+        schema: 1,
+        tool: Tool::Dns,
+        target: "https://example.test".into(),
+        elapsed_ms: 12,
+        status: "complete",
+        entries,
+    };
+    let original = serde_json::to_value(&report).unwrap();
+    let lines = report.lines_in(Language::English);
+    assert_eq!(
+        lines[2],
+        "DNS response · A · 2 answers · AA=yes · RA=unavailable"
+    );
+    assert_eq!(lines[3], "Record · Type 1 · TTL 60 s · 保留原文");
+    assert_eq!(lines[4], "Record · Type 16 · TTL 0 s · Content hidden");
+    assert_eq!(serde_json::to_value(&report).unwrap(), original);
+    assert!(report.lines()[2].contains("2 条回答"));
+}
+
+#[test]
+fn english_network_results_translate_generated_values_only() {
+    for (label, detail, code, expected) in [
+        (
+            "请求结果",
+            "收到响应 2 / 3 · 传输失败 1；HTTP 业务状态另列",
+            "http_failed",
+            "Responses 2 / 3 · Transport failures 1; HTTP status listed separately",
+        ),
+        (
+            "响应头耗时",
+            "最低 2 · 中位 3 · 最高 4 ms",
+            "ok",
+            "Min 2 · Median 3 · Max 4 ms",
+        ),
+        (
+            "响应正文",
+            "接收 4096 B（最多 4096 B），已丢弃",
+            "byte_limit",
+            "Received 4096 B (up to 4096 B); discarded",
+        ),
+        (
+            "已接收",
+            "8192 B / 16384 B 上限",
+            "ok",
+            "8192 B / 16384 B limit",
+        ),
+        (
+            "平均速度",
+            "12.5 KiB/s · 3.25 秒",
+            "information",
+            "12.5 KiB/s · 3.25 s",
+        ),
+        (
+            "代理建立目标连接",
+            "端口 443 · 25 ms（含代理侧 DNS、规则及出站处理）",
+            "ok",
+            "Port 443 · 25 ms (includes proxy DNS, rules and outbound processing)",
+        ),
+        (
+            "证书验证",
+            "域名、有效期和信任链验证通过 · 服务端提供 2 张证书",
+            "ok",
+            "Domain, validity and chain verified · 2 certificates",
+        ),
+        (
+            "IPv6",
+            "2001:db8::1 · 连接超时",
+            "family_timeout",
+            "2001:db8::1 · Connection timed out",
+        ),
+        (
+            "DNS / UDP",
+            "收到有效响应 · 11 ms",
+            "ok",
+            "Valid response · 11 ms",
+        ),
+        (
+            "检查失败",
+            "证书已过期，未绕过验证",
+            "tls_certificate_expired",
+            "Certificate expired",
+        ),
+    ] {
+        assert_eq!(
+            entry_detail_in(label, detail, code, Language::English),
+            expected,
+            "{label}"
+        );
+        assert_eq!(
+            entry_detail_in(label, detail, code, Language::SimplifiedChinese),
+            detail,
+            "{label}"
+        );
+    }
+    for (label, detail, code) in [
+        ("记录", "类型 1 · TTL 60 s · 正文已隐藏", "ok"),
+        ("记录", "TXT value: 保留原文", "ok"),
+        ("平均速度", "源站 · 3.25 秒", "information"),
+        ("DNS / UDP", "收到有效响应 · 11 ms", "process_output"),
+        ("证书主体", "证书已过期，未绕过验证", "ok"),
+    ] {
+        let translated = entry_detail_in(label, detail, code, Language::English);
+        if label == "记录" && detail.starts_with("类型 ") {
+            assert_eq!(translated, "Type 1 · TTL 60 s · 正文已隐藏");
+        } else {
+            assert_eq!(translated, detail);
+        }
+    }
+}
+
 #[tokio::test]
 async fn protection_rejects_raw_probes_before_opening_any_socket() {
     for tool in [Tool::Udp, Tool::Ping, Tool::Trace] {

@@ -139,7 +139,12 @@ async fn tcp_probe_sends_no_application_bytes_and_cancellation_closes_the_socket
             task.abort();
             assert!(task.await.unwrap_err().is_cancelled());
         } else {
-            assert_eq!(task.await.unwrap().unwrap().status, "complete");
+            let report = task.await.unwrap().unwrap();
+            assert_eq!(report.status, "complete");
+            assert!(report.lines_in(Language::English).iter().any(|line| {
+                line.starts_with("Proxy connection to target · Port 22 · ")
+                    && line.ends_with("ms (includes proxy DNS, rules and outbound processing)")
+            }));
         }
         server.await.unwrap();
     }

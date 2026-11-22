@@ -181,7 +181,10 @@ export component MobileProxies inherits PageSurface {
             MButton { geometry-key: "nodes-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
                 accessible-label: PageViews.nodes-list ? @tr("切换到宫格视图") : @tr("切换到列表视图");
                 ViewModeIcon { list-view: PageViews.nodes-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
-                clicked => { PageViews.nodes-list = !PageViews.nodes-list; }
+                clicked => {
+                    PageViews.nodes-list = !PageViews.nodes-list;
+                    MobileView.page-views-changed(PageViews.nodes-list, PageViews.profiles-list);
+                }
             }
             MField {
                 GeometryTarget { key: "groups-search"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
@@ -273,7 +276,10 @@ export component MobileSubscriptions inherits PageSurface {
             MButton { geometry-key: "profiles-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
                 accessible-label: PageViews.profiles-list ? @tr("切换到宫格视图") : @tr("切换到列表视图");
                 ViewModeIcon { list-view: PageViews.profiles-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
-                clicked => { PageViews.profiles-list = !PageViews.profiles-list; }
+                clicked => {
+                    PageViews.profiles-list = !PageViews.profiles-list;
+                    MobileView.page-views-changed(PageViews.nodes-list, PageViews.profiles-list);
+                }
             }
             MField { placeholder: @tr("粘贴订阅链接"); text <=> MobileView.profile-source; enabled: !MobileData.protected && !MobileData.protection-pending; }
             MButton { text: @tr("导入"); compact: true; primary: true; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending; width: max(64px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0;

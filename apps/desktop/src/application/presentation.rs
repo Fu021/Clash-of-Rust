@@ -748,6 +748,7 @@ impl App {
                             clash_client_core::subscription::summary(
                                 profile.usage.as_deref(),
                                 profile.updated,
+                                language,
                             )
                             .into()
                         },

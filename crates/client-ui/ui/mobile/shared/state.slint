@@ -121,6 +121,7 @@ export global MobileView {
     controls-modal-blocked => { self.modal }
     pure callback controls-notice-blocked <=> ControlAccess.notice-blocked;
     controls-notice-blocked => { self.notice-modal }
+    callback page-views-changed(bool, bool);
     in-out property <int> page;
     in-out property <bool> network-open;
     // 1 risks, 2 rule editor, 3 profile editor, 4 delete, 5 connection,

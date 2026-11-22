@@ -6,6 +6,8 @@
 
 发布后需要验证真实跨版本更新时，在各发行版入口同时填写 `update_from_ci` 和 `update_release`：前者指向旧版成功的 push CI，后者为已公开的目标 Release 标签。作业校验旧版候选包、来源提交以及目标安装包和 SHA256 附件，再在一次性 runner 或虚拟机中安装旧版。DEB 与官方 Arch 包通过 `cor` 发现、下载并安装实际 Release；RPM 检查 DNF 或 Zypper 提示，再通过对应包管理器安装 Release 的 RPM。所有路径核对已安装包、客户端和后台版本，以及已有设置、测试订阅和停止状态下的内核；结果单独写入 `published-update.json`。常规兼容回执仍只说明其列出的基础检查；该终端验收不代表 GUI 图形授权通过。旧 CI 附件或 Arch 兼容回执过期后须选择可验证的旧版来源。
 
+2026-11-22 使用 `59b91a03`、CI `45011206632`、旧候选 CI `44943304678` 和公开预发布 `v0.7.3-dev.2.live-language`，以下八套共 21 个目标的跨版本终端报告通过：[Ubuntu](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456673)、[Debian](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456896)、[Mint](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456401)、[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456816)、[Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456535)、[Fedora](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456876)、[openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456820)及 [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013457070)。Arch 旧包来自 CI 候选；GUI 图形授权与失败恢复不在此批报告范围。
+
 | 手动入口 | 固定来宾及架构 | 原生安装路径 |
 | --- | --- | --- |
 | Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，用 APT 安装 DEB |
@@ -78,3 +80,5 @@ Arch 工作流使用 CI 的 x64 DEB 在 Arch 来宾内重封装，检查安装�
 | [Arch Linux](https://github.com/Fu021/Clash-of-Rust/actions/runs/44714880300) | 5.6 秒 | — | 3.8 秒 | 2:32 | 2:54 |
 
 本轮 Mint 的主要耗时是实际 ISO 安装，Zorin 两版的主要耗时是 ISO 传输。ISO 传输速率随上游镜像和 runner 变化。
+
+2026-11-22 的跨版本验收中，Mint 两版 ISO 下载约 46／62 秒、安装约 437／442 秒；Zorin 两版下载约 202／382 秒、安装约 372／300 秒；openSUSE Tumbleweed 依赖准备约 7 秒。这些是不同运行条件下的单次样本，不代表稳定速度或受控加速对比。

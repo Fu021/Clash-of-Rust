@@ -1363,6 +1363,61 @@ public class ProxyTunTest {
         });
         previewNavigate(0);
     }
+    private static void setPageView(String target, String field, boolean list) throws Exception {
+        await("Page view did not change: " + field, () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            if (ui.optBoolean("live") && ui.has(field) && ui.getBoolean(field) == list) return true;
+            tryPreviewTarget(target);
+            SystemClock.sleep(350);
+            return false;
+        });
+    }
+    private static void recreateAndCheckPageViews(boolean nodes, boolean profiles) throws Exception {
+        MainActivity original = resumedActivity();
+        assertNotNull("No Activity to recreate", original);
+        long generation = MainActivity.diagnostics().optLong("ui_generation");
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(original::recreate);
+        await("Activity was not recreated", () -> {
+            MainActivity replacement = resumedActivity();
+            return replacement != null && replacement != original;
+        });
+        waitForAppWindow();
+        await("Recreated UI did not restore both page views", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("live") && ui.optLong("ui_generation") > generation
+                && ui.has("nodes_list") && ui.getBoolean("nodes_list") == nodes
+                && ui.has("profiles_list") && ui.getBoolean("profiles_list") == profiles;
+        });
+    }
+    private static void verifyPageViewPersistence(Context context) throws Exception {
+        JSONObject initial = MainActivity.diagnostics();
+        assertFalse("New installs must use the proxy grid", initial.getBoolean("nodes_list"));
+        assertFalse("New installs must use the subscription grid", initial.getBoolean("profiles_list"));
+        String config = CoreBridge.config();
+        long coreGeneration = CoreBridge.generation();
+        previewNavigate(1);
+        setPageView("nodes-view", "nodes_list", true);
+        previewNavigate(2);
+        setPageView("profiles-view", "profiles_list", true);
+        setPageView("profiles-view", "profiles_list", false);
+        android.content.SharedPreferences views = context.getSharedPreferences("page-views", Context.MODE_PRIVATE);
+        assertTrue(views.getBoolean("nodes_list", false));
+        assertFalse(views.getBoolean("profiles_list", true));
+        recreateAndCheckPageViews(true, false);
+        previewNavigate(2);
+        setPageView("profiles-view", "profiles_list", true);
+        previewNavigate(1);
+        setPageView("nodes-view", "nodes_list", false);
+        assertFalse(views.getBoolean("nodes_list", true));
+        assertTrue(views.getBoolean("profiles_list", false));
+        recreateAndCheckPageViews(false, true);
+        assertTrue("Recreating page views stopped the core", CoreBridge.ready());
+        assertEquals("Changing page views reloaded the core", coreGeneration, CoreBridge.generation());
+        assertEquals("Changing page views changed the core configuration", config, CoreBridge.config());
+        previewNavigate(2);
+        setPageView("profiles-view", "profiles_list", false);
+        previewNavigate(0);
+    }
     private static android.graphics.Bitmap previewWindowBitmap() throws Exception {
         java.util.concurrent.atomic.AtomicReference<MainActivity> focused = new java.util.concurrent.atomic.AtomicReference<>();
         await("Screenshot activity did not regain focus", () -> {
@@ -2364,11 +2419,13 @@ public class ProxyTunTest {
         heldResponseClassifiesTruncationAsTransportFailure();
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         persistNetworkProfile(context);
+        assertTrue(context.getSharedPreferences("page-views", Context.MODE_PRIVATE).edit().clear().commit());
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native UI did not start its core", CoreBridge::ready);
         await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
         waitForAppWindow();
         verifyConnectionsTouch();
+        verifyPageViewPersistence(context);
         previewNavigate(2);
         await("Subscription page is empty", () -> MainActivity.diagnostics().optInt("profiles") > 0);
         int profileCount = MainActivity.diagnostics().getInt("profiles");
@@ -2491,6 +2548,7 @@ public class ProxyTunTest {
                     assertNotNull("VPN Activity was not resumed before recreation",original);
                     long generation=TunnelService.generation();
                     long uiGeneration=MainActivity.diagnostics().optLong("ui_generation");
+                    long coreGeneration=CoreBridge.generation();
                     String fixture=CoreBridge.config();
                     InstrumentationRegistry.getInstrumentation().runOnMainSync(original::recreate);
                     await("VPN Activity was not recreated",()-> {
@@ -2506,7 +2564,8 @@ public class ProxyTunTest {
                     assertEquals("Recreating the UI restarted the VPN",generation,TunnelService.generation());
                     assertTrue("Recreating the UI changed the active VPN route",vpnActive(connectivity));
                     assertTrue("Recreating the UI stopped the process-owned core",CoreBridge.ready());
-                    assertEquals("Recreating the UI reloaded the running core",fixture,CoreBridge.config());
+                    assertEquals("Recreating the UI reloaded the running core",coreGeneration,CoreBridge.generation());
+                    assertEquals("Recreating the UI changed the core configuration",fixture,CoreBridge.config());
                     tunCarriesSocket(controller,secret);
                     for (int handover=0;handover<5;handover++) {
                         long previousGeneration = TunnelService.generation();

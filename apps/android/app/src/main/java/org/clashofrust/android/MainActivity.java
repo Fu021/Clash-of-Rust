@@ -172,6 +172,16 @@ public final class MainActivity extends NativeActivity {
                     getSharedPreferences("vpn", MODE_PRIVATE).edit().putBoolean("desired", data.getBoolean("enabled")).commit();
                     break;
                 case "appearance": return Appearance.startup(this).put("font_sizes",systemFontSizes()).toString();
+                case "page-views": {
+                    SharedPreferences views = getSharedPreferences("page-views", MODE_PRIVATE);
+                    return new JSONObject().put("nodes_list", views.getBoolean("nodes_list", false))
+                        .put("profiles_list", views.getBoolean("profiles_list", false)).toString();
+                }
+                case "save-page-views":
+                    getSharedPreferences("page-views", MODE_PRIVATE).edit()
+                        .putBoolean("nodes_list", data.getBoolean("nodes_list"))
+                        .putBoolean("profiles_list", data.getBoolean("profiles_list")).apply();
+                    break;
                 case "system-languages": {
                     android.os.LocaleList locales = android.content.res.Resources.getSystem().getConfiguration().getLocales();
                     org.json.JSONArray languages = new org.json.JSONArray();

@@ -274,6 +274,20 @@ mod tests {
                     .iter()
                     .any(|entry| entry.label == "追踪结果" && entry.success == Some(true))
             );
+            let lines = result.lines_in(Language::English);
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line == "Hop 2 · No response from this hop (*)")
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line == "Trace result · Target responded")
+            );
+            assert!(lines.iter().any(|line| {
+                line == "Probe settings · Up to 8 hops, 1 second per response; * indicates no response"
+            }));
         }
         let mut result = report();
         result.tool = Tool::Trace;
