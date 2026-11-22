@@ -1296,6 +1296,14 @@ mod tests {
             native.reject.store(reject, Ordering::Release);
             let result = session.install_geo(staged.path());
             assert_eq!(result.is_err(), reject);
+            if let Err(error) = &result {
+                let raw = format!("{error:#}");
+                assert_eq!(
+                    core::error_message::localize(&raw, core::config::Language::English),
+                    "Geo update failed; previous data restored: simulated Geo reload failure"
+                );
+                assert!(raw.starts_with("Geo 更新失败，已恢复旧数据"));
+            }
             if reject && inconsistent {
                 assert_eq!(
                     std::fs::read(session.store.runtime().join("GeoIP.dat")).unwrap(),
@@ -2266,6 +2274,41 @@ mod tests {
         let before = session.draft.clone();
         assert!(session.toggle_rule(&disabled).is_err());
         assert_eq!(session.draft, before);
+    }
+    #[test]
+    fn actual_mobile_rule_errors_follow_language_without_changing_the_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let draft = session.draft.clone();
+        let rows = session.document().rows(&draft).0.len();
+        let errors = [
+            (
+                session
+                    .save_rule_state("", "DOMAIN,unique.example,DIRECT", 0, true)
+                    .unwrap_err(),
+                format!("Insertion position must be between 1 and {}", rows + 1),
+            ),
+            (
+                session.move_rule_to("missing", 0).unwrap_err(),
+                format!("Move position must be between 1 and {rows}"),
+            ),
+            (
+                session.move_rule("missing", "missing").unwrap_err(),
+                "The target rule changed; drag again".into(),
+            ),
+        ];
+        for (error, expected) in errors {
+            let raw = format!("{error:#}");
+            assert_eq!(
+                core::error_message::localize(&raw, core::config::Language::English),
+                expected
+            );
+            assert_eq!(
+                core::error_message::localize(&raw, core::config::Language::SimplifiedChinese),
+                raw
+            );
+        }
+        assert_eq!(session.draft, draft);
     }
     #[test]
     fn mobile_rule_limit_failure_does_not_poison_the_draft() {

@@ -593,6 +593,7 @@ impl native::Host for DesktopHost {
         self.models.attach(&self.data);
         self.last_frame = None;
         self.app.presentation_language = self.app.settings.language.resolve_desktop();
+        self.app.refresh_network_result();
         self.app.present(&self.data, &mut self.models);
         let result = (|| -> anyhow::Result<Renderer> {
             let owner = std::env::current_exe()?;

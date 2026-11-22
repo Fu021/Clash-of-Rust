@@ -300,6 +300,44 @@ enum Message {
     ExitFinished(Result<(), String>),
 }
 
+enum NetworkResult {
+    Report(network_tools::Report),
+    Cancelled,
+    ProtectionPending,
+    Failed(String),
+}
+
+impl NetworkResult {
+    fn lines(&self, language: Language) -> Vec<String> {
+        match self {
+            Self::Report(report) => report.lines_in(language),
+            Self::Cancelled => vec![language.text("检查已取消", "Check cancelled").into()],
+            Self::ProtectionPending => vec![
+                language
+                    .text(
+                        "Claude 保护切换中，请稍后重试",
+                        "Claude protection is changing; try again shortly",
+                    )
+                    .into(),
+            ],
+            Self::Failed(error) => {
+                vec![format!(
+                    "{} · {error}",
+                    language.text("检查失败", "Check failed")
+                )]
+            }
+        }
+    }
+
+    fn codes(&self) -> Vec<&'static str> {
+        match self {
+            Self::Report(report) => report.entries.iter().map(|entry| entry.code).collect(),
+            Self::Cancelled => vec!["cancelled"],
+            Self::ProtectionPending | Self::Failed(_) => Vec::new(),
+        }
+    }
+}
+
 struct App {
     confirmation: Option<desktop_view::Confirmation>,
     profile_editor: Option<desktop_view::ProfileEditor>,
@@ -412,6 +450,7 @@ struct App {
     autostart: bool,
     test_url: String,
     test_results: Vec<String>,
+    network_result: Option<NetworkResult>,
     network_test_generation: u64,
     network_test_task: Option<desktop_runtime::task::Handle>,
     geo_status: String,
@@ -652,6 +691,7 @@ impl App {
             profile_source: String::new(),
             test_url: "https://www.gstatic.com/generate_204".into(),
             test_results: vec![],
+            network_result: None,
             network_test_generation: 0,
             network_test_task: None,
             updates: update::State::default(),
@@ -881,6 +921,19 @@ impl App {
         self.probing = false;
         self.test_results.clear();
         self.network_codes.clear();
+        self.network_result = None;
+    }
+
+    fn set_network_result(&mut self, result: NetworkResult) {
+        self.test_results = result.lines(self.presentation_language);
+        self.network_codes = result.codes();
+        self.network_result = Some(result);
+    }
+
+    fn refresh_network_result(&mut self) {
+        if let Some(result) = &self.network_result {
+            self.test_results = result.lines(self.presentation_language);
+        }
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -1146,6 +1199,7 @@ impl App {
                             }
                             self.settings = engine.settings.clone();
                             self.presentation_language = self.settings.language.resolve_desktop();
+                            self.refresh_network_result();
                             if !self.rule_state.dirty() && !self.rule_state.has_editor() {
                                 self.rule_state = rules_view::State::default();
                             }
@@ -1754,10 +1808,7 @@ impl App {
                             false,
                         );
                     }
-                    Err(error) => self.show_notice(format!(
-                        "{}{error}",
-                        self.presentation_language.text("Geo 更新失败：", "Geo update failed: ")
-                    ), true),
+                    Err(error) => self.show_notice(format!("Geo 更新失败：{error}"), true),
                 }
                 return self.dispatch(Action::Refresh);
             }
@@ -2375,6 +2426,7 @@ impl App {
                 self.settings = reply.settings;
                 if language_changed {
                     self.presentation_language = self.settings.language.resolve_desktop();
+                    self.refresh_network_result();
                 }
                 if update_channel_changed {
                     self.updates.reset_channel();
@@ -2617,23 +2669,20 @@ impl App {
             }
             Message::ProbeCancel => {
                 self.clear_network_test();
-                self.test_results = vec![self.presentation_language.text("检查已取消", "Check cancelled").into()];
-                self.network_codes = vec!["cancelled"];
+                self.set_network_result(NetworkResult::Cancelled);
             }
             Message::Probe(fields) => {
                 if self.probing {
                     return Task::none();
                 }
                 if self.claude.protection_pending.is_some() {
-                    self.test_results = vec![self.presentation_language.text(
-                        "Claude 保护切换中，请稍后重试",
-                        "Claude protection is changing; try again shortly",
-                    ).into()];
+                    self.set_network_result(NetworkResult::ProtectionPending);
                     return Task::none();
                 }
                 self.probing = true;
                 self.test_results.clear();
                 self.network_codes.clear();
+                self.network_result = None;
                 self.network_test_generation = self.network_test_generation.wrapping_add(1);
                 let generation = self.network_test_generation;
                 let url = self.test_url.clone();
@@ -2668,19 +2717,10 @@ impl App {
                 }
                 self.probing = false;
                 self.network_test_task = None;
-                match result {
-                    Ok(result) => {
-                        self.test_results = result.lines_in(self.presentation_language);
-                        self.network_codes =
-                            result.entries.iter().map(|entry| entry.code).collect();
-                    }
-                    Err(error) => {
-                        self.test_results = vec![format!(
-                            "{} · {error}",
-                            self.presentation_language.text("检查失败", "Check failed")
-                        )];
-                    }
-                }
+                self.set_network_result(match result {
+                    Ok(report) => NetworkResult::Report(report),
+                    Err(error) => NetworkResult::Failed(error),
+                });
             }
             Message::OverviewRefresh => return self.overview_refresh(),
             Message::OverviewPrivacy => self.privacy_hidden = !self.privacy_hidden,

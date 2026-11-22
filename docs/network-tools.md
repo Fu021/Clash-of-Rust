@@ -65,4 +65,4 @@ Claude 保护开启或状态未知时，不查询系统 DNS，不发送 UDP、IC
 
 新增工具的 JSON 包含 `schema`、`tool`、脱敏源站 `target`、`elapsed_ms`、`status` 和逐项 `entries`，每项含 `label`、`detail`、`success`、`code`。`success=null` 表示未确认或说明；`complete`、`partial`、`failed`、`unavailable` 不能互相替代。GUI、Android 和 TUI 的共享文本报告在首行显示本次检查状态及总耗时；“完成”表示测量完成，HTTP 503 等仍按证据说明服务状态，不等同服务正常。已知状态、错误和测量文字按界面语言展示；JSON、DNS 返回内容、系统输出及其他外部原始证据保持原样。系统输出及正常达到流量/时限上限属于说明，不单独把成功检查降为部分完成；未捕获实际线路仍明确标为未确认。CLI 对 `failed/unavailable` 返回非零退出码，仍先输出报告；原有 `network check` 保留原 JSON 结构。
 
-GUI 诊断携带当前工具、结果和错误码；CLI 用 `--json` 或 `--output FILE` 保存。TUI 按 `e` 填写 JSON 路径，将本次原报告脱敏后原子写入，不重新执行检查；失败保留路径和报告，演示模式不写文件。切页后当前结果被清除，需要时应先导出。错误码定义见[诊断说明](diagnostics.md#网络工具)。
+GUI 诊断携带当前工具、结果和错误码；桌面收到其他客户端的语言切换后重新显示已有结果，无需重新检查。CLI 用 `--json` 或 `--output FILE` 保存。TUI 按 `e` 填写 JSON 路径，将本次原报告脱敏后原子写入，不重新执行检查；失败保留路径和报告，演示模式不写文件。切页后当前结果被清除，需要时应先导出。错误码定义见[诊断说明](diagnostics.md#网络工具)。

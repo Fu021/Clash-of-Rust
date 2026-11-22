@@ -77,6 +77,7 @@ def main():
     if not extended and desktop_ui_tests() and (args.system, args.arch) == ('linux', 'x64'):
         for case in ('application::ui_tests::network_report_is_replaced_and_late_results_cannot_reappear_after_navigation',
                      'application::ui_tests::english_network_report_displays_translated_status_and_preserves_raw_evidence',
+                     'application::ui_tests::network_report_follows_language_changes_from_another_client',
                      'application::ui_tests::network_tools_remain_reachable_after_scrolling_other_pages',
                      'application::ui_tests::remounted_subscription_list_clamps_a_stale_scroll_position',
                      'application::ui_tests::remounted_long_pages_preserve_valid_scroll_positions',
@@ -90,6 +91,7 @@ def main():
                      'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
                      'application::ui_tests::english_desktop_validation_and_errors_follow_language',
                      'application::ui_tests::english_shared_errors_are_projected_without_changing_drafts_or_evidence',
+                     'application::ui_tests::geo_failure_follows_the_current_language_and_keeps_external_details',
                      'application::ui_tests::profile_edit_closes_on_success_independently_of_presentation_language',
                      'application::ui_tests::english_desktop_dialogs_show_edit_validation_and_protection_effects',
                      'application::interaction::tests::english_delete_confirmation_keeps_the_active_subscription_and_network_consequences',

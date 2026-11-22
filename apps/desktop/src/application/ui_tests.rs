@@ -86,6 +86,91 @@ fn english_network_report_displays_translated_status_and_preserves_raw_evidence(
 }
 
 #[test]
+fn network_report_follows_language_changes_from_another_client() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Tests);
+    app.settings.language = LanguagePreference::SimplifiedChinese;
+    app.presentation_language = Language::SimplifiedChinese;
+    let report = network_tools::Report {
+        schema: 1,
+        tool: network_tools::Tool::Dns,
+        target: "https://example.test".into(),
+        elapsed_ms: 42,
+        status: "partial",
+        entries: vec![network_tools::Entry {
+            label: "系统 DNS".into(),
+            detail: "保留原始值".into(),
+            success: Some(false),
+            code: "dns_failed",
+        }],
+    };
+    let generation = app.network_test_generation;
+    let _ = app.update(Message::ProbeDone(generation, Ok(report)));
+    assert_eq!(app.test_results[0], "检查状态 · 部分完成 · 42 ms");
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_network_results().row_data(0).unwrap(),
+        "检查状态 · 部分完成 · 42 ms"
+    );
+    let mut english = synchronized_reply(&app);
+    english.settings.language = LanguagePreference::English;
+    let _ = app.update(Message::Finished(Box::new(english)));
+    assert_eq!(app.test_results[0], "Status · Partial · 42 ms");
+    assert_eq!(app.test_results[2], "System DNS · 保留原始值");
+    assert_eq!(app.network_codes, ["dns_failed"]);
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_network_results().row_data(0).unwrap(),
+        "Status · Partial · 42 ms"
+    );
+    assert_eq!(
+        data.get_network_results().row_data(2).unwrap(),
+        "System DNS · 保留原始值"
+    );
+    let mut chinese = synchronized_reply(&app);
+    chinese.settings.language = LanguagePreference::SimplifiedChinese;
+    let _ = app.update(Message::Finished(Box::new(chinese)));
+    assert_eq!(app.test_results[0], "检查状态 · 部分完成 · 42 ms");
+    assert_eq!(app.test_results[2], "系统 DNS · 保留原始值");
+
+    let _ = app.update(Message::ProbeCancel);
+    let mut english = synchronized_reply(&app);
+    english.settings.language = LanguagePreference::English;
+    let _ = app.update(Message::Finished(Box::new(english)));
+    assert_eq!(app.test_results, ["Check cancelled"]);
+    assert_eq!(app.network_codes, ["cancelled"]);
+
+    let _ = app.update(Message::Probe(String::new()));
+    let generation = app.network_test_generation;
+    let _ = app.update(Message::ProbeDone(generation, Err("原始错误".into())));
+    let mut chinese = synchronized_reply(&app);
+    chinese.settings.language = LanguagePreference::SimplifiedChinese;
+    let _ = app.update(Message::Finished(Box::new(chinese)));
+    assert_eq!(app.test_results, ["检查失败 · 原始错误"]);
+    assert!(app.network_codes.is_empty());
+
+    app.claude.protection_pending = Some(true);
+    let _ = app.update(Message::Probe(String::new()));
+    assert_eq!(app.test_results, ["Claude 保护切换中，请稍后重试"]);
+    let mut english = synchronized_reply(&app);
+    english.settings.language = LanguagePreference::English;
+    let _ = app.update(Message::Finished(Box::new(english)));
+    assert_eq!(
+        app.test_results,
+        ["Claude protection is changing; try again shortly"]
+    );
+    assert!(app.network_codes.is_empty());
+    let _ = app.update(Message::Navigate(Page::Home));
+    let _ = app.update(Message::Navigate(Page::Tests));
+    assert!(app.test_results.is_empty());
+    assert!(app.network_result.is_none());
+}
+
+#[test]
 fn english_update_results_localize_projection_without_changing_failure_state() {
     ui_testing::initialize(950, 700);
     let window = AppWindow::new().unwrap();
@@ -4543,6 +4628,32 @@ fn geo_download_survives_unrelated_refresh_and_only_success_clears_results() {
     assert!(!app.geo_updating);
     assert!(app.node_delays.is_empty());
     assert!(!app.error && app.notice.contains("已全部更新"));
+}
+
+#[test]
+fn geo_failure_follows_the_current_language_and_keeps_external_details() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Settings);
+    app.presentation_language = Language::English;
+    let _ = app.update(Message::GeoFinished(Err(
+        "Geo 更新失败，已恢复旧数据: 東京；provider".into(),
+    )));
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_notice(),
+        "Geo update failed: Geo update failed; previous data restored: 東京；provider"
+    );
+    assert!(app.error && app.snapshot.running);
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_notice(),
+        "Geo 更新失败：Geo 更新失败，已恢复旧数据: 東京；provider"
+    );
 }
 
 #[test]

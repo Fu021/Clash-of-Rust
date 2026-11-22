@@ -1,6 +1,7 @@
 use clash_mobile_runtime::core::{
     config::{Language, Profile},
     connection::{Field, Sort},
+    error_message,
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -37,8 +38,9 @@ impl LogMessage {
                 )
                 .into(),
             Self::StatusRefreshFailed(detail) => format!(
-                "{}{detail}",
-                language.text("状态刷新失败：", "Status refresh failed: ")
+                "{}{}",
+                language.text("状态刷新失败：", "Status refresh failed: "),
+                error_message::localize(detail, language)
             ),
             Self::SubscriptionUpdateFailed => language
                 .text(
@@ -47,11 +49,12 @@ impl LogMessage {
                 )
                 .into(),
             Self::SubscriptionDownloadFailed(detail) => format!(
-                "{}{detail}",
+                "{}{}",
                 language.text(
                     "订阅定时下载失败，已保留原配置与运行状态：",
                     "Scheduled subscription download failed; configuration and connection preserved: "
-                )
+                ),
+                error_message::localize(detail, language)
             ),
             Self::SubscriptionPrepareFailed => language
                 .text(
@@ -338,6 +341,13 @@ mod tests {
                 LogMessage::StatusRefreshFailed("timeout".into()),
                 "状态刷新失败：timeout",
                 "Status refresh failed: timeout",
+            ),
+            (
+                LogMessage::SubscriptionDownloadFailed(
+                    "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅".into(),
+                ),
+                "订阅定时下载失败，已保留原配置与运行状态：订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅",
+                "Scheduled subscription download failed; configuration and connection preserved: Incompatible subscription; use a Mihomo/Clash Meta YAML subscription",
             ),
             (
                 LogMessage::SubscriptionUpdateFailed,

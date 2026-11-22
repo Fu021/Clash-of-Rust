@@ -9,6 +9,9 @@ fn english(message: &str) -> Option<&'static str> {
         "订阅更新失败，已保留原配置与运行状态" => {
             "Subscription update failed; the previous configuration and running state were retained"
         }
+        "订阅定时更新失败，已保留原配置与运行状态" => {
+            "Scheduled subscription update failed; the previous configuration and running state were retained"
+        }
         "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅" => {
             "Incompatible subscription; use a Mihomo/Clash Meta YAML subscription"
         }
@@ -24,6 +27,7 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "订阅已修改，请刷新后重试" => "Subscription changed; refresh and try again",
         "订阅不存在" | "订阅已不存在" => "Subscription no longer exists",
+        "当前订阅已丢失" => "The current subscription is missing",
         "尚未选择订阅" | "请先选择订阅" => "Select a subscription first",
         "请先选择订阅配置" | "请先导入并选择一个订阅配置" => {
             "Import and select a subscription first"
@@ -35,7 +39,18 @@ fn english(message: &str) -> Option<&'static str> {
             "Enter a subscription URL or local YAML path"
         }
         "默认直连配置不能编辑" => "The default direct configuration cannot be edited",
+        "默认直连配置不能编辑，或订阅已不存在" => {
+            "The default direct configuration cannot be edited, or the subscription no longer exists"
+        }
         "默认直连配置不能删除" => "The default direct configuration cannot be deleted",
+        "默认配置缺失" => "The default configuration is missing",
+        "订阅名称不能为空" => "Subscription name cannot be empty",
+        "订阅名称已存在" => "Subscription name already exists",
+        "本地配置需要导入文件" => "Import a file for the local configuration",
+        "本地配置没有更新地址" => "The local configuration has no update URL",
+        "删除订阅失败，原运行配置恢复失败" => {
+            "Subscription deletion failed; the previous running configuration could not be restored"
+        }
         "YAML 配置格式错误" | "本地订阅 YAML 格式错误" => {
             "Invalid YAML configuration"
         }
@@ -62,6 +77,11 @@ fn english(message: &str) -> Option<&'static str> {
             "An identical rule is already enabled; edit it or change its order"
         }
         "规则已变化，请重新选择" => "Rules changed; select again",
+        "目标规则已变化，请重新拖动" => "The target rule changed; drag again",
+        "只有自定义规则可以停用" => "Only custom rules can be disabled",
+        "请先应用或放弃当前规则修改" => {
+            "Apply or discard the current rule changes first"
+        }
         "未找到规则；使用 rule list 查看稳定 ID" => {
             "Rule not found; use rule list to view stable IDs"
         }
@@ -91,6 +111,21 @@ fn english(message: &str) -> Option<&'static str> {
         "插入位置应为正整数" => "The insertion position must be a positive integer",
         "请先开启 DNS 覆盖" => "Enable DNS override first",
         "请先开启 DNS 覆盖，再启用 Fake-IP" => "Enable DNS override before Fake-IP",
+        "请先关闭 Claude 保护" => "Disable Claude protection first",
+        "请先关闭 Claude 保护，再修改 Fake-IP" => {
+            "Disable Claude protection before changing Fake-IP"
+        }
+        "请先关闭 Claude 保护，再编辑排除项" => {
+            "Disable Claude protection before editing exclusions"
+        }
+        "请使用 Claude 保护开关" => "Use the Claude protection switch",
+        "当前全局出口为 DIRECT，请先选择代理节点再开启 Claude 保护" => {
+            "The global route is DIRECT; select a proxy node before enabling Claude protection"
+        }
+        "请先选择具体代理节点" | "请选择具体代理节点" => {
+            "Select a specific proxy node"
+        }
+        "当前代理节点不存在" => "The current proxy node no longer exists",
         "Fake-IP 排除项过长" => "Fake-IP exclusion is too long",
         "Fake-IP 排除项只能包含域名、通配符和 . - _ + *" => {
             "Fake-IP exclusions may contain domains, wildcards, and . - _ + *"
@@ -98,6 +133,7 @@ fn english(message: &str) -> Option<&'static str> {
         "Fake-IP 排除项格式无效" => "Invalid Fake-IP exclusion",
         "这些排除项已存在" => "These exclusions already exist",
         "未找到排除项，请刷新后重试" => "Exclusion not found; refresh and try again",
+        "排除项操作无效" => "Invalid exclusion operation",
         "字号比例应为 80–150%" => "Text scale must be 80–150%",
         "运行模式无效" => "Invalid routing mode",
         "控制端口与代理端口必须非零且不能相同" => {
@@ -111,6 +147,50 @@ fn english(message: &str) -> Option<&'static str> {
         "设置文件格式错误" => "Invalid settings file",
         "无法读取订阅索引" => "Could not read the subscription index",
         "订阅索引格式错误" => "Invalid subscription index",
+        "系统通知内容无效" => "Invalid system notification",
+        "TUN 配置无效" => "Invalid TUN configuration",
+        "DNS 配置无效" => "Invalid DNS configuration",
+        "内核拒绝配置后恢复失败" => {
+            "Could not restore the core after it rejected the configuration"
+        }
+        "配置写入失败，磁盘恢复也失败" => {
+            "Configuration write failed; disk recovery also failed"
+        }
+        "配置保存失败，内核恢复也失败" => {
+            "Configuration save failed; core recovery also failed"
+        }
+        "Geo 更新失败" => "Geo update failed",
+        "Geo 更新失败，已恢复旧数据" => "Geo update failed; previous data restored",
+        "Geo 更新失败，恢复旧文件也失败" => {
+            "Geo update failed; previous files could not be restored"
+        }
+        "Geo 文件已恢复，但旧内核配置重载失败" => {
+            "Geo files were restored, but the previous core configuration could not be reloaded"
+        }
+        "Geo 数据清单缺失" => "Geo data manifest is missing",
+        "Geo 数据清单不完整" => "Geo data manifest is incomplete",
+        "Geo 数据清单缺少必要文件" => "Geo data manifest is missing a required file",
+        "Geo 数据清单格式无效" => "Invalid Geo data manifest",
+        "新下载的 Geo 数据无效" => "Downloaded Geo data is invalid",
+        "Geo 数据大小与发布信息不一致" => "Geo data size does not match the release",
+        "Geo 数据超过预期大小" => "Geo data exceeds the expected size",
+        "Geo 数据 SHA256/大小校验失败，已有数据保持不变" => {
+            "Geo data SHA256 or size verification failed; existing data was retained"
+        }
+        "Geo 发布信息获取失败" => "Could not retrieve Geo release information",
+        "Geo 下载失败" => "Geo download failed",
+        "Geo 更新备份不完整，无法自动恢复" => {
+            "Geo update backup is incomplete and cannot be restored automatically"
+        }
+        "Geo 更新备份无法读取，无法自动恢复" => {
+            "Geo update backup cannot be read or restored automatically"
+        }
+        "Geo 更新备份记录无效，无法自动恢复" => {
+            "Geo update backup record is invalid and cannot be restored automatically"
+        }
+        "Geo 更新备份校验失败，无法自动恢复" => {
+            "Geo update backup verification failed and cannot be restored automatically"
+        }
         _ => return None,
     })
 }
@@ -129,11 +209,17 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
             return format!("{translated}: {}", localize(detail, language)).into();
         }
     }
-    if let Some(limit) = message.strip_prefix("位置应为 1–")
-        && !limit.is_empty()
-        && limit.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return format!("Position must be between 1 and {limit}").into();
+    for (prefix, label) in [
+        ("位置应为 1–", "Position"),
+        ("插入位置应为 1-", "Insertion position"),
+        ("移动位置应为 1-", "Move position"),
+    ] {
+        if let Some(limit) = message.strip_prefix(prefix)
+            && !limit.is_empty()
+            && limit.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return format!("{label} must be between 1 and {limit}").into();
+        }
     }
     Cow::Borrowed(message)
 }
@@ -173,5 +259,22 @@ mod tests {
             localize("位置应为 1–12", Language::English),
             "Position must be between 1 and 12"
         );
+    }
+
+    #[test]
+    fn nested_geo_and_scheduled_subscription_failures_keep_external_details() {
+        for (message, expected) in [
+            (
+                "Geo 更新失败：Geo 更新失败，已恢复旧数据: 東京；provider",
+                "Geo update failed: Geo update failed; previous data restored: 東京；provider",
+            ),
+            (
+                "订阅定时更新失败，已保留原配置与运行状态：订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅",
+                "Scheduled subscription update failed; the previous configuration and running state were retained: Incompatible subscription; use a Mihomo/Clash Meta YAML subscription",
+            ),
+        ] {
+            assert_eq!(localize(message, Language::English), expected);
+            assert_eq!(localize(message, Language::SimplifiedChinese), message);
+        }
     }
 }

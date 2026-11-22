@@ -1300,7 +1300,7 @@ async fn run_loop(
                         state.geo_updating=false;geo_job=None;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
                             Ok(manifest)=> {state.geo=core::geodata::localize_status(&manifest.display_status(), state.presentation_language);state.notice=state.presentation_language.text("Geo 数据已更新", "Geo data updated").into();},
-                            Err(error)=>{state.notice=format!("{}{error}", state.presentation_language.text("Geo 更新失败：", "Geo update failed: "));state.notice_error=true;},
+                            Err(error)=>{state.notice=format!("Geo 更新失败：{error}");state.notice_error=true;},
                         }
                     }
                     Some(Update::Subscription(generation, pending, result)) if generation == subscription_generation => {
@@ -1325,7 +1325,7 @@ async fn run_loop(
                                 Err(error) => {
                                     if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
                                         && let Some(message) = core::subscription::format_notice(&error) {
-                                        state.notice = format!("{}{message}", state.presentation_language.text("订阅定时更新失败，已保留原配置与运行状态：", "Scheduled subscription update failed; the existing configuration and connection are preserved: "));
+                                        state.notice = format!("订阅定时更新失败，已保留原配置与运行状态：{message}");
                                         state.notice_error = true;
                                     }
                                     state.logs.push_back(("WARN".into(), LogMessage::SubscriptionDownloadFailed(error.to_string())));
