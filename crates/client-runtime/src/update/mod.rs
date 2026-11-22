@@ -10,7 +10,8 @@ use futures_util::future::{AbortHandle, AbortRegistration};
 pub use install::run_terminal_install;
 pub use install::{
     InstallSession, InstallationStatus, cleanup, ensure_installable, handoff, handoff_at,
-    handoff_owner, handoff_owner_at, helper_main, installation_status, startup_outcome,
+    handoff_owner, handoff_owner_at, helper_main, installation_status,
+    localize_installation_message, startup_outcome,
 };
 #[cfg(target_os = "linux")]
 pub(crate) use install::{commit_terminal_install, prepare_terminal_install};
@@ -21,6 +22,7 @@ use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -157,6 +159,51 @@ pub struct State {
 }
 
 impl State {
+    pub fn status_in(&self, language: clash_client_core::config::Language) -> Cow<'_, str> {
+        use clash_client_core::config::Language;
+        if language == Language::SimplifiedChinese {
+            return self.status.as_str().into();
+        }
+        match self.status.as_str() {
+            "更新通道已更改，请检查更新" => {
+                return "Update channel changed; check for updates".into();
+            }
+            "Claude 保护期间暂停客户端更新" => {
+                return "Client updates paused during Claude protection".into();
+            }
+            _ => {}
+        }
+        let Some((checked, description)) = self.status.split_once(" · ") else {
+            return self.status.as_str().into();
+        };
+        let translated = if description == "未发现新版本" {
+            "No updates found".into()
+        } else if let Some(error) = description.strip_prefix("检查失败：") {
+            format!("Check failed: {error}")
+        } else if let Some(update) = &self.available {
+            let describe = |language| {
+                let mut text = channel::description_in(
+                    &update.version,
+                    update.preview,
+                    crate::VERSION,
+                    language,
+                );
+                if let Some(manager) = update.package_manager {
+                    text.push_str(" · ");
+                    text.push_str(&package_manager_update_hint_in(manager, language));
+                }
+                text
+            };
+            if description != describe(Language::SimplifiedChinese) {
+                return self.status.as_str().into();
+            }
+            describe(language)
+        } else {
+            return self.status.as_str().into();
+        };
+        format!("{checked} · {translated}").into()
+    }
+
     /// Coalesce automatic and manual checks instead of queuing more requests.
     pub fn begin(&mut self) -> bool {
         if self.checking || self.busy() {
@@ -880,6 +927,10 @@ mod tests {
         let mut state = State::default();
         state.finish(Ok(Some(available.clone())));
         assert!(state.status.contains(&hint));
+        let displayed = state.status_in(clash_client_core::config::Language::English);
+        assert!(displayed.contains("AUR") && displayed.contains("makepkg -si"));
+        assert!(displayed.contains("use pacman"));
+        assert!(state.status.contains(&hint));
         available.package_manager = Some("dnf");
         assert_eq!(
             available.package_manager_hint().as_deref(),
@@ -887,6 +938,38 @@ mod tests {
         );
         available.package_manager = None;
         assert_eq!(available.package_manager_hint(), None);
+    }
+
+    #[test]
+    fn update_check_status_localizes_known_results_and_keeps_original_details() {
+        use clash_client_core::config::Language;
+        let mut state = State::default();
+        state.finish(Ok(None));
+        assert!(
+            state
+                .status_in(Language::English)
+                .ends_with("No updates found")
+        );
+        assert!(state.status.ends_with("未发现新版本"));
+        state.finish(Err("TLS example".into()));
+        assert!(
+            state
+                .status_in(Language::English)
+                .ends_with("Check failed: TLS example")
+        );
+        state.reset_channel();
+        assert_eq!(
+            state.status_in(Language::English),
+            "Update channel changed; check for updates"
+        );
+        state.pause_for_protection();
+        assert_eq!(
+            state.status_in(Language::English),
+            "Client updates paused during Claude protection"
+        );
+        state.status = "外部结果 · 東京".into();
+        assert_eq!(state.status_in(Language::English), state.status);
+        assert_eq!(state.status_in(Language::SimplifiedChinese), state.status);
     }
 
     #[cfg(target_os = "linux")]

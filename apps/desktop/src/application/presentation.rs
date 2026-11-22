@@ -6,6 +6,7 @@ use clash_desktop_protocol::{
     models::{ViewModels, reconcile},
     *,
 };
+use std::borrow::Cow;
 
 pub(super) fn model<T: Clone + PartialEq>(old: ModelRc<T>, values: Vec<T>) -> ModelRc<T> {
     if old.with_rows(|rows| rows == values.as_slice()) {
@@ -483,9 +484,13 @@ impl App {
             get_notice,
             set_notice,
             if self.notice_visible {
-                self.notice.as_str()
+                if self.notice_update_failure {
+                    update::localize_installation_message(&self.notice, language)
+                } else {
+                    Cow::Borrowed(self.notice.as_str())
+                }
             } else {
-                ""
+                Cow::Borrowed("")
             }
         );
         text!(get_query, set_query, &self.query);
@@ -662,17 +667,16 @@ impl App {
                 )
             }
         });
-        text!(
-            get_update_status,
-            set_update_status,
-            self.updates
-                .failure
-                .as_deref()
-                .or(self.updates.outcome.as_deref())
-                .or(self.updates.install_stage.as_deref())
-                .or(download_status.as_deref())
-                .unwrap_or(&self.updates.status)
-        );
+        let update_status = self
+            .updates
+            .failure
+            .as_deref()
+            .or(self.updates.outcome.as_deref())
+            .or(self.updates.install_stage.as_deref())
+            .map(|message| update::localize_installation_message(message, language))
+            .or_else(|| download_status.as_deref().map(Cow::Borrowed))
+            .unwrap_or_else(|| self.updates.status_in(language));
+        text!(get_update_status, set_update_status, update_status);
         data.set_network_results(strings(data.get_network_results(), &self.test_results));
         self.present_overview(data);
         if !self.visible {

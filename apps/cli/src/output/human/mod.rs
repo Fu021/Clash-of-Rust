@@ -503,7 +503,13 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 )
             }
         }
-        "update install" if value["state"] == "succeeded" => message(out, &text(value, "message")),
+        "update install" if value["state"] == "succeeded" => message(
+            out,
+            &clash_client_runtime::update::localize_installation_message(
+                &text(value, "message"),
+                language,
+            ),
+        ),
         "update install" => message(
             out,
             language.text(
@@ -530,7 +536,10 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 field_in(
                     out,
                     language.text("安装结果", "Installation result"),
-                    &text_in(value, "message", language),
+                    &clash_client_runtime::update::localize_installation_message(
+                        &text(value, "message"),
+                        language,
+                    ),
                     language,
                 )?;
                 if matches!(value["state"].as_str(), Some("preparing" | "installing")) {

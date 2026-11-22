@@ -3011,6 +3011,9 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
                 native_ci.main()
         checks = [command for command in commands if len(command) > 1 and command[1] == 'test']
+        self.assertTrue(any(command[command.index('-p')+1] == 'clash-cli'
+                            and '--test' in command and 'console' in command
+                            and '--no-run' not in command for command in checks))
         for package, case in (('clash-client-core', 'update'),
                               ('clash-client-core', 'download::tests::'),
                               ('clash-client-core', 'geodata::tests::'),
@@ -3022,7 +3025,8 @@ class BuildTests(unittest.TestCase):
         for path in ('crates/client-core/src/config/mod.rs',
                      'crates/client-core/src/download.rs',
                      'crates/client-core/src/geodata/mod.rs',
-                     'crates/client-core/src/update/schedule.rs'):
+                     'crates/client-core/src/update/schedule.rs',
+                     'apps/cli/tests/console.rs'):
             self.assertTrue(ci_test_policy.select([path])['update_tests'])
 
     def test_desktop_ui_changes_run_targeted_checks_in_linux_container(self):

@@ -56,6 +56,8 @@ def main():
         run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
              'update::', '--', '--test-threads=1'])
         if (args.system, args.arch) == ('linux', 'x64'):
+            run(['cargo', 'test', '-p', 'clash-cli', '--test', 'console', '--release',
+                 '--locked', '--', '--test-threads=1'])
             for package, target, case in (
                     ('clash-client-core', ['--lib'], 'update'),
                     ('clash-client-core', ['--lib'], 'download::tests::'),

@@ -86,6 +86,39 @@ fn english_network_report_displays_translated_status_and_preserves_raw_evidence(
 }
 
 #[test]
+fn english_update_results_localize_projection_without_changing_failure_state() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Settings);
+    app.presentation_language = Language::English;
+    let failure = "更新失败：安装授权已取消；本次未停止原后台";
+    app.update_outcome(failure.into(), true);
+    app.present_slint(&data, &mut models);
+    let expected = "Update failed: Installation authorization cancelled; existing background process not stopped";
+    assert_eq!(data.get_notice(), expected);
+    assert_eq!(data.get_update_status(), expected);
+    assert_eq!(app.pending_update_failure.as_deref(), Some(failure));
+    assert_eq!(app.updates.failure.as_deref(), Some(failure));
+    let _ = app.update(Message::DismissNotice);
+    assert!(app.pending_update_failure.is_none());
+    assert!(app.updates.failure.is_none());
+    app.updates.outcome = Some("已更新至 0.6.7；后台和内核已启动".into());
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_update_status(),
+        "Updated to 0.6.7; background process and core started"
+    );
+    app.updates.outcome = None;
+    app.updates.finish(Ok(None));
+    app.present_slint(&data, &mut models);
+    assert!(data.get_update_status().ends_with("No updates found"));
+    assert!(app.updates.status.ends_with("未发现新版本"));
+}
+
+#[test]
 fn network_tools_remain_reachable_after_scrolling_other_pages() {
     use slint::platform::WindowEvent;
 

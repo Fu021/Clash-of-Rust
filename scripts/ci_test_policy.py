@@ -152,7 +152,7 @@ def select(paths, extended=False):
                          'apps/cli/src/service', 'apps/cli/src/commands/inspection',
                          'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'installer/', 'crates/client-runtime/src/platform/windows/'))
-        or path in ('scripts/test-cli-update.py', 'scripts/ci_test_policy.py',
+        or path in ('apps/cli/tests/console.rs', 'scripts/test-cli-update.py', 'scripts/ci_test_policy.py',
                     'scripts/windows_ci.py', 'scripts/windows_update_tests.py',
                     'scripts/build-installer.py')
         for path in paths

@@ -1,10 +1,12 @@
 //! A copied native helper survives replacement of the GUI executable. No scripts.
 use super::Downloaded;
 use anyhow::{Context, Result, bail};
+use clash_client_core::config::Language;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -16,6 +18,142 @@ use std::{
 mod linux;
 mod package;
 mod windows;
+
+pub fn localize_installation_message(message: &str, language: Language) -> Cow<'_, str> {
+    if language == Language::SimplifiedChinese {
+        return message.into();
+    }
+    let translated = match message {
+        "安装包已校验，正在准备安装" => {
+            Some("Package verified; preparing installation")
+        }
+        "安装包已校验，等待终端授权；后台仍在运行" => Some(
+            "Package verified; waiting for terminal authorization; background process still running",
+        ),
+        "安装助手正在处理，尚未确认完成" => {
+            Some("Installer running; completion not yet confirmed")
+        }
+        "正在安装，后台已暂停" => Some("Installing; background process paused"),
+        "正在启动安装助手…" => Some("Starting installer…"),
+        "正在挂载更新安装包…" => Some("Mounting update package…"),
+        "正在校验更新应用、内核与资源…" => {
+            Some("Verifying application, core and resources…")
+        }
+        "正在请求安装授权，请完成系统确认…" => {
+            Some("Waiting for installation authorization; confirm the system prompt…")
+        }
+        "正在准备更新文件…" => Some("Preparing update files…"),
+        "更新已准备好，正在退出旧客户端…" => {
+            Some("Update ready; closing the previous client…")
+        }
+        "正在替换应用文件…" => Some("Replacing application files…"),
+        "应用已更新，正在清理安装包并重启…" => {
+            Some("Application updated; cleaning up and restarting…")
+        }
+        "已取消更新下载" => Some("Update download cancelled"),
+        "安装授权已取消" => Some("Installation authorization cancelled"),
+        "安装已取消" => Some("Installation cancelled"),
+        _ => None,
+    };
+    if let Some(translated) = translated {
+        return translated.into();
+    }
+    if let Some(rest) = message.strip_prefix("已更新至 ") {
+        for (suffix, translated) in [
+            (
+                "；后台和内核已启动",
+                "; background process and core started",
+            ),
+            (
+                "；后台已恢复，内核保持关闭",
+                "; background process restored; core remains stopped",
+            ),
+            (
+                "；可用 cor start 启动后台",
+                "; run cor start to start the background process",
+            ),
+        ] {
+            if let Some(version) = rest.strip_suffix(suffix) {
+                return format!("Updated to {version}{translated}").into();
+            }
+        }
+        if !rest.contains('；') {
+            return format!("Updated to {rest}").into();
+        }
+    }
+    if let Some(rest) = message.strip_prefix("已安装 ")
+        && let Some((version, detail)) = rest.split_once("，但恢复后台失败：")
+        && let Some(reason) = detail.strip_suffix("；请运行 cor status 检查后重试")
+    {
+        return format!(
+            "Installed {version}, but could not restore the background process: {reason}; check cor status and retry"
+        )
+        .into();
+    }
+    if let Some(reason) = message.strip_prefix("更新失败：") {
+        let (reason, recovery) = if let Some((reason, recovery)) =
+            reason.rsplit_once("；恢复后台也失败：")
+            && let Some(detail) = recovery.strip_suffix("；请运行 cor start")
+        {
+            (
+                reason,
+                format!("; background recovery also failed: {detail}; run cor start"),
+            )
+        } else {
+            [
+                (
+                    "；本次未停止原后台",
+                    "; existing background process not stopped",
+                ),
+                (
+                    "；已恢复更新前的后台和内核状态",
+                    "; previous background and core state restored",
+                ),
+            ]
+            .into_iter()
+            .find_map(|(suffix, translated)| {
+                reason
+                    .strip_suffix(suffix)
+                    .map(|reason| (reason, translated.to_owned()))
+            })
+            .unwrap_or_else(|| (reason, String::new()))
+        };
+        let reason = if reason == "安装授权已取消" {
+            "Installation authorization cancelled".into()
+        } else if reason == "安装已取消" {
+            "Installation cancelled".into()
+        } else if reason == "未获得安装授权，未执行停止后台；请在交互终端重试，或由管理员手动安装"
+        {
+            "Installation authorization denied; retry in an interactive terminal or ask an administrator to install the package".into()
+        } else if reason == "未获得安装授权，未执行停止后台；当前账户无权通过 sudo 安装此软件包"
+        {
+            "Installation authorization denied; this account cannot install the package with sudo"
+                .into()
+        } else if reason == "安装助手意外退出，请检查安全软件" {
+            "Installer exited unexpectedly; check security software".into()
+        } else if reason == "安装目录中的文件不可写或仍被占用，未替换旧文件，请稍后重试"
+        {
+            "Installation files are not writable or are in use; old files retained; retry later"
+                .into()
+        } else if let Some((status, detail)) = reason
+            .strip_prefix("DEB 安装失败（")
+            .and_then(|rest| rest.split_once("）："))
+        {
+            format!("DEB installation failed ({status}): {detail}")
+        } else if let Some((status, detail)) = reason
+            .strip_prefix("Arch 原生包 安装失败（")
+            .and_then(|rest| rest.split_once("）："))
+        {
+            format!("Arch package installation failed ({status}): {detail}")
+        } else if let Some(detail) = reason.strip_prefix("DEB 安装失败：") {
+            format!("DEB installation failed: {detail}")
+        } else {
+            reason.to_owned()
+        };
+        return format!("Update failed: {reason}{recovery}").into();
+    }
+    message.into()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstallationStatus {
