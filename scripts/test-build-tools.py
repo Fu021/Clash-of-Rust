@@ -2591,6 +2591,7 @@ class BuildTests(unittest.TestCase):
                          'crates/client-ui/ui/models.slint',
                          'crates/client-ui/ui/preview-network.slint',
                          'resources/fonts/SourceHanSansCN-Regular.otf',
+                         'crates/client-core/src/error_message.rs',
                          'crates/client-core/src/detection/ip/mod.rs'):
                 selected = ci_test_policy.select([path])
                 self.assertTrue(selected['desktop_ui_tests'], path)
@@ -3065,6 +3066,9 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any(command[command.index('-p')+1] == 'clash-cli'
                             and 'args::tests::' in command and '--no-run' not in command
                             for command in ui_checks))
+        self.assertTrue(any(command[command.index('-p')+1] == 'clash-cli'
+                            and 'output::tests::localized_errors_translate_known_protection_message_and_preserve_external_values' in command
+                            for command in ui_checks))
         for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
             self.assertFalse(any(target in command for command in ui_checks))
         focused = [command for command in ui_checks if command[command.index('-p')+1] == 'clash-of-rust']
@@ -3078,6 +3082,7 @@ class BuildTests(unittest.TestCase):
                 'application::ui_tests::desktop_language_menu_dispatches_stable_tags_in_both_catalogs',
                 'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
                 'application::ui_tests::english_desktop_validation_and_errors_follow_language',
+                'application::ui_tests::english_shared_errors_are_projected_without_changing_drafts_or_evidence',
                 'application::ui_tests::profile_edit_closes_on_success_independently_of_presentation_language',
                 'application::ui_tests::english_desktop_dialogs_show_edit_validation_and_protection_effects',
                 'application::interaction::tests::english_delete_confirmation_keeps_the_active_subscription_and_network_consequences',

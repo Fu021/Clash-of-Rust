@@ -104,6 +104,7 @@ def select(paths, extended=False):
         or path.startswith(('apps/desktop-ui/', 'crates/desktop-protocol/', 'vendor/winit/',
                          'apps/desktop/src/application/', 'crates/client-core/src/config/',
                          'crates/client-core/src/protection/', 'crates/client-runtime/src/control/',
+                         'crates/client-core/src/error_message.rs',
                          'crates/client-core/src/detection/',
                          'resources/fonts/',
                          'crates/client-core/src/application_rules.rs',
@@ -120,6 +121,7 @@ def select(paths, extended=False):
                          'crates/client-ui/ui/icons/', 'apps/android/native/', 'resources/fonts/',
                          'crates/mobile-ffi/src/', 'crates/client-core/src/config/',
                          'crates/client-core/src/protection/', 'crates/client-core/src/detection/',
+                         'crates/client-core/src/error_message.rs',
                          'crates/client-core/src/application_rules.rs',
                          'crates/client-core/src/application_rules/'))
         or path in ('crates/client-ui/ui/models.slint', 'crates/client-ui/ui/preview-reports.slint',

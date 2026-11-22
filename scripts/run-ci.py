@@ -86,6 +86,7 @@ def main():
                      'application::ui_tests::desktop_language_menu_dispatches_stable_tags_in_both_catalogs',
                      'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
                      'application::ui_tests::english_desktop_validation_and_errors_follow_language',
+                     'application::ui_tests::english_shared_errors_are_projected_without_changing_drafts_or_evidence',
                      'application::ui_tests::profile_edit_closes_on_success_independently_of_presentation_language',
                      'application::ui_tests::english_desktop_dialogs_show_edit_validation_and_protection_effects',
                      'application::interaction::tests::english_delete_confirmation_keeps_the_active_subscription_and_network_consequences',
@@ -131,6 +132,7 @@ def main():
                 ('clash-desktop-ui', ['--lib'], ['']),
                 ('clash-client-core', ['--lib'], ['']),
                 ('clash-cli', ['--bin', 'cor'], ['args::tests::', 'tui::tests::',
+                                               'output::tests::localized_errors_translate_known_protection_message_and_preserve_external_values',
                                                'output::tests::english_network_report_translates_known_evidence_without_rewriting_external_values']),
                 ('clash-client-runtime', ['--lib'],
                  ['control::dispatch::tests::', 'control::transport::tests::']
