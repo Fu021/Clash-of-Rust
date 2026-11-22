@@ -4,8 +4,10 @@ from contextlib import contextmanager, nullcontext
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import secrets
+import selectors
 import signal
 import subprocess
 import sys
@@ -20,6 +22,7 @@ from workflow_artifacts import fetch_package_inputs, release_module
 
 APP = Path('/opt/clash-of-rust')
 REPORT = ROOT/'target/linux-report/published-update.json'
+GUI_REPORT = REPORT.with_name('published-gui-update.json')
 
 
 def require(condition, message):
@@ -200,6 +203,170 @@ def expected_version(package_format, version):
     return native_version(version, '~' if package_format == 'rpm' else 'pre.') + '-1'
 
 
+def gui_target(package_format, arch):
+    release = platform.freedesktop_os_release()
+    if package_format == 'pkg':
+        return (arch == 'x64' and release.get('ID') == 'arch'
+                and os.environ.get('COR_LINUX_GUEST') == 'true')
+    return (package_format == 'deb' and arch == 'x64'
+            and (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', '24.04')
+            and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
+
+
+@contextmanager
+def package_manager_lock(package_format):
+    from linux_gui import cleanup_steps, stop_child
+
+    require(package_format in ('deb', 'pkg'), 'Unsupported graphical installation lock')
+    marker = '/var/lib/pacman/.cor-gui-' + secrets.token_hex(16)
+    worker = """
+import fcntl
+import os
+from pathlib import Path
+import select
+import signal
+import sys
+
+mode, marker = sys.argv[1:]
+marker = Path(marker)
+path = marker.with_name('db.lck')
+
+def cleanup():
+    try:
+        ours = marker.stat()
+    except FileNotFoundError:
+        return
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        current = None
+    if current and (ours.st_dev, ours.st_ino) == (current.st_dev, current.st_ino):
+        path.unlink()
+    marker.unlink()
+
+def interrupt(number, frame):
+    raise SystemExit(128 + number)
+
+def hold():
+    print('locked', flush=True)
+    if not select.select([sys.stdin], [], [], 420)[0]:
+        raise TimeoutError('Native database lock lease expired')
+
+for number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(number, interrupt)
+
+if mode == 'cleanup':
+    cleanup()
+elif mode == 'deb':
+    with open('/var/lib/dpkg/lock-frontend', 'r+b') as lock:
+        fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        hold()
+else:
+    with marker.open('xb'):
+        try:
+            os.link(marker, path)
+            hold()
+            if not marker.samefile(path):
+                raise RuntimeError('The reserved Arch database lock was replaced')
+        finally:
+            cleanup()
+"""
+    command = ['sudo', '-n', '/usr/bin/python3', '-I', '-c', worker]
+    with tempfile.TemporaryFile(mode='w+b') as errors:
+        child = subprocess.Popen([*command, package_format, marker], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=errors)
+        acquired = False
+
+        def details():
+            return os.pread(errors.fileno(), 4096, 0).decode(errors='replace').strip()
+
+        def release():
+            child.stdin.close()
+            status = child.wait(timeout=15)
+            if status and acquired:
+                raise RuntimeError(f'Package manager lock helper failed ({status}): {details()}')
+
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                if not selector.select(15):
+                    raise TimeoutError('Package manager lock helper did not report acquisition')
+                if child.stdout.readline() != b'locked\n':
+                    raise RuntimeError(f'Could not acquire the {package_format} database lock: {details()}')
+            acquired = True
+            yield
+        finally:
+            steps = [('release package manager database lock', release),
+                     ('stop package lock helper', lambda: stop_child(child))]
+            if package_format == 'pkg':
+                def remove_owned_lock():
+                    if child.poll() is None:
+                        raise RuntimeError('Package lock helper survived and may still own the native lock')
+                    invoke([*command, 'cleanup', marker], timeout=15)
+                steps.append(('remove owned Arch database lock', remove_owned_lock))
+            steps.append(('close package lock status pipe', child.stdout.close))
+            cleanup_steps(*steps)
+
+
+def exercise_gui(fixture, old_package):
+    from linux_gui import installed_tests, verify_installed_package
+
+    require_disposable_update_runner()
+    package_format = fixture['format']
+    require(gui_target(package_format, fixture['arch']), 'No graphical update target on this runner')
+    previous, published = fixture['previous'], fixture['published']
+    report = {'schema': 1, 'status': 'failed', 'format': package_format,
+              'previous': previous, 'published': published, 'checks': {}}
+    try:
+        if package_format == 'deb':
+            from linux_apt import install
+            install(['xvfb', 'xauth', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
+                     'policykit-1-gnome', 'fonts-noto-cjk', 'scrot', 'tesseract-ocr',
+                     'tesseract-ocr-chi-sim', 'tesseract-ocr-eng', 'strace'])
+        else:
+            from linux_native_guest import install_dependencies
+            install_dependencies(['xorg-server-xvfb', 'xorg-xauth', 'xorg-xdpyinfo', 'xorg-xwininfo',
+                                  'xdotool', 'wmctrl', 'openbox', 'mate-polkit', 'noto-fonts-cjk',
+                                  'scrot', 'tesseract', 'tesseract-data-chi_sim', 'tesseract-data-eng', 'strace'])
+            if Path('/usr/lib/systemd/system/polkit-agent-helper.socket').is_file():
+                invoke(['sudo', '-n', 'systemctl', 'start', 'polkit-agent-helper.socket'])
+        install_previous(package_format, old_package)
+        old_version = expected_version(package_format, previous['version'])
+        verify_installed_package(package_format, old_version)
+        report['checks']['previous_package_installed'] = True
+        with tempfile.TemporaryDirectory(prefix='cor-gui-update-checksum-') as temporary:
+            checksum = Path(temporary)/'package.sha256'
+            download(published['checksum_url'], checksum, digest=published['checksum_sha256'])
+            require(checksum.read_text(encoding='ascii').strip() == published['sha256'],
+                    'The published checksum differs from the package digest')
+        report['checks']['published_checksum_verified'] = True
+        installed_tests(update_case={
+            'format': package_format, 'published': published, 'previous_version': previous['version'],
+            'old_native_version': old_version,
+            'new_native_version': expected_version(package_format, published['version']),
+        }, package_lock=lambda: package_manager_lock(package_format))
+        desktop = json.loads((GUI_REPORT.parent/'desktop-update'/'gui.json').read_text())
+        checks = desktop.get('checks', {})
+        require(desktop.get('status') == 'passed'
+                and checks.get('version_visible_in_gui') is True
+                and checks.get('cancel', {}).get('outcome') == 'failed'
+                and checks.get('locked', {}).get('outcome') == 'failed'
+                and checks['locked'].get('native_lock_conflict')
+                and checks.get('retry', {}).get('outcome') == 'succeeded'
+                and checks['retry'].get('gui_reopened') is True,
+                'No passing graphical update session report')
+        report['checks'].update(checks)
+        verify_installed_package(package_format, expected_version(package_format, published['version']))
+        report['status'] = 'passed'
+    except BaseException as error:
+        report['error'] = f'{type(error).__name__}: {error}'
+        if getattr(error, '__notes__', None):
+            report['error_notes'] = error.__notes__
+        raise
+    finally:
+        write_json(GUI_REPORT, report)
+
+
 @contextmanager
 def terminal_authorization():
     import pwd
@@ -222,11 +389,15 @@ def terminal_authorization():
             invoke(['sudo', '-n', 'rm', '-f', '--', destination])
 
 
-def exercise(directory):
+def require_disposable_update_runner():
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'linux'
             or os.geteuid() == 0 or (os.environ.get('COR_LINUX_GUEST') != 'true'
                                      and os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted')):
         raise RuntimeError('Published update tests require a disposable Actions runner or compatibility VM')
+
+
+def exercise_cli(directory):
+    require_disposable_update_runner()
     fixture = json.loads((directory/'fixture.json').read_text())
     package_format = fixture['format']
     require(fixture.get('schema') == 1 and fixture['arch'] == host_arch()
@@ -349,6 +520,14 @@ def exercise(directory):
         raise
     finally:
         write_json(REPORT, report)
+
+    return fixture, old_package
+
+
+def exercise(directory):
+    fixture, old_package = exercise_cli(directory)
+    if gui_target(fixture['format'], fixture['arch']):
+        exercise_gui(fixture, old_package)
 
 
 if __name__ == '__main__':
