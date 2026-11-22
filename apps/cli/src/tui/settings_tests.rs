@@ -10,6 +10,104 @@ fn args() -> crate::args::Args {
     crate::args::parse(["ui", "--lang=zh-CN"].into_iter().map(str::to_owned)).unwrap()
 }
 
+#[tokio::test]
+async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
+    use clash_client_core::config::Profile;
+    use clash_client_runtime::control::{Endpoint, PROTOCOL, Remote};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        for index in 0..4 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let length = stream.read_u32().await.unwrap() as usize;
+            let mut request = vec![0; length];
+            stream.read_exact(&mut request).await.unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(request["operation"]["command"], "rule-document");
+            assert_eq!(request["operation"]["id"], "selected-profile");
+            let reply = if index % 2 == 0 {
+                serde_json::json!({
+                    "result": {
+                        "profile_id": "different-profile",
+                        "builtin": false,
+                        "original": [],
+                        "policies": [],
+                        "included": [false, false, false, false, false]
+                    },
+                    "error": null
+                })
+            } else {
+                serde_json::json!({
+                    "result": null,
+                    "error": "设置已被另一客户端修改，请刷新后重试"
+                })
+            };
+            let reply = serde_json::to_vec(&reply).unwrap();
+            stream.write_u32(reply.len() as u32).await.unwrap();
+            stream.write_all(&reply).await.unwrap();
+        }
+    });
+    let endpoint: Endpoint = serde_json::from_value(serde_json::json!({
+        "protocol": PROTOCOL,
+        "port": port,
+        "pid": std::process::id(),
+        "owner": "daemon",
+        "token": "a".repeat(64)
+    }))
+    .unwrap();
+    let remote = Remote::new(endpoint, std::time::Duration::from_secs(2));
+    for (language, changed, backend_error) in [
+        (
+            SimplifiedChinese,
+            "订阅已变化，请刷新后重试",
+            "设置已被另一客户端修改，请刷新后重试",
+        ),
+        (
+            English,
+            "The subscription changed; refresh and try again",
+            "Settings changed in another client; refresh and try again",
+        ),
+    ] {
+        let mut poll = demo_poll();
+        poll.meta.settings.active_profile = Some("selected-profile".into());
+        poll.meta.profiles.push(Profile {
+            id: "selected-profile".into(),
+            name: "Example".into(),
+            source: "https://example.test/sub".into(),
+            updated: 0,
+            usage: None,
+            builtin: false,
+        });
+        let changed_status =
+            crate::tui::catalog::read_shortcuts(&remote, &poll, None, true, language)
+                .await
+                .unwrap();
+        let backend_status =
+            crate::tui::catalog::read_shortcuts(&remote, &poll, None, true, language)
+                .await
+                .unwrap();
+        let mut state = State::new(false);
+        state.language = language;
+        state.accept(Some(poll));
+        for (status, expected) in [(changed_status, changed), (backend_status, backend_error)] {
+            assert_eq!(status.error.as_deref(), Some(expected));
+            assert!(status.document.is_none());
+            state.shortcuts = Some(status);
+            let lines = crate::tui::catalog::rules(&state, 120, 24)
+                .into_iter()
+                .map(|(line, _)| line)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(lines.contains(expected), "{lines}");
+            assert!(crate::tui::catalog::open_shortcut(&state, "shortcut_ads").is_err());
+        }
+    }
+    server.await.unwrap();
+}
+
 #[test]
 fn native_choices_wait_for_confirmation_and_backend_state_before_showing_saved_values() {
     let mut state = State::new(false);

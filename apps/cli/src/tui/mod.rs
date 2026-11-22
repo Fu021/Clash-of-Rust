@@ -61,7 +61,7 @@ async fn read(
             return Ok(Reply::Snapshot(None, None));
         };
         let shortcuts = if page == Page::Rules {
-            catalog::read_shortcuts(&remote, &poll, cached, include_rules).await
+            catalog::read_shortcuts(&remote, &poll, cached, include_rules, language).await
         } else {
             None
         };
@@ -185,7 +185,7 @@ async fn save_command(
             })
             .await?;
         let shortcuts = if shortcut {
-            catalog::read_shortcuts(&remote, &poll, None, include_rules).await
+            catalog::read_shortcuts(&remote, &poll, None, include_rules, language).await
         } else {
             None
         };

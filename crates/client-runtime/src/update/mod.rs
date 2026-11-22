@@ -198,11 +198,14 @@ fn localize_check_detail(error: &str) -> Cow<'_, str> {
             Some(body) => ("Could not get the pre-release list: ", body),
             None => ("", body),
         };
-        let details = body
-            .split('；')
-            .map(|detail| localize_check_route(detail).into_owned())
-            .collect::<Vec<_>>()
-            .join("; ");
+        let mut details = String::new();
+        for (index, detail) in body.split('；').enumerate() {
+            let translated = localize_check_route(detail);
+            if index > 0 {
+                details.push_str(if translated == detail { "；" } else { "; " });
+            }
+            details.push_str(&translated);
+        }
         return format!("{prefix}{details} (tried available proxies and direct connections)")
             .into();
     }
@@ -228,6 +231,8 @@ fn localize_check_reason(error: &str) -> Cow<'_, str> {
     for (prefix, label) in [
         ("GitHub API", "GitHub API"),
         ("Release 订阅", "Release feed"),
+        ("安装包信息", "Package information"),
+        ("下载", "Download"),
     ] {
         if let Some(reason) = error.strip_prefix(prefix) {
             let reason = match reason {
@@ -1077,6 +1082,13 @@ mod tests {
         );
         assert_eq!(
             localize_check_error(
+                "检查更新失败（已尝试 4 次）：安装包信息返回 HTTP 503 Service Unavailable",
+                Language::English,
+            ),
+            "Update check failed after 4 attempts: Package information returned HTTP 503 Service Unavailable"
+        );
+        assert_eq!(
+            localize_check_error(
                 "检查更新失败（已尝试 4 次）：系统网络：GitHub API网络连接失败；Release 订阅域名解析失败（已尝试可用代理和直连）",
                 Language::English,
             ),
@@ -1088,6 +1100,13 @@ mod tests {
                 Language::English,
             ),
             "Could not get the pre-release list: Core proxy: 外部详情 東京 (tried available proxies and direct connections)"
+        );
+        assert_eq!(
+            localize_check_error(
+                "内核代理：外部详情；東京（已尝试可用代理和直连）",
+                Language::English,
+            ),
+            "Core proxy: 外部详情；東京 (tried available proxies and direct connections)"
         );
         assert_eq!(
             localize_check_error("检查更新失败（已尝试 x 次）：外部详情", Language::English),
@@ -1467,6 +1486,31 @@ mod tests {
             );
             server.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn http_package_error_is_localized_from_the_failed_response() {
+        use clash_client_core::config::Language;
+
+        let wire = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec();
+        let (url, server) = mock(wire, Duration::ZERO).await;
+        let directory = tempfile::tempdir().unwrap();
+        let error = transfer(
+            &client(Duration::from_secs(2)),
+            &url,
+            3,
+            &"0".repeat(64),
+            &directory.path().join("package"),
+            (None, false),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            localize_installation_message(&format!("更新失败：{error:#}"), Language::English),
+            "Update failed: Package download failed (HTTP 404)"
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

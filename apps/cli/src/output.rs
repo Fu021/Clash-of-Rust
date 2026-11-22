@@ -13,13 +13,9 @@ pub(crate) fn localized_error(
         .chain()
         .map(|cause| {
             let message = cause.to_string();
-            if message == clash_client_core::protection::READ_ONLY_NOTICE {
-                language
-                    .text(
-                        clash_client_core::protection::READ_ONLY_NOTICE,
-                        "Disable Claude protection first; network changes and updates are locked while protection is active",
-                    )
-                    .to_owned()
+            let translated = clash_client_core::error_message::localize(&message, language);
+            if translated != message {
+                translated.into_owned()
             } else {
                 clash_client_runtime::update::localize_check_error(&message, language).into_owned()
             }
@@ -188,6 +184,17 @@ mod tests {
         assert_eq!(
             localized_error(&package, Language::English),
             "Could not read the package: permission denied"
+        );
+        let invalid_rule = clash_client_core::rule_manager::parts("DOMAIN,,DIRECT")
+            .err()
+            .unwrap();
+        assert_eq!(
+            localized_error(&invalid_rule, Language::English),
+            "Rule content cannot be empty"
+        );
+        assert_eq!(
+            localized_error(&invalid_rule, Language::SimplifiedChinese),
+            "规则内容不能为空"
         );
     }
 

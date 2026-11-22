@@ -1,5 +1,6 @@
 use super::{form::Form, model::State, render::Tone, settings};
 use anyhow::{Context, Result, ensure};
+use clash_client_core::config::Language;
 use clash_client_runtime::control::{Command, Poll, Remote};
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,7 @@ pub(super) async fn read_shortcuts(
     poll: &Poll,
     cached: Option<Shortcuts>,
     include_rules: bool,
+    language: Language,
 ) -> Option<Shortcuts> {
     let profile = poll.meta.settings.active_profile.as_ref()?;
     if let Some(cached) = cached.filter(|cached| {
@@ -46,8 +48,23 @@ pub(super) async fn read_shortcuts(
             include_rules.then(|| std::sync::Arc::new(document)),
             None,
         ),
-        Ok(_) => ([false; 5], None, Some("订阅已变化，请刷新后重试".into())),
-        Err(error) => ([false; 5], None, Some(format!("{error:#}"))),
+        Ok(_) => (
+            [false; 5],
+            None,
+            Some(
+                language
+                    .text(
+                        "订阅已变化，请刷新后重试",
+                        "The subscription changed; refresh and try again",
+                    )
+                    .into(),
+            ),
+        ),
+        Err(error) => (
+            [false; 5],
+            None,
+            Some(crate::output::localized_error(&error, language)),
+        ),
     };
     Some(Shortcuts {
         profile: profile.clone(),

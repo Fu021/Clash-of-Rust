@@ -4219,6 +4219,36 @@ fn english_desktop_validation_and_errors_follow_language() {
 }
 
 #[test]
+fn english_shared_errors_are_projected_without_changing_drafts_or_evidence() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Rules);
+    app.presentation_language = Language::English;
+    let _ = app.ui_intent(Intent::RuleAdd, "", "");
+    let _ = app.ui_intent(Intent::RuleTextMode, "true", "");
+    let _ = app.ui_intent(Intent::RuleRaw, "DOMAIN,,DIRECT", "");
+    let _ = app.ui_intent(Intent::RuleSave, "", "");
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_modal_error(), "Rule content cannot be empty");
+    let editor = app.rule_state.editor.as_ref().unwrap();
+    assert_eq!(editor.raw, "DOMAIN,,DIRECT");
+    assert_eq!(editor.error, "规则内容不能为空");
+
+    app.rule_state.editor = None;
+    let failure = "订阅更新失败，已保留原配置与运行状态：YAML 配置格式错误: 東京；provider";
+    app.show_notice(failure.into(), true);
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_notice(),
+        "Subscription update failed; the previous configuration and running state were retained: Invalid YAML configuration: 東京；provider"
+    );
+    assert_eq!(app.notice, failure);
+}
+
+#[test]
 fn profile_edit_closes_on_success_independently_of_presentation_language() {
     let mut app = fixture(Page::Profiles);
     app.presentation_language = Language::English;

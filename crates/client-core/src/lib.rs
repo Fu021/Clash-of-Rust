@@ -12,6 +12,7 @@ pub mod connection;
 pub mod countries;
 pub mod dns;
 pub mod download;
+pub mod error_message;
 #[path = "storage/hash.rs"]
 pub mod file_hash;
 pub mod geodata;

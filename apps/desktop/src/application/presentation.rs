@@ -486,6 +486,8 @@ impl App {
             if self.notice_visible {
                 if self.notice_update_failure {
                     update::localize_installation_message(&self.notice, language)
+                } else if self.error {
+                    clash_client_core::error_message::localize(&self.notice, language)
                 } else {
                     Cow::Borrowed(self.notice.as_str())
                 }
@@ -573,7 +575,11 @@ impl App {
             &self.update_interval_input
         );
         text!(get_fake_ip_input, set_fake_ip_input, &self.fake_ip_input);
-        text!(get_fake_ip_error, set_fake_ip_error, &self.fake_ip_error);
+        text!(
+            get_fake_ip_error,
+            set_fake_ip_error,
+            clash_client_core::error_message::localize(&self.fake_ip_error, language)
+        );
         text!(
             get_geo_status,
             set_geo_status,
@@ -1406,7 +1412,11 @@ impl App {
             data.set_modal_title(language.text("编辑订阅", "Edit subscription").into());
             data.set_edit_name(editor.name.as_str().into());
             data.set_edit_source(editor.source.as_str().into());
-            data.set_modal_error(editor.error.as_str().into());
+            data.set_modal_error(
+                clash_client_core::error_message::localize(&editor.error, language)
+                    .as_ref()
+                    .into(),
+            );
             data.set_modal_accept(language.text("保存", "Save").into());
         } else if self.import_open {
             kind = 3;
@@ -1450,7 +1460,11 @@ impl App {
             data.set_rule_position(editor.position.as_str().into());
             data.set_rule_enabled(editor.enabled);
             data.set_rule_no_resolve(editor.no_resolve);
-            data.set_modal_error(editor.error.as_str().into());
+            data.set_modal_error(
+                clash_client_core::error_message::localize(&editor.error, language)
+                    .as_ref()
+                    .into(),
+            );
         } else if self.rule_state.move_open && !rules_locked {
             kind = 5;
             data.set_modal_title(language.text("移动到指定位置", "Move to position").into());

@@ -264,6 +264,21 @@ pub(super) fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
     if let Some(translated) = translated {
         return translated.into();
     }
+    for (prefix, translated) in [
+        ("校验文件下载失败（HTTP ", "Checksum download failed"),
+        ("安装包下载失败（HTTP ", "Package download failed"),
+    ] {
+        if let Some(status) = reason
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix('）'))
+            .filter(|status| status.parse::<u16>().is_ok())
+        {
+            return format!("{translated} (HTTP {status})").into();
+        }
+    }
+    if let Some(status) = reason.strip_prefix("安装包信息返回 HTTP ") {
+        return format!("Package information returned HTTP {status}").into();
+    }
     if let Some((cause, file)) = reason
         .strip_prefix("安装未完成：")
         .and_then(|rest| rest.strip_suffix("），请处理后重试"))

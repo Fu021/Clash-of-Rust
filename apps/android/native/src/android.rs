@@ -1624,6 +1624,11 @@ async fn run_loop(
                 }
             }
         }
+        let notice = if notice_error {
+            core::error_message::localize(&notice, state.presentation_language).into_owned()
+        } else {
+            notice
+        };
         let weak = weak.clone();
         let gate = profile_gate.clone();
         let incident_sequence = system_notice.then_some(sequence);
