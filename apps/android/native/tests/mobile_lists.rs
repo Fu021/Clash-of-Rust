@@ -21,7 +21,7 @@ slint::slint! {
     import { MobileFrame } from "../../../../crates/client-ui/ui/mobile/shared/frame.slint";
     import { MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
     import { MobileData } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
-    import { MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow } from "../../../../crates/client-ui/ui/mobile/shared/pages.slint";
+    import { MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow } from "../../../../crates/client-ui/ui/mobile/shared/pages.slint";
     import { MobileModal } from "../../../../crates/client-ui/ui/mobile/shared/details.slint";
     import { AppearanceSettings } from "../../../../crates/client-ui/ui/mobile/shared/settings.slint";
     import { AndroidSurface } from "../../../../crates/client-ui/ui/mobile/android/app.slint";
@@ -34,11 +34,11 @@ slint::slint! {
     import { IosSurface } from "../../../../crates/client-ui/ui/mobile/ios/app.slint";
     import { PageViews } from "../../../../crates/client-ui/ui/components/view-toggle.slint";
     import { NoticeCountdown } from "../../../../crates/client-ui/ui/components/motion.slint";
-    export { ProfileItem } from "../../../../crates/client-ui/ui/models.slint";
+    export { GroupItem, ProfileItem } from "../../../../crates/client-ui/ui/models.slint";
     export { ConnectionItem } from "../../../../crates/client-ui/ui/models.slint";
     export { ReportItem } from "../../../../crates/client-ui/ui/models.slint";
     export { MobileActions, MobileIntent, MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
-    import { ProfileItem, ConnectionItem, ReportItem } from "../../../../crates/client-ui/ui/models.slint";
+    import { GroupItem, ProfileItem, ConnectionItem, ReportItem } from "../../../../crates/client-ui/ui/models.slint";
     import { Theme } from "../../../../crates/client-ui/ui/theme/palette.slint";
     export { UiGeometry } from "../../../../crates/client-ui/ui/components/geometry.slint";
 
@@ -82,7 +82,26 @@ slint::slint! {
         in-out property <int> detail <=> MobileView.detail;
         in-out property <bool> protected <=> MobileData.protected;
         in-out property <bool> busy <=> MobileData.profile-busy;
+        in-out property <bool> paginated <=> MobileData.profiles-paginated;
+        in-out property <int> page-index <=> MobileData.profile-page-index;
+        in-out property <bool> previous <=> MobileData.profile-previous;
+        in-out property <bool> next <=> MobileData.profile-next;
+        in-out property <string> query <=> MobileView.query;
         MobileSubscriptions { width: parent.width; height: parent.height; }
+    }
+
+    export component MobileGroupsProbe inherits Window {
+        preferred-width: 393px; preferred-height: 852px;
+        in-out property <[GroupItem]> groups <=> MobileData.groups;
+        in-out property <float> text-scale <=> Theme.text-scale;
+        in-out property <bool> core-running <=> MobileData.core-running;
+        in-out property <bool> protected <=> MobileData.protected;
+        in-out property <bool> paginated <=> MobileData.groups-paginated;
+        in-out property <int> page-index <=> MobileData.group-page-index;
+        in-out property <bool> previous <=> MobileData.group-previous;
+        in-out property <bool> next <=> MobileData.group-next;
+        in-out property <string> query <=> MobileView.query;
+        MobileProxies { width: parent.width; height: parent.height; }
     }
 
     export component MobileRuleRowsProbe inherits Window {
@@ -2639,6 +2658,341 @@ fn mobile_pages_start_cold_without_geometry_observers() {
         assert!(observations.get() > 0);
         startup.hide().unwrap();
     }
+}
+
+#[test]
+fn mobile_navigation_preserves_the_current_page_search_until_the_page_changes() {
+    let (_adapter, _clock) = headless(393, 852);
+    let groups = MobileGroupsProbe::new().unwrap();
+    let view = groups.global::<MobileView>();
+    view.set_page(1);
+    view.set_query("Hong Kong".into());
+    view.invoke_navigate(1);
+    assert_eq!(view.get_page(), 1);
+    assert_eq!(view.get_query(), "Hong Kong");
+    view.invoke_navigate(2);
+    assert_eq!(view.get_page(), 2);
+    assert_eq!(view.get_query(), "");
+}
+
+#[test]
+fn mobile_subscription_search_and_pagination_remain_available_during_protection() {
+    let (adapter, clock) = headless(393, 852);
+    let profiles = MobileProfilesProbe::new().unwrap();
+    profiles.set_protected(true);
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let measured_targets = targets.clone();
+    profiles
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            measured_targets
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
+        });
+    profiles.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    profiles
+        .global::<MobileActions>()
+        .on_request(move |intent, first, second| {
+            recorded.borrow_mut().push((intent, first, second))
+        });
+    profiles.show().unwrap();
+    let render = || {
+        targets.borrow_mut().clear();
+        let geometry = profiles.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision() + 1);
+        frame(&adapter, 393, 852);
+    };
+    let click = |key: &str| {
+        let bounds = targets.borrow()[key].clone();
+        assert!(bounds[2] >= 48. && bounds[3] >= 48.);
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            profiles.window().dispatch_event(event);
+            advance(&clock, Duration::from_millis(100));
+        }
+    };
+    advance(&clock, Duration::from_secs(1));
+    render();
+    click("profiles-pagination");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::ProfilePagination, "true".into(), "".into())
+    );
+    profiles.set_paginated(true);
+    profiles.set_page_index(1);
+    profiles.set_previous(true);
+    profiles.set_next(true);
+    advance(&clock, Duration::from_millis(300));
+    render();
+    click("profiles-page:previous");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::ProfilePage, "0".into(), "".into())
+    );
+    click("profiles-page:next");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::ProfilePage, "2".into(), "".into())
+    );
+    click("profiles-search");
+    profiles
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+    profiles
+        .window()
+        .dispatch_event(WindowEvent::KeyReleased { text: "x".into() });
+    assert_eq!(profiles.get_query(), "x");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::Query, "profiles".into(), "x".into())
+    );
+    profiles.hide().unwrap();
+}
+
+#[test]
+fn mobile_group_search_and_pagination_remain_available_during_protection() {
+    let (adapter, clock) = headless(393, 852);
+    let groups = MobileGroupsProbe::new().unwrap();
+    groups.set_protected(true);
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let measured_targets = targets.clone();
+    groups
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            measured_targets
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
+        });
+    groups.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    groups
+        .global::<MobileActions>()
+        .on_request(move |intent, first, second| {
+            recorded.borrow_mut().push((intent, first, second))
+        });
+    groups.show().unwrap();
+    let render = || {
+        targets.borrow_mut().clear();
+        let geometry = groups.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision() + 1);
+        frame(&adapter, 393, 852);
+    };
+    let click = |key: &str| {
+        let bounds = targets.borrow()[key].clone();
+        assert!(bounds[2] >= 48. && bounds[3] >= 48.);
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            groups.window().dispatch_event(event);
+            advance(&clock, Duration::from_millis(100));
+        }
+    };
+    advance(&clock, Duration::from_secs(1));
+    render();
+    click("groups-pagination");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::GroupPagination, "true".into(), "".into())
+    );
+    groups.set_paginated(true);
+    groups.set_page_index(1);
+    groups.set_previous(true);
+    groups.set_next(true);
+    advance(&clock, Duration::from_millis(300));
+    render();
+    click("groups-page:previous");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::GroupPage, "0".into(), "".into())
+    );
+    click("groups-page:next");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::GroupPage, "2".into(), "".into())
+    );
+    click("groups-search");
+    groups
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed { text: "x".into() });
+    groups
+        .window()
+        .dispatch_event(WindowEvent::KeyReleased { text: "x".into() });
+    assert_eq!(groups.get_query(), "x");
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::Query, "proxies".into(), "x".into())
+    );
+    groups.hide().unwrap();
+}
+
+#[test]
+fn mobile_group_expansion_follows_the_current_group_after_replacing_a_row() {
+    let (adapter, clock) = headless(393, 852);
+    let groups = MobileGroupsProbe::new().unwrap();
+    let items = Rc::new(slint::VecModel::from(vec![GroupItem {
+        id: "first".into(),
+        title: "First group".into(),
+        expanded: true,
+        ..Default::default()
+    }]));
+    groups.set_groups(items.clone().into());
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let measured_targets = targets.clone();
+    groups
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            measured_targets
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
+        });
+    groups.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    groups
+        .global::<MobileActions>()
+        .on_request(move |intent, first, second| {
+            recorded.borrow_mut().push((intent, first, second))
+        });
+    groups.show().unwrap();
+    for name in ["first", "second"] {
+        advance(&clock, Duration::from_millis(300));
+        frame(&adapter, 393, 852);
+        targets.borrow_mut().clear();
+        let geometry = groups.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        frame(&adapter, 393, 852);
+        let bounds = targets.borrow()[&format!("proxy-group:{name}")].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            groups.window().dispatch_event(event);
+            advance(&clock, Duration::from_millis(100));
+        }
+        assert!(!items.row_data(0).unwrap().expanded);
+        assert_eq!(
+            events.borrow().last().unwrap(),
+            &(MobileIntent::GroupExpansion, name.into(), "false".into())
+        );
+        items.set_row_data(
+            0,
+            GroupItem {
+                id: "second".into(),
+                title: "Second group".into(),
+                expanded: true,
+                ..Default::default()
+            },
+        );
+    }
+    groups.hide().unwrap();
+}
+
+#[test]
+fn mobile_group_header_keeps_its_title_and_speed_test_reachable() {
+    let (adapter, clock) = headless(320, 640);
+    let groups = MobileGroupsProbe::new().unwrap();
+    groups.set_groups(
+        Rc::new(slint::VecModel::from(vec![GroupItem {
+            id: "test-group".into(),
+            title: "Proxy Strategy".into(),
+            detail: "Selector · 6 nodes".into(),
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    groups.set_core_running(true);
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let measured_targets = targets.clone();
+    groups
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            measured_targets
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
+        });
+    groups.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    groups
+        .global::<MobileActions>()
+        .on_request(move |intent, first, _| recorded.borrow_mut().push((intent, first)));
+    groups.show().unwrap();
+    for (width, height, scale, narrow) in [
+        (320, 640, 1.3, true),
+        (393, 852, 1.0, false),
+        (800, 1280, 1.0, false),
+    ] {
+        adapter.set_size(slint::PhysicalSize::new(width, height));
+        groups.set_text_scale(scale);
+        advance(&clock, Duration::from_millis(300));
+        frame(&adapter, width as usize, height as usize);
+        targets.borrow_mut().clear();
+        let geometry = groups.global::<UiGeometry>();
+        geometry.set_revision(geometry.get_revision().wrapping_add(1));
+        frame(&adapter, width as usize, height as usize);
+        let (heading, action) = {
+            let targets = targets.borrow();
+            (
+                targets["proxy-group:test-group"].clone(),
+                targets["preview-measure-group:test-group"].clone(),
+            )
+        };
+        assert!(heading[2] >= if narrow { 180. } else { 100. });
+        assert!(action[2] >= 48. && action[3] >= 48.);
+        assert!(action[0] + action[2] <= width as f32 + 1.);
+        assert!(action[1] + action[3] <= height as f32 + 1.);
+        if narrow {
+            assert!(action[1] >= heading[1] + heading[3] - 1.);
+        } else {
+            assert!(action[0] >= heading[0] + heading[2] - 1.);
+        }
+        let position = LogicalPosition::new(action[0] + action[2] / 2., action[1] + action[3] / 2.);
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            groups.window().dispatch_event(event);
+            advance(&clock, Duration::from_millis(100));
+        }
+        assert_eq!(
+            events.borrow().last().unwrap(),
+            &(MobileIntent::GroupDelay, "test-group".into())
+        );
+    }
+    groups.hide().unwrap();
 }
 
 #[test]

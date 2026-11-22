@@ -23,8 +23,17 @@ export global MobilePageText {
         if value == "上传速度 ↑" { return @tr("上传速度 ↑"); }
         if value == "下载量 ↓" { return @tr("下载量 ↓"); }
         if value == "下载量 ↑" { return @tr("下载量 ↑"); }
+        if value == "上传量 ↓" { return @tr("上传量 ↓"); }
+        if value == "上传量 ↑" { return @tr("上传量 ↑"); }
+        if value == "开始时间 ↓" { return @tr("开始时间 ↓"); }
+        if value == "开始时间 ↑" { return @tr("开始时间 ↑"); }
         if value == "名称 A–Z" { return @tr("名称 A–Z"); }
         if value == "名称 Z–A" { return @tr("名称 Z–A"); }
+        if value == "规则 A–Z" { return @tr("规则 A–Z"); }
+        if value == "规则 Z–A" { return @tr("规则 Z–A"); }
+        if value == "代理链 A–Z" { return @tr("代理链 A–Z"); }
+        if value == "代理链 Z–A" { return @tr("代理链 Z–A"); }
+        if value == "默认顺序" { return @tr("默认顺序"); }
         if value == "全部来源" { return @tr("全部来源"); }
         if value == "自定义" { return @tr("自定义"); }
         if value == "快捷规则" { return @tr("快捷规则"); }
@@ -167,14 +176,17 @@ export component MobileProxies inherits PageSurface {
         self.detail-node = self.detail-group == group && self.detail-node == node ? "" : node;
         self.detail-group = group;
     }
-    MScroll { content-key: MobileView.query + "/" + MobileView.node-sort; VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+    MScroll { content-key: MobileView.query + "/" + MobileView.node-sort + "/" + MobileData.group-page-index + "/" + (MobileData.groups-paginated ? "paged" : "all"); VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         HorizontalLayout { spacing: MobileTypography.small-gap; cross-axis-alignment: center;
             MButton { geometry-key: "nodes-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
                 accessible-label: PageViews.nodes-list ? @tr("切换到宫格视图") : @tr("切换到列表视图");
                 ViewModeIcon { list-view: PageViews.nodes-list; x: 14px; y: 14px + parent.press-offset; width: 20px; height: 20px; }
                 clicked => { PageViews.nodes-list = !PageViews.nodes-list; }
             }
-            MField { placeholder: @tr("搜索节点或策略组"); text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "proxies", value); } }
+            MField {
+                GeometryTarget { key: "groups-search"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+                placeholder: @tr("搜索节点或策略组"); text <=> MobileView.query; edited(value) => { MobileActions.request(MobileIntent.query, "proxies", value); }
+            }
         }
         HorizontalLayout { spacing: MobileTypography.small-gap;
             MSelect { options: [@tr("延迟从低到高"), @tr("延迟从高到低"), @tr("名称排序")]; value: self.options[MobileView.node-sort];
@@ -184,14 +196,29 @@ export component MobileProxies inherits PageSurface {
                 clicked => { MobileActions.request(MobileIntent.delay-all, "", ""); }
             }
         }
-        for group in MobileData.groups: group-card := MCard {
+        HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
+            MSmall { text: MobileData.group-page; }
+            MButton { geometry-key: "groups-pagination"; text: MobileData.groups-paginated ? @tr("显示全部") : @tr("分页显示"); compact: true; quiet: true; width: max(100px, MobileTypography.font-size(13) * 7 + 20px); horizontal-stretch: 0;
+                clicked => { MobileActions.request(MobileIntent.group-pagination, MobileData.groups-paginated ? "false" : "true", ""); }
+            }
+        }
+        if MobileData.groups.length == 0: MCard { MSmall { text: MobileData.core-running ? @tr("当前配置没有匹配的代理组") : @tr("内核启动后显示代理组"); wrap: word-wrap; } }
+        for group[index] in MobileData.groups: group-card := MCard {
             property <bool> expanded: group.expanded;
-            HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
-                MRow { title: group.title; subtitle: group.detail; value: group-card.expanded ? @tr("收起") : @tr("展开"); expandable: true; expanded: group-card.expanded;
-                    clicked => { group-card.expanded = !group-card.expanded; }
+            group-header := GridLayout { spacing: MobileTypography.small-gap;
+                property <bool> narrow: root.width < 360px || Theme.text-scale > 1.25;
+                MRow { col: 0; row: 0; colspan: group-header.narrow ? 2 : 1; geometry-key: "proxy-group:" + group.id;
+                    title: group.title; subtitle: group.detail; value: group-card.expanded ? @tr("收起") : @tr("展开"); expandable: true; expanded: group-card.expanded;
+                    clicked => {
+                        let id = group.id;
+                        let expanded = !group.expanded;
+                        MobileData.groups[index].expanded = expanded;
+                        MobileActions.request(MobileIntent.group-expansion, id, expanded ? "true" : "false");
+                    }
                 }
-                if root.width > 580px: MTag { text: group.current; width-limit: 180px; }
-                MButton { text: group.testing ? @tr("测速中…") : @tr("组测速"); compact: true; busy: group.testing; width: max(72px, MobileTypography.font-size(13) * 6 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
+                if root.width > 580px && !group-header.narrow: MTag { col: 1; row: 0; text: group.current; width-limit: 180px; }
+                MButton { col: root.width > 580px && !group-header.narrow ? 2 : 1; row: group-header.narrow ? 1 : 0;
+                    text: group.testing ? @tr("测速中…") : @tr("组测速"); compact: true; busy: group.testing; width: max(72px, MobileTypography.font-size(13) * 6 + 16px); horizontal-stretch: 0; enabled: MobileData.core-running && !MobileData.delay-busy && !MobileData.protection-pending;
                     GeometryTarget { key: "preview-measure-group:" + group.id; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
                     clicked => { MobileActions.request(MobileIntent.group-delay, group.id, ""); }
                 }
@@ -229,13 +256,18 @@ export component MobileProxies inherits PageSurface {
                 }
             }
         }
+        if MobileData.groups-paginated: MPagination {
+            geometry-key: "groups-page";
+            status: MobileData.group-page; previous-enabled: MobileData.group-previous; next-enabled: MobileData.group-next;
+            compact: root.width < 360px; turn(direction) => { MobileActions.request(MobileIntent.group-page, "" + max(0, MobileData.group-page-index + direction), ""); }
+        }
     } }
 }
 export component MobileSubscriptions inherits PageSurface {
     motion-revision: PageViews.profiles-list ? 1 : 0;
     motion-enabled: Motion.layout-active;
     property <string> expanded-id;
-    MScroll { VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
+    MScroll { content-key: MobileView.query + "/" + MobileData.profile-page-index + "/" + (MobileData.profiles-paginated ? "paged" : "all"); VerticalLayout { alignment: start; spacing: MobileTypography.gap; padding-bottom: MobileTypography.padding;
         MCard { vertical-padding: 6px; horizontal-padding: 8px;
           HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
             MButton { geometry-key: "profiles-view"; width: 48px; height: 48px; horizontal-stretch: 0; quiet: true;
@@ -252,6 +284,18 @@ export component MobileSubscriptions inherits PageSurface {
             }
           }
         }
+        MField {
+            GeometryTarget { key: "profiles-search"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
+            placeholder: @tr("搜索名称或来源"); text <=> MobileView.query;
+            edited(value) => { MobileActions.request(MobileIntent.query, "profiles", value); }
+        }
+        HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
+            MSmall { text: MobileData.profile-page; }
+            MButton { geometry-key: "profiles-pagination"; text: MobileData.profiles-paginated ? @tr("显示全部") : @tr("分页显示"); compact: true; quiet: true; width: max(100px, MobileTypography.font-size(13) * 7 + 20px); horizontal-stretch: 0;
+                clicked => { MobileActions.request(MobileIntent.profile-pagination, MobileData.profiles-paginated ? "false" : "true", ""); }
+            }
+        }
+        if MobileData.profiles.length == 0: MCard { MSmall { text: MobileView.query != "" ? @tr("没有匹配的订阅") : @tr("导入订阅链接或本地 YAML 配置开始使用"); wrap: word-wrap; } }
         profile-grid := VerticalLayout {
         property <int> columns: PageViews.profiles-list ? 1 : max(1, floor(root.width / (288px * Theme.text-scale)));
         spacing: MobileTypography.gap; alignment: start;
@@ -307,6 +351,11 @@ export component MobileSubscriptions inherits PageSurface {
         }
         }
         }
+        if MobileData.profiles-paginated: MPagination {
+            geometry-key: "profiles-page";
+            status: MobileData.profile-page; previous-enabled: MobileData.profile-previous; next-enabled: MobileData.profile-next;
+            compact: root.width < 360px; turn(direction) => { MobileActions.request(MobileIntent.profile-page, "" + max(0, MobileData.profile-page-index + direction), ""); }
+        }
     } }
 }
 component ConnectionsToolbar inherits VerticalLayout {
@@ -320,7 +369,7 @@ component ConnectionsToolbar inherits VerticalLayout {
         property <bool> narrow: root.width - 24px < 300px || Theme.text-scale > 1.25;
         MSelect { col: 0; row: 0; colspan: parent.narrow ? 2 : 1;
             geometry-key: "connections-sort";
-            value: MobileView.connection-sort; options: ["下载速度 ↓", "下载速度 ↑", "上传速度 ↓", "上传速度 ↑", "下载量 ↓", "下载量 ↑", "名称 A–Z", "名称 Z–A"];
+            value: MobileView.connection-sort; options: ["下载速度 ↓", "下载速度 ↑", "上传速度 ↓", "上传速度 ↑", "下载量 ↓", "下载量 ↑", "名称 A–Z", "名称 Z–A", "上传量 ↓", "上传量 ↑", "开始时间 ↓", "开始时间 ↑", "规则 A–Z", "规则 Z–A", "代理链 A–Z", "代理链 Z–A", "默认顺序"];
             display-value(value) => { MobilePageText.label(value) }
             selected(index, value) => { MobileView.connection-sort = value; MobileActions.request(MobileIntent.connection-sort, value, ""); }
         }

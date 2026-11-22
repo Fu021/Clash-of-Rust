@@ -913,6 +913,33 @@ msgstr "Downloaded ↑"
 msgid "下载量 ↓"
 msgstr "Downloaded ↓"
 
+msgid "上传量 ↑"
+msgstr "Uploaded ↑"
+
+msgid "上传量 ↓"
+msgstr "Uploaded ↓"
+
+msgid "开始时间 ↑"
+msgstr "Start time ↑"
+
+msgid "开始时间 ↓"
+msgstr "Start time ↓"
+
+msgid "规则 A–Z"
+msgstr "Rule A–Z"
+
+msgid "规则 Z–A"
+msgstr "Rule Z–A"
+
+msgid "代理链 A–Z"
+msgstr "Proxy chain A–Z"
+
+msgid "代理链 Z–A"
+msgstr "Proxy chain Z–A"
+
+msgid "默认顺序"
+msgstr "Default order"
+
 msgid "使用"
 msgstr "Use"
 
@@ -1003,6 +1030,9 @@ msgstr "Search logs"
 msgid "搜索节点或策略组"
 msgstr "Search nodes or groups"
 
+msgid "搜索名称或来源"
+msgstr "Search name or source"
+
 msgid "搜索规则"
 msgstr "Search rules"
 
@@ -1044,6 +1074,24 @@ msgstr "No matching rules"
 
 msgid "没有匹配的连接"
 msgstr "No matching connections"
+
+msgid "没有匹配的订阅"
+msgstr "No matching subscriptions"
+
+msgid "当前配置没有匹配的代理组"
+msgstr "No matching proxy groups"
+
+msgid "内核启动后显示代理组"
+msgstr "Start the core to view proxy groups"
+
+msgid "导入订阅链接或本地 YAML 配置开始使用"
+msgstr "Import a subscription URL or local YAML file to get started"
+
+msgid "分页显示"
+msgstr "Paginate"
+
+msgid "显示全部"
+msgstr "Show all"
 
 msgid "流量与规则"
 msgstr "Traffic and rules"

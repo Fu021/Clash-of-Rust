@@ -250,6 +250,18 @@ fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
                 "下载速度 ↓"
             }
         );
+        for (source, english) in [
+            ("上传量 ↓", "Uploaded ↓"),
+            ("开始时间 ↑", "Start time ↑"),
+            ("规则 A–Z", "Rule A–Z"),
+            ("代理链 Z–A", "Proxy chain Z–A"),
+            ("默认顺序", "Default order"),
+        ] {
+            assert_eq!(
+                text.invoke_label(source.into()),
+                if locale == "en" { english } else { source }
+            );
+        }
         assert_eq!(
             text.invoke_label("自定义".into()),
             if locale == "en" {

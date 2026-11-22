@@ -1,4 +1,4 @@
-use crate::request_gate::RequestGate;
+use crate::{list_presentation, request_gate::RequestGate};
 use anyhow::{Context, Result, ensure};
 use clash_mobile_runtime::{NativeHost, Session, Snapshot, core};
 use core::{api, config, proxy_order, rule_manager};
@@ -288,6 +288,9 @@ struct State {
     node_delays: BTreeMap<String, u32>,
     delay_generation: u64,
     delay_scope: Option<DelayScope>,
+    group_expansion: BTreeMap<String, bool>,
+    group_page: usize,
+    profile_page: usize,
     connection_page: usize,
     rule_page: usize,
     rule_rows: Option<Vec<rule_manager::Row>>,
@@ -624,6 +627,9 @@ async fn run_loop(
         node_delays: BTreeMap::new(),
         delay_generation: 0,
         delay_scope: None,
+        group_expansion: BTreeMap::new(),
+        group_page: 0,
+        profile_page: 0,
         connection_page: 0,
         rule_page: 0,
         rule_rows: None,
@@ -825,6 +831,9 @@ async fn run_loop(
                     }
                     state.page = page;
                     state.query.clear();
+                    state.group_expansion.clear();
+                    state.group_page = 0;
+                    state.profile_page = 0;
                     state.connection_page = 0;
                     state.rule_page = 0;
                     if let Some(job) = refresh_job.take() { job.abort(); }
@@ -1043,6 +1052,8 @@ async fn run_loop(
                                 | MobileIntent::RuleSelect | MobileIntent::RuleEdit | MobileIntent::RuleSave
                                 | MobileIntent::RuleMove | MobileIntent::RuleDelete | MobileIntent::RuleShortcut
                                 | MobileIntent::RuleDiscard | MobileIntent::NodePage | MobileIntent::NodeSort
+                                | MobileIntent::GroupExpansion | MobileIntent::GroupPage | MobileIntent::GroupPagination
+                                | MobileIntent::ProfilePage | MobileIntent::ProfilePagination
                                 | MobileIntent::Appearance | MobileIntent::Accent | MobileIntent::TextScale
                                 | MobileIntent::Language) {
                                 if let Some(job) = refresh_job.take() { job.abort(); }
@@ -2231,12 +2242,33 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::Query => {
             state.query = b;
             state.node_pages.clear();
+            state.group_page = 0;
+            state.profile_page = 0;
             state.connection_page = 0;
             state.rule_page = 0;
         }
         MobileIntent::NodePage => {
             let value = state.node_pages.entry(a).or_default();
             *value = value.saturating_add_signed(b.parse()?);
+        }
+        MobileIntent::GroupExpansion => {
+            if state.page == 1 && session.proxies.proxies.contains_key(a.as_str()) {
+                state.group_expansion.insert(a, b.parse()?);
+            }
+        }
+        MobileIntent::GroupPage => state.group_page = a.parse()?,
+        MobileIntent::ProfilePage => state.profile_page = a.parse()?,
+        MobileIntent::GroupPagination => {
+            let mut next = session.settings.clone();
+            next.proxy_groups_paginated = a.parse()?;
+            session.commit_settings(next)?;
+            state.group_page = 0;
+        }
+        MobileIntent::ProfilePagination => {
+            let mut next = session.settings.clone();
+            next.profiles_paginated = a.parse()?;
+            session.commit_settings(next)?;
+            state.profile_page = 0;
         }
         MobileIntent::ConnectionPage => {
             state.connection_page = state.connection_page.saturating_add_signed(a.parse()?)
@@ -2767,6 +2799,11 @@ fn mobile_allowed_during_protection(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::OverviewPrivacy
             | MobileIntent::Query
             | MobileIntent::NodePage
+            | MobileIntent::GroupExpansion
+            | MobileIntent::GroupPage
+            | MobileIntent::GroupPagination
+            | MobileIntent::ProfilePage
+            | MobileIntent::ProfilePagination
             | MobileIntent::ConnectionPage
             | MobileIntent::RulePage
             | MobileIntent::RuleFilter
@@ -2920,6 +2957,7 @@ struct Projection {
     download: String,
     groups: Vec<GroupView>,
     profiles: Vec<config::Profile>,
+    rule_profiles: Vec<String>,
     connections: Vec<api::Connection>,
     rules: Vec<(usize, rule_manager::Row)>,
     policies: Vec<String>,
@@ -2947,6 +2985,8 @@ struct Projection {
     probe_busy: bool,
     network_tool: i32,
     geo: String,
+    group_page: (usize, usize),
+    profile_page: (usize, usize),
     connection_page: (usize, usize),
     rule_page: (usize, usize),
     rule_form: Option<RuleForm>,
@@ -2985,16 +3025,40 @@ fn project(state: &State) -> Projection {
     let s = &state.session;
     let language = state.presentation_language;
     let query = state.query.to_lowercase();
+    let mut matching_groups = s
+        .proxies
+        .proxies
+        .iter()
+        .filter(|_| state.page == 1)
+        .filter(|(name, group)| {
+            !group.all.is_empty()
+                && !s
+                    .settings
+                    .claude_protection
+                    .as_ref()
+                    .is_some_and(|protection| protection.route == name.as_str())
+                && list_presentation::group_matches(
+                    name.as_str(),
+                    group.all.iter().map(|node| node.as_str()),
+                    &query,
+                )
+        })
+        .collect::<Vec<_>>();
+    if let Some(index) = matching_groups
+        .iter()
+        .position(|(name, _)| s.active_group() == Some(name.as_str()))
+    {
+        matching_groups[..=index].rotate_right(1);
+    }
+    let matching_groups = list_presentation::page(
+        matching_groups,
+        state.group_page,
+        8,
+        s.settings.proxy_groups_paginated,
+    );
+    let group_page = (matching_groups.index, matching_groups.total);
     let mut groups = vec![];
-    for (name, group) in s.proxies.proxies.iter().filter(|_| state.page == 1) {
-        if group.all.is_empty()
-            || s.settings
-                .claude_protection
-                .as_ref()
-                .is_some_and(|p| p.route == name.as_str())
-        {
-            continue;
-        }
+    for (index, (name, group)) in matching_groups.items.into_iter().enumerate() {
         let indices = proxy_order::sorted_indices(
             &group.all,
             s.settings.node_sort,
@@ -3006,9 +3070,8 @@ fn project(state: &State) -> Projection {
                     .or_else(|| s.proxies.proxies.get(node).and_then(|n| n.delay))
             },
             |node| {
-                query.is_empty()
-                    || node.to_lowercase().contains(&query)
-                    || name.as_str().to_lowercase().contains(&query)
+                list_presentation::contains_query(node, &query)
+                    || list_presentation::contains_query(name.as_str(), &query)
             },
         );
         let count = indices.len();
@@ -3041,7 +3104,13 @@ fn project(state: &State) -> Projection {
         groups.push(GroupView {
             name: name.to_string(),
             group: group.clone(),
-            expanded: s.active_group() == Some(name.as_str()),
+            expanded: list_presentation::group_expanded(
+                name.as_str(),
+                s.active_group(),
+                &query,
+                index,
+                &state.group_expansion,
+            ),
             nodes,
             count,
             page,
@@ -3049,11 +3118,14 @@ fn project(state: &State) -> Projection {
                 || matches!(&state.delay_scope,Some(DelayScope::Group(group)) if group==name.as_str()),
         });
     }
-    // Show the home page's actual outbound group first, keeping every other
-    // group's relative order. Direct mode has no active proxy group to expand.
-    if let Some(index) = groups.iter().position(|group| group.expanded) {
-        groups[..=index].rotate_right(1);
-    }
+    let matching_profiles = list_presentation::profiles(
+        if state.page == 2 { &s.profiles } else { &[] },
+        &query,
+        state.profile_page,
+        s.settings.profiles_paginated,
+    );
+    let profile_page = (matching_profiles.index, matching_profiles.total);
+    let profiles = matching_profiles.items.into_iter().cloned().collect();
     let node = s.node.clone();
     let document = if state.page == 4 {
         Some(s.document())
@@ -3069,19 +3141,7 @@ fn project(state: &State) -> Projection {
         .filter(|_| matches!(state.page, 0 | 3))
         .filter(|c| core::connection::matches_query(c, &query))
         .collect::<Vec<_>>();
-    let field = if state.connection_sort.starts_with("名称") {
-        core::connection::Field::Name
-    } else if state.connection_sort.starts_with("上传速度") {
-        core::connection::Field::UploadRate
-    } else if state.connection_sort.starts_with("下载量") {
-        core::connection::Field::DownloadTotal
-    } else {
-        core::connection::Field::DownloadRate
-    };
-    let sort = core::connection::Sort {
-        field: Some(field),
-        descending: state.connection_sort.ends_with('↓') || state.connection_sort.ends_with("Z–A"),
-    };
+    let sort = list_presentation::connection_sort(&state.connection_sort);
     connections.sort_by(|a, b| sort.compare(a, b));
     let connection_count = connections.len();
     let connection_page = state
@@ -3481,7 +3541,12 @@ fn project(state: &State) -> Projection {
         upload: bytes(s.connections.upload_total),
         download: bytes(s.connections.download_total),
         groups,
-        profiles: s.profiles.clone(),
+        profiles,
+        rule_profiles: s
+            .profiles
+            .iter()
+            .map(|profile| profile.name.clone())
+            .collect(),
         connections,
         rates: (
             format!("{}/s", bytes(s.rates.0)),
@@ -3511,6 +3576,8 @@ fn project(state: &State) -> Projection {
         probe_busy: state.probe_busy,
         network_tool: state.network_tool,
         geo: state.geo.clone(),
+        group_page,
+        profile_page,
         rules,
         connection_page: (connection_page, connection_count),
         rule_page: (rule_page, rule_count),
@@ -3587,16 +3654,11 @@ fn project(state: &State) -> Projection {
         }),
         dirty: s.draft != *saved,
         rule_warning: state.rule_warnings.join("\n"),
-        logs: state
-            .logs
-            .iter()
-            .filter(|(level, line)| {
-                state.page == 5
-                    && (state.log_level == "全部等级" || level == &state.log_level)
-                    && (query.is_empty() || line.to_lowercase().contains(&query))
-            })
-            .cloned()
-            .collect(),
+        logs: if state.page == 5 {
+            list_presentation::logs(&state.logs, &state.log_level, &query)
+        } else {
+            Vec::new()
+        },
         details,
     }
 }
@@ -3788,6 +3850,53 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     ) && ui.get_current_detail() == 15
     {
         ui.set_current_detail(0);
+    }
+    data.set_groups_paginated(p.settings.proxy_groups_paginated);
+    data.set_profiles_paginated(p.settings.profiles_paginated);
+    for (page, count, size, paginated, profiles) in [
+        (
+            p.group_page.0,
+            p.group_page.1,
+            8,
+            p.settings.proxy_groups_paginated,
+            false,
+        ),
+        (
+            p.profile_page.0,
+            p.profile_page.1,
+            60,
+            p.settings.profiles_paginated,
+            true,
+        ),
+    ] {
+        let pages = if paginated {
+            count.div_ceil(size).max(1)
+        } else {
+            1
+        };
+        let label = match (language, paginated, profiles) {
+            (config::Language::SimplifiedChinese, true, _) => {
+                format!("{} / {pages} · {count} 条", page + 1)
+            }
+            (config::Language::English, true, _) => {
+                format!("{} / {pages} · {count} items", page + 1)
+            }
+            (config::Language::SimplifiedChinese, false, true) => format!("{count} 条订阅"),
+            (config::Language::SimplifiedChinese, false, false) => format!("{count} 个代理组"),
+            (config::Language::English, false, true) => format!("{count} subscriptions"),
+            (config::Language::English, false, false) => format!("{count} groups"),
+        };
+        if profiles {
+            data.set_profile_page(label.into());
+            data.set_profile_page_index(page as i32);
+            data.set_profile_previous(page > 0);
+            data.set_profile_next(paginated && (page + 1) * size < count);
+        } else {
+            data.set_group_page(label.into());
+            data.set_group_page_index(page as i32);
+            data.set_group_previous(page > 0);
+            data.set_group_next(paginated && (page + 1) * size < count);
+        }
     }
     for (page, count, size, rules) in [
         (p.connection_page.0, p.connection_page.1, 50, false),
@@ -4064,7 +4173,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     ));
     data.set_rule_profiles(stable(
         data.get_rule_profiles(),
-        rows(p.profiles.iter().map(|p| p.name.clone().into()).collect()),
+        rows(p.rule_profiles.into_iter().map(Into::into).collect()),
     ));
     data.set_rule_policies(stable(
         data.get_rule_policies(),
@@ -4330,6 +4439,7 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
             "working":data.get_working(),"profile_busy":data.get_profile_busy(),
             "draft_dirty":view.get_draft_dirty(),"modal":view.get_modal(),
             "groups":data.get_groups().row_count(),"profiles":data.get_profiles().row_count(),
+            "rule_profiles":data.get_rule_profiles().row_count(),
             "vpn_pending":data.get_vpn_pending(),
             "delay_busy":data.get_delay_busy(),
             "logs":data.get_logs().row_count(),"dark":theme.get_dark(),"accent":theme.get_accent_index(),"text_scale":theme.get_text_scale(),

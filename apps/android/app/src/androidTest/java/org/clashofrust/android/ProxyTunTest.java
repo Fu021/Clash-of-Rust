@@ -2369,6 +2369,16 @@ public class ProxyTunTest {
         await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
         waitForAppWindow();
         verifyConnectionsTouch();
+        previewNavigate(2);
+        await("Subscription page is empty", () -> MainActivity.diagnostics().optInt("profiles") > 0);
+        int profileCount = MainActivity.diagnostics().getInt("profiles");
+        previewTool(4);
+        await("Rules page lost subscription choices", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("live") && ui.optInt("page", -1) == 4
+                && ui.optInt("profiles", -1) == 0 && ui.optInt("rule_profiles", -1) >= profileCount;
+        });
+        previewNavigate(0);
         String raw = CoreBridge.config();
         assertNetworkProfile(raw);
         MainActivity activity = resumedActivity();

@@ -4,7 +4,7 @@ import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair
 import { ControlAccess } from "../../components/control-access.slint";
 
 export enum MobileIntent {
-    navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
+    navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, group-expansion, group-page, group-pagination, profile-page, profile-pagination, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
     import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
@@ -40,7 +40,17 @@ export global MobileData {
     in-out property <bool> overview-hidden;
     in-out property <int> mode;
     in-out property <[GroupItem]> groups;
+    in-out property <bool> groups-paginated;
+    in-out property <string> group-page;
+    in-out property <int> group-page-index;
+    in-out property <bool> group-previous;
+    in-out property <bool> group-next;
     in-out property <[ProfileItem]> profiles;
+    in-out property <bool> profiles-paginated;
+    in-out property <string> profile-page;
+    in-out property <int> profile-page-index;
+    in-out property <bool> profile-previous;
+    in-out property <bool> profile-next;
     in-out property <[ConnectionItem]> connections;
     in-out property <string> connection-page;
     in-out property <int> connection-page-index;
@@ -190,8 +200,8 @@ export global MobileView {
         if self.draft-dirty {
             self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {
-            if self.page != destination { self.network-open = false; }
-            self.page = destination; self.detail = 0; self.query = ""; self.rule-selected = false; self.rule-drag-id = ""; self.rule-drag-target = "";
+            if self.page != destination { self.network-open = false; self.query = ""; }
+            self.page = destination; self.detail = 0; self.rule-selected = false; self.rule-drag-id = ""; self.rule-drag-target = "";
         }
     }
     callback back();

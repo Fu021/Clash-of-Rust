@@ -240,6 +240,7 @@ export component MProtectionLock inherits Rectangle {
     }
 }
 export component MPagination inherits HorizontalLayout {
+    in property <string> geometry-key;
     in property <string> status;
     in property <bool> previous-enabled;
     in property <bool> next-enabled;
@@ -247,6 +248,7 @@ export component MPagination inherits HorizontalLayout {
     callback turn(int);
     alignment: start; spacing: MobileTypography.small-gap; vertical-stretch: 0;
     MButton {
+        geometry-key: root.geometry-key == "" ? "" : root.geometry-key + ":previous";
         text: root.compact || Theme.text-scale > 1.25 ? "‹" : @tr("上一页");
         accessible-role: button; accessible-label: @tr("上一页");
         width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);
@@ -255,6 +257,7 @@ export component MPagination inherits HorizontalLayout {
     }
     MSmall { text: root.status; horizontal-alignment: center; wrap: word-wrap; }
     MButton {
+        geometry-key: root.geometry-key == "" ? "" : root.geometry-key + ":next";
         text: root.compact || Theme.text-scale > 1.25 ? "›" : @tr("下一页");
         accessible-role: button; accessible-label: @tr("下一页");
         width: root.compact || Theme.text-scale > 1.25 ? 48px : max(80px, MobileTypography.font-size(15) * 3 + 20px);

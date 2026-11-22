@@ -4,6 +4,8 @@ mod android;
 mod application_routing_mode;
 #[cfg(any(target_os = "android", test))]
 mod incident_delivery;
+#[cfg(any(target_os = "android", test))]
+mod list_presentation;
 #[cfg(target_os = "android")]
 mod protection_service;
 #[cfg(any(target_os = "android", test))]
