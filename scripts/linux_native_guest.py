@@ -13,7 +13,7 @@ from urllib.request import urlopen
 import zipfile
 
 from build_support import download, run, sha256
-from linux_compatibility_targets import TARGETS, TUMBLEWEED_ARM64_REPOMD
+from linux_compatibility_targets import TARGETS, TUMBLEWEED_REPOMD
 
 DISTROS = ('fedora', 'opensuse-leap', 'opensuse-tumbleweed', 'arch')
 RPM = ('fedora', 'opensuse-leap', 'opensuse-tumbleweed')
@@ -51,27 +51,27 @@ def refresh_tumbleweed():
     datetime.strptime(snapshot, '%Y%m%d')
     alias = 'cor-tumbleweed-snapshot'
     source = f'https://download.opensuse.org/history/{snapshot}/tumbleweed/repo/oss/'
-    digest = None
-    if platform.machine() == 'aarch64':
-        digest = TUMBLEWEED_ARM64_REPOMD[snapshot]
+    machine = platform.machine()
+    digest = TUMBLEWEED_REPOMD[machine][snapshot]
+    if machine == 'aarch64':
         source = ('https://openqa.opensuse.org/assets/repo/'
                   f'openSUSE-Tumbleweed-oss-aarch64-Snapshot{snapshot}/')
-        content = 'https://downloadcontent.opensuse.org/ports/aarch64/tumbleweed/repo/oss/'
-        try:
-            with urlopen(content + 'repodata/repomd.xml', timeout=15) as response:
-                published = hashlib.sha256(response.read(64*1024)).hexdigest()
-        except OSError as error:
-            print(f'Tumbleweed CDN metadata unavailable: {error}', flush=True)
-        else:
-            if published == digest:
-                source = content
+    port = '/ports/aarch64' if machine == 'aarch64' else ''
+    content = f'https://downloadcontent.opensuse.org{port}/tumbleweed/repo/oss/'
+    try:
+        with urlopen(content + 'repodata/repomd.xml', timeout=15) as response:
+            published = hashlib.sha256(response.read(64*1024)).hexdigest()
+    except OSError as error:
+        print(f'Tumbleweed CDN metadata unavailable: {error}', flush=True)
+    else:
+        if published == digest:
+            source = content
     privileged('modifyrepo', '--all', '--disable', timeout=60)
     privileged('addrepo', '--check', '--gpgcheck', '--no-refresh', source, alias, timeout=90)
     privileged('refresh', alias, timeout=300)
-    if digest:
-        cached = Path('/var/cache/zypp/raw')/alias/'repodata/repomd.xml'
-        if not cached.is_file() or sha256(cached) != digest:
-            raise RuntimeError(f'Tumbleweed {snapshot} ARM64 repository metadata does not match the pinned SHA256')
+    cached = Path('/var/cache/zypp/raw')/alias/'repodata/repomd.xml'
+    if not cached.is_file() or sha256(cached) != digest:
+        raise RuntimeError(f'Tumbleweed {snapshot} {machine} repository metadata does not match the pinned SHA256')
 
 
 def refresh():

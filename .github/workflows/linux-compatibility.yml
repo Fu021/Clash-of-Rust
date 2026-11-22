@@ -8,6 +8,12 @@ on:
       run_id:
         required: true
         type: string
+      update_from_ci:
+        required: false
+        type: string
+      update_release:
+        required: false
+        type: string
 env:
   BUILD_INPUTS_DIR: dependency-snapshot
   PYTHONDONTWRITEBYTECODE: '1'
@@ -40,7 +46,7 @@ jobs:
     name: ${{ matrix.distribution }} ${{ matrix.release }}-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.timeout }}
+    timeout-minutes: ${{ inputs.update_from_ci != '' && 120 || matrix.timeout }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -113,6 +119,8 @@ jobs:
           RELEASE: ${{ matrix.release }}
           EXPECTED_ARCH: ${{ matrix.arch }}
           COR_LINUX_TOOLS_DIR: ${{ runner.temp }}/cor-linux-tools
+          COR_LINUX_UPDATE_FROM_CI: ${{ inputs.update_from_ci }}
+          COR_LINUX_UPDATE_RELEASE: ${{ inputs.update_release }}
         run: >
           python3 scripts/linux_ci.py verify --package-run-id "$SOURCE_RUN"
           --suite "$SUITE" --release "$RELEASE" --expect-arch "$EXPECTED_ARCH"

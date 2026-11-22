@@ -4,8 +4,9 @@ import hashlib
 
 UBUNTU_BASELINE = '20.04'
 OPENSUSE_MIRROR = 'https://ftp.gwdg.de/pub/opensuse'
-TUMBLEWEED_ARM64_REPOMD = {
-    '20261117': '781d163094bd76fc89ff4fea07636bca733f4fdd51600ed1f6c0eb31baf853ad',
+TUMBLEWEED_REPOMD = {
+    'x86_64': {'20261120': '882abef29539e9f7c6cf96c66d9334ae16f2fb33917767ce182cc0484d694f5d'},
+    'aarch64': {'20261117': '781d163094bd76fc89ff4fea07636bca733f4fdd51600ed1f6c0eb31baf853ad'},
 }
 
 
@@ -82,8 +83,9 @@ def debian_target(release, series, build, arch, digest):
 
 
 def mint_target(release, digest):
-    url = f'https://pub.linuxmint.io/stable/{release}/linuxmint-{release}-cinnamon-64bit.iso'
-    return Target('linuxmint', release, 'x64', url, digest, image_format='iso')
+    path = f'/stable/{release}/linuxmint-{release}-cinnamon-64bit.iso'
+    return Target('linuxmint', release, 'x64', 'https://pub.linuxmint.io' + path, digest,
+                  image_format='iso', image_mirrors=('https://mirrors.edge.kernel.org/linuxmint' + path,))
 
 
 def pop_target(release, build, digest, *, arch='x64'):
@@ -94,9 +96,11 @@ def pop_target(release, build, digest, *, arch='x64'):
 
 
 def zorin_target(release, filename, digest):
-    root = 'https://mirrors.edge.kernel.org/zorinos-isos'
-    return Target('zorin', release, 'x64', f'{root}/{release.split(".")[0]}/{filename}',
-                  digest, image_format='iso')
+    path = f'/{release.split(".")[0]}/{filename}'
+    return Target('zorin', release, 'x64', 'https://mirrors.edge.kernel.org/zorinos-isos' + path,
+                  digest, image_format='iso',
+                  image_mirrors=('https://distro.ibiblio.org/zorinos' + path,
+                                 'https://mirror.clarkson.edu/zorinos/isos' + path))
 
 
 def fedora_target(build, arch, digest, *, variant='Generic', runner_release='24.04'):

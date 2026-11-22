@@ -377,14 +377,17 @@ def wait_package(client, run_id, system, arch, expected_commit, timeout=1200):
         time.sleep(15)
 
 
-def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_ci_run_id, *, rpm=False):
+def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_ci_run_id, *, rpm=False,
+                         version=None):
     if type(expected_ci_run_id) is not int or expected_ci_run_id <= 0:
         raise ValueError('Package inputs require a verified source CI run')
+    from build_support import validate_version
+    version = validate_version(version or package_version())
     wait_package(client, run_id, 'linux', arch, expected_commit, timeout=3600)
     records = client(f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
     records = current_ci_artifacts(client, client(f'/actions/runs/{run_id}'), records)
     suffix = 'amd64' if arch == 'x64' else 'arm64'
-    package = f'Clash-of-Rust-{package_version()}-linux-{suffix}.deb'
+    package = f'Clash-of-Rust-{version}-linux-{suffix}.deb'
     expected_artifacts = [
             (f'package-linux-{arch}', root/'dist',
              {package, package+'.sha256', 'package-receipt.json'}),
@@ -392,7 +395,7 @@ def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_c
     if rpm:
         from linux_native_package import rpm_filename, verify_rpm
         expected_artifacts.append((f'linux-rpm-{arch}', root/'dist/linux-rpm',
-                                   {rpm_filename(package_version(), arch), 'rpm-receipt.json'}))
+                                   {rpm_filename(version, arch), 'rpm-receipt.json'}))
     for name, folder, expected in expected_artifacts:
         matches = [record for record in records if record['name'] == name]
         if len(matches) != 1 or matches[0].get('expired'):
@@ -415,7 +418,7 @@ def fetch_package_inputs(client, run_id, arch, root, expected_commit, expected_c
     receipt = json.loads((root/'dist/package-receipt.json').read_text())
     if (receipt.get('schema') != 1 or receipt.get('tests_passed') is not True
             or receipt.get('system') != 'linux' or receipt.get('arch') != arch
-            or receipt.get('version') != package_version()
+            or receipt.get('version') != version
             or receipt.get('ci_run_id') != expected_ci_run_id
             or receipt.get('commit') != expected_commit or receipt.get('package') != package
             or receipt.get('sha256') != sha256(root/'dist'/package)

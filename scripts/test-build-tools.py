@@ -28,6 +28,7 @@ import macos_ci as macos
 from test_macos_runner_network import MacosRunnerNetworkTests
 from test_macos_test_network import MacosTestNetworkTests
 from test_cli_tui import CliTuiTests
+from test_linux_update_compatibility import LinuxPublishedUpdateTests
 import workflow_storage as storage
 import workflow_artifacts
 import action_cache as local_cache
@@ -570,7 +571,7 @@ class UbuntuVmTests(unittest.TestCase):
                                  f'unix:{guest.monitor_path},server=on,wait=off')
                 self.assertEqual(command[command.index('-display')+1],
                                  'sdl,gl=on' if suite == 'pop' and needs_gpu else 'none')
-                self.assertEqual(command[command.index('-smp')+1], '4' if needs_gpu and not kvm else '2')
+                self.assertEqual(command[command.index('-smp')+1], '4' if kvm or needs_gpu else '2')
 
     def test_mint_automatic_boot_preserves_the_image_uuid_and_rejects_non_casper_media(self):
         source = ('menuentry "Start Linux Mint" {\n'
@@ -1489,12 +1490,15 @@ class UbuntuVmTests(unittest.TestCase):
                                        tools_directory=MagicMock(return_value=root),
                                        vm_source_archive=MagicMock(return_value=archive),
                                        download=MagicMock(return_value=root/'image'), fetch_vm_package=MagicMock(),
+                                       download_bounded_iso=MagicMock(return_value=root/'image'),
+                                       order_image_mirrors=MagicMock(side_effect=lambda urls, _path: urls),
                                        run=MagicMock(side_effect=run_host), wait_vm_ssh=MagicMock(side_effect=wait_for_ssh),
                                        prepare_vm_guest=MagicMock(), verify_vm_package=MagicMock()), \
                         patch.object(linux_ci.socket, 'socket') as listener, \
+                        patch.object(linux_ci.os, 'sched_getaffinity', return_value={0, 1, 2, 3}), \
                         patch.object(linux_ci.shutil, 'copyfile'), \
                         patch.object(linux_mint_install, 'install', side_effect=install), \
-                        patch.object(linux_ci.subprocess, 'Popen'), \
+                        patch.object(linux_ci.subprocess, 'Popen') as boot, \
                         patch.multiple(linux_ci.VmGuest, create=True, stage_seconds=0, stage=MagicMock(),
                                        output=MagicMock(side_effect=['x86_64\n', 'linuxmint\n22.3\n', '6.8\n']),
                                        capture_desktop_failure=MagicMock(), close_ssh=MagicMock(), preserve=MagicMock()):
@@ -1505,6 +1509,9 @@ class UbuntuVmTests(unittest.TestCase):
                     else:
                         linux_ci.vm_test(123, target)
 
+                if failure != 'iso_install':
+                    command = boot.call_args.args[0]
+                    self.assertEqual(command[command.index('-smp')+1], '4')
                 report = json.loads((root/'report/linux-vm.json').read_text())
                 timings = report['timings_seconds']
                 self.assertEqual(report.get('failed_stage'), failure)
@@ -3643,6 +3650,80 @@ class BuildTests(unittest.TestCase):
                 linux_ci.download_vm_image(image, target.image_mirrors, path)
             self.assertEqual(http.return_value.open.call_args.args[0].full_url, target.image_url)
             self.assertFalse(path.exists())
+
+    def test_iso_mirror_sampling_orders_successes_and_preserves_fallbacks(self):
+        urls = ('https://first.invalid/image.iso', 'https://fast.invalid/image.iso',
+                'https://unavailable.invalid/image.iso')
+        speeds = {urls[0]: 1.0, urls[1]: 3.0, urls[2]: None}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(linux_ci, 'probe_image_mirror', side_effect=speeds.get) as probe:
+            path = Path(temporary)/'image.iso'
+            self.assertEqual(linux_ci.order_image_mirrors(urls + urls[:1], path),
+                             (urls[1], urls[0], urls[2]))
+            self.assertEqual(probe.call_count, 3)
+            probe.reset_mock()
+            path.write_bytes(b'cached')
+            self.assertEqual(linux_ci.order_image_mirrors(urls, path), urls)
+            self.assertEqual(linux_ci.order_image_mirrors(urls, path.with_suffix('.qcow2')), urls)
+            probe.assert_not_called()
+
+    def test_iso_probe_rejects_incomplete_invalid_and_failed_samples(self):
+        for output, returncode, expected in (
+                ('206 1048576 0.5', 0, 2097152.0),
+                ('200 1048576 0.5', 0, None),
+                ('206 100 0.5', 0, None),
+                ('206 1048576 nan', 0, None),
+                ('bad response', 0, None),
+                ('206 1048576 0.5', 1, None)):
+            result = subprocess.CompletedProcess([], returncode, stdout=output, stderr='')
+            with self.subTest(output=output, returncode=returncode), \
+                    patch.object(linux_ci.shutil, 'which', return_value='/usr/bin/curl'), \
+                    patch.object(linux_ci.subprocess, 'run', return_value=result):
+                self.assertEqual(linux_ci.probe_image_mirror('https://example.invalid/image.iso'), expected)
+
+    def test_bounded_iso_checks_bytes_and_removes_partial_downloads(self):
+        data = b'known image bytes'
+        record = {'url': 'https://example.invalid/image.iso', 'sha256': hashlib.sha256(data).hexdigest()}
+        for scenario in ('valid', 'changed', 'slow'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(linux_ci.shutil, 'which', return_value='/usr/bin/curl'):
+                path = Path(temporary)/'image.iso'
+
+                def curl(arguments, **_kwargs):
+                    self.assertIn('--speed-limit', arguments)
+                    self.assertIn('--speed-time', arguments)
+                    Path(arguments[arguments.index('--output') + 1]).write_bytes(
+                        data if scenario != 'changed' else b'changed')
+                    return subprocess.CompletedProcess(arguments, 28 if scenario == 'slow' else 0)
+
+                with patch.object(linux_ci.subprocess, 'run', side_effect=curl):
+                    if scenario == 'valid':
+                        self.assertEqual(linux_ci.download_bounded_iso(record, path), path)
+                        self.assertEqual(path.read_bytes(), data)
+                    else:
+                        exception = urllib.error.URLError if scenario == 'slow' else ValueError
+                        with self.assertRaises(exception):
+                            linux_ci.download_bounded_iso(record, path)
+                        self.assertFalse(path.exists())
+                    self.assertFalse(path.with_name(path.name + '.partial').exists())
+
+    def test_iso_network_failure_falls_back_but_checksum_failure_stops(self):
+        image = {'url': 'https://first.invalid/image.iso', 'sha256': 'a'*64}
+        mirror = 'https://second.invalid/image.iso'
+        path = Path('/tmp/cor-absent-fixture-image.iso')
+        for error, fallback in ((urllib.error.URLError('slow'), True),
+                                (ValueError('SHA256 mismatch'), False)):
+            with self.subTest(error=error), \
+                    patch.object(linux_ci, 'order_image_mirrors', return_value=(image['url'], mirror)), \
+                    patch.object(linux_ci, 'download_bounded_iso', side_effect=error), \
+                    patch.object(linux_ci, 'download', return_value=path) as last:
+                if fallback:
+                    self.assertEqual(linux_ci.download_vm_image(image, (mirror,), path), (path, mirror))
+                    last.assert_called_once_with(dict(image, url=mirror), path)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
+                        linux_ci.download_vm_image(image, (mirror,), path)
+                    last.assert_not_called()
 
     def test_linux_gui_supports_gnome_336_and_newer_compositors(self):
         import linux_gui
@@ -8292,14 +8373,17 @@ class CompatibilityTests(unittest.TestCase):
 
         metadata = b'signed fixture metadata'
         digest = hashlib.sha256(metadata).hexdigest()
-        content = 'https://downloadcontent.opensuse.org/ports/aarch64/tumbleweed/repo/oss/'
+        arm_content = 'https://downloadcontent.opensuse.org/ports/aarch64/tumbleweed/repo/oss/'
+        x64_content = 'https://downloadcontent.opensuse.org/tumbleweed/repo/oss/'
         archive = 'https://openqa.opensuse.org/assets/repo/openSUSE-Tumbleweed-oss-aarch64-Snapshot20261117/'
         for machine, arch, snapshot, published, cached_digest, source in (
-            ('x86_64', 'x64', '20261118', None, None,
+            ('x86_64', 'x64', '20261118', metadata, digest, x64_content),
+            ('x86_64', 'x64', '20261118', b'next snapshot', digest,
              'https://download.opensuse.org/history/20261118/tumbleweed/repo/oss/'),
-            ('aarch64', 'arm64', '20261117', metadata, digest, content),
+            ('x86_64', 'x64', '20261118', metadata, 'wrong digest', x64_content),
+            ('aarch64', 'arm64', '20261117', metadata, digest, arm_content),
             ('aarch64', 'arm64', '20261117', b'next snapshot', digest, archive),
-            ('aarch64', 'arm64', '20261117', metadata, 'wrong digest', content),
+            ('aarch64', 'arm64', '20261117', metadata, 'wrong digest', arm_content),
         ):
             with self.subTest(arch=arch, source=source, cached_digest=cached_digest):
                 target = tumbleweed_target(snapshot, arch, digest)
@@ -8308,7 +8392,7 @@ class CompatibilityTests(unittest.TestCase):
                         patch.object(platform, 'machine', return_value=machine), \
                         patch.object(platform, 'freedesktop_os_release', return_value={'VERSION_ID': snapshot}), \
                         patch.dict(linux_native_guest.TARGETS, {'opensuse': (target,)}), \
-                        patch.dict(linux_native_guest.TUMBLEWEED_ARM64_REPOMD, {snapshot: digest}), \
+                        patch.dict(linux_native_guest.TUMBLEWEED_REPOMD, {machine: {snapshot: digest}}), \
                         patch.object(linux_native_guest, 'urlopen') as fetch, \
                         patch.object(Path, 'is_file', return_value=True), \
                         patch.object(linux_native_guest, 'sha256', return_value=cached_digest) as cached, \
@@ -8319,13 +8403,10 @@ class CompatibilityTests(unittest.TestCase):
                             linux_native_guest.refresh()
                     else:
                         linux_native_guest.refresh()
-                if arch == 'arm64':
-                    fetch.assert_called_once_with(content + 'repodata/repomd.xml', timeout=15)
-                    cached.assert_called_once_with(Path('/var/cache/zypp/raw/cor-tumbleweed-snapshot'
-                                                        '/repodata/repomd.xml'))
-                else:
-                    fetch.assert_not_called()
-                    cached.assert_not_called()
+                content = arm_content if arch == 'arm64' else x64_content
+                fetch.assert_called_once_with(content + 'repodata/repomd.xml', timeout=15)
+                cached.assert_called_once_with(Path('/var/cache/zypp/raw/cor-tumbleweed-snapshot'
+                                                    '/repodata/repomd.xml'))
                 self.assertEqual(zypper.call_args_list, [
                     call('modifyrepo', '--all', '--disable', timeout=60),
                     call('addrepo', '--check', '--gpgcheck', '--no-refresh',

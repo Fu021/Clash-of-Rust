@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -21,7 +22,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 import urllib.request
 import uuid
 
@@ -136,16 +137,89 @@ def download(record, path):
     return path
 
 
+def probe_image_mirror(url):
+    curl = shutil.which('curl')
+    if not curl:
+        return None
+    sample = 1024*1024
+    try:
+        result = subprocess.run(
+            [curl, '--location', '--fail', '--silent', '--show-error',
+             '--proto', '=https', '--proto-redir', '=https',
+             '--connect-timeout', '5', '--max-time', '12',
+             '--max-filesize', str(sample), '--range', f'0-{sample-1}',
+             '--output', os.devnull,
+             '--write-out', '%{http_code} %{size_download} %{time_total}', url],
+            capture_output=True, text=True, timeout=15)
+        status, size, elapsed = result.stdout.split()
+        seconds = float(elapsed)
+        if result.returncode or status != '206' or int(size) != sample or not math.isfinite(seconds) or seconds <= 0:
+            return None
+        return sample/seconds
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def order_image_mirrors(urls, path):
+    urls = tuple(dict.fromkeys(urls))
+    if len(urls) < 2 or path.suffix != '.iso' or path.is_file():
+        return urls
+    with ThreadPoolExecutor(max_workers=min(len(urls), 4)) as workers:
+        speeds = list(workers.map(probe_image_mirror, urls))
+    ordered = sorted(zip(urls, speeds), key=lambda item: (
+        item[1] is None, -item[1] if item[1] is not None else 0))
+    if ordered[0][1] is not None:
+        print(f'Linux ISO mirror sample: selected {ordered[0][0]} '
+              f'({ordered[0][1]/1024**2:.1f} MiB/s)', flush=True)
+    return tuple(url for url, _speed in ordered)
+
+
+def download_bounded_iso(record, path):
+    curl = shutil.which('curl')
+    if not curl or (path.is_file() and sha256(path) == record.get('sha256')):
+        return download(record, path)
+    expected = record.get('sha256', '')
+    if not re.fullmatch(r'[0-9a-f]{64}', expected):
+        raise ValueError('Download requires an upstream SHA256')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + '.partial')
+    try:
+        result = subprocess.run(
+            [curl, '--location', '--fail', '--silent', '--show-error',
+             '--proto', '=https', '--proto-redir', '=https', '--max-redirs', '5',
+             '--connect-timeout', '15', '--speed-limit', '262144', '--speed-time', '60',
+             '--retry', '2', '--retry-all-errors', '--retry-delay', '1',
+             '--output', str(partial), '--', record['url']],
+            capture_output=True, text=True)
+        if result.returncode:
+            raise URLError(f'ISO download failed (curl exit {result.returncode})')
+        if sha256(partial) != expected:
+            raise ValueError('SHA256 mismatch: ' + path.name)
+        partial.replace(path)
+        print(f'Linux download: verified {path.name} ({path.stat().st_size / 1024**2:.1f} MiB)',
+              flush=True)
+        return path
+    finally:
+        partial.unlink(missing_ok=True)
+
+
 def download_vm_image(image, mirrors, path):
-    urls = (image['url'], *mirrors)
+    urls = order_image_mirrors((image['url'], *mirrors), path)
     for url in urls:
         try:
-            return download(dict(image, url=url), path), url
+            record = dict(image, url=url)
+            fetch = download_bounded_iso if path.suffix == '.iso' and url != urls[-1] else download
+            return fetch(record, path), url
         except HTTPError as error:
-            if error.code not in (404, 410) or url == urls[-1]:
+            if error.code not in (403, 404, 408, 410, 429, 500, 502, 503, 504) or url == urls[-1]:
                 raise
             print(f'Linux image unavailable (HTTP {error.code}): {url}. Trying a listed mirror.',
                   flush=True)
+        except (URLError, TimeoutError, ConnectionError) as error:
+            if url == urls[-1]:
+                raise
+            print(f'Linux image download failed ({type(error).__name__}): {url}. '
+                  'Trying a listed mirror.', flush=True)
 
 
 def require_actions():
@@ -202,7 +276,7 @@ def guest_deb_downloads(ssh, remote, environment, staging, records=None):
             raise ValueError('Guest DEB download differs from signed APT metadata')
         return destination
 
-    with ThreadPoolExecutor(max_workers=4) as workers:
+    with ThreadPoolExecutor(max_workers=8) as workers:
         archives = list(workers.map(fetch, records.items()))
     archive = staging.parent/'guest-debs.tar'
     with tarfile.open(archive, 'w') as tar:
@@ -431,7 +505,7 @@ class VmGuest:
             machine += ',gic-version=host'
         cpu = 'host' if kvm else ('max' if architecture == 'x86_64' else 'cortex-a72')
         cpus = 2
-        if architecture == 'aarch64' and not kvm and target.full_desktop:
+        if kvm or (architecture == 'aarch64' and target.full_desktop):
             cpus = min(4, len(os.sched_getaffinity(0)))
         print(f'{target.distribution} {target.release} VM: {label}, {architecture}, '
               f'acceleration={"kvm" if kvm else "tcg"}, vcpus={cpus}', flush=True)
@@ -746,7 +820,7 @@ def compatibility_command(target, python):
             '--expect-linux', target.os_release_id, target.os_release_version, '--expect-arch', target.arch]
 
 
-def hosted_test(package_run_id, target):
+def hosted_test(package_run_id, target, fixture=None):
     started = time.monotonic()
     result = {'distribution': target.family, 'version_id': target.release, 'arch': target.arch,
               'execution': 'hosted', 'kernel': os.uname().release,
@@ -759,19 +833,24 @@ def hosted_test(package_run_id, target):
         environment.pop('GH_TOKEN', None)
         environment.pop('GITHUB_TOKEN', None)
         run(compatibility_command(target, sys.executable), env=environment, timeout=1500)
+        if fixture:
+            run([sys.executable, ROOT/'scripts/linux_update_compatibility.py', fixture],
+                env=environment, timeout=1800)
         result['success'] = True
     finally:
         result['seconds'] = round(time.monotonic() - started, 3)
         write_json(REPORT/'linux-runner.json', result)
 
 
-def fetch_vm_package(directory, package_run_id, timings, *, rpm=False):
+def fetch_vm_package(directory, package_run_id, timings, *, rpm=False, fixture=None):
     started = time.monotonic()
     try:
         fetch_compatibility_package(package_run_id, host_arch(), rpm=rpm)
         with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
             for relative in ('dist', 'target/linux-tun-test'):
                 tar.add(ROOT/relative, arcname=relative)
+            if fixture:
+                tar.add(fixture, arcname='target/linux-update-fixture')
         return directory / 'package.tar.gz'
     finally:
         timings['package_download_and_archive'] = round(time.monotonic() - started, 3)
@@ -797,7 +876,7 @@ def collect_arch_package(guest, directory, ci_run_id):
 
 
 def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=None,
-                      package_future=None):
+                      package_future=None, fixture=None):
     timings = timings if timings is not None else {}
     started = time.monotonic()
     try:
@@ -879,13 +958,22 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
                 raise
             finally:
                 timings['package_lifecycle'] = round(time.monotonic() - phase_started, 3)
+        if fixture:
+            print(f'{guest.target.distribution} {guest.target.release}: verifying published update', flush=True)
+            phase_started = time.monotonic()
+            try:
+                guest.remote(guest.environment + '/opt/cor-test-python/bin/python3 '
+                             'scripts/linux_update_compatibility.py target/linux-update-fixture',
+                             timeout=2400 if slow_guest else 1800)
+            finally:
+                timings['published_update'] = round(time.monotonic() - phase_started, 3)
         if guest.target.family == 'arch':
             collect_arch_package(guest, directory, package_run_id)
     finally:
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
 
-def vm_test(package_run_id, target):
+def vm_test(package_run_id, target, fixture=None):
     overall_started = time.monotonic()
     timings = {}
     from build_inputs import manifest
@@ -926,7 +1014,7 @@ def vm_test(package_run_id, target):
             try:
                 stage = 'download_inputs'
                 package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings,
-                                                rpm=target.package_format == 'rpm')
+                                                rpm=target.package_format == 'rpm', fixture=fixture)
                 phase_started = time.monotonic()
                 filename = (f'{target.family}-{target.release}-{architecture}.{target.image_format}'
                             if target.image_url else 'focal.img')
@@ -976,7 +1064,7 @@ def vm_test(package_run_id, target):
                 timings['source_transfer'] = guest.stage_seconds
                 stage = 'installed_candidate'
                 verify_vm_package(guest, directory, package_run_id, frozen=bool(frozen), timings=timings,
-                                  package_future=package_future)
+                                  package_future=package_future, fixture=fixture)
                 result['success'] = True
             except Exception:
                 if 'failed_iso_install' in timings:
@@ -1044,7 +1132,21 @@ def main():
             raise RuntimeError('Linux compatibility runner architecture mismatch')
         target = target_for(args.suite, args.release, args.expect_arch)
         verify = hosted_test if target.hosted else vm_test
-        verify(args.package_run_id, target)
+        old_run = os.environ.get('COR_LINUX_UPDATE_FROM_CI', '')
+        release_tag = os.environ.get('COR_LINUX_UPDATE_RELEASE', '')
+        if bool(old_run) != bool(release_tag) or (old_run and not old_run.isdecimal()):
+            raise ValueError('Published update testing requires both a previous CI run and release tag')
+        if old_run:
+            from linux_update_compatibility import prepare
+            from workflow_artifacts import release_module
+            module = release_module()
+            repo = module.repository()
+            client = module.GitHub(repo, module.credential(repo))
+            fixture = ROOT/'target/linux-update-fixture'
+            prepare(client, int(old_run), release_tag, target.package_format, target.arch, fixture)
+            verify(args.package_run_id, target, fixture=fixture)
+        else:
+            verify(args.package_run_id, target)
     elif args.operation == 'ci':
         require_actions()
         run([sys.executable, ROOT/'scripts/prepare-resources.py',

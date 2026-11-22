@@ -4,6 +4,8 @@
 
 每次兼容运行实际安装同源候选包，执行和 CI 相同的基础系统代理和 TUN 流量检查，包含 DNS 与退出恢复。回执列出 `system_proxy` 与 `tun`。新增平台的完整验收可在目标配置中启用 `full_desktop`，覆盖 [三端、桌面登录与包生命周期](install-validation.md#新平台完整验收)。
 
+发布后需要验证真实跨版本更新时，在各发行版入口同时填写 `update_from_ci` 和 `update_release`：前者指向旧版成功的 push CI，后者为已公开的目标 Release 标签。作业校验旧版候选包、来源提交以及目标安装包和 SHA256 附件，再在一次性 runner 或虚拟机中安装旧版。DEB 与官方 Arch 包通过 `cor` 发现、下载并安装实际 Release；RPM 检查 DNF 或 Zypper 提示，再通过对应包管理器安装 Release 的 RPM。所有路径核对已安装包、客户端和后台版本，以及已有设置、测试订阅和停止状态下的内核；结果单独写入 `published-update.json`。常规兼容回执仍只说明其列出的基础检查；该终端验收不代表 GUI 图形授权通过。旧 CI 附件或 Arch 兼容回执过期后须选择可验证的旧版来源。
+
 | 手动入口 | 固定来宾及架构 | 原生安装路径 |
 | --- | --- | --- |
 | Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，用 APT 安装 DEB |
@@ -12,11 +14,11 @@
 | openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.21、Tumbleweed 20261120（x64） | 可写 Cloud VM，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
-镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。openSUSE 原站返回 404 或 410 时，从[列名镜像站](https://mirrors.opensuse.org/)尝试下载相同文件，沿用固定摘要，报告记录实际使用的地址。若两处均已移除，从官方索引核对替代镜像、摘要及匹配的签名软件源，再更新目标并复验。这里的 QEMU 来宾统一用 x64 `ubuntu-24.04` runner。
+镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Linux Mint 与 Zorin OS 使用[发行版列名的镜像](https://www.linuxmint.com/edition.php?id=311)、[Zorin 官方镜像](https://zorin.com/os/mirrors/)，下载 ISO 前并行抽样排序；非最后一个地址持续低速或网络失败时尝试下一地址，最后一个地址允许慢速完成。openSUSE 镜像不可用时也会尝试列名镜像。全部来源使用相同的固定摘要，报告记录实际地址；不能取得匹配文件时复核官方索引、摘要及匹配的签名软件源。这里的 QEMU 来宾统一用 x64 `ubuntu-24.04` runner。
 
 新增或替换目标时核对发行版的维护期限和镜像来源。上游宣布停止维护后，复查本项目是否仍需该目标作为明确的兼容基线。替换受支持目标须先验证替代版本，再同步目标矩阵、公开支持范围和发布门禁。滚动版每次更换快照都记录日期与摘要，使用配套的软件源并完整复验。Ubuntu 的最低内核基线见 [Ubuntu 兼容验证](ubuntu-compatibility.md)。
 
-排查时先对照各目标 `linux-vm.json` 的 `failed_stage`，区分输入下载、来宾启动、源码传入、依赖准备和已安装候选验收。报告记录 runner 标签、镜像版本、KVM 或 TCG，以及实际内核和阶段耗时。基础运行的托管 runner、云镜像 VM、ISO VM 分别限时 30、45、75 分钟。来宾引导或候选检查失败时保留串口日志，并尝试通过私有 QEMU 监控截图。
+排查时先对照各目标 `linux-vm.json` 的 `failed_stage`，区分输入下载、来宾启动、源码传入、依赖准备和已安装候选验收。报告记录 runner 标签、镜像版本、KVM 或 TCG，以及实际内核和阶段耗时。KVM 来宾使用不超过 runner 可用 CPU 数的四个 vCPU；ARM64 软件仿真延续原有桌面与基础验收配置。基础运行的托管 runner、云镜像 VM、ISO VM 分别限时 30、45、75 分钟。来宾引导或候选检查失败时保留串口日志，并尝试通过私有 QEMU 监控截图。
 
 `linux-vm.json` 单列官方镜像与 Python 工具的下载校验时间。ISO 来宾分别记录安装器和安装盘启动的耗时。安装器失败时记录 `iso_install` 失败阶段和已用时间。候选检查内部的依赖准备由 `compatibility-environment.json` 单列，VM 在来宾归档内保存，直接使用托管 runner 时随报告上传。
 
@@ -38,7 +40,7 @@ COSMIC 登录探针在 logind 标记桌面会话为活动状态后，等待[来�
 
 COSMIC 的[合成器刷新](https://github.com/pop-os/cosmic-comp/blob/master/src/wayland/protocols/toplevel_info.rs)异步发送几何事件。探针识别出目标窗口后最多等待一秒接收几何，原生 Wayland 验收仍检查 800×450 的最低尺寸。
 
-Tumbleweed 在来宾关闭预设仓库，只启用 openSUSE 历史目录中与云镜像日期一致的签名仓库，并禁用自动刷新。Tumbleweed 的 [GDM 打包补丁](https://api.opensuse.org/public/source/openSUSE:Factory/gdm/gdm-sysconfig-settings.patch)使 `/etc/sysconfig/displaymanager` 的 `DISPLAYMANAGER_AUTOLOGIN` 优先于 `custom.conf`。在一次性 VM 仅替换该键的值，保留实际 GDM 启动 Wayland 会话与登录自启动的断言。
+Tumbleweed 在来宾关闭预设仓库，使用与云镜像日期一致的签名仓库并禁用自动刷新。官方 CDN 的 `repomd.xml` 与固定快照摘要一致时优先使用 CDN，否则使用历史仓库；刷新后再次校验实际元数据。Tumbleweed 的 [GDM 打包补丁](https://api.opensuse.org/public/source/openSUSE:Factory/gdm/gdm-sysconfig-settings.patch)使 `/etc/sysconfig/displaymanager` 的 `DISPLAYMANAGER_AUTOLOGIN` 优先于 `custom.conf`。在一次性 VM 仅替换该键的值，保留实际 GDM 启动 Wayland 会话与登录自启动的断言。
 
 真实 GNOME Wayland 登录前，探针通过短生命周期的 D-Bus 会话写入扩展设置，指定 GIO 的本地文件实现以免启动 GVfs。若 SSH 阶段超时而 `desktop-login/prepare.json` 已写入成功结果，核对该命令是否启动了仍持有 SSH 输出的进程。真实 X11 登录中，窗口枚举遇到已销毁的 X11 客户窗口时短暂重试，成功读取窗口列表后再判断是否前台显示。
 

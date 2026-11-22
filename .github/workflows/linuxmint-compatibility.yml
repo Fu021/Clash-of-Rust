@@ -6,6 +6,14 @@ on:
         description: Successful CI run for the selected branch commit
         required: true
         type: string
+      update_from_ci:
+        description: Previous successful CI run for a published update test
+        required: false
+        type: string
+      update_release:
+        description: Published release tag to install during the update test
+        required: false
+        type: string
 permissions:
   actions: read
   contents: read
@@ -19,3 +27,5 @@ jobs:
     with:
       suite: linuxmint
       run_id: ${{ inputs.run_id }}
+      update_from_ci: ${{ inputs.update_from_ci }}
+      update_release: ${{ inputs.update_release }}

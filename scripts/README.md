@@ -28,6 +28,7 @@
 | `compatibility.py` | CLI / 模块 | 生成 Android 和 Linux 兼容矩阵，解析同提交成功 CI。`resolve --suite SUITE --run-id ID` 解析候选，`record` 绑定成功 job 及输入 id/name/digest。 |
 | `linux_compatibility_targets.py` | 模块 | 固定 Linux 发行版版本、架构和官方镜像摘要。矩阵与实际 VM 共享同一目标定义。 |
 | `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和 `verify` 兼容入口。兼容目标直接使用可丢弃的 Actions runner 或同架构 VM。 |
+| `linux_update_compatibility.py` | 隔离更新测试模块 | 校验旧版 CI 候选和已公开 Release，在一次性 Linux 环境检查真实版本发现、原生更新方式与用户数据保留；由现有发行版兼容入口按需调用。 |
 | `ubuntu_vm_environment.py` | 共享模块 | 冻结 Ubuntu 双架构的官方 APT 计划与签名索引，在隔离 VM 中校验及安装。 |
 | `linux_apt.py` | 模块 | 限时安装系统依赖，按签名索引校验同次运行中已下载的 DEB。 |
 | `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证。 |
@@ -54,6 +55,7 @@
 | `preview-slint.py` | CLI | 使用依赖版本一致的 Viewer 与 edition 1.19 检查和渲染正式组件，沿用随包字体；拒绝旧工具输出缺字截图，不调用 Cargo。 |
 | `preview-page.py` | CLI | 单个 Markdown、HTML 或网页的 PNG 截图，网页默认生成整页长图。见[本地截图说明](../docs/workflows/local-development.md#markdown-与网页截图)。 |
 | `test-build-tools.py` | 离线测试 | 构建输入、缓存、打包、Windows/macOS 辅助逻辑的单元测试。 |
+| `test_linux_update_compatibility.py` | 离线测试 | 验证跨版本更新夹具的来源、附件、路径和隔离边界，由构建工具测试调用。 |
 | `test-workflow-artifacts.py` | 离线测试 | 不可变产物、安装包和内存工作流的离线回归测试。 |
 
 ## 仓库内其他脚本

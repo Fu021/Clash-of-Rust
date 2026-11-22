@@ -227,7 +227,8 @@ class ArtifactTests(unittest.TestCase):
                     'package-receipt.json': json.dumps(receipt)}),
             zipped({'linux-tun-test': binary}),
         ]
-        for scenario in ('valid', 'archive-changed', 'wrong-receipt', 'wrong-ci', 'unsafe-member'):
+        for scenario in ('valid', 'old-version', 'wrong-selected-version', 'archive-changed',
+                         'wrong-receipt', 'wrong-ci', 'unsafe-member'):
             archives = originals.copy()
             if scenario in ('wrong-receipt', 'wrong-ci'):
                 changed = dict(receipt, **({'commit': 'b'*40} if scenario == 'wrong-receipt'
@@ -251,15 +252,19 @@ class ArtifactTests(unittest.TestCase):
                 return {'head_sha': self.commit, 'status': 'in_progress'}
 
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary, \
-                    patch.object(artifacts, 'package_version', return_value=self.version):
+                    patch.object(artifacts, 'package_version', return_value='0.9.0'
+                                 if scenario == 'old-version' else self.version):
                 root = Path(temporary)
-                if scenario == 'valid':
-                    artifacts.fetch_package_inputs(client, 42, 'x64', root, self.commit, 17)
+                if scenario in ('valid', 'old-version'):
+                    artifacts.fetch_package_inputs(client, 42, 'x64', root, self.commit, 17,
+                                                   version=self.version if scenario == 'old-version' else None)
                     self.assertEqual((root/'dist'/package).read_bytes(), payload)
                     self.assertEqual((root/'target/linux-tun-test').read_bytes(), binary)
                 else:
                     with self.assertRaises(ValueError):
-                        artifacts.fetch_package_inputs(client, 42, 'x64', root, self.commit, 17)
+                        artifacts.fetch_package_inputs(client, 42, 'x64', root, self.commit, 17,
+                                                       version='0.9.0'
+                                                       if scenario == 'wrong-selected-version' else None)
 
     def test_only_proxy_tun_test_is_exported_after_units_run_in_ci(self):
         with tempfile.TemporaryDirectory() as directory:
