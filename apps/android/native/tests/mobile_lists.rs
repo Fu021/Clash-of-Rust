@@ -695,21 +695,30 @@ fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
         probe.set_detail(0);
         render();
         let start = LogicalPosition::new(list[0] + list[2] / 2., list[1] + list[3] * 0.75);
-        probe.window().dispatch_event(WindowEvent::PointerPressed {
-            position: start,
-            button: PointerEventButton::Left,
-        });
+        let touch = |position: LogicalPosition, phase: i_slint_core::input::TouchPhase| {
+            probe.window().dispatch_event(WindowEvent::internal(
+                i_slint_core::platform::InternalEvent::Touch {
+                    id: 0,
+                    position: i_slint_core::lengths::LogicalPoint::new(position.x, position.y),
+                    phase,
+                    event_time: None,
+                    history: Default::default(),
+                },
+            ));
+        };
+        touch(start, i_slint_core::input::TouchPhase::Started);
         for step in 1..=6 {
             advance(&clock, Duration::from_millis(16));
-            probe.window().dispatch_event(WindowEvent::PointerMoved {
-                position: LogicalPosition::new(start.x, start.y - step as f32 * 24.),
-            });
+            touch(
+                LogicalPosition::new(start.x, start.y - step as f32 * 24.),
+                i_slint_core::input::TouchPhase::Moved,
+            );
             frame(&adapter, width as usize, height as usize);
         }
-        probe.window().dispatch_event(WindowEvent::PointerReleased {
-            position: LogicalPosition::new(start.x, start.y - 144.),
-            button: PointerEventButton::Left,
-        });
+        touch(
+            LogicalPosition::new(start.x, start.y - 144.),
+            i_slint_core::input::TouchPhase::Ended,
+        );
         render();
         let first_after_drag = targets.borrow().get("connection-row:0").map(|row| row[1]);
         assert!(
