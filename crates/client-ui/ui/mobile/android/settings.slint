@@ -16,7 +16,6 @@ component AndroidLanguage inherits VerticalLayout {
             enabled: !MobileData.working;
             selected(index, value) => { MobileActions.request(MobileIntent.language, ["system", "zh-CN", "en"][index], ""); }
         }
-        MSmall { text: @tr("切换后立即生效。"); wrap: word-wrap; }
     }
 }
 component AndroidNetwork inherits VerticalLayout {

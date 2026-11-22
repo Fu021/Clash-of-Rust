@@ -298,9 +298,6 @@ msgstr "Scheduled tasks"
 msgid "语言/language"
 msgstr "Language/语言"
 
-msgid "切换后立即生效。"
-msgstr "Changes apply immediately."
-
 msgid "跟随系统"
 msgstr "Follow system"
 

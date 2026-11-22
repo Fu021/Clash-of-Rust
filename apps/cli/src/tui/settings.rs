@@ -280,7 +280,7 @@ pub(super) fn hint(key: &str, language: Language) -> &'static str {
             "只改变终端节点显示；节点页也可按 s 循环切换。",
             "Press s on the Nodes page to cycle through sort orders.",
         ),
-        "language" => language.text("切换后立即生效。", "Changes apply immediately."),
+        "language" => "",
         key if key.starts_with("shortcut_") => language.text(
             "作用于当前订阅；自定义规则、顺序和订阅原规则在规则页管理。",
             "Applies to the active subscription. Manage other rules under Rules.",

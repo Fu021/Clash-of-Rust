@@ -174,6 +174,9 @@ pub(super) fn editor(state: &State, width: usize, height: usize) -> Vec<(String,
                 Tone::Muted,
             ),
         ]
+        .into_iter()
+        .filter(|(text, _)| !text.is_empty())
+        .collect()
     } else {
         vec![
             (

@@ -9,7 +9,7 @@ i-slint-backend-android-activity = { path = "vendor/slint-android-activity" }
 winit = { path = "vendor/winit" }
 
 [workspace.package]
-version = "0.7.3-dev.1.tui-and-lists"
+version = "0.7.3-dev.2.live-language"
 edition = "2024"
 license = "GPL-3.0-only"
 

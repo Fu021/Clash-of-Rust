@@ -406,9 +406,6 @@ msgstr "Language/语言"
 msgid "跟随系统"
 msgstr "Follow system"
 
-msgid "切换后立即生效。"
-msgstr "Changes apply immediately."
-
 msgid "已隐藏"
 msgstr "Hidden"
 
