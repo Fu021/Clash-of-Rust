@@ -749,6 +749,7 @@ async fn download_routes(
         .size;
     let mut errors = Vec::new();
     for (index, route) in routes.iter().enumerate() {
+        let has_fallback = index + 1 < routes.len();
         for attempt in 0..2 {
             // Each attempt owns a fresh temporary directory and starts at zero.
             report(Progress {
@@ -760,7 +761,7 @@ async fn download_routes(
                 available.clone(),
                 route.proxy.as_deref(),
                 api,
-                index + 1 < routes.len(),
+                clash_client_core::download::monitor_slow(has_fallback, attempt),
                 |mut value| {
                     value.route = route.label;
                     report(value);
@@ -770,7 +771,7 @@ async fn download_routes(
             {
                 Ok(downloaded) => return Ok(downloaded),
                 Err(error) => {
-                    let reconnect = attempt == 0 && clash_client_core::download::retryable(&error);
+                    let reconnect = clash_client_core::download::retry_same_route(&error, attempt);
                     errors.push(format!("{}：{error:#}", route.label));
                     if !reconnect {
                         break;
@@ -1769,6 +1770,11 @@ mod tests {
         assert_eq!(
             localize_installation_message(&message, Language::SimplifiedChinese),
             message
+        );
+        let slow = "更新失败：内核代理：下载持续低于 32 KiB/s；内核代理：下载速度持续下降（已尝试可用代理和直连）";
+        assert_eq!(
+            localize_installation_message(slow, Language::English),
+            "Update failed: Core proxy: Download stayed below 32 KiB/s; Core proxy: Download speed remained low after a drop (tried available proxies and direct connections)"
         );
         for task in tasks {
             task.await.unwrap();

@@ -558,8 +558,8 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!(
         "network traffic",
-        "已移除；流量汇总位于连接页",
-        "Removed. Traffic totals are on the Connections page.",
+        "已移除；请用 connection list 查看当前连接",
+        "Removed. Use connection list to inspect current connections.",
         "network traffic",
         0,
         0,

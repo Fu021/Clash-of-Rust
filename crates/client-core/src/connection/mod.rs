@@ -2,8 +2,6 @@
 use crate::api::{Connection, ConnectionRates};
 use crate::config::Language;
 use std::{cmp::Ordering, time::Duration};
-mod summary;
-pub use summary::{traffic_summary, traffic_summary_in};
 
 pub fn hostname(connection: &Connection) -> &str {
     if connection.metadata.sniff_host.is_empty() {

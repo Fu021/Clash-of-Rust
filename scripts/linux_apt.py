@@ -15,7 +15,8 @@ from build_support import host_arch, run, sha256
 
 OPTIONS = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
-           'Acquire::Languages=none', '-o', 'Dpkg::Use-Pty=0']
+           'Acquire::Languages=none', '-o', 'Dpkg::Use-Pty=0', '-o',
+           'DPkg::Lock::Timeout=120']
 UBUNTU_ARCHIVES = {'archive.ubuntu.com', 'security.ubuntu.com', 'ports.ubuntu.com'}
 INDEX_RETRY_DELAYS = (5, 15)
 

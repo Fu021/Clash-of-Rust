@@ -81,6 +81,8 @@ def main():
                      'application::ui_tests::remounted_subscription_list_clamps_a_stale_scroll_position',
                      'application::ui_tests::remounted_long_pages_preserve_valid_scroll_positions',
                      'application::ui_tests::window_controls_remain_available_during_subscription_and_proxy_updates',
+                     'application::ui_tests::connection_detail_exposes_all_fields_and_copies_the_same_values',
+                     'application::ui_tests::english_connection_detail_actions_fit_a_scaled_window',
                      'application::ui_tests::ip_report_shows_each_target_exit_and_its_measurement_state',
                      'application::ui_tests::ip_category_status_and_region_popups_drive_report_filters',
                      'application::ui_tests::desktop_language_menu_dispatches_stable_tags_in_both_catalogs',

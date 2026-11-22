@@ -1,9 +1,11 @@
 """Verify an installed Linux client's update against a published release."""
 import base64
+from contextlib import contextmanager, nullcontext
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -198,6 +200,28 @@ def expected_version(package_format, version):
     return native_version(version, '~' if package_format == 'rpm' else 'pre.') + '-1'
 
 
+@contextmanager
+def terminal_authorization():
+    import pwd
+    user = pwd.getpwuid(os.geteuid()).pw_name
+    require(re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_.-]*\$?', user) is not None,
+            'Invalid compatibility test user')
+    destination = Path('/etc/sudoers.d')/f'cor-update-{secrets.token_hex(12)}'
+    with tempfile.TemporaryDirectory(prefix='cor-update-sudo-') as temporary:
+        directory = Path(temporary)
+        directory.chmod(0o755)
+        source = directory/'sudoers'
+        source.write_text(f'Defaults:{user} verifypw=never\n')
+        source.chmod(0o644)
+        invoke(['sudo', '-n', 'visudo', '-cf', source])
+        invoke(['sudo', '-n', 'install', '-m', '0440', source, destination])
+        try:
+            invoke(['sudo', '-n', '-v'])
+            yield
+        finally:
+            invoke(['sudo', '-n', 'rm', '-f', '--', destination])
+
+
 def exercise(directory):
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'linux'
             or os.geteuid() == 0 or (os.environ.get('COR_LINUX_GUEST') != 'true'
@@ -282,7 +306,9 @@ def exercise(directory):
                                 and sha256(downloaded) == published['sha256'],
                                 'The downloaded update differs from the published package')
                         report['checks']['published_download_verified'] = True
-                        cli(data, 'update', 'install', '--yes', '--no-start', timeout=900)
+                        authorization = terminal_authorization() if package_format == 'deb' else nullcontext()
+                        with authorization:
+                            cli(data, 'update', 'install', '--yes', '--no-start', timeout=900)
                         status = cli(data, 'update', 'status')
                         require(status.get('state') == 'succeeded' and status.get('error') is False,
                                 'The application did not report a successful installation')

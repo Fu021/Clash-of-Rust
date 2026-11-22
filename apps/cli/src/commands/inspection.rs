@@ -37,8 +37,8 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         }
         "network traffic" => {
             bail!("{}", args.language().text(
-                "流量汇总已移至连接页；命令行请用 cor connection list 查看当前连接",
-                "Traffic is shown on the connections page; use cor connection list to inspect current connections",
+                "流量汇总已移除；请用 cor connection list 查看当前连接",
+                "Traffic summary was removed; use cor connection list to inspect current connections",
             ))
         }
         "network performance" => {

@@ -693,6 +693,30 @@ fn mobile_connections_keep_actions_reachable_and_scroll_with_long_names() {
             &[(MobileIntent::ConnectionDetail, "0".to_owned())]
         );
         probe.set_detail(0);
+        render();
+        let start = LogicalPosition::new(list[0] + list[2] / 2., list[1] + list[3] * 0.75);
+        probe.window().dispatch_event(WindowEvent::PointerPressed {
+            position: start,
+            button: PointerEventButton::Left,
+        });
+        for step in 1..=6 {
+            advance(&clock, Duration::from_millis(16));
+            probe.window().dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(start.x, start.y - step as f32 * 24.),
+            });
+            frame(&adapter, width as usize, height as usize);
+        }
+        probe.window().dispatch_event(WindowEvent::PointerReleased {
+            position: LogicalPosition::new(start.x, start.y - 144.),
+            button: PointerEventButton::Left,
+        });
+        render();
+        let first_after_drag = targets.borrow().get("connection-row:0").map(|row| row[1]);
+        assert!(
+            first_after_drag.is_none_or(|top| top < first[1] - 12.),
+            "connection rows must scroll under a drag gesture at {width}x{height}"
+        );
+        assert_eq!(probe.get_detail(), 0);
         for _ in 0..8 {
             probe.window().dispatch_event(WindowEvent::PointerScrolled {
                 position: LogicalPosition::new(list[0] + list[2] / 2., list[1] + list[3] / 2.),

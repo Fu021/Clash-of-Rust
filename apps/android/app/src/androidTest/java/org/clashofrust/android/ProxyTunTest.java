@@ -1351,6 +1351,18 @@ public class ProxyTunTest {
         }
         fail("Tool is outside the screenshot viewport: " + page);
     }
+    private static void verifyConnectionsTouch() throws Exception {
+        previewTool(3);
+        await("Connections page has no measured content",
+            () -> previewBounds(MainActivity.diagnostics(), "preview-content") != null);
+        previewSwipe(true);
+        previewSwipe(false);
+        await("Connections page stopped responding after touch scrolling", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            return ui.optBoolean("live") && ui.optInt("page", -1) == 3;
+        });
+        previewNavigate(0);
+    }
     private static android.graphics.Bitmap previewWindowBitmap() throws Exception {
         java.util.concurrent.atomic.AtomicReference<MainActivity> focused = new java.util.concurrent.atomic.AtomicReference<>();
         await("Screenshot activity did not regain focus", () -> {
@@ -2356,6 +2368,7 @@ public class ProxyTunTest {
         await("Native UI did not start its core", CoreBridge::ready);
         await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
         waitForAppWindow();
+        verifyConnectionsTouch();
         String raw = CoreBridge.config();
         assertNetworkProfile(raw);
         MainActivity activity = resumedActivity();

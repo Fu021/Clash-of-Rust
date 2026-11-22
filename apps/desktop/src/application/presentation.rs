@@ -766,14 +766,6 @@ impl App {
         } else {
             reconcile(&models.connections, Vec::new());
         }
-        data.set_connection_summary(strings(
-            data.get_connection_summary(),
-            if self.page == Page::Connections {
-                connection::traffic_summary_in(&self.snapshot.connections.connections, language)
-            } else {
-                Vec::new()
-            },
-        ));
         if self.page == Page::Rules {
             self.present_rules(data, models, &query);
         } else {

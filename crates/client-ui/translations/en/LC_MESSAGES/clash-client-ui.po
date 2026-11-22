@@ -597,12 +597,6 @@ msgstr "Search domain, IP, rule, or proxy chain"
 msgid "{} 条活跃连接"
 msgstr "{} active connections"
 
-msgid "收起汇总"
-msgstr "Hide summary"
-
-msgid "流量汇总"
-msgstr "Traffic summary"
-
 msgid "主机"
 msgstr "Host"
 

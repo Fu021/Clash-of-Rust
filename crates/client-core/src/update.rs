@@ -278,6 +278,7 @@ pub async fn download(
     let mut errors = Vec::new();
     let routes = crate::network::download_routes(port, None);
     for (index, route) in routes.iter().enumerate() {
+        let has_fallback = index + 1 < routes.len();
         for attempt in 0..2 {
             progress(Progress {
                 total: package.size,
@@ -321,7 +322,10 @@ pub async fn download(
                 let file = tokio::fs::File::from_std(temporary.reopen()?);
                 let mut file =
                     tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
-                let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
+                let mut watchdog = crate::download::Watchdog::new(crate::download::monitor_slow(
+                    has_fallback,
+                    attempt,
+                ));
                 let mut count = 0u64;
                 let mut hash = Sha256::new();
                 let mut last = std::time::Instant::now();
@@ -375,7 +379,7 @@ pub async fn download(
             match result {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    let reconnect = attempt == 0 && crate::download::retryable(&e);
+                    let reconnect = crate::download::retry_same_route(&e, attempt);
                     errors.push(format!("{}：{e}", route.label));
                     if !reconnect {
                         break;

@@ -1009,9 +1009,6 @@ msgstr "Search rules"
 msgid "收起"
 msgstr "Collapse"
 
-msgid "收起流量汇总"
-msgstr "Hide traffic summary"
-
 msgid "放弃"
 msgstr "Discard"
 
@@ -1050,9 +1047,6 @@ msgstr "No matching connections"
 
 msgid "流量与规则"
 msgstr "Traffic and rules"
-
-msgid "流量汇总"
-msgstr "Traffic summary"
 
 msgid "测速中…"
 msgstr "Testing…"

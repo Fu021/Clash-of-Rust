@@ -25,11 +25,20 @@ pub async fn download_routes(url: &Url, routes: &[Route]) -> Result<(String, Opt
     let mut errors = Vec::new();
     let mut format_error = None;
     for (index, route) in routes.iter().enumerate() {
-        match download_route(url, route, index + 1 < routes.len()).await {
-            Ok(subscription) => return Ok(subscription),
-            Err(error) => {
-                format_error = incompatible_format(&error).or(format_error);
-                errors.push(format!("{}：{error}", route.label));
+        let has_fallback = index + 1 < routes.len();
+        for attempt in 0..2 {
+            let retry_slow = crate::download::monitor_slow(has_fallback, attempt);
+            match download_route(url, route, retry_slow).await {
+                Ok(subscription) => return Ok(subscription),
+                Err(error) => {
+                    let reconnect = crate::download::retry_same_route(&error, attempt);
+                    format_error = incompatible_format(&error).or(format_error);
+                    errors.push(format!("{}：{error}", route.label));
+                    if !reconnect {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
             }
         }
     }
@@ -177,6 +186,33 @@ mod tests {
             "clash.meta mihomo ClashMeta clash-verge ClashVerge ClashMetaForAndroid clash-of-rust"
         );
         assert!(request.contains("application/yaml"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_subscription_reconnects_and_returns_only_the_complete_result() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                if attempt == 0 {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\npro")
+                        .await
+                        .unwrap();
+                } else {
+                    socket.write_all(&response()).await.unwrap();
+                }
+                socket.shutdown().await.unwrap();
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/config")).unwrap();
+        let (raw, usage) = download_routes(&url, &routes(None, None)).await.unwrap();
+        assert_eq!(raw, "proxies: []\n");
+        assert_eq!(usage.as_deref(), Some("upload=1; download=2; total=3"));
+        server.await.unwrap();
     }
 
     #[tokio::test]

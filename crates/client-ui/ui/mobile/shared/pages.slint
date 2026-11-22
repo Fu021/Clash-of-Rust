@@ -310,7 +310,6 @@ export component MobileSubscriptions inherits PageSurface {
     } }
 }
 component ConnectionsToolbar inherits VerticalLayout {
-    property <bool> summary-open;
     alignment: start; spacing: MobileTypography.small-gap; vertical-stretch: 0;
     padding: 12px;
     MField {
@@ -329,16 +328,6 @@ component ConnectionsToolbar inherits VerticalLayout {
             geometry-key: "connections-close-all";
             text: @tr("关闭全部"); width: max(100px, MobileTypography.font-size(15) * 6 + 16px); horizontal-stretch: 0; danger: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
         MSmall { col: 0; row: 1; colspan: parent.narrow ? 1 : 2; text: @tr("{} 条活跃连接", MobileData.connection-count); preferred-width: 0px; }
-        MButton { col: 0; row: 2; colspan: 2; text: root.summary-open ? @tr("收起流量汇总") : @tr("流量汇总"); quiet: true;
-            geometry-key: "connections-summary-toggle";
-            clicked => { root.summary-open = !root.summary-open; }
-        }
-    }
-    if root.summary-open: Rectangle {
-        height: 150px; horizontal-stretch: 1;
-        MScroll {
-            for line in MobileData.connection-summary: MParagraph { text: line; font-size: MobileTypography.font-size(12); }
-        }
     }
 }
 component ConnectionsRow inherits Rectangle {

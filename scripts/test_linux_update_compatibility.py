@@ -1,5 +1,6 @@
 """Offline checks for published Linux update fixtures."""
 import base64
+from contextlib import nullcontext
 import copy
 import hashlib
 import json
@@ -9,6 +10,7 @@ import signal
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import linux_update_compatibility as update
@@ -167,6 +169,57 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
                     invoke.assert_called_once_with([*query, 'clash-of-rust'], check=False)
                     self.assertEqual(remove.call_count, int(result_code == 0))
 
+    def test_deb_fixture_waits_for_competing_apt_transactions(self):
+        import linux_apt
+        package = Path('/tmp/previous.deb')
+        with patch.dict(os.environ, {'COR_LINUX_APT_CACHE': ''}), \
+                patch.object(linux_apt, 'privileged') as privileged:
+            update.install_previous('deb', package)
+        self.assertEqual(len(privileged.call_args_list), 2)
+        for request in privileged.call_args_list:
+            command = request.args[0]
+            self.assertIn('DPkg::Lock::Timeout=120', command)
+            self.assertIn(command[-3], ('purge', 'install'))
+
+    @unittest.skipUnless(hasattr(os, 'geteuid'), 'sudo authorization is Linux-only')
+    def test_terminal_authorization_is_scoped_and_always_removed(self):
+        commands = []
+
+        def invoke(command, **_kwargs):
+            commands.append(list(map(str, command)))
+            if command[:4] == ['sudo', '-n', 'visudo', '-cf']:
+                self.assertEqual(Path(command[4]).read_text(), 'Defaults:corci verifypw=never\n')
+
+        with patch('pwd.getpwuid', return_value=SimpleNamespace(pw_name='corci')), \
+                patch.object(update.secrets, 'token_hex', return_value='testtoken'), \
+                patch.object(update, 'invoke', side_effect=invoke):
+            with self.assertRaisesRegex(RuntimeError, 'installation failed'):
+                with update.terminal_authorization():
+                    raise RuntimeError('installation failed')
+        self.assertEqual(commands[1][:5], ['sudo', '-n', 'install', '-m', '0440'])
+        self.assertEqual(commands[1][-1], '/etc/sudoers.d/cor-update-testtoken')
+        self.assertEqual(commands[2], ['sudo', '-n', '-v'])
+        self.assertEqual(commands[3], ['sudo', '-n', 'rm', '-f', '--',
+                                       '/etc/sudoers.d/cor-update-testtoken'])
+
+    @unittest.skipUnless(hasattr(os, 'geteuid'), 'sudo authorization is Linux-only')
+    def test_terminal_authorization_removes_rule_if_validation_fails(self):
+        commands = []
+
+        def invoke(command, **_kwargs):
+            commands.append(list(map(str, command)))
+            if command == ['sudo', '-n', '-v']:
+                raise RuntimeError('authorization failed')
+
+        with patch('pwd.getpwuid', return_value=SimpleNamespace(pw_name='corci')), \
+                patch.object(update.secrets, 'token_hex', return_value='testtoken'), \
+                patch.object(update, 'invoke', side_effect=invoke):
+            with self.assertRaisesRegex(RuntimeError, 'authorization failed'):
+                with update.terminal_authorization():
+                    self.fail('must not run without validation')
+        self.assertEqual(commands[-1], ['sudo', '-n', 'rm', '-f', '--',
+                                        '/etc/sudoers.d/cor-update-testtoken'])
+
     def test_published_update_checks_channel_versions_and_saved_data(self):
         content = b'published-package'
         digest = hashlib.sha256(content).hexdigest()
@@ -239,6 +292,7 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
                             update.expected_version('deb', version)]), \
                         patch.object(update, 'wait_for', side_effect=[1234, 5678]), \
                         patch.object(update, 'stop_fixture_daemon'), \
+                        patch.object(update, 'terminal_authorization', return_value=nullcontext()), \
                         patch.object(update.subprocess, 'Popen', return_value=daemon), \
                         patch.object(update, 'download', side_effect=fake_download), \
                         patch.object(update, 'cli', side_effect=fake_cli):

@@ -176,6 +176,8 @@ pub(super) fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
         }
         "安装包大小与 Release 不一致" => Some("Package size does not match the release"),
         "安装包下载不完整" => Some("Package download is incomplete"),
+        "下载持续低于 32 KiB/s" => Some("Download stayed below 32 KiB/s"),
+        "下载速度持续下降" => Some("Download speed remained low after a drop"),
         "无法读取安装包" => Some("Could not read the package"),
         "安装包路径无效" => Some("The package path is invalid"),
         "无法锁定安装包目录，请关闭占用程序后重试" => {

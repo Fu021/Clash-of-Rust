@@ -1,12 +1,27 @@
 //! Shared bounds for streamed Geo and installer bodies.
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::time::Duration;
 use tokio::time::Instant;
 
 pub const BUFFER_CAPACITY: usize = 256 * 1024;
 const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 const SPEED_WINDOW: Duration = Duration::from_secs(20);
+const SAMPLE_WINDOW: Duration = Duration::from_secs(5);
 const MIN_BYTES_PER_SECOND: u64 = 32 * 1024;
+const DROP_CEILING_BYTES_PER_SECOND: u64 = 128 * 1024;
+const DROP_BASELINE_BYTES_PER_SECOND: u64 = 256 * 1024;
+const DROP_FACTOR: f64 = 4.0;
+
+#[derive(Debug)]
+struct SlowTransfer(&'static str);
+
+impl std::fmt::Display for SlowTransfer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for SlowTransfer {}
 
 pub async fn response(request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
     response_with_timeout(request, STALL_TIMEOUT).await
@@ -27,6 +42,7 @@ pub fn retryable(error: &anyhow::Error) -> bool {
         cause
             .downcast_ref::<reqwest::Error>()
             .is_some_and(|error| error.is_timeout() || error.is_body())
+            || cause.is::<tokio::time::error::Elapsed>()
             || cause
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(retryable_io)
@@ -56,28 +72,64 @@ fn retryable_io(mut error: &std::io::Error) -> bool {
     }
 }
 
+pub fn monitor_slow(has_fallback: bool, attempt: usize) -> bool {
+    has_fallback || attempt == 0
+}
+
+pub fn retry_same_route(error: &anyhow::Error, attempt: usize) -> bool {
+    attempt == 0 && (retryable(error) || error.chain().any(|cause| cause.is::<SlowTransfer>()))
+}
+
 pub struct Watchdog {
     retry_slow: bool,
     window_started: Instant,
     window_bytes: u64,
+    sample_started: Instant,
+    sample_bytes: u64,
+    peak_bytes_per_second: f64,
 }
 
 impl Watchdog {
-    /// Only reject a slow route when another route can still be attempted.
-    /// The final route retains the idle and overall request timeouts.
     pub fn new(retry_slow: bool) -> Self {
+        let now = Instant::now();
         Self {
             retry_slow,
-            window_started: Instant::now(),
+            window_started: now,
             window_bytes: 0,
+            sample_started: now,
+            sample_bytes: 0,
+            peak_bytes_per_second: 0.0,
+        }
+    }
+
+    fn record(&mut self, bytes: u64, now: Instant) {
+        self.window_bytes = self.window_bytes.saturating_add(bytes);
+        if !self.retry_slow {
+            return;
+        }
+        self.sample_bytes = self.sample_bytes.saturating_add(bytes);
+        let elapsed = now.duration_since(self.sample_started);
+        if elapsed >= SAMPLE_WINDOW {
+            self.peak_bytes_per_second = self
+                .peak_bytes_per_second
+                .max(self.sample_bytes as f64 / elapsed.as_secs_f64());
+            self.sample_started = now;
+            self.sample_bytes = 0;
         }
     }
 
     fn check_window(&mut self, now: Instant) -> Result<()> {
         let elapsed = now.duration_since(self.window_started);
         if self.retry_slow && elapsed >= SPEED_WINDOW {
-            if (self.window_bytes as f64) < MIN_BYTES_PER_SECOND as f64 * elapsed.as_secs_f64() {
-                bail!("下载持续低于 32 KiB/s，尝试下一条连接路线");
+            let rate = self.window_bytes as f64 / elapsed.as_secs_f64();
+            if rate < MIN_BYTES_PER_SECOND as f64 {
+                return Err(SlowTransfer("下载持续低于 32 KiB/s").into());
+            }
+            if rate < DROP_CEILING_BYTES_PER_SECOND as f64
+                && self.peak_bytes_per_second >= DROP_BASELINE_BYTES_PER_SECOND as f64
+                && rate * DROP_FACTOR < self.peak_bytes_per_second
+            {
+                return Err(SlowTransfer("下载速度持续下降").into());
             }
             self.window_started = now;
             self.window_bytes = 0;
@@ -102,7 +154,7 @@ impl Watchdog {
                 Ok(result) => {
                     let chunk = result.context("下载中断或超时")?;
                     if let Some(bytes) = &chunk {
-                        self.window_bytes += bytes.len() as u64;
+                        self.record(bytes.len() as u64, Instant::now());
                     }
                     return Ok(chunk);
                 }
@@ -271,5 +323,98 @@ mod tests {
         last_route
             .check_window(last_route.window_started + Duration::from_secs(60))
             .unwrap();
+    }
+
+    #[test]
+    fn sustained_drop_uses_observed_speed_without_rejecting_steady_slow_networks() {
+        let mut dropped = Watchdog::new(true);
+        let start = dropped.window_started;
+        dropped.record(512 * 1024 * 5, start + Duration::from_secs(5));
+        for seconds in [10, 15, 20] {
+            dropped.record(48 * 1024 * 5, start + Duration::from_secs(seconds));
+        }
+        dropped.check_window(start + SPEED_WINDOW).unwrap();
+        for seconds in [25, 30, 35, 40] {
+            dropped.record(48 * 1024 * 5, start + Duration::from_secs(seconds));
+        }
+        let error = dropped
+            .check_window(start + SPEED_WINDOW + SPEED_WINDOW)
+            .unwrap_err();
+        assert!(error.to_string().contains("速度持续下降"));
+
+        let mut steady = Watchdog::new(true);
+        let start = steady.window_started;
+        for seconds in [5, 10, 15, 20, 25, 30, 35, 40] {
+            steady.record(48 * 1024 * 5, start + Duration::from_secs(seconds));
+            steady
+                .check_window(start + Duration::from_secs(seconds))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn slow_last_route_reconnects_once_and_then_permits_slow_completion() {
+        let error = anyhow::Error::new(SlowTransfer("slow"));
+        assert!(monitor_slow(true, 0));
+        assert!(monitor_slow(false, 0));
+        assert!(!monitor_slow(false, 1));
+        assert!(retry_same_route(&error, 0));
+        assert!(!retry_same_route(&error, 1));
+        assert!(!retry_same_route(&anyhow::anyhow!("SHA256 校验失败"), 0));
+    }
+
+    #[tokio::test]
+    async fn outer_request_timeout_is_retryable() {
+        let error = tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        assert!(retry_same_route(&anyhow::Error::new(error), 0));
+    }
+
+    #[tokio::test]
+    async fn continuous_dropped_speed_above_the_absolute_floor_is_detected() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10000000\r\n\r\n")
+                .await
+                .unwrap();
+            loop {
+                if socket.write_all(b".").await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        let mut response = response(
+            crate::network::client_builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}/package")),
+        )
+        .await
+        .unwrap();
+        let mut watchdog = Watchdog::new(true);
+        watchdog.window_started = Instant::now() - SPEED_WINDOW + Duration::from_millis(100);
+        watchdog.window_bytes = 48 * 1024 * SPEED_WINDOW.as_secs();
+        watchdog.peak_bytes_per_second = 512.0 * 1024.0;
+        let error = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Err(error) = watchdog.chunk(&mut response).await {
+                    return error;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(error.to_string().contains("速度持续下降"), "{error:#}");
+        server.abort();
+        let _ = server.await;
     }
 }

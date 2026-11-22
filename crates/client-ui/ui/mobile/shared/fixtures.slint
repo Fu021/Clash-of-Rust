@@ -72,12 +72,6 @@ export component MobileFixture inherits Rectangle {
             {id: "local", name: "默认直连", source: "default.yaml", detail: "本地配置", local: true, builtin: true},
             {id: "imported", name: "本地导入的配置", source: "", detail: "本地配置", local: true}
         ];
-        MobileData.connection-summary = [
-            "全部当前连接 24 条 · 累计字节快照，非全日用量",
-            "主机 · api.github.com · 4 条 · ↑ 24576 B · ↓ 1887436 B",
-            "进程 · browser.exe · 12 条 · ↑ 49152 B · ↓ 3774872 B",
-            "策略链 · Proxy → 德国 01 · 16 条 · ↑ 65536 B · ↓ 5033162 B",
-            "规则类型 · DomainSuffix · 16 条 · ↑ 65536 B · ↓ 5033162 B"];
         MobileData.connections = [
             {id: "1", host: root.long-names ? "very-long-service-name.api.github.example.com:443" : "api.github.com:443", detail: "tcp · 10:31:20", rule: root.long-names ? "DOMAIN-SUFFIX very-long-service-name.example.com" : "DOMAIN-SUFFIX github.com", route: root.long-names ? "Proxy → " + root.long-name : "Proxy → 德国 01 · IPv6", up: "2.4 KiB/s", down: "128 KiB/s", upload: "24 KiB", download: "1.8 MiB"},
             {id: "2", host: "www.google.com:443", detail: "tcp · 10:31:24", rule: "DOMAIN-SUFFIX google.com", route: "Proxy → 德国 01 · IPv6", up: "1.8 KiB/s", down: "86 KiB/s", upload: "18 KiB", download: "980 KiB"},

@@ -171,6 +171,7 @@ struct ReleaseAsset {
 
 struct DownloadRoute {
     label: &'static str,
+    route: crate::network::Route,
     client: Result<reqwest::Client>,
 }
 
@@ -178,6 +179,7 @@ impl DownloadRoute {
     fn new(route: &crate::network::Route) -> Self {
         Self {
             label: route.label,
+            route: route.clone(),
             client: download_client(route),
         }
     }
@@ -301,10 +303,16 @@ async fn download_asset(
 ) -> Result<()> {
     let mut errors = Vec::new();
     for (index, route) in routes.iter().enumerate() {
+        let has_fallback = index + 1 < routes.len();
         for attempt in 0..2 {
             let result = async {
+                let client = if attempt == 0 {
+                    route.client()?.clone()
+                } else {
+                    download_client(&route.route)?
+                };
                 let mut response =
-                    crate::download::response(route.client()?.get(&asset.browser_download_url))
+                    crate::download::response(client.get(&asset.browser_download_url))
                         .await?
                         .error_for_status()?;
                 if response
@@ -319,7 +327,10 @@ async fn download_asset(
                 let file = tokio::fs::File::from_std(temporary.reopen()?);
                 let mut file =
                     tokio::io::BufWriter::with_capacity(crate::download::BUFFER_CAPACITY, file);
-                let mut watchdog = crate::download::Watchdog::new(index + 1 < routes.len());
+                let mut watchdog = crate::download::Watchdog::new(crate::download::monitor_slow(
+                    has_fallback,
+                    attempt,
+                ));
                 let mut hash = Sha256::new();
                 let mut size = 0;
                 while let Some(chunk) = watchdog.chunk(&mut response).await? {
@@ -349,7 +360,7 @@ async fn download_asset(
             match result {
                 Ok(()) => return Ok(()),
                 Err(error) => {
-                    let reconnect = attempt == 0 && crate::download::retryable(&error);
+                    let reconnect = crate::download::retry_same_route(&error, attempt);
                     errors.push(format!("{}：{error:#}", route.label));
                     if !reconnect {
                         break;
@@ -770,6 +781,78 @@ mod tests {
         })];
         tokio::time::timeout(
             Duration::from_secs(5),
+            download_asset(&asset, &destination, &routes),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), body);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn slow_transfer_reconnects_before_fallback_and_preserves_previous_file() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = vec![42; 64 * 1024];
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("GeoIP.dat");
+        std::fs::write(&destination, b"previous verified data").unwrap();
+        let previous = destination.clone();
+        let expected = body.clone();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            let mut request = [0; 8192];
+            assert!(first.read(&mut request).await.unwrap() > 0);
+            first
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                        expected.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            first.write_all(&expected[..1024]).await.unwrap();
+            let (mut retry, _) = listener.accept().await.unwrap();
+            assert!(retry.read(&mut request).await.unwrap() > 0);
+            assert_eq!(std::fs::read(&previous).unwrap(), b"previous verified data");
+            retry
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        expected.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            retry.write_all(&expected).await.unwrap();
+        });
+        let asset = ReleaseAsset {
+            name: "geoip.dat".into(),
+            size: body.len() as u64,
+            digest: Some(format!(
+                "sha256:{}",
+                crate::file_hash::hex(Sha256::digest(&body))
+            )),
+            browser_download_url: format!("http://{address}/asset"),
+        };
+        let routes = [
+            DownloadRoute::new(&crate::network::Route {
+                label: "测试网络",
+                proxy: None,
+            }),
+            DownloadRoute::new(&crate::network::Route {
+                label: "不可用的备用路线",
+                proxy: Some("http://127.0.0.1:1".into()),
+            }),
+        ];
+        tokio::time::timeout(
+            Duration::from_secs(35),
             download_asset(&asset, &destination, &routes),
         )
         .await
