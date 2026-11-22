@@ -4,6 +4,38 @@ use std::time::Instant;
 
 pub(super) const LIFETIME: Duration = Duration::from_secs(5);
 
+pub(super) struct UnreachableNotice {
+    context: Option<String>,
+    count: usize,
+    protected: bool,
+}
+
+impl UnreachableNotice {
+    pub(super) fn display(&self, language: Language) -> String {
+        let context = self
+            .context
+            .as_deref()
+            .unwrap_or_else(|| language.text("本次定时测速", "Scheduled latency test"));
+        let detail = if self.protected {
+            language.text(
+                "请检查 Claude 保护线路。",
+                "Check the Claude protection route.",
+            )
+        } else {
+            language.text(
+                "请更换节点；更新失败后会自动尝试直连。",
+                "Choose another node; failed updates will retry using a direct connection.",
+            )
+        };
+        match language {
+            Language::SimplifiedChinese => {
+                format!("{context}：{} 个节点不可达。{detail}", self.count)
+            }
+            Language::English => format!("{context}: {} nodes unreachable. {detail}", self.count),
+        }
+    }
+}
+
 impl App {
     pub(super) fn fail_update(&mut self, reason: String) {
         let directory = self.updates.install_directory.clone();
@@ -112,44 +144,50 @@ impl App {
     }
 
     pub(super) fn show_notice(&mut self, text: String, error: bool) {
-        self.present_notice(text, error, false);
+        self.present_notice(text, error, false, false);
     }
 
     pub(super) fn show_critical(&mut self, text: String) {
-        self.present_notice(text, true, true);
+        self.present_notice(text, true, true, false);
+    }
+
+    pub(super) fn show_copy_failure(&mut self) {
+        if self.notice_visible {
+            self.record_notice_issue(
+                desktop_view::CopyFeedback::Failed.text(self.presentation_language),
+                false,
+            );
+            self.notice_copy_failed = true;
+        } else {
+            self.present_notice(String::new(), true, false, true);
+        }
     }
 
     pub(super) fn show_unreachable_nodes(&mut self, context: &str, count: usize) {
-        let language = self.presentation_language;
-        let detail = if self.settings.claude_protection.is_some() {
-            language.text(
-                "请检查 Claude 保护线路。",
-                "Check the Claude protection route.",
-            )
-        } else {
-            language.text(
-                "请更换节点；更新失败后会自动尝试直连。",
-                "Choose another node; failed updates will retry using a direct connection.",
-            )
+        self.show_unreachable_notice(Some(context.to_owned()), count);
+    }
+
+    pub(super) fn show_scheduled_unreachable_nodes(&mut self, count: usize) {
+        self.show_unreachable_notice(None, count);
+    }
+
+    fn show_unreachable_notice(&mut self, context: Option<String>, count: usize) {
+        let notice = UnreachableNotice {
+            context,
+            count,
+            protected: self.settings.claude_protection.is_some(),
         };
         let revision = self.notice_revision;
-        self.show_notice(
-            match language {
-                Language::SimplifiedChinese => {
-                    format!("{context}：{count} 个节点不可达。{detail}")
-                }
-                Language::English => format!("{context}: {count} nodes unreachable. {detail}"),
-            },
-            true,
-        );
+        self.show_notice(notice.display(self.presentation_language), true);
         if self.notice_revision != revision {
             self.notice_network_recovery = true;
+            self.unreachable_notice = Some(notice);
         }
     }
 
     pub(super) fn update_unreachable_notice(&mut self, text: String) {
         if self.notice_visible && self.notice_network_recovery {
-            self.show_notice(text, true);
+            self.present_notice(text, true, false, self.notice_copy_failed);
             self.notice_network_recovery = true;
         }
     }
@@ -157,24 +195,34 @@ impl App {
     pub(super) fn show_notice_followup(&mut self, text: String, error: bool) {
         if self.notice_visible && self.error {
             let update_failure = self.notice_update_failure;
-            self.present_notice(
-                format!("{}\n\n{text}", self.notice),
-                true,
-                self.notice_critical,
-            );
+            let text = if self.notice.is_empty() {
+                text
+            } else {
+                format!("{}\n\n{text}", self.notice)
+            };
+            self.present_notice(text, true, self.notice_critical, self.notice_copy_failed);
             self.notice_update_failure = update_failure;
         } else {
             self.show_notice(text, error);
         }
     }
 
-    fn present_notice(&mut self, text: String, error: bool, critical: bool) {
+    fn record_notice_issue(&mut self, text: &str, critical: bool) {
+        self.issue_events
+            .push_back(clash_client_core::support::incident(text, critical));
+        while self.issue_events.len() > 20 {
+            self.issue_events.pop_front();
+        }
+    }
+
+    fn present_notice(&mut self, text: String, error: bool, critical: bool, copy_failed: bool) {
         if error {
-            self.issue_events
-                .push_back(clash_client_core::support::incident(&text, critical));
-            while self.issue_events.len() > 20 {
-                self.issue_events.pop_front();
-            }
+            let issue = if copy_failed && text.is_empty() {
+                desktop_view::CopyFeedback::Failed.text(self.presentation_language)
+            } else {
+                &text
+            };
+            self.record_notice_issue(issue, critical);
         }
         if self.notice_visible && ((self.notice_critical && !critical) || (self.error && !error)) {
             return;
@@ -183,7 +231,9 @@ impl App {
         self.error = error;
         self.notice_critical = critical;
         self.notice_network_recovery = false;
+        self.unreachable_notice = None;
         self.notice_update_failure = false;
+        self.notice_copy_failed = copy_failed;
         self.notice_visible = true;
         self.notice_started = Some(Instant::now());
         self.notice_revision = self.notice_revision.wrapping_add(1);
@@ -213,7 +263,9 @@ impl App {
         self.notice_visible = false;
         self.notice_critical = false;
         self.notice_network_recovery = false;
+        self.unreachable_notice = None;
         self.notice_update_failure = false;
+        self.notice_copy_failed = false;
         self.notice_started = None;
         self.notice_revision = self.notice_revision.wrapping_add(1);
         if let Some(timer) = self.notice_timer.take() {
@@ -225,6 +277,159 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn apply_language_setting(app: &mut App, language: LanguagePreference) {
+        app.updates.started = true;
+        let _ = app.update(Message::Finished(Box::new(Reply {
+            view_revision: app.view_revision,
+            remote: false,
+            profile_edit: false,
+            profile_import: false,
+            profile_updated: false,
+            scope: Scope::Other,
+            start_requested: false,
+            settings: Settings {
+                language,
+                ..app.settings.clone()
+            },
+            profiles: None,
+            rule_document: None,
+            rules_applied: false,
+            snapshot: None,
+            notice: Ok(String::new()),
+            running: false,
+            geo_status: String::new(),
+            autostart: false,
+            protection_changed: false,
+            tray_nodes: None,
+        })));
+    }
+
+    #[test]
+    fn clipboard_feedback_follows_language_changes_without_another_copy() {
+        use clash_desktop_protocol::{UiData, models::ViewModels};
+
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        app.page = Page::Claude;
+        let data = UiData::default();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+        for (revision, script, written) in [(4, true, true), (5, true, false), (6, false, false)] {
+            app.dismiss_notice();
+            app.claude.status = "Existing Claude status".into();
+            app.claude.error = false;
+            apply_language_setting(&mut app, LanguagePreference::SimplifiedChinese);
+            app.finish_copy(revision, script, written);
+
+            for (language, copied, failure) in [
+                (
+                    LanguagePreference::SimplifiedChinese,
+                    "脚本已复制",
+                    "无法写入系统剪贴板，请重试。",
+                ),
+                (
+                    LanguagePreference::English,
+                    "Script copied",
+                    "Could not write to the system clipboard. Please try again.",
+                ),
+                (
+                    LanguagePreference::SimplifiedChinese,
+                    "脚本已复制",
+                    "无法写入系统剪贴板，请重试。",
+                ),
+            ] {
+                let notice_revision = app.notice_revision;
+                apply_language_setting(&mut app, language);
+                app.present(&data, &mut models);
+                assert_eq!(data.get_copy_revision(), revision);
+                assert_eq!(data.get_copy_failed(), !written);
+                assert_eq!(data.get_claude_error(), script && !written);
+                if !script {
+                    assert_eq!(data.get_claude_status().as_str(), "Existing Claude status");
+                } else if written {
+                    let status = data.get_claude_status();
+                    assert!(
+                        status.as_str().starts_with(copied),
+                        "{language:?}: {status:?}"
+                    );
+                } else {
+                    assert_eq!(data.get_claude_status().as_str(), failure);
+                }
+                assert_eq!(
+                    data.get_notice().as_str(),
+                    if written { "" } else { failure }
+                );
+                assert_eq!(app.notice_revision, notice_revision);
+            }
+        }
+    }
+
+    #[test]
+    fn clipboard_failure_preserves_the_active_notice_and_its_actions() {
+        use clash_desktop_protocol::{UiData, models::ViewModels};
+
+        let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
+        let data = UiData::default();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+        type NoticeCase = (&'static str, fn(&mut App));
+        let cases: [NoticeCase; 4] = [
+            ("3 nodes unreachable", |app| {
+                app.show_unreachable_nodes("Test", 3)
+            }),
+            ("被占用", |app| app.fail_update("安装文件被占用".into())),
+            ("Critical test notice", |app| {
+                app.show_critical("Critical test notice".into())
+            }),
+            ("Saved test settings", |app| {
+                app.show_notice("Saved test settings".into(), false)
+            }),
+        ];
+        for (original_english, show_notice) in cases {
+            app.dismiss_notice();
+            apply_language_setting(&mut app, LanguagePreference::SimplifiedChinese);
+            show_notice(&mut app);
+            let original = app.notice.clone();
+            let revision = app.notice_revision;
+            let started = app.notice_started;
+            let flags = (
+                app.error,
+                app.notice_critical,
+                app.notice_network_recovery,
+                app.notice_update_failure,
+            );
+            app.finish_copy(11, false, false);
+            app.finish_copy(12, false, false);
+            assert_eq!(app.notice, original);
+            assert_eq!(app.notice_revision, revision);
+            assert_eq!(app.notice_started, started);
+            assert_eq!(
+                (
+                    app.error,
+                    app.notice_critical,
+                    app.notice_network_recovery,
+                    app.notice_update_failure
+                ),
+                flags
+            );
+
+            apply_language_setting(&mut app, LanguagePreference::English);
+            app.present(&data, &mut models);
+            let message = data.get_notice();
+            assert!(message.as_str().contains(original_english), "{message:?}");
+            assert_eq!(
+                message
+                    .as_str()
+                    .matches("Could not write to the system clipboard. Please try again.")
+                    .count(),
+                1
+            );
+            app.dismiss_notice();
+            app.show_notice("New test notice".into(), false);
+            app.present(&data, &mut models);
+            assert_eq!(data.get_notice().as_str(), "New test notice");
+        }
+    }
 
     fn stored_installation_failure(
         data_dir: &std::path::Path,

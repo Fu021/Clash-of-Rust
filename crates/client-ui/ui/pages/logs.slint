@@ -5,6 +5,56 @@ import { PageScroll, Label, Caption, Panel, ActionButton, Field, Badge, Select }
 import { CopyButton } from "../components/desktop-copy.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 import { ChoiceBar } from "../components/sections.slint";
+import { LogItem } from "../models.slint";
+
+component LogRow inherits Rectangle {
+    in property <LogItem> entry;
+    in property <string> original;
+    in property <int> row-index;
+    property <string> focused-original;
+    property <bool> current: root.row-index >= 0 && root.row-index < UiData.logs.length
+        && root.original == (UiData.logs[root.row-index].original == "" ? UiData.logs[root.row-index].message : UiData.logs[root.row-index].original);
+    changed original => { keys.clear-focus(); }
+    GeometryTarget { key: "log:" + root.entry.message; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
+    height: max(34px, Theme.detail-size * 1.6 + 12px);
+    background: row-area.has-hover ? Theme.inset : root.entry.tone == 3 ? Theme.danger-wash : root.entry.tone == 2 ? Theme.warning-wash : transparent;
+    accessible-role: button;
+    accessible-label: root.entry.message;
+    accessible-action-default => { if root.current && UiData.modal == 0 { UiActions.dispatch(Intent.log-detail, root.original, ""); } }
+    keys := FocusScope {
+        enabled: root.current && UiData.modal == 0;
+        focus-gained(reason) => { root.focused-original = root.original; }
+        key-pressed(event) => {
+            if root.current && root.focused-original == root.original && (event.text == Key.Return || event.text == " ") {
+                UiActions.dispatch(Intent.log-detail, root.original, "");
+                return accept;
+            }
+            return reject;
+        }
+    }
+    row-area := TouchArea {
+        enabled: root.current && UiData.modal == 0;
+        mouse-cursor: pointer;
+        clicked => { UiActions.dispatch(Intent.log-detail, root.original, ""); }
+    }
+    HorizontalLayout { cross-axis-alignment: center; spacing: 10px; padding-left: 16px; padding-right: 8px;
+        if root.entry.time != "": Caption { text: root.entry.time; width: 66px; horizontal-stretch: 0; }
+        Caption { text: root.entry.level; color: root.entry.tone == 3 ? Theme.danger : root.entry.tone == 2 ? Theme.warning : Theme.secondary; width: 52px * Theme.text-scale; horizontal-stretch: 0; }
+        Label { text: root.entry.message; font-size: Theme.detail-size; }
+        CopyButton { geometry-key: "copy-log:" + root.entry.message; value: root.entry.message; enabled: root.current; quiet: true; compact: true; }
+    }
+}
+
+component LogSlot inherits VerticalLayout {
+    in property <LogItem> entry;
+    in property <int> row-index;
+    property <string> current: root.entry.original == "" ? root.entry.message : root.entry.original;
+    property <string> snapshot;
+    init => { root.snapshot = root.current; }
+    changed current => { root.snapshot = root.current; }
+    for held in [{ original: root.snapshot }]: LogRow { entry: root.entry; original: held.original; row-index: root.row-index; }
+}
+
 export component LogsPage inherits PageSurface {
     VerticalLayout {
         spacing: Theme.page-gap;
@@ -24,28 +74,7 @@ export component LogsPage inherits PageSurface {
                 content-y <=> UiData.scroll-logs;
                 VerticalLayout {
                     alignment: start; padding-top: 6px; padding-bottom: 6px; spacing: 0px;
-                    for entry in UiData.logs: entry-row := Rectangle {
-                        GeometryTarget { key: "log:" + entry.message; bounds: [entry-row.absolute-position.x, entry-row.absolute-position.y, entry-row.width, entry-row.height]; }
-                        height: max(34px, Theme.detail-size * 1.6 + 12px);
-                        background: row-area.has-hover ? Theme.inset : entry.tone == 3 ? Theme.danger-wash : entry.tone == 2 ? Theme.warning-wash : transparent;
-                        accessible-role: button;
-                        accessible-label: entry.message;
-                        accessible-action-default => { if UiData.modal == 0 { UiActions.dispatch(Intent.log-detail, entry.message, ""); } }
-                        FocusScope {
-                            enabled: UiData.modal == 0;
-                            key-pressed(event) => {
-                                if event.text == Key.Return || event.text == " " { UiActions.dispatch(Intent.log-detail, entry.message, ""); return accept; }
-                                return reject;
-                            }
-                        }
-                        row-area := TouchArea { enabled: UiData.modal == 0; mouse-cursor: pointer; clicked => { UiActions.dispatch(Intent.log-detail, entry.message, ""); } }
-                        HorizontalLayout { cross-axis-alignment: center; spacing: 10px; padding-left: 16px; padding-right: 8px;
-                            if entry.time != "": Caption { text: entry.time; width: 66px; horizontal-stretch: 0; }
-                            Caption { text: entry.level; color: entry.tone == 3 ? Theme.danger : entry.tone == 2 ? Theme.warning : Theme.secondary; width: 52px * Theme.text-scale; horizontal-stretch: 0; }
-                            Label { text: entry.message; font-size: Theme.detail-size; }
-                            CopyButton { geometry-key: "copy-log:" + entry.message; value: entry.message; quiet: true; compact: true; }
-                        }
-                    }
+                    for entry[index] in UiData.logs: LogSlot { entry: entry; row-index: index; }
                 }
             }
         }

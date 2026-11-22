@@ -1,8 +1,9 @@
 use super::{form::Form, model::State, render::Tone, settings};
 use anyhow::{Context, Result, ensure};
-use clash_client_core::config::Language;
+use clash_client_core::{config::Language, subscription};
 use clash_client_runtime::control::{Command, Poll, Remote};
 use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone)]
 pub(super) struct Shortcuts {
@@ -187,7 +188,8 @@ pub(super) fn profiles(state: &State, width: usize, height: usize) -> Vec<(Strin
             .find(|profile| profile.id == *id)
             .unwrap();
         let current = poll.meta.settings.active_profile.as_deref() == Some(*id);
-        let text = format!(
+        let local = profile.is_local();
+        let mut text = format!(
             "{} {}{} · {}",
             if index == state.selected { "›" } else { " " },
             if current {
@@ -198,12 +200,22 @@ pub(super) fn profiles(state: &State, width: usize, height: usize) -> Vec<(Strin
             crate::output::profile_name(profile, language),
             if profile.builtin {
                 language.text("内置", "Built-in")
-            } else if profile.is_local() {
+            } else if local {
                 language.text("本地", "Local")
             } else {
                 language.text("远程", "Remote")
             },
         );
+        if !profile.builtin && !local {
+            let separator = " · ";
+            let summary =
+                subscription::summary(profile.usage.as_deref(), profile.updated, language);
+            let row_width = text.replace(char::is_control, " ").width();
+            if row_width + separator.width() + summary.as_str().width() <= width {
+                text.push_str(separator);
+                text.push_str(&summary);
+            }
+        }
         (
             text,
             if index == state.selected {

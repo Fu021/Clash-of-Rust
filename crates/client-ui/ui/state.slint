@@ -33,7 +33,10 @@ export enum Intent {
 }
 export struct Choice { id: string, label: string }
 
-export global UiActions { callback dispatch(Intent, string, string); }
+export global UiActions {
+    in-out property <int> copy-request-revision;
+    callback dispatch(Intent, string, string);
+}
 export global UiData {
     pure callback controls-modal-blocked <=> ControlAccess.modal-blocked;
     controls-modal-blocked => { self.modal != 0 && self.modal != 10 }
@@ -62,8 +65,9 @@ export global UiData {
     in-out property <[DetailItem]> connection-details;
     in-out property <string> connection-selected-id;
     in-out property <string> modal-copy;
-    in-out property <int> copy-revision;
     in-out property <string> copy-value;
+    in-out property <bool> copy-failed;
+    in-out property <int> copy-revision;
     in-out property <bool> protection-pending;
     in-out property <string> protection-status;
     in-out property <int> protection-health;

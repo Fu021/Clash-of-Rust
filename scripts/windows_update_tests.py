@@ -7,8 +7,10 @@ from http.server import ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import random
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -154,18 +156,19 @@ class IndependentHTTPServer(ThreadingHTTPServer):
 
 @contextmanager
 def reserve_mixed_port():
-    for attempt in range(32):
+    candidates = [0, *random.sample(range(1024, 65536), 128)]
+    for attempt, candidate in enumerate(candidates):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, \
                 socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
             if os.name == 'nt':
                 for reservation in (tcp, udp):
                     reservation.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
-                tcp.bind(('127.0.0.1', 0))
-                port = tcp.getsockname()[1]
-                udp.bind(('127.0.0.1', port))
+                udp.bind(('127.0.0.1', candidate))
+                port = udp.getsockname()[1]
+                tcp.bind(('127.0.0.1', port))
             except OSError as failure:
-                if attempt == 31:
+                if attempt == len(candidates)-1:
                     raise OSError('No available TCP/UDP port for independent Mihomo') from failure
                 continue
             yield port
@@ -176,10 +179,54 @@ class IndependentCoreNotReady(OSError):
     pass
 
 
+def windows_loopback_port_owners(port):
+    import ctypes
+
+    api = ctypes.WinDLL('iphlpapi')
+    tcp_table_owner_pid_listener = 3
+    udp_table_owner_pid = 1
+    insufficient_buffer = 122
+    dword = ctypes.c_uint32
+    entry_count = struct.Struct('=I')
+    loopback, = entry_count.unpack(socket.inet_aton('127.0.0.1'))
+    owners = {'TCP': set(), 'UDP': set()}
+    for protocol, function, table_class, row in (
+        ('TCP', 'GetExtendedTcpTable', tcp_table_owner_pid_listener, struct.Struct('=4xII8xI')),
+        ('UDP', 'GetExtendedUdpTable', udp_table_owner_pid, struct.Struct('=III')),
+    ):
+        query = getattr(api, function)
+        query.argtypes = (ctypes.c_void_p, ctypes.POINTER(dword), ctypes.c_int,
+                          dword, ctypes.c_int, dword)
+        query.restype = dword
+        size = dword()
+        table = None
+        for _ in range(5):
+            status = query(table, ctypes.byref(size), False, socket.AF_INET, table_class, 0)
+            if status == 0:
+                break
+            if status != insufficient_buffer:
+                raise RuntimeError(f'{function} failed with Windows error {status}')
+            table = ctypes.create_string_buffer(size.value)
+        else:
+            raise RuntimeError(f'{function} could not size the Windows endpoint table')
+
+        count, = entry_count.unpack_from(table)
+        for index in range(count):
+            address, local_port, pid = row.unpack_from(table, entry_count.size + index * row.size)
+            if address == loopback and socket.ntohs(local_port & 0xffff) == port:
+                owners[protocol].add(pid)
+    return owners
+
+
 def probe_independent_core(process, proxy_port, server):
     from proxy_benchmark import BLOCK
     if process.poll() is not None:
         raise RuntimeError('Independent Mihomo exited during the update test')
+    owners = windows_loopback_port_owners(proxy_port)
+    if owners['TCP'] != {process.pid} or owners['UDP'] != {process.pid}:
+        raise IndependentCoreNotReady(
+            f'Independent Mihomo PID {process.pid} does not own both listeners at 127.0.0.1:{proxy_port} '
+            f'(TCP owner PIDs={sorted(owners["TCP"])}, UDP owner PIDs={sorted(owners["UDP"])})')
     connection = HTTPConnection('127.0.0.1', proxy_port, timeout=2)
     try:
         connection.request(

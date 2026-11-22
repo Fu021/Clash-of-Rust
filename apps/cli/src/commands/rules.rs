@@ -1,7 +1,7 @@
 use super::*;
 use clash_client_runtime::{
     control::RuleChange,
-    rule_manager::{Document, ProfileRules},
+    rule_manager::{Document, ProfileRules, warning_in},
 };
 const SHORTCUTS: [&str; 5] = ["ads", "private-domain", "private-ip", "cn-domain", "cn-ip"];
 
@@ -30,7 +30,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
         let has_warnings = !warnings.is_empty();
         for warning in warnings {
             if !args.flag("quiet") {
-                eprintln!("{warning}");
+                eprintln!("{}", warning_in(&warning, args.language()));
             }
         }
         if has_warnings {

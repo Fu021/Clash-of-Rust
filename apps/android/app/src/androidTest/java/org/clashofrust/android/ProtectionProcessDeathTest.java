@@ -41,8 +41,9 @@ public class ProtectionProcessDeathTest {
         dns:
           enable: false
         proxies:
-          - {name: CI-Process-Death, type: http, server: 127.0.0.1, port: 9}
+          - {name: CI-Process-Death, type: http, server: 10.0.2.2, port: 18081}
         rules:
+          - IP-CIDR,198.51.100.1/32,CI-Process-Death,no-resolve
           - MATCH,REJECT
         """;
 
@@ -225,6 +226,7 @@ public class ProtectionProcessDeathTest {
             appMethod(TunnelService.class, "prepareStart", new Class<?>[]{Context.class}, context));
         assertTrue(context.getSharedPreferences("vpn", Context.MODE_PRIVATE).getBoolean("desired", false));
         assertEquals(ROUTE, read(client("settings.json")).getJSONObject("claude_protection").getString("route"));
+        ProxyTunTest.noTunRoute();
 
         await("The recovery retry button could not be tapped", ProtectionProcessDeathTest::tapRetry);
         await("Recovery did not restore the real VPN and clear the record", () ->
@@ -242,6 +244,10 @@ public class ProtectionProcessDeathTest {
         assertFalse("Recovery must restore the saved plan independently of live TUN",
             platform.getBoolean("vpn_desired"));
         assertEquals("complete", platform.getJSONObject("vpn_rollback").getString("status"));
+        String running = CoreBridge.config();
+        ProxyTunTest.tunCarriesSocket(ProxyTunTest.value(running, "external-controller"),
+            ProxyTunTest.value(running, "secret"), "198.51.100.1", false, NODE);
+        report("cor_death_tun", token + ":" + replacement);
         appMethod(TunnelService.class, "stop", new Class<?>[]{Context.class}, context);
         await("The disposable VPN did not disconnect", () -> !connected() && !systemVpn());
     }

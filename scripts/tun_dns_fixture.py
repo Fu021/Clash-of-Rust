@@ -1,6 +1,7 @@
 """Isolated upstream for Linux native TUN tests; never contacts the Internet."""
 import asyncio
 import base64
+from collections import deque
 import ipaddress
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ import socket
 import ssl
 import struct
 import sys
+import time
 
 # These are the real production resolver endpoints, assigned inside the peer
 # namespace. TLS verification stays enabled using a namespace-local test CA.
@@ -20,6 +22,8 @@ METRICS = {'bootstrap': 0, 'proxied_dns': 0, 'direct_public_dns': 0,
            'node_connections': 0, 'web': 0, 'plaintext_dns': 0,
            'bootstrap_public_lookup': 0, 'resolver_bootstrap': 0,
            'slow_node6_a': 0, 'slow_node6_aaaa': 0}
+SUBSCRIPTION_REQUESTS = {'started': 0, 'drained': 0, 'incomplete': 0}
+SUBSCRIPTION_EVENTS = deque(maxlen=128)
 BLOCK_FIXED_BOOTSTRAP = False
 BLOCK_PUBLIC_DNS = False
 DELAY_NODE6_AAAA = False
@@ -60,13 +64,27 @@ def dns_response(query, bootstrap):
     return response
 
 
+def record_subscription_event(event, **fields):
+    SUBSCRIPTION_EVENTS.append(dict(event=event, monotonic_ns=time.monotonic_ns(), **fields))
+
+
+def record_update_dns(name, kind, route, response, **fields):
+    if name == 'updates.fixture.test' and kind in (1, 28):
+        record_subscription_event('dns_answer', qtype='A' if kind == 1 else 'AAAA',
+                                  route=route, answers=struct.unpack_from('!H', response, 6)[0],
+                                  **fields)
+
+
 async def http(reader, writer):
     global BLOCK_FIXED_BOOTSTRAP, BLOCK_PUBLIC_DNS, DELAY_NODE6_AAAA
+    request_id = None
+    drained = False
     try:
         head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 8)
         path = head.split(b' ', 2)[1].decode('ascii')
         local = writer.get_extra_info('sockname')[0]
         peer = writer.get_extra_info('peername')[0]
+        direct = peer in ('192.0.2.1', '2001:db8:1::1')
         if path.startswith('/block-fixed-bootstrap/'):
             BLOCK_FIXED_BOOTSTRAP = path.endswith('/on')
             body, content_type = b'ok', 'text/plain'
@@ -78,12 +96,24 @@ async def http(reader, writer):
             body, content_type = b'ok', 'text/plain'
         elif path == '/subscription.yaml':
             body, content_type = b'proxies: []\nrules: ["MATCH,DIRECT"]\n', 'application/yaml'
+            SUBSCRIPTION_REQUESTS['started'] += 1
+            request_id = SUBSCRIPTION_REQUESTS['started']
+            record_subscription_event('http_start', request_id=request_id,
+                                      source='uplink' if direct else 'peer',
+                                      family=6 if ':' in local else 4)
         elif path == '/metrics':
             body, content_type = json.dumps(METRICS).encode(), 'application/json'
+        elif path == '/diagnostics':
+            body = json.dumps({
+                'schema': 1,
+                'clock': {'monotonic_ns': time.monotonic_ns(), 'unix_ns': time.time_ns()},
+                'subscription_requests': SUBSCRIPTION_REQUESTS,
+                'events': list(SUBSCRIPTION_EVENTS),
+            }).encode()
+            content_type = 'application/json'
         elif path.startswith('/dns-query?dns='):
             fixed = local in BOOTSTRAP or local == PUBLIC[2]
             bootstrap = fixed or local in ('192.0.2.254', '2001:db8:1::fe')
-            direct = peer in ('192.0.2.1', '2001:db8:1::1')
             if fixed and direct and BLOCK_FIXED_BOOTSTRAP:
                 # Model a network where the chosen public HTTPS IPs cannot be
                 # reached. The subscription's own encrypted bootstrap remains
@@ -108,6 +138,8 @@ async def http(reader, writer):
                     METRICS['slow_node6_aaaa'] += 1
                     await asyncio.sleep(0.35)
             body, content_type = dns_response(query, bootstrap), 'application/dns-message'
+            route = 'bootstrap' if bootstrap else ('direct' if direct else 'proxy')
+            record_update_dns(name, kind, route, body, resolver=local)
         else:
             METRICS['web'] += 1
             if path == '/auto-check':
@@ -116,9 +148,15 @@ async def http(reader, writer):
             body, content_type = b'protected-ok', 'text/plain'
         writer.write(f'HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n'.encode() + body)
         await writer.drain()
+        drained = True
     except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError):
         pass
     finally:
+        if request_id is not None:
+            outcome = 'drained' if drained else 'incomplete'
+            SUBSCRIPTION_REQUESTS[outcome] += 1
+            record_subscription_event('http_finish', request_id=request_id, outcome=outcome,
+                                      body_bytes=len(body) if drained else None)
         writer.close()
 
 
@@ -175,7 +213,11 @@ class PlaintextDNS(asyncio.DatagramProtocol):
         # subscription's original default-nameserver, never a public query.
         infrastructure = b'\x08resolver\x07fixture\x04test\x00' in data
         METRICS['resolver_bootstrap' if infrastructure else 'plaintext_dns'] += 1
-        self.transport.sendto(dns_response(data, False), peer)
+        response = dns_response(data, False)
+        if b'\x07updates\x07fixture\x04test\x00' in data:
+            name, kind, _ = dns_question(data)
+            record_update_dns(name, kind, 'plaintext', response)
+        self.transport.sendto(response, peer)
 
 
 async def main(directory):

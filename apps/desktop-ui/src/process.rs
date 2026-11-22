@@ -20,8 +20,28 @@ struct Frontend {
     pending_view: Option<wire::ViewState>,
     output: mpsc::Sender<UiEvent>,
     revision: Rc<Cell<u64>>,
+    pending_copy: Rc<RefCell<Option<PendingCopy>>>,
     reclaim: Timer,
 }
+struct PendingCopy {
+    host_revision: i32,
+    request_revision: i32,
+    value: wire::Text,
+}
+
+fn project_copy(frame: &mut wire::Frame, pending: Option<PendingCopy>, displayed: (i32, bool)) {
+    frame.copy_value = Default::default();
+    if let Some(copy) = pending {
+        frame.copy_failed |= frame.copy_revision == 0 || copy.host_revision != frame.copy_revision;
+        frame.copy_revision = copy.request_revision;
+        if !frame.copy_failed {
+            frame.copy_value = copy.value;
+        }
+    } else {
+        (frame.copy_revision, frame.copy_failed) = displayed;
+    }
+}
+
 fn send(output: &mpsc::Sender<UiEvent>, event: UiEvent) {
     let _ = output.send(event);
 }
@@ -198,21 +218,29 @@ pub fn run() -> anyhow::Result<()> {
         .is_some_and(|state| view_state::prepare(state, &window));
     let revision = Rc::new(Cell::new(0u64));
     let action_revision = revision.clone();
+    let pending_copy = Rc::new(RefCell::new(None));
+    let action_copy = pending_copy.clone();
     let weak = window.as_weak();
     let actions = output.clone();
     window
         .global::<UiActions>()
         .on_dispatch(move |action, a, b| {
             if let Some(window) = weak.upgrade() {
+                let revision = action_revision.get().saturating_add(1);
+                action_revision.set(revision);
+                let intent = intent(action);
+                if matches!(intent, wire::Intent::Copy | wire::Intent::ClaudeCopyScript) {
+                    *action_copy.borrow_mut() = Some(PendingCopy {
+                        host_revision: revision as i32,
+                        request_revision: window.global::<UiActions>().get_copy_request_revision(),
+                        value: a.as_str().into(),
+                    });
+                }
                 send(
                     &actions,
                     UiEvent::Intent {
-                        revision: {
-                            let n = action_revision.get().saturating_add(1);
-                            action_revision.set(n);
-                            n
-                        },
-                        intent: intent(action),
+                        revision,
+                        intent,
                         a: a.to_string(),
                         b: b.to_string(),
                         view: view_state::capture(&window),
@@ -375,6 +403,7 @@ pub fn run() -> anyhow::Result<()> {
             pending_view: if view_ready { None } else { view },
             output: output.clone(),
             revision,
+            pending_copy,
             reclaim: Timer::default(),
         })
     });
@@ -452,24 +481,28 @@ fn packet(bytes: &[u8]) {
         };
         match packet {
             HostPacket::Frame {
-                data,
+                mut data,
                 view_ready,
                 accepted,
             } => {
-                let old_page = front.window.global::<UiData>().get_page();
+                let view = front.window.global::<UiData>();
+                let current = front.revision.get();
+                if accepted < current {
+                    return;
+                }
+                project_copy(
+                    &mut data,
+                    front.pending_copy.borrow_mut().take(),
+                    (view.get_copy_revision(), view.get_copy_failed()),
+                );
+                let old_page = view.get_page();
                 let old_nodes: usize = front
                     .models
                     .groups
                     .iter()
                     .map(|group| group.nodes.row_count())
                     .sum();
-                let applied = apply_if_current(
-                    &data,
-                    &front.window.global::<UiData>(),
-                    &mut front.models,
-                    accepted,
-                    front.revision.get(),
-                );
+                let applied = apply_if_current(&data, &view, &mut front.models, accepted, current);
                 match applied {
                     Ok(true) => {}
                     Ok(false) => return,
@@ -576,4 +609,133 @@ fn pick_file(id: u64, output: &mpsc::Sender<UiEvent>) {
             result: Err("此平台由后台打开文件选择器".into()),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    slint::slint! {
+        #[edition = "1.19"]
+        import { CopyButton } from "../../../crates/client-ui/ui/components/desktop-copy.slint";
+        import { Intent, UiActions, UiData } from "../../../crates/client-ui/ui/state.slint";
+
+        export component DesktopCopyProbe inherits Window {
+            in-out property <string> copy-value <=> UiData.copy-value;
+            in-out property <bool> copy-failed <=> UiData.copy-failed;
+            in-out property <int> copy-revision <=> UiData.copy-revision;
+            out property <bool> script-copied: script.success;
+            out property <bool> log-copied: log.success;
+            out property <int> request-revision: UiActions.copy-request-revision;
+            public function copy-script() { script.clicked(); }
+            public function copy-log() { log.clicked(); }
+            script := CopyButton { intent: Intent.claude-copy-script; }
+            log := CopyButton { value: "fictional log"; }
+        }
+    }
+
+    #[test]
+    fn clipboard_failure_and_other_success_cannot_confirm_the_script_button() {
+        use slint::platform::{
+            Platform, PlatformError, WindowAdapter,
+            software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+        };
+
+        struct Headless;
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        let window = DesktopCopyProbe::new().unwrap();
+        slint::platform::update_timers_and_animations();
+        let reply = |revision, failed, value: &str| {
+            window.set_copy_value(value.into());
+            window.set_copy_failed(failed);
+            window.set_copy_revision(revision);
+            slint::platform::update_timers_and_animations();
+        };
+
+        window.invoke_copy_script();
+        assert_eq!(window.get_request_revision(), 1);
+        reply(1, true, "");
+        assert!(!window.get_script_copied());
+
+        window.invoke_copy_log();
+        reply(2, false, "fictional log");
+        assert!(window.get_log_copied());
+        assert!(!window.get_script_copied());
+
+        window.invoke_copy_script();
+        window.invoke_copy_log();
+        reply(4, false, "fictional log");
+        assert!(window.get_log_copied());
+        assert!(!window.get_script_copied());
+
+        window.invoke_copy_script();
+        reply(5, false, "");
+        assert!(window.get_script_copied());
+    }
+
+    #[test]
+    fn generated_bridge_sets_clipboard_value_and_outcome_before_revision() {
+        let bridge = include_str!(concat!(env!("OUT_DIR"), "/bridge.rs"));
+        let revision = bridge.find("data.set_copy_revision(").unwrap();
+        assert!(bridge.find("data.set_copy_value(").unwrap() < revision);
+        assert!(bridge.find("data.set_copy_failed(").unwrap() < revision);
+    }
+
+    #[test]
+    fn clipboard_feedback_resolves_the_local_request_with_the_matching_native_result() {
+        let mut frame = wire::Frame {
+            copy_revision: 8,
+            ..Default::default()
+        };
+        let latest = || PendingCopy {
+            host_revision: 9,
+            request_revision: 3,
+            value: "fictional log".into(),
+        };
+        project_copy(&mut frame, Some(latest()), (2, false));
+        assert_eq!(frame.copy_revision, 3);
+        assert!(frame.copy_failed);
+        assert!(frame.copy_value.as_str().is_empty());
+
+        frame.copy_revision = 9;
+        frame.copy_failed = true;
+        project_copy(&mut frame, Some(latest()), (2, false));
+        assert_eq!(frame.copy_revision, 3);
+        assert!(frame.copy_failed);
+        assert!(frame.copy_value.as_str().is_empty());
+
+        frame.copy_revision = 9;
+        frame.copy_failed = false;
+        project_copy(&mut frame, Some(latest()), (2, false));
+        assert_eq!(frame.copy_revision, 3);
+        assert!(!frame.copy_failed);
+        assert_eq!(frame.copy_value.as_str(), "fictional log");
+    }
+
+    #[test]
+    fn clipboard_feedback_does_not_replay_without_a_pending_request() {
+        let mut frame = wire::Frame {
+            copy_revision: 9,
+            copy_failed: true,
+            copy_value: "old copy".into(),
+            ..Default::default()
+        };
+        project_copy(&mut frame, None, (9, false));
+        assert_eq!(frame.copy_revision, 9);
+        assert!(!frame.copy_failed);
+        assert!(frame.copy_value.as_str().is_empty());
+
+        project_copy(&mut frame, None, (9, true));
+        assert_eq!(frame.copy_revision, 9);
+        assert!(frame.copy_failed);
+
+        project_copy(&mut frame, None, (0, false));
+        assert_eq!(frame.copy_revision, 0);
+        assert!(!frame.copy_failed);
+    }
 }

@@ -10,6 +10,15 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import org.clashofrust.nativecore.mobile.Mobile;
 import org.json.*;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -831,7 +840,7 @@ public class ProxyTunTest {
         }
         fail(message+"; actual UI: "+MainActivity.diagnostics());
     }
-    private static String value(String yaml, String name) {
+    static String value(String yaml, String name) {
         for (String line : yaml.split("\n")) {
             if (line.startsWith(name + ":")) return line.substring(name.length()+1).trim().replace("\"", "").replace("'", "");
         }
@@ -851,7 +860,7 @@ public class ProxyTunTest {
             return out.toString(StandardCharsets.UTF_8.name());
         } finally { connection.disconnect(); }
     }
-    private static void noTunRoute() throws Exception {
+    static void noTunRoute() throws Exception {
         try (Socket connection=new Socket(java.net.Proxy.NO_PROXY)) {
             try {connection.connect(new InetSocketAddress("198.51.100.1",18081),1000);}
             catch (IOException blocked) {return;}
@@ -1049,7 +1058,7 @@ public class ProxyTunTest {
     private static void tunCarriesSocket(String controller,String secret) throws Exception {
         tunCarriesSocket(controller,secret,"198.51.100.1",false,"CI-TUN-origin");
     }
-    private static void tunCarriesSocket(String controller,String secret,String destination,boolean verifyOwner,String expectedNode) throws Exception {
+    static void tunCarriesSocket(String controller,String secret,String destination,boolean verifyOwner,String expectedNode) throws Exception {
         // NetworkCallbacks describe the control plane. A just-replaced VPN can
         // still be waiting for netd's UID routes; require fresh real traffic,
         // with a bounded deadline, rather than sleeping or rerunning the test.
@@ -1145,7 +1154,7 @@ public class ProxyTunTest {
         try (Socket connection=new Socket(java.net.Proxy.NO_PROXY)) {
             connection.connect(new InetSocketAddress(destination,18081),5000);
             connection.setSoTimeout(5000);
-            connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\nConnection: close\r\nContent-Length: 1\r\n\r\n")
+            connection.getOutputStream().write(("GET /hold HTTP/1.1\r\nHost: "+destination+"\r\nConnection: close\r\nContent-Length: 1\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
             assertHeldResponse(connection.getInputStream());
             connection.setSoTimeout(1);
@@ -1162,9 +1171,12 @@ public class ProxyTunTest {
                         if (metadata.optString("type").equalsIgnoreCase("Tun")
                             && metadata.optInt("sourcePort")==connection.getLocalPort()
                             && metadata.optInt("destinationPort")==18081
+                            && heldDestinationMatches(metadata,destination,connection.getInetAddress().getHostAddress())
                             && (!verifyOwner || metadata.optInt("uid")==android.os.Process.myUid())
                             && expectedNode.equals(chains.optString(chain))) {
+                            connection.setSoTimeout(5000);
                             connection.getOutputStream().write('!');
+                            assertHeldAcknowledgement(connection.getInputStream());
                             return;
                         }
                 }
@@ -1174,6 +1186,15 @@ public class ProxyTunTest {
             fail("No matching TUN connection: "+connection.getLocalSocketAddress()+" -> "+connection.getRemoteSocketAddress()
                 +"; a direct-only test must fail; records="+records);
         }
+    }
+    private static boolean heldDestinationMatches(JSONObject metadata, String destination, String socketAddress) {
+        return socketAddress.equals(metadata.optString("destinationIP"))
+            || (!destination.equals(socketAddress) && destination.equalsIgnoreCase(metadata.optString("host")));
+    }
+    private static void assertHeldAcknowledgement(InputStream stream) throws IOException {
+        int confirmation=stream.read();
+        if (confirmation<0) throw new EOFException("Held TUN connection closed without the origin acknowledgement");
+        assertEquals("Held TUN origin returned the wrong acknowledgement",'\n',confirmation);
     }
     private static void assertHeldResponse(InputStream stream) throws IOException {
         ByteArrayOutputStream header=new ByteArrayOutputStream();
@@ -1228,6 +1249,25 @@ public class ProxyTunTest {
         try { assertHeldConnectionPending(new ByteArrayInputStream(new byte[]{'!'})); }
         catch (AssertionError error) { premature=error; }
         assertNotNull("Premature completion must not be retried as a transport transition",premature);
+        assertHeldAcknowledgement(new ByteArrayInputStream(new byte[]{'\n'}));
+        try {
+            assertHeldAcknowledgement(new ByteArrayInputStream(new byte[0]));
+            fail("The response body alone cannot satisfy the origin handshake");
+        } catch (EOFException expected) {
+            assertNotNull(expected);
+        }
+        AssertionError wrongAcknowledgement=null;
+        try { assertHeldAcknowledgement(new ByteArrayInputStream(new byte[]{'!'})); }
+        catch (AssertionError error) { wrongAcknowledgement=error; }
+        assertNotNull("The origin must acknowledge with a newline",wrongAcknowledgement);
+        JSONObject metadata=new JSONObject().put("destinationIP","198.51.100.1");
+        assertTrue(heldDestinationMatches(metadata,"198.51.100.1","198.51.100.1"));
+        metadata.put("destinationIP","198.51.100.2").put("host","198.51.100.1");
+        assertFalse(heldDestinationMatches(metadata,"198.51.100.1","198.51.100.1"));
+        metadata.remove("destinationIP");
+        metadata.put("host","application-policy.test");
+        assertTrue(heldDestinationMatches(metadata,"application-policy.test","198.18.0.2"));
+        assertFalse(heldDestinationMatches(metadata,"other.test","198.18.0.2"));
     }
     private static JSONArray previewBounds(JSONObject ui, String name) {
         JSONObject targets = ui.optJSONObject("targets");
@@ -2763,6 +2803,635 @@ public class ProxyTunTest {
         waitForAppWindow();
     }
 
+    private static void verifyExpiredRecoveryConsent(Context context) throws Exception {
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        JSONObject original = CoreBridge.state(context);
+        Boolean desired = original.isNull("vpn_desired") ? null : original.getBoolean("vpn_desired");
+        var record = new File(context.getFilesDir(), "client/protection-recovery.json").toPath();
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        var serial = (ScheduledExecutorService) tunnelField("serial").get(null);
+        Object requests = tunnelField("requests").get(null);
+        var deadline = tunnelField("rollbackDeadline");
+        String expired = UUID.randomUUID().toString();
+        String retry = UUID.randomUUID().toString();
+        Files.createFile(record);
+        try {
+            instrumentation.runOnMainSync(() -> {
+                try {
+                    synchronized (requests) {
+                        TunnelService.restoreNetwork(activity, expired, true, desired, recoveryDeadline());
+                        long originalDeadline = deadline.getLong(null);
+                        TunnelService.restoreNetwork(activity, expired, true, desired, originalDeadline + 120_000);
+                        assertEquals("A replay extended the original deadline", originalDeadline, deadline.getLong(null));
+                        expireArmedRecoveryDeadline(requests, deadline);
+                        deliverRecoveryConsent(activity, expired, MainActivity.RESULT_OK);
+                    }
+                    JSONObject timedOut = CoreBridge.state(context);
+                    assertEquals("failed", timedOut.getJSONObject("vpn_rollback").getString("status"));
+                    assertEquals(AppLanguage.current(context).getString(R.string.vpn_recovery_timeout),
+                        timedOut.getJSONObject("vpn_rollback").getString("error"));
+                    TunnelService.restoreNetwork(activity, expired, true, desired, recoveryDeadline());
+                    assertFalse(TunnelService.startAllowed(activity, expired));
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                }
+            });
+            serial.submit(() -> {}).get(30, TimeUnit.SECONDS);
+            assertEquals("settled", expireVpnStart(activity, expired));
+            instrumentation.runOnMainSync(() -> {
+                try {
+                    TunnelService.restoreNetwork(activity, retry, true, desired, recoveryDeadline());
+                    assertEquals("stale", expireVpnStart(activity, expired));
+                    deliverRecoveryConsent(activity, expired, MainActivity.RESULT_CANCELED);
+                    assertTrue("The old denial must leave the new request pending",
+                        TunnelService.startAllowed(activity, retry));
+                    deliverRecoveryConsent(activity, retry, MainActivity.RESULT_CANCELED);
+                    assertFalse(TunnelService.startAllowed(activity, retry));
+                    assertFalse(TunnelService.start(activity, true, expired));
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                }
+            });
+            instrumentation.waitForIdleSync();
+            serial.submit(() -> {}).get(30, TimeUnit.SECONDS);
+            JSONObject state = CoreBridge.state(context);
+            JSONObject rejected = state.getJSONObject("vpn_rollback");
+            assertEquals(retry, rejected.getString("request"));
+            assertEquals("failed", rejected.getString("status"));
+            assertEquals(AppLanguage.current(context).getString(R.string.vpn_cancelled), rejected.getString("error"));
+            assertFalse(state.getBoolean("vpn_transition_pending"));
+            assertEquals(original.getBoolean("vpn"), state.getBoolean("vpn"));
+            assertEquals(original.getLong("vpn_generation"), state.getLong("vpn_generation"));
+            assertEquals(original.get("vpn_desired"), state.get("vpn_desired"));
+            assertTrue(Files.isRegularFile(record));
+        } finally {
+            Files.delete(record);
+        }
+    }
+
+    private static void deliverRecoveryConsent(MainActivity activity, String request, int result) throws Exception {
+        var prompt = MainActivity.class.getDeclaredField("vpnPrompt");
+        var reconfigure = MainActivity.class.getDeclaredField("vpnReconfigure");
+        var startRequest = MainActivity.class.getDeclaredField("vpnStartRequest");
+        prompt.setAccessible(true);
+        reconfigure.setAccessible(true);
+        startRequest.setAccessible(true);
+        assertFalse(prompt.getBoolean(activity));
+        prompt.setBoolean(activity, true);
+        reconfigure.setBoolean(activity, true);
+        startRequest.set(activity, request);
+        activity.onActivityResult(10, result, null);
+    }
+
+    private static java.lang.reflect.Field tunnelField(String name) throws Exception {
+        var field = TunnelService.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+    }
+
+    private static String expireVpnStart(MainActivity activity, String request) throws Exception {
+        JSONObject response = new JSONObject(activity.request(new JSONObject()
+            .put("op", "expire-vpn-start").put("request", request).toString()));
+        assertEquals(request, response.getString("request"));
+        return response.getString("status");
+    }
+
+    private static boolean blockedIn(Thread worker, Class<?> owner, String method) {
+        if (worker.getState() != Thread.State.BLOCKED) return false;
+        for (StackTraceElement frame : worker.getStackTrace()) {
+            if (frame.getClassName().equals(owner.getName()) && frame.getMethodName().equals(method)) return true;
+        }
+        return false;
+    }
+
+    private static void awaitBlockedIn(Thread worker, Class<?> owner, String method) throws InterruptedException {
+        long waitUntil = SystemClock.elapsedRealtime() + 5_000;
+        while (!blockedIn(worker, owner, method) && SystemClock.elapsedRealtime() < waitUntil) Thread.sleep(10);
+        assertTrue("Connect did not block in " + owner.getSimpleName() + "." + method, blockedIn(worker, owner, method));
+    }
+
+    private static void assertRecoveryBusy(Context context, String request, Boolean desired) throws Exception {
+        try {
+            TunnelService.restoreNetwork(context, request, true, desired, recoveryDeadline());
+            fail("A retry overtook VPN work that had not settled");
+        } catch (IOException busy) {
+            assertEquals(AppLanguage.current(context).getString(R.string.vpn_connecting), busy.getMessage());
+        }
+    }
+
+    private static long recoveryDeadline() {
+        return SystemClock.elapsedRealtime() + 120_000;
+    }
+
+    private static void expireArmedRecoveryDeadline(Object requests, java.lang.reflect.Field deadline) throws Exception {
+        synchronized (requests) {
+            long now = SystemClock.elapsedRealtime();
+            assertTrue("The recovery deadline must still be armed", deadline.getLong(null) > now);
+            deadline.setLong(null, now);
+        }
+    }
+
+    private static void verifyRecoveryConnectTimeout(Context context, boolean duringRestore) throws Exception {
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        assertNull("Recovery connect test requires existing VPN consent", VpnService.prepare(context));
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        var serial = (ScheduledExecutorService) tunnelField("serial").get(null);
+        Object requests = tunnelField("requests").get(null);
+        Object service = tunnelField("instance").get(null);
+        var descriptor = tunnelField("descriptor");
+        var acceptedRequest = tunnelField("acceptedRequest");
+        var deadline = tunnelField("rollbackDeadline");
+        var previous = (android.os.ParcelFileDescriptor) descriptor.get(service);
+        assertNotNull(previous);
+        JSONObject original = CoreBridge.state(context);
+        Boolean desired = original.isNull("vpn_desired") ? null : original.getBoolean("vpn_desired");
+        var record = new File(context.getFilesDir(), "client/protection-recovery.json").toPath();
+        String request = UUID.randomUUID().toString();
+        CountDownLatch releaseQueue = new CountDownLatch(1);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        Files.createFile(record);
+        try {
+            TunnelService.holdRecovery(context);
+            synchronized (requests) {
+                TunnelService.restoreNetwork(activity, request, true, desired, recoveryDeadline());
+                serial.submit(() -> {
+                    worker.set(Thread.currentThread());
+                    if (!releaseQueue.await(45, TimeUnit.SECONDS)) throw new AssertionError("Recovery queue was not released");
+                    return null;
+                });
+            }
+            await("Foreground service did not accept the recovery connect behind the queue barrier",
+                () -> worker.get() != null && request.equals(acceptedRequest.get(service)));
+            instrumentation.waitForIdleSync();
+            if (duringRestore) {
+                synchronized (CoreBridge.class) {
+                    releaseQueue.countDown();
+                    awaitBlockedIn(worker.get(), CoreBridge.class, "restore");
+                    assertEquals("claimed", expireVpnStart(activity, request));
+                    synchronized (requests) {
+                        assertEquals("failed", tunnelField("rollbackStatus").get(null));
+                    }
+                    assertRecoveryBusy(context, UUID.randomUUID().toString(), desired);
+                }
+            } else {
+                expireArmedRecoveryDeadline(requests, deadline);
+                releaseQueue.countDown();
+            }
+            serial.submit(() -> {}).get(30, TimeUnit.SECONDS);
+
+            synchronized (requests) {
+                assertEquals("Connect must settle the timeout before the test polls state", "failed",
+                    tunnelField("rollbackStatus").get(null));
+            }
+            JSONObject state = CoreBridge.state(context);
+            JSONObject rollback = state.getJSONObject("vpn_rollback");
+            assertEquals(request, rollback.getString("request"));
+            assertEquals("failed", rollback.getString("status"));
+            assertEquals(AppLanguage.current(context).getString(R.string.vpn_recovery_timeout), rollback.getString("error"));
+            assertFalse(state.getBoolean("vpn_transition_pending"));
+            assertEquals("settled", expireVpnStart(activity, request));
+            assertTrue(state.getBoolean("vpn"));
+            assertTrue(state.getBoolean("vpn_held"));
+            assertEquals(original.getLong("vpn_generation"), state.getLong("vpn_generation"));
+            assertEquals(original.get("vpn_desired"), state.get("vpn_desired"));
+            assertSame(previous, descriptor.get(service));
+            assertTrue(previous.getFileDescriptor().valid());
+            assertTrue(Files.isRegularFile(record));
+        } finally {
+            releaseQueue.countDown();
+            try { serial.submit(() -> {}).get(30, TimeUnit.SECONDS); }
+            finally { Files.delete(record); }
+        }
+    }
+
+    private static void verifyClaimedRecoverySettlesBeforeRetry(Context context) throws Exception {
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        var serial = (ScheduledExecutorService) tunnelField("serial").get(null);
+        Thread worker = serial.submit(() -> { return Thread.currentThread(); }).get(30, TimeUnit.SECONDS);
+        var record = new File(context.getFilesDir(), "client/protection-recovery.json").toPath();
+        JSONObject original = CoreBridge.state(context);
+        Boolean desired = original.isNull("vpn_desired") ? null : original.getBoolean("vpn_desired");
+        String request = UUID.randomUUID().toString();
+        Files.createFile(record);
+        try {
+            TunnelService.holdRecovery(context);
+            synchronized (ProtectionRuntime.class) {
+                TunnelService.restoreNetwork(activity, request, true, desired, recoveryDeadline());
+                awaitBlockedIn(worker, ProtectionRuntime.class, "pause");
+                assertEquals("claimed", expireVpnStart(activity, request));
+                assertEquals("claimed", expireVpnStart(activity, request));
+                assertFalse(TunnelService.cancelStart(activity, request));
+                assertTrue(CoreBridge.state(context).getBoolean("vpn_transition_pending"));
+                assertRecoveryBusy(context, UUID.randomUUID().toString(), desired);
+            }
+            await("Claimed recovery did not settle", () -> "settled".equals(expireVpnStart(activity, request)));
+            JSONObject state = CoreBridge.state(context);
+            assertFalse(state.getBoolean("vpn_transition_pending"));
+            assertEquals("complete", state.getJSONObject("vpn_rollback").getString("status"));
+            assertTrue(state.getLong("vpn_generation") > original.getLong("vpn_generation"));
+            assertTrue(state.getBoolean("vpn_held"));
+            assertTrue(Files.isRegularFile(record));
+            Object requests = tunnelField("requests").get(null);
+            var deadline = tunnelField("rollbackDeadline");
+            long expiredDeadline = SystemClock.elapsedRealtime();
+            long commitDeadline;
+            synchronized (requests) {
+                commitDeadline = deadline.getLong(null);
+                deadline.setLong(null, expiredDeadline);
+            }
+            JSONObject finish = new JSONObject().put("op", "finish-protection-recovery").put("request", request)
+                .put("connected", true).put("desired", state.get("vpn_desired"))
+                .put("generation", state.getLong("vpn_generation")).put("config", CoreBridge.config())
+                .put("ipv6", CoreBridge.ipv6()).put("protected", state.getJSONObject("protection").getBoolean("enabled"))
+                .put("deadline_elapsed_ms", expiredDeadline);
+            JSONObject reply = new JSONObject(activity.request(finish.toString()));
+            assertTrue("Expired finalization must be rejected", reply.optString("error").contains(
+                AppLanguage.current(context).getString(R.string.vpn_recovery_timeout)));
+            assertTrue("Expired finalization released forwarding", CoreBridge.state(context).getBoolean("vpn_held"));
+            assertTrue("Expired finalization removed the recovery record", Files.isRegularFile(record));
+
+            synchronized (requests) {
+                deadline.setLong(null, commitDeadline);
+            }
+            var elapsed = new AtomicLong(commitDeadline - 1);
+            var checkedAt = new AtomicLong(-1);
+            JSONObject committed = TunnelService.finishRecovery(context, request, true, desired,
+                state.getLong("vpn_generation"), CoreBridge.config(), CoreBridge.ipv6(),
+                state.getJSONObject("protection").getBoolean("enabled"), commitDeadline,
+                () -> {
+                    long now = elapsed.get();
+                    checkedAt.set(now);
+                    return now;
+                },
+                (fd, ipv6) -> {
+                    assertEquals("The deadline must be checked before starting the TUN",
+                        commitDeadline - 1, checkedAt.get());
+                    Mobile.startTun(fd, ipv6);
+                    elapsed.set(commitDeadline + 1);
+                    assertTrue("The recovery record must still exist when the deadline passes",
+                        Files.isRegularFile(record));
+                    assertFalse("The receipt must wait for the record commit",
+                        TunnelService.recoveryCommitted(context, request));
+                });
+            assertTrue("Settlement must occur after the deadline", elapsed.get() > commitDeadline);
+            assertTrue(committed.getBoolean("vpn_matches"));
+            assertTrue(committed.getBoolean("matches"));
+            assertTrue(committed.getBoolean("guard_matches"));
+            assertTrue("A commit admitted before expiry must settle", committed.getBoolean("record_cleared"));
+            JSONObject settled = CoreBridge.state(context);
+            assertTrue("The committed VPN must remain connected", settled.getBoolean("vpn"));
+            assertFalse("An admitted commit was paused again", settled.getBoolean("vpn_held"));
+            assertEquals(state.getLong("vpn_generation"), settled.getLong("vpn_generation"));
+            assertFalse(Files.exists(record));
+            JSONObject receipt = new JSONObject().put("op", "protection-recovery-receipt").put("request", request);
+            assertTrue("The admitted commit must have a receipt",
+                new JSONObject(activity.request(receipt.toString())).getBoolean("committed"));
+            receipt.put("request", UUID.randomUUID().toString());
+            assertFalse("An unrelated request must have no receipt",
+                new JSONObject(activity.request(receipt.toString())).getBoolean("committed"));
+        } finally {
+            try { serial.submit(() -> {}).get(30, TimeUnit.SECONDS); }
+            finally { Files.deleteIfExists(record); }
+        }
+    }
+
+    private static void verifyExpiredNonLiveRecoveryKeepsPlan(Context context) throws Exception {
+        var serial = (ScheduledExecutorService) tunnelField("serial").get(null);
+        Object requests = tunnelField("requests").get(null);
+        var deadline = tunnelField("rollbackDeadline");
+        var record = new File(context.getFilesDir(), "client/protection-recovery.json").toPath();
+        JSONObject original = CoreBridge.state(context);
+        assertFalse(original.getBoolean("vpn"));
+        boolean newPlan = !Boolean.TRUE.equals(original.get("vpn_desired"));
+        Files.createFile(record);
+        try {
+            for (Boolean live : new Boolean[] {false, null}) {
+                String request = UUID.randomUUID().toString();
+                CountDownLatch release = new CountDownLatch(1);
+                serial.submit(() -> {
+                    if (!release.await(30, TimeUnit.SECONDS)) throw new AssertionError("Recovery queue was not released");
+                    return null;
+                });
+                try {
+                    TunnelService.restoreNetwork(context, request, live, newPlan, recoveryDeadline());
+                    synchronized (requests) {
+                        deadline.setLong(null, SystemClock.elapsedRealtime());
+                        if (live != null) assertEquals("claimed", expireVpnStart(context, request));
+                    }
+                } finally {
+                    release.countDown();
+                    serial.submit(() -> {}).get(30, TimeUnit.SECONDS);
+                }
+                JSONObject state = CoreBridge.state(context);
+                assertEquals("Expired request wrote the VPN plan", original.get("vpn_desired"), state.get("vpn_desired"));
+                JSONObject rollback = state.getJSONObject("vpn_rollback");
+                assertEquals("failed", rollback.getString("status"));
+                assertEquals(AppLanguage.current(context).getString(R.string.vpn_recovery_timeout), rollback.getString("error"));
+                assertEquals("settled", expireVpnStart(context, request));
+                assertTrue(Files.isRegularFile(record));
+            }
+        } finally {
+            Files.delete(record);
+        }
+    }
+
+    private static void verifyCancelledColdRecoveryStopsIdleService(Context context) throws Exception {
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        assertNull("Cold recovery must have permission to start the foreground service", VpnService.prepare(context));
+        var instance = tunnelField("instance");
+        var acceptedRequest = tunnelField("acceptedRequest");
+        var descriptor = tunnelField("descriptor");
+        var latestStartId = tunnelField("latestStartId");
+        var stopping = tunnelField("stopping");
+        var pendingCleanup = tunnelField("pendingCleanup");
+        var serial = (ScheduledExecutorService) tunnelField("serial").get(null);
+        Object requests = tunnelField("requests").get(null);
+        await("Cold recovery test requires no running VPN service",
+            () -> instance.get(null) == null && !CoreBridge.state(context).getBoolean("vpn_transition_pending"));
+        JSONObject original = CoreBridge.state(context);
+        Boolean desired = original.isNull("vpn_desired") ? null : original.getBoolean("vpn_desired");
+        String rejected = UUID.randomUUID().toString();
+        String reservation = UUID.randomUUID().toString();
+        TunnelService.reserveRecovery(context, reservation, false, desired, original.getLong("vpn_generation"));
+        try {
+            assertEquals("stale", expireVpnStart(activity, rejected));
+        } finally {
+            TunnelService.releaseRecovery(reservation);
+        }
+        String undelivered = UUID.randomUUID().toString();
+        String expired = UUID.randomUUID().toString();
+        String retry = UUID.randomUUID().toString();
+        CountDownLatch releaseConnect = new CountDownLatch(1);
+        CountDownLatch connectDrained = new CountDownLatch(1);
+        CountDownLatch releaseIdleStop = new CountDownLatch(1);
+        CountDownLatch releaseCleanup = new CountDownLatch(1);
+        var record = new File(context.getFilesDir(), "client/protection-recovery.json").toPath();
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        instrumentation.runOnMainSync(() -> {
+            try {
+                assertTrue(TunnelService.start(activity, false, TunnelService.prepareStart(activity)));
+                assertTrue(TunnelService.cancelStart(activity, TunnelService.prepareStart(activity)));
+                assertNull("Android has not dispatched the superseded ordinary start", instance.get(null));
+                assertEquals("stale", expireVpnStart(activity, rejected));
+            } catch (Exception error) {
+                throw new AssertionError(error);
+            }
+        });
+        await("The superseded ordinary start never settled",
+            () -> instance.get(null) == null && "idle".equals(expireVpnStart(activity, rejected)));
+        CountDownLatch releaseOrdinaryConnect = new CountDownLatch(1);
+        serial.submit(() -> {
+            assertTrue("Ordinary connect barrier was not released", releaseOrdinaryConnect.await(45, TimeUnit.SECONDS));
+            return null;
+        });
+        try {
+            String ordinary = TunnelService.prepareStart(activity);
+            assertTrue(TunnelService.start(activity, false, ordinary));
+            await("Android did not queue the ordinary connection", () -> {
+                Object active = instance.get(null);
+                return active != null && ordinary.equals(acceptedRequest.get(active));
+            });
+            assertTrue(TunnelService.cancelStart(activity, TunnelService.prepareStart(activity)));
+            assertEquals("stale", expireVpnStart(activity, rejected));
+        } finally {
+            releaseOrdinaryConnect.countDown();
+        }
+        await("The superseded ordinary connection never settled",
+            () -> instance.get(null) == null && "idle".equals(expireVpnStart(activity, rejected)));
+        Files.createFile(record);
+        try {
+            String alreadyExpired = UUID.randomUUID().toString();
+            synchronized (requests) {
+                try {
+                    TunnelService.restoreNetwork(context, alreadyExpired, true, desired, SystemClock.elapsedRealtime());
+                    expireVpnStart(activity, alreadyExpired);
+                    fail("A deadline expired before Java entry was accepted");
+                } catch (IOException error) {
+                    assertEquals(AppLanguage.current(context).getString(R.string.vpn_recovery_timeout), error.getMessage());
+                }
+            }
+            assertFalse(TunnelService.current(context, alreadyExpired));
+            assertEquals("idle", expireVpnStart(activity, alreadyExpired));
+            long registrationDeadline = SystemClock.elapsedRealtime() + 100;
+            String restore = new JSONObject()
+                .put("op", "restore-vpn").put("request", rejected).put("connected", true)
+                .put("desired", original.get("vpn_desired")).put("deadline_elapsed_ms", registrationDeadline).toString();
+            Thread worker = serial.submit(() -> { return Thread.currentThread(); }).get(30, TimeUnit.SECONDS);
+            Future<String> reply;
+            synchronized (requests) {
+                reply = serial.submit(() -> { return activity.request(restore); });
+                awaitBlockedIn(worker, TunnelService.class, "restoreNetwork");
+                SystemClock.sleep(Math.max(0, registrationDeadline - SystemClock.elapsedRealtime()));
+            }
+            JSONObject refusal = new JSONObject(reply.get(30, TimeUnit.SECONDS));
+            assertTrue(refusal.getString("error").contains(
+                AppLanguage.current(context).getString(R.string.vpn_recovery_timeout)));
+            assertFalse("The expired budget must be rejected before registration", TunnelService.current(context, rejected));
+            assertEquals("idle", expireVpnStart(activity, rejected));
+
+            instrumentation.runOnMainSync(() -> {
+                try {
+                    TunnelService.restoreNetwork(activity, undelivered, true, desired, recoveryDeadline());
+                    assertTrue(TunnelService.start(activity, true, undelivered));
+                    assertNull("Android has not dispatched onStartCommand yet", instance.get(null));
+                    assertEquals("claimed", expireVpnStart(activity, undelivered));
+                    assertEquals("stale", expireVpnStart(activity, rejected));
+                    assertRecoveryBusy(context, expired, desired);
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                }
+            });
+            await("The cancelled foreground start never settled",
+                () -> "settled".equals(expireVpnStart(activity, undelivered))
+                    && instance.get(null) == null && !CoreBridge.state(context).getBoolean("vpn_transition_pending"));
+            assertEquals("idle", expireVpnStart(activity, rejected));
+            assertEquals(original.getLong("vpn_generation"), TunnelService.generation());
+
+            instrumentation.waitForIdleSync();
+            synchronized (TunnelService.class) {
+                activity.startForegroundService(new Intent(activity, TunnelService.class)
+                    .putExtra(TunnelService.REQUEST, rejected));
+                await("Android did not create the service for the stale intent", () -> instance.get(null) != null);
+                assertEquals(0, latestStartId.getInt(instance.get(null)));
+                assertEquals("stale", expireVpnStart(activity, rejected));
+                assertEquals("claimed", expireVpnStart(activity, undelivered));
+                assertRecoveryBusy(context, expired, desired);
+            }
+            await("The service for the stale intent never settled",
+                () -> instance.get(null) == null && "settled".equals(expireVpnStart(activity, undelivered)));
+            assertEquals("idle", expireVpnStart(activity, rejected));
+
+            synchronized (requests) {
+                TunnelService.restoreNetwork(activity, expired, true, desired, recoveryDeadline());
+                serial.submit(() -> {
+                    assertTrue("Connect barrier was not released", releaseConnect.await(45, TimeUnit.SECONDS));
+                    return null;
+                });
+            }
+            await("The first recovery did not start its foreground service", () -> {
+                Object active = instance.get(null);
+                return active != null && expired.equals(acceptedRequest.get(active));
+            });
+            instrumentation.waitForIdleSync();
+            Object service = instance.get(null);
+            assertNotNull(service);
+            assertNull(descriptor.get(service));
+
+            serial.submit(() -> {
+                connectDrained.countDown();
+                assertTrue("Idle-stop barrier was not released", releaseIdleStop.await(45, TimeUnit.SECONDS));
+                return null;
+            });
+            assertEquals("claimed", expireVpnStart(activity, expired));
+            JSONObject expiredState = CoreBridge.state(context);
+            assertEquals(AppLanguage.current(context).getString(R.string.vpn_recovery_timeout),
+                expiredState.getJSONObject("vpn_rollback").getString("error"));
+            assertTrue("A cancelled start still owns its serial work until it drains",
+                expiredState.getBoolean("vpn_transition_pending"));
+            assertEquals("stale", expireVpnStart(activity, rejected));
+            assertRecoveryBusy(context, retry, desired);
+            releaseConnect.countDown();
+            assertTrue("Expired connect did not drain", connectDrained.await(30, TimeUnit.SECONDS));
+            assertEquals("Queued idle stop must keep the request claimed", "claimed", expireVpnStart(activity, expired));
+            assertEquals("stale", expireVpnStart(activity, rejected));
+            assertRecoveryBusy(context, retry, desired);
+            serial.submit(() -> {
+                assertTrue("Destroy cleanup barrier was not released", releaseCleanup.await(45, TimeUnit.SECONDS));
+                return null;
+            });
+            instrumentation.runOnMainSync(() -> {
+                try {
+                    releaseIdleStop.countDown();
+                    await("Android did not accept stopSelfResult", () -> stopping.getBoolean(service));
+                    assertSame("onDestroy cannot run while the main thread is held", service, instance.get(null));
+                    assertEquals(0, pendingCleanup.getInt(null));
+                    assertEquals("claimed", expireVpnStart(activity, expired));
+                    assertEquals("stale", expireVpnStart(activity, rejected));
+                    assertRecoveryBusy(context, retry, desired);
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                }
+            });
+            await("The empty service did not enter destruction", () -> instance.get(null) == null);
+            assertEquals("claimed", expireVpnStart(activity, expired));
+            assertEquals("stale", expireVpnStart(activity, rejected));
+            assertRecoveryBusy(context, retry, desired);
+            releaseCleanup.countDown();
+            await("The expired request never released the destroyed service",
+                () -> "settled".equals(expireVpnStart(activity, expired)));
+            assertEquals("idle", expireVpnStart(activity, rejected));
+            instrumentation.runOnMainSync(() -> {
+                try {
+                    TunnelService.restoreNetwork(activity, retry, true, desired, recoveryDeadline());
+                    assertEquals("stale", expireVpnStart(activity, expired));
+                    deliverRecoveryConsent(activity, expired, MainActivity.RESULT_OK);
+                    assertTrue("A late grant must leave the retry pending", TunnelService.startAllowed(context, retry));
+                    deliverRecoveryConsent(activity, retry, MainActivity.RESULT_CANCELED);
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                }
+            });
+            await("The denied retry never settled", () -> "settled".equals(expireVpnStart(activity, retry)));
+            assertNull("A late grant or denied retry started a service", instance.get(null));
+            JSONObject state = CoreBridge.state(context);
+            JSONObject rollback = state.getJSONObject("vpn_rollback");
+            assertEquals(retry, rollback.getString("request"));
+            assertEquals("failed", rollback.getString("status"));
+            assertEquals(AppLanguage.current(context).getString(R.string.vpn_cancelled), rollback.getString("error"));
+            assertEquals("idle", expireVpnStart(activity, expired));
+            assertEquals("idle", expireVpnStart(activity, rejected));
+            assertFalse(state.getBoolean("vpn"));
+            assertFalse(state.getBoolean("vpn_pending"));
+            assertEquals(original.getLong("vpn_generation"), state.getLong("vpn_generation"));
+            assertEquals(original.get("vpn_desired"), state.get("vpn_desired"));
+            assertTrue(Files.isRegularFile(record));
+        } finally {
+            releaseConnect.countDown();
+            releaseIdleStop.countDown();
+            releaseCleanup.countDown();
+            try { serial.submit(() -> {}).get(30, TimeUnit.SECONDS); }
+            finally {
+                Files.delete(record);
+                if (instance.get(null) != null) context.stopService(new Intent(context, TunnelService.class));
+            }
+        }
+    }
+
+    private static void verifyRecoveryConsentRecreation(Context context) throws Exception {
+        var instance = tunnelField("instance");
+        await("Recovery consent test requires the previous VPN service to be destroyed",
+            () -> instance.get(null) == null && !CoreBridge.state(context).getBoolean("vpn_transition_pending"));
+        shell("appops set org.clashofrust.android ACTIVATE_VPN default");
+        assertNotNull(VpnService.prepare(context));
+        MainActivity original = resumedActivity();
+        assertNotNull(original);
+        var serial = (ScheduledExecutorService) tunnelField("serial").get(null);
+        var record = new File(context.getFilesDir(), "client/protection-recovery.json").toPath();
+        JSONObject before = CoreBridge.state(context);
+        Boolean desired = before.isNull("vpn_desired") ? null : before.getBoolean("vpn_desired");
+        String request = UUID.randomUUID().toString();
+        String retry = UUID.randomUUID().toString();
+        CountDownLatch releasePrepare = new CountDownLatch(1);
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        var prompt = MainActivity.class.getDeclaredField("vpnPrompt");
+        var promptRequest = MainActivity.class.getDeclaredField("vpnStartRequest");
+        prompt.setAccessible(true);
+        promptRequest.setAccessible(true);
+        Files.createFile(record);
+        try {
+            serial.submit(() -> {
+                assertTrue("Recovery prepare barrier was not released", releasePrepare.await(45, TimeUnit.SECONDS));
+                return null;
+            });
+            TunnelService.restoreNetwork(original, request, true, desired, recoveryDeadline());
+            instrumentation.runOnMainSync(original::recreate);
+            await("Activity did not recreate before the recovery consent was launched", () -> {
+                MainActivity activity = resumedActivity();
+                return activity != null && activity != original && original.isDestroyed();
+            });
+            MainActivity replacement = resumedActivity();
+            assertNotNull(replacement);
+            releasePrepare.countDown();
+            await("Recreated Activity did not launch the existing recovery consent", () ->
+                consentRoot(instrumentation.getUiAutomation()) != null);
+            MainActivity promptOwner = recreateDuringVpnPrompt(replacement);
+            assertEquals(request, promptRequest.get(promptOwner));
+            serial.submit(() -> {}).get(30, TimeUnit.SECONDS);
+            assertEquals("cancelled", expireVpnStart(promptOwner, request));
+            assertEquals("settled", expireVpnStart(promptOwner, request));
+            TunnelService.restoreNetwork(promptOwner, retry, true, desired, recoveryDeadline());
+            serial.submit(() -> {}).get(30, TimeUnit.SECONDS);
+            assertEquals("stale", expireVpnStart(promptOwner, request));
+            assertTrue(TunnelService.startAllowed(promptOwner, retry));
+            assertEquals("The retry must preserve the identity of the displayed prompt",
+                request, promptRequest.get(promptOwner));
+            assertEquals("cancelled", expireVpnStart(promptOwner, retry));
+            assertEquals("idle", expireVpnStart(promptOwner, request));
+
+            consent(true);
+            await("The stale consent was not delivered to the recreated Activity", () -> !prompt.getBoolean(promptOwner));
+            instrumentation.waitForIdleSync();
+            serial.submit(() -> {}).get(30, TimeUnit.SECONDS);
+            JSONObject state = CoreBridge.state(context);
+            assertFalse(state.getBoolean("vpn"));
+            assertFalse(state.getBoolean("vpn_transition_pending"));
+            assertEquals(before.getLong("vpn_generation"), state.getLong("vpn_generation"));
+            assertNull("A late consent started a foreground service", instance.get(null));
+            assertTrue(Files.isRegularFile(record));
+        } finally {
+            releasePrepare.countDown();
+            try { serial.submit(() -> {}).get(30, TimeUnit.SECONDS); }
+            finally {
+                Files.delete(record);
+                shell("appops set org.clashofrust.android ACTIVATE_VPN default");
+            }
+        }
+    }
+
     private static void verifySavedProtectionCanRetry(Context context) throws Exception {
         assertNotNull("Protection retry needs the Android consent dialog", VpnService.prepare(context));
         File settings = new File(context.getFilesDir(), "client/settings.json");
@@ -2890,6 +3559,8 @@ public class ProxyTunTest {
         consent(true);
         authorization(103, "granted");
         assertNull(VpnService.prepare(context));
+        verifyExpiredNonLiveRecoveryKeepsPlan(context);
+        verifyCancelledColdRecoveryStopsIdleService(context);
         String secret = value(raw, "secret");
         String controller = value(raw, "external-controller");
         java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", mixed));
@@ -2923,11 +3594,20 @@ public class ProxyTunTest {
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q, networks.getJSONObject(index).has("mtu"));
             }
             recoverWithRunningVpn(context);
+            verifyExpiredRecoveryConsent(context);
+            verifyRecoveryConnectTimeout(context, false);
+            verifyRecoveryConnectTimeout(context, true);
+            verifyClaimedRecoverySettlesBeforeRetry(context);
+            long generation = TunnelService.generation();
+            TunnelService.start(context, true);
+            await("The retained VPN could not reconfigure after recovery timed out",
+                () -> TunnelService.connected() && TunnelService.generation() > generation);
             tunResolvesAndCarriesHttp();
         } finally {
             TunnelService.stop(context);
         }
         awaitDirectRecovery(connectivity);
+        verifyRecoveryConsentRecreation(context);
     }
 
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {

@@ -319,6 +319,43 @@ fn english_network_results_translate_generated_values_only() {
 }
 
 #[test]
+fn route_explanations_keep_both_languages_and_older_reports_readable() {
+    for (label, chinese, english) in [
+        (
+            "路径",
+            "系统 ICMP / 逐跳探针，绕过系统代理；TUN 是否接管取决于系统路由。",
+            "System ICMP or trace probe; bypasses the system proxy; TUN follows system routes",
+        ),
+        (
+            "路径",
+            "系统 ICMP / 逐跳探针；系统代理不承载此流量，TUN 是否接管取决于系统路由。这不是代理节点延迟",
+            "System ICMP or trace probe; bypasses the system proxy; TUN follows system routes",
+        ),
+        (
+            "检查路径",
+            "目标 IP 经本机 SOCKS5，IP 与域名可能匹配不同规则；HTTPS 校验证书，HTTP 仅建立连接。",
+            "Target IP via local SOCKS5; IP and domain rules may differ; HTTPS validates the domain certificate, HTTP only connects",
+        ),
+        (
+            "检查路径",
+            "强制目标 IP，经本机 SOCKS5 代理；HTTPS 验证原域名证书，HTTP 仅建立连接。IP 规则可能与域名请求不同；结果不代表本机或节点入口的地址族能力",
+            "Target IP via local SOCKS5; IP and domain rules may differ; HTTPS validates the domain certificate, HTTP only connects",
+        ),
+    ] {
+        assert_eq!(
+            entry_detail_in(label, chinese, "information", Language::English),
+            english
+        );
+        assert_eq!(
+            entry_detail_in(label, chinese, "information", Language::SimplifiedChinese),
+            chinese
+        );
+        let entry = Entry::unknown(label, chinese, "information");
+        assert_eq!(serde_json::to_value(entry).unwrap()["detail"], chinese);
+    }
+}
+
+#[test]
 fn english_website_check_translates_only_known_probe_details() {
     for (label, code, detail, expected) in [
         (

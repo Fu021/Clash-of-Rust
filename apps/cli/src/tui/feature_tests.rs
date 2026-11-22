@@ -709,6 +709,82 @@ fn profile_list_localizes_only_the_builtin_default_name() {
 }
 
 #[test]
+fn profile_list_shows_localized_usage_only_when_it_fits() {
+    use chrono::{DateTime, Local};
+    use clash_client_core::config::{Language, Profile};
+    use unicode_width::UnicodeWidthStr;
+
+    let mut state = State::new(true);
+    state.page = Page::Profiles;
+    let long_name = "跨地域远程线路".repeat(7);
+    let expiry_timestamp = 1813147200;
+    let expiry_date = DateTime::from_timestamp(expiry_timestamp, 0)
+        .unwrap()
+        .with_timezone(&Local)
+        .format("%Y-%m-%d");
+    let no_expiry = "upload=1048576; download=2147483648; total=3221225472; expire=0";
+    let profiles: Vec<_> = [
+        ("旅行节点", Some(no_expiry.into())),
+        ("限期订阅", Some(format!("expire={expiry_timestamp}"))),
+        ("备用订阅", None),
+        (long_name.as_str(), Some(no_expiry.into())),
+    ]
+    .into_iter()
+    .map(|(name, usage)| Profile {
+        id: name.into(),
+        name: name.into(),
+        source: "https://example.test/sub".into(),
+        updated: 0,
+        usage,
+        builtin: false,
+    })
+    .collect();
+    state.poll.as_mut().unwrap().meta.profiles = profiles.clone();
+
+    for language in [Language::English, Language::SimplifiedChinese] {
+        state.language = language;
+        let remote = language.text("远程", "Remote");
+        let expected = [
+            language
+                .text("已用 2/3 GiB · 不限期", "Used 2/3 GiB · No expiry")
+                .into(),
+            format!("{} {expiry_date}", language.text("到期", "Expires")),
+            language
+                .text("未提供用量与到期", "Usage and expiry unavailable")
+                .into(),
+        ];
+        for columns in [32, 120] {
+            let frame = render::frame(&state, columns, 30);
+            assert_eq!(frame.len(), 30);
+            assert!(frame.iter().all(|line| line.text.width() < columns));
+            for (profile, summary) in profiles.iter().zip(&expected) {
+                let prefix = format!("{} · {remote}", profile.name);
+                let row = if columns == 120 {
+                    format!("{prefix} · {summary}")
+                } else {
+                    prefix
+                };
+                assert!(
+                    frame
+                        .iter()
+                        .any(|line| line.text.trim_end().ends_with(&row)),
+                    "{columns}: {row}"
+                );
+            }
+            if columns == 120 {
+                let long_row = format!("{long_name} · {remote}");
+                assert!(
+                    frame
+                        .iter()
+                        .any(|line| line.text.trim_end().ends_with(&long_row))
+                );
+            }
+        }
+    }
+    assert_eq!(state.poll.as_ref().unwrap().meta.profiles, profiles);
+}
+
+#[test]
 fn long_profile_node_and_connection_names_wrap_and_keep_the_original_target() {
     use unicode_width::UnicodeWidthStr;
     let compact = |text: &str| {

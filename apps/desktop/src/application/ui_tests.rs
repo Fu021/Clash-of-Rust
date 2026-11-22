@@ -233,6 +233,82 @@ fn english_update_results_localize_projection_without_changing_failure_state() {
 }
 
 #[test]
+fn unreachable_recheck_notice_tracks_language_without_changing_the_recorded_result() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Home);
+    for (raw, english) in [
+        (
+            "全部节点不可达，TUN 仍开启。请更换节点；更新失败后会自动尝试直连。",
+            "All nodes are unreachable; TUN remains enabled. Choose another node; failed updates will retry using a direct connection.",
+        ),
+        (
+            "全部节点不可达，系统代理仍开启。请更换节点；更新失败后会自动尝试直连。",
+            "All nodes are unreachable; system proxy remains enabled. Choose another node; failed updates will retry using a direct connection.",
+        ),
+    ] {
+        app.dismiss_notice();
+        app.presentation_language = Language::SimplifiedChinese;
+        app.show_unreachable_nodes("测速", 3);
+        let (aborter, _) = AbortHandle::new_pair();
+        app.recovery_aborter = Some(aborter);
+        let _ = app.update(Message::UnreachableRecovered(
+            app.delay_generation,
+            Ok(Some(raw.into())),
+        ));
+        app.present_slint(&data, &mut models);
+        assert_eq!(data.get_notice(), raw);
+        app.presentation_language = Language::English;
+        app.present_slint(&data, &mut models);
+        assert_eq!(data.get_notice(), english);
+        assert_eq!(app.notice, raw);
+        assert!(app.notice_network_recovery);
+    }
+}
+
+#[test]
+fn unreachable_notice_and_recheck_failure_follow_language() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Home);
+    app.dismiss_notice();
+    app.presentation_language = Language::SimplifiedChinese;
+    app.show_unreachable_nodes("节点甲", 3);
+    app.present_slint(&data, &mut models);
+    assert!(data.get_notice().contains("节点甲：3 个节点不可达"));
+
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    assert!(data.get_notice().contains("节点甲: 3 nodes unreachable"));
+
+    let (aborter, _) = AbortHandle::new_pair();
+    app.recovery_aborter = Some(aborter);
+    let _ = app.update(Message::UnreachableRecovered(
+        app.delay_generation,
+        Err("provider 原文".into()),
+    ));
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_notice(), "Node recheck failed: provider 原文");
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_notice(), "节点复测失败：provider 原文");
+
+    app.dismiss_notice();
+    app.show_scheduled_unreachable_nodes(1);
+    app.present_slint(&data, &mut models);
+    assert!(data.get_notice().contains("本次定时测速"));
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    assert!(data.get_notice().contains("Scheduled latency test"));
+}
+
+#[test]
 fn network_tools_remain_reachable_after_scrolling_other_pages() {
     use slint::platform::WindowEvent;
 
@@ -4065,6 +4141,171 @@ fn ip_category_status_and_region_popups_drive_report_filters() {
 }
 
 #[test]
+fn client_log_rows_follow_language_and_search_without_changing_source_logs() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Logs);
+    app.snapshot.logs = vec!["[客户端] 配置已导入/更新".into(), "[内核] 外部原文".into()];
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_logs().row_data(0).unwrap().message,
+        "[内核] 外部原文"
+    );
+    assert!(data.get_logs().row_data(0).unwrap().original.is_empty());
+    assert_eq!(
+        data.get_logs().row_data(1).unwrap().message,
+        "[Client] Configuration imported or updated"
+    );
+    assert_eq!(
+        data.get_logs().row_data(1).unwrap().original,
+        "[客户端] 配置已导入/更新"
+    );
+    app.query = "configuration".into();
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_logs().row_count(), 1);
+    assert_eq!(
+        data.get_logs().row_data(0).unwrap().message,
+        "[Client] Configuration imported or updated"
+    );
+    app.query.clear();
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_logs().row_data(1).unwrap().message,
+        "[客户端] 配置已导入/更新"
+    );
+    assert_eq!(app.snapshot.logs[0].as_ref(), "[客户端] 配置已导入/更新");
+    assert_eq!(app.snapshot.logs[1].as_ref(), "[内核] 外部原文");
+}
+
+#[test]
+fn open_client_log_detail_tracks_language_and_keeps_its_original_record() {
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Logs);
+    let raw = "[客户端] 配置已导入/更新";
+    let english = "[Client] Configuration imported or updated";
+    app.snapshot.logs = vec![raw.into()];
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    let events = pointer_events(&window);
+    window.show().unwrap();
+    motion_frame(&window, 0);
+    click_target(&window, &format!("copy-log:{english}"));
+    assert_eq!(
+        events.borrow().last(),
+        Some(&(Intent::Copy, english.into(), "".into()))
+    );
+    events.borrow_mut().clear();
+    click_target(&window, &format!("log:{english}"));
+    assert_eq!(
+        events.borrow().last(),
+        Some(&(Intent::LogDetail, raw.into(), "".into()))
+    );
+    let _ = app.ui_intent(Intent::LogDetail, raw, "");
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_modal_description(), english);
+    assert_eq!(data.get_modal_copy(), english);
+    app.snapshot.logs.clear();
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_modal_description(), raw);
+    assert_eq!(data.get_modal_copy(), raw);
+    assert_eq!(app.log_detail.as_deref(), Some(raw));
+    window.hide().unwrap();
+}
+
+#[test]
+fn log_row_actions_reject_a_different_record_after_language_refresh() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let mut app = fixture(Page::Logs);
+    let raw = "[客户端] 配置已导入/更新";
+    let english = "[Client] Configuration imported or updated";
+    let core = "[内核] configuration remains unchanged";
+    app.snapshot.logs = vec![core.into(), raw.into()];
+    app.query = "configuration".into();
+    let events = pointer_events(&window);
+    window.show().unwrap();
+
+    for key in [format!("log:{english}"), format!("copy-log:{english}")] {
+        app.presentation_language = Language::English;
+        app.present_slint(&data, &mut models);
+        motion_frame(&window, 0);
+        assert_eq!(data.get_logs().row_count(), 2);
+        let bounds = target_bounds(&key);
+        let position =
+            slint::LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        app.presentation_language = Language::SimplifiedChinese;
+        app.present_slint(&data, &mut models);
+        motion_frame(&window, 0);
+        assert_eq!(data.get_logs().row_count(), 1);
+        assert_eq!(data.get_logs().row_data(0).unwrap().message, core);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        assert!(events.borrow().is_empty(), "stale action from {key}");
+    }
+    click_target(&window, &format!("log:{core}"));
+    assert_eq!(
+        events.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [(Intent::LogDetail, core.into(), "".into())]
+    );
+
+    app.query.clear();
+    app.snapshot.logs = vec![raw.into()];
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 0);
+    let bounds = target_bounds(&format!("log:{english}"));
+    let position =
+        slint::LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 0);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    assert_eq!(
+        events.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [(Intent::LogDetail, raw.into(), "".into())]
+    );
+    window.hide().unwrap();
+}
+
+#[test]
 fn log_rows_open_full_text_copy_without_opening_and_filter_by_source_level() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Logs);
@@ -4432,8 +4673,14 @@ fn copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing() {
         "unrelated or failed writes must not display success"
     );
     rapid_target(&window, "copy-log:[info] copy fixture");
-    data.set_copy_value(value);
-    data.set_copy_revision(2);
+    let projection = clash_desktop_protocol::UiData::default();
+    let mut projected = clash_desktop_protocol::models::ViewModels::default();
+    projected.attach(&projection);
+    app.present(&projection, &mut projected);
+    let mut frame = projection.snapshot();
+    frame.copy_value = value.as_str().into();
+    frame.copy_revision = 2;
+    clash_desktop_ui::apply(&frame, &data, &mut models);
     motion_frame(&window, 0);
     let copied = motion_frame(&window, 250);
     assert_ne!(waiting, copied);

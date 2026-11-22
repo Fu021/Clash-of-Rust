@@ -12,6 +12,12 @@ fn english(message: &str) -> Option<&'static str> {
         "订阅定时更新失败，已保留原配置与运行状态" => {
             "Scheduled subscription update failed; the previous configuration and running state were retained"
         }
+        "全部节点不可达，TUN 仍开启。请更换节点；更新失败后会自动尝试直连。" => {
+            "All nodes are unreachable; TUN remains enabled. Choose another node; failed updates will retry using a direct connection."
+        }
+        "全部节点不可达，系统代理仍开启。请更换节点；更新失败后会自动尝试直连。" => {
+            "All nodes are unreachable; system proxy remains enabled. Choose another node; failed updates will retry using a direct connection."
+        }
         "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅" => {
             "Incompatible subscription; use a Mihomo/Clash Meta YAML subscription"
         }
@@ -289,6 +295,19 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
             && limit.bytes().all(|byte| byte.is_ascii_digit())
         {
             return format!("{label} must be between 1 and {limit}").into();
+        }
+    }
+    for (prefix, label) in [
+        ("Fake-IP 排除项最多 ", "Fake-IP exclusions"),
+        ("Fake-IP 自定义排除项最多 ", "Custom Fake-IP exclusions"),
+    ] {
+        if let Some(limit) = message
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(" 个"))
+            && !limit.is_empty()
+            && limit.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return format!("{label} are limited to {limit} entries").into();
         }
     }
     Cow::Borrowed(message)

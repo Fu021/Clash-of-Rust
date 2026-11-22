@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 #[cfg(test)]
 use clash_mobile_runtime::core::config::Settings;
 use clash_mobile_runtime::{
-    PROTECTION_RECOVERY_FILE as RECOVERY_FILE, Session,
+    PROTECTION_RECOVERY_FILE as RECOVERY_FILE, ProtectionRecoveryCommit, Session,
     core::{
         config::{Language, atomic_write},
         protection::Protection,
@@ -13,11 +13,87 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs,
+    future::Future,
     io::ErrorKind,
     path::Path,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
+
+pub(crate) struct ProtectionJob {
+    verification_request: Option<String>,
+    ticket: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ProtectionJob {
+    pub(crate) fn spawn<F>(
+        verification_request: Option<String>,
+        run: impl FnOnce(String) -> F,
+    ) -> Self
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let ticket = protection_request_id();
+        let task = tokio::spawn(run(ticket.clone()));
+        Self {
+            verification_request,
+            ticket,
+            task,
+        }
+    }
+
+    pub(crate) fn verifies(&self, request: &str) -> bool {
+        self.verification_request.as_deref() == Some(request)
+    }
+
+    pub(crate) fn finish(
+        pending: &mut Option<Self>,
+        ticket: &str,
+        verification_request: Option<&str>,
+    ) -> bool {
+        pending
+            .take_if(|job| {
+                job.ticket == ticket && job.verification_request.as_deref() == verification_request
+            })
+            .is_some()
+    }
+}
+
+impl Drop for ProtectionJob {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProtectionDeadline(u64);
+
+impl ProtectionDeadline {
+    pub(crate) fn after(duration: Duration) -> Self {
+        Self(Self::elapsed_ms() + u64::try_from(duration.as_millis()).expect("protection timeout"))
+    }
+
+    pub(crate) fn reached(self) -> bool {
+        Self::elapsed_ms() >= self.0
+    }
+
+    #[cfg(target_os = "android")]
+    fn elapsed_ms() -> u64 {
+        use rustix::time::{ClockId, clock_gettime};
+        let now = clock_gettime(ClockId::Boottime);
+        now.tv_sec as u64 * 1000 + now.tv_nsec as u64 / 1_000_000
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn elapsed_ms() -> u64 {
+        use std::{sync::LazyLock, time::Instant};
+        static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+        START.elapsed().as_millis() as u64
+    }
+}
 
 pub(crate) fn active_probe_allowed(
     change_pending: bool,
@@ -132,18 +208,70 @@ impl RecoveryRecord {
 #[derive(Debug)]
 pub(crate) struct VpnTransition {
     pub(crate) request: String,
-    previous_generation: u64,
+    previous_generation: Result<u64>,
     target: VpnBaseline,
+    deadline: ProtectionDeadline,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum VpnStartExpiry {
+    Cancelled,
+    Claimed,
+    Idle,
+    Settled,
+    Stale,
+}
+
+pub(crate) enum VpnStartTimeout {
+    ReadyForRecovery,
+    Waiting,
+    Unconfirmed(anyhow::Error),
+}
+
+fn expire_vpn_start(session: &Session, request: &str) -> Result<VpnStartExpiry> {
+    let response = session.native.request(json!({
+        "op":"expire-vpn-start", "request":request,
+    }))?;
+    ensure!(
+        response["request"] == request,
+        "Unexpected VPN start expiry request"
+    );
+    match response["status"].as_str() {
+        Some("cancelled") => Ok(VpnStartExpiry::Cancelled),
+        Some("claimed") => Ok(VpnStartExpiry::Claimed),
+        Some("idle") => Ok(VpnStartExpiry::Idle),
+        Some("settled") => Ok(VpnStartExpiry::Settled),
+        Some("stale") => Ok(VpnStartExpiry::Stale),
+        _ => anyhow::bail!("Missing or invalid VPN start expiry status"),
+    }
+}
+
+fn vpn_start_allows_recovery(session: &Session, request: &str) -> Result<bool> {
+    match expire_vpn_start(session, request)? {
+        VpnStartExpiry::Idle | VpnStartExpiry::Settled => Ok(true),
+        VpnStartExpiry::Claimed | VpnStartExpiry::Cancelled => Ok(false),
+        VpnStartExpiry::Stale => {
+            anyhow::bail!(
+                "Android reports a stale VPN request. VPN service activity is unconfirmed"
+            )
+        }
+    }
 }
 
 impl VpnTransition {
-    fn start(session: &Session, live: Option<bool>, target: VpnBaseline) -> Result<Self> {
+    fn start(
+        session: &Session,
+        live: Option<bool>,
+        target: VpnBaseline,
+        deadline: ProtectionDeadline,
+        now_ms: impl Fn() -> u64,
+    ) -> Result<Self> {
         let request = protection_request_id();
-        let command = json!({
-            "op":"restore-vpn", "request":request, "desired":target.desired, "connected":live,
-        });
         let send = || {
-            let response = session.native.request(command.clone())?;
+            let response = session.native.request(json!({
+                "op":"restore-vpn", "request":request, "desired":target.desired, "connected":live,
+                "deadline_elapsed_ms":deadline.0,
+            }))?;
             ensure!(
                 response["request"] == request,
                 "Unexpected VPN transition request"
@@ -152,23 +280,72 @@ impl VpnTransition {
                 .as_u64()
                 .context("Missing VPN transition generation")
         };
-        let previous_generation = send().or_else(|_| send()).context("restore-vpn")?;
+        ensure!(
+            now_ms() < deadline.0,
+            "restore-vpn: protection change timed out before VPN dispatch"
+        );
+        let previous_generation = send()
+            .or_else(|error| {
+                if now_ms() >= deadline.0 {
+                    return Err(error);
+                }
+                send()
+            })
+            .context("restore-vpn receipt unconfirmed");
         Ok(Self {
             request,
             previous_generation,
             target,
+            deadline,
         })
     }
 
-    pub(crate) fn apply(session: &Session, target: VpnBaseline) -> Result<Self> {
-        Self::start(session, Some(target.connected), target)
+    fn apply(session: &Session, target: VpnBaseline, deadline: ProtectionDeadline) -> Result<Self> {
+        Self::start(
+            session,
+            Some(target.connected),
+            target,
+            deadline,
+            ProtectionDeadline::elapsed_ms,
+        )
     }
 
     pub(crate) fn target_connected(&self) -> bool {
         self.target.connected
     }
 
+    pub(crate) fn needs_settlement(&self) -> bool {
+        self.previous_generation.is_err() || self.deadline.reached()
+    }
+
+    pub(crate) fn expiry_reason(&self) -> Option<&anyhow::Error> {
+        self.previous_generation.as_ref().err()
+    }
+
+    pub(crate) fn resolve_start_timeout(&self, session: &Session) -> VpnStartTimeout {
+        match vpn_start_allows_recovery(session, &self.request) {
+            Ok(true) => VpnStartTimeout::ReadyForRecovery,
+            Ok(false) => VpnStartTimeout::Waiting,
+            Err(error) => VpnStartTimeout::Unconfirmed(error),
+        }
+    }
+
+    pub(crate) fn accepts_dns_result(&self, session: &Session, request: &str) -> bool {
+        self.request == request
+            && matches!(
+                self.poll(session, session.settings.claude_protection.is_some()),
+                RollbackProgress::VerifyProtection {
+                    check_dns: true,
+                    ..
+                }
+            )
+            && !self.needs_settlement()
+    }
+
     pub(crate) fn poll(&self, session: &Session, protected: bool) -> RollbackProgress {
+        let Ok(previous_generation) = self.previous_generation else {
+            return RollbackProgress::Pending;
+        };
         let result = &session.platform["vpn_rollback"];
         if result["request"].as_str() != Some(&self.request)
             || session.platform["vpn_transition_pending"] != false
@@ -196,7 +373,7 @@ impl VpnTransition {
             || (observed.connected != self.target.connected && !held_for_disconnect)
             || (observed.connected && session.platform["vpn_held"] != true)
             || !result["generation"].as_u64().is_some_and(|generation| {
-                (!self.target.connected || generation > self.previous_generation)
+                (!self.target.connected || generation > previous_generation)
                     && session.platform["vpn_generation"].as_u64() == Some(generation)
             })
         {
@@ -228,17 +405,24 @@ struct Rollback {
     record: Option<RecoveryRecord>,
     phase: RollbackPhase,
     last_error: Option<String>,
-    finalizing: Option<String>,
 }
 
 enum RollbackPhase {
-    Applying,
+    Applying {
+        request: Option<String>,
+    },
     ReleaseReservation {
         token: String,
     },
     Pending {
         transition: VpnTransition,
-        deadline: Instant,
+    },
+    AwaitingVpnStart {
+        request: String,
+    },
+    AwaitingFinalization {
+        request: String,
+        during_change: bool,
     },
     Failed,
 }
@@ -253,6 +437,7 @@ pub(crate) enum RetryOutcome {
 pub(crate) enum RollbackProgress {
     Idle,
     Pending,
+    WaitingForVpnSettlement(String),
     VerifyProtection { request: String, check_dns: bool },
     Restored,
     Failed(String),
@@ -287,31 +472,45 @@ impl SavedProtectionRecovery {
     }
 
     pub(crate) fn last_error(&self) -> Option<String> {
-        self.lock().as_ref()?.last_error.clone()
+        let recovery = self.lock();
+        let rollback = recovery.as_ref()?;
+        if matches!(rollback.phase, RollbackPhase::AwaitingFinalization { .. }) {
+            return None;
+        }
+        rollback.last_error.clone()
     }
 
     fn reopen(&self, root: &Path, language: Language) {
         let mut recovery = self.lock();
-        if recovery
-            .as_ref()
-            .is_some_and(|rollback| !matches!(rollback.phase, RollbackPhase::Applying))
-        {
-            return;
+        let interrupted = language.text(
+            "上次保护切换未完成，请重试恢复原网络状态",
+            "The previous protection change was interrupted. Retry to restore the previous network state.",
+        );
+        if let Some(rollback) = recovery.as_mut() {
+            match &mut rollback.phase {
+                RollbackPhase::Applying {
+                    request: Some(request),
+                } => {
+                    rollback.phase = RollbackPhase::AwaitingVpnStart {
+                        request: request.clone(),
+                    };
+                    rollback.last_error = Some(interrupted.into());
+                    return;
+                }
+                RollbackPhase::Applying { request: None } => {}
+                RollbackPhase::AwaitingFinalization { during_change, .. } => {
+                    *during_change = false;
+                    return;
+                }
+                _ => return,
+            }
         }
         *recovery = match RecoveryRecord::load(root) {
             Ok(None) => None,
             Ok(Some(record)) => Some(Rollback {
                 record: Some(record),
                 phase: RollbackPhase::Failed,
-                last_error: Some(
-                    language
-                        .text(
-                            "上次保护切换未完成，请重试恢复原网络状态",
-                            "The previous protection change was interrupted. Retry to restore the previous network state.",
-                        )
-                        .into(),
-                ),
-                finalizing: None,
+                last_error: Some(interrupted.into()),
             }),
             Err(_) => Some(Rollback {
                 record: None,
@@ -324,7 +523,6 @@ impl SavedProtectionRecovery {
                         )
                         .into(),
                 ),
-                finalizing: None,
             }),
         };
     }
@@ -364,7 +562,6 @@ impl SavedProtectionRecovery {
                     record: None,
                     phase: RollbackPhase::ReleaseReservation { token },
                     last_error: Some(message.clone()),
-                    finalizing: None,
                 });
                 anyhow::bail!("{message}");
             }
@@ -387,9 +584,8 @@ impl SavedProtectionRecovery {
             (Ok(()), Ok(())) => {
                 *recovery = Some(Rollback {
                     record: Some(record),
-                    phase: RollbackPhase::Applying,
+                    phase: RollbackPhase::Applying { request: None },
                     last_error: None,
-                    finalizing: None,
                 });
                 if let Err(error) = Self::hold_vpn(session) {
                     let rollback = recovery.as_mut().expect("new protection recovery");
@@ -410,7 +606,6 @@ impl SavedProtectionRecovery {
                     record,
                     phase: RollbackPhase::ReleaseReservation { token },
                     last_error: Some(message.clone()),
-                    finalizing: None,
                 });
                 anyhow::bail!("{message}");
             }
@@ -442,9 +637,40 @@ impl SavedProtectionRecovery {
     }
 
     pub(crate) fn is_applying(&self) -> bool {
-        self.lock()
-            .as_ref()
-            .is_some_and(|rollback| matches!(rollback.phase, RollbackPhase::Applying))
+        self.lock().as_ref().is_some_and(|rollback| {
+            matches!(
+                rollback.phase,
+                RollbackPhase::Applying { .. }
+                    | RollbackPhase::AwaitingFinalization {
+                        during_change: true,
+                        ..
+                    }
+            )
+        })
+    }
+
+    pub(crate) fn is_finalizing(&self) -> bool {
+        self.lock().as_ref().is_some_and(|rollback| {
+            matches!(rollback.phase, RollbackPhase::AwaitingFinalization { .. })
+        })
+    }
+
+    pub(crate) fn apply_vpn(
+        &self,
+        session: &Session,
+        target: VpnBaseline,
+        deadline: ProtectionDeadline,
+    ) -> Result<VpnTransition> {
+        let mut recovery = self.lock();
+        let Some(RollbackPhase::Applying { request }) =
+            recovery.as_mut().map(|rollback| &mut rollback.phase)
+        else {
+            anyhow::bail!("No protection change is running");
+        };
+        ensure!(request.is_none(), "A VPN transition is already running");
+        let transition = VpnTransition::apply(session, target, deadline)?;
+        *request = Some(transition.request.clone());
+        Ok(transition)
     }
 
     #[cfg(test)]
@@ -470,14 +696,29 @@ impl SavedProtectionRecovery {
                 return Ok(RetryOutcome::ReservationReleased);
             };
             ensure!(
-                !matches!(rollback.phase, RollbackPhase::Applying),
+                !matches!(
+                    rollback.phase,
+                    RollbackPhase::Applying { .. }
+                        | RollbackPhase::AwaitingFinalization {
+                            during_change: true,
+                            ..
+                        }
+                ),
                 "A protection change is already running"
             );
-            if let Some(request) = &rollback.finalizing
-                && session.protection_recovery_completed(request)?
-            {
-                recovery.take();
-                return Ok(RetryOutcome::FinalizationConfirmed);
+            if let RollbackPhase::AwaitingVpnStart { request } = &rollback.phase {
+                ensure!(
+                    vpn_start_allows_recovery(session, request)?,
+                    "The VPN service is still working on the original request"
+                );
+                rollback.phase = RollbackPhase::Failed;
+            }
+            if let RollbackPhase::AwaitingFinalization { request, .. } = &rollback.phase {
+                if session.protection_recovery_completed(request)? {
+                    recovery.take();
+                    return Ok(RetryOutcome::FinalizationConfirmed);
+                }
+                rollback.phase = RollbackPhase::Failed;
             }
             if let RollbackPhase::ReleaseReservation { token } = &rollback.phase {
                 if let Err(error) = Self::release_reservation(session, token) {
@@ -516,6 +757,14 @@ impl SavedProtectionRecovery {
             !matches!(rollback.phase, RollbackPhase::ReleaseReservation { .. }),
             "The VPN recovery reservation must be released first"
         );
+        ensure!(
+            !matches!(rollback.phase, RollbackPhase::AwaitingVpnStart { .. }),
+            "The previous VPN start must settle before recovery"
+        );
+        ensure!(
+            !matches!(rollback.phase, RollbackPhase::AwaitingFinalization { .. }),
+            "The protection recovery commit must be confirmed first"
+        );
         let result = (|| {
             if rollback.record.is_none() {
                 rollback.record = RecoveryRecord::load(&session.store.root)
@@ -528,16 +777,24 @@ impl SavedProtectionRecovery {
                 "A VPN transition is still running. Retry protection recovery when it finishes."
             );
             Self::hold_vpn(session)?;
-            rollback.finalizing = None;
             rollback_network(session, &record, start_core)
         })();
         match result {
-            Ok(transition) => {
-                rollback.phase = RollbackPhase::Pending {
-                    transition,
-                    deadline: Instant::now() + Duration::from_secs(120),
-                };
+            Ok((transition, None)) => {
+                let error = transition.expiry_reason().map(|error| format!("{error:#}"));
+                rollback.phase = RollbackPhase::Pending { transition };
+                if let Some(error) = error {
+                    rollback.last_error = Some(error.clone());
+                    anyhow::bail!("{error}");
+                }
                 Ok(())
+            }
+            Ok((transition, Some(error))) => {
+                rollback.phase = RollbackPhase::AwaitingVpnStart {
+                    request: transition.request,
+                };
+                rollback.last_error = Some(format!("{error:#}"));
+                Err(error)
             }
             Err(error) => {
                 rollback.phase = RollbackPhase::Failed;
@@ -567,17 +824,67 @@ impl SavedProtectionRecovery {
         Ok(record.clone())
     }
 
-    pub(crate) fn poll(&self, session: Option<&Session>) -> RollbackProgress {
+    #[cfg(test)]
+    fn poll(&self, session: Option<&Session>) -> RollbackProgress {
+        self.poll_observed(session, session.is_some())
+    }
+
+    pub(crate) fn poll_observed(
+        &self,
+        session: Option<&Session>,
+        observed: bool,
+    ) -> RollbackProgress {
         let mut recovery = self.lock();
         let Some(rollback) = recovery.as_mut() else {
             return RollbackProgress::Idle;
         };
-        let (transition, deadline) = match &rollback.phase {
-            RollbackPhase::Applying => return RollbackProgress::Pending,
-            RollbackPhase::Pending {
-                transition,
-                deadline,
-            } => (transition, *deadline),
+        let transition = match &rollback.phase {
+            RollbackPhase::Applying { .. } => return RollbackProgress::Pending,
+            RollbackPhase::Pending { transition } => transition,
+            RollbackPhase::AwaitingFinalization {
+                request,
+                during_change,
+            } => match session.map(|session| session.protection_recovery_completed(request)) {
+                Some(Ok(true)) => {
+                    recovery.take();
+                    return RollbackProgress::Restored;
+                }
+                Some(Ok(false)) => {
+                    let error = rollback
+                        .last_error
+                        .clone()
+                        .expect("unconfirmed finalization has an error");
+                    rollback.phase = if *during_change {
+                        rollback.last_error = None;
+                        RollbackPhase::Applying {
+                            request: Some(request.clone()),
+                        }
+                    } else {
+                        RollbackPhase::Failed
+                    };
+                    return RollbackProgress::Failed(error);
+                }
+                _ => return RollbackProgress::Pending,
+            },
+            RollbackPhase::AwaitingVpnStart { request } => {
+                let reason = rollback
+                    .last_error
+                    .clone()
+                    .expect("interrupted rollback has an error");
+                match session
+                    .context("Could not reach the VPN service")
+                    .and_then(|session| vpn_start_allows_recovery(session, request))
+                {
+                    Ok(true) => rollback.phase = RollbackPhase::Failed,
+                    Ok(false) => return RollbackProgress::WaitingForVpnSettlement(reason),
+                    Err(error) => {
+                        return RollbackProgress::WaitingForVpnSettlement(format!(
+                            "{reason}. {error:#}"
+                        ));
+                    }
+                }
+                return RollbackProgress::Failed(reason);
+            }
             RollbackPhase::Failed | RollbackPhase::ReleaseReservation { .. } => {
                 return RollbackProgress::Failed(
                     rollback
@@ -587,20 +894,41 @@ impl SavedProtectionRecovery {
                 );
             }
         };
-        let progress = if Instant::now() >= deadline {
-            RollbackProgress::Failed("Timed out restoring the previous VPN state".into())
-        } else {
-            let Some(session) = session else {
-                return RollbackProgress::Pending;
-            };
-            transition.poll(
-                session,
-                rollback
-                    .record
-                    .as_ref()
-                    .is_some_and(|record| record.protection.is_some()),
-            )
+        if transition.needs_settlement() {
+            let error = transition.expiry_reason().map_or_else(
+                || "Timed out restoring the previous VPN state".into(),
+                |error| format!("{error:#}"),
+            );
+            let outcome = session.map_or_else(
+                || VpnStartTimeout::Unconfirmed(anyhow::anyhow!("Could not reach the VPN service")),
+                |session| transition.resolve_start_timeout(session),
+            );
+            match outcome {
+                VpnStartTimeout::Waiting => {
+                    return RollbackProgress::WaitingForVpnSettlement(error);
+                }
+                VpnStartTimeout::ReadyForRecovery => {
+                    rollback.last_error = Some(error.clone());
+                    rollback.phase = RollbackPhase::Failed;
+                    return RollbackProgress::Failed(error);
+                }
+                VpnStartTimeout::Unconfirmed(status) => {
+                    return RollbackProgress::WaitingForVpnSettlement(format!(
+                        "{error}. {status:#}"
+                    ));
+                }
+            }
+        }
+        let Some(session) = session.filter(|_| observed) else {
+            return RollbackProgress::Pending;
         };
+        let progress = transition.poll(
+            session,
+            rollback
+                .record
+                .as_ref()
+                .is_some_and(|record| record.protection.is_some()),
+        );
         if let RollbackProgress::Failed(error) = &progress {
             rollback.last_error = Some(error.clone());
             rollback.phase = RollbackPhase::Failed;
@@ -614,7 +942,7 @@ impl SavedProtectionRecovery {
         request: &str,
         result: Result<()>,
     ) -> RollbackProgress {
-        let progress = self.poll(Some(session));
+        let progress = self.poll_observed(Some(session), true);
         if progress.verification_request() != Some(request) {
             return progress;
         }
@@ -622,8 +950,10 @@ impl SavedProtectionRecovery {
         let Some(rollback) = recovery.as_mut() else {
             return RollbackProgress::Idle;
         };
-        if !matches!(&rollback.phase, RollbackPhase::Pending { transition, .. } if transition.request == request)
-        {
+        let RollbackPhase::Pending { transition } = &rollback.phase else {
+            return RollbackProgress::Pending;
+        };
+        if transition.request != request {
             return RollbackProgress::Pending;
         }
         let result = result.and_then(|()| {
@@ -633,16 +963,31 @@ impl SavedProtectionRecovery {
                     && session.settings.run_mode == record.run_mode,
                 "The saved protection settings changed before rollback could be confirmed"
             );
-            let RollbackPhase::Pending { transition, .. } = &rollback.phase else {
-                unreachable!("matching recovery transition");
-            };
-            rollback.finalizing = Some(request.to_owned());
-            session.finish_protection_recovery(request, transition.target_connected())
+            Ok(())
+        });
+        if transition.needs_settlement() {
+            drop(recovery);
+            return self.poll_observed(Some(session), true);
+        }
+        let result = result.and_then(|()| {
+            session.finish_protection_recovery(
+                request,
+                transition.target_connected(),
+                transition.deadline.0,
+            )
         });
         match result {
-            Ok(()) => {
+            Ok(ProtectionRecoveryCommit::Committed) => {
                 recovery.take();
                 RollbackProgress::Restored
+            }
+            Ok(ProtectionRecoveryCommit::Unconfirmed(error)) => {
+                rollback.phase = RollbackPhase::AwaitingFinalization {
+                    request: request.to_owned(),
+                    during_change: false,
+                };
+                rollback.last_error = Some(format!("{error:#}"));
+                RollbackProgress::Pending
             }
             Err(error) => {
                 let message = format!("{error:#}");
@@ -658,12 +1003,12 @@ impl SavedProtectionRecovery {
         session: &Session,
         transition: &VpnTransition,
         dns_verified: bool,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut recovery = self.lock();
         let rollback = recovery
             .as_mut()
             .context("Missing protection recovery record")?;
-        ensure!(matches!(rollback.phase, RollbackPhase::Applying));
+        ensure!(matches!(rollback.phase, RollbackPhase::Applying { .. }));
         let RollbackProgress::VerifyProtection { check_dns, .. } =
             transition.poll(session, session.settings.claude_protection.is_some())
         else {
@@ -674,10 +1019,28 @@ impl SavedProtectionRecovery {
             "Protection DNS has not been verified"
         );
         Self::validate_record(session, rollback)?;
-        rollback.finalizing = Some(transition.request.clone());
-        session.finish_protection_recovery(&transition.request, transition.target_connected())?;
-        recovery.take();
-        Ok(())
+        ensure!(
+            !transition.needs_settlement(),
+            "Protection change timed out before commit"
+        );
+        match session.finish_protection_recovery(
+            &transition.request,
+            transition.target_connected(),
+            transition.deadline.0,
+        )? {
+            ProtectionRecoveryCommit::Committed => {
+                recovery.take();
+                Ok(true)
+            }
+            ProtectionRecoveryCommit::Unconfirmed(error) => {
+                rollback.phase = RollbackPhase::AwaitingFinalization {
+                    request: transition.request.clone(),
+                    during_change: true,
+                };
+                rollback.last_error = Some(format!("{error:#}"));
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -685,7 +1048,8 @@ fn rollback_network(
     session: &mut Session,
     record: &RecoveryRecord,
     start_core: bool,
-) -> Result<VpnTransition> {
+) -> Result<(VpnTransition, Option<anyhow::Error>)> {
+    let deadline = ProtectionDeadline::after(RECOVERY_TIMEOUT);
     let config = session
         .restore_protection(record.protection.clone(), record.run_mode.clone())
         .and_then(|()| {
@@ -697,11 +1061,27 @@ fn rollback_network(
         });
     let live = (!record.vpn.connected || (config.is_ok() && session.running))
         .then_some(record.vpn.connected);
-    let network = VpnTransition::start(session, live, record.vpn);
-    match (config, network) {
-        (Ok(()), network) => network,
-        (Err(config), Ok(_)) => Err(config),
-        (Err(config), Err(network)) => anyhow::bail!("{config:#} · {network:#}"),
+    let config_error = config.err();
+    match (
+        VpnTransition::start(
+            session,
+            live,
+            record.vpn,
+            deadline,
+            ProtectionDeadline::elapsed_ms,
+        ),
+        config_error,
+    ) {
+        (Ok(transition), Some(config)) => {
+            let error = match transition.expiry_reason() {
+                Some(network) => anyhow::anyhow!("{config:#} · {network:#}"),
+                None => config,
+            };
+            Ok((transition, Some(error)))
+        }
+        (Ok(transition), None) => Ok((transition, None)),
+        (Err(network), Some(config)) => anyhow::bail!("{config:#} · {network:#}"),
+        (Err(network), None) => Err(network),
     }
 }
 
@@ -721,12 +1101,100 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    #[tokio::test]
+    async fn queued_preparation_result_cannot_complete_a_new_enable() {
+        for old_result in [Ok("old node"), Err("old preparation failed")] {
+            let (updates, mut received) = tokio::sync::mpsc::unbounded_channel();
+            let (queued, queued_result) = tokio::sync::oneshot::channel();
+            let sender = updates.clone();
+            let old = ProtectionJob::spawn(None, |ticket| async move {
+                sender.send((ticket, old_result)).unwrap();
+                queued.send(()).unwrap();
+            });
+            queued_result.await.unwrap();
+            drop(old);
+
+            let mut current = Some(ProtectionJob::spawn(None, |ticket| async move {
+                updates.send((ticket, Ok("new node"))).unwrap();
+            }));
+            let (ticket, result) = received.recv().await.unwrap();
+            assert_eq!(result, old_result);
+            assert!(!ProtectionJob::finish(&mut current, &ticket, None));
+
+            let (ticket, result) = received.recv().await.unwrap();
+            assert!(ProtectionJob::finish(&mut current, &ticket, None));
+            assert_eq!(result, Ok("new node"));
+            assert!(!ProtectionJob::finish(&mut current, &ticket, None));
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_a_protection_job_cancels_unfinished_work() {
+        let (started, running) = tokio::sync::oneshot::channel();
+        let (completed, result) = tokio::sync::oneshot::channel::<()>();
+        let job = ProtectionJob::spawn(None, |_| async move {
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+            completed.send(()).unwrap();
+        });
+        running.await.unwrap();
+        drop(job);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), result)
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_dns_failure_cannot_consume_the_retry_verification() {
+        for retry_request in ["original-vpn-request", "new-vpn-request"] {
+            let (updates, mut received) = tokio::sync::mpsc::unbounded_channel();
+            let (queued, queued_result) = tokio::sync::oneshot::channel();
+            let sender = updates.clone();
+            let old_request = "original-vpn-request";
+            let old = ProtectionJob::spawn(Some(old_request.into()), |ticket| async move {
+                sender
+                    .send((ticket, old_request, Err("DNS failed")))
+                    .unwrap();
+                queued.send(()).unwrap();
+            });
+            queued_result.await.unwrap();
+            drop(old);
+
+            let mut current = Some(ProtectionJob::spawn(
+                Some(retry_request.into()),
+                |ticket| async move {
+                    updates.send((ticket, retry_request, Ok(()))).unwrap();
+                },
+            ));
+            let (ticket, request, result) = received.recv().await.unwrap();
+            assert_eq!(result, Err("DNS failed"));
+            assert!(!ProtectionJob::finish(&mut current, &ticket, Some(request)));
+            assert!(current.as_ref().unwrap().verifies(retry_request));
+
+            let (ticket, request, result) = received.recv().await.unwrap();
+            assert!(!ProtectionJob::finish(
+                &mut current,
+                &ticket,
+                Some("unrelated-vpn-request"),
+            ));
+            assert!(ProtectionJob::finish(&mut current, &ticket, Some(request)));
+            assert_eq!(result, Ok(()));
+            assert!(current.is_none());
+        }
+    }
+
     #[derive(Default)]
     struct Network {
         plan: Option<bool>,
         vpn: bool,
         pending: bool,
         queue_reconnect: bool,
+        rollback_deadline_ms: Option<u64>,
+        reconnect_claimed: bool,
+        reconnect_cleanup: bool,
         generation: u64,
         reservation: Option<String>,
         rollback_status: Value,
@@ -737,6 +1205,33 @@ mod tests {
         live_config: String,
         state: Option<Value>,
         cold: bool,
+    }
+
+    impl Network {
+        fn transition_pending(&self) -> bool {
+            self.pending || self.reconnect_cleanup
+        }
+
+        fn deliver_reconnect_consent(&mut self, request: &str, elapsed_ms: u64) {
+            if !self.pending || self.rollback_status["request"] != request {
+                return;
+            }
+            self.pending = false;
+            if !self.reconnect_claimed
+                && self
+                    .rollback_deadline_ms
+                    .is_some_and(|deadline| elapsed_ms >= deadline)
+            {
+                self.rollback_status["status"] = json!("failed");
+                self.rollback_status["error"] = json!("fixture VPN start timed out");
+                return;
+            }
+            self.vpn = true;
+            self.forwarding_held = true;
+            self.generation += 1;
+            self.rollback_status["status"] = json!("complete");
+            self.rollback_status["generation"] = json!(self.generation);
+        }
     }
 
     struct Host {
@@ -769,6 +1264,10 @@ mod tests {
             let operation = value["op"].as_str().unwrap();
             self.calls.lock().unwrap().push(value.clone());
             if self.failures.lock().unwrap().contains(&operation) {
+                if operation == "restore-vpn" {
+                    self.network.lock().unwrap().rollback_status =
+                        json!({"request":value["request"],"status":"failed"});
+                }
                 return clash_mobile_runtime::native_response(
                     json!({"error":format!("fixture {operation} failure")}),
                 );
@@ -780,7 +1279,8 @@ mod tests {
                         || json!({
                             "running":!network.cold, "vpn":network.vpn, "vpn_pending":network.pending,
                             "vpn_held":network.forwarding_held,
-                            "vpn_transition_pending":network.pending, "vpn_desired":network.plan,
+                            "vpn_transition_pending":network.transition_pending(),
+                            "vpn_desired":network.plan,
                             "vpn_rollback":network.rollback_status,"vpn_generation":network.generation,
                             "protection":{"enabled":network.guard,"snapshot":{"connected":network.guard,"error":""}}
                         }),
@@ -827,6 +1327,7 @@ mod tests {
                     let matches = value["config"] == network.live_config;
                     let vpn_matches = network.rollback_status["request"] == value["request"]
                         && network.rollback_status["status"] == "complete"
+                        && value["deadline_elapsed_ms"] == json!(network.rollback_deadline_ms)
                         && network.rollback_status["generation"] == value["generation"]
                         && value["generation"] == network.generation
                         && network.reservation.is_none()
@@ -840,6 +1341,27 @@ mod tests {
                     let guard_matches = value["protected"] == network.guard;
                     let clear_record = matches && vpn_matches && guard_matches;
                     if clear_record {
+                        let deadline = network.rollback_deadline_ms.unwrap();
+                        let now = if self
+                            .failures
+                            .lock()
+                            .unwrap()
+                            .contains(&"expire-at-finalization")
+                        {
+                            deadline
+                        } else {
+                            ProtectionDeadline::elapsed_ms()
+                        };
+                        ensure!(now < deadline, "fixture protection finalization timed out");
+                        if value["connected"] == true
+                            && self
+                                .failures
+                                .lock()
+                                .unwrap()
+                                .contains(&"start-tun-finalize")
+                        {
+                            anyhow::bail!("fixture TUN start failure");
+                        }
                         if value["connected"] == false && network.vpn {
                             if self
                                 .failures
@@ -884,6 +1406,40 @@ mod tests {
                 }
                 "protection-pause" => network.guard = false,
                 "hold-vpn-recovery" => network.forwarding_held = network.vpn,
+                "expire-vpn-start" => {
+                    let request = &value["request"];
+                    if self
+                        .failures
+                        .lock()
+                        .unwrap()
+                        .contains(&"expire-wrong-request")
+                    {
+                        return Ok(json!({"request":"unrelated","status":"idle"}));
+                    }
+                    if &network.rollback_status["request"] != request {
+                        let status =
+                            if network.transition_pending() || network.reservation.is_some() {
+                                "stale"
+                            } else {
+                                "idle"
+                            };
+                        return Ok(json!({"request":request,"status":status}));
+                    }
+                    let cancelled = network.pending && !network.reconnect_claimed;
+                    if cancelled {
+                        network.pending = false;
+                        network.rollback_status["status"] = json!("failed");
+                        network.rollback_status["error"] = json!("fixture VPN start timed out");
+                    }
+                    let status = if network.reconnect_cleanup || network.pending {
+                        "claimed"
+                    } else if cancelled {
+                        "cancelled"
+                    } else {
+                        "settled"
+                    };
+                    return Ok(json!({"request":request,"status":status}));
+                }
                 "restore-vpn" => {
                     ensure!(network.reservation.is_none(), "fixture reservation is busy");
                     let request = &value["request"];
@@ -892,9 +1448,23 @@ mod tests {
                             json!({"request":request,"generation":network.previous_generation}),
                         );
                     }
+                    ensure!(
+                        !network.transition_pending(),
+                        "fixture VPN transition is busy"
+                    );
+                    if self
+                        .failures
+                        .lock()
+                        .unwrap()
+                        .contains(&"restore-before-registration")
+                    {
+                        anyhow::bail!("fixture VPN start budget expired before registration");
+                    }
                     let previous = network.generation;
                     network.previous_generation = previous;
                     network.plan = value["desired"].as_bool();
+                    network.rollback_deadline_ms = value["deadline_elapsed_ms"].as_u64();
+                    network.reconnect_claimed = false;
                     if value["connected"] == true && network.queue_reconnect {
                         network.pending = true;
                         network.rollback_status = json!({"request":request,"status":"pending"});
@@ -970,6 +1540,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forward_dns_result_requires_an_unexpired_current_vpn() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        let deadline = ProtectionDeadline::after(RECOVERY_TIMEOUT);
+        let mut transition =
+            VpnTransition::apply(&session, VpnBaseline::target(true), deadline).unwrap();
+        session.observe_native().unwrap();
+        assert!(transition.accepts_dns_result(&session, &transition.request));
+        transition.deadline = ProtectionDeadline::after(Duration::ZERO);
+        assert!(!transition.accepts_dns_result(&session, &transition.request));
+        transition.deadline = deadline;
+
+        {
+            let mut network = host.network.lock().unwrap();
+            network.pending = true;
+            network.rollback_status["status"] = json!("failed");
+        }
+        session.observe_native().unwrap();
+        assert!(!transition.accepts_dns_result(&session, &transition.request));
+
+        host.network.lock().unwrap().pending = false;
+        let retry = VpnTransition::apply(&session, VpnBaseline::target(true), deadline).unwrap();
+        session.observe_native().unwrap();
+        assert!(!transition.accepts_dns_result(&session, &transition.request));
+        assert!(!retry.accepts_dns_result(&session, &transition.request));
+        assert!(retry.accepts_dns_result(&session, &retry.request));
+    }
+
+    #[tokio::test]
     async fn interrupted_protection_switch_is_recoverable_from_disk() {
         assert_recovery_after_process_death(
             false,
@@ -1024,7 +1624,12 @@ mod tests {
         session
             .commit_protection(protected.claude_protection, protected.run_mode)
             .unwrap();
-        VpnTransition::apply(&session, VpnBaseline::target(true)).unwrap();
+        VpnTransition::apply(
+            &session,
+            VpnBaseline::target(true),
+            ProtectionDeadline::after(RECOVERY_TIMEOUT),
+        )
+        .unwrap();
         assert_eq!(host.network.lock().unwrap().plan, Some(true));
         if config_already_restored {
             session.restore_protection(None, "global".into()).unwrap();
@@ -1232,7 +1837,12 @@ mod tests {
         recovery.begin(&session, baseline).unwrap();
         let path = root.path().join(RECOVERY_FILE);
         let record = fs::read(&path).unwrap();
-        let transition = VpnTransition::apply(&session, VpnBaseline::target(true)).unwrap();
+        let transition = VpnTransition::apply(
+            &session,
+            VpnBaseline::target(true),
+            ProtectionDeadline::after(RECOVERY_TIMEOUT),
+        )
+        .unwrap();
         session.observe_native().unwrap();
         *host.failures.lock().unwrap() = vec!["revoke-before-record-clear"];
         let error = recovery.finish(&session, &transition, true).unwrap_err();
@@ -1272,7 +1882,11 @@ mod tests {
         recovery.begin(session, VpnBaseline::capture(session).unwrap())?;
         assert!(recovery.is_applying());
         session.commit_protection(None, "global".into())?;
-        VpnTransition::apply(session, VpnBaseline::target(false))
+        VpnTransition::apply(
+            session,
+            VpnBaseline::target(false),
+            ProtectionDeadline::after(RECOVERY_TIMEOUT),
+        )
     }
 
     #[tokio::test]
@@ -1372,7 +1986,12 @@ mod tests {
             session
                 .commit_protection(Some(Arc::new(prepared)), "global".into())
                 .unwrap();
-            let enable = VpnTransition::apply(&session, VpnBaseline::target(true)).unwrap();
+            let enable = VpnTransition::apply(
+                &session,
+                VpnBaseline::target(true),
+                ProtectionDeadline::after(RECOVERY_TIMEOUT),
+            )
+            .unwrap();
             session.observe_native().unwrap();
             recovery.finish(&session, &enable, true).unwrap();
 
@@ -1390,7 +2009,12 @@ mod tests {
             session
                 .commit_protection(None, saved.previous.mode.clone())
                 .unwrap();
-            let disable = VpnTransition::apply(&session, target).unwrap();
+            let disable = VpnTransition::apply(
+                &session,
+                target,
+                ProtectionDeadline::after(RECOVERY_TIMEOUT),
+            )
+            .unwrap();
             session.observe_native().unwrap();
             recovery.finish(&session, &disable, false).unwrap();
             assert_eq!(host.network.lock().unwrap().plan, desired);
@@ -1516,27 +2140,166 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn losing_both_completion_and_receipt_replies_can_be_reconciled_on_retry() {
+    async fn losing_both_completion_and_receipt_replies_awaits_confirmation_after_reopen() {
         let root = tempfile::tempdir().unwrap();
         let host = Arc::new(Host::new(root.path()));
         let mut session = protected_session(root.path(), host.clone()).await;
+        host.network.lock().unwrap().vpn = true;
         session.observe_native().unwrap();
         let recovery = SavedProtectionRecovery::default();
-        let transition = recovery_begin_and_disable(&mut session, &recovery).unwrap();
+        recovery
+            .begin(&session, VpnBaseline::capture(&session).unwrap())
+            .unwrap();
+        session.commit_protection(None, "global".into()).unwrap();
+        let transition = recovery
+            .apply_vpn(
+                &session,
+                VpnBaseline::target(true),
+                ProtectionDeadline::after(RECOVERY_TIMEOUT),
+            )
+            .unwrap();
         session.observe_native().unwrap();
         *host.failures.lock().unwrap() = vec!["finish-reply", "receipt-reply"];
-        assert!(recovery.finish(&session, &transition, false).is_err());
+        assert!(!recovery.finish(&session, &transition, false).unwrap());
+        assert!(recovery.is_applying());
+        assert!(recovery.is_finalizing());
+        assert!(!root.path().join(RECOVERY_FILE).exists());
+        assert!(!host.network.lock().unwrap().forwarding_held);
         assert!(recovery.rollback(&mut session).is_err());
         assert!(!active_probe_allowed(false, &recovery));
-        host.failures.lock().unwrap().clear();
+        recovery.reopen(root.path(), Language::English);
+        assert!(recovery.last_error().is_none());
         host.take_operations();
-        assert_eq!(
-            recovery.retry(&mut session).unwrap(),
-            RetryOutcome::FinalizationConfirmed
-        );
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::Pending
+        ));
+        assert_eq!(host.take_operations(), ["protection-recovery-receipt"]);
+        host.failures.lock().unwrap().clear();
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::Restored
+        ));
         assert_eq!(host.take_operations(), ["protection-recovery-receipt"]);
         assert!(!recovery.is_active());
         assert!(session.settings.claude_protection.is_none());
+    }
+
+    #[tokio::test]
+    async fn deadline_contract_replays_the_same_absolute_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let session = protected_session(root.path(), host.clone()).await;
+        *host.failures.lock().unwrap() = vec!["restore-reply"];
+        host.take_operations();
+
+        VpnTransition::apply(
+            &session,
+            VpnBaseline::target(true),
+            ProtectionDeadline::after(RECOVERY_TIMEOUT),
+        )
+        .unwrap();
+
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["request"], calls[1]["request"]);
+        assert!(calls[0]["deadline_elapsed_ms"].as_u64().is_some());
+        assert_eq!(
+            calls[0]["deadline_elapsed_ms"],
+            calls[1]["deadline_elapsed_ms"]
+        );
+    }
+
+    #[tokio::test]
+    async fn deadline_contract_covers_disconnect_and_plan_only_requests() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let session = protected_session(root.path(), host.clone()).await;
+        host.take_operations();
+        let deadline = ProtectionDeadline::after(RECOVERY_TIMEOUT);
+        for live in [Some(false), None] {
+            VpnTransition::start(
+                &session,
+                live,
+                VpnBaseline::target(false),
+                deadline,
+                ProtectionDeadline::elapsed_ms,
+            )
+            .unwrap();
+        }
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0]["deadline_elapsed_ms"].as_u64().is_some());
+        assert_eq!(
+            calls[0]["deadline_elapsed_ms"],
+            calls[1]["deadline_elapsed_ms"]
+        );
+    }
+
+    #[tokio::test]
+    async fn deadline_contract_finalization_uses_the_registered_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        host.network.lock().unwrap().vpn = true;
+        session.observe_native().unwrap();
+        let recovery = SavedProtectionRecovery::default();
+        host.take_operations();
+        recovery
+            .begin(&session, VpnBaseline::capture(&session).unwrap())
+            .unwrap();
+        session.commit_protection(None, "global".into()).unwrap();
+        let transition = recovery
+            .apply_vpn(
+                &session,
+                VpnBaseline::target(true),
+                ProtectionDeadline::after(RECOVERY_TIMEOUT),
+            )
+            .unwrap();
+        session.observe_native().unwrap();
+        let path = root.path().join(RECOVERY_FILE);
+        let original_record = fs::read(&path).unwrap();
+        *host.failures.lock().unwrap() = vec!["expire-at-finalization"];
+        let error = recovery.finish(&session, &transition, false).unwrap_err();
+        assert!(format!("{error:#}").contains("finalization timed out"));
+        assert!(host.network.lock().unwrap().forwarding_held);
+        assert_eq!(fs::read(&path).unwrap(), original_record);
+
+        let calls = host.calls.lock().unwrap();
+        let restore = calls
+            .iter()
+            .find(|call| call["op"] == "restore-vpn")
+            .unwrap();
+        let finish = calls
+            .iter()
+            .find(|call| call["op"] == "finish-protection-recovery")
+            .unwrap();
+        assert!(finish["deadline_elapsed_ms"].as_u64().is_some());
+        assert_eq!(
+            finish["deadline_elapsed_ms"],
+            restore["deadline_elapsed_ms"]
+        );
+        drop(calls);
+
+        *host.failures.lock().unwrap() = vec!["start-tun-finalize", "receipt-reply"];
+        assert!(!recovery.finish(&session, &transition, false).unwrap());
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::Pending
+        ));
+        assert!(recovery.rollback(&mut session).is_err());
+        assert!(host.network.lock().unwrap().forwarding_held);
+        assert_eq!(fs::read(&path).unwrap(), original_record);
+
+        host.failures.lock().unwrap().clear();
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::Failed(error) if error.contains("fixture TUN start failure")
+        ));
+        assert!(recovery.is_applying());
+        assert!(!recovery.is_finalizing());
+        recovery.rollback(&mut session).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), original_record);
     }
 
     #[tokio::test]
@@ -1552,11 +2315,22 @@ mod tests {
             .unwrap();
         *host.failures.lock().unwrap() = vec!["restore-reply"];
         host.take_operations();
-        let transition = VpnTransition::apply(&session, VpnBaseline::target(true)).unwrap();
+        let transition = VpnTransition::apply(
+            &session,
+            VpnBaseline::target(true),
+            ProtectionDeadline::after(RECOVERY_TIMEOUT),
+        )
+        .unwrap();
         {
             let calls = host.calls.lock().unwrap();
             assert_eq!(calls.len(), 2);
-            assert_eq!(calls[0], calls[1]);
+            for field in ["op", "request", "connected", "desired"] {
+                assert_eq!(calls[0][field], calls[1][field]);
+            }
+            assert_eq!(
+                calls[0]["deadline_elapsed_ms"],
+                calls[1]["deadline_elapsed_ms"]
+            );
         }
         session.observe_native().unwrap();
         assert_eq!(session.platform["vpn_generation"], 1);
@@ -1688,6 +2462,496 @@ mod tests {
             RollbackProgress::Restored
         ));
         assert!(recovery.last_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn protection_disable_does_not_accept_consent_after_its_remaining_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        let recovery = SavedProtectionRecovery::default();
+        let mut saved = (**session.settings.claude_protection.as_ref().unwrap()).clone();
+        saved.previous.proxy_mode = ProxyMode::Tun;
+        session
+            .commit_protection(
+                Some(Arc::new(saved.clone())),
+                session.settings.run_mode.clone(),
+            )
+            .unwrap();
+        host.network.lock().unwrap().queue_reconnect = true;
+        session.observe_native().unwrap();
+        let before = VpnBaseline::capture(&session).unwrap();
+        recovery.begin(&session, before).unwrap();
+        session
+            .commit_protection(None, saved.previous.mode.clone())
+            .unwrap();
+
+        let deadline = ProtectionDeadline::after(Duration::from_secs(8));
+        let transition =
+            VpnTransition::apply(&session, VpnBaseline::target_for_disable(&saved), deadline)
+                .unwrap();
+        {
+            let mut network = host.network.lock().unwrap();
+            assert!(network.pending);
+            assert_eq!(network.rollback_deadline_ms, Some(deadline.0));
+            network.deliver_reconnect_consent(&transition.request, deadline.0);
+            assert!(!network.vpn, "Late consent established a VPN");
+            assert_eq!(network.generation, 0);
+        }
+        session.observe_native().unwrap();
+        assert!(matches!(
+            transition.poll(&session, false),
+            RollbackProgress::Failed(error) if error.contains("timed out")
+        ));
+        assert!(root.path().join(RECOVERY_FILE).is_file());
+        recovery.rollback(&mut session).unwrap();
+        session.observe_native().unwrap();
+        let progress = recovery.poll(Some(&session));
+        assert!(matches!(
+            recovery.verified(&session, progress.verification_request().unwrap(), Ok(())),
+            RollbackProgress::Restored
+        ));
+        assert_eq!(VpnBaseline::capture(&session), Some(before));
+    }
+
+    #[tokio::test]
+    async fn exhausted_protection_change_does_not_dispatch_vpn_transition() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let session = protected_session(root.path(), host.clone()).await;
+        host.take_operations();
+
+        let result = VpnTransition::apply(
+            &session,
+            VpnBaseline::target(true),
+            ProtectionDeadline::after(Duration::ZERO),
+        );
+
+        assert!(result.unwrap_err().to_string().contains("restore-vpn"));
+        assert!(host.take_operations().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lost_restore_reply_at_deadline_keeps_request_for_synchronous_expiry() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let session = protected_session(root.path(), host.clone()).await;
+        host.network.lock().unwrap().queue_reconnect = true;
+        *host.failures.lock().unwrap() = vec!["restore-reply"];
+        host.take_operations();
+        let deadline = ProtectionDeadline::after(Duration::from_secs(8));
+        let clock = || {
+            if host.calls.lock().unwrap().is_empty() {
+                deadline.0 - 8_000
+            } else {
+                deadline.0
+            }
+        };
+        let transition = VpnTransition::start(
+            &session,
+            Some(true),
+            VpnBaseline::target(true),
+            deadline,
+            clock,
+        )
+        .unwrap();
+        assert!(transition.needs_settlement());
+        assert!(matches!(
+            transition.resolve_start_timeout(&session),
+            VpnStartTimeout::Waiting
+        ));
+        {
+            let calls = host.calls.lock().unwrap();
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[0]["op"], "restore-vpn");
+            assert_eq!(calls[0]["deadline_elapsed_ms"], deadline.0);
+            assert_eq!(
+                calls[1],
+                json!({"op":"expire-vpn-start","request":transition.request})
+            );
+            assert_eq!(calls[0]["request"], calls[1]["request"]);
+        }
+        assert!(matches!(
+            transition.resolve_start_timeout(&session),
+            VpnStartTimeout::ReadyForRecovery
+        ));
+        assert!(!host.network.lock().unwrap().vpn);
+    }
+
+    #[tokio::test]
+    async fn expired_disable_cannot_commit_a_vpn_android_already_claimed() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        let recovery = SavedProtectionRecovery::default();
+        host.network.lock().unwrap().queue_reconnect = true;
+        session.observe_native().unwrap();
+        recovery
+            .begin(&session, VpnBaseline::capture(&session).unwrap())
+            .unwrap();
+        session.commit_protection(None, "global".into()).unwrap();
+        let mut transition = recovery
+            .apply_vpn(
+                &session,
+                VpnBaseline::target(true),
+                ProtectionDeadline::after(Duration::from_secs(30)),
+            )
+            .unwrap();
+        let original_deadline = transition.deadline;
+        transition.deadline = ProtectionDeadline::after(Duration::ZERO);
+        {
+            let mut network = host.network.lock().unwrap();
+            network.reconnect_claimed = true;
+            network.deliver_reconnect_consent(&transition.request, original_deadline.0);
+        }
+        session.observe_native().unwrap();
+        assert!(matches!(
+            transition.poll(&session, false),
+            RollbackProgress::VerifyProtection { .. }
+        ));
+        host.take_operations();
+        let error = recovery.finish(&session, &transition, false).unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(host.take_operations().is_empty());
+        assert!(root.path().join(RECOVERY_FILE).is_file());
+        assert!(matches!(
+            transition.resolve_start_timeout(&session),
+            VpnStartTimeout::ReadyForRecovery
+        ));
+    }
+
+    #[tokio::test]
+    async fn vpn_start_expiry_cancels_only_the_matching_unclaimed_request() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let session = protected_session(root.path(), host.clone()).await;
+        host.network.lock().unwrap().queue_reconnect = true;
+        let target = VpnBaseline::target(true);
+        let deadline = ProtectionDeadline::after(Duration::from_secs(30));
+        let old = VpnTransition::apply(&session, target, deadline).unwrap();
+
+        assert_eq!(
+            expire_vpn_start(&session, &old.request).unwrap(),
+            VpnStartExpiry::Cancelled
+        );
+        assert_eq!(
+            expire_vpn_start(&session, &old.request).unwrap(),
+            VpnStartExpiry::Settled
+        );
+        let next = VpnTransition::apply(&session, target, deadline).unwrap();
+        assert_ne!(next.request, old.request);
+        assert_eq!(
+            expire_vpn_start(&session, &old.request).unwrap(),
+            VpnStartExpiry::Stale
+        );
+        {
+            let mut network = host.network.lock().unwrap();
+            network.deliver_reconnect_consent(&old.request, 0);
+            assert!(network.pending);
+            assert_eq!(network.generation, 0);
+            network.reconnect_claimed = true;
+        }
+        assert_eq!(
+            expire_vpn_start(&session, &next.request).unwrap(),
+            VpnStartExpiry::Claimed
+        );
+        {
+            let mut network = host.network.lock().unwrap();
+            assert!(network.pending);
+            network.deliver_reconnect_consent(&next.request, 0);
+        }
+        assert_eq!(
+            expire_vpn_start(&session, &next.request).unwrap(),
+            VpnStartExpiry::Settled
+        );
+        assert_eq!(host.network.lock().unwrap().generation, 1);
+
+        *host.failures.lock().unwrap() = vec!["expire-wrong-request"];
+        assert!(expire_vpn_start(&session, &next.request).is_err());
+    }
+
+    #[tokio::test]
+    async fn rejected_restore_can_retry_after_atomic_idle() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        let recovery = SavedProtectionRecovery::default();
+        host.network.lock().unwrap().vpn = true;
+        session.observe_native().unwrap();
+        recovery
+            .begin(&session, VpnBaseline::capture(&session).unwrap())
+            .unwrap();
+
+        *host.failures.lock().unwrap() = vec!["restore-before-registration"];
+        host.take_operations();
+        let error = recovery.rollback(&mut session).unwrap_err();
+        assert!(format!("{error:#}").contains("before registration"));
+        let original_request = {
+            let calls = host.calls.lock().unwrap();
+            let attempts: Vec<_> = calls
+                .iter()
+                .filter(|call| call["op"] == "restore-vpn")
+                .collect();
+            assert_eq!(attempts.len(), 2);
+            assert_eq!(attempts[0]["request"], attempts[1]["request"]);
+            attempts[0]["request"].clone()
+        };
+        assert!(host.network.lock().unwrap().rollback_status.is_null());
+        host.failures.lock().unwrap().clear();
+        host.take_operations();
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::Failed(error) if error.contains("before registration")
+        ));
+        assert_eq!(
+            host.calls.lock().unwrap().as_slice(),
+            &[json!({"op":"expire-vpn-start","request":original_request})]
+        );
+        assert!(root.path().join(RECOVERY_FILE).is_file());
+        host.take_operations();
+
+        host.network.lock().unwrap().reconnect_cleanup = true;
+        assert!(recovery.retry(&mut session).is_err());
+        assert_eq!(host.take_operations(), ["state"]);
+        host.network.lock().unwrap().reconnect_cleanup = false;
+        assert_eq!(
+            recovery.retry(&mut session).unwrap(),
+            RetryOutcome::RollbackPending
+        );
+        assert_ne!(
+            host.network.lock().unwrap().rollback_status["request"],
+            original_request
+        );
+    }
+
+    #[tokio::test]
+    async fn recreated_protection_change_waits_for_atomic_idle_after_a_stale_request() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        let recovery = SavedProtectionRecovery::default();
+        host.network.lock().unwrap().queue_reconnect = true;
+        session.observe_native().unwrap();
+        recovery
+            .begin(&session, VpnBaseline::capture(&session).unwrap())
+            .unwrap();
+        session.commit_protection(None, "global".into()).unwrap();
+        let transition = recovery
+            .apply_vpn(
+                &session,
+                VpnBaseline::target(true),
+                ProtectionDeadline::after(Duration::from_secs(30)),
+            )
+            .unwrap();
+        *host.failures.lock().unwrap() = vec!["expire-vpn-start"];
+        assert!(matches!(
+            transition.resolve_start_timeout(&session),
+            VpnStartTimeout::Unconfirmed(_)
+        ));
+        recovery.reopen(root.path(), Language::English);
+        session = Session::open(root.path().into(), host.clone()).unwrap();
+        host.take_operations();
+        assert!(recovery.rollback(&mut session).is_err());
+        assert!(host.take_operations().is_empty());
+        assert!(recovery.retry(&mut session).is_err());
+        assert_eq!(host.take_operations(), ["expire-vpn-start"]);
+
+        host.failures.lock().unwrap().clear();
+        host.network.lock().unwrap().reconnect_claimed = true;
+        assert!(recovery.retry(&mut session).is_err());
+        assert_eq!(host.take_operations(), ["expire-vpn-start"]);
+        assert!(root.path().join(RECOVERY_FILE).is_file());
+
+        {
+            let mut network = host.network.lock().unwrap();
+            network.deliver_reconnect_consent(&transition.request, transition.deadline.0);
+            network.reconnect_cleanup = true;
+        }
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::WaitingForVpnSettlement(_)
+        ));
+        assert!(recovery.retry(&mut session).is_err());
+        assert_eq!(host.take_operations(), ["expire-vpn-start"; 2]);
+        {
+            let mut network = host.network.lock().unwrap();
+            network.rollback_status = json!({"request":"replacement","status":"complete"});
+        }
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::WaitingForVpnSettlement(error) if error.contains("stale")
+        ));
+        assert!(recovery.retry(&mut session).is_err());
+        assert_eq!(host.take_operations(), ["expire-vpn-start"; 2]);
+        {
+            let mut network = host.network.lock().unwrap();
+            network.reconnect_cleanup = false;
+            network.reservation = Some("another-recovery".into());
+        }
+        session.observe_native().unwrap();
+        assert_eq!(session.platform["vpn_transition_pending"], false);
+        assert!(recovery.retry(&mut session).is_err());
+        assert_eq!(host.take_operations(), ["state", "expire-vpn-start"]);
+        host.network.lock().unwrap().reservation = None;
+        *host.failures.lock().unwrap() = vec!["expire-wrong-request"];
+        assert!(recovery.retry(&mut session).is_err());
+        assert_eq!(host.take_operations(), ["expire-vpn-start"]);
+        host.failures.lock().unwrap().clear();
+        assert_eq!(
+            recovery.retry(&mut session).unwrap(),
+            RetryOutcome::RollbackPending
+        );
+        assert!(host.take_operations().iter().any(|op| op == "restore-vpn"));
+        assert_ne!(
+            host.network.lock().unwrap().rollback_status["request"],
+            transition.request
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_background_recovery_keeps_claim_until_the_service_settles() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        let recovery = SavedProtectionRecovery::default();
+        {
+            let mut network = host.network.lock().unwrap();
+            network.vpn = true;
+            network.queue_reconnect = true;
+        }
+        session.observe_native().unwrap();
+        recovery
+            .begin(&session, VpnBaseline::capture(&session).unwrap())
+            .unwrap();
+        recovery.rollback(&mut session).unwrap();
+        host.network.lock().unwrap().reconnect_cleanup = true;
+        assert_eq!(session.platform["vpn_transition_pending"], false);
+
+        let set_deadline = |value| {
+            let mut state = recovery.lock();
+            let RollbackPhase::Pending { transition } = &mut state.as_mut().unwrap().phase else {
+                panic!("expected a pending recovery");
+            };
+            transition.deadline = value;
+            transition.request.clone()
+        };
+        let request = set_deadline(ProtectionDeadline::after(Duration::ZERO));
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::WaitingForVpnSettlement(error) if error.contains("Timed out")
+        ));
+        {
+            let network = host.network.lock().unwrap();
+            assert_eq!(network.rollback_status["status"], "failed");
+            assert!(!network.pending && network.reconnect_cleanup);
+        }
+        host.take_operations();
+        assert_eq!(
+            recovery.retry(&mut session).unwrap(),
+            RetryOutcome::RollbackPending
+        );
+        assert!(host.take_operations().is_empty());
+        set_deadline(ProtectionDeadline(0));
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::WaitingForVpnSettlement(_)
+        ));
+        assert_eq!(host.take_operations(), ["expire-vpn-start"]);
+        assert_eq!(
+            recovery.retry(&mut session).unwrap(),
+            RetryOutcome::RollbackPending
+        );
+        assert!(host.take_operations().is_empty());
+        *host.failures.lock().unwrap() = vec!["expire-wrong-request"];
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::WaitingForVpnSettlement(error) if error.contains("Unexpected")
+        ));
+        assert_eq!(host.take_operations(), ["expire-vpn-start"]);
+        assert!(root.path().join(RECOVERY_FILE).is_file());
+
+        host.failures.lock().unwrap().clear();
+        host.network.lock().unwrap().reconnect_cleanup = false;
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::Failed(error) if error.contains("Timed out")
+        ));
+        assert_eq!(host.take_operations(), ["expire-vpn-start"]);
+        assert_eq!(
+            recovery.retry(&mut session).unwrap(),
+            RetryOutcome::RollbackPending
+        );
+        assert!(host.take_operations().iter().any(|op| op == "restore-vpn"));
+        assert_ne!(
+            host.network.lock().unwrap().rollback_status["request"],
+            request
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_recovery_retries_with_a_new_request_and_full_start_timeout() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::new(root.path()));
+        let mut session = protected_session(root.path(), host.clone()).await;
+        let recovery = SavedProtectionRecovery::default();
+        {
+            let mut network = host.network.lock().unwrap();
+            network.vpn = true;
+            network.generation = 4;
+            network.queue_reconnect = true;
+        }
+        let (_, baseline) = recovery.observe_snapshot(&mut session).unwrap().unwrap();
+        recovery.begin(&session, baseline).unwrap();
+        let before_first = ProtectionDeadline::elapsed_ms();
+        recovery.rollback(&mut session).unwrap();
+        {
+            let mut state = recovery.lock();
+            let RollbackPhase::Pending { transition } = &mut state.as_mut().unwrap().phase else {
+                panic!("expected a pending recovery");
+            };
+            transition.deadline = ProtectionDeadline::after(Duration::ZERO);
+        }
+        assert!(matches!(
+            recovery.poll(None),
+            RollbackProgress::WaitingForVpnSettlement(error) if error.contains("Timed out")
+        ));
+        assert!(root.path().join(RECOVERY_FILE).is_file());
+        host.network.lock().unwrap().reconnect_claimed = true;
+        assert_eq!(
+            recovery.retry(&mut session).unwrap(),
+            RetryOutcome::RollbackPending
+        );
+        {
+            let mut network = host.network.lock().unwrap();
+            assert!(network.vpn && network.forwarding_held);
+            assert_eq!(network.generation, 4);
+            network.pending = false;
+            network.rollback_status["status"] = json!("failed");
+        }
+        assert!(matches!(
+            recovery.poll(Some(&session)),
+            RollbackProgress::Failed(error) if error.contains("Timed out")
+        ));
+        let before_retry = ProtectionDeadline::elapsed_ms();
+        assert_eq!(
+            recovery.retry(&mut session).unwrap(),
+            RetryOutcome::RollbackPending
+        );
+        let calls = host.calls.lock().unwrap();
+        let attempts: Vec<_> = calls
+            .iter()
+            .filter(|call| call["op"] == "restore-vpn")
+            .collect();
+        assert_eq!(attempts.len(), 2);
+        assert_ne!(attempts[0]["request"], attempts[1]["request"]);
+        for (attempt, before) in attempts.into_iter().zip([before_first, before_retry]) {
+            let deadline = attempt["deadline_elapsed_ms"].as_u64().unwrap();
+            assert!(
+                (before + 120_000..=ProtectionDeadline::elapsed_ms() + 120_000).contains(&deadline)
+            );
+            assert_eq!(attempt["connected"], true);
+            assert_eq!(attempt["desired"], json!(baseline.desired));
+        }
     }
 
     #[tokio::test]
@@ -2195,6 +3459,7 @@ mod tests {
             assert_eq!(
                 host.take_operations(),
                 [
+                    "expire-vpn-start",
                     "state",
                     "hold-vpn-recovery",
                     "reload",
@@ -2210,6 +3475,7 @@ mod tests {
             assert_eq!(
                 host.take_operations(),
                 [
+                    "expire-vpn-start",
                     "state",
                     "hold-vpn-recovery",
                     "reload",
@@ -2251,7 +3517,8 @@ mod tests {
                 desired: None,
             },
         };
-        let error = rollback_network(&mut session, &record, false).unwrap_err();
+        let (_, error) = rollback_network(&mut session, &record, false).unwrap();
+        let error = error.unwrap();
         assert!(format!("{error:#}").contains("Core is not running"));
         assert_eq!(host.take_operations(), ["restore-vpn"]);
         assert_eq!(std::fs::read(&path).unwrap(), original);

@@ -551,25 +551,54 @@ fn slim(connections: &mut [Connection]) {
     }
 }
 
+fn named_log_level(level: &str) -> Option<&'static str> {
+    match level {
+        "error" | "fatal" | "panic" => Some("error"),
+        "warn" | "warning" => Some("warning"),
+        "info" | "trace" => Some("info"),
+        "debug" => Some("debug"),
+        _ => None,
+    }
+}
+
+fn source_log_level(line: &str) -> Option<&'static str> {
+    if let Some((tag, _)) = line.strip_prefix('[').and_then(|line| line.split_once(']')) {
+        return named_log_level(tag);
+    }
+    if line.starts_with('{') {
+        let record: Value = serde_json::from_str(line).ok()?;
+        return ["type", "level"]
+            .into_iter()
+            .filter_map(|field| record[field].as_str())
+            .find_map(named_log_level);
+    }
+    if line.starts_with("time=") || line.starts_with("level=") {
+        return line
+            .split_ascii_whitespace()
+            .take_while(|field| !field.starts_with("msg="))
+            .filter_map(|field| field.strip_prefix("level="))
+            .find_map(|level| named_log_level(level.trim_matches('"')));
+    }
+    None
+}
+
 fn log_level(line: &str) -> &'static str {
     let lower = line.to_lowercase();
-    if lower.starts_with("[error]")
-        || lower.contains("level=error")
+    let core = lower.strip_prefix("[内核] ");
+    if core.is_some_and(|line| line.starts_with("[客户端] ")) {
+        return "info";
+    }
+    if let Some(level) = source_log_level(core.unwrap_or(&lower)) {
+        return level;
+    }
+    if lower.contains("level=error")
         || lower.contains("\"type\":\"error\"")
         || lower.contains("失败")
     {
         "error"
-    } else if lower.starts_with("[warning]")
-        || lower.starts_with("[warn]")
-        || lower.contains("level=warning")
-        || lower.contains("level=warn")
-        || lower.contains("\"type\":\"warning\"")
-    {
+    } else if lower.contains("level=warn") || lower.contains("\"type\":\"warning\"") {
         "warning"
-    } else if lower.starts_with("[debug]")
-        || lower.contains("level=debug")
-        || lower.contains("\"type\":\"debug\"")
-    {
+    } else if lower.contains("level=debug") || lower.contains("\"type\":\"debug\"") {
         "debug"
     } else {
         "info"
@@ -639,8 +668,14 @@ async fn logs(args: &Args) -> Result<()> {
         };
         for line in &lines[start..] {
             let detected = log_level(line);
+            let displayed = if output::writes_json(args) {
+                std::borrow::Cow::Borrowed(line.as_str())
+            } else {
+                clash_client_core::runtime::logging::display(line, args.language())
+            };
             if level.is_some_and(|level| level != detected)
-                || !line.to_lowercase().contains(&filter)
+                || !(line.to_lowercase().contains(&filter)
+                    || displayed.to_lowercase().contains(&filter))
             {
                 continue;
             }
@@ -649,7 +684,7 @@ async fn logs(args: &Args) -> Result<()> {
                 if args.flag("json") || args.flag("jsonl") {
                     json!({"level":detected,"message":line})
                 } else {
-                    json!(line)
+                    json!(displayed)
                 },
             )?;
             if detected == "error" {
@@ -1046,6 +1081,47 @@ impl Drop for AuditScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_levels_prefer_structured_source_over_message_text() {
+        for (line, expected) in [
+            ("[WARN] 连接失败 level=error", "warning"),
+            ("[info] 连接失败 level=error", "info"),
+            ("[debug] 连接失败", "debug"),
+            ("[trace] 连接失败", "info"),
+            ("[fatal] connection terminated", "error"),
+            ("[内核] [warning] 连接失败", "warning"),
+            ("[info] [客户端] 操作失败：level=error", "info"),
+            (
+                r#"[内核] time="2026-11-22T01:02:03Z" level=warning msg="连接失败 level=error""#,
+                "warning",
+            ),
+            (r#"level="info" msg="连接失败 level=error""#, "info"),
+            (
+                r#"{"type": "warning", "payload":"连接失败 level=error"}"#,
+                "warning",
+            ),
+            (r#"{"level":"info","msg":"连接失败 level=error"}"#, "info"),
+        ] {
+            assert_eq!(log_level(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn log_levels_keep_legacy_fallbacks_and_treat_guarded_client_prefix_as_core_text() {
+        for (line, expected) in [
+            ("[内核] [客户端] 操作失败：level=error", "info"),
+            ("[客户端] 操作失败：原始详情", "error"),
+            ("未知格式：订阅失败", "error"),
+            ("legacy source LEVEL=error", "error"),
+            ("legacy source level=warning", "warning"),
+            (r#"legacy source "type":"debug""#, "debug"),
+            ("[vendor] other text", "info"),
+        ] {
+            assert_eq!(log_level(line), expected, "{line}");
+        }
+    }
+
     #[test]
     fn connection_json_does_not_report_an_original_domain_as_a_sniffed_result() {
         let mut connection = Connection::default();

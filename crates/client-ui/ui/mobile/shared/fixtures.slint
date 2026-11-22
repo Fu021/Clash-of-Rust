@@ -128,10 +128,10 @@ export component MobileFixture inherits Rectangle {
             {id: "4", position: "4", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", enabled: true, raw: "MATCH,Proxy"}
         ];
         MobileData.logs = [
-            {time: "10:30:00", level: "INFO", message: "mihomo 已启动，控制接口可用，VPN 会话已建立。", tone: 4},
-            {time: "10:31:20", level: "INFO", message: "[TCP] 198.18.0.1:53218 → api.github.com:443 match DomainSuffix(github.com) using Proxy[德国 01 · IPv6]", tone: 4},
-            {time: "10:31:24", level: "WARN", message: "[DNS] query example.invalid: temporary failure; retrying with the configured resolver. 演示长日志，可点击查看并复制全文。", tone: 2},
-            {time: "10:31:28", level: "DEBUG", message: "配置已更新，规则与 DNS 覆盖已生效。", tone: 4}
+            {time: "10:30:00", level: "INFO", message: "mihomo 已启动，控制接口可用，VPN 会话已建立。", original: "", tone: 4},
+            {time: "10:31:20", level: "INFO", message: "[TCP] 198.18.0.1:53218 → api.github.com:443 match DomainSuffix(github.com) using Proxy[德国 01 · IPv6]", original: "", tone: 4},
+            {time: "10:31:24", level: "WARN", message: "[DNS] query example.invalid: temporary failure; retrying with the configured resolver. 演示长日志，可点击查看并复制全文。", original: "", tone: 2},
+            {time: "10:31:28", level: "DEBUG", message: "配置已更新，规则与 DNS 覆盖已生效。", original: "", tone: 4}
         ];
         MobileData.site-progress = "完成 182 / 182";
         MobileData.exit-ip = "203.0.113.42"; MobileData.exit-country = "香港";

@@ -53,6 +53,7 @@ import platform
 import sys
 import urllib.error
 import urllib.parse
+import urllib.request
 import zipfile
 import tarfile
 from contextlib import contextmanager, nullcontext
@@ -148,6 +149,75 @@ class TunDnsFixtureTests(unittest.TestCase):
     def query(self, name, kind):
         labels = b''.join(bytes([len(label)]) + label.encode('ascii') for label in name.split('.'))
         return struct.pack('!HHHHHH', 1, 0x0100, 1, 0, 0, 0) + labels + b'\0' + struct.pack('!HH', kind, 1)
+
+    def test_subscription_failure_output_keeps_error_and_redacts_private_details(self):
+        secret = 'test-controller-secret'
+        directory = Path('/tmp/private-test-directory')
+        url = 'https://fixture.test/secret-path?query=secret-value#fragment'
+        output = json.dumps({'data': [{
+            'id': 'direct-fallback', 'name': 'fixture', 'updated': False,
+            'error': f'download failed: {url}; {secret}; {directory}/data',
+            'extra': 'discard-this-field',
+        }]})
+        detail = linux_tun_test.subscription_update_stdout(output, secret, directory)
+        row = json.loads(detail)[0]
+        self.assertEqual(row['id'], 'direct-fallback')
+        self.assertFalse(row['updated'])
+        self.assertIn('download failed', row['error'])
+        for private in (secret, str(directory), url, 'secret-value', 'discard-this-field'):
+            self.assertNotIn(private, detail)
+        self.assertEqual(linux_tun_test.subscription_update_stdout('', secret, directory), '[empty]')
+        self.assertIn('omitted', linux_tun_test.subscription_update_stdout('{', secret, directory))
+        oversized = json.dumps({'data': [{'error': 'x'*5000}]})
+        self.assertEqual(len(linux_tun_test.subscription_update_stdout(oversized, secret, directory)), 4096)
+
+    def test_subscription_dns_events_keep_only_a_bounded_timeline(self):
+        from collections import deque
+
+        with patch.object(tun_dns_fixture, 'SUBSCRIPTION_EVENTS', deque(maxlen=128)), \
+                patch.dict(tun_dns_fixture.METRICS, tun_dns_fixture.METRICS.copy()):
+            for kind, bootstrap in ((1, True), (1, False), (28, False)):
+                answer = tun_dns_fixture.dns_response(self.query('updates.fixture.test', kind), bootstrap)
+                tun_dns_fixture.record_update_dns(
+                    'updates.fixture.test', kind, 'bootstrap' if bootstrap else 'direct', answer)
+            events = list(tun_dns_fixture.SUBSCRIPTION_EVENTS)
+            self.assertEqual([(event['qtype'], event['answers']) for event in events],
+                             [('A', 0), ('A', 1), ('AAAA', 1)])
+            self.assertEqual([event['monotonic_ns'] for event in events],
+                             sorted(event['monotonic_ns'] for event in events))
+            for index in range(130):
+                tun_dns_fixture.record_subscription_event('sample', index=index)
+            self.assertEqual(len(tun_dns_fixture.SUBSCRIPTION_EVENTS), 128)
+            self.assertEqual(tun_dns_fixture.SUBSCRIPTION_EVENTS[0]['index'], 2)
+
+    def test_subscription_http_events_record_completed_and_interrupted_responses(self):
+        import asyncio
+        from collections import deque
+        from unittest.mock import AsyncMock
+
+        async def request(path, failure=None):
+            reader = MagicMock()
+            reader.readuntil = AsyncMock(return_value=f'GET {path} HTTP/1.1\r\n\r\n'.encode())
+            writer = MagicMock()
+            writer.get_extra_info.side_effect = lambda name: (
+                ('192.0.2.254', 80) if name == 'sockname' else ('192.0.2.1', 12345))
+            writer.drain = AsyncMock(side_effect=failure)
+            await tun_dns_fixture.http(reader, writer)
+            writer.close.assert_called_once()
+            return writer.write.call_args.args[0]
+
+        with patch.object(tun_dns_fixture, 'SUBSCRIPTION_EVENTS', deque(maxlen=128)), \
+                patch.dict(tun_dns_fixture.SUBSCRIPTION_REQUESTS, started=0, drained=0, incomplete=0):
+            asyncio.run(request('/subscription.yaml'))
+            asyncio.run(request('/subscription.yaml', OSError('fixture disconnect')))
+            response = asyncio.run(request('/diagnostics'))
+            report = json.loads(response.split(b'\r\n\r\n', 1)[1])
+        self.assertEqual(report['subscription_requests'], {'started': 2, 'drained': 1, 'incomplete': 1})
+        events = report['events']
+        self.assertEqual([(event['event'], event['request_id']) for event in events],
+                         [('http_start', 1), ('http_finish', 1), ('http_start', 2), ('http_finish', 2)])
+        self.assertEqual(events[1]['body_bytes'], 36)
+        self.assertIsNone(events[3]['body_bytes'])
 
     def test_update_addresses_stay_outside_tun_traffic_targets(self):
         import ipaddress
@@ -1997,14 +2067,14 @@ class BuildTests(unittest.TestCase):
         reservations = [MagicMock(), MagicMock()]
         for reservation in reservations:
             reservation.__enter__.return_value = reservation
-        reservations[0].getsockname.return_value = ('127.0.0.1', 54048)
+        reservations[1].getsockname.return_value = ('127.0.0.1', 54048)
         with patch.object(windows_update_tests, 'os', SimpleNamespace(name='nt')), \
                 patch.object(socket, 'SO_EXCLUSIVEADDRUSE', 0x101, create=True), \
                 patch.object(socket, 'socket', side_effect=reservations):
             with windows_update_tests.reserve_mixed_port() as port:
                 self.assertEqual(port, 54048)
                 for reservation, address in zip(
-                        reservations, (('127.0.0.1', 0), ('127.0.0.1', 54048))):
+                        reservations, (('127.0.0.1', 54048), ('127.0.0.1', 0))):
                     option = call.setsockopt(socket.SOL_SOCKET, 0x101, 1)
                     self.assertLess(reservation.mock_calls.index(option),
                                     reservation.mock_calls.index(call.bind(address)))
@@ -2028,8 +2098,76 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(server.allow_reuse_address)
         self.assertFalse(server.allow_reuse_port)
 
+    def test_windows_loopback_port_owners_reads_both_native_tables(self):
+        import ctypes
+
+        port = 42122
+        loopback = socket.inet_aton('127.0.0.1')
+        wildcard = socket.inet_aton('0.0.0.0')
+        port_field = struct.pack('!H2s', port, b'\x99\x99')
+        tcp_rows = (struct.pack('=I4s4sIII', 2, loopback, port_field, 0, 0, 123),
+                    struct.pack('=I4s4sIII', 2, wildcard, port_field, 0, 0, 456))
+        udp_rows = (struct.pack('=4s4sI', loopback, port_field, 123),
+                    struct.pack('=4s4sI', loopback, port_field, 456),
+                    struct.pack('=4s4sI', loopback, struct.pack('!HH', port + 1, 0), 789))
+
+        def native_table(rows, table_class, grows=False):
+            payload = struct.pack('=I', len(rows)) + b''.join(rows)
+
+            def query(buffer, size, order, family, requested_class, reserved):
+                self.assertEqual((order, family, requested_class, reserved),
+                                 (False, socket.AF_INET, table_class, 0))
+                size = ctypes.cast(size, ctypes.POINTER(ctypes.c_uint32))
+                if buffer is None:
+                    size[0] = 4 if grows else len(payload)
+                    return 122
+                if size[0] < len(payload):
+                    size[0] = len(payload)
+                    return 122
+                ctypes.memmove(buffer, payload, len(payload))
+                return 0
+
+            return MagicMock(side_effect=query)
+
+        tcp_table = native_table(tcp_rows, 3, grows=True)
+        udp_table = native_table(udp_rows, 1)
+        api = SimpleNamespace(GetExtendedTcpTable=tcp_table, GetExtendedUdpTable=udp_table)
+        with patch.object(ctypes, 'WinDLL', return_value=api, create=True) as load:
+            self.assertEqual(windows_update_tests.windows_loopback_port_owners(port),
+                             {'TCP': {123}, 'UDP': {123, 456}})
+        load.assert_called_once_with('iphlpapi')
+        self.assertEqual(tcp_table.call_count, 3)
+        self.assertEqual(udp_table.call_count, 2)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows IP Helper tables')
+    def test_windows_loopback_port_owners_reads_real_tcp_listener_and_udp_endpoint(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            for endpoint in (tcp, udp):
+                endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                endpoint.bind(('127.0.0.1', 0))
+            tcp.listen()
+            for protocol, endpoint in (('TCP', tcp), ('UDP', udp)):
+                owners = windows_update_tests.windows_loopback_port_owners(endpoint.getsockname()[1])
+                self.assertEqual(owners[protocol], {os.getpid()})
+
+    def test_windows_independent_proxy_rejects_missing_or_foreign_listener(self):
+        process = SimpleNamespace(pid=123, poll=lambda: None)
+        for tcp, udp in (({456}, {123}), ({123}, set()), ({123}, {456}), ({123}, {123, 456})):
+            with self.subTest(tcp=tcp, udp=udp), \
+                    patch.object(windows_update_tests, 'windows_loopback_port_owners',
+                                 return_value={'TCP': tcp, 'UDP': udp}) as owners, \
+                    patch.object(windows_update_tests, 'HTTPConnection') as connect:
+                with self.assertRaisesRegex(windows_update_tests.IndependentCoreNotReady,
+                                            'PID 123 does not own both listeners') as raised:
+                    windows_update_tests.probe_independent_core(process, 42122, None)
+                self.assertIn(f'TCP owner PIDs={sorted(tcp)}', str(raised.exception))
+                self.assertIn(f'UDP owner PIDs={sorted(udp)}', str(raised.exception))
+                owners.assert_called_once_with(42122)
+                connect.assert_not_called()
+
     def test_windows_independent_proxy_rejects_wrong_payload_status_and_origin(self):
-        process = SimpleNamespace(poll=lambda: None)
+        process = SimpleNamespace(pid=123, poll=lambda: None)
         server = SimpleNamespace(server_port=42121, fixture_id='expected-fixture',
                                  last_path='/small')
         for status, body, identity, passed in (
@@ -2044,7 +2182,9 @@ class BuildTests(unittest.TestCase):
                 response.getheader.return_value = identity
                 connection = MagicMock()
                 connection.getresponse.return_value = response
-                with patch.object(windows_update_tests, 'HTTPConnection',
+                with patch.object(windows_update_tests, 'windows_loopback_port_owners',
+                                  return_value={'TCP': {123}, 'UDP': {123}}), \
+                        patch.object(windows_update_tests, 'HTTPConnection',
                                   return_value=connection):
                     if passed:
                         digest = windows_update_tests.probe_independent_core(
@@ -2087,7 +2227,7 @@ class BuildTests(unittest.TestCase):
             context.__exit__.assert_called_once()
 
     def test_windows_independent_only_unmarked_empty_502_without_origin_is_not_ready(self):
-        process = SimpleNamespace(poll=lambda: None)
+        process = SimpleNamespace(pid=123, poll=lambda: None)
         for status, body, identity, last_path, expected in (
                 (502, b'', None, None, windows_update_tests.IndependentCoreNotReady),
                 (502, b'', 'expected-fixture', None, AssertionError),
@@ -2105,7 +2245,9 @@ class BuildTests(unittest.TestCase):
                 response.getheader.return_value = identity
                 connection = MagicMock()
                 connection.getresponse.return_value = response
-                with patch.object(windows_update_tests, 'HTTPConnection', return_value=connection):
+                with patch.object(windows_update_tests, 'windows_loopback_port_owners',
+                                  return_value={'TCP': {123}, 'UDP': {123}}), \
+                        patch.object(windows_update_tests, 'HTTPConnection', return_value=connection):
                     with self.assertRaises(expected):
                         windows_update_tests.probe_independent_core(process, 42122, server)
                 connection.close.assert_called_once()
@@ -2202,18 +2344,21 @@ class BuildTests(unittest.TestCase):
                 if outcome in ('config-fails', 'worker-fails'):
                     launch.assert_not_called()
 
-    def test_windows_mixed_port_retries_udp_failure_and_reserves_both_protocols(self):
+    def test_windows_mixed_port_retries_conflicts_and_reserves_both_protocols(self):
         sockets = [MagicMock() for index in range(4)]
         for reservation in sockets:
             reservation.__enter__.return_value = reservation
-        sockets[0].getsockname.return_value = ('127.0.0.1', 53047)
-        sockets[1].bind.side_effect = PermissionError('UDP port excluded')
-        sockets[2].getsockname.return_value = ('127.0.0.1', 54048)
-        with patch.object(windows_update_tests.socket, 'socket', side_effect=sockets) as create:
+        sockets[1].getsockname.return_value = ('127.0.0.1', 53047)
+        sockets[0].bind.side_effect = PermissionError('TCP port excluded')
+        sockets[3].getsockname.return_value = ('127.0.0.1', 54048)
+        with patch.object(windows_update_tests.random, 'sample', return_value=[54048]), \
+                patch.object(windows_update_tests.socket, 'socket', side_effect=sockets) as create:
             with windows_update_tests.reserve_mixed_port() as port:
                 self.assertEqual(port, 54048)
-                sockets[1].bind.assert_called_once_with(('127.0.0.1', 53047))
+                sockets[1].bind.assert_called_once_with(('127.0.0.1', 0))
+                sockets[0].bind.assert_called_once_with(('127.0.0.1', 53047))
                 sockets[3].bind.assert_called_once_with(('127.0.0.1', 54048))
+                sockets[2].bind.assert_called_once_with(('127.0.0.1', 54048))
                 for reservation in sockets[:2]:
                     reservation.__exit__.assert_called_once()
                 for reservation in sockets[2:]:
@@ -2225,30 +2370,60 @@ class BuildTests(unittest.TestCase):
         for reservation in sockets:
             reservation.__exit__.assert_called_once()
 
+    def test_windows_mixed_port_retries_more_than_thirty_two_udp_exclusions(self):
+        reservations = [MagicMock() for index in range(68)]
+        for reservation in reservations:
+            reservation.__enter__.return_value = reservation
+        reservations[1].getsockname.return_value = ('127.0.0.1', 53047)
+        reservations[0].bind.side_effect = PermissionError('TCP port excluded')
+        for udp in reservations[3:-1:2]:
+            udp.bind.side_effect = PermissionError('UDP port excluded')
+        reservations[-1].getsockname.return_value = ('127.0.0.1', 12032)
+        with patch.object(windows_update_tests.random, 'sample',
+                          return_value=list(range(12000, 12033))), \
+                patch.object(windows_update_tests.socket, 'socket', side_effect=reservations):
+            with windows_update_tests.reserve_mixed_port() as port:
+                self.assertEqual(port, 12032)
+                reservations[-2].bind.assert_called_once_with(('127.0.0.1', 12032))
+                reservations[-1].bind.assert_called_once_with(('127.0.0.1', 12032))
+        for reservation in reservations:
+            reservation.__exit__.assert_called_once()
+
+    def test_windows_mixed_port_reserves_and_releases_both_real_protocols(self):
+        with windows_update_tests.reserve_mixed_port() as port:
+            for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+                with self.subTest(kind=kind), socket.socket(socket.AF_INET, kind) as competing:
+                    with self.assertRaises(OSError):
+                        competing.bind(('127.0.0.1', port))
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            tcp.bind(('127.0.0.1', port))
+            udp.bind(('127.0.0.1', port))
+
     def test_windows_mixed_port_exhaustion_is_bounded_and_closes_sockets(self):
         tcp = MagicMock()
         udp = MagicMock()
         for reservation in (tcp, udp):
             reservation.__enter__.return_value = reservation
-        tcp.getsockname.return_value = ('127.0.0.1', 53047)
         failure = PermissionError('UDP port excluded')
         udp.bind.side_effect = failure
-        with patch.object(windows_update_tests.socket, 'socket',
-                          side_effect=[tcp, udp] * 32) as create:
+        with patch.object(windows_update_tests.random, 'sample', return_value=[12000, 12001]), \
+                patch.object(windows_update_tests.socket, 'socket',
+                             side_effect=[tcp, udp] * 3) as create:
             with self.assertRaisesRegex(OSError, 'No available TCP/UDP port') as raised:
                 with windows_update_tests.reserve_mixed_port():
                     self.fail('Excluded port was accepted')
         self.assertIs(raised.exception.__cause__, failure)
-        self.assertEqual(create.call_count, 64)
-        self.assertEqual(tcp.__exit__.call_count, 32)
-        self.assertEqual(udp.__exit__.call_count, 32)
+        self.assertEqual(create.call_count, 6)
+        self.assertEqual(tcp.__exit__.call_count, 3)
+        self.assertEqual(udp.__exit__.call_count, 3)
 
     def test_windows_mixed_port_does_not_retry_errors_from_consumer(self):
         tcp = MagicMock()
         udp = MagicMock()
         for reservation in (tcp, udp):
             reservation.__enter__.return_value = reservation
-        tcp.getsockname.return_value = ('127.0.0.1', 54048)
+        udp.getsockname.return_value = ('127.0.0.1', 54048)
         with patch.object(windows_update_tests.socket, 'socket',
                           side_effect=[tcp, udp]) as create:
             with self.assertRaisesRegex(OSError, 'HTTP fixture failed'):
@@ -2550,6 +2725,7 @@ class BuildTests(unittest.TestCase):
                          'crates/client-core/src/connection/mod.rs',
                          'crates/client-core/src/controller/mod.rs',
                          'crates/client-core/src/dns.rs',
+                         'crates/client-core/src/runtime/logging.rs',
                          'crates/client-runtime/src/platform/linux/startup.rs',
                          'crates/client-runtime/src/platform/network/mod.rs',
                          'crates/client-runtime/src/control/network.rs',
@@ -2571,6 +2747,7 @@ class BuildTests(unittest.TestCase):
                          'crates/client-core/src/detection/tools/transport.rs',
                          'crates/client-core/src/detection/tools/tests.rs',
                          'crates/client-core/src/detection/probe.rs',
+                         'crates/client-core/src/runtime/logging.rs',
                          'crates/client-core/src/application_rules/groups.rs',
                          'Cargo.toml',
                          'Cargo.lock',
@@ -3100,6 +3277,12 @@ class BuildTests(unittest.TestCase):
                 'application::ui_tests::english_sample_actions_fit_and_dispatch_in_a_scaled_dialog',
                 'application::ui_tests::english_desktop_validation_and_errors_follow_language',
                 'application::ui_tests::english_shared_errors_are_projected_without_changing_drafts_or_evidence',
+                'application::ui_tests::unreachable_recheck_notice_tracks_language_without_changing_the_recorded_result',
+                'application::ui_tests::unreachable_notice_and_recheck_failure_follow_language',
+                'application::ui_tests::client_log_rows_follow_language_and_search_without_changing_source_logs',
+                'application::ui_tests::open_client_log_detail_tracks_language_and_keeps_its_original_record',
+                'application::ui_tests::log_row_actions_reject_a_different_record_after_language_refresh',
+                'application::ui_tests::copy_feedback_waits_for_matching_native_ack_and_resets_without_resizing',
                 'application::ui_tests::geo_failure_follows_the_current_language_and_keeps_external_details',
                 'application::ui_tests::profile_edit_closes_on_success_independently_of_presentation_language',
                 'application::ui_tests::english_desktop_dialogs_show_edit_validation_and_protection_effects',
@@ -6883,6 +7066,11 @@ runpy.run_path(str(script), run_name='__main__')
                 with self.assertRaisesRegex(RuntimeError, 'current API 36 cor-ci emulator launch'):
                     android_build.protection_death_device(device, launch_identity=identity)
                 probe.assert_called_once_with(device + ['emu', 'avd', 'path'], text=True, timeout=15)
+            with patch.object(android_build.subprocess, 'check_output') as probe:
+                with self.assertRaisesRegex(RuntimeError, 'emulator path changed'):
+                    android_build.protection_death_device(
+                        device, launch_identity=identity, expected_path=avd_path.parent/'other.avd')
+                probe.assert_not_called()
 
     def test_android_protection_death_rejects_symlinks_at_each_avd_path_component(self):
         components = ('runner', 'cor-emulator', '.android', 'avd', 'cor-ci.avd')
@@ -6980,6 +7168,8 @@ runpy.run_path(str(script), run_name='__main__')
                     'INSTRUMENTATION_CODE: 0\n')
         recovered = (f'INSTRUMENTATION_STATUS: cor_death_observed={token}:101:202\n'
                      'INSTRUMENTATION_STATUS_CODE: 2\n'
+                     f'INSTRUMENTATION_STATUS: cor_death_tun={token}:202\n'
+                     'INSTRUMENTATION_STATUS_CODE: 2\n'
                      'INSTRUMENTATION_STATUS_CODE: 0\n'
                      'INSTRUMENTATION_RESULT: stream=\n'
                      'OK (1 test)\n'
@@ -6994,13 +7184,25 @@ runpy.run_path(str(script), run_name='__main__')
                 ('same-pid', 'different process'),
                 ('missing-exit-evidence', 'did not verify both'),
                 ('missing-test-success', 'did not verify both'),
+                ('missing-tun-evidence', 'did not verify both'),
+                ('duplicate-tun-evidence', 'did not verify both'),
+                ('wrong-tun-pid', 'did not verify both'),
                 ('wrong-recovery-pid', 'did not verify both'),
+                ('replacement-before-recovery', 'emulator launch changed'),
                 ('failed-recovery', 'did not verify both')):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
                 report = Path(temporary)
                 status = {'schema': 1, 'passed': False}
                 commands = []
                 pids = iter(['101', '101' if scenario == 'same-pid' else '202'])
+                verified = []
+
+                def verify_device():
+                    if (scenario == 'replacement-before-recovery' and commands
+                            and commands[-1][4] == 'pidof'
+                            and sum(cmd[4:6] == ['am', 'start'] for cmd in commands) == 2):
+                        raise RuntimeError('emulator launch changed')
+                    verified.append(len(commands))
 
                 def invoke(command, **kwargs):
                     commands.append(command)
@@ -7036,6 +7238,12 @@ runpy.run_path(str(script), run_name='__main__')
                         self.assertEqual(command[command.index('death_pid')+1], '101')
                         output = {'missing-exit-evidence': 'OK (1 test)\nINSTRUMENTATION_CODE: -1\n',
                                   'missing-test-success': recovered.replace('INSTRUMENTATION_STATUS_CODE: 0\n', ''),
+                                  'missing-tun-evidence': recovered.replace(
+                                      f'INSTRUMENTATION_STATUS: cor_death_tun={token}:202\n', ''),
+                                  'duplicate-tun-evidence': recovered + (
+                                      f'INSTRUMENTATION_STATUS: cor_death_tun={token}:202\n'),
+                                  'wrong-tun-pid': recovered.replace(f'cor_death_tun={token}:202',
+                                                                      f'cor_death_tun={token}:303'),
                                   'wrong-recovery-pid': recovered.replace(':202', ':303'),
                                   'failed-recovery': recovered + 'FAILURES!!!\n'}.get(scenario, recovered)
                     return subprocess.CompletedProcess(command, 0, output, '')
@@ -7045,17 +7253,24 @@ runpy.run_path(str(script), run_name='__main__')
                         patch.object(android_build.uuid, 'uuid4', return_value=android_build.uuid.UUID(hex=token)):
                     if expected_error:
                         with self.assertRaisesRegex(RuntimeError, expected_error):
-                            android_build.test_protection_process_death(device, report, status)
+                            android_build.test_protection_process_death(device, report, status, verify_device)
                     else:
-                        android_build.test_protection_process_death(device, report, status)
+                        android_build.test_protection_process_death(device, report, status, verify_device)
+                self.assertEqual(verified, list(range(len(commands))))
                 phases = [cmd for cmd in commands if 'instrument' in cmd]
                 self.assertTrue(phases)
                 self.assertFalse(any('force-stop' in cmd for cmd in commands))
                 self.assertEqual(sum(cmd[4:6] == ['pm', 'clear'] for cmd in commands), 1)
                 self.assertFalse(status['passed'])
                 self.assertEqual(status.get('recovery_verified', False), expected_error is None)
+                self.assertEqual(status.get('tun_verified', False), expected_error is None)
                 if scenario == 'transport-timeout':
                     self.assertEqual((report/'prepareAndKill.txt').read_text(), prepared+'ADB command timed out')
+                if scenario == 'replacement-before-recovery':
+                    self.assertEqual(len(phases), 1)
+                    self.assertTrue(status['prepare_terminated'])
+                    self.assertEqual((report/'prepareAndKill.txt').read_text(), prepared)
+                    self.assertFalse((report/'recoverAfterDeath.txt').exists())
                 if not expected_error:
                     self.assertEqual((status['victim_pid'], status['recovery_pid']), (101, 202))
                     self.assertEqual(len(phases), 2)
@@ -7065,17 +7280,71 @@ runpy.run_path(str(script), run_name='__main__')
                     self.assertEqual(len(phases), 1)
                     self.assertFalse((report/'recoverAfterDeath.txt').exists())
 
+    def test_android_protection_death_origin_is_local_and_closes_after_failure(self):
+        with self.assertRaisesRegex(RuntimeError, 'fixture failure'):
+            with android_build.protection_death_origin(port=0) as server:
+                self.assertEqual(server.server_address[0], '127.0.0.1')
+                url = f'http://127.0.0.1:{server.server_address[1]}/probe'
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    self.assertEqual(response.read(), b'cor-android-network-ok')
+                raise RuntimeError('fixture failure')
+        self.assertEqual(server.fileno(), -1)
+
+    def test_android_protection_death_origin_closes_active_connect_tunnels(self):
+        def read_ok_headers(response):
+            status = response.readline()
+            self.assertTrue(status.startswith(b'HTTP/1.1 200 '), status)
+            for line in iter(response.readline, b''):
+                if line == b'\r\n':
+                    return
+            self.fail('Origin closed before sending complete headers')
+
+        for phase_fails in (False, True):
+            with self.subTest(phase_fails=phase_fails), contextlib.ExitStack() as clients:
+                outcome = self.assertRaisesRegex(RuntimeError, 'fixture failure') if phase_fails else nullcontext()
+                with outcome, android_build.protection_death_origin(port=0) as server:
+                    responses = []
+                    for held in (True, False):
+                        connection = clients.enter_context(socket.create_connection(server.server_address, timeout=2))
+                        response = clients.enter_context(connection.makefile('rb'))
+                        responses.append(response)
+                        connection.sendall(b'CONNECT 198.51.100.1:18081 HTTP/1.1\r\n'
+                                           b'Host: 198.51.100.1:18081\r\n\r\n')
+                        read_ok_headers(response)
+                        if held:
+                            connection.sendall(b'GET /hold HTTP/1.1\r\nHost: 198.51.100.1\r\n'
+                                               b'Connection: close\r\nContent-Length: 1\r\n\r\n')
+                            read_ok_headers(response)
+                            expected = b'cor-android-network-ok'
+                            self.assertEqual(response.read(len(expected)), expected)
+                    if phase_fails:
+                        raise RuntimeError('fixture failure')
+                self.assertEqual(server.fileno(), -1)
+                for response in responses:
+                    self.assertEqual(response.read(1), b'')
+
     def test_android_protection_death_only_keeps_instrumentation_and_report_separate(self):
         device = [android_build.ADB, '-s', 'emulator-5554']
         token = 'a' * 32
+        avd_path = Path('/runner/cor-ci.avd')
+        events = []
+
+        @contextmanager
+        def origin():
+            events.append('bind')
+            yield
+            self.assertFalse(json.loads(receipt.read_text())['passed'])
+            events.append('release')
+
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.object(android_build, 'ROOT', Path(temporary)), \
+                patch.object(android_build, 'cor_ci_avd_path', return_value=avd_path), \
                 patch.object(android_build, 'protection_death_device', return_value=(device, token)) as verify, \
-                patch.object(android_build, 'run') as run, \
                 patch.object(android_build, 'device_property', return_value='36') as property_probe, \
                 patch.object(android_build, 'start_test_log') as start_log, \
                 patch.object(android_build, 'finish_test_log', return_value=('', None)) as finish_log, \
                 patch.object(android_build, 'stop_app_before_test') as force_stop, \
+                patch.object(android_build, 'protection_death_origin', side_effect=origin), \
                 patch.object(android_build, 'test_protection_process_death') as death, \
                 patch.object(android_build.subprocess, 'run',
                              return_value=subprocess.CompletedProcess([], 0, 'Success\n', '')) as evidence:
@@ -7086,28 +7355,204 @@ runpy.run_path(str(script), run_name='__main__')
 
             def check_receipt(command, **kwargs):
                 self.assertFalse(json.loads(receipt.read_text())['passed'])
+                self.assertEqual(events[0], 'bind')
+                self.assertNotIn('release', events)
+                events.append(command)
                 return evidence.return_value
 
             evidence.side_effect = check_receipt
+            verified = []
+
+            def guard(*args, **kwargs):
+                verified.append(len(events))
+                return device, token
+
+            verify.side_effect = guard
             android_build.test('x64', app, test, protection_death_only=True)
-            self.assertEqual(run.call_args_list, [call(device + ['install', '-r', path], timeout=60)
-                                                 for path in (app, test)])
+            self.assertEqual(events[1:3], [device + ['install', '-r', path] for path in (app, test)])
+            self.assertEqual(events[-1], 'release')
+            self.assertTrue(all(index in verified for index in range(1, len(events)-1)))
             self.assertEqual(start_log.call_args.args[0], report)
-            self.assertEqual(start_log.call_args.kwargs, {'adb': device})
-            self.assertEqual(finish_log.call_args.kwargs, {'adb': device})
+            verifier = death.call_args.args[3]
+            self.assertEqual(start_log.call_args.kwargs, {'adb': device, 'verify_device': verifier})
+            self.assertEqual(finish_log.call_args.kwargs, {'adb': device, 'verify_device': verifier})
             self.assertTrue(all(request.kwargs == {'adb': device} for request in property_probe.call_args_list))
-            self.assertEqual(verify.call_args_list, [call(), call(device, launch_identity=token),
-                                                     call(device, launch_identity=token)])
+            self.assertEqual(verify.call_args_list[0], call(expected_path=avd_path))
+            self.assertTrue(all(request == call(device, launch_identity=token, expected_path=avd_path)
+                                for request in verify.call_args_list[1:]))
             self.assertEqual(death.call_args.args[:2], (device, report))
             force_stop.assert_not_called()
-            self.assertTrue(all(request.args[0][:4] == device + ['shell'] for request in evidence.call_args_list))
-            self.assertTrue(all(request.kwargs['timeout'] == 15 for request in evidence.call_args_list))
+            self.assertTrue(all(request.args[0][:4] == device + ['shell'] for request in evidence.call_args_list[2:]))
+            self.assertTrue(all(request.kwargs['timeout'] == 60 for request in evidence.call_args_list[:2]))
+            self.assertTrue(all(request.kwargs['timeout'] == 15 for request in evidence.call_args_list[2:]))
             self.assertTrue(json.loads(receipt.read_text())['passed'])
+
+    def test_android_protection_death_keeps_report_locked_until_final_receipt(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        origin_closed = False
+        interleaved = False
+        write_json = android_build.write_json
+
+        @contextmanager
+        def origin():
+            nonlocal origin_closed
+            origin_closed = False
+            yield
+            origin_closed = True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = root/'target/android-report/x64/protection-process-death'
+            receipt = report/'process-death-status.json'
+            install_report = report/'install-app.txt'
+
+            def test_once():
+                android_build.test('x64', protection_death_only=True)
+
+            def write_receipt(path, value):
+                nonlocal interleaved
+                if path == receipt and value['passed'] and not interleaved:
+                    self.assertTrue(origin_closed)
+                    interleaved = True
+                    outstanding_receipt = receipt.read_bytes()
+                    outstanding_install = install_report.read_bytes()
+                    with self.assertRaisesRegex(RuntimeError, 'already using the report directory'):
+                        test_once()
+                    self.assertEqual(receipt.read_bytes(), outstanding_receipt)
+                    self.assertEqual(install_report.read_bytes(), outstanding_install)
+                write_json(path, value)
+
+            with patch.object(android_build, 'ROOT', root), \
+                    patch.object(android_build, 'protection_death_origin', side_effect=origin) as start_origin, \
+                    patch.object(android_build, 'cor_ci_avd_path', return_value=root), \
+                    patch.object(android_build, 'protection_death_device', return_value=(device, 'a' * 32)), \
+                    patch.object(android_build, 'adb_evidence_command', side_effect=[
+                        subprocess.CompletedProcess([], 0, output, '')
+                        for output in ('first install', 'first test install',
+                                       'second install', 'second test install')
+                    ]), \
+                    patch.object(android_build, 'device_property', return_value='36'), \
+                    patch.object(android_build, 'start_test_log'), \
+                    patch.object(android_build, 'test_protection_process_death'), \
+                    patch.object(android_build, 'collect_protection_death_evidence'), \
+                    patch.object(android_build, 'cleanup_protection_death'), \
+                    patch.object(android_build, 'write_json', side_effect=write_receipt):
+                test_once()
+                self.assertTrue(interleaved)
+                start_origin.assert_called_once()
+                self.assertTrue(json.loads(receipt.read_text())['passed'])
+                self.assertEqual(install_report.read_text(), 'first install')
+
+                test_once()
+                self.assertEqual(start_origin.call_count, 2)
+                self.assertTrue(json.loads(receipt.read_text())['passed'])
+                self.assertEqual(install_report.read_text(), 'second install')
+
+    def test_android_protection_death_report_lock_releases_after_abrupt_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary)/'report'
+            command = [
+                sys.executable, '-c',
+                'import os, sys\n'
+                'from pathlib import Path\n'
+                'from android import protection_death_report_lock\n'
+                'with protection_death_report_lock(Path(sys.argv[1])):\n'
+                '    os._exit(23)\n',
+                str(report),
+            ]
+            result = subprocess.run(command, cwd=Path(android_build.__file__).parent,
+                                    capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 23, result.stderr)
+            with android_build.protection_death_report_lock(report):
+                with self.assertRaisesRegex(RuntimeError, 'already using the report directory'):
+                    with android_build.protection_death_report_lock(report):
+                        self.fail('The held report lock admitted a second run')
+
+    def test_android_protection_death_records_origin_shutdown_failure(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        error = OSError('fixture origin shutdown failed')
+
+        @contextmanager
+        def origin():
+            yield
+            cleanup.assert_called_once()
+            raise error
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary)
+            with patch.object(android_build, 'protection_death_origin', side_effect=origin) as start_origin, \
+                    patch.object(android_build, 'cor_ci_avd_path', return_value=report), \
+                    patch.object(android_build, 'protection_death_device', return_value=(device, 'a' * 32)), \
+                    patch.object(android_build, 'adb_evidence_command',
+                                 return_value=subprocess.CompletedProcess([], 0, 'Success\n', '')), \
+                    patch.object(android_build, 'device_property', return_value='36'), \
+                    patch.object(android_build, 'start_test_log'), \
+                    patch.object(android_build, 'test_protection_process_death'), \
+                    patch.object(android_build, 'collect_protection_death_evidence'), \
+                    patch.object(android_build, 'cleanup_protection_death') as cleanup:
+                with self.assertRaises(OSError) as failure:
+                    android_build.run_protection_death_test(Path('app.apk'), Path('test.apk'), report)
+                self.assertIs(failure.exception, error)
+                receipt = report/'process-death-status.json'
+                status = json.loads(receipt.read_text())
+                self.assertFalse(status['passed'])
+                self.assertEqual(status['error'], str(error))
+                self.assertFalse(list(report.glob('origin-failure-*.json')))
+
+                start_origin.side_effect = None
+                start_origin.return_value = nullcontext()
+                android_build.run_protection_death_test(Path('app.apk'), Path('test.apk'), report)
+                self.assertTrue(json.loads(receipt.read_text())['passed'])
+
+    def test_android_protection_death_port_conflict_invalidates_stale_success_and_preserves_evidence(self):
+        origin = android_build.protection_death_origin
+        with tempfile.TemporaryDirectory() as temporary, origin(port=0) as active:
+            report = Path(temporary)
+            receipt = report/'process-death-status.json'
+            previous_status = '{"passed": true, "serial": "emulator-5554"}'
+            receipt.write_text(previous_status)
+            prepared = report/'prepareAndKill.txt'
+            prepared.write_text('previous run evidence')
+            logcat = report/'logcat.raw'
+            logcat.write_bytes(b'previous logcat evidence')
+
+            def bind_occupied_origin():
+                self.assertEqual(json.loads(receipt.read_text()), {'schema': 1, 'passed': False})
+                return origin(port=active.server_port)
+
+            with patch.object(android_build, 'protection_death_origin',
+                              side_effect=bind_occupied_origin) as start_origin, \
+                    patch.object(android_build, 'protection_death_device') as verify, \
+                    patch.object(android_build, 'adb_evidence_command') as adb, \
+                    patch.object(android_build, 'cleanup_protection_death') as cleanup:
+                with android_build.protection_death_report_lock(report):
+                    with self.assertRaisesRegex(RuntimeError, 'already using the report directory'):
+                        android_build.run_protection_death_test(Path('app.apk'), Path('test.apk'), report)
+                    start_origin.assert_not_called()
+                    self.assertEqual(receipt.read_text(), previous_status)
+                    self.assertFalse(list(report.glob('origin-failure-*.json')))
+                with self.assertRaises(OSError) as failure:
+                    android_build.run_protection_death_test(Path('app.apk'), Path('test.apk'), report)
+                start_origin.assert_called_once()
+                verify.assert_not_called()
+                adb.assert_not_called()
+                cleanup.assert_not_called()
+            status = json.loads(receipt.read_text())
+            self.assertFalse(status['passed'])
+            self.assertEqual(status['error'], str(failure.exception))
+            self.assertNotIn('serial', status)
+            self.assertEqual(prepared.read_text(), 'previous run evidence')
+            self.assertEqual(logcat.read_bytes(), b'previous logcat evidence')
+            origin_failure, = report.glob('origin-failure-*.json')
+            self.assertEqual(json.loads(origin_failure.read_text()), status)
+            with urllib.request.urlopen(f'http://127.0.0.1:{active.server_port}/probe', timeout=5) as response:
+                self.assertEqual(response.read(), b'cor-android-network-ok')
 
     def test_android_protection_death_invalidates_stale_success_before_preparation(self):
         device = [android_build.ADB, '-s', 'emulator-5554']
         token = 'a' * 32
-        for prerequisite in ('guard', 'first install', 'second install', 'properties', 'log startup'):
+        for prerequisite in ('guard', 'first install', 'replacement before second install',
+                             'second install timeout', 'properties', 'log startup'):
             with self.subTest(prerequisite=prerequisite), tempfile.TemporaryDirectory() as temporary:
                 report = Path(temporary, 'target/android-report/x64/protection-process-death')
                 receipt = report/'process-death-status.json'
@@ -7120,8 +7565,11 @@ runpy.run_path(str(script), run_name='__main__')
                 (report/'unrelated.txt').write_text('keep')
                 error = RuntimeError(prerequisite)
                 with patch.object(android_build, 'ROOT', Path(temporary)), \
+                        patch.object(android_build, 'protection_death_origin', return_value=nullcontext()), \
+                        patch.object(android_build, 'cor_ci_avd_path', return_value=report), \
                         patch.object(android_build, 'protection_death_device', return_value=(device, token)) as guard, \
-                        patch.object(android_build, 'run') as install, \
+                        patch.object(android_build, 'adb_evidence_command',
+                                     return_value=subprocess.CompletedProcess([], 0, 'Success\n', '')) as install, \
                         patch.object(android_build, 'device_property', return_value='36') as prop, \
                         patch.object(android_build, 'start_test_log') as start_log, \
                         patch.object(android_build, 'cleanup_protection_death') as cleanup:
@@ -7129,15 +7577,29 @@ runpy.run_path(str(script), run_name='__main__')
                         guard.side_effect = error
                     elif prerequisite == 'first install':
                         install.side_effect = error
-                    elif prerequisite == 'second install':
-                        install.side_effect = [None, error]
+                    elif prerequisite == 'replacement before second install':
+                        guard.side_effect = [(device, token), (device, token), error]
+                    elif prerequisite == 'second install timeout':
+                        install.side_effect = [
+                            install.return_value,
+                            subprocess.CompletedProcess([], 255, 'Installing\n', 'ADB command timed out after 60s'),
+                        ]
                     elif prerequisite == 'properties':
                         prop.side_effect = error
                     else:
                         start_log.side_effect = error
                     with self.assertRaises(RuntimeError) as failure:
                         android_build.test('x64', protection_death_only=True)
-                    self.assertIs(failure.exception, error)
+                    if prerequisite == 'second install timeout':
+                        error = failure.exception
+                        self.assertIn('install-test.txt', str(error))
+                        self.assertEqual((report/'install-test.txt').read_text(),
+                                         'Installing\nADB command timed out after 60s')
+                    else:
+                        self.assertIs(failure.exception, error)
+                    if prerequisite == 'replacement before second install':
+                        install.assert_called_once()
+                        self.assertEqual((report/'install-app.txt').read_text(), 'Success\n')
                     cleanup.assert_not_called()
                 for name in previous_reports:
                     if name == 'device.json' and prerequisite == 'log startup':
@@ -7145,7 +7607,7 @@ runpy.run_path(str(script), run_name='__main__')
                     else:
                         self.assertFalse((report/name).exists(), name)
                 self.assertEqual((report/'unrelated.txt').read_text(), 'keep')
-                self.assertEqual(json.loads(receipt.read_text())['error'], prerequisite)
+                self.assertEqual(json.loads(receipt.read_text())['error'], str(error))
                 self.assertFalse(json.loads(receipt.read_text())['passed'])
 
     def test_android_protection_death_keeps_original_error_and_cleans_after_evidence(self):
@@ -7153,13 +7615,32 @@ runpy.run_path(str(script), run_name='__main__')
         token = 'a' * 32
         package = 'org.clashofrust.android'
         for scenario in ('phase fails', 'log boundary fails', 'native runtime fails',
-                         'diagnostics fail', 'launch changed'):
+                         'diagnostics fail', 'launch changed before diagnostics', 'launch changed during cleanup'):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
                 report = Path(temporary)
                 original = RuntimeError('phase failed')
                 captured = RuntimeError('log boundary failed') if scenario == 'log boundary fails' else None
                 log = 'Android startup: failed' if scenario == 'native runtime fails' else ''
                 commands = []
+                cleanup_commands = [
+                    ['am', 'force-stop', package], ['pm', 'clear', package],
+                    ['appops', 'set', package, 'ACTIVATE_VPN', 'default'],
+                    ['pm', 'revoke', package, 'android.permission.POST_NOTIFICATIONS'],
+                ]
+                collecting = False
+
+                def verify(*args, **kwargs):
+                    after_installs = len(commands) == 2
+                    if ((scenario == 'launch changed before diagnostics' and after_installs and collecting)
+                            or (scenario == 'launch changed during cleanup' and commands
+                                and commands[-1][4:] == cleanup_commands[0])):
+                        raise RuntimeError('launch changed')
+                    return device, token
+
+                def finish_log(*args, **kwargs):
+                    nonlocal collecting
+                    collecting = True
+                    return log, captured
 
                 def invoke(command, **kwargs):
                     commands.append(command)
@@ -7168,33 +7649,37 @@ runpy.run_path(str(script), run_name='__main__')
                         raise subprocess.TimeoutExpired(command, 15, output=b'partial output', stderr=b'partial error')
                     return subprocess.CompletedProcess(command, 0, 'Success\n', '')
 
-                with patch.object(android_build, 'protection_death_device',
-                        side_effect=[(device, token), (device, token),
-                                     RuntimeError('launch changed') if scenario == 'launch changed' else (device, token)]), \
-                        patch.object(android_build, 'run'), \
+                with patch.object(android_build, 'cor_ci_avd_path', return_value=report), \
+                        patch.object(android_build, 'protection_death_device', side_effect=verify), \
                         patch.object(android_build, 'device_property', return_value='36'), \
                         patch.object(android_build, 'start_test_log'), \
-                        patch.object(android_build, 'finish_test_log', return_value=(log, captured)), \
+                        patch.object(android_build, 'finish_test_log', side_effect=finish_log), \
+                        patch.object(android_build, 'protection_death_origin', return_value=nullcontext()), \
                         patch.object(android_build, 'test_protection_process_death',
                                      side_effect=original if scenario == 'phase fails' else None), \
                         patch.object(android_build.subprocess, 'run', side_effect=invoke):
                     with self.assertRaises(RuntimeError) as failure:
                         android_build.run_protection_death_test(Path('app.apk'), Path('test.apk'), report)
-                self.assertTrue(all(command[:4] == device + ['shell'] for command in commands))
-                self.assertEqual(commands[:len(android_build.ANDROID_TEST_DIAGNOSTICS)],
-                    [device + ['shell', *command] for command in android_build.ANDROID_TEST_DIAGNOSTICS.values()])
+                self.assertTrue(all(command[:4] == device + ['shell'] for command in commands[2:]))
                 status = json.loads((report/'process-death-status.json').read_text())
                 self.assertFalse(status['passed'])
                 cleanup = json.loads((report/'cleanup-status.json').read_text())
-                if scenario == 'launch changed':
+                if scenario == 'launch changed before diagnostics':
                     self.assertEqual(cleanup['commands'], {})
-                    self.assertEqual(len(commands), len(android_build.ANDROID_TEST_DIAGNOSTICS))
+                    self.assertEqual(cleanup['blocked_command'], 'force_stop')
+                    self.assertEqual(len(commands), 2)
                     self.assertIn('launch changed', status['error'])
                     continue
-                self.assertEqual(commands[-4:], [device + ['shell', *command] for command in (
-                    ['am', 'force-stop', package], ['pm', 'clear', package],
-                    ['appops', 'set', package, 'ACTIVATE_VPN', 'default'],
-                    ['pm', 'revoke', package, 'android.permission.POST_NOTIFICATIONS'])])
+                self.assertEqual(commands[2:2+len(android_build.ANDROID_TEST_DIAGNOSTICS)],
+                    [device + ['shell', *command] for command in android_build.ANDROID_TEST_DIAGNOSTICS.values()])
+                if scenario == 'launch changed during cleanup':
+                    self.assertEqual(list(cleanup['commands']), ['force_stop'])
+                    self.assertTrue(cleanup['commands']['force_stop']['passed'])
+                    self.assertEqual(cleanup['blocked_command'], 'clear_fixture')
+                    self.assertEqual(commands[-1], device + ['shell', *cleanup_commands[0]])
+                    self.assertIn('launch changed', status['error'])
+                    continue
+                self.assertEqual(commands[-4:], [device + ['shell', *command] for command in cleanup_commands])
                 if scenario == 'phase fails':
                     self.assertIs(failure.exception, original)
                     self.assertTrue(any('diagnostics failed' in note for note in status['notes']))
@@ -7220,6 +7705,40 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertEqual(result.stdout, b'prepared\n\xff' if binary else 'prepared\n\ufffd')
                 notice = 'warning\nADB command timed out after 15s'
                 self.assertEqual(result.stderr, notice.encode() if binary else notice)
+
+    def test_android_protection_death_log_markers_require_the_original_launch(self):
+        device = [android_build.ADB, '-s', 'emulator-5554']
+        error = RuntimeError('emulator launch changed')
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary)
+            process = MagicMock()
+            process.poll.return_value = None
+            with patch.object(android_build.subprocess, 'Popen', return_value=process), \
+                    patch.object(android_build, 'run') as mark, \
+                    patch.object(android_build, 'stop_test_log') as stop:
+                verify = MagicMock(side_effect=[None, error])
+                with self.assertRaisesRegex(RuntimeError, 'emulator launch changed'):
+                    android_build.start_test_log(report, 'phase', adb=device, verify_device=verify)
+                mark.assert_not_called()
+                stop.assert_called_once_with(process)
+
+            raw = b'CorAndroidTest: phase\nprior device evidence\n'
+            (report/'logcat.raw').write_bytes(raw)
+            with patch.object(android_build, 'run') as mark, \
+                    patch.object(android_build, 'stop_test_log'), \
+                    patch.object(android_build, 'record_adb_health'), \
+                    patch.object(android_build, 'wait_adb_identity', return_value='2000'), \
+                    patch.object(android_build, 'adb_evidence_command') as replay:
+                verify = MagicMock(side_effect=error)
+                output, boundary_error = android_build.finish_test_log(
+                    process, report, 'phase', adb=device, verify_device=verify)
+                mark.assert_not_called()
+                replay.assert_not_called()
+                self.assertEqual(verify.call_count, 2)
+                self.assertIs(boundary_error, error)
+                self.assertEqual(output, raw.decode())
+                self.assertEqual((report/'logcat.raw').read_bytes(), raw)
+                self.assertIn(str(error), (report/'logcat-recovery.txt').read_text())
 
     def test_android_log_stream_requires_a_captured_start_marker_before_running_tests(self):
         with tempfile.TemporaryDirectory() as temporary:

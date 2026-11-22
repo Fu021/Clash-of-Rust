@@ -231,7 +231,11 @@ pub(super) async fn run(
     {
         trace_entries(&output, address, options.max_hops, report);
     }
-    report.entries.push(Entry::unknown("路径", "系统 ICMP / 逐跳探针；系统代理不承载此流量，TUN 是否接管取决于系统路由。这不是代理节点延迟", "information"));
+    report.entries.push(Entry::unknown(
+        "路径",
+        "系统 ICMP / 逐跳探针，绕过系统代理；TUN 是否接管取决于系统路由。",
+        "information",
+    ));
     Ok(())
 }
 

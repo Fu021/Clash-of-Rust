@@ -675,6 +675,7 @@ dependencies = [
  "i-slint-core",
  "jni 0.22.4",
  "log",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "slint",

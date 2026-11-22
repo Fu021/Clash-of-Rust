@@ -162,7 +162,132 @@ async fn dns_uses_only_the_controller_and_preserves_machine_output() {
 }
 
 #[tokio::test]
+async fn logs_localize_human_output_and_search_but_preserve_raw_records() {
+    use clash_client_core::config::atomic_write;
+    use clash_client_runtime::control::PROTOCOL;
+    use serde_json::{Value, json};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let token = "a".repeat(64);
+    let endpoint = json!({
+        "protocol": PROTOCOL, "port": listener.local_addr().unwrap().port(),
+        "pid": std::process::id(), "owner": "daemon", "token": token,
+    });
+    atomic_write(
+        &root.path().join("control.json"),
+        &serde_json::to_vec(&endpoint).unwrap(),
+    )
+    .unwrap();
+    let client = "[客户端] 配置已导入/更新";
+    let core = "[内核] 配置已导入/更新";
+    let warning = "[warn] 连接失败 level=error";
+    let info = "[info] 连接失败 level=error";
+    let guarded = "[内核] [客户端] 操作失败：level=error";
+    let translated = "[Client] Configuration imported or updated";
+    let records = [
+        (client, "info"),
+        (core, "info"),
+        (warning, "warning"),
+        (info, "info"),
+        (guarded, "info"),
+    ];
+    let raw = records.map(|(message, _)| message);
+    let meta = serde_json::to_vec(&json!({"result": {
+        "profiles": [], "running": false, "version": "test", "owner": "daemon", "executable": "",
+        "geo": {"version": "test", "updated": 0, "files": []},
+        "settings": {"secret": "fixture-export-secret"},
+    }}))
+    .unwrap();
+    let logs = serde_json::to_vec(&json!({"result": raw})).unwrap();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let size = stream.read_u32().await.unwrap();
+            let mut request = vec![0; size as usize];
+            stream.read_exact(&mut request).await.unwrap();
+            let request: Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(request["protocol"], PROTOCOL);
+            assert_eq!(request["token"], token);
+            let response = match request["operation"]["command"].as_str() {
+                Some("meta") => &meta,
+                Some("logs") => {
+                    assert_eq!(request["operation"]["clear"], false);
+                    &logs
+                }
+                command => panic!("unexpected backend command {command:?}"),
+            };
+            stream.write_u32(response.len() as u32).await.unwrap();
+            stream.write_all(response).await.unwrap();
+        }
+    });
+    let run = |language: &str, options: &[&str]| {
+        let mut command = tokio::process::Command::from(cor());
+        command
+            .arg("logs")
+            .args(options)
+            .args(["--lang", language, "--timeout=2", "--data-dir"])
+            .arg(root.path())
+            .kill_on_drop(true);
+        async move {
+            let output = tokio::time::timeout(std::time::Duration::from_secs(10), command.output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        }
+    };
+
+    let expected = records.map(|(message, level)| {
+        json!({"schema": 1, "command": "logs", "data": {"level": level, "message": message}})
+    });
+    for (language, displayed_client) in [("en", translated), ("zh-CN", client)] {
+        let text = run(language, &[]).await;
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [displayed_client, core, warning, info, guarded]
+        );
+        for format in ["--json", "--jsonl"] {
+            let text = run(language, &[format]).await;
+            let actual: Vec<Value> = text
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(actual, expected, "{language} {format}");
+        }
+        let export = root.path().join(format!("logs-{language}.txt"));
+        let text = run(language, &["export", "--output", export.to_str().unwrap()]).await;
+        assert!(text.is_empty());
+        assert_eq!(std::fs::read(export).unwrap(), raw.join("\n").as_bytes());
+    }
+    let filtered = run("en", &["--level", "warning"]).await;
+    assert_eq!(filtered.lines().collect::<Vec<_>>(), [warning]);
+    let filtered = run("en", &["--level", "info"]).await;
+    assert_eq!(
+        filtered.lines().collect::<Vec<_>>(),
+        [translated, core, info, guarded]
+    );
+    assert!(run("en", &["--level", "error"]).await.is_empty());
+    let filtered = run("en", &["--filter", "cOnFiGuRaTiOn ImPoRtEd"]).await;
+    assert_eq!(filtered.lines().collect::<Vec<_>>(), [translated]);
+    let filtered = run("en", &["--filter", "配置已导入"]).await;
+    assert_eq!(filtered.lines().collect::<Vec<_>>(), [translated, core]);
+    assert!(!root.path().join("daemon.log").exists());
+    server.abort();
+}
+
+#[tokio::test]
 async fn profile_list_localizes_human_output_and_preserves_machine_output() {
+    use chrono::{DateTime, Local};
     use clash_client_core::config::atomic_write;
     use clash_client_runtime::control::PROTOCOL;
     use serde_json::{Value, json};
@@ -184,28 +309,66 @@ async fn profile_list_localizes_human_output_and_preserves_machine_output() {
         &serde_json::to_vec(&endpoint).unwrap(),
     )
     .unwrap();
+    let expiry_timestamp = 1813147200;
+    let no_expiry = "upload=1048576; download=2147483648; total=3221225472; expire=0";
+    let dated = format!("upload=1048576; total=3221225472; expire={expiry_timestamp}");
     let rows = [
-        ("builtin", "默认直连", "/resources/default.yaml", true),
-        ("imported", "默认直连", "/imports/default.yaml", false),
-        ("custom", "旅行节点", "/imports/travel.yaml", false),
-        ("renamed", "自定义直连", "/resources/default.yaml", true),
+        ("builtin", "默认直连", "/resources/default.yaml", true, None),
+        (
+            "imported",
+            "默认直连",
+            "/imports/default.yaml",
+            false,
+            Some(no_expiry),
+        ),
+        (
+            "custom",
+            "旅行节点",
+            "https://travel.example.test/",
+            false,
+            Some(no_expiry),
+        ),
+        (
+            "renamed",
+            "自定义直连",
+            "https://builtin.example.test/",
+            true,
+            None,
+        ),
+        (
+            "dated",
+            "限期订阅",
+            "https://dated.example.test/",
+            false,
+            Some(dated.as_str()),
+        ),
+        (
+            "missing",
+            "备用订阅",
+            "https://backup.example.test/",
+            false,
+            None,
+        ),
     ];
     let expected_rows: Vec<_> = rows
         .iter()
-        .map(|(id, name, source, _)| {
-            json!({"id": id, "name": name, "source": source, "active": *id == "builtin",
-                "updated": 0, "usage": null})
+        .map(|(id, name, source, _, usage)| {
+            json!({"id": id, "name": name, "active": *id == "builtin", "source": source,
+                "updated": 0, "usage": usage})
         })
         .collect();
     let profiles: Vec<_> = expected_rows
         .iter()
         .zip(rows)
-        .map(|(row, (_, _, _, builtin))| {
+        .map(|(row, (_, _, _, builtin, _))| {
             let mut profile = row.clone();
             profile["builtin"] = json!(builtin);
             profile
         })
         .collect();
+    let profiles_path = root.path().join("profiles.json");
+    let stored_profiles = serde_json::to_vec_pretty(&profiles).unwrap();
+    atomic_write(&profiles_path, &stored_profiles).unwrap();
     let reply = serde_json::to_vec(&json!({"result": {
         "profiles": profiles, "settings": {"active_profile": "builtin"}, "running": false,
         "geo": {"version": "test", "updated": 0, "files": []},
@@ -256,15 +419,61 @@ async fn profile_list_localizes_human_output_and_preserves_machine_output() {
     }
     let chinese = list(&["--lang=zh-CN"]).await;
     assert!(chinese.starts_with("[当前] 默认直连\n"), "{chinese}");
+    let expiry_date = DateTime::from_timestamp(expiry_timestamp, 0)
+        .unwrap()
+        .with_timezone(&Local)
+        .format("%Y-%m-%d");
+    for (text, id_label, summaries) in [
+        (
+            &english,
+            "  ID: ",
+            [
+                "Used 2/3 GiB · No expiry".into(),
+                format!("Upload 1 MiB · Total 3 GiB · Expires {expiry_date}"),
+                "Usage and expiry unavailable".into(),
+            ],
+        ),
+        (
+            &chinese,
+            "  ID：",
+            [
+                "已用 2/3 GiB · 不限期".into(),
+                format!("上传 1 MiB · 总量 3 GiB · 到期 {expiry_date}"),
+                "未提供用量与到期".into(),
+            ],
+        ),
+    ] {
+        let entry_for = |id| {
+            let id_line = format!("{id_label}{id}");
+            text.split("\n\n")
+                .find(|entry| entry.lines().any(|line| line == id_line))
+                .unwrap_or_else(|| panic!("missing {id}: {text}"))
+        };
+        for (id, summary) in ["custom", "dated", "missing"].into_iter().zip(summaries) {
+            let summary_line = format!("  {summary}");
+            let entry = entry_for(id);
+            assert!(entry.lines().any(|line| line == summary_line), "{entry}");
+        }
+        for id in ["builtin", "imported", "renamed"] {
+            let entry = entry_for(id);
+            assert_eq!(entry.lines().count(), 4, "{entry}");
+        }
+        for raw_key in ["upload=", "download=", "total=", "expire="] {
+            assert!(!text.contains(raw_key), "{text}");
+        }
+    }
     let expected = json!({"schema": 1, "command": "profile list", "data": expected_rows});
-    for format in ["--json", "--jsonl"] {
-        let text = list(&["--lang=en", format]).await;
-        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+    let expected_stdout = format!("{expected}\n");
+    for language in ["--lang=en", "--lang=zh-CN"] {
+        for format in ["--json", "--jsonl"] {
+            let text = list(&[language, format]).await;
+            assert_eq!(text, expected_stdout, "{language} {format}");
+        }
     }
     assert!(list(&["--lang=en", "--output", export]).await.is_empty());
     assert_eq!(
-        serde_json::from_slice::<Value>(&std::fs::read(export).unwrap()).unwrap(),
-        expected
+        std::fs::read(export).unwrap(),
+        serde_json::to_vec_pretty(&expected).unwrap()
     );
 
     let by_display_name = list(&["--lang=en", "--filter=dEfAuLt DiReCt"]).await;
@@ -303,6 +512,165 @@ async fn profile_list_localizes_human_output_and_preserves_machine_output() {
         serde_json::from_slice::<Value>(&std::fs::read(export).unwrap()).unwrap()["data"],
         json!([])
     );
+    assert_eq!(std::fs::read(profiles_path).unwrap(), stored_profiles);
+    server.abort();
+}
+
+async fn subscription_backend(root: &std::path::Path) -> tokio::task::JoinHandle<()> {
+    use clash_client_core::{config, rule_manager::Document};
+    use clash_client_runtime::control::PROTOCOL;
+    use serde_json::{Value, json};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let token = "a".repeat(64);
+    let endpoint = json!({
+        "protocol": PROTOCOL, "port": listener.local_addr().unwrap().port(),
+        "pid": std::process::id(), "owner": "daemon", "token": token,
+    });
+    config::atomic_write(
+        &root.join("control.json"),
+        &serde_json::to_vec(&endpoint).unwrap(),
+    )
+    .unwrap();
+    let meta = json!({"result": {
+        "profiles": [{"id": "fixture", "name": "本地订阅", "source": "/fixture.yaml",
+            "updated": 0, "usage": null, "builtin": false}],
+        "settings": {"active_profile": "fixture"}, "running": false,
+        "geo": {"version": "test", "updated": 0, "files": []},
+        "version": "test", "owner": "daemon", "executable": "",
+    }});
+    let document = Document::from_raw(
+        "fixture",
+        false,
+        "proxies: []\nrules: ['MATCH,DIRECT', 'DOMAIN,example.test,DIRECT']",
+    )
+    .unwrap();
+    let document = json!({"result": document});
+    let error = config::parse_profile("name: sample").unwrap_err();
+    let import_error = json!({"result": null, "error": format!("{error:#}")});
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let size = stream.read_u32().await.unwrap();
+            let mut request = vec![0; size as usize];
+            stream.read_exact(&mut request).await.unwrap();
+            let request: Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(request["token"], token);
+            let operation = &request["operation"];
+            let response = match operation["command"].as_str() {
+                Some("meta") => &meta,
+                Some("rule-document") => {
+                    assert_eq!(operation["id"], "fixture");
+                    &document
+                }
+                Some("import") => {
+                    assert_eq!(operation["id"], "fixture");
+                    assert_eq!(operation["expect_current"], true);
+                    &import_error
+                }
+                command => panic!("unexpected backend command {command:?}"),
+            };
+            let response = serde_json::to_vec(response).unwrap();
+            stream.write_u32(response.len() as u32).await.unwrap();
+            stream.write_all(&response).await.unwrap();
+        }
+    })
+}
+
+#[tokio::test]
+async fn rule_list_localizes_warnings_and_preserves_quiet_and_machine_output() {
+    let root = tempfile::tempdir().unwrap();
+    let server = subscription_backend(root.path()).await;
+    let list = |language: &str, options: &[&str]| {
+        let mut command = cor();
+        command
+            .args(["rule", "list", "--timeout=2", "--data-dir"])
+            .arg(root.path())
+            .args(["--lang", language])
+            .args(options);
+        async move { tokio::process::Command::from(command).output().await }
+    };
+    let raw = "MATCH 之后有 1 条规则不会被匹配，请检查顺序。";
+    let translated =
+        "Rules after MATCH will never be evaluated (1 affected). Check the rule order.";
+    let english = list("en", &[]).await.unwrap();
+    assert!(english.status.success(), "{english:?}");
+    let stderr = String::from_utf8(english.stderr).unwrap();
+    assert!(stderr.lines().any(|line| line == translated), "{stderr}");
+    assert!(!stderr.contains(raw), "{stderr}");
+
+    let chinese = list("zh-CN", &[]).await.unwrap();
+    assert!(chinese.status.success(), "{chinese:?}");
+    assert!(
+        String::from_utf8(chinese.stderr)
+            .unwrap()
+            .lines()
+            .any(|line| line == raw)
+    );
+
+    for format in ["--json", "--jsonl"] {
+        let raw_output = list("zh-CN", &[format]).await.unwrap();
+        let quiet = list("en", &[format, "--quiet"]).await.unwrap();
+        assert!(raw_output.status.success() && quiet.status.success());
+        assert_eq!(quiet.stdout, raw_output.stdout);
+        let stderr = String::from_utf8(quiet.stderr).unwrap();
+        assert!(
+            !stderr.contains(translated) && !stderr.contains(raw),
+            "{stderr}"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&quiet.stdout).unwrap();
+        assert_eq!(
+            value["data"]["items"][1]["rule"],
+            "DOMAIN,example.test,DIRECT"
+        );
+        assert_eq!(value["data"]["items"][1]["source"], "Subscription");
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn profile_update_localizes_human_error_and_preserves_machine_output() {
+    use serde_json::{Value, json};
+
+    let root = tempfile::tempdir().unwrap();
+    let server = subscription_backend(root.path()).await;
+    let update = |language: &str, options: &[&str]| {
+        let mut command = cor();
+        command
+            .args(["profile", "update", "fixture", "--timeout=2", "--data-dir"])
+            .arg(root.path())
+            .args(["--lang", language])
+            .args(options)
+            .env("COLUMNS", "120");
+        async move { tokio::process::Command::from(command).output().await }
+    };
+    let raw = "配置中没有 proxies 或 proxy-providers";
+    let translated = "The configuration has no proxies or proxy-providers";
+    for (language, expected, unexpected) in [("en", translated, raw), ("zh-CN", raw, translated)] {
+        let output = update(language, &[]).await.unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("本地订阅"), "{text}");
+        assert!(
+            text.contains(expected) && !text.contains(unexpected),
+            "{text}"
+        );
+    }
+    let expected = json!({"schema": 1, "command": "profile update", "data": [{
+        "id": "fixture", "name": "本地订阅", "updated": false, "error": raw,
+    }]});
+    for format in ["--json", "--jsonl"] {
+        let output = update("en", &[format]).await.unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+            expected
+        );
+    }
     server.abort();
 }
 

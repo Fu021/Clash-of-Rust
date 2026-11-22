@@ -369,6 +369,9 @@ impl App {
             }};
         }
         text!(get_version, set_version, clash_of_rust::VERSION);
+        let (copy_revision, written) = self.copy_result.unwrap_or((0, true));
+        set!(get_copy_failed, set_copy_failed, !written);
+        set!(get_copy_revision, set_copy_revision, copy_revision);
         set!(get_page, set_page, self.page as i32);
         set!(get_ready, set_ready, self.engine.is_some());
         set!(get_running, set_running, self.snapshot.running);
@@ -480,21 +483,39 @@ impl App {
             self.notice_started
                 .map_or(0.0, |started| started.elapsed().as_secs_f32())
         );
-        text!(
-            get_notice,
-            set_notice,
-            if self.notice_visible {
-                if self.notice_update_failure {
-                    update::localize_installation_message(&self.notice, language)
-                } else if self.error {
-                    clash_client_core::error_message::localize(&self.notice, language)
-                } else {
-                    Cow::Borrowed(self.notice.as_str())
-                }
+        let notice = if self.notice_visible {
+            if self.notice_update_failure {
+                update::localize_installation_message(&self.notice, language)
+            } else if let Some(notice) = &self.unreachable_notice {
+                Cow::Owned(notice.display(language))
+            } else if let Some(detail) = self
+                .notice_network_recovery
+                .then(|| self.notice.strip_prefix("节点复测失败："))
+                .flatten()
+            {
+                Cow::Owned(format!(
+                    "{}{detail}",
+                    language.text("节点复测失败：", "Node recheck failed: ")
+                ))
+            } else if self.error {
+                clash_client_core::error_message::localize(&self.notice, language)
             } else {
-                Cow::Borrowed("")
+                Cow::Borrowed(self.notice.as_str())
             }
-        );
+        } else {
+            Cow::Borrowed("")
+        };
+        let notice = if self.notice_visible && self.notice_copy_failed {
+            let failure = desktop_view::CopyFeedback::Failed.text(language);
+            if notice.is_empty() {
+                Cow::Borrowed(failure)
+            } else {
+                Cow::Owned(format!("{notice}\n\n{failure}"))
+            }
+        } else {
+            notice
+        };
+        text!(get_notice, set_notice, notice);
         text!(get_query, set_query, &self.query);
         text!(
             get_profile,
@@ -781,9 +802,10 @@ impl App {
                 .rev()
                 .filter_map(|line| {
                     let level = logs::Level::of(line);
+                    let message = clash_client_core::runtime::logging::display(line, language);
                     (self.log_level.is_none_or(|selected| selected == level)
-                        && contains_query(line, &query))
-                    .then_some((line, level))
+                        && (contains_query(line, &query) || contains_query(&message, &query)))
+                    .then(|| (line, message.into_owned(), level))
                 })
                 .collect();
             self.pager(data, logs.len(), PAGE_SIZE);
@@ -792,10 +814,15 @@ impl App {
                 logs.into_iter()
                     .skip(data.get_page_offset() as usize)
                     .take(PAGE_SIZE)
-                    .map(|(line, level)| LogItem {
+                    .map(|(line, message, level)| LogItem {
                         time: "".into(),
                         level: level.label().into(),
-                        message: line.as_ref().into(),
+                        original: if line.as_ref() == message {
+                            "".into()
+                        } else {
+                            line.as_ref().into()
+                        },
+                        message: message.into(),
                         tone: level.tone(),
                     })
                     .collect(),
@@ -1148,7 +1175,7 @@ impl App {
         data.set_claude_clues(counts[2].to_string().into());
         data.set_browser_session(self.claude.session.is_some());
         data.set_claude_busy(self.claude.busy());
-        data.set_claude_status(self.claude.status.as_str().into());
+        data.set_claude_status(self.claude.status.display(language).into());
         data.set_claude_error(self.claude.error);
         data.set_claude_guard(self.claude.guard_status.as_str().into());
         data.set_protection_status(
@@ -1501,8 +1528,9 @@ impl App {
         } else if let Some(line) = &self.log_detail {
             kind = 13;
             data.set_modal_title(language.text("日志详情", "Log details").into());
-            data.set_modal_description(line.as_str().into());
-            data.set_modal_copy(line.as_str().into());
+            let message = clash_client_core::runtime::logging::display(line, language);
+            data.set_modal_description(message.as_ref().into());
+            data.set_modal_copy(message.as_ref().into());
         } else if let Some(index) = self.site_detail {
             kind = 11;
             let service = &ip_check::services()[index];

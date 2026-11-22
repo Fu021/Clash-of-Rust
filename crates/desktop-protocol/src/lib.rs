@@ -90,7 +90,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 21;
+pub const PROTOCOL: u32 = 22;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -297,6 +297,7 @@ mod tests {
         data.set_fake_ip_removed_defaults(2);
         models.logs.set_vec(vec![LogItem {
             message: "完整日志".into(),
+            original: "原始日志".into(),
             ..Default::default()
         }]);
         data.set_site_exit_flag("🇩🇪".into());
@@ -341,6 +342,7 @@ mod tests {
         let node = group.nodes.row_data(0).unwrap().left;
         assert_eq!(node.name, "🇺🇸 美国 01");
         assert_eq!(decoded.logs.row_data(0).unwrap().message, "完整日志");
+        assert_eq!(decoded.logs.row_data(0).unwrap().original, "原始日志");
         let exclusion = decoded.fake_ip_exclusions.row_data(0).unwrap();
         assert_eq!(exclusion.domain, "localhost");
         assert_eq!(exclusion.source, "用户自定义、DNS 覆盖");

@@ -40,6 +40,39 @@ pub enum Event {
     Tick,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Status {
+    Message(String),
+    Copy(desktop_view::CopyFeedback),
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Self::Message(String::new())
+    }
+}
+
+impl From<String> for Status {
+    fn from(value: String) -> Self {
+        Self::Message(value)
+    }
+}
+
+impl From<&str> for Status {
+    fn from(value: &str) -> Self {
+        Self::Message(value.into())
+    }
+}
+
+impl Status {
+    pub(super) fn display(&self, language: Language) -> &str {
+        match self {
+            Self::Message(message) => message,
+            Self::Copy(feedback) => feedback.text(language),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     pub protection_pending: Option<bool>,
@@ -60,7 +93,7 @@ pub struct State {
     pub(super) browser_busy: bool,
     pub(super) importing: bool,
     pub(super) session_starting: bool,
-    pub status: String,
+    pub(super) status: Status,
     pub error: bool,
 }
 pub(super) enum Entry<'a> {
@@ -373,7 +406,7 @@ impl State {
 
 impl App {
     fn fail_claude_check(&mut self, message: String) {
-        self.claude.status = message.clone();
+        self.claude.status = message.clone().into();
         self.claude.error = true;
         self.show_notice(message, true);
     }
@@ -585,11 +618,7 @@ impl App {
                     .into();
             }
             Event::CopySiteScript => {
-                self.claude.status = language.text(
-                    "脚本已复制：在 Claude 网页的开发者工具 Console 中运行，再导入脚本复制的 JSON。脚本不读取账号或 Cookie。",
-                    "Script copied. Run it in the Claude page's developer console, then import the copied JSON.",
-                ).into();
-                return desktop_runtime::clipboard::write(check::browser::site_script());
+                self.copy_request = Some(desktop_view::CopyRequest::ClaudeScript);
             }
             Event::Import => {
                 let generation = self.claude.generation;
@@ -710,7 +739,7 @@ impl App {
             }
             Event::Completed(result) => match result {
                 Ok(message) => {
-                    self.claude.status = message;
+                    self.claude.status = message.into();
                     self.claude.error = false;
                 }
                 Err(message) => {
@@ -777,7 +806,10 @@ mod tests {
             let _ = app.claude_event(event);
             assert!(app.claude.error && app.error && app.notice_visible);
             assert!(!app.notice_critical);
-            assert_eq!(app.notice, app.claude.status);
+            assert_eq!(
+                app.notice,
+                app.claude.status.display(app.presentation_language)
+            );
             assert_eq!(app.claude.reports[0].as_ref().unwrap().context, "preserved");
             assert_eq!(app.issue_events.back().unwrap()["level"], "recoverable");
         }
@@ -903,7 +935,10 @@ mod tests {
         finish_local(&mut app, generation);
         assert!(!app.claude.busy());
         assert!(app.claude.error && app.claude.audit.is_some());
-        assert_eq!(app.claude.status, "bind failed");
+        assert_eq!(
+            app.claude.status.display(app.presentation_language),
+            "bind failed"
+        );
     }
     #[tokio::test]
     async fn completion_waits_for_browser_without_late_launch_overwriting_report() {

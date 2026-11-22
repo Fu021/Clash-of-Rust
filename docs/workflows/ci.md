@@ -110,7 +110,11 @@ DEB 安装验收前，编译容器与 Linux 兼容 runner 共用签名 APT 索�
 
 Android x86_64 使用 Android 16（API 36）模拟器验证真实 VPN 授权、代理请求、TUN 流量、DNS 和断开恢复。[应用分流](../android-application-routing.md#范围与验证)相关变化或扩展模式会追加三种分流模式；完整授权取消、Activity 重建与冷磁贴归扩展模式。选中移动界面回归时，x64 作业安装软件渲染测试所需的字体开发库，并启用 `mobile-ui-tests` 执行宿主界面 Clippy 和测试。三个作业分别对各自 Android 目标执行 Clippy 和编译。ARM64/ARMv7 完成 Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
 
-Android x64 候选包收集常规报告后运行保护恢复的两阶段回归。单独运行时，用同一个 `RUNNER_TEMP` 启动可丢弃的 API 36 `cor-ci` AVD 和执行 `python3 scripts/android.py test --arch x64 --protection-death-only`。每轮先将回执设为失败，并清除该夹具上一次生成的报告。脚本核对模拟器序列号、AVD 路径、API、启动标识和启动计数，拒绝经过符号链接的 AVD 路径；验证通过后清除测试应用的数据并预授予 VPN 同意。第一阶段使用虚构本地配置建立 TUN，写入模拟的中断记录，再向应用自身进程发送 SIGKILL。两阶段均用 `am instrument --no-restart`，阶段之间只确认旧 PID 消失并打开应用。第二阶段在新 PID 中核对 Android 退出历史里的 SIGKILL，检查冷启动保持暂停，再点击重试并验证原配置、TUN 和保存的 VPN 计划恢复。测试阶段成功或失败后先采集证据，再重新核对同一模拟器并有界清理应用数据与授权；清理失败附在原始错误后，日志和清理全部通过才写入成功回执。`target/android-report/x64/protection-process-death/` 保留两阶段输出、状态、清理结果和日志。夹具覆盖中断记录落盘之后的进程死亡与显式恢复，保护启用事务的真实中断点、保护 DNS 和厂商系统行为仍需独立验证。
+Android x64 候选包收集常规报告后运行保护恢复的两阶段回归。普通 `test` 及 `package --arch x64` 的常规测试阶段使用当前 ADB 目标，可向该目标安装 APK 并修改 VPN 授权。CI 为这些操作预先启动可丢弃的模拟器。本地单独运行进程死亡回归时，用同一个 `RUNNER_TEMP` 启动可丢弃的 API 36 `cor-ci` AVD 和执行 `python3 scripts/android.py test --arch x64 --protection-death-only`。
+
+进程死亡夹具先锁定报告目录，持有到清理结束且最终回执写完。争锁失败的运行直接退出，保留当前运行的回执和报告。取得锁后先将 `process-death-status.json` 的 `passed` 设为 `false`，再独占 `127.0.0.1:18081`。源站启动失败时将错误写入本轮回执和独立的 `origin-failure-*.json`，保留已有日志和诊断报告，也不接触设备。取得源站后才清除上次夹具报告。安装 APK、清除应用数据、修改授权、启动应用、写入日志标记、执行插桩及每项清理前均重新核对固定 AVD 路径、模拟器序列号、API、启动标识和启动计数。脚本拒绝经过符号链接的 AVD 路径。校验与后续 ADB 命令各自发出，同一序列号在两者之间被替换时仍有竞态。
+
+第一阶段使用虚构本地配置建立 TUN，写入模拟的中断记录，再向应用自身进程发送 SIGKILL。两阶段均用 `am instrument --no-restart`。第二阶段在新 PID 中核对 Android 退出历史里的 SIGKILL，检查冷启动保持暂停，再点击重试并验证原配置和保存的 VPN 计划恢复。通过本机测试源、直连负对照和控制器连接记录验证恢复后的 TUN 实际转发。阶段成功或失败后先采证，再有界清理应用数据与授权。身份复核失败时停止后续清理并保留已执行的命令结果。清理失败附在原始错误后。采证、设备清理及源站退出均成功后才写入成功回执。`target/android-report/x64/protection-process-death/` 保留安装和插桩输出、回执、清理结果和日志。夹具覆盖中断记录落盘之后的进程死亡与显式恢复，保护启用事务的真实中断点、保护 DNS 和厂商系统行为仍需独立验证。
 
 常规测试、输入法专项及打包共用模拟器准备入口。当前[模拟器实现](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)会将首次启动的 API 24+ userdata 提高到至少 6 GiB，并要求分区大小的 1.2 倍空闲；因此配置显式使用 6144 MiB，再为测试留出 1 GiB，启动前合计要求约 8.2 GiB。此前 3072 MiB / 4 GiB 的预检遗漏了这一最低值，`1139dcc` 的 x64 仍在约 5255 MiB 空闲时被模拟器要求 7372.8 MiB 而拒绝，不能把配置写入或较宽裕 runner 的偶然成功当作修复。
 

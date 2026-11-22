@@ -19,7 +19,7 @@
 | `prepare-assets.py` | 维护 CLI | 生成图标、CLDR 国家名称，或核验 Windows 嵌入图标；普通构建不运行，不生成国旗图片。 |
 | `android.py` | CLI / 模块 | Android 编译、模拟器、产物导出与 APK 打包。[CI](../docs/workflows/ci.md#android-工具与原包)复用同一 Gradle 任务预热依赖及离线构建。`application-preview --arch x64 --api LEVEL --build DIRECTORY --compatibility` 复用 CI APK 验证基础代理/TUN，可加 `--screenshots`、`--verify-diagnostics`，见[兼容验证](../docs/workflows/android-compatibility.md)。不带 `--compatibility` 的本地入口仍只截图或诊断。 |
 | `build-installer.py` | CLI | 只组装已验证产物为 Windows、Linux 或 macOS 安装包。 |
-| `windows_update_tests.py` | 隔离安装测试模块 | 由 Windows 候选包验证按需调用；使用固定提交、固定摘要的旧安装器脚本和同一份 CI payload，对照文件占用、只读与 ACL 拒绝写入的旧/新退出码；另以独占端口和带身份标记的 HTTP 来源验证安装目录外独立 Mihomo 的流量、更新替换及外部进程/文件保留。首次启动等待有界的转发就绪并保留错误，正式更新前后拒绝错误响应，不重试掩盖失败。 |
+| `windows_update_tests.py` | 隔离安装测试模块 | 由 Windows 候选包验证按需调用；使用固定提交、固定摘要的旧安装器脚本和同一份 CI payload，对照文件占用、只读与 ACL 拒绝写入的旧/新退出码；另以独占端口和带身份标记的 HTTP 来源验证安装目录外独立 Mihomo 的流量、更新替换及外部进程/文件保留。端口优先由 UDP 分配，并在冲突时有界地尝试其他端口，同时确认 TCP 与 UDP 均可独占；每次探测核对两种端口均由独立 Mihomo 进程持有。首次启动等待有界的转发就绪并保留错误，正式更新前后拒绝错误响应，不重试掩盖失败。 |
 | `macos_package.py` | 模块 | macOS App / DMG 组装；被打包器和 macOS 验证延迟导入。 |
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择，Windows 更新相关变更另执行服务与进程边界回归，macOS 代理相关变更包含 CF 转换及偏好数据回归。 |
@@ -43,8 +43,8 @@
 | `macos_runner_network.py` | 共享模块 | 供 macOS 安装验收采集 runner 原生 DNS、路由与解析探针。 |
 | `macos_test_network.py` | 共享模块 | 可丢弃 Mac runner 安装测试前的网络快照、测试助手取证/清理、失败恢复和附件端点检查；由安装验收及上传前检查调用，不用于用户网络。 |
 | `test-proxy-modes.py` | CLI | Windows、Linux、macOS 共用的系统代理、HTTP 和 TUN 流量检查。 |
-| `test-linux-tun.py` | root CLI | Linux 隔离网络/挂载命名空间内的用户身份、订阅隔离、TUN 授权、DNS 和恢复测试。 |
-| `tun_dns_fixture.py` | 子进程夹具 | Linux TUN 测试的隔离上游；必须作为独立进程启动。 |
+| `test-linux-tun.py` | root CLI | Linux 隔离网络/挂载命名空间内的用户身份、订阅隔离、TUN 授权、DNS 和恢复测试；订阅更新失败时输出脱敏原因和夹具时序。 |
+| `tun_dns_fixture.py` | 子进程夹具 | Linux TUN 测试的隔离上游；必须作为独立进程启动，保留有界的虚构订阅请求与 DNS 事件用于故障诊断。 |
 | `tun_ipv6_lifecycle.py` | 隔离测试模块 | 由 Linux TUN 测试调用，验证默认 IPv6、无 IPv6 的启动/保护、地址族增减与 TUN 重连；不单独操作开发主机网络。 |
 | `test-release-package.py` | CLI | 统一调度安装包结构、安装后验证和 Linux 兼容性检查。 |
 | `run-memory-benchmark.py` | CLI | 准备、分片测量和汇总 API、GUI、托盘及 CLI/TUI 内存基准。 |

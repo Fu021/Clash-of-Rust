@@ -14,6 +14,11 @@ pub mod overview;
 
 pub const PROTECTION_RECOVERY_FILE: &str = "protection-recovery.json";
 
+pub enum ProtectionRecoveryCommit {
+    Committed,
+    Unconfirmed(anyhow::Error),
+}
+
 pub trait NativeHost: Send + Sync + 'static {
     fn request(&self, value: Value) -> Result<Value>;
     fn notify(&self, title: &str, message: &str, interactive: bool) -> Result<()> {
@@ -462,7 +467,12 @@ impl Session {
         Ok(())
     }
 
-    pub fn finish_protection_recovery(&self, request: &str, connected: bool) -> Result<()> {
+    pub fn finish_protection_recovery(
+        &self,
+        request: &str,
+        connected: bool,
+        deadline_elapsed_ms: u64,
+    ) -> Result<ProtectionRecoveryCommit> {
         let saved = read_saved_settings(&self.store.root)?;
         ensure!(
             saved.claude_protection == self.settings.claude_protection
@@ -482,16 +492,21 @@ impl Session {
                 "config": raw,
                 "ipv6": effective_ipv6(&self.settings),
                 "request": request,
+                "deadline_elapsed_ms": deadline_elapsed_ms,
                 "connected": connected,
                 "desired": self.platform["vpn_desired"],
                 "generation": self.platform["vpn_generation"],
                 "protected": connected && self.settings.claude_protection.is_some(),
             }))
             .and_then(Self::check_protection_completion);
-        if result.is_err() && self.protection_recovery_completed(request).unwrap_or(false) {
-            return Ok(());
+        match result {
+            Ok(()) => Ok(ProtectionRecoveryCommit::Committed),
+            Err(error) => match self.protection_recovery_completed(request) {
+                Ok(true) => Ok(ProtectionRecoveryCommit::Committed),
+                Ok(false) => Err(error),
+                Err(_) => Ok(ProtectionRecoveryCommit::Unconfirmed(error)),
+            },
         }
-        result
     }
 
     pub fn protection_recovery_completed(&self, request: &str) -> Result<bool> {

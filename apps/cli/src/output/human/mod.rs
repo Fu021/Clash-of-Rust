@@ -200,16 +200,30 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             &clean(first),
             language,
         ),
-        "profile update" => table::records_in(
-            out,
-            rows(value),
-            &[
-                (language.text("订阅", "Subscription"), "name"),
-                (language.text("更新成功", "Updated"), "updated"),
-                (language.text("失败原因", "Error"), "error"),
-            ],
-            language,
-        ),
+        "profile update" => {
+            let headers = [
+                language.text("订阅", "Subscription"),
+                language.text("更新成功", "Updated"),
+                language.text("失败原因", "Error"),
+            ];
+            let rows = rows(value)
+                .iter()
+                .map(|row| {
+                    let error = row["error"].as_str().filter(|error| !error.is_empty());
+                    vec![
+                        text_in(row, "name", language),
+                        text_in(row, "updated", language),
+                        error.map_or_else(
+                            || text_in(row, "error", language),
+                            |error| {
+                                clean(&clash_client_core::error_message::localize(error, language))
+                            },
+                        ),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            table::write_in(out, &headers, &rows, table::width(), language)
+        }
         "rule list" => lists::rules(out, value, language),
         "rule shortcut" if value.is_array() => table::records_in(
             out,
@@ -866,10 +880,18 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
                 language,
             )?;
         }
+        let log = &value["local_evidence"]["daemon_log"];
+        let log_state = match log["state"].as_str() {
+            Some("collected") => language.text("已采集", "Collected").to_owned(),
+            Some("missing") => language.text("未找到", "Not found").to_owned(),
+            Some("withheld") => language.text("已隐藏", "Withheld").to_owned(),
+            Some("unavailable") => language.text("不可用", "Unavailable").to_owned(),
+            _ => text_in(log, "state", language),
+        };
         field_in(
             out,
             language.text("后台日志采集", "Background log capture"),
-            &text_in(&value["local_evidence"]["daemon_log"], "state", language),
+            &log_state,
             language,
         )?;
         network_notice(out, &value["host_routes"], language)?;

@@ -5,7 +5,7 @@ use crate::{
     list_presentation::{
         self, CONNECTION_PAGE_SIZE, ConnectionPageCursor, ConnectionPager, LogMessage,
     },
-    protection_presentation,
+    protection_presentation::{self, PendingVpnRestoration, VpnRestoration},
     request_gate::RequestGate,
     settings_input, site_report,
     startup_events::{
@@ -13,7 +13,8 @@ use crate::{
         vpn_authorization_result,
     },
     startup_protection::{
-        RetryOutcome, RollbackProgress, SavedProtectionRecovery, VpnBaseline, VpnTransition,
+        ProtectionDeadline, ProtectionJob, RetryOutcome, RollbackProgress, SavedProtectionRecovery,
+        VpnBaseline, VpnStartTimeout, VpnTransition,
     },
 };
 use anyhow::{Context, Result, ensure};
@@ -161,7 +162,7 @@ pub extern "system" fn Java_org_clashofrust_android_CoreBridge_nativeColdRuntime
             let root = root.try_to_string(env)?;
             let response = match Session::cold_android_runtime(
                 std::path::Path::new(&root),
-                application_rules_supported != 0,
+                application_rules_supported,
             ) {
                 Ok((raw, settings)) => json!({
                     "config":raw,
@@ -274,9 +275,10 @@ struct Request {
 struct ProtectionChange {
     kind: ProtectionChangeKind,
     transition: Option<VpnTransition>,
-    deadline: std::time::Instant,
+    deadline: ProtectionDeadline,
     verified: bool,
     authorization: Option<(i64, ProtectionAuthorization)>,
+    job: Option<ProtectionJob>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProtectionChangeKind {
@@ -313,6 +315,7 @@ struct State {
     claude_status: String,
     protection_change: Option<ProtectionChange>,
     saved_protection_recovery: SavedProtectionRecovery,
+    protection_disable_confirmation: Option<PendingVpnRestoration>,
     protection_status: String,
     protection_rollback_error: Option<String>,
     guard_snapshot: core::claude_check::guard::Snapshot,
@@ -708,9 +711,12 @@ enum Update {
     Ip(u64, usize, core::ip_report::ResultSlot),
     IpDone(u64),
     Claude(u64, std::result::Result<core::claude_check::Report, String>),
-    Protection(std::result::Result<core::claude_check::protection::Protection, String>),
-    ProtectionVerified(String, std::result::Result<(), String>),
-    ProtectionRollbackVerified(String, Result<()>),
+    ProtectionPrepared(
+        String,
+        std::result::Result<core::claude_check::protection::Protection, String>,
+    ),
+    ProtectionVerified(String, String, std::result::Result<(), String>),
+    ProtectionRollbackVerified(String, String, Result<()>),
     Address(
         ConnectionSelection,
         connection_detail::AddressRequest,
@@ -940,6 +946,7 @@ async fn run_loop(
         claude_status: startup.language.text("尚未检测", "Not checked").into(),
         protection_change: None,
         saved_protection_recovery,
+        protection_disable_confirmation: None,
         protection_status: String::new(),
         protection_rollback_error: None,
         guard_snapshot: Default::default(),
@@ -1022,9 +1029,7 @@ async fn run_loop(
     let (overview_send, mut overview_rx) = mpsc::channel(16);
     let mut checks: Option<tokio::task::JoinHandle<()>> = None;
     let mut claude_job: Option<tokio::task::JoinHandle<()>> = None;
-    let mut protection_job: Option<tokio::task::JoinHandle<()>> = None;
-    let mut protection_dns_job: Option<tokio::task::JoinHandle<()>> = None;
-    let mut rollback_dns_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut rollback_dns_job: Option<ProtectionJob> = None;
     let mut address_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut log_job: Option<tokio::task::JoinHandle<()>> = None;
     let geo_gate = RequestGate::default();
@@ -1050,6 +1055,7 @@ async fn run_loop(
     loop {
         let mut immediate = false;
         let mut refresh_requested = false;
+        let mut protection_dns_result = None;
         let mut protection_reservation_released = false;
         let mut profile_completed = None;
         let mut overview_refresh = false;
@@ -1346,26 +1352,29 @@ async fn run_loop(
                         state.geo_updating = false;
                         subscription_generation = subscription_generation.wrapping_add(1);
                         if let Some(job) = subscription_job.take() { job.abort(); let _ = job.await; }
-                        if let Some(job) = protection_dns_job.take() { job.abort(); }
-                        state.protection_change = Some(ProtectionChange {
-                            kind: ProtectionChangeKind::Enable,
-                            transition: None, deadline: std::time::Instant::now()+Duration::from_secs(120),
-                            verified: false,
-                            authorization: None,
-                        });
+                        state.protection_disable_confirmation = None;
+                        let deadline = ProtectionDeadline::after(Duration::from_secs(120));
                         state.protection_status=state.presentation_language.text("正在确认当前代理节点…", "Checking the current proxy node…").into();
                         let api=state.session.api.clone();let settings=state.session.settings.clone();
                         let language=state.presentation_language;
                         let raw=state.session.raw();let send=updates.clone();
-                        protection_job=Some(tokio::spawn(async move {
+                        let job = ProtectionJob::spawn(None, |ticket| async move {
                             let result=async {
                                 let raw=raw?;
                                 tokio::time::timeout(Duration::from_secs(20),
                                     clash_mobile_runtime::prepare_protection(&api,&settings,&raw))
                                     .await.context(language.text("确认保护节点超时", "Timed out checking the protected node"))?
                             }.await.map_err(|error|format!("{error:#}"));
-                            let _=send.send(Update::Protection(result)).await;
-                        }));
+                            let _=send.send(Update::ProtectionPrepared(ticket, result)).await;
+                        });
+                        state.protection_change = Some(ProtectionChange {
+                            kind: ProtectionChangeKind::Enable,
+                            transition: None,
+                            deadline,
+                            verified: false,
+                            authorization: None,
+                            job: Some(job),
+                        });
                     }
                 } else if intent == MobileIntent::ClaudeStart {
                     start_claude_check(&mut state, &mut claude_job, updates.clone());
@@ -1468,24 +1477,16 @@ async fn run_loop(
                             }
                         }
                     }
-                    Some(Update::ProtectionVerified(request, result)) => {
+                    Some(Update::ProtectionVerified(ticket, request, result)) => {
                         if let Some(change) = state.protection_change.as_mut()
-                            && change.transition.as_ref().is_some_and(|transition| transition.request == request) {
-                            protection_dns_job = None;
-                            match result {
-                                Ok(()) => change.verified = true,
-                                Err(error) => {
-                                    let prefix = state.presentation_language.text("保护验证失败：", "Protection verification failed: ");
-                                    let reason = format!("{prefix}{error}");
-                                    rollback_protection(&mut state, &reason);
-                                }
-                            }
+                            && ProtectionJob::finish(&mut change.job, &ticket, Some(&request)) {
+                            protection_dns_result = Some((request, result));
                             refresh_requested = true;
                             immediate = true;
                         }
                     }
-                    Some(Update::ProtectionRollbackVerified(request, result)) => {
-                        rollback_dns_job = None;
+                    Some(Update::ProtectionRollbackVerified(ticket, request, result))
+                        if ProtectionJob::finish(&mut rollback_dns_job, &ticket, Some(&request)) => {
                         if state.session.observe_native().is_ok() {
                             let progress = state.saved_protection_recovery.verified(
                                 &state.session, &request, result,
@@ -1643,26 +1644,28 @@ async fn run_loop(
                             Err(error) => {state.claude_status=format!("{}{error}", state.presentation_language.text("检测失败：", "Check failed: ")); state.notice=error;state.notice_error=true;}
                         }
                     }
-                    Some(Update::Protection(result)) => {
-                        protection_job=None;
-                        immediate=true;
-                        let applied=(|| -> Result<()> {
-                            let protection=result.map_err(anyhow::Error::msg)?;
-                            ensure!(state.protection_change.is_some(), "{}", state.presentation_language.text("保护操作已取消", "Protection change cancelled"));
-                            ensure!(state.session.settings.active_profile.as_deref()==Some(protection.profile_id.as_str()),
-                                "{}", state.presentation_language.text("订阅已变化，请重新开启保护", "The subscription changed; enable protection again"));
-                            let request=next_vpn_authorization(&state.session.store.root)?;
-                            state.protection_change.as_mut().expect("pending protection")
-                                .authorization=Some((request,ProtectionAuthorization::Enable(protection)));
-                            state.protection_status=state.presentation_language.text("正在等待 VPN 授权，当前网络设置保持不变…", "Waiting for VPN authorization; current network settings are unchanged…").into();
-                            request_vpn_authorization(&state.session, state.presentation_language, request)?;
-                            Ok(())
-                        })();
-                        if let Err(error)=applied {
-                            let reason = format!("{}{error:#}", state.presentation_language.text("保护开启失败：", "Failed to enable protection: "));
-                            rollback_protection(&mut state,&reason);
+                    Some(Update::ProtectionPrepared(ticket, result)) => {
+                        if let Some(change) = state.protection_change.as_mut()
+                            && ProtectionJob::finish(&mut change.job, &ticket, None) {
+                            immediate = true;
+                            refresh_requested = true;
+                            if !change.deadline.reached() {
+                                let applied = (|| -> Result<()> {
+                                    let protection = result.map_err(anyhow::Error::msg)?;
+                                    ensure!(state.session.settings.active_profile.as_deref() == Some(protection.profile_id.as_str()),
+                                        "{}", state.presentation_language.text("订阅已变化，请重新开启保护", "The subscription changed; enable protection again"));
+                                    let request = next_vpn_authorization(&state.session.store.root)?;
+                                    change.authorization = Some((request, ProtectionAuthorization::Enable(protection)));
+                                    state.protection_status = state.presentation_language.text("正在等待 VPN 授权，当前网络设置保持不变…", "Waiting for VPN authorization; current network settings are unchanged…").into();
+                                    request_vpn_authorization(&state.session, state.presentation_language, request)?;
+                                    Ok(())
+                                })();
+                                if let Err(error) = applied {
+                                    let reason = format!("{}{error:#}", state.presentation_language.text("保护开启失败：", "Failed to enable protection: "));
+                                    rollback_protection(&mut state, &reason);
+                                }
+                            }
                         }
-                        refresh_requested=true;
                     }
                     Some(Update::Log(level,message)) => state.logs.push_back((level,message.into())),
                     Some(Update::Geo(ticket, result)) if geo_gate.finish(ticket) => {
@@ -1826,37 +1829,48 @@ async fn run_loop(
                 restore_protection = false;
                 let progress = state
                     .saved_protection_recovery
-                    .poll(state.protection_observed.then_some(&state.session));
+                    .poll_observed(Some(&state.session), state.protection_observed);
                 match progress {
                     RollbackProgress::VerifyProtection {
                         request,
                         check_dns: true,
                     } => {
-                        if rollback_dns_job.is_none() {
+                        if !rollback_dns_job
+                            .as_ref()
+                            .is_some_and(|job| job.verifies(&request))
+                        {
+                            drop(rollback_dns_job.take());
                             let api = state.session.api.clone();
                             let language = state.presentation_language;
                             let sender = updates.clone();
-                            rollback_dns_job = Some(tokio::spawn(async move {
-                                let result = tokio::time::timeout(
-                                    Duration::from_secs(40),
-                                    api.finish_protection_enable(),
-                                )
-                                .await
-                                .context(
-                                    language
-                                        .text("保护验证超时", "Protection verification timed out"),
-                                )
-                                .and_then(|result| result);
-                                let _ = sender
-                                    .send(Update::ProtectionRollbackVerified(request, result))
-                                    .await;
-                            }));
+                            rollback_dns_job = Some(ProtectionJob::spawn(
+                                Some(request.clone()),
+                                |ticket| async move {
+                                    let result =
+                                        tokio::time::timeout(
+                                            Duration::from_secs(40),
+                                            api.finish_protection_enable(),
+                                        )
+                                        .await
+                                        .context(language.text(
+                                            "保护验证超时",
+                                            "Protection verification timed out",
+                                        ))
+                                        .and_then(|result| result);
+                                    let _ = sender
+                                        .send(Update::ProtectionRollbackVerified(
+                                            ticket, request, result,
+                                        ))
+                                        .await;
+                                },
+                            ));
                         }
                     }
                     RollbackProgress::VerifyProtection {
                         request,
                         check_dns: false,
                     } => {
+                        rollback_dns_job = None;
                         let progress = state.saved_protection_recovery.verified(
                             &state.session,
                             &request,
@@ -1865,21 +1879,22 @@ async fn run_loop(
                         present_rollback(&mut state, progress);
                     }
                     other => {
-                        if let Some(job) = rollback_dns_job.take() {
-                            job.abort();
-                        }
+                        rollback_dns_job = None;
                         present_rollback(&mut state, other);
                     }
                 }
-            } else if restore_protection && state.protection_observed && state.session.running {
-                restore_protection = !restore_saved_protection(&mut state);
+            } else {
+                rollback_dns_job = None;
+                if restore_protection && state.protection_observed && state.session.running {
+                    restore_protection = !restore_saved_protection(&mut state);
+                }
             }
             if was_running && !state.session.running {
                 state.notice = state.presentation_language.text("内核已意外停止，请导出诊断后重试启动。", "The core stopped unexpectedly. Export diagnostics, then try starting it again.").into();
                 state.notice_error = true;
                 state.notice_critical = true;
             }
-            match observe_protection(&mut state) {
+            match observe_protection(&mut state, protection_dns_result) {
                 Ok(true) => start_claude_check(&mut state, &mut claude_job, updates.clone()),
                 Ok(false) => {}
                 Err(error) => {
@@ -1897,16 +1912,22 @@ async fn run_loop(
                         .push_back(("ERROR".into(), state.notice.clone().into()));
                 }
             }
-            if state.protection_change.is_none()
-                && let Some(job) = protection_dns_job.take()
+            if let Some(change) = state.protection_change.as_mut()
+                && (change.deadline.reached()
+                    || change
+                        .transition
+                        .as_ref()
+                        .is_some_and(VpnTransition::needs_settlement))
             {
-                job.abort();
+                change.job = None;
             }
-            if let Some(change) = &state.protection_change
+            if let Some(change) = state.protection_change.as_mut()
+                && !change.deadline.reached()
                 && !change.verified
-                && protection_dns_job.is_none()
+                && change.job.is_none()
                 && state.protection_observed
                 && let Some(transition) = &change.transition
+                && !transition.needs_settlement()
                 && let RollbackProgress::VerifyProtection {
                     request,
                     check_dns: true,
@@ -1918,13 +1939,18 @@ async fn run_loop(
                 let api = state.session.api.clone();
                 let send = updates.clone();
                 state.protection_status = state.presentation_language.text("正在关闭旧连接并验证保护节点与加密 DNS…", "Closing old connections and checking the protected node and encrypted DNS…").into();
-                protection_dns_job = Some(tokio::spawn(async move {
-                    let result = api
-                        .finish_protection_enable()
-                        .await
-                        .map_err(|error| format!("{error:#}"));
-                    let _ = send.send(Update::ProtectionVerified(request, result)).await;
-                }));
+                change.job = Some(ProtectionJob::spawn(
+                    Some(request.clone()),
+                    |ticket| async move {
+                        let result = api
+                            .finish_protection_enable()
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                        let _ = send
+                            .send(Update::ProtectionVerified(ticket, request, result))
+                            .await;
+                    },
+                ));
             }
             if !state.session.running || (!state.visible && !state.session.vpn) {
                 if let Some(job) = refresh_job.take() {
@@ -2187,15 +2213,8 @@ async fn run_loop(
     if let Some(job) = claude_job {
         job.abort();
     }
-    if let Some(job) = protection_job {
-        job.abort();
-    }
-    if let Some(job) = protection_dns_job {
-        job.abort();
-    }
-    if let Some(job) = rollback_dns_job {
-        job.abort();
-    }
+    drop(state.protection_change.take());
+    drop(rollback_dns_job);
     if let Some(job) = log_job {
         job.abort();
     }
@@ -2279,12 +2298,14 @@ fn restore_saved_protection(state: &mut State) -> bool {
         .into();
     let result = (|| -> Result<()> {
         let request = next_vpn_authorization(&state.session.store.root)?;
+        state.protection_disable_confirmation = None;
         state.protection_change = Some(ProtectionChange {
             kind: ProtectionChangeKind::Restore,
             transition: None,
-            deadline: std::time::Instant::now() + Duration::from_secs(120),
+            deadline: ProtectionDeadline::after(Duration::from_secs(120)),
             verified: false,
             authorization: Some((request, ProtectionAuthorization::Restore)),
+            job: None,
         });
         request_vpn_authorization(&state.session, language, request)
     })();
@@ -2315,8 +2336,12 @@ fn request_vpn_authorization(
 }
 
 fn rollback_protection(state: &mut State, reason: &str) {
+    if state.saved_protection_recovery.is_finalizing() {
+        return;
+    }
     let mut failures = Vec::new();
-    if let Some(change) = state.protection_change.take() {
+    if let Some(mut change) = state.protection_change.take() {
+        drop(change.job.take());
         if let Some((request, _)) = change.authorization {
             EVENTS.cancel_authorization(request);
             if let Err(error) = state
@@ -2389,26 +2414,137 @@ fn present_rollback(state: &mut State, progress: RollbackProgress) {
                 )
                 .into();
         }
+        RollbackProgress::WaitingForVpnSettlement(detail) => {
+            let waiting = language.text(
+                "正在等待 Android VPN 服务结束原请求。",
+                "Waiting for the Android VPN service to finish the original request.",
+            );
+            let message = format!("{detail} · {waiting}");
+            state.protection_rollback_error = None;
+            if state.protection_status != message {
+                state.protection_status = message.clone();
+                state.notice = message;
+                state.notice_error = true;
+            }
+        }
         RollbackProgress::Idle | RollbackProgress::VerifyProtection { .. } => {}
     }
 }
 
+fn disabled_and_restored(language: config::Language) -> &'static str {
+    language.text(
+        "Claude 保护已关闭，原网络状态已恢复",
+        "Claude protection disabled; previous network state restored",
+    )
+}
+
+fn settled_protection_disable(state: &mut State) -> Option<&'static str> {
+    let language = state.presentation_language;
+    let confirmation = protection_presentation::observe_vpn_restoration(
+        &mut state.protection_disable_confirmation,
+        state.protection_observed.then_some(&state.session.platform),
+    )?;
+    Some(match confirmation {
+        VpnRestoration::Restored => disabled_and_restored(language),
+        VpnRestoration::Superseded => {
+            language.text("Claude 保护已关闭", "Claude protection disabled")
+        }
+    })
+}
+
+fn complete_protection_change(state: &mut State) -> bool {
+    let change = state
+        .protection_change
+        .take()
+        .expect("committed protection change");
+    let transition = change.transition.expect("committed VPN transition");
+    let language = state.presentation_language;
+    state.protection_rollback_error = None;
+    state.protection_observed = state.session.observe_native().is_ok();
+    let live = state.protection_observed && protected_vpn_attached(&state.session);
+    let status = if change.kind != ProtectionChangeKind::Disable && live {
+        language.text("Claude 保护已开启", "Claude protection enabled")
+    } else if change.kind != ProtectionChangeKind::Disable {
+        language.text(
+            "保护已保存，实时状态待确认",
+            "Protection saved; live status unconfirmed",
+        )
+    } else {
+        state.protection_disable_confirmation = Some(PendingVpnRestoration {
+            connected: transition.target_connected(),
+            request: transition.request,
+        });
+        settled_protection_disable(state).unwrap_or_else(|| {
+            language.text(
+                "Claude 保护已关闭，VPN 状态待确认",
+                "Claude protection disabled; VPN state unconfirmed",
+            )
+        })
+    };
+    state.protection_status = status.into();
+    if state.protection_disable_confirmation.is_none() {
+        state.notice = status.into();
+    }
+    change.kind == ProtectionChangeKind::Enable && live
+}
+
 /// Returns true only after a user-requested enable has completed successfully.
-fn observe_protection(state: &mut State) -> Result<bool> {
+fn observe_protection(
+    state: &mut State,
+    dns_result: Option<(String, std::result::Result<(), String>)>,
+) -> Result<bool> {
+    if let Some(message) = settled_protection_disable(state) {
+        state.protection_status = message.into();
+        if state.notice.is_empty() {
+            state.notice = message.into();
+        }
+    }
     if state.saved_protection_recovery.is_active() && !state.saved_protection_recovery.is_applying()
     {
         return Ok(false);
     }
     let language = state.presentation_language;
-    if state
-        .protection_change
-        .as_ref()
-        .is_some_and(|change| std::time::Instant::now() >= change.deadline)
+    if state.protection_change.is_some() && state.saved_protection_recovery.is_finalizing() {
+        match state
+            .saved_protection_recovery
+            .poll_observed(Some(&state.session), state.protection_observed)
+        {
+            RollbackProgress::Restored => return Ok(complete_protection_change(state)),
+            RollbackProgress::Failed(error) => rollback_protection(state, &error),
+            _ => {}
+        }
+        return Ok(false);
+    }
+    if let Some(change) = &state.protection_change
+        && (change.deadline.reached()
+            || change
+                .transition
+                .as_ref()
+                .is_some_and(VpnTransition::needs_settlement))
     {
-        rollback_protection(
-            state,
-            language.text("保护切换超时", "Protection change timed out"),
-        );
+        let timeout = language.text("保护切换超时", "Protection change timed out");
+        let Some(transition) = &change.transition else {
+            rollback_protection(state, timeout);
+            return Ok(false);
+        };
+        let reason = transition
+            .expiry_reason()
+            .map_or_else(|| timeout.to_owned(), |error| format!("{error:#}"));
+        let detail = match transition.resolve_start_timeout(&state.session) {
+            VpnStartTimeout::ReadyForRecovery => {
+                rollback_protection(state, &reason);
+                return Ok(false);
+            }
+            VpnStartTimeout::Waiting => reason,
+            VpnStartTimeout::Unconfirmed(error) => format!(
+                "{reason}{}{error:#}",
+                language.text(
+                    "。无法确认 VPN 启动状态：",
+                    ". Could not confirm VPN start status: "
+                ),
+            ),
+        };
+        present_rollback(state, RollbackProgress::WaitingForVpnSettlement(detail));
         return Ok(false);
     }
     match state.session.protection_snapshot() {
@@ -2423,23 +2559,43 @@ fn observe_protection(state: &mut State) -> Result<bool> {
                     "Protection status temporarily unavailable: "
                 )
             );
-            if state.protection_status != message {
+            let diagnostic = if state.protection_change.is_some()
+                || state.session.settings.claude_protection.is_some()
+            {
+                &mut state.protection_status
+            } else {
+                &mut state.guard_snapshot.error
+            };
+            if *diagnostic != message {
                 state
                     .logs
                     .push_back(("WARN".into(), message.clone().into()));
+                *diagnostic = message;
             }
-            state.protection_status = message;
             return Ok(false);
         }
     }
     let native = &state.session.platform["protection"];
     let active = native["enabled"].as_bool().unwrap_or(false);
-    if let Some(change) = &state.protection_change {
+    if let Some(change) = &mut state.protection_change {
         let Some(transition) = &change.transition else {
             return Ok(false);
         };
         if !state.protection_observed {
             return Ok(false);
+        }
+        if let Some((request, result)) = dns_result
+            && transition.accepts_dns_result(&state.session, &request)
+        {
+            match result {
+                Ok(()) => change.verified = true,
+                Err(error) => {
+                    let prefix =
+                        language.text("保护验证失败：", "Protection verification failed: ");
+                    rollback_protection(state, &format!("{prefix}{error}"));
+                    return Ok(false);
+                }
+            }
         }
         let enabled = change.kind != ProtectionChangeKind::Disable;
         let ready = match transition.poll(&state.session, enabled) {
@@ -2451,46 +2607,22 @@ fn observe_protection(state: &mut State) -> Result<bool> {
             _ => false,
         };
         if ready {
-            if let Err(error) =
-                state
-                    .saved_protection_recovery
-                    .finish(&state.session, transition, change.verified)
-            {
-                rollback_protection(state, &format!("{error:#}"));
-                return Ok(false);
+            match state.saved_protection_recovery.finish(
+                &state.session,
+                transition,
+                change.verified,
+            ) {
+                Ok(true) => return Ok(complete_protection_change(state)),
+                Ok(false) => {
+                    state.protection_status = language
+                        .text("正在确认 VPN 提交…", "Confirming the VPN commit…")
+                        .into();
+                }
+                Err(error) if !transition.needs_settlement() => {
+                    rollback_protection(state, &format!("{error:#}"));
+                }
+                Err(_) => {}
             }
-            let auto_check = change.kind == ProtectionChangeKind::Enable;
-            let target_vpn = transition.target_connected();
-            state.protection_change = None;
-            state.protection_rollback_error = None;
-            state.protection_observed = state.session.observe_native().is_ok();
-            let live = state.protection_observed && protected_vpn_attached(&state.session);
-            let vpn_confirmed = state.protection_observed
-                && state.session.vpn == target_vpn
-                && state.session.platform["vpn_held"] == false
-                && state.session.platform["vpn_transition_pending"] == false
-                && state.session.platform["vpn_error"].as_str() == Some("");
-            state.notice = if enabled && live {
-                language.text("Claude 保护已开启", "Claude protection enabled")
-            } else if enabled {
-                language.text(
-                    "保护已保存，实时状态待确认",
-                    "Protection saved; live status unconfirmed",
-                )
-            } else if vpn_confirmed {
-                language.text(
-                    "Claude 保护已关闭，原网络状态已恢复",
-                    "Claude protection disabled; previous network state restored",
-                )
-            } else {
-                language.text(
-                    "Claude 保护已关闭，VPN 状态待确认",
-                    "Claude protection disabled; VPN state unconfirmed",
-                )
-            }
-            .into();
-            state.protection_status = state.notice.clone();
-            return Ok(auto_check && live);
         }
     } else if let Some(protection) = &state.session.settings.claude_protection {
         state.protection_status =
@@ -2598,7 +2730,7 @@ async fn native_event(state: &mut State, value: &Value) -> Result<()> {
             if state
                 .protection_change
                 .as_ref()
-                .is_some_and(|change| std::time::Instant::now() >= change.deadline)
+                .is_some_and(|change| change.deadline.reached())
             {
                 rollback_protection(
                     state,
@@ -2644,7 +2776,7 @@ async fn native_event(state: &mut State, value: &Value) -> Result<()> {
                 state
                     .saved_protection_recovery
                     .begin(&state.session, before_vpn)?;
-                change.deadline = std::time::Instant::now() + Duration::from_secs(120);
+                change.deadline = ProtectionDeadline::after(Duration::from_secs(120));
                 if let ProtectionAuthorization::Enable(mut protection) = authorization {
                     before_vpn.save_for_disable(&mut protection);
                     state.session.commit_protection(
@@ -2658,9 +2790,10 @@ async fn native_event(state: &mut State, value: &Value) -> Result<()> {
                     )?;
                 }
                 state.guard_snapshot = Default::default();
-                change.transition = Some(VpnTransition::apply(
+                change.transition = Some(state.saved_protection_recovery.apply_vpn(
                     &state.session,
                     VpnBaseline::target(true),
+                    change.deadline,
                 )?);
                 state.protection_status = language
                     .text("正在连接保护 VPN…", "Connecting protected VPN…")
@@ -3387,13 +3520,16 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 "VPN 状态正在切换，请重试",
                 "The VPN state is changing. Try again.",
             ))?;
+            let deadline = ProtectionDeadline::after(Duration::from_secs(30));
             state.saved_protection_recovery.begin(session, before_vpn)?;
+            state.protection_disable_confirmation = None;
             state.protection_change = Some(ProtectionChange {
                 kind: ProtectionChangeKind::Disable,
                 transition: None,
-                deadline: std::time::Instant::now() + Duration::from_secs(30),
+                deadline,
                 verified: false,
                 authorization: None,
+                job: None,
             });
             state.protection_status = language
                 .text(
@@ -3418,7 +3554,9 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                     }
                 }
                 session.api.close_connections().await?;
-                VpnTransition::apply(session, target)
+                state
+                    .saved_protection_recovery
+                    .apply_vpn(session, target, deadline)
             }
             .await;
             match result {
@@ -4999,6 +5137,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     },
                     level: level.into(),
                     message: message.into(),
+                    original: "".into(),
                     time: "".into(),
                 })
                 .collect(),

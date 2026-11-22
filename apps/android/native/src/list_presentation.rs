@@ -215,6 +215,10 @@ pub(crate) fn logs(
     lower_query: &str,
     language: Language,
 ) -> Vec<(String, String)> {
+    let other_language = match language {
+        Language::SimplifiedChinese => Language::English,
+        Language::English => Language::SimplifiedChinese,
+    };
     entries
         .iter()
         .rev()
@@ -223,7 +227,10 @@ pub(crate) fn logs(
                 return None;
             }
             let line = message.display(language);
-            contains_query(&line, lower_query).then(|| (entry_level.clone(), line))
+            (contains_query(&line, lower_query)
+                || (!matches!(message, LogMessage::Raw(_))
+                    && contains_query(&message.display(other_language), lower_query)))
+            .then(|| (entry_level.clone(), line))
         })
         .collect()
 }
@@ -436,6 +443,46 @@ mod tests {
             assert_eq!(message.display(Language::SimplifiedChinese), chinese);
             assert_eq!(message.display(Language::English), english);
         }
+    }
+
+    #[test]
+    fn log_search_matches_original_and_translated_text_after_language_switches() {
+        let detail = "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅";
+        let raw = "[observed_at=12:00] [客户端] 配置已导入/更新";
+        let chinese = format!("订阅定时下载失败，已保留原配置与运行状态：{detail}");
+        let english = "Scheduled subscription download failed; configuration and connection preserved: Incompatible subscription; use a Mihomo/Clash Meta YAML subscription";
+        let entries = VecDeque::from([
+            (
+                "WARN".into(),
+                LogMessage::SubscriptionDownloadFailed(detail.into()),
+            ),
+            ("INFO".into(), LogMessage::Raw(raw.into())),
+        ]);
+        let original = entries.clone();
+        for (language, displayed) in [
+            (Language::SimplifiedChinese, chinese.as_str()),
+            (Language::English, english),
+            (Language::SimplifiedChinese, chinese.as_str()),
+        ] {
+            for query in [
+                "订阅定时下载失败",
+                "scheduled subscription download failed",
+                "订阅格式不兼容",
+                "incompatible subscription",
+            ] {
+                assert_eq!(
+                    logs(&entries, "全部等级", query, language),
+                    [("WARN".into(), displayed.into())]
+                );
+            }
+            assert!(logs(&entries, "INFO", "incompatible subscription", language).is_empty());
+            assert_eq!(
+                logs(&entries, "全部等级", "配置已导入/更新", language),
+                [("INFO".into(), raw.into())]
+            );
+            assert!(logs(&entries, "全部等级", "configuration imported", language).is_empty());
+        }
+        assert_eq!(entries, original);
     }
 
     #[test]

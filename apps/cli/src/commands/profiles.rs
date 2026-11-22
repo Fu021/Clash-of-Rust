@@ -13,14 +13,18 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 .iter()
                 .filter(|profile| output::profile_list_matches(args, profile, &filter))
                 .map(|profile| {
-                    json!({
+                    let mut row = json!({
                         "id": profile.id,
                         "name": output::profile_list_name(args, profile),
                         "active": meta.settings.active_profile.as_deref() == Some(&profile.id),
                         "source": profile.source,
                         "updated": profile.updated,
                         "usage": profile.usage,
-                    })
+                    });
+                    if !output::writes_json(args) && !profile.is_default() && !profile.is_local() {
+                        row["show_usage"] = Value::Bool(true);
+                    }
+                    row
                 })
                 .collect();
             output::emit(args, json!(rows))

@@ -9,6 +9,10 @@ pub(super) fn has_notice(state: &State) -> bool {
         || state.confirmation.is_some()
         || state.error.is_some()
         || state.message.is_some()
+        || state
+            .fake_ip
+            .as_ref()
+            .is_some_and(|editor| editor.has_review_error())
         || state.saving
         || state.updates.pending.is_some()
         || state

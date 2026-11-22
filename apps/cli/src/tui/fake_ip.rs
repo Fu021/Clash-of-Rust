@@ -3,7 +3,7 @@ use super::{
     model::{Action, State},
     render::{Tone, wrap},
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::Error;
 use clash_client_core::config::{
     DEFAULT_FAKE_IP_EXCLUSIONS, Language, Settings, parse_fake_ip_exclusions,
 };
@@ -24,6 +24,18 @@ pub(super) struct Editor {
     pub disabled_defaults: usize,
     pub pending: Option<(Command, String)>,
     pub saving_addition: bool,
+    review_error: Option<ReviewError>,
+}
+
+enum ReviewError {
+    Message(&'static str, &'static str),
+    Shared(Error),
+}
+
+impl From<Error> for ReviewError {
+    fn from(error: Error) -> Self {
+        Self::Shared(error)
+    }
 }
 
 impl Editor {
@@ -36,6 +48,7 @@ impl Editor {
             disabled_defaults: 0,
             pending: None,
             saving_addition: false,
+            review_error: None,
         };
         editor.sync(settings);
         editor
@@ -77,16 +90,32 @@ impl Editor {
             .map_or(self.selected.min(self.entries.len() + 1), |index| index + 2);
     }
 
-    fn prepare(&self, settings: &Settings, language: Language) -> Result<(Command, String)> {
+    pub fn has_review_error(&self) -> bool {
+        self.review_error.is_some()
+    }
+
+    pub fn review_message(&self, language: Language) -> Option<String> {
+        self.review_error.as_ref().map(|error| match error {
+            ReviewError::Message(chinese, english) => language.text(chinese, english).into(),
+            ReviewError::Shared(error) => crate::output::localized_error(error, language),
+        })
+    }
+
+    fn prepare(
+        &self,
+        settings: &Settings,
+        language: Language,
+    ) -> Result<(Command, String), ReviewError> {
         let mut next = settings.clone();
         let description = match self.selected {
             0 => {
                 let values = parse_fake_ip_exclusions(&self.draft)?;
-                ensure!(
-                    !values.is_empty(),
-                    "{}",
-                    language.text("请输入域名后再保存", "Enter a domain before saving")
-                );
+                if values.is_empty() {
+                    return Err(ReviewError::Message(
+                        "请输入域名后再保存",
+                        "Enter a domain before saving",
+                    ));
+                }
                 next.add_fake_ip_exclusions(&values)?;
                 format!(
                     "{}{}",
@@ -95,11 +124,12 @@ impl Editor {
                 )
             }
             1 => {
-                ensure!(
-                    self.disabled_defaults > 0,
-                    "{}",
-                    language.text("默认排除项均已启用", "All default exclusions are enabled")
-                );
+                if self.disabled_defaults == 0 {
+                    return Err(ReviewError::Message(
+                        "默认排除项均已启用",
+                        "All default exclusions are enabled",
+                    ));
+                }
                 next.restore_fake_ip_defaults()?;
                 language
                     .text(
@@ -109,10 +139,10 @@ impl Editor {
                     .into()
             }
             index => {
-                let entry = self
-                    .entries
-                    .get(index - 2)
-                    .context(language.text("请重新选择排除项", "Select the exclusion again"))?;
+                let entry = self.entries.get(index - 2).ok_or(ReviewError::Message(
+                    "请重新选择排除项",
+                    "Select the exclusion again",
+                ))?;
                 if entry.enabled {
                     next.remove_fake_ip_exclusion(&entry.domain)?;
                     format!(
@@ -126,11 +156,12 @@ impl Editor {
                         entry.domain
                     )
                 } else {
-                    ensure!(
-                        next.dns_override,
-                        "{}",
-                        language.text("请先开启 DNS 覆盖", "Enable DNS override first")
-                    );
+                    if !next.dns_override {
+                        return Err(ReviewError::Message(
+                            "请先开启 DNS 覆盖",
+                            "Enable DNS override first",
+                        ));
+                    }
                     next.fake_ip_disabled_defaults
                         .retain(|domain| !domain.eq_ignore_ascii_case(&entry.domain));
                     format!(
@@ -146,7 +177,7 @@ impl Editor {
         Ok((
             Command::Settings {
                 settings: next,
-                expected: Some(serde_json::to_value(settings)?),
+                expected: Some(serde_json::to_value(settings).map_err(Error::from)?),
             },
             description,
         ))
@@ -259,36 +290,27 @@ fn append(draft: &mut String, text: &str) {
 }
 
 fn review(state: &mut State) -> Action {
-    if state.error.is_some() {
-        state.message = Some(
-            state
-                .language
-                .text(
-                    "后台状态过期，输入保留；等待读取恢复后再保存",
-                    "Backend state is stale; input is retained until it reconnects",
-                )
-                .into(),
-        );
+    state.message = None;
+    let editor = state.fake_ip.as_mut().unwrap();
+    editor.review_error = if state.error.is_some() {
+        Some(ReviewError::Message(
+            "后台状态过期，输入保留；等待读取恢复后再保存",
+            "Backend state is stale; input is retained until it reconnects",
+        ))
     } else if let Some(poll) = &state.poll {
-        let editor = state.fake_ip.as_mut().unwrap();
         match editor.prepare(&poll.meta.settings, state.language) {
             Ok(pending) => {
                 editor.pending = Some(pending);
-                state.message = None;
+                None
             }
-            Err(error) => state.message = Some(format!("{error:#}")),
+            Err(error) => Some(error),
         }
     } else {
-        state.message = Some(
-            state
-                .language
-                .text(
-                    "后台未运行，输入保留",
-                    "Backend is not running; input is retained",
-                )
-                .into(),
-        );
-    }
+        Some(ReviewError::Message(
+            "后台未运行，输入保留",
+            "Backend is not running; input is retained",
+        ))
+    };
     Action::None
 }
 

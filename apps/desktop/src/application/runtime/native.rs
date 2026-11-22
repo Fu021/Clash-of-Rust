@@ -12,7 +12,7 @@ pub trait Host {
     fn minimized(&self, id: window::Id) -> Option<bool>;
     fn window_command(&mut self, id: window::Id, command: window::Command);
     fn read_clipboard(&mut self) -> Option<String>;
-    fn write_clipboard(&mut self, text: String);
+    fn write_clipboard(&mut self, text: String) -> Result<(), arboard::Error>;
     fn focus(&mut self, target: &str);
     fn system_theme(&self) -> theme::Mode;
     #[cfg(target_os = "macos")]
@@ -83,9 +83,6 @@ pub mod clipboard {
     use super::*;
     pub fn read() -> Task<Option<String>> {
         call(|host| host.read_clipboard())
-    }
-    pub fn write<T: Send + 'static>(text: String) -> Task<T> {
-        call(move |host| host.write_clipboard(text)).discard()
     }
 }
 pub mod system {

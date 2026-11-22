@@ -8,6 +8,7 @@ use anyhow::Result;
 use clash_client_core::{
     config::Language,
     ip_report::{self, Counts, Status},
+    subscription,
 };
 use serde_json::Value;
 use std::io::Write;
@@ -362,12 +363,11 @@ pub(super) fn profiles(out: &mut dyn Write, value: &Value, language: Language) -
                 language,
             )?;
         }
-        if !row["usage"].is_null() {
-            field_in(
+        if row["show_usage"] == true {
+            writeln!(
                 out,
-                language.text("  用量", "  Usage"),
-                &text_in(row, "usage", language),
-                language,
+                "  {}",
+                subscription::summary(row["usage"].as_str(), 0, language)
             )?;
         }
     }

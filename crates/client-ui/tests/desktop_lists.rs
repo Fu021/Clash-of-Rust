@@ -16,11 +16,12 @@ slint::slint! {
     import { ActionButton, Field, PageScroll } from "../ui/components/controls.slint";
     import { RuleDragHandle } from "../ui/components/rule-drag.slint";
     import { ConnectionsPage } from "../ui/pages/connections.slint";
+    import { LogsPage } from "../ui/pages/logs.slint";
     import { SettingsPage, SettingsNavigation } from "../ui/pages/settings.slint";
     import { NetworkPage } from "../ui/pages/network.slint";
     import { UiData } from "../ui/state.slint";
-    import { ConnectionItem } from "../ui/models.slint";
-    export { ConnectionItem } from "../ui/models.slint";
+    import { ConnectionItem, LogItem } from "../ui/models.slint";
+    export { ConnectionItem, LogItem } from "../ui/models.slint";
     export { Intent, UiActions } from "../ui/state.slint";
     import { Theme } from "../ui/theme/palette.slint";
     export { UiGeometry } from "../ui/components/geometry.slint";
@@ -31,6 +32,12 @@ slint::slint! {
         in-out property <int> page-offset <=> UiData.page-offset;
         in-out property <bool> protected <=> UiData.protected;
         ConnectionsPage { width: parent.width; height: parent.height; }
+    }
+
+    export component DesktopLogsProbe inherits Window {
+        preferred-width: 950px; preferred-height: 540px;
+        in-out property <[LogItem]> logs <=> UiData.logs;
+        LogsPage { width: parent.width; height: parent.height; }
     }
 
     export component DesktopNetworkToolboxProbe inherits Window {
@@ -422,6 +429,119 @@ fn desktop_connections_keyboard_and_accessibility_close_the_intended_row() {
     press(slint::platform::Key::Return);
     current.accessible_action(&AccessibilityAction::Default);
     assert!(requests.borrow().is_empty(), "protection is active");
+    desktop.hide().unwrap();
+}
+
+#[test]
+fn desktop_logs_keep_focus_for_the_same_record_and_reject_a_replaced_row() {
+    use clash_client_ui::models::reconcile;
+    use i_slint_core::{
+        accessibility::{
+            AccessibilityAction, AccessibleStringProperty, accessible_descendents,
+            nearest_accessible_item,
+        },
+        items::ItemRc,
+        window::WindowInner,
+    };
+
+    let (adapter, clock) = headless(950, 540);
+    let desktop = DesktopLogsProbe::new().unwrap();
+    let mut rows: Vec<_> = ["first", "second"]
+        .into_iter()
+        .map(|name| LogItem {
+            message: format!("display {name}").into(),
+            original: format!("raw {name}").into(),
+            ..Default::default()
+        })
+        .collect();
+    let logs = Rc::new(slint::VecModel::from(rows.clone()));
+    desktop.set_logs(logs.clone().into());
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let observed = requests.clone();
+    desktop
+        .global::<UiActions>()
+        .on_dispatch(move |intent, value, _| {
+            observed.borrow_mut().push((intent, value.to_string()))
+        });
+    desktop.show().unwrap();
+    frame(&adapter, 950, 540);
+    advance(&clock, Duration::from_millis(300));
+
+    fn find_log(item: &ItemRc, label: &str) -> Option<ItemRc> {
+        accessible_descendents(item).find_map(|child| {
+            if child
+                .accessible_string_property(AccessibleStringProperty::Label)
+                .is_some_and(|value| value == label)
+            {
+                Some(child)
+            } else {
+                find_log(&child, label)
+            }
+        })
+    }
+
+    let window = WindowInner::from_pub(desktop.window());
+    let tree = ItemRc::new_root(window.component());
+    let press = |key: slint::platform::Key| {
+        desktop
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+        desktop
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+    };
+    let tab_to = |row: &ItemRc| {
+        for _ in 0..20 {
+            press(slint::platform::Key::Tab);
+            if window
+                .focus_item
+                .borrow()
+                .upgrade()
+                .is_some_and(|item| &nearest_accessible_item(item) == row)
+            {
+                return;
+            }
+        }
+        panic!("Tab did not reach the log row");
+    };
+    let expect_detail = |value: &str| {
+        assert_eq!(
+            requests.borrow_mut().drain(..).collect::<Vec<_>>(),
+            [(Intent::LogDetail, value.to_owned())]
+        );
+    };
+
+    let original = find_log(&tree, "display first").expect("first log row");
+    tab_to(&original);
+    press(slint::platform::Key::Return);
+    expect_detail("raw first");
+    original.accessible_action(&AccessibilityAction::Default);
+    expect_detail("raw first");
+
+    rows[0].message = "translated first".into();
+    reconcile(&logs, rows.clone());
+    frame(&adapter, 950, 540);
+    press(slint::platform::Key::Return);
+    expect_detail("raw first");
+
+    rows.remove(0);
+    reconcile(&logs, rows);
+    frame(&adapter, 950, 540);
+    press(slint::platform::Key::Return);
+    assert!(
+        requests.borrow().is_empty(),
+        "focus from the removed record: {:?}",
+        requests.borrow()
+    );
+    original.accessible_action(&AccessibilityAction::Default);
+    assert!(requests.borrow().is_empty(), "removed accessible item");
+
+    let current = find_log(&tree, "display second").expect("remaining log row");
+    tab_to(&current);
+    press(slint::platform::Key::Return);
+    expect_detail("raw second");
+    current.accessible_action(&AccessibilityAction::Default);
+    expect_detail("raw second");
     desktop.hide().unwrap();
 }
 

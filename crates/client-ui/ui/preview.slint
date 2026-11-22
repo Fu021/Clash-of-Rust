@@ -177,10 +177,10 @@ export component Preview inherits AppWindow {
             {id: "5", position: "5", kind: "GEOIP", value: "CN", policy: "DIRECT", source: "订阅", selected: false, enabled: true, raw: "GEOIP,CN,DIRECT,no-resolve"},
             {id: "6", position: "6", kind: "MATCH", value: "", policy: "Proxy", source: "订阅", selected: false, enabled: true, raw: "MATCH,Proxy"}];
         UiData.logs = [
-            {time: "", level: "INFO", message: "mihomo 已启动，控制接口可用", tone: 4},
-            {time: "", level: "INFO", message: "配置已更新并生效", tone: 4},
-            {time: "", level: "WARN", message: "DNS query failed, retrying", tone: 2},
-            {time: "", level: "ERROR", message: "connection timeout: api.example.org:443", tone: 3}];
+            {time: "", level: "INFO", message: "mihomo 已启动，控制接口可用", original: "", tone: 4},
+            {time: "", level: "INFO", message: "配置已更新并生效", original: "", tone: 4},
+            {time: "", level: "WARN", message: "DNS query failed, retrying", original: "", tone: 2},
+            {time: "", level: "ERROR", message: "connection timeout: api.example.org:443", original: "", tone: 3}];
         UiData.test-url = PreviewNetwork.target(root.preview-network-tool);
         UiData.network-results = PreviewNetwork.results(root.preview-network-tool);
         UiData.node-sort = 2;

@@ -50,7 +50,7 @@ impl App {
             "network_tool":network_tools::Tool::at(self.network_tool).ok().map(|tool| tool.id()),
             "network_test_codes":self.network_codes,
             "site_results":clash_client_core::support::ip_results(&self.site_results),
-            "claude_status":self.claude.status,
+            "claude_status":self.claude.status.display(self.presentation_language),
             "geo_status":self.geo_status,
             "events":self.issue_events,
             "desktop_startup":self.startup_diagnostics(),

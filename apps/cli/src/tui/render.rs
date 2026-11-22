@@ -461,6 +461,12 @@ fn notice(state: &State) -> (String, Tone) {
         )
     } else if let Some(message) = &state.message {
         (message.clone(), Tone::Warning)
+    } else if let Some(message) = state
+        .fake_ip
+        .as_ref()
+        .and_then(|editor| editor.review_message(state.language))
+    {
+        (message, Tone::Warning)
     } else {
         (
             state

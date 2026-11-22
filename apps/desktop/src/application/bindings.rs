@@ -351,7 +351,11 @@ impl DesktopHost {
     }
     fn sync(&mut self) {
         if !self.app.visible || self.current_window_id().is_none() {
+            self.app.copy_result = None;
             return;
+        }
+        if self.app.exiting {
+            self.app.copy_result = None;
         }
         self.app.present(&self.data, &mut self.models);
         if let Ok(bytes) = wire::encode(&HostPacket::Frame {
@@ -489,6 +493,14 @@ impl DesktopHost {
                 self.remember_view(view);
                 self.window.as_mut().unwrap().revision = revision;
                 let task = self.app.intent(intent, &a, &b);
+                if let Some(copy) = self.app.copy_request.take()
+                    && self.app.visible
+                    && !self.app.exiting
+                {
+                    let script = matches!(copy, desktop_view::CopyRequest::ClaudeScript);
+                    let written = self.write_clipboard(copy.into_text()).is_ok();
+                    self.app.finish_copy(revision as i32, script, written);
+                }
                 self.spawn(task);
                 self.finish_retirement();
                 self.sync();
@@ -592,6 +604,7 @@ impl native::Host for DesktopHost {
         self.data = UiData::default();
         self.models.attach(&self.data);
         self.last_frame = None;
+        self.app.copy_result = None;
         self.app.presentation_language = self.app.settings.language.resolve_desktop();
         self.app.refresh_network_result();
         self.app.present(&self.data, &mut self.models);
@@ -773,13 +786,11 @@ impl native::Host for DesktopHost {
         }
         self.clipboard.as_mut().and_then(|c| c.get_text().ok())
     }
-    fn write_clipboard(&mut self, text: String) {
+    fn write_clipboard(&mut self, text: String) -> Result<(), arboard::Error> {
         if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
+            self.clipboard = Some(arboard::Clipboard::new()?);
         }
-        if let Some(c) = &mut self.clipboard {
-            let _ = c.set_text(text);
-        }
+        self.clipboard.as_mut().unwrap().set_text(text)
     }
     fn focus(&mut self, target: &str) {
         // The target can have just been mounted by a navigation intent. Put

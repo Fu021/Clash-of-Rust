@@ -372,6 +372,8 @@ struct App {
     network_tool: i32,
     network_codes: Vec<&'static str>,
     visible: bool,
+    copy_request: Option<desktop_view::CopyRequest>,
+    copy_result: Option<(i32, bool)>,
     hidden_ticks: u8,
     expanded: BTreeSet<String>,
     focus_active_group: bool,
@@ -420,7 +422,9 @@ struct App {
     error: bool,
     notice_critical: bool,
     notice_network_recovery: bool,
+    unreachable_notice: Option<notice::UnreachableNotice>,
     notice_update_failure: bool,
+    notice_copy_failed: bool,
     update_check_notice_revision: Option<u64>,
     pending_update_failure: Option<String>,
     installation_root: Option<std::path::PathBuf>,
@@ -524,6 +528,7 @@ impl App {
         self.notice_visible = false;
         self.notice_critical = false;
         self.notice_update_failure = false;
+        self.notice_copy_failed = false;
         self.busy = true;
         self.working = true;
         if let Some(error) = self.tray_failure.clone() {
@@ -624,7 +629,9 @@ impl App {
             error,
             notice_critical: core_failure.is_some(),
             notice_network_recovery: false,
+            unreachable_notice: None,
             notice_update_failure: false,
+            notice_copy_failed: false,
             update_check_notice_revision: None,
             pending_update_failure: None,
             installation_root: None,
@@ -651,6 +658,8 @@ impl App {
             network_tool: 0,
             network_codes: Vec::new(),
             visible: !background_start() || (tray.is_none() && tray_startup.is_none()),
+            copy_request: None,
+            copy_result: None,
             hidden_ticks: 0,
             expanded: BTreeSet::new(),
             focus_active_group: false,
@@ -1072,10 +1081,9 @@ impl App {
                         self.update_unreachable_notice(message);
                     }
                     Ok(None) => {}
-                    Err(error) => self.update_unreachable_notice(format!(
-                        "{}{error}",
-                        self.presentation_language.text("节点复测失败：", "Node recheck failed: ")
-                    )),
+                    Err(error) => {
+                        self.update_unreachable_notice(format!("节点复测失败：{error}"))
+                    }
                 }
                 return self.dispatch(Action::Refresh);
             }
@@ -2065,11 +2073,7 @@ impl App {
                         && (self.node_delays.is_empty()
                             || self.node_delays.values().any(|delay| *delay > 0))
                     {
-                        self.show_unreachable_nodes(
-                            self.presentation_language
-                                .text("本次定时测速", "Scheduled latency test"),
-                            delays.len(),
-                        );
+                        self.show_scheduled_unreachable_nodes(delays.len());
                     }
                     self.node_delays = delays;
                     self.proxy_order.get_mut().clear();

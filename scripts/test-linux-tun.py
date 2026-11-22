@@ -298,6 +298,36 @@ def socks_http(host, port, url):
         return body
 
 
+def redact_root_smoke_output(text, secret, directory):
+    if secret:
+        text = text.replace(secret, '[redacted]')
+    text = text.replace(str(directory), '[test-directory]')
+    return re.sub(r"""(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>\\]+""", '[redacted-url]', text)
+
+
+def subscription_update_stdout(stdout, secret, directory):
+    if not stdout.strip():
+        return '[empty]'
+    try:
+        envelope = json.loads(stdout)
+        rows = envelope.get('data') if isinstance(envelope, dict) else None
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            return '[unexpected stdout format; content omitted]'
+    except ValueError:
+        return '[unexpected stdout format; content omitted]'
+    details = []
+    for row in rows:
+        detail = {}
+        for field in ('id', 'name', 'updated', 'error'):
+            value = row.get(field)
+            if isinstance(value, str):
+                detail[field] = redact_root_smoke_output(value, secret, directory)
+            elif value is None or isinstance(value, bool):
+                detail[field] = value
+        details.append(detail)
+    return json.dumps(details, ensure_ascii=False)[:4096]
+
+
 def root_cli_smoke():
     """Exercise the installed headless root path before granting user TUN access."""
     cli = '/opt/clash-of-rust/cor'
@@ -312,11 +342,23 @@ def root_cli_smoke():
         directory = Path(temporary)
         env['CLASH_OF_RUST_DATA_DIR'] = str(directory/'data')
         command = [cli, '--lang=zh-CN', '--json', '--timeout', '30']
+        secret = ''
+        proxy_mode = 'tun'
+        smoke_failed = False
 
         def invoke(*arguments, success=True):
+            subscription_update = arguments == ('profile', 'update', 'direct-fallback')
+            started_ns = time.monotonic_ns() if subscription_update else None
             output = subprocess.run([*command, *map(str, arguments)], env=env,
                                     capture_output=True, text=True, timeout=45)
             if success:
+                if output.returncode != 0 and subscription_update:
+                    finished_ns = time.monotonic_ns()
+                    detail = subscription_update_stdout(output.stdout, secret, directory)
+                    error = redact_root_smoke_output(output.stderr, secret, directory)[:4096]
+                    raise AssertionError(
+                        f'root cor {arguments} exit={output.returncode} mode={proxy_mode} '
+                        f'monotonic_ns={started_ns}..{finished_ns}\nstderr: {error}\nstdout: {detail}')
                 assert output.returncode == 0, f'root cor {arguments}: {output.stderr}'
                 if arguments[:1] == ('logs',):
                     return [json.loads(line)['data'] for line in output.stdout.splitlines() if line]
@@ -324,8 +366,8 @@ def root_cli_smoke():
             assert output.returncode != 0, f'Invalid configuration was accepted: {arguments}'
             return output.stderr
 
-        def http(host, port, path, secret=None, headers=None):
-            connection = HTTPConnection(host, port, timeout=10)
+        def http(host, port, path, secret=None, headers=None, timeout=10):
+            connection = HTTPConnection(host, port, timeout=timeout)
             try:
                 request_headers = dict(headers or {})
                 if secret:
@@ -463,16 +505,31 @@ def root_cli_smoke():
                       'while subscription updates use independent DIRECT', flush=True)
             invoke('proxy', 'off')
         except Exception:
-            diagnostics = subprocess.run([*command, 'logs', '--limit', '500'], env=env,
-                                         capture_output=True, text=True, timeout=45)
-            print(diagnostics.stdout+diagnostics.stderr, flush=True)
+            smoke_failed = True
+            for path, label in (('/diagnostics', 'subscription timeline'), ('/metrics', 'metrics')):
+                try:
+                    data = http('192.0.2.254', 80, path, timeout=3).decode()
+                    print(f'Isolated upstream {label}:', data, flush=True)
+                except Exception as error:
+                    print(f'Isolated upstream {label} unavailable:',
+                          redact_root_smoke_output(str(error), secret, directory), flush=True)
             try:
-                print('Isolated upstream metrics:', http('192.0.2.254', 80, '/metrics').decode(), flush=True)
+                diagnostics = subprocess.run([*command, 'logs', '--limit', '500'], env=env,
+                                             capture_output=True, text=True, timeout=45)
+                print(redact_root_smoke_output(diagnostics.stdout+diagnostics.stderr, secret, directory),
+                      flush=True)
             except Exception as error:
-                print('Isolated upstream metrics unavailable:', error, flush=True)
+                print('Root CLI logs unavailable:',
+                      redact_root_smoke_output(str(error), secret, directory), flush=True)
             raise
         finally:
-            invoke('stop')
+            try:
+                invoke('stop')
+            except Exception as error:
+                if not smoke_failed:
+                    raise
+                print('Root CLI stop failed:',
+                      redact_root_smoke_output(str(error), secret, directory), flush=True)
         assert not (directory/'data/control.json').exists(), 'Root daemon survived cor stop'
         links = json.loads(subprocess.check_output(['ip', '-json', 'link', 'show'], text=True))
         assert not any(link['ifname'] == 'CorRootTest' for link in links), 'Root TUN was not removed'

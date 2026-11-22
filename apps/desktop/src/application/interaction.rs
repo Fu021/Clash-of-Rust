@@ -1,4 +1,40 @@
 use super::*;
+
+pub(super) enum CopyRequest {
+    Text(String),
+    ClaudeScript,
+}
+
+impl CopyRequest {
+    pub(super) fn into_text(self) -> String {
+        match self {
+            Self::Text(text) => text,
+            Self::ClaudeScript => clash_of_rust::claude_check::browser::site_script(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CopyFeedback {
+    ScriptCopied,
+    Failed,
+}
+
+impl CopyFeedback {
+    pub(super) fn text(self, language: Language) -> &'static str {
+        match self {
+            Self::ScriptCopied => language.text(
+                "脚本已复制：在 Claude 网页的开发者工具 Console 中运行，再导入脚本复制的 JSON。脚本不读取账号或 Cookie。",
+                "Script copied. Run it in the Claude page's developer console, then import the copied JSON.",
+            ),
+            Self::Failed => language.text(
+                "无法写入系统剪贴板，请重试。",
+                "Could not write to the system clipboard. Please try again.",
+            ),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum Pending {
     Delete(String),
@@ -39,6 +75,21 @@ impl ProfileEditor {
 }
 
 impl App {
+    pub(super) fn finish_copy(&mut self, revision: i32, script: bool, written: bool) {
+        self.copy_result = Some((revision, written));
+        if script {
+            self.claude.status = claude_view::Status::Copy(if written {
+                CopyFeedback::ScriptCopied
+            } else {
+                CopyFeedback::Failed
+            });
+            self.claude.error = !written;
+        }
+        if !written {
+            self.show_copy_failure();
+        }
+    }
+
     pub(super) fn prepare_notifications(&mut self) -> Task<Message> {
         if self.notification_checking || self.exiting {
             return Task::none();
@@ -218,7 +269,10 @@ impl App {
             Message::Appearance(mode) => self.dispatch(Action::Appearance(*mode)),
             Message::TextScale(scale) => self.dispatch(Action::TextScale(*scale)),
             Message::TraySpeed(enabled) => self.dispatch(Action::TraySpeed(*enabled)),
-            Message::Copy(value) => desktop_runtime::clipboard::write(value.clone()),
+            Message::Copy(value) => {
+                self.copy_request = Some(CopyRequest::Text(value.clone()));
+                none()
+            }
             Message::ExportDiagnostics(context) => self.export_diagnostics(context),
             Message::ReportIssue(context) => self.prepare_diagnostics(context, true),
             Message::DiagnosticsExported(result) => {
@@ -647,6 +701,82 @@ mod tests {
     fn app() -> App {
         App::initial_state(Err(anyhow::anyhow!("isolated desktop test")), None)
     }
+
+    #[test]
+    fn clipboard_feedback_attaches_both_outcomes_to_the_request_revision() {
+        use clash_desktop_protocol::{Intent, UiData, models::ViewModels};
+
+        let mut app = app();
+        app.dismiss_notice();
+        app.presentation_language = Language::English;
+        let data = UiData::default();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+        let text = "[info] fictional log";
+
+        let _ = app.intent(Intent::Copy, text, "");
+        assert!(app.copy_result.is_none());
+        assert_eq!(app.copy_request.take().unwrap().into_text(), text);
+        app.finish_copy(4, false, true);
+        app.present(&data, &mut models);
+        assert_eq!(data.get_copy_revision(), 4);
+        assert!(!data.get_copy_failed());
+        assert!(data.get_copy_value().as_str().is_empty());
+
+        let _ = app.intent(Intent::Copy, text, "");
+        assert_eq!(app.copy_request.take().unwrap().into_text(), text);
+        app.finish_copy(5, false, false);
+        app.present(&data, &mut models);
+        assert_eq!(data.get_copy_revision(), 5);
+        assert!(data.get_copy_failed());
+        assert!(data.get_copy_value().as_str().is_empty());
+        assert!(data.get_notice_error());
+        assert_eq!(
+            data.get_notice().as_str(),
+            "Could not write to the system clipboard. Please try again."
+        );
+    }
+
+    #[test]
+    fn clipboard_script_status_waits_for_native_result() {
+        use clash_desktop_protocol::Intent;
+
+        let mut app = app();
+        app.dismiss_notice();
+        app.presentation_language = Language::SimplifiedChinese;
+        app.claude.status = "先前状态".into();
+        let _ = app.intent(Intent::ClaudeCopyScript, "", "");
+        assert_eq!(
+            app.claude.status.display(app.presentation_language),
+            "先前状态"
+        );
+        assert!(matches!(
+            app.copy_request.take(),
+            Some(CopyRequest::ClaudeScript)
+        ));
+        app.finish_copy(7, true, false);
+        assert_eq!(app.copy_result, Some((7, false)));
+        assert_eq!(
+            app.claude.status,
+            claude_view::Status::Copy(CopyFeedback::Failed)
+        );
+        assert!(app.claude.error);
+
+        app.dismiss_notice();
+        let _ = app.intent(Intent::ClaudeCopyScript, "", "");
+        assert!(matches!(
+            app.copy_request.take(),
+            Some(CopyRequest::ClaudeScript)
+        ));
+        app.finish_copy(8, true, true);
+        assert_eq!(app.copy_result, Some((8, true)));
+        assert_eq!(
+            app.claude.status,
+            claude_view::Status::Copy(CopyFeedback::ScriptCopied)
+        );
+        assert!(!app.claude.error);
+    }
+
     #[test]
     fn preview_install_requires_three_seconds_and_cancelling_or_reopening_resets_consent() {
         let mut app = app();

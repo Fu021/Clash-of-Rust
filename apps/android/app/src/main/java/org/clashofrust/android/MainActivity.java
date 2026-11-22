@@ -19,6 +19,8 @@ public final class MainActivity extends NativeActivity {
     static { System.loadLibrary("clash_mobile"); }
     private static final int VPN = 10, OPEN = 11, SAVE = 12, NOTIFICATIONS = 13;
     private static final String VPN_STATE = "org.clashofrust.android.vpn-state";
+    private static final Handler recoveryConsentHandler = new Handler(Looper.getMainLooper());
+    private static MainActivity resumedVpnActivity;
     private volatile boolean vpnPrompt;
     private boolean vpnReconfigure;
     private String vpnStartRequest;
@@ -128,7 +130,16 @@ public final class MainActivity extends NativeActivity {
             else emit("notice",AppLanguage.current(this).getString(R.string.update_permission_missing));
         }
     }
-    @Override protected void onPause() { emit("visible", false); super.onPause(); }
+    @Override protected void onPostResume() {
+        super.onPostResume();
+        resumedVpnActivity = this;
+        preparePendingRecoveryConsent();
+    }
+    @Override protected void onPause() {
+        if (resumedVpnActivity == this) resumedVpnActivity = null;
+        emit("visible", false);
+        super.onPause();
+    }
     @Override protected void onDestroy() {
         if (isFinishing()) TunnelService.cancelStart(this, vpnStartRequest);
         NetworkOverview current = networkOverview;
@@ -156,7 +167,8 @@ public final class MainActivity extends NativeActivity {
                     Boolean desired = data.isNull("desired") ? null : data.getBoolean("desired");
                     return TunnelService.finishRecovery(this, data.getString("request"),
                         data.getBoolean("connected"), desired, data.getLong("generation"),
-                        data.getString("config"), data.getBoolean("ipv6"), data.getBoolean("protected")).toString();
+                        data.getString("config"), data.getBoolean("ipv6"), data.getBoolean("protected"),
+                        data.getLong("deadline_elapsed_ms")).toString();
                 }
                 case "protection-recovery-receipt": return new JSONObject().put(
                     "committed", TunnelService.recoveryCommitted(this, data.getString("request"))).toString();
@@ -218,8 +230,10 @@ public final class MainActivity extends NativeActivity {
                 case "restore-vpn": {
                     Boolean live = data.isNull("connected") ? null : data.getBoolean("connected");
                     Boolean desired = data.isNull("desired") ? null : data.getBoolean("desired");
-                    return TunnelService.restoreNetwork(this, data.getString("request"), live, desired).toString();
+                    return TunnelService.restoreNetwork(this, data.getString("request"), live, desired,
+                        data.getLong("deadline_elapsed_ms")).toString();
                 }
+                case "expire-vpn-start": return TunnelService.expireVpnStart(this, data.getString("request")).toString();
                 case "protection-sync": ProtectionRuntime.sync(this); break;
                 case "protection-pause": ProtectionRuntime.pause(this); break;
                 case "appearance": return Appearance.startup(this).put("font_sizes",systemFontSizes()).toString();
@@ -383,6 +397,17 @@ public final class MainActivity extends NativeActivity {
         if (vpnPrompt) return;
         prepareVpn(false, TunnelService.prepareStart(this));
     }
+    static void dispatchRecoveryConsent() {
+        recoveryConsentHandler.post(() -> {
+            MainActivity activity = resumedVpnActivity;
+            if (activity != null) activity.preparePendingRecoveryConsent();
+        });
+    }
+    private void preparePendingRecoveryConsent() {
+        if (vpnPrompt || isFinishing() || isDestroyed()) return;
+        String request = TunnelService.takeRecoveryConsent(this);
+        if (request != null) prepareVpn(true, request);
+    }
     private void authorizationResult(long request, boolean granted, String error) {
         try {
             JSONObject result = new JSONObject().put("request", request).put("status", granted ? "granted" : "denied")
@@ -417,7 +442,7 @@ public final class MainActivity extends NativeActivity {
         }
     }
     void prepareVpn(boolean reconfigure, String request) {
-        if (!TunnelService.current(this, request)) return;
+        if (!TunnelService.startAllowed(this, request)) return;
         if (isFinishing() || isDestroyed() || vpnPrompt || (TunnelService.connected() && !reconfigure)) {
             TunnelService.cancelStart(this, request);
             return;
@@ -442,10 +467,9 @@ public final class MainActivity extends NativeActivity {
     private void startVpn() {
         String request = vpnStartRequest;
         vpnStartRequest = null;
-        if (!TunnelService.current(this, request)) { vpnReconfigure = false; return; }
         boolean reconfigure = vpnReconfigure;
         vpnReconfigure = false;
-        try { TunnelService.start(this, reconfigure, request); }
+        try { if (!TunnelService.start(this, reconfigure, request)) return; }
         catch (RuntimeException error) { emit("error", error.toString()); return; }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 14);
@@ -455,6 +479,7 @@ public final class MainActivity extends NativeActivity {
         if (request == VPN) {
             if (!vpnPrompt) return;
             vpnPrompt = false;
+            dispatchRecoveryConsent();
             if (vpnAuthorizationOnly) {
                 long pending = vpnAuthorizationRequest;
                 vpnAuthorizationOnly = false;
@@ -466,9 +491,10 @@ public final class MainActivity extends NativeActivity {
                 return;
             }
             if (result == RESULT_OK) startVpn(); else {
+                String pending = vpnStartRequest;
                 vpnReconfigure = false;
-                TunnelService.cancelStart(this, vpnStartRequest);
                 vpnStartRequest = null;
+                if (!TunnelService.cancelStart(this, pending)) return;
                 emit("vpn-cancelled", true);
                 emit("error", AppLanguage.current(this).getString(R.string.vpn_authorization_cancelled_short));
             }

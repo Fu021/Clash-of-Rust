@@ -2347,29 +2347,7 @@ impl Engine {
                     let mut stream = response.bytes_stream();
                     let mut frames = LogFrames::default();
                     while let Some(Ok(chunk)) = stream.next().await {
-                        frames.push(&chunk, |frame| {
-                            #[derive(serde::Deserialize)]
-                            struct Entry<'a> {
-                                #[serde(rename = "type", default)]
-                                kind: &'a str,
-                                #[serde(default, borrow)]
-                                payload: std::borrow::Cow<'a, str>,
-                            }
-                            if let Ok(entry) = serde_json::from_slice::<Entry<'_>>(frame) {
-                                append(
-                                    &logs,
-                                    format!(
-                                        "[{}] {}",
-                                        if entry.kind.is_empty() {
-                                            "info"
-                                        } else {
-                                            entry.kind
-                                        },
-                                        entry.payload
-                                    ),
-                                );
-                            }
-                        });
+                        frames.push_core_events(&chunk, &logs);
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(3)).await;

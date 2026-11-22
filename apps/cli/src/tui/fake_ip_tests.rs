@@ -1,9 +1,11 @@
 use crate::tui::{
     input::Key,
     model::{Action, Page, State, demo_poll},
-    render,
+    render, settings,
 };
-use clash_client_core::config::DEFAULT_FAKE_IP_EXCLUSIONS;
+use clash_client_core::config::{
+    DEFAULT_FAKE_IP_EXCLUSIONS, FAKE_IP_EXCLUSION_LIMIT, Language, LanguagePreference,
+};
 use clash_client_runtime::control::Command;
 
 fn editor() -> State {
@@ -43,8 +45,6 @@ fn additions_preserve_both_settings_fields_and_use_the_full_expected_snapshot() 
 
 #[test]
 fn english_exclusion_editor_localizes_confirmation_and_preserves_the_domain() {
-    use clash_client_core::config::Language;
-
     let mut state = editor();
     state.language = Language::English;
     let frame = render::frame(&state, 120, 40)
@@ -73,6 +73,106 @@ fn english_exclusion_editor_localizes_confirmation_and_preserves_the_domain() {
         panic!("expected settings")
     };
     assert_eq!(settings.fake_ip_exclusions, ["example.test"]);
+}
+
+#[test]
+fn invalid_exclusions_display_localized_errors_and_preserve_drafts() {
+    let full_list = (0..FAKE_IP_EXCLUSION_LIMIT)
+        .map(|index| format!("host{index}.example"))
+        .collect::<Vec<_>>();
+    let over_limit = format!("{},extra.example", full_list.join(","));
+    for (saved, draft, chinese, english) in [
+        (
+            &[][..],
+            "example.com:443",
+            "Fake-IP 排除项只能包含域名、通配符和 . - _ + *",
+            "Fake-IP exclusions may contain domains, wildcards, and . - _ + *",
+        ),
+        (
+            &[][..],
+            &over_limit,
+            &format!("Fake-IP 排除项最多 {FAKE_IP_EXCLUSION_LIMIT} 个"),
+            &format!("Fake-IP exclusions are limited to {FAKE_IP_EXCLUSION_LIMIT} entries"),
+        ),
+        (
+            full_list.as_slice(),
+            "extra.example",
+            &format!("Fake-IP 自定义排除项最多 {FAKE_IP_EXCLUSION_LIMIT} 个"),
+            &format!("Custom Fake-IP exclusions are limited to {FAKE_IP_EXCLUSION_LIMIT} entries"),
+        ),
+    ] {
+        for language in [Language::English, Language::SimplifiedChinese] {
+            let mut state = editor();
+            let mut poll = demo_poll();
+            poll.meta.settings.fake_ip_exclusions = saved.to_vec();
+            state.accept(Some(poll));
+            state.language = language;
+            let before = state.poll.as_ref().unwrap().meta.settings.clone();
+            state.key(Key::Enter);
+            state.key(Key::Paste(draft.into()));
+            assert!(matches!(state.key(Key::Enter), Action::None));
+            let editor = state.fake_ip.as_ref().unwrap();
+            assert_eq!(editor.draft, draft);
+            assert!(editor.pending.is_none());
+            assert_eq!(state.poll.as_ref().unwrap().meta.settings, before);
+            let frame = render::frame(&state, 120, 40)
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(frame.contains(language.text(chinese, english)), "{frame}");
+            if language == Language::English {
+                assert!(!frame.contains(chinese), "{frame}");
+            }
+        }
+    }
+}
+
+#[test]
+fn external_language_switches_redraw_fake_ip_validation_without_replacing_the_draft() {
+    use LanguagePreference::{English, SimplifiedChinese};
+
+    for (draft, chinese, english) in [
+        (
+            "example.com:443",
+            "Fake-IP 排除项只能包含域名、通配符和 . - _ + *",
+            "Fake-IP exclusions may contain domains, wildcards, and . - _ + *",
+        ),
+        ("", "请输入域名后再保存", "Enter a domain before saving"),
+    ] {
+        let mut state = editor();
+        let mut args = crate::args::parse(["ui"].into_iter().map(str::to_owned)).unwrap();
+        state.key(Key::Enter);
+        state.key(Key::Paste(draft.into()));
+        assert!(matches!(state.key(Key::Enter), Action::None));
+
+        for (preference, expected, previous, changed) in [
+            (SimplifiedChinese, chinese, english, false),
+            (English, english, chinese, true),
+            (SimplifiedChinese, chinese, english, true),
+        ] {
+            let mut poll = demo_poll();
+            poll.meta.settings.language = preference;
+            let saved = poll.meta.settings.clone();
+            state.accept(Some(poll));
+            assert_eq!(
+                settings::sync_language(&mut state, &mut args, true, 118),
+                changed
+            );
+            let frame = render::frame(&state, 120, 40)
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(frame.contains(expected), "{frame}");
+            assert!(!frame.contains(previous), "{frame}");
+            let editor = state.fake_ip.as_ref().unwrap();
+            assert_eq!(editor.draft, draft);
+            assert!(!editor.editing);
+            assert!(editor.pending.is_none());
+            assert_eq!(state.poll.as_ref().unwrap().meta.settings, saved);
+        }
+    }
 }
 
 #[test]
@@ -199,8 +299,10 @@ fn disabled_dns_allows_inspection_but_rejects_writes_without_losing_input() {
     state.key(Key::Enter);
     assert!(
         state
-            .message
-            .as_deref()
+            .fake_ip
+            .as_ref()
+            .unwrap()
+            .review_message(state.language)
             .unwrap()
             .contains("请先开启 DNS 覆盖")
     );
@@ -228,7 +330,15 @@ fn protection_keeps_the_list_readable_and_rejects_exclusion_changes() {
     state.fake_ip.as_mut().unwrap().selected = 2;
     state.key(Key::Enter);
     assert!(state.fake_ip.as_ref().unwrap().pending.is_none());
-    assert!(state.message.as_deref().unwrap().contains("Claude 保护"));
+    assert!(
+        state
+            .fake_ip
+            .as_ref()
+            .unwrap()
+            .review_message(state.language)
+            .unwrap()
+            .contains("Claude 保护")
+    );
     assert!(
         render::frame(&state, 120, 40)
             .iter()

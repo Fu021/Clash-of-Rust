@@ -4,6 +4,7 @@
     <string name="vpn_connecting">正在连接…</string>
     <string name="vpn_disconnected">VPN 未连接</string>
     <string name="vpn_cancelled">VPN 连接已取消</string>
+    <string name="vpn_recovery_timeout">VPN 恢复已超时，请重试恢复网络。</string>
     <string name="vpn_permission_expired">VPN 授权已失效，请打开应用重新连接</string>
     <string name="vpn_permission_revoked">VPN 授权已被系统撤回</string>
     <string name="vpn_establish_denied">系统拒绝建立 VPN</string>

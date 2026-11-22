@@ -301,7 +301,7 @@ mod linux {
                 {
                     continue;
                 }
-                rows.push(json!({
+                let mut row = json!({
                     "id": profile.id,
                     "name": crate::output::profile_list_name(args, &profile),
                     "owner": account.name,
@@ -311,7 +311,12 @@ mod linux {
                     "source": profile.source,
                     "updated": profile.updated,
                     "usage": profile.usage,
-                }));
+                });
+                if !crate::output::writes_json(args) && !profile.is_default() && !profile.is_local()
+                {
+                    row["show_usage"] = Value::Bool(true);
+                }
+                rows.push(row);
             }
         }
         Ok(json!(rows))
@@ -388,7 +393,8 @@ mod linux {
             std::fs::create_dir_all(&data).unwrap();
             let profiles = json!([
                 {"id":"builtin","name":"默认直连","source":"default.yaml","updated":0,"builtin":true},
-                {"id":"imported","name":"默认直连","source":"/imports/default.yaml","updated":0,"builtin":false}
+                {"id":"imported","name":"默认直连","source":"/imports/default.yaml","updated":0,"builtin":false},
+                {"id":"remote","name":"远程线路","source":"http://example.test/","updated":0,"builtin":false}
             ]);
             std::fs::write(data.join("profiles.json"), profiles.to_string()).unwrap();
             let args = |options: &[&str]| {
@@ -415,6 +421,15 @@ mod linux {
             assert_eq!(human.as_array().unwrap().len(), 1);
             assert_eq!(human[0]["id"], "builtin");
             assert_eq!(human[0]["name"], "Default direct");
+
+            let human = list(&args(&[]));
+            let machine = list(&args(&["--json"]));
+            for (index, id) in ["builtin", "imported", "remote"].into_iter().enumerate() {
+                assert_eq!(human[index]["id"], id);
+                assert_eq!(human[index]["show_usage"] == true, id == "remote");
+                assert_eq!(machine[index]["id"], id);
+                assert!(machine[index].get("show_usage").is_none());
+            }
 
             let output = home.path().join("export.json");
             let path = output.to_str().unwrap();

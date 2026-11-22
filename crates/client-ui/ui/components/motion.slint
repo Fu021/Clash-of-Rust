@@ -114,8 +114,10 @@ export component NoticeCountdown inherits ProgressTrack {
 // Acknowledgements come from the native clipboard, never from the click itself.
 export component CopyFeedback {
     in property <int> revision;
+    in property <int> request-revision;
     in property <string> acknowledged;
     in property <string> value;
+    in property <bool> failed;
     in property <bool> any-value;
     property <bool> pending;
     out property <bool> copied;
@@ -124,7 +126,8 @@ export component CopyFeedback {
     changed revision => {
         if self.pending {
             self.pending = false;
-            self.copied = self.any-value || self.acknowledged == self.value;
+            self.copied = !self.failed && (self.request-revision == 0 || self.request-revision == self.revision)
+                && (self.any-value || self.acknowledged == self.value);
             if self.copied { reset.restart(); }
         }
     }

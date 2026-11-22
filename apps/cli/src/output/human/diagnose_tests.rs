@@ -122,3 +122,35 @@ fn diagnose_keeps_json_and_saved_reports_in_the_original_language() {
         expected
     );
 }
+
+#[test]
+fn offline_diagnose_localizes_log_capture_state_and_preserves_json() {
+    for (state, chinese, english) in [
+        ("collected", "已采集", "Collected"),
+        ("missing", "未找到", "Not found"),
+        ("withheld", "已隐藏", "Withheld"),
+        ("unavailable", "不可用", "Unavailable"),
+        ("future-state", "future-state", "future-state"),
+    ] {
+        let report = json!({
+            "offline": true,
+            "local_evidence": {"daemon_log": {"state": state}},
+        });
+        assert!(
+            render("zh-CN", &[], &report)
+                .lines()
+                .any(|line| line == format!("后台日志采集：{chinese}"))
+        );
+        assert!(
+            render("en", &[], &report)
+                .lines()
+                .any(|line| line == format!("Background log capture: {english}"))
+        );
+        let rendered = render("en", &["--json"], &report);
+        let value = serde_json::from_str::<Value>(&rendered).unwrap();
+        assert_eq!(
+            value["data"]["local_evidence"]["daemon_log"]["state"],
+            state
+        );
+    }
+}

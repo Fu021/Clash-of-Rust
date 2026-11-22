@@ -88,7 +88,8 @@ def select(paths, extended=False):
                     'scripts/ci_test_policy.py', 'apps/desktop/tests/core_integration.rs',
                     'apps/desktop/tests/support/protected_dns.rs',
                     'apps/desktop/tests/support/proxy_benchmark.rs',
-                    'scripts/proxy_benchmark.py', 'crates/client-runtime/src/engine/mod.rs')
+                    'scripts/proxy_benchmark.py', 'crates/client-runtime/src/engine/mod.rs',
+                    'crates/client-core/src/runtime/logging.rs')
         or path.startswith('crates/client-runtime/src/platform/network/')
         or path in ('crates/client-runtime/src/control/network.rs',
                     'crates/client-runtime/src/engine/recovery.rs')
@@ -119,7 +120,8 @@ def select(paths, extended=False):
                          'crates/client-core/src/application_rules/'))
         or path in ('Cargo.toml', 'Cargo.lock', 'apps/desktop/Cargo.toml',
                     'apps/desktop-ui/Cargo.toml', 'crates/desktop-shell/Cargo.toml',
-                    'scripts/run-ci.py', 'scripts/macos_ci.py', 'scripts/ci_test_policy.py')
+                    'scripts/run-ci.py', 'scripts/macos_ci.py', 'scripts/ci_test_policy.py',
+                    'crates/client-core/src/runtime/logging.rs')
         for path in paths
     )
     mobile_ui = any(

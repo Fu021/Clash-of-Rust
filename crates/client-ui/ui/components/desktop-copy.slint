@@ -8,8 +8,16 @@ export component CopyButton inherits ActionButton {
     in property <Intent> intent: Intent.copy;
     width: max(88px, measure.preferred-width + 28px);
     measure := Label { visible: false; text: root.label; }
-    feedback := CopyFeedback { revision: UiData.copy-revision; acknowledged: UiData.copy-value; value: root.value; any-value: root.intent != Intent.copy; }
+    feedback := CopyFeedback {
+        revision: UiData.copy-revision; acknowledged: UiData.copy-value; failed: UiData.copy-failed;
+        value: root.value; any-value: root.intent != Intent.copy;
+    }
     text: feedback.copied ? @tr("已复制") : root.label;
     success: feedback.copied;
-    clicked => { feedback.requested(); UiActions.dispatch(root.intent, root.value, ""); }
+    clicked => {
+        UiActions.copy-request-revision = UiActions.copy-request-revision == 2147483647 ? 1 : UiActions.copy-request-revision + 1;
+        feedback.request-revision = UiActions.copy-request-revision;
+        feedback.requested();
+        UiActions.dispatch(root.intent, root.value, "");
+    }
 }

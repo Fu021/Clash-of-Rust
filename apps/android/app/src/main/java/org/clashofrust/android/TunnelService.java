@@ -9,10 +9,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.StandardCopyOption;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Executors;
+import java.util.function.LongSupplier;
 import org.clashofrust.nativecore.mobile.Mobile;
 import org.json.JSONObject;
 
@@ -22,6 +25,7 @@ public final class TunnelService extends VpnService {
     static final String REQUEST = "vpn_request";
     private static final String NOTIFICATION_CHANNEL = "vpn";
     private static final Object requests = new Object();
+    private static final Map<String, Integer> pendingStarts = new HashMap<>();
     private static volatile TunnelService instance;
     private static volatile boolean connected;
     private static volatile String lastError = "";
@@ -32,6 +36,11 @@ public final class TunnelService extends VpnService {
     private static String rollbackStatus;
     private static String rollbackError;
     private static Boolean rollbackLive;
+    private static long rollbackDeadline;
+    private static boolean rollbackConsentReady;
+    private static boolean rollbackStartSent;
+    private static boolean rollbackWorkClaimed;
+    private static int pendingVpnWork;
     private static long rollbackPreviousGeneration;
     private static long rollbackGeneration;
     private static String completedRecovery;
@@ -46,6 +55,7 @@ public final class TunnelService extends VpnService {
     private boolean interfaceIpv6;
     private volatile boolean forwardingHeld;
     private volatile boolean stopping;
+    private boolean idleStopQueued;
     private volatile String lastStatus = "";
     private JSONObject networkStatus = new JSONObject();
     private volatile int latestStartId;
@@ -68,6 +78,58 @@ public final class TunnelService extends VpnService {
         return request != null && request.equals(rollbackRequest)
             && request.equals(queuedRequest) && "pending".equals(rollbackStatus);
     }
+    private static boolean liveRecovery(String request) {
+        return request != null && request.equals(rollbackRequest) && Boolean.TRUE.equals(rollbackLive);
+    }
+    private static boolean serviceWorkPending() {
+        TunnelService active = instance;
+        return !pendingStarts.isEmpty() || pendingVpnWork != 0 || pendingCleanup != 0 || (active != null
+            && (active.latestStartId == 0 || active.idleStopQueued || active.stopping));
+    }
+    private static boolean transitionPending() {
+        return queuedRequest != null || rollbackConsentReady || serviceWorkPending();
+    }
+    private static void expireRecoveryStart(Context context, String request) {
+        if (recoveryStart(request) && !rollbackWorkClaimed && SystemClock.elapsedRealtime() >= rollbackDeadline) {
+            cancelRecoveryForTimeout(context, request);
+        }
+    }
+    private static void requireRecoveryBeforeDeadline(Context context, long deadline) throws IOException {
+        requireRecoveryBeforeDeadline(context, deadline, SystemClock.elapsedRealtime());
+    }
+    private static void requireRecoveryBeforeDeadline(Context context, long deadline, long now) throws IOException {
+        if (now >= deadline) {
+            throw new IOException(AppLanguage.current(context).getString(R.string.vpn_recovery_timeout));
+        }
+    }
+    private static void cancelRecoveryForTimeout(Context context, String request) {
+        reportRollback(request, false, AppLanguage.current(context).getString(R.string.vpn_recovery_timeout));
+        finishRequest(request);
+    }
+    static JSONObject expireVpnStart(Context context, String request) throws org.json.JSONException {
+        synchronized (requests) {
+            String status;
+            if (request.equals(rollbackRequest)) {
+                boolean cancelled = recoveryStart(request) && !rollbackWorkClaimed;
+                if (cancelled) cancelRecoveryForTimeout(context, request);
+                if (serviceWorkPending() || request.equals(queuedRequest)) {
+                    status = "claimed";
+                } else {
+                    status = cancelled ? "cancelled" : "settled";
+                }
+            } else {
+                status = recoveryReservation != null || transitionPending() ? "stale" : "idle";
+            }
+            return new JSONObject().put("request", request).put("status", status);
+        }
+    }
+    static boolean startAllowed(Context context, String request) {
+        synchronized (requests) {
+            if (!current(context, request)) return false;
+            expireRecoveryStart(context, request);
+            return request.equals(rollbackRequest) ? recoveryStart(request) : !recoveryBlocked(context);
+        }
+    }
     private static String newRequest(Context context) {
         return newRequest(context, java.util.UUID.randomUUID().toString());
     }
@@ -76,13 +138,14 @@ public final class TunnelService extends VpnService {
             rollbackStatus = "failed";
             rollbackError = AppLanguage.current(context).getString(R.string.vpn_cancelled);
         }
+        rollbackConsentReady = false;
         context.getSharedPreferences("vpn", MODE_PRIVATE).edit().putString(REQUEST, request).apply();
         queuedRequest = request;
         return request;
     }
     static void reserveRecovery(Context context, String token, boolean live, Boolean desired, long observedGeneration) throws Exception {
         synchronized (requests) {
-            if (recoveryBlocked(context) || queuedRequest != null || pendingCleanup != 0
+            if (recoveryBlocked(context) || transitionPending()
                 || connected != live || generation != observedGeneration
                 || !java.util.Objects.equals(desiredPlan(context), desired)) {
                 throw new java.io.IOException(AppLanguage.current(context).getString(R.string.vpn_connecting));
@@ -97,7 +160,7 @@ public final class TunnelService extends VpnService {
     }
     static void holdRecovery(Context context) throws Exception {
         synchronized (requests) {
-            if (!recoveryRequired(context) || pendingCleanup != 0 || queuedRequest != null) {
+            if (!recoveryRequired(context) || transitionPending()) {
                 throw new IOException(AppLanguage.current(context).getString(R.string.protection_unconfirmed));
             }
             TunnelService active = instance;
@@ -129,42 +192,72 @@ public final class TunnelService extends VpnService {
         return desired == null ? editor.remove("desired") : editor.putBoolean("desired", desired);
     }
     static void start(Context context, boolean reconfigure) { start(context, reconfigure, prepareStart(context)); }
-    static void start(Context context, boolean reconfigure, String request) {
+    static boolean start(Context context, boolean reconfigure, String request) {
         synchronized (requests) {
-            if (!current(context, request)) return;
-            if (recoveryBlocked(context) && !recoveryStart(request)) {
+            boolean recovering = liveRecovery(request);
+            if (recovering && rollbackStartSent) return false;
+            if (!startAllowed(context, request)) {
                 finishRequest(request);
-                return;
+                return false;
             }
             Intent intent = new Intent(context, TunnelService.class).putExtra(REQUEST, request);
             if (reconfigure) intent.setAction(RECONFIGURE);
+            if (recovering) rollbackStartSent = true;
+            pendingStarts.merge(request, 1, Integer::sum);
             try {
                 context.startForegroundService(intent);
                 clearError();
             } catch (RuntimeException error) {
+                finishStartDelivery(request);
                 reportRollback(request, false, error.toString());
                 finishRequest(request);
                 throw error;
             }
+            return true;
         }
+    }
+    private static void finishStartDelivery(String request) {
+        pendingStarts.computeIfPresent(request, (id, count) -> count == 1 ? null : count - 1);
     }
     static void resumeRequest(Context context, String request) {
         synchronized (requests) {
             if (!recoveryBlocked(context) && current(context, request)) queuedRequest = request;
         }
     }
-    static void cancelStart(Context context, String request) {
+    static boolean cancelStart(Context context, String request) {
         synchronized (requests) {
-            if (current(context, request)) {
-                reportRollback(request, false, AppLanguage.current(context).getString(R.string.vpn_cancelled));
-                finishRequest(request);
-            }
+            if (recoveryStart(request) && rollbackWorkClaimed) return false;
+            if (!startAllowed(context, request)) return false;
+            reportRollback(request, false, AppLanguage.current(context).getString(R.string.vpn_cancelled));
+            finishRequest(request);
+            return true;
         }
     }
     private static void finishRequest(String request) {
         synchronized (requests) {
-            if (request != null && request.equals(queuedRequest)) queuedRequest = null;
+            if (request != null && request.equals(queuedRequest)) {
+                queuedRequest = null;
+                if (request.equals(rollbackRequest)) rollbackConsentReady = false;
+                scheduleIdleStop();
+            }
         }
+    }
+    private static void scheduleIdleStop() {
+        TunnelService active = instance;
+        if (!transitionPending() && active != null) active.stopWhenIdle();
+    }
+    private static void enqueueVpnWork(Runnable work) {
+        pendingVpnWork++;
+        serial.execute(() -> {
+            try {
+                work.run();
+            } finally {
+                synchronized (requests) {
+                    pendingVpnWork--;
+                    scheduleIdleStop();
+                }
+            }
+        });
     }
     private static void reportRollback(String request, boolean success, String error) {
         synchronized (requests) {
@@ -175,34 +268,50 @@ public final class TunnelService extends VpnService {
             }
         }
     }
-    static JSONObject restoreNetwork(MainActivity activity, String request, Boolean live, Boolean desired) throws Exception {
+    static JSONObject restoreNetwork(Context context, String request, Boolean live, Boolean desired,
+            long deadline) throws Exception {
         synchronized (requests) {
+            expireRecoveryStart(context, rollbackRequest);
             if (request.equals(rollbackRequest)) {
                 return new JSONObject().put("request", request).put("generation", rollbackPreviousGeneration);
             }
-            if (recoveryReservation != null || queuedRequest != null || pendingCleanup != 0) {
-                throw new java.io.IOException(AppLanguage.current(activity).getString(R.string.vpn_connecting));
+            if (recoveryReservation != null || transitionPending()) {
+                throw new IOException(AppLanguage.current(context).getString(R.string.vpn_connecting));
             }
-            if (!recoveryRequired(activity)) {
-                throw new java.io.IOException(AppLanguage.current(activity).getString(R.string.protection_unconfirmed));
+            if (!recoveryRequired(context)) {
+                throw new IOException(AppLanguage.current(context).getString(R.string.protection_unconfirmed));
             }
-            newRequest(activity, request);
+            requireRecoveryBeforeDeadline(context, deadline);
+            newRequest(context, request);
             rollbackRequest = request;
             rollbackStatus = "pending";
             rollbackError = "";
             rollbackLive = live;
+            rollbackDeadline = deadline;
+            rollbackStartSent = false;
+            rollbackWorkClaimed = false;
             rollbackPreviousGeneration = generation;
-            serial.execute(() -> applyRestoreNetwork(activity, request, live, desired));
+            Context application = context.getApplicationContext();
+            enqueueVpnWork(() -> applyRestoreNetwork(application, request, live, desired));
             return new JSONObject().put("request", request).put("generation", rollbackPreviousGeneration);
         }
     }
-    private static void applyRestoreNetwork(MainActivity activity, String request, Boolean live, Boolean desired) {
+    static String takeRecoveryConsent(Context context) {
+        synchronized (requests) {
+            if (!rollbackConsentReady || !startAllowed(context, rollbackRequest)) return null;
+            rollbackConsentReady = false;
+            return rollbackRequest;
+        }
+    }
+    private static void applyRestoreNetwork(Context context, String request, Boolean live, Boolean desired) {
         try {
             synchronized (requests) {
-                if (!current(activity, request)) return;
-                if (!savePlan(activity, desired)) {
-                    throw new IllegalStateException(AppLanguage.current(activity).getString(R.string.vpn_plan_save_failed));
+                if (!startAllowed(context, request)) return;
+                if (!Boolean.TRUE.equals(live)) rollbackWorkClaimed = true;
+                if (!savePlan(context, desired)) {
+                    throw new IllegalStateException(AppLanguage.current(context).getString(R.string.vpn_plan_save_failed));
                 }
+                if (Boolean.TRUE.equals(live)) rollbackConsentReady = true;
             }
             if (live == null) {
                 reportRollback(request, true, "");
@@ -210,13 +319,13 @@ public final class TunnelService extends VpnService {
                 return;
             }
             if (live) {
-                activity.runOnUiThread(() -> activity.prepareVpn(true, request));
+                MainActivity.dispatchRecoveryConsent();
             } else {
                 TunnelService active = instance;
                 if (connected && (active == null || !active.forwardingHeld)) {
-                    throw new IllegalStateException(AppLanguage.current(activity).getString(R.string.vpn_cancelled));
+                    throw new IllegalStateException(AppLanguage.current(context).getString(R.string.vpn_cancelled));
                 }
-                ProtectionRuntime.pause(activity);
+                ProtectionRuntime.pause(context);
                 reportRollback(request, true, "");
                 finishRequest(request);
             }
@@ -227,10 +336,11 @@ public final class TunnelService extends VpnService {
     }
     static void writeState(Context context, JSONObject state) throws org.json.JSONException {
         synchronized (requests) {
+            expireRecoveryStart(context, rollbackRequest);
             Boolean desired = desiredPlan(context);
             state.put("vpn", connected).put("vpn_pending", pending())
                 .put("vpn_held", forwardingHeld())
-                .put("vpn_transition_pending", queuedRequest != null || pendingCleanup != 0)
+                .put("vpn_transition_pending", transitionPending())
                 .put("vpn_generation", generation).put("vpn_error", lastError)
                 .put("vpn_desired", desired == null ? JSONObject.NULL : desired)
                 .put("vpn_rollback", rollbackRequest == null ? JSONObject.NULL
@@ -243,16 +353,27 @@ public final class TunnelService extends VpnService {
             return request.equals(completedRecovery) && !recoveryRequired(context);
         }
     }
+    @FunctionalInterface
+    interface RecoveryTunStarter {
+        void start(int fd, boolean ipv6) throws Exception;
+    }
     static JSONObject finishRecovery(Context context, String request, boolean live, Boolean desired,
-        long observedGeneration, String config, boolean ipv6, boolean protectedVpn) throws Exception {
+        long observedGeneration, String config, boolean ipv6, boolean protectedVpn, long deadline) throws Exception {
+        return finishRecovery(context, request, live, desired, observedGeneration, config, ipv6, protectedVpn,
+            deadline, SystemClock::elapsedRealtime, Mobile::startTun);
+    }
+    static JSONObject finishRecovery(Context context, String request, boolean live, Boolean desired,
+        long observedGeneration, String config, boolean ipv6, boolean protectedVpn, long deadline,
+        LongSupplier elapsedRealtime, RecoveryTunStarter startTun) throws Exception {
         synchronized (requests) {
             TunnelService active = instance;
             boolean hasDescriptor = active != null && active.descriptor != null;
             boolean held = hasDescriptor && active.forwardingHeld && !active.stopping;
             boolean vpnMatches = request.equals(rollbackRequest) && "complete".equals(rollbackStatus)
                 && current(context, request)
+                && deadline == rollbackDeadline
                 && java.util.Objects.equals(rollbackLive, live)
-                && recoveryReservation == null && queuedRequest == null && pendingCleanup == 0
+                && recoveryReservation == null && !transitionPending()
                 && (live ? connected && held && VpnService.prepare(context) == null
                     : (hasDescriptor ? held : !connected))
                 && generation == observedGeneration && generation == rollbackGeneration
@@ -265,8 +386,9 @@ public final class TunnelService extends VpnService {
                     throw new IOException("The protection recovery record is missing or invalid");
                 }
                 java.nio.file.Path committed = record.resolveSibling("protection-recovery-committed.json");
+                requireRecoveryBeforeDeadline(context, deadline, elapsedRealtime.getAsLong());
                 if (live) {
-                    Mobile.startTun(active.descriptor.getFd(), active.interfaceIpv6);
+                    startTun.start(active.descriptor.getFd(), active.interfaceIpv6);
                 } else if (active != null && !active.stopping) {
                     try {
                         if (!active.disconnect(request, false, true)) {
@@ -307,8 +429,11 @@ public final class TunnelService extends VpnService {
         return active != null && active.forwardingHeld;
     }
     static boolean pending() {
-        TunnelService active = instance;
-        return active != null && !connected && !active.stopping && current(active, active.acceptedRequest);
+        synchronized (requests) {
+            TunnelService active = instance;
+            return active != null && !connected && !active.stopping
+                && queuedRequest != null && queuedRequest.equals(active.acceptedRequest);
+        }
     }
     static String error() { return lastError; }
     static void clearError() { lastError = ""; }
@@ -321,7 +446,7 @@ public final class TunnelService extends VpnService {
             if (!revoked && recoveryBlocked(context)) return;
             String request = newRequest(context);
             TunnelService active = instance;
-            serial.execute(() -> {
+            enqueueVpnWork(() -> {
                 if (active != null) {
                     active.disconnect(request, !revoked, false);
                 } else {
@@ -337,7 +462,10 @@ public final class TunnelService extends VpnService {
         }
     }
     @Override public void onCreate() {
-        super.onCreate(); instance = this;
+        super.onCreate();
+        synchronized (requests) {
+            instance = this;
+        }
         updateNotificationChannel(AppLanguage.current(this), true);
         notificationTask = serial.scheduleWithFixedDelay(this::updateStatus, 1, 1, TimeUnit.SECONDS);
     }
@@ -361,31 +489,30 @@ public final class TunnelService extends VpnService {
         synchronized (requests) {
             latestStartId = startId;
             String request = intent == null ? null : intent.getStringExtra(REQUEST);
+            finishStartDelivery(request);
             if (request != null && !current(this, request)) {
                 // A previously queued foreground start must not undo a later stop.
                 // Android's foreground deadline belongs to the service, even
                 // when this request is stale and a newer start prevents stopSelf.
                 startForeground(1, notification(AppLanguage.current(this).getString(
                     forwardingHeld() ? R.string.protection_unconfirmed : connected ? R.string.vpn_connected : R.string.vpn_cancelled)));
-                if (current(this, acceptedRequest)) return START_STICKY;
-                stopForeground(STOP_FOREGROUND_REMOVE);
-                stopSelfResult(startId);
+                if (connected || forwardingHeld) return START_STICKY;
+                stopWhenIdle();
                 return START_NOT_STICKY;
             }
             boolean restore = intent == null;
             boolean alwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
-            if (recoveryBlocked(this) && !recoveryStart(request)) {
+            if (request == null ? recoveryBlocked(this) : !startAllowed(this, request)) {
                 finishRequest(request);
-                if (connected) return START_STICKY;
+                if (connected || forwardingHeld) return START_STICKY;
                 startForeground(1, notification(AppLanguage.current(this).getString(R.string.protection_unconfirmed)));
-                stopForeground(STOP_FOREGROUND_REMOVE);
-                stopSelfResult(startId);
+                stopWhenIdle();
                 return START_NOT_STICKY;
             }
             if (restore && !alwaysOn && !getSharedPreferences("vpn", MODE_PRIVATE).getBoolean("desired", false)) {
                 startForeground(1, notification(AppLanguage.current(this).getString(R.string.vpn_cancelled)));
-                stopForeground(STOP_FOREGROUND_REMOVE);
-                stopSelfResult(startId); return START_NOT_STICKY;
+                stopWhenIdle();
+                return START_NOT_STICKY;
             }
             if (request == null) request = prepareStart(this);
             acceptedRequest = request;
@@ -396,25 +523,49 @@ public final class TunnelService extends VpnService {
             } catch (RuntimeException error) {
                 reportRollback(request, false, error.toString());
                 finishRequest(request);
-                if (!connected) stopSelfResult(startId);
+                stopWhenIdle();
                 return START_NOT_STICKY;
             }
             boolean reconfigure = intent != null && RECONFIGURE.equals(intent.getAction());
             String accepted = request;
-            serial.execute(() -> connect(reconfigure, accepted));
+            enqueueVpnWork(() -> connect(reconfigure, accepted));
             VpnTileService.refresh(this);
             return START_STICKY;
         }
     }
+    private boolean claimRecoveryEstablish(String request) {
+        synchronized (requests) {
+            if (stopping || !startAllowed(this, request) || !liveRecovery(request)
+                    || rollbackWorkClaimed) return false;
+            rollbackWorkClaimed = true;
+            return true;
+        }
+    }
+    private void stopWhenIdle() {
+        if (idleStopQueued || stopping || connected || forwardingHeld) return;
+        idleStopQueued = true;
+        serial.execute(() -> {
+            synchronized (requests) {
+                idleStopQueued = false;
+                if (instance == this && latestStartId != 0 && !stopping
+                        && !transitionPending() && descriptor == null && !connected && !forwardingHeld
+                        && stopSelfResult(latestStartId)) {
+                    stopping = true;
+                    stopForeground(STOP_FOREGROUND_REMOVE);
+                }
+            }
+        });
+    }
     private void connect(boolean reconfigure, String request) {
         boolean recovery;
+        boolean timedRecovery;
         synchronized (requests) {
-            if (stopping || !current(this, request)
-                || (recoveryBlocked(this) && !recoveryStart(request))) {
+            if (stopping || !startAllowed(this, request)) {
                 finishRequest(request);
                 return;
             }
             recovery = recoveryStart(request);
+            timedRecovery = liveRecovery(request);
             if (descriptor != null && !reconfigure) {
                 finishRequest(request);
                 return;
@@ -423,11 +574,13 @@ public final class TunnelService extends VpnService {
         ParcelFileDescriptor previous = descriptor;
         ParcelFileDescriptor replacement = null;
         boolean previousReaderStopped = false;
+        boolean recoveryProtectorInstalled = false;
+        boolean recoveryEstablishClaimed = false;
         boolean established = false;
         boolean protectedVpn = false;
         try {
             CoreBridge.restore(this);
-            if (stopping || !current(this, request)) return;
+            if (stopping || !startAllowed(this, request)) return;
             if (VpnService.prepare(this) != null) throw new IllegalStateException(AppLanguage.current(this).getString(R.string.vpn_permission_expired));
             boolean ipv6 = CoreBridge.ipv6();
             protectedVpn = CoreBridge.vpnProtectedMode(this);
@@ -443,13 +596,26 @@ public final class TunnelService extends VpnService {
             // the old VPN atomically when the replacement succeeds; closing it
             // first exposes the underlying network during every reconfigure.
             try (VpnRouting routes=new VpnRouting(this,previous==null ? null : interfaceName,ipv6)) {
-                if (stopping || !current(this, request)) return;
-                if (previous == null) Mobile.setProtector(fd -> protect(fd));
-                if (previous != null && !forwardingHeld) {
-                    Mobile.stopTun();
-                    previousReaderStopped = true;
+                if (timedRecovery) {
+                    if (previous != null && !forwardingHeld) {
+                        throw new IOException(AppLanguage.current(this).getString(R.string.protection_unconfirmed));
+                    }
+                    if (previous == null) {
+                        if (stopping || !startAllowed(this, request)) return;
+                        Mobile.setProtector(fd -> protect(fd));
+                        recoveryProtectorInstalled = true;
+                    }
+                    if (!claimRecoveryEstablish(request)) return;
+                    recoveryEstablishClaimed = true;
+                } else {
+                    if (stopping || !current(this, request)) return;
+                    if (previous == null) Mobile.setProtector(fd -> protect(fd));
+                    if (previous != null && !forwardingHeld) {
+                        Mobile.stopTun();
+                        previousReaderStopped = true;
+                    }
+                    ProtectionRuntime.pause(this);
                 }
-                ProtectionRuntime.pause(this);
                 replacement = builder.establish();
                 if (replacement == null) throw new IllegalStateException(AppLanguage.current(this).getString(R.string.vpn_establish_denied));
                 established = true;
@@ -461,6 +627,7 @@ public final class TunnelService extends VpnService {
                 interfaceIpv6 = ipv6;
                 closeDescriptor(previous);
                 previous = null;
+                if (timedRecovery) ProtectionRuntime.pause(this);
                 // establish() returns before ConnectivityService/netd finishes
                 // moving the existing VPN Network to the new interface. Do
                 // not start its packet reader against that transitional device.
@@ -495,6 +662,10 @@ public final class TunnelService extends VpnService {
             updateStatus();
             MainActivity.emit("vpn", true);
         } catch (Exception error) {
+            if (timedRecovery && !recoveryEstablishClaimed) {
+                if (startAllowed(this, request)) reportRollback(request, false, error.toString());
+                return;
+            }
             reportRollback(request, false, error.toString());
             closeDescriptor(replacement);
             if (stopping || !current(this, request)) {
@@ -557,7 +728,11 @@ public final class TunnelService extends VpnService {
             IncidentNotifications.publish(this, "critical", true);
             disconnect(request, false, false);
         } finally {
-            finishRequest(request);
+            try {
+                if (recoveryProtectorInstalled && !recoveryEstablishClaimed) Mobile.setProtector(null);
+            } finally {
+                finishRequest(request);
+            }
         }
     }
     private void awaitGuard(String request) throws Exception {
@@ -620,10 +795,9 @@ public final class TunnelService extends VpnService {
             boolean cleaned = cleanup(recovering);
             if (recovering && !cleaned) return false;
             synchronized (requests) {
-                if (!current(this, request)) { stopping = false; return false; }
+                if (!current(this, request)) return false;
                 stopForeground(STOP_FOREGROUND_REMOVE);
                 stopped = stopSelfResult(latestStartId);
-                if (!stopped) stopping = false;
                 reportRollback(request, cleaned,
                     cleaned ? "" : AppLanguage.current(this).getString(R.string.vpn_cancelled));
             }
@@ -632,8 +806,10 @@ public final class TunnelService extends VpnService {
             reportRollback(request, false, error.toString());
             throw error;
         } finally {
-            if (recovering && !stopped) stopping = false;
-            finishRequest(request);
+            synchronized (requests) {
+                if (!stopped && instance == this) stopping = false;
+                finishRequest(request);
+            }
         }
     }
     @Override public void onRevoke() {
@@ -643,9 +819,9 @@ public final class TunnelService extends VpnService {
         IncidentNotifications.publish(this, "recovery", true);
     }
     @Override public void onDestroy() {
-        stopping = true;
         if (notificationTask != null) notificationTask.cancel(false);
         synchronized (requests) {
+            stopping = true;
             if (instance == this) instance = null;
             pendingCleanup++;
         }
@@ -657,6 +833,7 @@ public final class TunnelService extends VpnService {
                     pendingCleanup--;
                     reportRollback(acceptedRequest, false, AppLanguage.current(this).getString(R.string.vpn_cancelled));
                     finishRequest(acceptedRequest);
+                    scheduleIdleStop();
                 }
             }
         });

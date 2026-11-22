@@ -306,7 +306,11 @@ pub(super) async fn run(
                 )),
             }
         }
-        report.entries.push(Entry::unknown("检查路径", "强制目标 IP，经本机 SOCKS5 代理；HTTPS 验证原域名证书，HTTP 仅建立连接。IP 规则可能与域名请求不同；结果不代表本机或节点入口的地址族能力", "information"));
+        report.entries.push(Entry::unknown(
+            "检查路径",
+            "目标 IP 经本机 SOCKS5，IP 与域名可能匹配不同规则；HTTPS 校验证书，HTTP 仅建立连接。",
+            "information",
+        ));
         return Ok(());
     }
     let mut url = url.clone();

@@ -303,13 +303,17 @@ pub(super) fn detail(label: &str, value: &str, code: &str, language: Language) -
         (
             "路径",
             "information",
-            "系统 ICMP / 逐跳探针；系统代理不承载此流量，TUN 是否接管取决于系统路由。这不是代理节点延迟",
-        ) => "System ICMP or trace probe; TUN routing depends on system routes",
+            "系统 ICMP / 逐跳探针；系统代理不承载此流量，TUN 是否接管取决于系统路由。这不是代理节点延迟"
+            | "系统 ICMP / 逐跳探针，绕过系统代理；TUN 是否接管取决于系统路由。",
+        ) => "System ICMP or trace probe; bypasses the system proxy; TUN follows system routes",
         (
             "检查路径",
             "information",
-            "强制目标 IP，经本机 SOCKS5 代理；HTTPS 验证原域名证书，HTTP 仅建立连接。IP 规则可能与域名请求不同；结果不代表本机或节点入口的地址族能力",
-        ) => "Target IP via local SOCKS5; HTTPS validates the original domain certificate",
+            "强制目标 IP，经本机 SOCKS5 代理；HTTPS 验证原域名证书，HTTP 仅建立连接。IP 规则可能与域名请求不同；结果不代表本机或节点入口的地址族能力"
+            | "目标 IP 经本机 SOCKS5，IP 与域名可能匹配不同规则；HTTPS 校验证书，HTTP 仅建立连接。",
+        ) => {
+            "Target IP via local SOCKS5; IP and domain rules may differ; HTTPS validates the domain certificate, HTTP only connects"
+        }
         ("IPv4" | "IPv6", "family_no_address", "未返回此地址族的目标地址，未发起连接") => {
             "No address returned for this family; connection not attempted"
         }
