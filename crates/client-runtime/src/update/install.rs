@@ -118,41 +118,138 @@ pub fn localize_installation_message(message: &str, language: Language) -> Cow<'
             })
             .unwrap_or_else(|| (reason, String::new()))
         };
-        let reason = if reason == "安装授权已取消" {
-            "Installation authorization cancelled".into()
-        } else if reason == "安装已取消" {
-            "Installation cancelled".into()
-        } else if reason == "未获得安装授权，未执行停止后台；请在交互终端重试，或由管理员手动安装"
-        {
-            "Installation authorization denied; retry in an interactive terminal or ask an administrator to install the package".into()
-        } else if reason == "未获得安装授权，未执行停止后台；当前账户无权通过 sudo 安装此软件包"
-        {
-            "Installation authorization denied; this account cannot install the package with sudo"
-                .into()
-        } else if reason == "安装助手意外退出，请检查安全软件" {
-            "Installer exited unexpectedly; check security software".into()
-        } else if reason == "安装目录中的文件不可写或仍被占用，未替换旧文件，请稍后重试"
-        {
-            "Installation files are not writable or are in use; old files retained; retry later"
-                .into()
-        } else if let Some((status, detail)) = reason
-            .strip_prefix("DEB 安装失败（")
-            .and_then(|rest| rest.split_once("）："))
-        {
-            format!("DEB installation failed ({status}): {detail}")
-        } else if let Some((status, detail)) = reason
-            .strip_prefix("Arch 原生包 安装失败（")
-            .and_then(|rest| rest.split_once("）："))
-        {
-            format!("Arch package installation failed ({status}): {detail}")
-        } else if let Some(detail) = reason.strip_prefix("DEB 安装失败：") {
-            format!("DEB installation failed: {detail}")
-        } else {
-            reason.to_owned()
-        };
+        let reason = localize_installation_reason(reason);
         return format!("Update failed: {reason}{recovery}").into();
     }
-    message.into()
+    localize_installation_reason(message)
+}
+
+fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
+    let translated = match reason {
+        "安装授权已取消" => Some("Installation authorization cancelled"),
+        "安装已取消" => Some("Installation cancelled"),
+        "未获得安装授权，未执行停止后台；请在交互终端重试，或由管理员手动安装" => {
+            Some(
+                "Installation authorization denied; retry in an interactive terminal or ask an administrator to install the package",
+            )
+        }
+        "未获得安装授权，未执行停止后台；当前账户无权通过 sudo 安装此软件包" => {
+            Some(
+                "Installation authorization denied; this account cannot install the package with sudo",
+            )
+        }
+        "安装助手意外退出" => Some("Installer exited unexpectedly"),
+        "安装助手意外退出，请检查安全软件" => {
+            Some("Installer exited unexpectedly; check security software")
+        }
+        "安装准备或授权超时" => {
+            Some("Installation preparation or authorization timed out")
+        }
+        "安装准备或授权超时，客户端仍在运行，请重试或手动安装" => Some(
+            "Installation preparation or authorization timed out; the client is still running; retry or install manually",
+        ),
+        "缺少 pkexec，无法请求安装授权" => {
+            Some("pkexec is unavailable; cannot request installation authorization")
+        }
+        "无法获得安装授权，请检查桌面授权服务" => {
+            Some("Installation authorization failed; check the desktop authorization service")
+        }
+        "DEB 安装失败，请检查包管理器占用、依赖与磁盘空间" => {
+            Some("DEB installation failed; check the package manager, dependencies and disk space")
+        }
+        "Arch 原生包 安装失败，请检查包管理器占用、依赖与磁盘空间" => {
+            Some(
+                "Arch package installation failed; check the package manager, dependencies and disk space",
+            )
+        }
+        "客户端未能正常退出或文件被占用，请退出后重试" => {
+            Some("The client could not exit or files are in use; exit and retry")
+        }
+        "安装包架构与当前 Windows 不兼容，请下载匹配的安装包" => Some(
+            "The package architecture is incompatible with Windows; download a matching package",
+        ),
+        "安装文件写入失败，具体原因未确认，请导出诊断后重试" => {
+            Some("Installation files could not be written; export diagnostics and retry")
+        }
+        "无法替换主程序：文件被占用或安装目录不可写，已保留旧版本" => {
+            Some(
+                "Could not replace the application: files are in use or the directory is not writable; the previous version was retained",
+            )
+        }
+        "无法替换界面程序：文件被占用或安装目录不可写，已恢复旧版本" => {
+            Some(
+                "Could not replace the interface: files are in use or the directory is not writable; the previous version was restored",
+            )
+        }
+        "无法写入卸载程序：文件被占用或安装目录不可写，已恢复旧版本" => {
+            Some(
+                "Could not write the uninstaller: files are in use or the directory is not writable; the previous version was restored",
+            )
+        }
+        "Windows 网络助手安装失败，已恢复旧版主程序与界面" => Some(
+            "Windows network helper installation failed; the previous application and interface were restored",
+        ),
+        "无法写入安装登记信息，已恢复旧版主程序与界面" => Some(
+            "Could not write installation registration; the previous application and interface were restored",
+        ),
+        "安装交接未确认或已超时，已保留旧版本" => Some(
+            "Installation handoff was not confirmed or timed out; the previous version was retained",
+        ),
+        "安装目录中的文件不可写或仍被占用，未替换旧文件，请稍后重试" => {
+            Some(
+                "Installation files are not writable or are in use; old files retained; retry later",
+            )
+        }
+        _ => None,
+    };
+    if let Some(translated) = translated {
+        return translated.into();
+    }
+    if let Some((cause, file)) = reason
+        .strip_prefix("安装未完成：")
+        .and_then(|rest| rest.strip_suffix("），请处理后重试"))
+        .and_then(|rest| rest.split_once('（'))
+    {
+        let cause = match cause {
+            "没有写入权限、文件只读或被安全软件阻止" => {
+                Some("No write permission, file is read-only, or blocked by security software")
+            }
+            "磁盘为只读" => Some("Disk is read-only"),
+            "文件仍被占用" => Some("File is still in use"),
+            "磁盘空间不足" => Some("Not enough disk space"),
+            "无法写入文件" => Some("Could not write file"),
+            _ => None,
+        };
+        if let Some(cause) = cause {
+            return format!(
+                "Installation incomplete: {cause} ({file}); resolve the issue and retry"
+            )
+            .into();
+        }
+    }
+    if let Some(code) = reason
+        .strip_prefix("安装程序失败（代码 ")
+        .and_then(|rest| rest.strip_suffix("），请重试"))
+        .filter(|code| code.parse::<u32>().is_ok())
+    {
+        return format!("Installer failed (code {code}); retry").into();
+    }
+    if let Some((status, detail)) = reason
+        .strip_prefix("DEB 安装失败（")
+        .and_then(|rest| rest.split_once("）："))
+    {
+        return format!("DEB installation failed ({status}): {detail}").into();
+    }
+    if let Some((status, detail)) = reason
+        .strip_prefix("Arch 原生包 安装失败（")
+        .and_then(|rest| rest.split_once("）："))
+    {
+        return format!("Arch package installation failed ({status}): {detail}").into();
+    }
+    if let Some(detail) = reason.strip_prefix("DEB 安装失败：") {
+        return format!("DEB installation failed: {detail}").into();
+    }
+    reason.into()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -809,6 +906,132 @@ fn parent_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_installation_failures_are_localized_from_actual_installer_results() {
+        let directory = tempfile::tempdir().unwrap();
+        for (code, expected) in [
+            (2, "Installation cancelled"),
+            (
+                3,
+                "The client could not exit or files are in use; exit and retry",
+            ),
+            (
+                4,
+                "The package architecture is incompatible with Windows; download a matching package",
+            ),
+            (
+                6,
+                "Installation files could not be written; export diagnostics and retry",
+            ),
+            (
+                61,
+                "Could not replace the application: files are in use or the directory is not writable; the previous version was retained",
+            ),
+            (
+                62,
+                "Could not replace the interface: files are in use or the directory is not writable; the previous version was restored",
+            ),
+            (
+                64,
+                "Could not write the uninstaller: files are in use or the directory is not writable; the previous version was restored",
+            ),
+            (
+                65,
+                "Windows network helper installation failed; the previous application and interface were restored",
+            ),
+            (
+                66,
+                "Could not write installation registration; the previous application and interface were restored",
+            ),
+            (
+                67,
+                "Installation handoff was not confirmed or timed out; the previous version was retained",
+            ),
+            (
+                68,
+                "Installation files are not writable or are in use; old files retained; retry later",
+            ),
+            (100, "Installer failed (code 100); retry"),
+        ] {
+            let reason = windows::result(code, directory.path())
+                .unwrap_err()
+                .to_string();
+            let message = format!("更新失败：{reason}");
+            assert_eq!(
+                localize_installation_message(&message, Language::English),
+                format!("Update failed: {expected}"),
+                "installer exit {code}"
+            );
+            assert_eq!(
+                localize_installation_message(&message, Language::SimplifiedChinese),
+                message
+            );
+        }
+
+        for (error, expected) in [
+            (
+                5,
+                "No write permission, file is read-only, or blocked by security software",
+            ),
+            (19, "Disk is read-only"),
+            (32, "File is still in use"),
+            (112, "Not enough disk space"),
+            (999, "Could not write file"),
+        ] {
+            let failure = serde_json::json!({
+                "schema": 1, "stage": "preflight", "file": "resources/GeoIP.dat",
+                "win32_error": error, "exit_code": 68
+            });
+            fs::write(
+                directory.path().join("installer-failure.json"),
+                serde_json::to_vec(&failure).unwrap(),
+            )
+            .unwrap();
+            let reason = windows::result(68, directory.path())
+                .unwrap_err()
+                .to_string();
+            let message = format!("更新失败：{reason}");
+            assert_eq!(
+                localize_installation_message(&message, Language::English),
+                format!(
+                    "Update failed: Installation incomplete: {expected} (resources/GeoIP.dat); resolve the issue and retry"
+                ),
+                "Windows error {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn installation_translation_preserves_unknown_causes_and_package_details() {
+        for (message, expected) in [
+            (
+                "更新失败：无法获得安装授权，请检查桌面授权服务",
+                "Update failed: Installation authorization failed; check the desktop authorization service",
+            ),
+            (
+                "更新失败：DEB 安装失败，请检查包管理器占用、依赖与磁盘空间",
+                "Update failed: DEB installation failed; check the package manager, dependencies and disk space",
+            ),
+            (
+                "更新失败：Arch 原生包 安装失败（exit status: 1）：外部详情",
+                "Update failed: Arch package installation failed (exit status: 1): 外部详情",
+            ),
+            (
+                "更新失败：安装未完成：未知原因（resources/GeoIP.dat），请处理后重试",
+                "Update failed: 安装未完成：未知原因（resources/GeoIP.dat），请处理后重试",
+            ),
+        ] {
+            assert_eq!(
+                localize_installation_message(message, Language::English),
+                expected
+            );
+            assert_eq!(
+                localize_installation_message(message, Language::SimplifiedChinese),
+                message
+            );
+        }
+    }
 
     #[cfg(any(windows, target_os = "macos"))]
     #[test]

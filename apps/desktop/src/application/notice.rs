@@ -87,8 +87,9 @@ impl App {
                         status.message
                     ),
                     Language::English => format!(
-                        "{}\n\nCould not acknowledge the installation failure: {error:#}. Try closing this notice again later.",
-                        status.message
+                        "{}\n\nCould not acknowledge the installation failure: {}. Try closing this notice again later.",
+                        update::localize_installation_message(&status.message, Language::English),
+                        error.root_cause()
                     ),
                 };
                 if self.notice != message {
@@ -335,6 +336,45 @@ mod tests {
                 .unwrap()
                 .needs_notification()
         );
+    }
+
+    #[test]
+    fn english_failed_confirmation_localizes_the_record_and_preserves_it_for_retry() {
+        let data = tempfile::tempdir().unwrap();
+        let failure = "更新失败：安装授权已取消";
+        stored_installation_failure(data.path(), failure);
+        let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        app.presentation_language = Language::English;
+        app.installation_root = Some(data.path().to_owned());
+        app.prepare_initialization(None);
+        app.read_installation_notice(None);
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(data.path().join("update-install.lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let _ = app.update(Message::DismissNotice);
+        assert!(
+            app.notice
+                .starts_with("Update failed: Installation authorization cancelled")
+        );
+        assert!(
+            app.notice
+                .contains("Could not acknowledge the installation failure")
+        );
+        assert_eq!(
+            update::installation_status(data.path())
+                .unwrap()
+                .unwrap()
+                .message,
+            failure
+        );
+        drop(lock);
+        let _ = app.update(Message::DismissNotice);
+        assert!(!app.notice_visible && app.updates.failure.is_none());
     }
 
     #[test]

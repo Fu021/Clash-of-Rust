@@ -102,6 +102,13 @@ fn english_update_results_localize_projection_without_changing_failure_state() {
     assert_eq!(data.get_update_status(), expected);
     assert_eq!(app.pending_update_failure.as_deref(), Some(failure));
     assert_eq!(app.updates.failure.as_deref(), Some(failure));
+    let windows_failure = "更新失败：安装未完成：文件仍被占用（resources/GeoIP.dat），请处理后重试";
+    app.update_outcome(windows_failure.into(), true);
+    app.present_slint(&data, &mut models);
+    let windows_expected = "Update failed: Installation incomplete: File is still in use (resources/GeoIP.dat); resolve the issue and retry";
+    assert_eq!(data.get_notice(), windows_expected);
+    assert_eq!(data.get_update_status(), windows_expected);
+    assert_eq!(app.pending_update_failure.as_deref(), Some(windows_failure));
     let _ = app.update(Message::DismissNotice);
     assert!(app.pending_update_failure.is_none());
     assert!(app.updates.failure.is_none());

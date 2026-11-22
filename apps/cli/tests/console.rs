@@ -329,6 +329,16 @@ fn update_status_localizes_known_results_without_changing_saved_or_json_messages
         ),
         (
             "failed",
+            "更新失败：安装未完成：文件仍被占用（resources/GeoIP.dat），请处理后重试",
+            "Update failed: Installation incomplete: File is still in use (resources/GeoIP.dat); resolve the issue and retry",
+        ),
+        (
+            "failed",
+            "更新失败：无法获得安装授权，请检查桌面授权服务",
+            "Update failed: Installation authorization failed; check the desktop authorization service",
+        ),
+        (
+            "failed",
             "更新失败：DEB 安装失败（exit status: 1）：example details；已恢复更新前的后台和内核状态",
             "Update failed: DEB installation failed (exit status: 1): example details; previous background and core state restored",
         ),
