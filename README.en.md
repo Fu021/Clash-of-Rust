@@ -22,11 +22,6 @@
   <a href="https://clash-of-rust.fu021.shop/en/"><img src="resources/icons/website-button-en.svg" width="176" height="44" alt="Project website — features and downloads"></a>
   <a href="https://clash-of-rust.fu021.shop/en/download"><img src="resources/icons/download-button-en.svg" width="136" height="44" alt="Download the installer for your platform and architecture"></a>
 </p>
-<p align="center">
-  <a href="#interface-preview">Interface preview</a> ·
-  <a href="#command-line">Command line</a>
-</p>
-
 Clash of Rust is a native proxy client built with **Rust + Slint + mihomo**. The desktop GUI, TUI, and `cor` command line share a backend. Android has a dedicated client.
 
 The table lists supported installs and tested environments for **stable release 0.7.2**.

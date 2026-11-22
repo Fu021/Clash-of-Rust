@@ -61,7 +61,7 @@ export component SettingsPage inherits PageSurface {
                 general-section := SettingsSection {
                     title: @tr("常规");
                     ListPanel {
-                        FormRow { title: @tr("语言"); hint: @tr("重新打开窗口后生效。");
+                        FormRow { title: @tr("语言/language"); hint: @tr("切换后立即生效。");
                             Select {
                                 geometry-key: "language";
                                 width: 162px * Theme.text-scale; horizontal-stretch: 0;

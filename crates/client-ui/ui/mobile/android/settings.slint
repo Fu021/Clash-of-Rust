@@ -7,7 +7,7 @@ import { AppearanceSettings, NetworkToggles, ScheduleSettings, CurrentVersion, G
 
 component AndroidLanguage inherits VerticalLayout {
     alignment: start; spacing: 10px;
-    MSmall { text: @tr("语言"); font-weight: 600; }
+    MSmall { text: @tr("语言/language"); font-weight: 600; }
     MCard {
         MSelect {
             geometry-key: "language";
@@ -16,7 +16,7 @@ component AndroidLanguage inherits VerticalLayout {
             enabled: !MobileData.working;
             selected(index, value) => { MobileActions.request(MobileIntent.language, ["system", "zh-CN", "en"][index], ""); }
         }
-        MSmall { text: @tr("重新打开应用后生效。"); wrap: word-wrap; }
+        MSmall { text: @tr("切换后立即生效。"); wrap: word-wrap; }
     }
 }
 component AndroidNetwork inherits VerticalLayout {

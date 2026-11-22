@@ -1,6 +1,9 @@
 use super::form::{self, Form};
 use anyhow::{Context, Result, ensure};
-use clash_client_core::{config::Language, proxy_order::NodeSort};
+use clash_client_core::{
+    config::{Language, LanguagePreference},
+    proxy_order::NodeSort,
+};
 use clash_client_runtime::control::{Command, Poll};
 use clash_client_runtime::engine::ProxyMode;
 use serde_json::{Value, json};
@@ -116,6 +119,19 @@ fn language_choices(language: Language) -> [(&'static str, &'static str); 3] {
     ]
 }
 
+pub(super) fn language_display(preference: LanguagePreference, language: Language) -> &'static str {
+    language_choices(language)
+        .into_iter()
+        .find(|(tag, _)| *tag == preference.tag())
+        .map_or("", |(_, label)| label)
+}
+
+pub(super) fn language_form(preference: LanguagePreference, language: Language) -> Form {
+    let mut form = Form::setting("language", &json!(preference.tag()), language);
+    choices(&mut form, 1, &language_choices(language));
+    form
+}
+
 fn enabled_label(enabled: bool, language: Language) -> &'static str {
     if enabled {
         language.text("开启", "On")
@@ -199,11 +215,7 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
                 NodeSort::LatencyDescending => "Highest latency first".into(),
             },
         },
-        "language" => language_choices(language)
-            .iter()
-            .find(|(tag, _)| value.as_str() == Some(*tag))
-            .map_or("", |(_, label)| *label)
-            .into(),
+        "language" => language_display(poll.meta.settings.language, language).into(),
         "fake_ip" if !poll.meta.settings.dns_override => language
             .text("关闭（DNS 覆盖未开启）", "Off (DNS override is off)")
             .into(),
@@ -268,10 +280,7 @@ pub(super) fn hint(key: &str, language: Language) -> &'static str {
             "只改变终端节点显示；节点页也可按 s 循环切换。",
             "Press s on the Nodes page to cycle through sort orders.",
         ),
-        "language" => language.text(
-            "重新打开终端界面后生效。",
-            "Reopen the terminal UI to apply.",
-        ),
+        "language" => language.text("切换后立即生效。", "Changes apply immediately."),
         key if key.starts_with("shortcut_") => language.text(
             "作用于当前订阅；自定义规则、顺序和订阅原规则在规则页管理。",
             "Applies to the active subscription. Manage other rules under Rules.",
@@ -281,6 +290,47 @@ pub(super) fn hint(key: &str, language: Language) -> &'static str {
             "Use ← → or Space to change a choice, Enter to edit, and ↓ to select Save.",
         ),
     }
+}
+
+pub(super) fn apply_saved_language(
+    state: &mut super::model::State,
+    poll: &Poll,
+    key: Option<&str>,
+    args: &mut crate::args::Args,
+) {
+    if key != Some("language") {
+        return;
+    }
+    apply_language(state, poll.meta.settings.language, args);
+}
+
+pub(super) fn apply_language(
+    state: &mut super::model::State,
+    preference: LanguagePreference,
+    args: &mut crate::args::Args,
+) {
+    state.language_preference = preference;
+    state.language = preference.resolve_desktop();
+    args.options
+        .insert("lang".into(), state.language.tag().into());
+    if let Some(report) = &state.network_report {
+        state.network_results = report.lines_in(state.language);
+    }
+}
+
+pub(super) fn sync_language(
+    state: &mut super::model::State,
+    args: &mut crate::args::Args,
+    follow_preference: bool,
+) -> bool {
+    if !follow_preference
+        || state.form.is_some()
+        || state.language == state.language_preference.resolve_desktop()
+    {
+        return false;
+    }
+    apply_language(state, state.language_preference, args);
+    true
 }
 
 fn choices(form: &mut Form, index: usize, values: &[(&str, &str)]) {
@@ -301,6 +351,9 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
             "Manage this setting under Commands."
         )
     );
+    if key == "language" {
+        return Ok(language_form(poll.meta.settings.language, language));
+    }
     let value = value(poll, key);
     let mut form = Form::setting(key, &value, language);
     let off = enabled_label(false, language);
@@ -396,7 +449,6 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
                 ),
             ],
         ),
-        "language" => choices(&mut form, 1, &language_choices(language)),
         key if key.starts_with("shortcut_") => {
             let (_, name, _, _) = SHORTCUTS
                 .iter()

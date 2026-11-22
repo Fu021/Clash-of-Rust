@@ -1,7 +1,7 @@
 use super::form::{self, Form};
 use super::input::Key;
 use anyhow::{Context, Result, ensure};
-use clash_client_core::config::Language;
+use clash_client_core::config::{Language, LanguagePreference};
 use clash_client_core::proxy_order::{self, NodeSort};
 use clash_client_runtime::{
     control::{Meta, Owner, Poll},
@@ -146,6 +146,7 @@ pub(super) enum Action {
 pub(super) struct State {
     pub page: Page,
     pub language: Language,
+    pub language_preference: LanguagePreference,
     pub poll: Option<Poll>,
     pub error: Option<String>,
     pub query: String,
@@ -176,6 +177,7 @@ impl State {
         Self {
             page: Page::Home,
             language: Language::SimplifiedChinese,
+            language_preference: LanguagePreference::System,
             poll: demo.then(demo_poll),
             error: None,
             query: String::new(),
@@ -204,6 +206,9 @@ impl State {
 
     pub fn accept(&mut self, poll: Option<Poll>) {
         let selected_node = self.selected_node();
+        if let Some(poll) = &poll {
+            self.language_preference = poll.meta.settings.language;
+        }
         let changed = self
             .poll
             .as_ref()

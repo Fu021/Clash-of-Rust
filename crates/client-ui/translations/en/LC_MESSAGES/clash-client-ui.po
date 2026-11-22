@@ -295,11 +295,11 @@ msgstr "Updates"
 msgid "计划任务"
 msgstr "Scheduled tasks"
 
-msgid "语言"
-msgstr "Language"
+msgid "语言/language"
+msgstr "Language/语言"
 
-msgid "重新打开窗口后生效。"
-msgstr "Reopen the window to apply."
+msgid "切换后立即生效。"
+msgstr "Changes apply immediately."
 
 msgid "跟随系统"
 msgstr "Follow system"

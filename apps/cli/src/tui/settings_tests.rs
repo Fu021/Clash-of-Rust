@@ -164,13 +164,13 @@ fn language_choices_use_localized_interface_and_save_the_stable_setting_value() 
             SimplifiedChinese,
             "语言",
             "跟随系统",
-            "保存语言为「English」",
+            "保存语言/language为「English」",
         ),
         (
             English,
             "language",
             "Follow system",
-            "Save Language as English",
+            "Save Language/语言 as English",
         ),
     ] {
         let mut state = State::new(false);
@@ -207,6 +207,135 @@ fn language_choices_use_localized_interface_and_save_the_stable_setting_value() 
         assert_eq!(value, "en");
         assert_eq!(operation.get("lang"), Some("zh-CN"));
     }
+}
+
+#[test]
+fn saved_language_immediately_redraws_the_existing_terminal_state() {
+    use clash_client_core::config::LanguagePreference;
+
+    let mut state = State::new(false);
+    let mut poll = demo_poll();
+    let mut current_args = args();
+    state.page = Page::Settings;
+    state.query = "language".into();
+    state.language = SimplifiedChinese;
+    poll.meta.settings.language = LanguagePreference::English;
+    settings::apply_saved_language(&mut state, &poll, Some("ipv6"), &mut current_args);
+    assert_eq!(state.language, SimplifiedChinese);
+    settings::apply_saved_language(&mut state, &poll, Some("language"), &mut current_args);
+    state.accept(Some(poll));
+    assert_eq!(state.language, English);
+    assert_eq!(current_args.get("lang"), Some("en"));
+    assert_eq!(state.query, "language");
+    assert!(
+        render::frame(&state, 80, 24)
+            .iter()
+            .any(|line| line.text.contains("Language/语言"))
+    );
+    let mut poll = demo_poll();
+    poll.meta.settings.language = LanguagePreference::SimplifiedChinese;
+    settings::apply_saved_language(&mut state, &poll, Some("language"), &mut current_args);
+    assert_eq!(state.language, SimplifiedChinese);
+    poll.meta.settings.language = LanguagePreference::System;
+    settings::apply_saved_language(&mut state, &poll, Some("language"), &mut current_args);
+    assert_eq!(state.language, LanguagePreference::System.resolve_desktop());
+}
+
+#[test]
+fn external_language_changes_follow_preferences_without_losing_drafts_or_overrides() {
+    use clash_client_core::config::LanguagePreference;
+
+    let mut state = State::new(false);
+    let mut current_args = args();
+    state.language = SimplifiedChinese;
+    state.language_preference = LanguagePreference::English;
+    state.query = "example".into();
+    assert!(!settings::sync_language(
+        &mut state,
+        &mut current_args,
+        false
+    ));
+    assert_eq!(state.language, SimplifiedChinese);
+
+    state.form = Some(settings::language_form(
+        LanguagePreference::SimplifiedChinese,
+        SimplifiedChinese,
+    ));
+    state.form.as_mut().unwrap().draft = "unfinished".into();
+    assert!(!settings::sync_language(
+        &mut state,
+        &mut current_args,
+        true
+    ));
+    assert_eq!(state.form.as_ref().unwrap().draft, "unfinished");
+    assert_eq!(state.language, SimplifiedChinese);
+
+    state.form = None;
+    assert!(settings::sync_language(&mut state, &mut current_args, true));
+    assert_eq!(state.language, English);
+    assert_eq!(current_args.get("lang"), Some("en"));
+    assert_eq!(state.query, "example");
+    assert!(!settings::sync_language(
+        &mut state,
+        &mut current_args,
+        true
+    ));
+}
+
+#[tokio::test]
+async fn offline_language_save_preserves_settings_and_respects_the_owner_lock() {
+    use crate::tui::{Reply, save_setting};
+    use clash_client_core::config::{LanguagePreference, Store};
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let context = crate::args::parse(
+        ["--data-dir", root.to_str().unwrap(), "ui"]
+            .into_iter()
+            .map(str::to_owned),
+    )
+    .unwrap();
+    let operation = crate::args::parse(
+        ["config", "set", "language", "en"]
+            .into_iter()
+            .map(str::to_owned),
+    )
+    .unwrap();
+    assert!(matches!(
+        save_setting(&context, &operation, SimplifiedChinese, false)
+            .await
+            .unwrap(),
+        Reply::LanguageSaved(LanguagePreference::English)
+    ));
+    let store = Store::at(root.clone()).unwrap();
+    let mut original = store.load_settings().unwrap();
+    original.ipv6 = !original.ipv6;
+    store.save_settings(&original).unwrap();
+    let owner = store.instance_lock().unwrap();
+    let conflicting = crate::args::parse(
+        ["config", "set", "language", "zh-CN"]
+            .into_iter()
+            .map(str::to_owned),
+    )
+    .unwrap();
+    assert!(
+        save_setting(&context, &conflicting, English, false)
+            .await
+            .is_err()
+    );
+    assert_eq!(store.load_settings().unwrap(), original);
+    drop(owner);
+    assert!(!root.join("control.json").exists());
+    assert!(matches!(
+        save_setting(&context, &conflicting, English, false)
+            .await
+            .unwrap(),
+        Reply::LanguageSaved(LanguagePreference::SimplifiedChinese)
+    ));
+    let saved = store.load_settings().unwrap();
+    assert_eq!(saved.language, LanguagePreference::SimplifiedChinese);
+    assert_eq!(saved.ipv6, original.ipv6);
+    assert!(!root.join("control.json").exists());
 }
 
 #[test]

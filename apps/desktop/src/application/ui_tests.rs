@@ -2557,10 +2557,13 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
 fn desktop_language_menu_dispatches_stable_tags_in_both_catalogs() {
     ui_testing::initialize(800, 450);
     let window = AppWindow::new().unwrap();
+    clash_desktop_ui::install_region_names(&window);
     let data = window.global::<UiData>();
     data.set_page(9);
     data.set_ready(true);
     data.set_protected(true);
+    let mut models = ViewModels::default();
+    models.attach(&data);
     track_targets(&window);
     let events = pointer_events(&window);
     window.show().unwrap();
@@ -2584,6 +2587,14 @@ fn desktop_language_menu_dispatches_stable_tags_in_both_catalogs() {
         ),
     ] {
         slint::select_bundled_translation(locale).unwrap();
+        let original = if locale == "en" {
+            LanguagePreference::English
+        } else {
+            LanguagePreference::SimplifiedChinese
+        };
+        data.set_language(original.tag().into());
+        data.set_ready(true);
+        data.set_protected(true);
         assert_eq!(window.get_page_title(), title);
         assert_eq!(
             window
@@ -2611,7 +2622,87 @@ fn desktop_language_menu_dispatches_stable_tags_in_both_catalogs() {
             events.borrow_mut().pop(),
             Some((Intent::Language, expected.into(), "".into()))
         );
+        let mut app = fixture(Page::Settings);
+        app.settings.language = original;
+        app.presentation_language = original.resolve_desktop();
+        app.profile_name = "Unsaved draft".into();
+        let mut reply = synchronized_reply(&app);
+        reply.settings.language = LanguagePreference::from_tag(expected).unwrap();
+        let _ = app.update(Message::Finished(Box::new(reply)));
+        assert_eq!(app.profile_name, "Unsaved draft");
+        assert_eq!(app.page, Page::Settings);
+        assert!(app.snapshot.running);
+        let projection = clash_desktop_protocol::UiData::default();
+        let mut projected = clash_desktop_protocol::models::ViewModels::default();
+        projected.attach(&projection);
+        app.present(&projection, &mut projected);
+        let frame = projection.snapshot();
+        assert!(!clash_desktop_ui::apply_if_current(&frame, &data, &mut models, 1, 2).unwrap());
+        assert_eq!(window.get_page_title(), title);
+        assert!(clash_desktop_ui::apply_if_current(&frame, &data, &mut models, 2, 2).unwrap());
+        assert_eq!(
+            window.get_page_title(),
+            if expected == "en" {
+                "Settings"
+            } else {
+                "设置"
+            }
+        );
+        assert_eq!(
+            window.global::<IpStatusText>().invoke_label("德国".into()),
+            if expected == "en" {
+                "Germany"
+            } else {
+                "德国"
+            }
+        );
+        if let Some(prefix) = std::env::var_os("COR_LIVE_LANGUAGE_PREVIEW") {
+            data.set_ready(true);
+            let image = window.window().take_snapshot().unwrap();
+            let size = window.window().size();
+            let mut bytes = format!("P6\n{} {}\n255\n", size.width, size.height).into_bytes();
+            for pixel in image.as_bytes().as_chunks::<4>().0 {
+                bytes.extend_from_slice(&pixel[..3]);
+            }
+            std::fs::write(
+                format!("{}-{expected}.ppm", prefix.to_string_lossy()),
+                bytes,
+            )
+            .unwrap();
+        }
     }
+    let mut app = fixture(Page::Settings);
+    app.settings.language = LanguagePreference::English;
+    app.presentation_language = Language::English;
+    app.profile_name = "Unsaved draft".into();
+    let mut failed = synchronized_reply(&app);
+    failed.notice = Err("Settings save failed".into());
+    let _ = app.update(Message::Finished(Box::new(failed)));
+    assert_eq!(app.presentation_language, Language::English);
+    assert_eq!(app.settings.language, LanguagePreference::English);
+    assert_eq!(app.profile_name, "Unsaved draft");
+    let mut reply = synchronized_reply(&app);
+    reply.settings.language = LanguagePreference::System;
+    let _ = app.update(Message::Finished(Box::new(reply)));
+    assert_eq!(
+        app.presentation_language,
+        LanguagePreference::System.resolve_desktop()
+    );
+    assert_eq!(app.profile_name, "Unsaved draft");
+    data.set_language("en".into());
+    slint::select_bundled_translation("en").unwrap();
+    let projection = clash_desktop_protocol::UiData::default();
+    let mut projected = clash_desktop_protocol::models::ViewModels::default();
+    projected.attach(&projection);
+    app.present(&projection, &mut projected);
+    assert!(
+        clash_desktop_ui::apply_if_current(&projection.snapshot(), &data, &mut models, 3, 3)
+            .unwrap()
+    );
+    assert_eq!(
+        window.get_page_title(),
+        app.presentation_language.text("设置", "Settings")
+    );
     window.hide().unwrap();
 }
 
@@ -4148,13 +4239,7 @@ fn renderer_rejects_stale_frames_without_losing_newer_input_or_dropdown_state() 
         rule_kind: "DOMAIN".into(),
         ..Default::default()
     };
-    assert!(!clash_desktop_ui::apply_if_current(
-        &frame,
-        &data,
-        &mut models,
-        2,
-        3
-    ));
+    assert!(!clash_desktop_ui::apply_if_current(&frame, &data, &mut models, 2, 3).unwrap());
     assert_eq!(data.get_edit_name(), "newer draft");
     assert_eq!(data.get_rule_kind(), "DOMAIN-SUFFIX");
     let frame = clash_desktop_protocol::Frame {
@@ -4162,13 +4247,7 @@ fn renderer_rejects_stale_frames_without_losing_newer_input_or_dropdown_state() 
         rule_kind: "DOMAIN-SUFFIX".into(),
         ..frame
     };
-    assert!(clash_desktop_ui::apply_if_current(
-        &frame,
-        &data,
-        &mut models,
-        3,
-        3
-    ));
+    assert!(clash_desktop_ui::apply_if_current(&frame, &data, &mut models, 3, 3).unwrap());
     assert_eq!(data.get_edit_name(), "newer draft");
 }
 

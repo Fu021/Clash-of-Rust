@@ -17,6 +17,7 @@ export global MobileActions { callback request(MobileIntent, string, string); }
 export global MobileData {
     in-out property <string> version;
     in-out property <string> language: "system";
+    in-out property <string> presentation-language;
     in-out property <bool> core-running;
     // VPN session status belongs to the platform, independently of the core.
     in-out property <bool> vpn-connected;

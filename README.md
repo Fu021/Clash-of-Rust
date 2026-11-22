@@ -22,11 +22,6 @@
   <a href="https://clash-of-rust.fu021.shop/"><img src="resources/icons/website-button.svg" width="176" height="44" alt="访问项目网站：功能介绍与软件下载"></a>
   <a href="https://clash-of-rust.fu021.shop/download"><img src="resources/icons/download-button.svg" width="136" height="44" alt="下载安装：选择平台与架构"></a>
 </p>
-<p align="center">
-  <a href="#界面预览">界面预览</a> ·
-  <a href="#命令行">命令行</a>
-</p>
-
 Clash of Rust 是基于 **Rust + Slint + mihomo** 的原生代理客户端。桌面 GUI、TUI 和 `cor` 命令行共用后台，Android 提供独立客户端。
 
 下表列出 **0.7.2 正式版**的安装范围和实测环境。

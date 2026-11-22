@@ -15,7 +15,7 @@ mod tests;
 
 use crate::{args::Args, backend};
 use anyhow::{Context, Result, ensure};
-use clash_client_core::config::Language;
+use clash_client_core::config::{Language, LanguagePreference, Store};
 use clash_client_runtime::{
     control::{Command, Poll},
     engine::Scope,
@@ -28,6 +28,7 @@ use tokio::task::JoinHandle;
 enum Reply {
     Snapshot(Option<Box<Poll>>, Option<catalog::Shortcuts>),
     Saved(Box<Poll>, Option<catalog::Shortcuts>),
+    LanguageSaved(LanguagePreference),
     Network(Box<Result<clash_client_core::network_tools::Report, String>>),
     Exported(Result<String, String>),
 }
@@ -138,8 +139,46 @@ async fn set_node_sort(
     ))?
 }
 
-async fn save_setting(context: &Args, operation: &Args, language: Language) -> Result<Reply> {
+async fn save_setting(
+    context: &Args,
+    operation: &Args,
+    language: Language,
+    connected: bool,
+) -> Result<Reply> {
     let command = settings::command_in(operation, language)?;
+    if !connected
+        && let Command::ConfigSet { key, value } = &command
+        && key == "language"
+    {
+        let remote =
+            tokio::time::timeout(Duration::from_secs(20), backend::connect(context, false))
+                .await
+                .context(language.text(
+                    "读取后台超时，草稿保留；请刷新后重试",
+                    "Backend read timed out; the draft is retained. Refresh and try again",
+                ))??;
+        if remote.is_none() {
+            let preference = value
+                .as_str()
+                .and_then(LanguagePreference::from_tag)
+                .context(language.text("语言无效", "Invalid language"))?;
+            let root = backend::data_root(context)?;
+            return tokio::task::spawn_blocking(move || {
+                let store = Store::at(root)?;
+                let _owner = store.instance_lock().context(language.text(
+                    "后台正在启动或运行，请刷新后重试",
+                    "The backend is starting or running; refresh and try again",
+                ))?;
+                let current = store.load_settings()?;
+                let mut next = current.clone();
+                next.language = preference;
+                current.require_settings_change(&next)?;
+                store.save_settings(&next)?;
+                Ok(Reply::LanguageSaved(preference))
+            })
+            .await?;
+        }
+    }
     save_command(
         context,
         command,
@@ -208,8 +247,16 @@ pub async fn run(args: &Args) -> Result<()> {
         )
     );
     let mut terminal = Some(terminal::Terminal::enter(!args.flag("no-color"))?);
+    let mut current_args = args.clone();
+    let mut follow_preference = !args.flag("lang") && !args.flag("demo");
     let mut state = State::new(args.flag("demo"));
     state.language = args.language();
+    let settings_root = (!state.demo)
+        .then(|| backend::data_root(args).ok())
+        .flatten();
+    if let Some(root) = &settings_root {
+        state.language_preference = LanguagePreference::read(root).unwrap_or_default();
+    }
     let mut input = input::Decoder::default();
     let mut request: Option<Request> = None;
     let mut update_request: Option<Request<Option<clash_client_runtime::update::Available>>> = None;
@@ -282,7 +329,7 @@ pub async fn run(args: &Args) -> Result<()> {
                             state.message = Some(format!("{error:#}"));
                         }
                     } else if let Some(form) = &state.form {
-                        match form.args(args) {
+                        match form.args(&current_args) {
                             Ok(operation) => {
                                 state.execution = Some(operation);
                                 state.message = None;
@@ -344,16 +391,17 @@ pub async fn run(args: &Args) -> Result<()> {
                     break;
                 }
                 Action::ApplySetting(operation) => {
-                    let args = args.clone();
+                    let args = current_args.clone();
                     let language = state.language;
+                    let connected = state.poll.is_some();
                     state.saving = true;
                     state.message = None;
                     request = Some(Request(tokio::spawn(async move {
-                        save_setting(&args, &operation, language).await
+                        save_setting(&args, &operation, language, connected).await
                     })));
                 }
                 Action::SaveFakeIp(command) => {
-                    let args = args.clone();
+                    let args = current_args.clone();
                     let language = state.language;
                     state.saving = true;
                     state.message = None;
@@ -362,7 +410,7 @@ pub async fn run(args: &Args) -> Result<()> {
                     })));
                 }
                 Action::SaveRules(command) => {
-                    let args = args.clone();
+                    let args = current_args.clone();
                     let language = state.language;
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
@@ -385,7 +433,7 @@ pub async fn run(args: &Args) -> Result<()> {
                 }
                 Action::Refresh => last_refresh -= Duration::from_secs(5),
                 Action::Select(target) => {
-                    let args = args.clone();
+                    let args = current_args.clone();
                     let language = state.language;
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
@@ -395,7 +443,7 @@ pub async fn run(args: &Args) -> Result<()> {
                     })));
                 }
                 Action::SetNodeSort(mode) => {
-                    let args = args.clone();
+                    let args = current_args.clone();
                     let language = state.language;
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
@@ -409,7 +457,7 @@ pub async fn run(args: &Args) -> Result<()> {
                     state.saving = false;
                 }
                 Action::CheckNetwork(tool, target, options) => {
-                    let args = args.clone();
+                    let args = current_args.clone();
                     state.saving = true;
                     request = Some(Request(tokio::spawn(async move {
                         Ok(Reply::Network(Box::new(
@@ -437,7 +485,7 @@ pub async fn run(args: &Args) -> Result<()> {
                             .unwrap(),
                         language,
                     )
-                    .args(args)?;
+                    .args(&current_args)?;
                     let result =
                         crate::commands::install_selected_update(&operation, *available).await;
                     eprintln!(
@@ -462,6 +510,12 @@ pub async fn run(args: &Args) -> Result<()> {
             let mut completed = request.take().unwrap();
             match (&mut completed.0).await {
                 Ok(Ok(Reply::Snapshot(poll, shortcuts))) => {
+                    if poll.is_none()
+                        && let Some(root) = &settings_root
+                        && let Ok(preference) = LanguagePreference::read(root)
+                    {
+                        state.language_preference = preference;
+                    }
                     state.accept(poll.map(|poll| *poll));
                     state.shortcuts = shortcuts;
                     rules::sync(&mut state);
@@ -479,6 +533,15 @@ pub async fn run(args: &Args) -> Result<()> {
                         .filter(|input| input.id.is_none())
                         .map(|input| input.raw.clone());
                     let key = state.form.as_ref().and_then(|form| form.setting.clone());
+                    settings::apply_saved_language(
+                        &mut state,
+                        &poll,
+                        key.as_deref(),
+                        &mut current_args,
+                    );
+                    if key.as_deref() == Some("language") {
+                        follow_preference = true;
+                    }
                     let message = key.map(|key| {
                         format!(
                             "{} · {}{}{}",
@@ -537,6 +600,19 @@ pub async fn run(args: &Args) -> Result<()> {
                     } else {
                         state.message = message;
                     }
+                }
+                Ok(Ok(Reply::LanguageSaved(preference))) => {
+                    settings::apply_language(&mut state, preference, &mut current_args);
+                    follow_preference = true;
+                    state.form = None;
+                    state.execution = None;
+                    state.message = Some(format!(
+                        "{} · {}{}{}",
+                        state.language.text("已保存", "Saved"),
+                        settings::title("language", state.language),
+                        state.language.text("：", ": "),
+                        settings::language_display(preference, state.language)
+                    ));
                 }
                 Ok(Ok(Reply::Network(result))) => match *result {
                     Ok(report) => {
@@ -598,6 +674,9 @@ pub async fn run(args: &Args) -> Result<()> {
             last_refresh = tokio::time::Instant::now();
             dirty = true;
         }
+        if settings::sync_language(&mut state, &mut current_args, follow_preference) {
+            dirty = true;
+        }
         if home::sync(&mut state) {
             update_request = None;
             dirty = true;
@@ -627,7 +706,7 @@ pub async fn run(args: &Args) -> Result<()> {
             dirty = true;
         }
         if !state.demo && request.is_none() && last_refresh.elapsed() >= Duration::from_secs(1) {
-            let args = args.clone();
+            let args = current_args.clone();
             let page = state.page;
             let cached = state.shortcuts.clone();
             let include_rules = !state.shortcuts_open;

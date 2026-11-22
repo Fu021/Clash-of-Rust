@@ -400,14 +400,14 @@ msgstr "Attention"
 msgid "查看 {} 项详情 →"
 msgstr "Details ({}) →"
 
-msgid "语言"
-msgstr "Language"
+msgid "语言/language"
+msgstr "Language/语言"
 
 msgid "跟随系统"
 msgstr "Follow system"
 
-msgid "重新打开应用后生效。"
-msgstr "Reopen the app to apply."
+msgid "切换后立即生效。"
+msgstr "Changes apply immediately."
 
 msgid "已隐藏"
 msgstr "Hidden"

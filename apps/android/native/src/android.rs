@@ -27,6 +27,10 @@ mod application_policies;
 mod application_routing;
 #[path = "../../../../crates/client-ui/src/fonts.rs"]
 mod fonts;
+#[path = "language_ui.rs"]
+mod language_ui;
+#[path = "live_language.rs"]
+mod live_language;
 
 slint::include_modules!();
 static EVENTS: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
@@ -331,28 +335,12 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         .directory(jni_str!("getCacheDir"))?
         .join("updates/update.apk");
     let preference = config::LanguagePreference::read(&root).unwrap_or_default();
-    let system_languages = native.request(json!({"op":"system-languages"})).ok();
-    let language = preference.resolve(
-        system_languages
-            .as_ref()
-            .and_then(|value| value["languages"].as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str),
-    );
+    let language = live_language::resolve(preference, native.as_ref());
     slint::android::init(app)?;
     fonts::register_emoji()?;
     let window = AndroidWindow::new()?;
-    slint::select_bundled_translation(if language == config::Language::SimplifiedChinese {
-        ""
-    } else {
-        language.tag()
-    })?;
-    window
-        .global::<IpStatusText>()
-        .on_region_name(move |value| {
-            core::countries::localized_name(value.as_str(), language).into()
-        });
+    language_ui::apply(&window, language)?;
+    language_ui::install(&window);
     window
         .global::<MobileData>()
         .set_language(preference.tag().into());
@@ -446,7 +434,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                 ui.global::<MobileData>().set_profile_busy(gate.busy());
                 ui.global::<MobileData>().set_working(gate.busy());
                 ui.invoke_notify(
-                    language
+                    language_ui::current(&ui)
                         .text(
                             "操作过于频繁，请稍后再试",
                             "Too many requests; try again shortly",
@@ -469,7 +457,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                         &ui,
                         intent,
                         value.as_str(),
-                        language,
+                        language_ui::current(&ui),
                     )
                 {
                     ui.global::<AndroidData>()
@@ -2598,7 +2586,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             }
         }
         MobileIntent::TextScale => {} // Android font sizes belong to the OS.
-        MobileIntent::Appearance | MobileIntent::Accent | MobileIntent::Language => {
+        MobileIntent::Appearance | MobileIntent::Accent => {
             let mut next = session.settings.clone();
             match intent {
                 MobileIntent::Appearance => {
@@ -2613,14 +2601,15 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                         .get(a.parse::<usize>()?)
                         .context(language.text("强调色无效", "Invalid accent color"))?
                 }
-                MobileIntent::Language => {
-                    next.language = config::LanguagePreference::from_tag(&a)
-                        .context(language.text("语言无效", "Invalid language"))?
-                }
                 _ => unreachable!(),
             }
             // Appearance changes do not reload the network configuration.
             session.commit_settings(next)?;
+        }
+        MobileIntent::Language => {
+            let preference = config::LanguagePreference::from_tag(&a)
+                .context(language.text("语言无效", "Invalid language"))?;
+            state.presentation_language = live_language::save(session, preference)?;
         }
         MobileIntent::Interval => {
             let mut next = session.settings.clone();
@@ -3623,6 +3612,9 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         return;
     }
     let language = p.language;
+    if let Err(error) = language_ui::apply(ui, language) {
+        log::error!("Could not select the UI language: {error}");
+    }
     let data = ui.global::<MobileData>();
     let view = ui.global::<MobileView>();
     let policies = ui.global::<AndroidData>();

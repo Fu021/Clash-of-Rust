@@ -27,10 +27,11 @@ impl Updates {
 
 pub(super) fn items(state: &State) -> Vec<&'static str> {
     let Some(poll) = &state.poll else {
-        return vec!["core"];
+        return vec!["core", "language"];
     };
     let mut items = vec![
         "core",
+        "language",
         "proxy_mode",
         "run_mode",
         "active_profile",
@@ -211,6 +212,25 @@ pub(super) fn open(state: &mut State) -> Action {
         return Action::None;
     };
     state.message = None;
+    if key == "language" {
+        if state.error.is_some() {
+            state.message = Some(
+                state
+                    .language
+                    .text(
+                        "后台状态过期，请先刷新",
+                        "Backend state is stale; refresh first",
+                    )
+                    .into(),
+            );
+        } else {
+            state.form = Some(settings::language_form(
+                state.language_preference,
+                state.language,
+            ));
+        }
+        return Action::None;
+    }
     if key == "core" {
         if state.error.is_some() {
             state.message = Some(
@@ -517,6 +537,11 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
                 } else {
                     ""
                 }
+            ),
+            "language" => format!(
+                "{} · {}",
+                settings::title(key, language),
+                settings::language_display(state.language_preference, language)
             ),
             key => format!(
                 "{} · {}",

@@ -160,6 +160,21 @@ def verify(console, resources, report):
             terminal.wait('尚未连接后台')
             if data.exists():
                 raise RuntimeError('Opening TUI created a backend')
+        offline_data = Path(temporary)/'offline-language'
+        offline_command = [str(console), '--lang=zh-CN', '--data-dir', str(offline_data),
+                           '--resources', str(resources), 'ui']
+        with Session(offline_command) as terminal:
+            terminal.wait('尚未连接后台')
+            terminal.send(b'\x1b[B\r\x1b[D\r')
+            terminal.wait('保存语言/language为「English」')
+            terminal.send(b'\r')
+            terminal.wait('Saved · Language/语言: English')
+            terminal.wait('Backend disconnected')
+            terminal.capture(report, 'home-language-offline-en')
+        if json.loads((offline_data/'settings.json').read_text())['language'] != 'en':
+            raise RuntimeError('Offline language choice did not persist')
+        if (offline_data/'control.json').exists():
+            raise RuntimeError('Offline language choice started a backend')
         with Session([*command, '--demo']) as terminal:
             terminal.wait('参考线路')
             terminal.capture(report, 'home')
@@ -322,6 +337,7 @@ def verify(console, resources, report):
     (report/'verification.json').write_text(json.dumps({
         'status': 'passed', 'source': 'real-pty',
         'checks': ['no-tty-rejected', 'read-only-no-backend', 'search-and-confirmation',
+                   'home-language-live-switch-with-and-without-backend',
                    'literal-q-search', 'connection-details', 'settings-edit-and-cancel',
                    'operation-demo-no-side-effects', 'literal-q-setting',
                    'network-tools-and-cancel', 'network-inline-parameters',
@@ -356,6 +372,20 @@ def verify_settings(console, resources, report):
             owner = json.loads((data/'control.json').read_text())['pid']
             original_port = call('config', 'get', 'mixed_port')['mixed_port']
             verify_home(call, command, data, report)
+            shared_command = [str(console), '--data-dir', str(data), '--resources', str(resources)]
+            with Session([*shared_command, 'ui']) as terminal:
+                terminal.wait('首页 · Enter 操作')
+                call('config', 'set', 'language', 'en')
+                terminal.wait('Home · Enter to act')
+                call('config', 'set', 'language', 'zh-CN')
+                terminal.wait('首页 · Enter 操作')
+            with Session([*command, 'ui']) as terminal:
+                terminal.wait('首页 · Enter 操作')
+                call('config', 'set', 'language', 'en')
+                terminal.wait('语言/language · English')
+                if '首页 · Enter 操作' not in terminal.text():
+                    raise RuntimeError('Explicit language override did not remain in effect')
+                call('config', 'set', 'language', 'zh-CN')
             with Session([*command, 'ui']) as terminal:
                 terminal.wait('内核未运行')
                 terminal.send(b'7/delay_interval_minutes\r')
@@ -427,6 +457,20 @@ def verify_home(call, command, data, report):
         terminal.wait('cor start')
         terminal.send(b'\x1b')
         terminal.wait('首页 · Enter 操作')
+        terminal.send(b'\x1b[B\r\x1b[D\r')
+        terminal.wait('保存语言/language为「English」')
+        terminal.send(b'\r')
+        terminal.wait('Saved · Language/语言: English')
+        if call('config', 'get', 'language')['language'] != 'en':
+            raise RuntimeError('Home language choice was not saved by the owner')
+        terminal.capture(report, 'home-language-en')
+        terminal.send(b'\r\x1b[D\r')
+        terminal.wait('Save Language/语言 as 简体中文')
+        terminal.send(b'\r')
+        terminal.wait('已保存 · 语言/language：简体中文')
+        if call('config', 'get', 'language')['language'] != 'zh-CN':
+            raise RuntimeError('Home language choice did not switch back to Chinese')
+        terminal.capture(report, 'home-language-zh')
         terminal.send(b'\x1b[B\x1b[B\r\x1b[C\r')
         terminal.wait('保存运行模式为')
         terminal.send(b'\r')

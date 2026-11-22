@@ -1,7 +1,8 @@
 //! Slint is confined to this process and its testable data adapter.
+use clash_client_core::config::{Language, LanguagePreference};
 use clash_client_ui as ui;
 use clash_desktop_protocol as wire;
-use slint::{Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 mod activation;
 mod motion;
 mod process;
@@ -58,6 +59,24 @@ pub fn invalidate_window(window: &slint::Window) {
     repaint::invalidate(window);
 }
 
+pub fn install_region_names(window: &ui::AppWindow) {
+    let weak = window.as_weak();
+    window
+        .global::<ui::IpStatusText>()
+        .on_region_name(move |value| {
+            let language = weak
+                .upgrade()
+                .and_then(|window| {
+                    LanguagePreference::from_tag(
+                        window.global::<ui::UiData>().get_language().as_str(),
+                    )
+                })
+                .unwrap_or_default()
+                .resolve_desktop();
+            clash_client_core::countries::localized_name(value.as_str(), language).into()
+        });
+}
+
 /// An in-flight frame must not overwrite input typed after it was produced.
 pub fn apply_if_current(
     frame: &wire::Frame,
@@ -65,12 +84,21 @@ pub fn apply_if_current(
     models: &mut ui::models::ViewModels,
     accepted: u64,
     current: u64,
-) -> bool {
+) -> Result<bool, slint::SelectBundledTranslationError> {
     if accepted < current {
-        return false;
+        return Ok(false);
+    }
+    if data.get_language().as_str() != frame.language.as_str() {
+        let language = LanguagePreference::from_tag(frame.language.as_str())
+            .unwrap_or_default()
+            .resolve_desktop();
+        slint::select_bundled_translation(match language {
+            Language::SimplifiedChinese => "",
+            Language::English => "en",
+        })?;
     }
     apply(frame, data, models);
-    true
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -126,7 +154,7 @@ mod tests {
             .into(),
             ..Default::default()
         };
-        assert!(apply_if_current(&frame, &data, &mut models, 2, 2));
+        assert!(apply_if_current(&frame, &data, &mut models, 2, 2).unwrap());
         assert_eq!(data.get_version(), "test-version");
         assert_eq!(data.get_focus_target(), "profile-name");
         assert_eq!(data.get_focus_revision(), 7);
@@ -138,7 +166,7 @@ mod tests {
             "available"
         );
         frame.version = "stale".into();
-        assert!(!apply_if_current(&frame, &data, &mut models, 1, 2));
+        assert!(!apply_if_current(&frame, &data, &mut models, 1, 2).unwrap());
         assert_eq!(data.get_version(), "test-version");
     }
 

@@ -1,8 +1,6 @@
 //! The renderer owns no Engine, settings writer, notification sender or tray.
 use crate::{activation, apply, apply_if_current, intent, repaint, view_state};
-use clash_client_ui::{
-    AppWindow, IpStatusText, Motion, Theme, UiActions, UiData, models::ViewModels,
-};
+use clash_client_ui::{AppWindow, Motion, Theme, UiActions, UiData, models::ViewModels};
 use clash_desktop_protocol::{self as wire, HostPacket, UiEvent, WindowCommand};
 use slint::{
     ComponentHandle, Model, Timer,
@@ -179,16 +177,7 @@ pub fn run() -> anyhow::Result<()> {
     });
     let window = AppWindow::new()?;
     slint::select_bundled_translation(if language == "zh-CN" { "" } else { &language })?;
-    let language = if language == "zh-CN" {
-        clash_client_core::config::Language::SimplifiedChinese
-    } else {
-        clash_client_core::config::Language::English
-    };
-    window
-        .global::<IpStatusText>()
-        .on_region_name(move |value| {
-            clash_client_core::countries::localized_name(value.as_str(), language).into()
-        });
+    crate::install_region_names(&window);
     let weak = window.as_weak();
     window.on_minimize_requested(move || {
         if let Some(window) = weak.upgrade() {
@@ -474,14 +463,20 @@ fn packet(bytes: &[u8]) {
                     .iter()
                     .map(|group| group.nodes.row_count())
                     .sum();
-                if !apply_if_current(
+                let applied = apply_if_current(
                     &data,
                     &front.window.global::<UiData>(),
                     &mut front.models,
                     accepted,
                     front.revision.get(),
-                ) {
-                    return;
+                );
+                match applied {
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(error) => {
+                        send(&front.output, UiEvent::Error(error.to_string()));
+                        return;
+                    }
                 }
                 let nodes: usize = front
                     .models

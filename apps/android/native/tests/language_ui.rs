@@ -1,7 +1,15 @@
+#[path = "../src/language_ui.rs"]
+mod language_ui;
+#[path = "../src/live_language.rs"]
+mod live_language;
+
+use anyhow::Result;
 use clash_mobile_runtime::core::{
     claude_check::{self, BlockRow, Evidence, Group, Signal},
-    config::Language,
+    config::{Language, LanguagePreference},
 };
+use clash_mobile_runtime::{NativeHost, Session};
+use serde_json::{Value, json};
 use slint::{
     ComponentHandle, LogicalPosition, Model,
     platform::{
@@ -9,15 +17,20 @@ use slint::{
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
     },
 };
-use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
 
 slint::include_modules!();
 
 struct Headless(Rc<MinimalSoftwareWindow>);
+
+struct LanguageHost(Vec<&'static str>);
+
+impl NativeHost for LanguageHost {
+    fn request(&self, value: Value) -> Result<Value> {
+        assert_eq!(value["op"], "system-languages");
+        Ok(json!({"languages": self.0}))
+    }
+}
 
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
@@ -132,17 +145,15 @@ fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
     slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
     adapter.set_size(slint::PhysicalSize::new(393, 852));
     let window = AndroidWindow::new().unwrap();
-    let english = Rc::new(Cell::new(false));
-    let region_language = english.clone();
-    window
-        .global::<IpStatusText>()
-        .on_region_name(move |value| {
-            if region_language.get() && value == "德国" {
-                "Germany".into()
-            } else {
-                value
-            }
-        });
+    language_ui::install(&window);
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = Session::open(
+        directory.path().to_owned(),
+        Arc::new(LanguageHost(vec!["fr-FR", "zh-CN", "en"])),
+    )
+    .unwrap();
+    session.running = true;
+    session.vpn = true;
     let section = "Claude 连接与选路";
     let view = window.global::<MobileView>();
     view.set_claude_section(section.into());
@@ -193,8 +204,12 @@ fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
             "en",
         ),
     ] {
-        slint::select_bundled_translation(locale).unwrap();
-        english.set(locale == "en");
+        let current = if locale == "en" {
+            Language::English
+        } else {
+            Language::SimplifiedChinese
+        };
+        language_ui::apply(&window, current).unwrap();
         window.set_current_page(9);
         assert_eq!(window.get_page_title(), page_title);
         assert_eq!(
@@ -319,7 +334,55 @@ fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
             requests.borrow().as_slice(),
             &[(MobileIntent::Language, preference.to_owned())]
         );
+        let preference = LanguagePreference::from_tag(preference).unwrap();
+        let next = live_language::save(&mut session, preference).unwrap();
+        language_ui::apply(&window, next).unwrap();
+        window
+            .global::<MobileData>()
+            .set_language(preference.tag().into());
+        render();
+        assert_eq!(
+            window.get_page_title(),
+            if next == Language::English {
+                "Settings"
+            } else {
+                "设置"
+            }
+        );
+        assert_eq!(
+            window.global::<IpStatusText>().invoke_label("德国".into()),
+            if next == Language::English {
+                "Germany"
+            } else {
+                "德国"
+            }
+        );
+        assert_eq!(session.store.load_settings().unwrap().language, preference);
+        assert!(session.running && session.vpn);
         window.global::<MobileData>().set_protected(false);
+        render();
+        if let Some(prefix) = std::env::var_os("COR_LIVE_LANGUAGE_PREVIEW") {
+            let data = window.global::<MobileData>();
+            data.set_core_running(true);
+            data.set_vpn_connected(true);
+            let android = window.global::<AndroidData>();
+            android.set_authorization_status(next.text("已连接", "Connected").into());
+            android.set_application_scope(next.text("全部应用", "All apps").into());
+            let mut screenshot = vec![slint::Rgb8Pixel::default(); 393 * 852];
+            window.window().request_redraw();
+            adapter.draw_if_needed(|renderer| {
+                renderer.render(&mut screenshot, 393);
+            });
+            let mut bytes = b"P6\n393 852\n255\n".to_vec();
+            for pixel in screenshot {
+                bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
+            }
+            std::fs::write(
+                format!("{}-android-{}.ppm", prefix.to_string_lossy(), next.tag()),
+                bytes,
+            )
+            .unwrap();
+        }
 
         window.set_current_page(7);
         view.set_site_filters(true);
@@ -393,6 +456,26 @@ fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
         }
         view.set_detail(0);
     }
+    assert_eq!(
+        live_language::save(&mut session, LanguagePreference::System).unwrap(),
+        Language::SimplifiedChinese
+    );
+    for (languages, expected) in [
+        (vec!["en-US", "zh-CN"], Language::English),
+        (vec!["zh-CN", "en-US"], Language::SimplifiedChinese),
+        (vec!["ja-JP", "fr-FR"], Language::English),
+    ] {
+        assert_eq!(
+            live_language::resolve(LanguagePreference::System, &LanguageHost(languages)),
+            expected
+        );
+    }
+    let path = session.store.root.join("settings.json");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(live_language::save(&mut session, LanguagePreference::English).is_err());
+    assert_eq!(session.settings.language, LanguagePreference::System);
+    assert!(session.running && session.vpn);
     drop(render);
     if let Ok(prefix) = std::env::var("COR_ANDROID_LANGUAGE_PREVIEW") {
         capture_report_previews(&window, &adapter, &prefix);

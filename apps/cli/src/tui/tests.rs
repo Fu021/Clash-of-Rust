@@ -323,7 +323,7 @@ fn disconnected_lists_keep_a_visible_route_to_home_without_starting_the_backend(
         }
         state.key(Key::Char('1'));
         assert!(state.page == Page::Home);
-        assert_eq!(state.items(), ["core"]);
+        assert_eq!(state.items(), ["core", "language"]);
         state.key(Key::Enter);
         assert_eq!(state.form.as_ref().unwrap().spec.path, "start");
         assert!(state.poll.is_none());

@@ -52,7 +52,7 @@ fn content(state: &State, columns: usize, rows: usize) -> String {
 #[test]
 fn home_starts_only_after_confirmation_and_reuses_current_mode_forms() {
     let mut disconnected = State::new(false);
-    assert_eq!(home::items(&disconnected), ["core"]);
+    assert_eq!(home::items(&disconnected), ["core", "language"]);
     assert!(matches!(disconnected.key(Key::Enter), Action::None));
     assert_eq!(disconnected.form.as_ref().unwrap().spec.path, "start");
     assert!(matches!(disconnected.key(Key::Enter), Action::ReviewForm));
@@ -281,7 +281,52 @@ fn channel_changes_and_owner_loss_cancel_old_update_requests_and_confirmations()
     state.accept(None);
     assert!(home::sync(&mut state));
     assert!(!state.updates.checking);
-    assert_eq!(home::items(&state), ["core"]);
+    assert_eq!(home::items(&state), ["core", "language"]);
+}
+
+#[test]
+fn home_language_is_available_offline_and_during_protection() {
+    use clash_client_core::{
+        claude_check::protection::{Previous, Protection},
+        config::{Language, LanguagePreference},
+    };
+
+    let mut offline = State::new(false);
+    select(&mut offline, "language");
+    assert!(content(&offline, 100, 30).contains("语言/language"));
+    offline.key(Key::Enter);
+    assert_eq!(
+        offline.form.as_ref().unwrap().setting.as_deref(),
+        Some("language")
+    );
+    assert_eq!(offline.form.as_ref().unwrap().fields[1].value, "system");
+
+    let mut protected = state();
+    protected.language = Language::English;
+    protected.language_preference = LanguagePreference::English;
+    protected
+        .poll
+        .as_mut()
+        .unwrap()
+        .meta
+        .settings
+        .claude_protection = Some(std::sync::Arc::new(Protection::new(
+        uuid::Uuid::new_v4().to_string(),
+        "protected".into(),
+        Previous {
+            mode: "rule".into(),
+            proxy_mode: clash_client_runtime::engine::ProxyMode::Off,
+            selectors: Default::default(),
+        },
+    )));
+    select(&mut protected, "language");
+    assert!(content(&protected, 100, 30).contains("Language/语言"));
+    protected.key(Key::Enter);
+    assert_eq!(
+        protected.form.as_ref().unwrap().setting.as_deref(),
+        Some("language")
+    );
+    assert_eq!(protected.form.as_ref().unwrap().fields[1].value, "en");
 }
 
 #[test]

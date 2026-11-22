@@ -1145,6 +1145,7 @@ impl App {
                                 self.updates.reset_channel();
                             }
                             self.settings = engine.settings.clone();
+                            self.presentation_language = self.settings.language.resolve_desktop();
                             if !self.rule_state.dirty() && !self.rule_state.has_editor() {
                                 self.rule_state = rules_view::State::default();
                             }
@@ -2370,7 +2371,11 @@ impl App {
                 }
                 let update_channel_changed =
                     self.settings.update_prereleases != reply.settings.update_prereleases;
+                let language_changed = self.settings.language != reply.settings.language;
                 self.settings = reply.settings;
+                if language_changed {
+                    self.presentation_language = self.settings.language.resolve_desktop();
+                }
                 if update_channel_changed {
                     self.updates.reset_channel();
                     if self.confirmation.as_ref().is_some_and(|confirmation| {
