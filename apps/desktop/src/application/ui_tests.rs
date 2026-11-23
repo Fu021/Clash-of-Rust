@@ -4249,6 +4249,21 @@ fn client_log_rows_follow_language_and_search_without_changing_source_logs() {
     );
     assert_eq!(app.snapshot.logs[0].as_ref(), "[客户端] 配置已导入/更新");
     assert_eq!(app.snapshot.logs[1].as_ref(), "[内核] 外部原文");
+    let raw =
+        "[客户端] 操作失败：订阅定时下载失败，已保留原配置与运行状态：订阅下载超时: provider 原文";
+    app.snapshot.logs = vec![raw.into()];
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    let row = data.get_logs().row_data(0).unwrap();
+    assert_eq!(
+        row.message,
+        "[Client] Operation failed: Scheduled subscription download failed. Configuration and running state retained: Subscription download timed out: provider 原文"
+    );
+    assert_eq!(row.original, raw);
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_logs().row_data(0).unwrap().message, raw);
+    assert_eq!(app.snapshot.logs[0].as_ref(), raw);
 }
 
 #[test]

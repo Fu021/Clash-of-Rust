@@ -435,6 +435,16 @@ mod tests {
                 "Status refresh failed: Control interface refresh timed out",
             ),
             (
+                LogMessage::ActionFailed("内核启动失败：控制接口刷新超时".into()),
+                "内核启动失败：控制接口刷新超时",
+                "Core startup failed: Control interface refresh timed out",
+            ),
+            (
+                LogMessage::ActionFailed("保护状态异常：保护状态不可用: native error 原文".into()),
+                "保护状态异常：保护状态不可用: native error 原文",
+                "Protection status error: Protection status unavailable: native error 原文",
+            ),
+            (
                 LogMessage::ActionFailed("保护开启失败：确认保护节点超时".into()),
                 "保护开启失败：确认保护节点超时",
                 "Failed to enable protection: Timed out checking the protected node",

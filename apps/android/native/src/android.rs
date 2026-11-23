@@ -1161,18 +1161,14 @@ async fn run_loop(
         state.session.attach_or_initialize()
     };
     if let Err(error) = attached {
-        state.notice = format!(
-            "{}{error:#}",
-            state
-                .presentation_language
-                .text("内核启动失败：", "Core startup failed: ")
-        );
+        state.notice = format!("内核启动失败：{error:#}");
         state.notice_error = true;
         state.notice_critical = true;
         log::error!("{}", state.notice);
-        state
-            .logs
-            .push_back(("ERROR".into(), state.notice.clone().into()));
+        state.logs.push_back((
+            "ERROR".into(),
+            LogMessage::ActionFailed(state.notice.clone()),
+        ));
     }
     if let Ok(manifest) = core::geodata::read_manifest(&state.session.store.runtime()) {
         state.geo = Some(manifest.display_status());
@@ -1341,7 +1337,7 @@ async fn run_loop(
                         for path in [&state.update_path, &state.update_path.with_extension("partial")] {
                             if let Err(error) = tokio::fs::remove_file(path).await
                                 && error.kind() != std::io::ErrorKind::NotFound {
-                                state.notice = format!("{}{error}", state.presentation_language.text("下载已取消，缓存清理失败：", "Download cancelled; cache cleanup failed: "));
+                                state.notice = format!("下载已取消，缓存清理失败：{error}");
                                 state.notice_error = true;
                             }
                         }
@@ -1705,7 +1701,7 @@ async fn run_loop(
                                 }
                                 if all {state.node_delays=values;} else {state.node_delays.extend(values);}
                             }
-                            Err(error)=>{state.notice=format!("{}{error}", state.presentation_language.text("测速失败：", "Speed test failed: "));state.notice_error=true;},
+                            Err(error)=>{state.notice=format!("测速失败：{error}");state.notice_error=true;},
                         }
                         immediate=true;refresh_requested=true;
                     }
@@ -1853,7 +1849,7 @@ async fn run_loop(
                                     if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
                                         && let Some(message) = core::subscription::format_notice(&error) {
                                         state.notice = LogMessage::SubscriptionDownloadFailed(message)
-                                            .display(state.presentation_language);
+                                            .display(config::Language::SimplifiedChinese);
                                         state.notice_error = true;
                                     }
                                     state.logs.push_back(("WARN".into(), LogMessage::SubscriptionDownloadFailed(error.to_string())));
@@ -2040,7 +2036,7 @@ async fn run_loop(
                 }
             }
             if was_running && !state.session.running {
-                state.notice = state.presentation_language.text("内核已意外停止，请导出诊断后重试启动。", "The core stopped unexpectedly. Export diagnostics, then try starting it again.").into();
+                state.notice = "内核已意外停止，请导出诊断后重试启动。".into();
                 state.notice_error = true;
                 state.notice_critical = true;
             }
@@ -2049,17 +2045,13 @@ async fn run_loop(
                 Ok(false) => {}
                 Err(error) => {
                     state.protection_observed = false;
-                    state.notice = format!(
-                        "{}{error:#}",
-                        state
-                            .presentation_language
-                            .text("保护状态异常：", "Protection status error: ")
-                    );
+                    state.notice = format!("保护状态异常：{error:#}");
                     state.notice_error = true;
                     state.notice_critical = true;
-                    state
-                        .logs
-                        .push_back(("ERROR".into(), state.notice.clone().into()));
+                    state.logs.push_back((
+                        "ERROR".into(),
+                        LogMessage::ActionFailed(state.notice.clone()),
+                    ));
                 }
             }
             if let Some(change) = state.protection_change.as_mut()

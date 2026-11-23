@@ -86,11 +86,6 @@ pub fn display(message: &str, language: crate::config::Language) -> Cow<'_, str>
             for (prefix, translated) in [
                 ("代理恢复失败：", "Proxy recovery failed: "),
                 ("操作失败：", "Operation failed: "),
-                ("定时测速失败：", "Scheduled speed test failed: "),
-                (
-                    "节点状态复测未完成，已保留网络设置：",
-                    "Node state recheck did not finish; network settings retained: ",
-                ),
                 (
                     "全部节点经两个独立目标复测仍不可达；",
                     "All nodes remain unreachable after two independent checks; ",
@@ -110,7 +105,10 @@ pub fn display(message: &str, language: crate::config::Language) -> Cow<'_, str>
                 )
                 .into();
             }
-            return Cow::Borrowed(message);
+            return match crate::error_message::localize(body, language) {
+                Cow::Borrowed(original) if original == body => Cow::Borrowed(message),
+                translated => format!("[Client] {translated}").into(),
+            };
         }
     };
     format!("[Client] {translated}").into()
@@ -248,7 +246,7 @@ mod tests {
                 "[客户端] 节点状态复测未完成，已保留网络设置：provider 原文",
                 Language::English
             ),
-            "[Client] Node state recheck did not finish; network settings retained: provider 原文"
+            "[Client] Node state recheck did not finish. Network settings retained: provider 原文"
         );
         for external in ["[内核] 配置已导入/更新", "[客户端] 未知事件：provider 原文"]
         {
@@ -285,6 +283,31 @@ mod tests {
         ] {
             assert_eq!(display(raw, Language::English), expected);
             assert_eq!(display(raw, Language::SimplifiedChinese), raw);
+        }
+    }
+
+    #[test]
+    fn recorded_operation_failures_localize_the_nested_client_message() {
+        for (body, expected) in [
+            (
+                "订阅定时下载失败，已保留原配置与运行状态：订阅下载超时: upstream 原文",
+                "Scheduled subscription download failed. Configuration and running state retained: Subscription download timed out: upstream 原文",
+            ),
+            (
+                "网络恢复未完成，将退避重试；保留原订阅与设置：provider 原文",
+                "Network recovery incomplete. Retrying after a delay. Subscription and settings retained: provider 原文",
+            ),
+            (
+                "定时测速失败：下载响应不完整（HTTP 206）",
+                "Scheduled speed test failed: Incomplete download response (HTTP 206)",
+            ),
+        ] {
+            let original = format!("[客户端] 操作失败：{body}");
+            assert_eq!(
+                display(&original, Language::English),
+                format!("[Client] Operation failed: {expected}")
+            );
+            assert_eq!(display(&original, Language::SimplifiedChinese), original);
         }
     }
 

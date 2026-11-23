@@ -12,6 +12,13 @@ fn english(message: &str) -> Option<&'static str> {
         "订阅定时更新失败，已保留原配置与运行状态" => {
             "Scheduled subscription update failed; the previous configuration and running state were retained"
         }
+        "订阅定时更新失败，已保留原配置" => {
+            "Scheduled subscription update failed. Previous configuration retained"
+        }
+        "订阅定时下载失败" => "Scheduled subscription download failed",
+        "订阅定时下载失败，已保留原配置与运行状态" => {
+            "Scheduled subscription download failed. Configuration and running state retained"
+        }
         "全部节点不可达，TUN 仍开启。请更换节点；更新失败后会自动尝试直连。" => {
             "All nodes are unreachable; TUN remains enabled. Choose another node; failed updates will retry using a direct connection."
         }
@@ -238,6 +245,30 @@ fn english(message: &str) -> Option<&'static str> {
         "控制接口刷新超时" => "Control interface refresh timed out",
         "全部节点复测超时" => "Timed out rechecking all nodes",
         "节点复测失败" => "Node recheck failed",
+        "测速失败" => "Speed test failed",
+        "定时测速失败" => "Scheduled speed test failed",
+        "节点状态复测未完成，已保留网络设置" => {
+            "Node state recheck did not finish. Network settings retained"
+        }
+        "读取默认路由失败，网络恢复监控将在下次重试" => {
+            "Could not read the default route. Network recovery monitoring will retry"
+        }
+        "网络变化后 Claude 保护的 TUN 覆盖不完整" => {
+            "Claude protection TUN coverage is incomplete after the network changed"
+        }
+        "网络恢复未完成，将退避重试；保留原订阅与设置" => {
+            "Network recovery incomplete. Retrying after a delay. Subscription and settings retained"
+        }
+        "手动网络刷新未完成" => "Manual network refresh incomplete",
+        "网络刷新未完成，部分步骤可能已经生效，请检查状态" => {
+            "Network refresh incomplete. Some changes may have applied. Check the current status"
+        }
+        "当前用户内核未运行" => "The current user's core is not running",
+        "内核启动失败" => "Core startup failed",
+        "内核已意外停止，请导出诊断后重试启动。" => {
+            "The core stopped unexpectedly. Export diagnostics, then try starting it again."
+        }
+        "下载已取消，缓存清理失败" => "Download cancelled. Cache cleanup failed",
         "保护验证超时" => "Protection verification timed out",
         "确认保护节点超时" => "Timed out checking the protected node",
         "保护节点无效" | "Claude 保护节点无效" => "Invalid Claude protection node",
@@ -247,6 +278,7 @@ fn english(message: &str) -> Option<&'static str> {
         "保护服务已停止" => "The protection service stopped",
         "保护服务未确认状态切换" => "The protection service did not confirm the change",
         "保护状态不可用" => "Protection status unavailable",
+        "保护状态异常" => "Protection status error",
         "订阅已变化，请重新开启保护" => {
             "The subscription changed; enable protection again"
         }
@@ -344,6 +376,7 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "无法读取设置文件" => "Could not read the settings file",
         "设置文件格式错误" => "Invalid settings file",
+        "日志缓冲区不可用" => "Log buffer unavailable",
         "保存窗口状态任务失败" => "Window state save task failed",
         "无法读取本地设置" => "Could not read local settings",
         "本地设置格式错误" => "Invalid local settings",
@@ -560,7 +593,6 @@ pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
         .map_or((message, None), |(summary, detail)| (summary, Some(detail)));
     let translated = match summary {
         "当前用户后台未运行" => "The current user's backend is not running",
-        "当前用户内核未运行" => "The current user's core is not running",
         "连接当前用户后台超过 5 秒；可用 --offline 保存本地现场" => {
             "Connecting to the current user's backend timed out after 5 seconds (use --offline to save local diagnostics)"
         }
