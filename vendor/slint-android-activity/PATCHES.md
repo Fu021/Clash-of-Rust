@@ -23,6 +23,14 @@ The pinned Skia swap-buffer error `[300d]` suspends the invalid surface and wait
 for `InitWindow`; unrelated rendering errors still propagate. Foreground input
 and rotation tests must prove recovery, not just that the process survived.
 
+Raw Android Back keys are returned as unhandled so the Activity's committed
+Back callback owns navigation. Older Android versions can continue dispatching
+the key to `Activity.onBackPressed()`. Android 16 can forward the raw key after
+invoking the registered callback, so processing both deliveries could dismiss
+an error and then background the app. See
+[Android's input dispatch](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/view/ViewRootImpl.java)
+and the [Back callback contract](https://developer.android.com/reference/android/window/OnBackInvokedCallback).
+
 Display density is read from the current Activity's `Resources` at window
 creation, configuration changes and resizes, with NDK configuration as a
 fallback for unavailable or invalid Activity metrics. Preview run `42685691467`

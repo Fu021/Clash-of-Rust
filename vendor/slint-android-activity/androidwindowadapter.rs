@@ -874,6 +874,9 @@ fn button_for_event(
 
 impl AndroidWindowAdapter {
     fn map_key_event(&self, key_event: &android_activity::input::KeyEvent) -> Option<WindowEvent> {
+        if key_event.key_code() == Keycode::Back {
+            return None;
+        }
         let text = match self.layout_aware_text(key_event) {
             LayoutKey::Text(t) => t,
             // Dead-key press/release: the accent is stashed until the next key.
@@ -958,7 +961,6 @@ fn map_key_code(code: android_activity::input::Keycode) -> Option<SharedString> 
         Keycode::SoftLeft => None,
         Keycode::SoftRight => None,
         Keycode::Home => None,
-        Keycode::Back => Some(Key::Back.into()),
         Keycode::Call => None,
         Keycode::Endcall => None,
         Keycode::Keycode0 => Some("0".into()),

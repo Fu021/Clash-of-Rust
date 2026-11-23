@@ -269,6 +269,19 @@ fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
         language_ui::apply(&window, current).unwrap();
         window.set_current_page(9);
         assert_eq!(window.get_page_title(), page_title);
+        let android = window.global::<AndroidData>();
+        assert_eq!(
+            android.get_application_scope(),
+            current.text("全部应用", "All apps")
+        );
+        assert_eq!(
+            android.get_authorization_status(),
+            current.text("查看授权", "View authorization")
+        );
+        assert_eq!(
+            android.get_update_status(),
+            current.text("尚未检查更新", "Updates not checked")
+        );
         assert_eq!(
             window
                 .global::<NetworkTools>()
@@ -688,5 +701,34 @@ fn opening_preview_update_dismisses_the_active_connection_detail() {
         updates.borrow().as_slice(),
         ["prepare", "cancel", "prepare", "cancel"]
     );
+    window.hide().unwrap();
+}
+
+#[test]
+fn committed_android_back_dismisses_startup_error_before_backgrounding() {
+    let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
+    adapter.set_size(slint::PhysicalSize::new(393, 852));
+    let window = AndroidWindow::new().unwrap();
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let received = actions.clone();
+    window
+        .global::<AndroidActions>()
+        .on_request(move |intent, _| received.borrow_mut().push(intent));
+    window.show().unwrap();
+
+    let view = window.global::<MobileView>();
+    view.set_notice_error(true);
+    view.set_notice_critical(true);
+    view.set_notice("Invalid settings".into());
+    assert!(view.get_notice_modal());
+
+    window.invoke_native_back();
+    assert!(!view.get_notice_modal());
+    assert_eq!(window.get_current_page(), 0);
+    assert!(actions.borrow().is_empty());
+
+    window.invoke_native_back();
+    assert_eq!(actions.borrow().as_slice(), [AndroidIntent::Background]);
     window.hide().unwrap();
 }

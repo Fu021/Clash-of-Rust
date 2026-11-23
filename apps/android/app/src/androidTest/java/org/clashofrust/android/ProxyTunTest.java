@@ -2618,11 +2618,19 @@ public class ProxyTunTest {
     }
 
     private static void dismissStartupError() throws Exception {
+        JSONObject before = MainActivity.diagnostics();
+        assertTrue("A live startup error must be open before Back",
+            before.getBoolean("live") && before.getBoolean("notice_modal"));
         shell("input keyevent KEYCODE_BACK");
         await("Back did not close the startup error", () -> {
             JSONObject ui = MainActivity.diagnostics();
             return ui.optBoolean("live") && !ui.optBoolean("notice_modal");
         });
+        waitForAppWindow();
+        JSONObject after = MainActivity.diagnostics();
+        assertFalse("Back must close the error and keep the current window", after.getBoolean("notice_modal"));
+        assertEquals("Back must keep the current Activity", before.getLong("ui_generation"), after.getLong("ui_generation"));
+        assertEquals("Back must keep the current page", before.getInt("page"), after.getInt("page"));
     }
 
     private static void tapStartupRetry() throws Exception {

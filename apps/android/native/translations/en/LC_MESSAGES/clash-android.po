@@ -229,6 +229,9 @@ msgstr "Include prereleases"
 msgid "检查更新"
 msgstr "Check for updates"
 
+msgid "尚未检查更新"
+msgstr "Updates not checked"
+
 msgid "安装更新"
 msgstr "Install update"
 
@@ -1119,6 +1122,9 @@ msgstr "Direct"
 
 msgid "等待系统授权"
 msgstr "Waiting for system authorization"
+
+msgid "查看授权"
+msgstr "View authorization"
 
 msgid "粘贴订阅链接"
 msgstr "Paste a subscription URL"
