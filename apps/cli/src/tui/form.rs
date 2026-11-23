@@ -65,7 +65,7 @@ pub(super) fn setting_title(key: &str, language: Language) -> &str {
         "proxy_mode" => language.text("代理方式", "Proxy mode"),
         "node_sort" => language.text("节点排序", "Node sort order"),
         "tui_node_sort" => language.text("终端节点排序", "Terminal node sort order"),
-        "language" => language.text("语言/language", "Language/语言"),
+        "language" => clash_client_core::messages::settings_language_title(language),
         "rule_overrides" => language.text("快捷规则", "Rule shortcuts"),
         "rule_profiles" => language.text("订阅规则", "Subscription rules"),
         "application_rules" => language.text("应用规则", "Application rules"),

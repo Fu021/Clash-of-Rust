@@ -493,7 +493,6 @@ def build(arch, gradle_offline=False):
     if ui_tests:
         run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--features', 'mobile-ui-tests',
              '--test', 'mobile_lists', '--test', 'scroll_remount', '--test', 'claude_report_blocks', '--test', 'language_ui',
-             '--test', 'policy_language',
              '--', '--test-threads=1'], cwd=ROOT, env=build_env)
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'

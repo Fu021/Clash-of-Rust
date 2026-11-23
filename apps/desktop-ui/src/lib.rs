@@ -2,7 +2,7 @@
 use clash_client_core::config::{Language, LanguagePreference};
 use clash_client_ui as ui;
 use clash_desktop_protocol as wire;
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 mod activation;
 mod motion;
 mod process;
@@ -59,7 +59,19 @@ pub fn invalidate_window(window: &slint::Window) {
     repaint::invalidate(window);
 }
 
-pub fn install_region_names(window: &ui::AppWindow) {
+pub fn install_localized_names(window: &ui::AppWindow) {
+    let choices = window.global::<ui::LanguageOptions>();
+    choices.set_tags(ModelRc::new(VecModel::from(
+        LanguagePreference::TAGS
+            .iter()
+            .map(|tag| SharedString::from(*tag))
+            .collect::<Vec<_>>(),
+    )));
+    choices.on_native_name(|tag| {
+        Language::from_tag(tag.as_str())
+            .map(|language| language.native_name().into())
+            .unwrap_or(tag)
+    });
     let weak = window.as_weak();
     window
         .global::<ui::IpStatusText>()
@@ -92,10 +104,7 @@ pub fn apply_if_current(
         let language = LanguagePreference::from_tag(frame.language.as_str())
             .unwrap_or_default()
             .resolve_desktop();
-        slint::select_bundled_translation(match language {
-            Language::SimplifiedChinese => "",
-            Language::English => "en",
-        })?;
+        slint::select_bundled_translation(language.slint_tag())?;
     }
     apply(frame, data, models);
     Ok(true)

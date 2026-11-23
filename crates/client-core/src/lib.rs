@@ -20,6 +20,10 @@ pub mod geodata;
 pub mod ip_check;
 #[path = "detection/ip/report.rs"]
 pub mod ip_report;
+pub mod messages {
+    use crate::config::Language;
+    include!(concat!(env!("OUT_DIR"), "/messages.rs"));
+}
 pub mod model;
 #[path = "subscription/routes.rs"]
 pub mod network;

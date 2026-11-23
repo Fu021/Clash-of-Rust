@@ -3,6 +3,7 @@ use super::{
     model::{Page, State},
     render,
 };
+use crate::messages;
 use anyhow::{Context, Result, ensure};
 use clash_client_core::config::Language;
 use clash_client_core::network_tools::{Options, Report, Tool};
@@ -328,41 +329,22 @@ pub(super) fn apply(state: &mut State) -> Result<()> {
 }
 
 pub(super) fn summary(tool: Tool, options: &Options, language: Language) -> String {
-    if language == Language::English {
-        return match tool {
-            Tool::Website => "Default check".into(),
-            Tool::Dns => format!("Record {}", options.record_type),
-            Tool::Stability => format!(
-                "{} requests · {}ms interval · {}s timeout",
-                options.count, options.interval_ms, options.seconds
-            ),
-            Tool::Ping => format!("{} requests", options.count),
-            Tool::Trace => format!("Up to {} hops", options.max_hops),
-            Tool::Download => format!(
-                "{} KiB · {}s timeout",
-                options.max_bytes / 1024,
-                options.seconds
-            ),
-            Tool::Http => format!("{} · {}s timeout", options.method, options.seconds),
-            _ => format!("{}s timeout", options.seconds),
-        };
-    }
     match tool {
-        Tool::Website => "默认检查".into(),
-        Tool::Dns => format!("记录 {}", options.record_type),
-        Tool::Stability => format!(
-            "{} 次 · 间隔 {}ms · 时限 {}s",
-            options.count, options.interval_ms, options.seconds
+        Tool::Website => messages::tui_network_website(language).into(),
+        Tool::Dns => messages::tui_dns_record(language, &options.record_type),
+        Tool::Stability => messages::tui_network_stability(
+            language,
+            options.count,
+            options.interval_ms,
+            options.seconds,
         ),
-        Tool::Ping => format!("{} 次", options.count),
-        Tool::Trace => format!("最多 {} 跳", options.max_hops),
-        Tool::Download => format!(
-            "{} KiB · 时限 {}s",
-            options.max_bytes / 1024,
-            options.seconds
-        ),
-        Tool::Http => format!("{} · 时限 {}s", options.method, options.seconds),
-        _ => format!("时限 {}s", options.seconds),
+        Tool::Ping => messages::tui_network_requests(language, options.count),
+        Tool::Trace => messages::tui_network_trace(language, options.max_hops),
+        Tool::Download => {
+            messages::tui_network_download(language, options.max_bytes / 1024, options.seconds)
+        }
+        Tool::Http => messages::tui_network_http(language, &options.method, options.seconds),
+        _ => messages::tui_network_timeout(language, options.seconds),
     }
 }
 

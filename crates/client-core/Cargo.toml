@@ -32,5 +32,8 @@ sys-locale = "0.3.2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[build-dependencies]
+serde_json = { workspace = true }
+
 [dev-dependencies]
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }

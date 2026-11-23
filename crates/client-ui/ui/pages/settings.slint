@@ -4,6 +4,7 @@ import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Caption, SettingsSection, ListPanel, FormRow, ActionButton, Divider, Field, Select, Toggle } from "../components/controls.slint";
 import { AccentSwatches, ChoiceBar } from "../components/sections.slint";
 import { FakeIpPage } from "fake-ip.slint";
+import { LanguageOptions } from "../components/language-options.slint";
 
 export component SettingsNavigation inherits Flickable {
     in property <int> active-section;
@@ -65,10 +66,11 @@ export component SettingsPage inherits PageSurface {
                             Select {
                                 geometry-key: "language";
                                 width: 162px * Theme.text-scale; horizontal-stretch: 0;
-                                options: [@tr("跟随系统"), "简体中文", "English"];
-                                value: self.options[UiData.language == "zh-CN" ? 1 : UiData.language == "en" ? 2 : 0];
+                                options: LanguageOptions.tags;
+                                value: UiData.language;
+                                display-value(tag) => { LanguageOptions.label(tag) }
                                 enabled: UiData.ready && !UiData.exiting && !UiData.update-busy;
-                                selected(index, value) => { UiActions.dispatch(Intent.language, ["system", "zh-CN", "en"][index], ""); }
+                                selected(index, value) => { UiActions.dispatch(Intent.language, value, ""); }
                             }
                         }
                         Divider { }

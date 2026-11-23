@@ -1,4 +1,5 @@
 //! One command catalogue drives parsing, help and shell completions.
+use crate::messages;
 use anyhow::{Result, bail, ensure};
 use clash_client_core::config::{Language, LanguagePreference, Store};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1078,9 +1079,8 @@ fn parse_inner(input: impl IntoIterator<Item = String>, language: Language) -> R
             "-o" => "--output",
             _ => &value,
         };
-        let value = value.strip_prefix("--").ok_or_else(|| match language {
-            Language::SimplifiedChinese => anyhow::anyhow!("不支持组合短选项：{value}"),
-            Language::English => anyhow::anyhow!("Combined short options are unsupported: {value}"),
+        let value = value.strip_prefix("--").ok_or_else(|| {
+            anyhow::anyhow!(messages::option_combined_short_unsupported(language, value))
         })?;
         let (key, supplied) = value
             .split_once('=')
@@ -1089,32 +1089,21 @@ fn parse_inner(input: impl IntoIterator<Item = String>, language: Language) -> R
         let parameter = if needs_value {
             supplied
                 .or_else(|| input.next())
-                .ok_or_else(|| match language {
-                    Language::SimplifiedChinese => anyhow::anyhow!("--{key} 缺少参数"),
-                    Language::English => anyhow::anyhow!("--{key} requires a value"),
-                })?
+                .ok_or_else(|| anyhow::anyhow!(messages::option_argument_missing(language, key)))?
         } else {
             ensure!(
                 supplied.is_none(),
-                "{}",
-                match language {
-                    Language::SimplifiedChinese => format!("--{key} 不接受参数"),
-                    Language::English => format!("--{key} does not take a value"),
-                }
+                messages::option_argument_unexpected(language, key)
             );
             "true".into()
         };
         ensure!(
             key != "lang" || LanguagePreference::from_tag(&parameter).is_some(),
-            "--lang: system / zh-CN / en"
+            messages::option_language_choices(language, LanguagePreference::TAGS.join(" / "))
         );
         ensure!(
             options.insert(key.to_owned(), parameter).is_none(),
-            "{}",
-            match language {
-                Language::SimplifiedChinese => format!("--{key} 重复指定"),
-                Language::English => format!("--{key} was specified more than once"),
-            }
+            messages::option_duplicate(language, key)
         );
     }
     let mut help = options.contains_key("help");
@@ -1329,9 +1318,16 @@ pub fn localized_help(prefix: &str, language: Language) -> String {
     out
 }
 fn option_help(key: &str, language: Language) -> String {
+    if key == "lang" {
+        return format!(
+            "  --{key:<20} {}{} [{}]\n",
+            language.text("<值>  ", "<value>  "),
+            messages::option_language_description(language),
+            LanguagePreference::TAGS.join(" / ")
+        );
+    }
     let chinese = match key {
         "help" => "显示当前命令及参数帮助（-h）",
-        "lang" => "本次帮助或终端界面的语言：system、zh-CN、en",
         "version" => "显示客户端版本（-V）",
         "json" => "只输出机器可读 JSON",
         "jsonl" => "逐行输出 JSON，适合持续采样",
@@ -1386,7 +1382,6 @@ fn option_help(key: &str, language: Language) -> String {
     };
     let english = match key {
         "help" => "Show help for this command and its options (-h).",
-        "lang" => "Choose the language for help or the terminal interface: system, zh-CN, or en.",
         "version" => "Show the client version (-V).",
         "json" => "Output machine-readable JSON only.",
         "jsonl" => "Output one JSON record per line, including live samples.",
@@ -1612,7 +1607,7 @@ fn setting_values(key: &str) -> &'static [&'static str] {
         "dark" | "tray_speed" | "update_prereleases" | "dns_override" | "fake_ip" | "ipv6"
         | "udp" => &["false", "true"],
         "theme_mode" => &["system", "light", "dark"],
-        "language" => &["system", "zh-CN", "en"],
+        "language" => LanguagePreference::TAGS,
         "accent_color" => &["teal", "blue", "purple", "rose", "amber", "slate"],
         "node_sort" | "tui_node_sort" => &["latency_ascending", "latency_descending", "name"],
         _ => &[],
@@ -1629,7 +1624,7 @@ fn attached_option(word: &str) -> Option<(&str, &str)> {
 
 fn option_values(path: &str, option: &str) -> &'static [&'static str] {
     match option {
-        "lang" => &["system", "zh-CN", "en"],
+        "lang" => LanguagePreference::TAGS,
         "type" if path == "network dns" => &[
             "ADDR", "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA", "PTR", "CAA",
         ],

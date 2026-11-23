@@ -5,6 +5,7 @@ use super::{
     render::{Tone, rate, wrap},
     settings,
 };
+use crate::messages;
 use anyhow::{Context, Result, ensure};
 use clash_client_core::{config::Language, network::DownloadPorts, update::schedule::Schedule};
 use clash_client_runtime::update::Available;
@@ -449,20 +450,12 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
             false,
         ));
         let traffic = if poll.snapshot.running {
-            match language {
-                Language::SimplifiedChinese => format!(
-                    "↓ 下载 {}/s · ↑ 上传 {}/s · 连接 {}",
-                    rate(poll.snapshot.download_rate),
-                    rate(poll.snapshot.upload_rate),
-                    poll.snapshot.connection_count
-                ),
-                Language::English => format!(
-                    "↓ Download {}/s · ↑ Upload {}/s · Connections {}",
-                    rate(poll.snapshot.download_rate),
-                    rate(poll.snapshot.upload_rate),
-                    poll.snapshot.connection_count
-                ),
-            }
+            messages::tui_traffic_summary(
+                language,
+                poll.snapshot.connection_count,
+                rate(poll.snapshot.download_rate),
+                rate(poll.snapshot.upload_rate),
+            )
         } else {
             language
                 .text(

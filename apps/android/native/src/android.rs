@@ -156,6 +156,25 @@ impl NativeHost for AndroidHost {
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_clashofrust_android_AppLanguage_nativeResolve(
+    mut unowned_env: EnvUnowned<'_>,
+    _: JClass<'_>,
+    preference: JString<'_>,
+    language_tags: JString<'_>,
+) -> jni::sys::jstring {
+    unowned_env
+        .with_env(|env| {
+            let preference = preference.try_to_string(env)?;
+            let language_tags = language_tags.try_to_string(env)?;
+            let resolved = config::LanguagePreference::from_tag(&preference)
+                .unwrap_or_default()
+                .resolve(language_tags.split(','));
+            env.new_string(resolved.tag()).map(JString::into_raw)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_CoreBridge_nativeColdRuntime(
     mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,

@@ -75,6 +75,7 @@ def select(paths, extended=False):
     )
     linux = any(
         path.startswith(('apps/cli/src/',
+                         'translations/cli/',
                          'crates/client-core/src/connection/',
                          'crates/client-core/src/controller/',
                          'crates/client-core/src/dns.rs',
@@ -83,7 +84,7 @@ def select(paths, extended=False):
                          'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'crates/client-runtime/src/platform/linux/startup.rs',
                          'crates/client-runtime/src/platform/host_network'))
-        or path in ('scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py',
+        or path in ('apps/cli/build.rs', 'scripts/test-linux-tun.py', 'scripts/tun_ipv6_lifecycle.py',
                     'scripts/cli_tui.py', 'scripts/cli_tui_preview.py', 'scripts/test_cli_tui.py',
                     'scripts/ci_test_policy.py', 'apps/desktop/tests/core_integration.rs',
                     'apps/desktop/tests/support/protected_dns.rs',
@@ -108,6 +109,7 @@ def select(paths, extended=False):
         (path.startswith('crates/client-ui/') and not path.startswith('crates/client-ui/ui/mobile/'))
         or path.startswith(('apps/desktop-ui/', 'crates/desktop-protocol/', 'vendor/winit/',
                          'apps/desktop/src/application/', 'crates/client-core/src/config/',
+                         'translations/desktop/', 'translations/shared/',
                          'crates/client-core/src/connection/', 'crates/client-core/src/controller/',
                          'crates/client-core/src/dns.rs',
                          'crates/client-core/src/rules/',
@@ -120,6 +122,7 @@ def select(paths, extended=False):
                          'crates/client-core/src/application_rules/'))
         or path in ('Cargo.toml', 'Cargo.lock', 'apps/desktop/Cargo.toml',
                     'apps/desktop-ui/Cargo.toml', 'crates/desktop-shell/Cargo.toml',
+                    'translations/languages.rs', 'translations/compile_catalog.rs',
                     'scripts/run-ci.py', 'scripts/macos_ci.py', 'scripts/ci_test_policy.py',
                     'crates/client-core/src/runtime/logging.rs')
         for path in paths
@@ -129,6 +132,7 @@ def select(paths, extended=False):
          and not path.startswith('crates/client-ui/ui/components/desktop-'))
         or path.startswith(('crates/client-ui/ui/mobile/', 'crates/client-ui/ui/theme/',
                          'crates/client-ui/ui/icons/', 'apps/android/native/', 'resources/fonts/',
+                         'translations/android/', 'translations/shared/',
                          'crates/mobile-ffi/src/', 'crates/client-core/src/config/',
                          'crates/client-core/src/connection/', 'crates/client-core/src/controller/',
                          'crates/client-core/src/dns.rs',
@@ -140,6 +144,7 @@ def select(paths, extended=False):
                          'crates/client-core/src/application_rules/'))
         or path in ('crates/client-ui/ui/models.slint', 'crates/client-ui/ui/preview-reports.slint',
                     'crates/client-ui/ui/preview-network.slint',
+                    'translations/languages.rs', 'translations/compile_catalog.rs',
                     'Cargo.toml', 'Cargo.lock', 'scripts/android.py', 'scripts/ci_test_policy.py')
         for path in paths
     )
@@ -163,12 +168,13 @@ def select(paths, extended=False):
         path.startswith(('crates/client-core/src/update', 'crates/client-core/src/config/',
                          'crates/client-core/src/download.rs', 'crates/client-core/src/geodata/',
                          'crates/client-runtime/src/update/', 'apps/cli/src/commands/maintenance.rs',
+                         'translations/cli/',
                          'apps/cli/src/tui/',
                          'crates/client-runtime/src/control/', 'apps/cli/src/backend.rs',
                          'apps/cli/src/service', 'apps/cli/src/commands/inspection',
                          'crates/client-runtime/src/platform/linux/cli_service.rs',
                          'installer/', 'crates/client-runtime/src/platform/windows/'))
-        or path in ('apps/cli/tests/console.rs', 'scripts/test-cli-update.py', 'scripts/ci_test_policy.py',
+        or path in ('apps/cli/build.rs', 'apps/cli/tests/console.rs', 'scripts/test-cli-update.py', 'scripts/ci_test_policy.py',
                     'scripts/windows_ci.py', 'scripts/windows_update_tests.py',
                     'scripts/build-installer.py')
         for path in paths

@@ -1,7 +1,13 @@
+#[allow(dead_code)]
+#[path = "../src/application_routing.rs"]
+mod application_routing;
+#[path = "../src/application_routing_mode.rs"]
+mod application_routing_mode;
 #[path = "../src/language_ui.rs"]
 mod language_ui;
 #[path = "../src/live_language.rs"]
 mod live_language;
+mod policy_language;
 
 use anyhow::Result;
 use clash_mobile_runtime::core::{

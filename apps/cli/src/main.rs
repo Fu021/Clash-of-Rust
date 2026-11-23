@@ -3,6 +3,10 @@ mod backend;
 mod commands;
 mod diagnostics;
 mod host_network;
+mod messages {
+    use clash_client_core::config::Language;
+    include!(concat!(env!("OUT_DIR"), "/messages.rs"));
+}
 mod output;
 mod service;
 mod tui;

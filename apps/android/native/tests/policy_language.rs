@@ -1,33 +1,16 @@
 #[allow(dead_code)]
 #[path = "../src/application_policies.rs"]
 mod application_policies;
-#[allow(dead_code)]
-#[path = "../src/application_routing.rs"]
-mod application_routing;
-#[path = "../src/application_routing_mode.rs"]
-mod application_routing_mode;
 
+use super::{AndroidIntent, AndroidWindow, Headless, MobileData, application_routing};
 use anyhow::Result;
 use clash_mobile_runtime::{NativeHost, Session, core::config::Language};
 use serde_json::{Value, json};
 use slint::{
     ComponentHandle,
-    platform::{Platform, PlatformError, WindowAdapter, software_renderer::MinimalSoftwareWindow},
+    platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
 };
-use std::{
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
-
-slint::include_modules!();
-
-struct Headless(Rc<MinimalSoftwareWindow>);
-
-impl Platform for Headless {
-    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        Ok(self.0.clone())
-    }
-}
+use std::sync::{Arc, Mutex};
 
 struct Host;
 
@@ -112,9 +95,7 @@ async fn invalid_application_rule_name_uses_the_display_language() {
 
 #[test]
 fn protected_application_routing_reports_the_selected_language() {
-    let adapter = MinimalSoftwareWindow::new(
-        slint::platform::software_renderer::RepaintBufferType::NewBuffer,
-    );
+    let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Headless(adapter))).unwrap();
     let window = AndroidWindow::new().unwrap();
     window.global::<MobileData>().set_protected(true);

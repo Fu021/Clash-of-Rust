@@ -1,0 +1,8 @@
+export global LanguageOptions {
+    in property <[string]> tags: ["system", "zh-CN", "en"];
+    pure callback native-name(string) -> string;
+    native-name(tag) => { tag == "zh-CN" ? "简体中文" : tag == "en" ? "English" : tag }
+    pure public function label(tag: string) -> string {
+        return tag == "system" ? @tr("跟随系统") : self.native-name(tag);
+    }
+}

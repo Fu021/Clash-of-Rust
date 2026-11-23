@@ -2876,7 +2876,7 @@ fn setting_and_toolbar_intents_preserve_their_values_in_the_command_queue() {
 fn desktop_language_menu_dispatches_stable_tags_in_both_catalogs() {
     ui_testing::initialize(800, 450);
     let window = AppWindow::new().unwrap();
-    clash_desktop_ui::install_region_names(&window);
+    clash_desktop_ui::install_localized_names(&window);
     let data = window.global::<UiData>();
     data.set_page(9);
     data.set_ready(true);

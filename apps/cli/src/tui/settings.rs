@@ -1,5 +1,6 @@
 use super::form::{self, Form};
 use super::model::Page;
+use crate::messages;
 use anyhow::{Context, Result, ensure};
 use clash_client_core::{
     config::{Language, LanguagePreference},
@@ -112,24 +113,25 @@ pub(super) fn title(key: &str, language: Language) -> &str {
         )
 }
 
-fn language_choices(language: Language) -> [(&'static str, &'static str); 3] {
-    [
-        ("system", language.text("跟随系统", "Follow system")),
-        ("zh-CN", "简体中文"),
-        ("en", "English"),
-    ]
-}
-
 pub(super) fn language_display(preference: LanguagePreference, language: Language) -> &'static str {
-    language_choices(language)
-        .into_iter()
-        .find(|(tag, _)| *tag == preference.tag())
-        .map_or("", |(_, label)| label)
+    preference.explicit().map_or_else(
+        || clash_client_core::messages::settings_language_follow_system(language),
+        Language::native_name,
+    )
 }
 
 pub(super) fn language_form(preference: LanguagePreference, language: Language) -> Form {
     let mut form = Form::setting("language", &json!(preference.tag()), language);
-    choices(&mut form, 1, &language_choices(language));
+    form.fields[1].choices = LanguagePreference::TAGS
+        .iter()
+        .filter_map(|tag| LanguagePreference::from_tag(tag))
+        .map(|choice| {
+            (
+                choice.tag().into(),
+                language_display(choice, language).into(),
+            )
+        })
+        .collect();
     form
 }
 
@@ -208,14 +210,7 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
                 || language.text("尚未选择", "None selected").into(),
                 |profile| crate::output::profile_name(profile, language).into(),
             ),
-        "tui_node_sort" => match language {
-            Language::SimplifiedChinese => poll.meta.settings.tui_node_sort.to_string(),
-            Language::English => match poll.meta.settings.tui_node_sort {
-                NodeSort::Name => "Node name".into(),
-                NodeSort::LatencyAscending => "Lowest latency first".into(),
-                NodeSort::LatencyDescending => "Highest latency first".into(),
-            },
-        },
+        "tui_node_sort" => node_sort_label(poll.meta.settings.tui_node_sort, language).into(),
         "language" => language_display(poll.meta.settings.language, language).into(),
         "fake_ip" if !poll.meta.settings.dns_override => language
             .text("关闭（DNS 覆盖未开启）", "Off (DNS override is off)")
@@ -223,18 +218,12 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
         "fake_ip_exclusions" => {
             let custom = poll.meta.settings.fake_ip_exclusions.len();
             let active = poll.meta.settings.fake_ip_exclusion_entries().len();
-            match language {
-                Language::SimplifiedChinese => format!("{custom} 项自定义 · {active} 项有效排除"),
-                Language::English => format!("{custom} custom · {active} active"),
-            }
+            messages::tui_fake_ip_custom_count(language, active, custom)
         }
         "fake_ip_disabled_defaults" => {
             let disabled = poll.meta.settings.fake_ip_disabled_defaults.len();
             let defaults = clash_client_core::config::DEFAULT_FAKE_IP_EXCLUSIONS.len();
-            match language {
-                Language::SimplifiedChinese => format!("{disabled} 项已停用 · {defaults} 项内置"),
-                Language::English => format!("{disabled} disabled · {defaults} defaults"),
-            }
+            messages::tui_fake_ip_disabled_count(language, defaults, disabled)
         }
         "run_mode" => routing_mode_label(value.as_str().unwrap_or(""), language).into(),
         "proxy_mode" => {
@@ -245,10 +234,7 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
             } else {
                 let current = label(actual);
                 let preferred = label(poll.meta.settings.proxy_mode);
-                match language {
-                    Language::SimplifiedChinese => format!("{current}（启动偏好：{preferred}）"),
-                    Language::English => format!("{current} (startup preference: {preferred})"),
-                }
+                messages::tui_proxy_startup_preference(language, current, preferred)
             }
         }
         _ => match value {
@@ -256,6 +242,14 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
             Value::String(value) => value,
             other => other.to_string(),
         },
+    }
+}
+
+fn node_sort_label(sort: NodeSort, language: Language) -> &'static str {
+    match sort {
+        NodeSort::Name => messages::tui_node_sort_name(language),
+        NodeSort::LatencyAscending => messages::tui_node_sort_latency_ascending(language),
+        NodeSort::LatencyDescending => messages::tui_node_sort_latency_descending(language),
     }
 }
 

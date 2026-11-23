@@ -2,22 +2,85 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{io::ErrorKind, path::Path};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LanguagePreference {
-    #[default]
-    #[serde(rename = "system")]
-    System,
-    #[serde(rename = "zh-CN")]
-    SimplifiedChinese,
-    #[serde(rename = "en")]
-    English,
+macro_rules! supported_languages {
+    ($($variant:ident => ($tag:literal, $name:literal, $slint:literal, $aliases:expr, $excluded:expr)),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+        pub enum LanguagePreference {
+            #[default]
+            #[serde(rename = "system")]
+            System,
+            $(
+                #[serde(rename = $tag)]
+                $variant,
+            )+
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Language {
+            $($variant,)+
+        }
+
+        impl LanguagePreference {
+            pub const TAGS: &[&str] = &["system", $($tag,)+];
+
+            pub fn from_tag(tag: &str) -> Option<Self> {
+                match tag {
+                    "system" => Some(Self::System),
+                    $($tag => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            pub const fn tag(self) -> &'static str {
+                match self {
+                    Self::System => "system",
+                    $(Self::$variant => $tag,)+
+                }
+            }
+
+            pub const fn explicit(self) -> Option<Language> {
+                match self {
+                    Self::System => None,
+                    $(Self::$variant => Some(Language::$variant),)+
+                }
+            }
+        }
+
+        impl Language {
+            pub const SUPPORTED: &[Self] = &[$(Self::$variant,)+];
+
+            pub fn from_tag(tag: &str) -> Option<Self> {
+                LanguagePreference::from_tag(tag)?.explicit()
+            }
+
+            pub const fn tag(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $tag,)+
+                }
+            }
+
+            pub const fn native_name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            pub const fn slint_tag(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $slint,)+
+                }
+            }
+
+            fn system_aliases(self) -> (&'static [&'static str], &'static [&'static str]) {
+                match self {
+                    $(Self::$variant => ($aliases, $excluded),)+
+                }
+            }
+        }
+    };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language {
-    SimplifiedChinese,
-    English,
-}
+include!("../../../../translations/languages.rs");
 
 impl LanguagePreference {
     pub fn read(root: &Path) -> Result<Self> {
@@ -65,32 +128,13 @@ impl LanguagePreference {
         self.resolve(std::iter::once_with(sys_locale::get_locales).flatten())
     }
 
-    pub fn from_tag(tag: &str) -> Option<Self> {
-        match tag {
-            "system" => Some(Self::System),
-            "zh-CN" => Some(Self::SimplifiedChinese),
-            "en" => Some(Self::English),
-            _ => None,
-        }
-    }
-
-    pub const fn tag(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::SimplifiedChinese => "zh-CN",
-            Self::English => "en",
-        }
-    }
-
     pub fn resolve(self, system_languages: impl IntoIterator<Item = impl AsRef<str>>) -> Language {
-        match self {
-            Self::System => system_languages
+        self.explicit().unwrap_or_else(|| {
+            system_languages
                 .into_iter()
                 .find_map(|tag| Language::from_system_tag(tag.as_ref()))
-                .unwrap_or(Language::English),
-            Self::SimplifiedChinese => Language::SimplifiedChinese,
-            Self::English => Language::English,
-        }
+                .unwrap_or(Language::English)
+        })
     }
 }
 
@@ -102,23 +146,32 @@ impl Language {
         }
     }
 
-    pub const fn tag(self) -> &'static str {
-        match self {
-            Self::SimplifiedChinese => "zh-CN",
-            Self::English => "en",
-        }
-    }
-
     fn from_system_tag(tag: &str) -> Option<Self> {
-        let mut subtags = tag.trim().split(['.', '@']).next()?.split(['-', '_']);
-        match subtags.next()?.to_ascii_lowercase().as_str() {
-            "en" | "c" | "posix" => Some(Self::English),
-            "zh" => match subtags.next().map(str::to_ascii_lowercase).as_deref() {
-                Some("hant" | "tw" | "hk" | "mo") => None,
-                _ => Some(Self::SimplifiedChinese),
-            },
-            _ => None,
+        fn matches_prefix(tag: &str, prefix: &str) -> bool {
+            tag == prefix
+                || tag
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with('-'))
         }
+
+        let mut tag = tag.trim().split(['.', '@']).next()?.replace('_', "-");
+        tag.make_ascii_lowercase();
+        Self::SUPPORTED
+            .iter()
+            .filter_map(|language| {
+                let (aliases, excluded) = language.system_aliases();
+                if excluded.iter().any(|prefix| matches_prefix(&tag, prefix)) {
+                    return None;
+                }
+                aliases
+                    .iter()
+                    .filter(|prefix| matches_prefix(&tag, prefix))
+                    .map(|prefix| prefix.len())
+                    .max()
+                    .map(|specificity| (specificity, *language))
+            })
+            .max_by_key(|(specificity, _)| *specificity)
+            .map(|(_, language)| language)
     }
 }
 

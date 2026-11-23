@@ -1,4 +1,5 @@
 use super::model::{Page, State};
+use crate::messages;
 use clash_client_core::config::Language;
 use unicode_width::UnicodeWidthStr;
 
@@ -604,22 +605,12 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
         }
         clash_client_core::proxy_order::NodeSort::Name => language.text("名称排序", "Name"),
     };
-    let item_count = items.len();
     let mut rows = vec![
         (
-            match language {
-                Language::SimplifiedChinese => format!("{group}   ·   {item_count} 项"),
-                Language::English => format!("{group}   ·   {item_count} items"),
-            },
+            messages::tui_node_count(language, items.len(), group),
             Tone::Plain,
         ),
-        (
-            match language {
-                Language::SimplifiedChinese => format!("[s 切换排序] 排序：{sort}"),
-                Language::English => format!("[s change sort] Sort: {sort}"),
-            },
-            Tone::Muted,
-        ),
+        (messages::tui_node_sort_hint(language, sort), Tone::Muted),
         (
             format!(
                 "{}{}{}{}",
@@ -682,10 +673,7 @@ fn nodes(state: &State, width: usize, height: usize, spacious: bool) -> Vec<(Str
                         })
                         .unwrap_or_else(|| language.text("未测速", "Not tested").into())
                 } else {
-                    match language {
-                        Language::SimplifiedChinese => format!("{} 项", proxy.all.len()),
-                        Language::English => format!("{} members", proxy.all.len()),
-                    }
+                    messages::tui_node_member_count(language, proxy.all.len())
                 }
             })
             .unwrap_or_else(|| language.text("未测速", "Not tested").into());
@@ -739,18 +727,7 @@ fn connections(state: &State, width: usize, height: usize) -> Vec<(String, Tone)
     let language = state.language;
     let header = vec![
         (
-            match language {
-                Language::SimplifiedChinese => format!(
-                    "活跃连接 {}   ·   匹配 {} 项",
-                    poll.snapshot.connection_count,
-                    items.len()
-                ),
-                Language::English => format!(
-                    "Active connections {}   ·   {} matches",
-                    poll.snapshot.connection_count,
-                    items.len()
-                ),
-            },
+            messages::tui_connection_count(language, poll.snapshot.connection_count, items.len()),
             Tone::Plain,
         ),
         (

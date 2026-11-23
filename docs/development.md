@@ -22,7 +22,7 @@
 
 ```sh
 CARGO_TARGET_DIR=target/desktop cargo test -p clash-client-ui --test desktop_lists --release --locked -- --test-threads=1
-CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --features mobile-ui-tests --test mobile_lists --test scroll_remount --test claude_report_blocks --test language_ui --test policy_language --release --locked -- --test-threads=1
+CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --features mobile-ui-tests --test mobile_lists --test scroll_remount --test claude_report_blocks --test language_ui --release --locked -- --test-threads=1
 ```
 
 本地 `target` 体积和可回收构建产物按[磁盘管理](workflows/local-development.md#本地-rust-构建与磁盘管理)检查；不能把另一端已有的构建结果当作当前端的验证。
@@ -59,6 +59,14 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 版本的权威来源为根 `Cargo.toml` 的 `[workspace.package].version`。同步 `Cargo.lock` 中所有 workspace 包、Android Gradle 的版本默认值和离线预览 fixture；不改第三方包版本或历史 Release 文档。正式发布去除后缀、跳版本及其他例外仍需维护者明确授权。版本变化后必须重新取得同提交 CI，不能复用旧版本的构建产物。
 
 安装包版本核验及高版本本地包的更新行为见[版本与更新通道](workflows/versions.md#版本与更新通道)。
+
+## 翻译资源
+
+仓库根目录的 [`translations/`](../translations/) 集中维护可见文案。Rust 共享文案放在 `shared/<语言标签>.json`，终端专属文案放在 `cli/<语言标签>.json`。新增或迁移 Rust 文案时，使用稳定的 `snake_case` 消息键和 `{name}` 参数，在调用处使用生成的 `messages::消息键(language, ...)`。生成器校验各语言的键和参数，按参数名排序生成函数签名，模板可按语言需要调整参数位置。
+
+Slint 界面使用 `@tr`，桌面和 Android 分别从 `desktop/<语言标签>/LC_MESSAGES/clash-client-ui.po` 和 `android/slint/<语言标签>/LC_MESSAGES/clash-android.po` 内嵌目录。简体中文使用现有 `@tr` 源文。Android 宿主使用 `android/res/values*/strings.xml`，Java 通过资源 ID 取文案。
+
+新增语言时在 [`languages.rs`](../translations/languages.rs) 注册标签、语言原名、Slint 标签与系统匹配规则，再为共享、CLI、桌面、Android 界面和 Android 宿主提供对应的翻译。语言菜单使用注册表，在实际应用入口验证系统匹配、手动切换和回退。旧的双语字面量和按语言拼接的文案在迁移相应模块时改用消息键。
 
 ## 修改前后都要检查
 

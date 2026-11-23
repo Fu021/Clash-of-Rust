@@ -14,6 +14,8 @@ import java.util.Objects;
 import org.json.JSONObject;
 
 final class AppLanguage {
+    static { System.loadLibrary("clash_mobile"); }
+
     private static File cachedFile;
     private static Object cachedKey;
     private static FileTime cachedModified;
@@ -22,21 +24,11 @@ final class AppLanguage {
 
     private AppLanguage() {}
 
+    private static native String nativeResolve(String preference, String languageTags);
+
     static String resolve(String preference, LocaleList languages) {
-        if ("en".equals(preference) || "zh-CN".equals(preference)) return preference;
-        for (int index = 0; index < languages.size(); index++) {
-            Locale locale = languages.get(index);
-            if ("en".equalsIgnoreCase(locale.getLanguage())) return "en";
-            if ("zh".equalsIgnoreCase(locale.getLanguage())) {
-                String script = locale.getScript();
-                String country = locale.getCountry();
-                if ("Hant".equalsIgnoreCase(script)) continue;
-                if (script.isEmpty() && ("TW".equalsIgnoreCase(country)
-                    || "HK".equalsIgnoreCase(country) || "MO".equalsIgnoreCase(country))) continue;
-                return "zh-CN";
-            }
-        }
-        return "en";
+        String resolved = nativeResolve(preference, languages.toLanguageTags());
+        return resolved != null ? resolved : "en";
     }
 
     private static synchronized String preference(Context context) {
@@ -62,7 +54,7 @@ final class AppLanguage {
 
     static Context localized(Context context, String tag) {
         Configuration configuration = new Configuration(context.getResources().getConfiguration());
-        configuration.setLocale("zh-CN".equals(tag) ? Locale.SIMPLIFIED_CHINESE : Locale.ENGLISH);
+        configuration.setLocale(Locale.forLanguageTag(tag));
         return context.createConfigurationContext(configuration);
     }
 

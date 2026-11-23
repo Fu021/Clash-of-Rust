@@ -1,5 +1,6 @@
 //! The renderer owns no Engine, settings writer, notification sender or tray.
 use crate::{activation, apply, apply_if_current, intent, repaint, view_state};
+use clash_client_core::config::Language;
 use clash_client_ui::{AppWindow, Motion, Theme, UiActions, UiData, models::ViewModels};
 use clash_desktop_protocol::{self as wire, HostPacket, UiEvent, WindowCommand};
 use slint::{
@@ -196,8 +197,9 @@ pub fn run() -> anyhow::Result<()> {
         }
     });
     let window = AppWindow::new()?;
-    slint::select_bundled_translation(if language == "zh-CN" { "" } else { &language })?;
-    crate::install_region_names(&window);
+    let language = Language::from_tag(&language).unwrap_or(Language::English);
+    slint::select_bundled_translation(language.slint_tag())?;
+    crate::install_localized_names(&window);
     let weak = window.as_weak();
     window.on_minimize_requested(move || {
         if let Some(window) = weak.upgrade() {

@@ -2840,10 +2840,14 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         command = [item.value for item in calls[0].args[0].elts if isinstance(item, ast.Constant)]
         self.assertIn('clash-android', command)
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui'):
             self.assertIn(target, command)
             path = build.ROOT/'apps/android/native/tests'/(target+'.rs')
             self.assertRegex(path.read_text(), r'#\[test\]\s*fn\s+')
+        tests = build.ROOT/'apps/android/native/tests'
+        self.assertIn('mod policy_language;', (tests/'language_ui.rs').read_text())
+        self.assertRegex((tests/'policy_language.rs').read_text(), r'#\[test\]\s*fn\s+')
+        self.assertNotIn('policy_language', command)
         desktop = (build.ROOT/'scripts/run-ci.py').read_text()
         for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
             self.assertNotIn("'"+target+"'", desktop)
@@ -3473,8 +3477,9 @@ class BuildTests(unittest.TestCase):
         self.assertIn('--lib', commands[0])
         self.assertEqual(commands[1][commands[1].index('-p')+1], 'clash-android')
         self.assertIn('mobile-ui-tests', commands[1])
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui'):
             self.assertIn(target, commands[1])
+        self.assertNotIn('policy_language', commands[1])
         self.assertNotIn('--no-run', commands[1])
 
     def test_linux_ci_prepares_resources_on_host_before_entering_container(self):
