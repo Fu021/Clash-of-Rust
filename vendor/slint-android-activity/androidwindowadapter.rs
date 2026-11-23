@@ -39,6 +39,7 @@ pub struct AndroidWindowAdapter {
     pub(crate) event_queue: EventQueue,
     pub(crate) pending_redraw: Cell<bool>,
     surface_ready: Cell<bool>,
+    activity_resumed: Cell<bool>,
     window_focused: Cell<bool>,
     pub(super) java_helper: JavaHelper,
     pub(crate) fullscreen: Cell<bool>,
@@ -221,6 +222,7 @@ impl AndroidWindowAdapter {
             event_queue: Default::default(),
             pending_redraw: Default::default(),
             surface_ready: Cell::new(false),
+            activity_resumed: Cell::new(false),
             window_focused: Cell::new(false),
             java_helper,
             fullscreen: Cell::new(false),
@@ -266,6 +268,7 @@ impl AndroidWindowAdapter {
                     )?;
                     self.surface_ready.set(true);
                     self.resize()?;
+                    self.refresh_window_focus()?;
                     self.render_surface()?;
                     self.request_redraw();
 
@@ -292,18 +295,19 @@ impl AndroidWindowAdapter {
                 self.do_render()?;
             }
             PollEvent::Main(MainEvent::GainedFocus) => {
-                self.window_focused.set(true);
-                self.java_helper
-                    .set_motion_preference(WindowInner::from_pub(&self.window).context());
-                self.window.dispatch_event_with_result(WindowEvent::WindowActiveChanged(true))?;
+                self.set_window_focus(true)?;
                 self.request_redraw();
             }
             PollEvent::Main(MainEvent::LostFocus) => {
-                self.window_focused.set(false);
-                self.window.dispatch_event_with_result(WindowEvent::WindowActiveChanged(false))?;
+                self.set_window_focus(false)?;
+            }
+            PollEvent::Main(MainEvent::Resume { .. }) => {
+                self.activity_resumed.set(true);
+                self.refresh_window_focus()?;
+                self.request_redraw();
             }
             PollEvent::Main(MainEvent::Pause | MainEvent::Stop) => {
-                self.window_focused.set(false);
+                self.activity_resumed.set(false);
                 self.pending_redraw.set(false);
             }
             PollEvent::Main(MainEvent::ConfigChanged { .. }) => {
@@ -647,7 +651,26 @@ impl AndroidWindowAdapter {
     }
 
     pub(crate) fn can_render(&self) -> bool {
-        self.surface_ready.get() && self.window_focused.get()
+        self.surface_ready.get() && self.activity_resumed.get() && self.window_focused.get()
+    }
+
+    fn refresh_window_focus(&self) -> Result<(), PlatformError> {
+        if let Ok(focused) = self.java_helper.has_window_focus() {
+            if focused && !self.window_focused.get() {
+                i_slint_core::debug_log!("Restoring Android window focus from the decor view");
+            }
+            self.set_window_focus(focused)?;
+        }
+        Ok(())
+    }
+
+    fn set_window_focus(&self, focused: bool) -> Result<(), PlatformError> {
+        self.window_focused.set(focused);
+        if focused {
+            self.java_helper.set_motion_preference(WindowInner::from_pub(&self.window).context());
+        }
+        self.window.dispatch_event_with_result(WindowEvent::WindowActiveChanged(focused))?;
+        Ok(())
     }
 
     pub fn do_render(&self) -> Result<(), PlatformError> {

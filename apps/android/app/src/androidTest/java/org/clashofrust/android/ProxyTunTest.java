@@ -2669,7 +2669,7 @@ public class ProxyTunTest {
         });
     }
 
-    private static void recoverWithRunningVpn(Context context) throws Exception {
+    private static void recoverWithRunningVpn(Context context, String controller, String secret) throws Exception {
         File settings = new File(context.getFilesDir(), "client/settings.json");
         File runtime = new File(context.getFilesDir(), "client/runtime/config.yaml");
         byte[] savedSettings = java.nio.file.Files.readAllBytes(settings.toPath());
@@ -2684,27 +2684,34 @@ public class ProxyTunTest {
         try {
             java.nio.file.Files.write(settings.toPath(), invalid);
             InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::recreate);
-            await("Recreated Activity did not expose its startup error with VPN running", () -> {
+            waitForAppWindow();
+            await("Recreated Activity did not render the startup error actions with VPN running", () -> {
                 JSONObject ui = MainActivity.diagnostics();
                 return ui.optBoolean("live") && ui.optLong("ui_generation") > uiGeneration
                     && ui.optBoolean("notice_modal") && ui.optBoolean("notice_error")
-                    && !ui.optBoolean("working");
+                    && !ui.optBoolean("working")
+                    && previewBounds(ui, "notice-retry-core") != null
+                    && previewBounds(ui, "preview-notice-export-diagnostics") != null;
             });
             assertTrue("Starting with corrupt settings stopped the existing VPN", TunnelService.connected());
+            tunCarriesSocket(controller, secret);
             assertArrayEquals(invalid, java.nio.file.Files.readAllBytes(settings.toPath()));
             java.nio.file.Files.write(settings.toPath(), savedSettings);
             repaired = true;
-            waitForAppWindow();
+            long attempts = MainActivity.diagnostics().getLong("session_attempts");
             tapStartupRetry();
             await("Recovery did not attach the existing core and VPN", () -> {
                 JSONObject ui = MainActivity.diagnostics();
                 return ui.optBoolean("live") && ui.optBoolean("core_running") && ui.optBoolean("vpn")
                     && !ui.optBoolean("notice_modal") && !ui.optBoolean("working");
             });
+            assertEquals("Recovering the UI reopened the session more than once", attempts + 1,
+                MainActivity.diagnostics().getLong("session_attempts"));
             assertEquals("Recovering the UI reloaded the existing core", coreGeneration, CoreBridge.generation());
             assertEquals("Recovering the UI rebuilt the existing VPN", vpnGeneration, TunnelService.generation());
             assertArrayEquals(savedRuntime, java.nio.file.Files.readAllBytes(runtime.toPath()));
             assertArrayEquals(savedSettings, java.nio.file.Files.readAllBytes(settings.toPath()));
+            tunCarriesSocket(controller, secret);
         } finally {
             if (!repaired) java.nio.file.Files.write(settings.toPath(), savedSettings);
         }
@@ -3617,7 +3624,7 @@ public class ProxyTunTest {
                 assertEquals("MTU diagnostics must respect the Android API version",
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q, networks.getJSONObject(index).has("mtu"));
             }
-            recoverWithRunningVpn(context);
+            recoverWithRunningVpn(context, controller, secret);
             verifyExpiredRecoveryConsent(context);
             verifyRecoveryConnectTimeout(context, false);
             verifyRecoveryConnectTimeout(context, true);

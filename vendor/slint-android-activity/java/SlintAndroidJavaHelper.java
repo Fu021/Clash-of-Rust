@@ -714,6 +714,11 @@ public class SlintAndroidJavaHelper {
         return mActivity.getResources().getDisplayMetrics().density;
     }
 
+    public boolean has_window_focus() {
+        View decor = mActivity.getWindow().peekDecorView();
+        return decor != null && decor.hasWindowFocus();
+    }
+
     public boolean animators_enabled() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             return ValueAnimator.areAnimatorsEnabled();

@@ -65,6 +65,10 @@ bind_java_type! {
             name = "display_density",
             sig = () -> jfloat,
         },
+        fn has_window_focus {
+            name = "has_window_focus",
+            sig = () -> jboolean,
+        },
         fn get_clipboard {
             name = "get_clipboard",
             sig = () -> JString,
@@ -589,6 +593,10 @@ impl JavaHelper {
 
     pub fn display_density(&self) -> Result<f32, jni::errors::Error> {
         self.with_jni_env(|env, helper| helper.display_density(env))
+    }
+
+    pub fn has_window_focus(&self) -> Result<bool, jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.has_window_focus(env))
     }
 
     /// Sets the motion preference of `ctx` to reduced when Android doesn't run animators,

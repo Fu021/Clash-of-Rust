@@ -11,8 +11,14 @@ is initialized. This is no longer a local backport. Source:
 https://github.com/slint-ui/slint/commit/611357480eb7a7eb4f1957d912512fadf99a6666
 
 Local lifecycle handling draws the first frame on `InitWindow`, then requires
-both an initialized surface and window focus for regular frames and animation
-wakeups. Pause, stop and focus loss prevent drawing to an outgoing surface.
+an initialized surface, a resumed Activity and window focus for regular frames
+and animation wakeups. Android can retain the focused decor view across an
+Activity relaunch. Read its current focus on `Resume` and `InitWindow` so
+rendering can resume before a new focus transition. Pause, stop and focus loss
+still prevent drawing to an outgoing surface. Android's window preservation is
+described in `ViewRootImpl.notifyChildRebuilt`:
+https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/view/ViewRootImpl.java
+
 The pinned Skia swap-buffer error `[300d]` suspends the invalid surface and waits
 for `InitWindow`; unrelated rendering errors still propagate. Foreground input
 and rotation tests must prove recovery, not just that the process survived.
