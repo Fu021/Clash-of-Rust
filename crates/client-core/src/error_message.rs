@@ -434,6 +434,14 @@ fn legacy_message(message: &str, language: Language) -> Option<&'static str> {
             "Could not authorize TUN; check polkit and the desktop authentication agent"
         }
         "TUN 授权失败" => "TUN authorization failed",
+        "已取消系统授权，原设置未改变" => {
+            messages::system_authorization_cancelled(language)
+        }
+        "管理员授权失败" => messages::system_authorization_failed(language),
+        "无法启动系统授权" => messages::system_authorization_start_failed(language),
+        "系统授权超时，已停止本次操作，请重试" => {
+            messages::system_authorization_timed_out(language)
+        }
         "DNS 配置无效" => "Invalid DNS configuration",
         "响应没有出口 IP" => "The response did not contain an exit IP address",
         "内核拒绝配置后恢复失败" => {
@@ -446,6 +454,11 @@ fn legacy_message(message: &str, language: Language) -> Option<&'static str> {
             "Configuration save failed; core recovery also failed"
         }
         "Geo 更新失败" => "Geo update failed",
+        "Geo 数据正在更新，请稍候" => messages::geo_update_in_progress(language),
+        "Geo 发布缺少 SHA256 校验信息" => messages::geo_release_checksum_missing(language),
+        "Geo 数据校验信息无效" => messages::geo_release_verification_invalid(language),
+        "Geo 下载源不是官方 HTTPS 发布" => messages::geo_release_source_invalid(language),
+        "Geo 发布信息超过大小限制" => messages::geo_release_metadata_too_large(language),
         "Geo 更新失败，已恢复旧数据" => "Geo update failed; previous data restored",
         "Geo 更新失败，恢复旧文件也失败" => {
             "Geo update failed; previous files could not be restored"
@@ -477,6 +490,8 @@ fn legacy_message(message: &str, language: Language) -> Option<&'static str> {
         "Geo 更新备份校验失败，无法自动恢复" => {
             "Geo update backup verification failed and cannot be restored automatically"
         }
+        "检测超时" => messages::ip_check_timed_out(language),
+        "检测响应不是有效 JSON" => messages::ip_check_invalid_json(language),
         _ => return None,
     })
 }
@@ -503,6 +518,13 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
     }
     if let Some(translated) = legacy_message(message, language) {
         return Cow::Borrowed(translated);
+    }
+    if let Some(asset) = message.strip_prefix("Geo 发布缺少 ")
+        && crate::geodata::RELEASE_ASSETS
+            .iter()
+            .any(|(remote, _)| *remote == asset)
+    {
+        return messages::geo_release_asset_missing(language, asset).into();
     }
     for (prefix, summary) in [
         ("更新服务器返回 HTTP ", "The update server returned HTTP"),
@@ -800,11 +822,27 @@ mod tests {
     }
 
     #[test]
-    fn nested_geo_and_scheduled_subscription_failures_keep_external_details() {
+    fn nested_failures_keep_external_details() {
         for (message, expected) in [
             (
                 "Geo 更新失败：Geo 更新失败，已恢复旧数据: 東京；provider",
                 "Geo update failed: Geo update failed; previous data restored: 東京；provider",
+            ),
+            (
+                "Geo 更新失败：Geo 发布缺少 geoip.dat",
+                "Geo update failed: The Geo release is missing geoip.dat",
+            ),
+            (
+                "Geo 更新失败：Geo 数据校验信息无效",
+                "Geo update failed: Invalid Geo verification data",
+            ),
+            (
+                "管理员授权失败：操作系统错误 (-60005)",
+                "Administrator authorization failed: 操作系统错误 (-60005)",
+            ),
+            (
+                "已取消系统授权，原设置未改变",
+                "System authorization cancelled. Settings were kept.",
             ),
             (
                 "订阅定时更新失败，已保留原配置与运行状态：订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅",

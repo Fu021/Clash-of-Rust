@@ -12,6 +12,12 @@ use std::{
 use tokio::io::AsyncWriteExt;
 
 pub const GEO_FILES: [&str; 4] = ["GeoIP.dat", "GeoSite.dat", "Country.mmdb", "ASN.mmdb"];
+pub(crate) const RELEASE_ASSETS: [(&str, &str); 4] = [
+    ("geoip.dat", "GeoIP.dat"),
+    ("geosite.dat", "GeoSite.dat"),
+    ("country.mmdb", "Country.mmdb"),
+    ("GeoLite2-ASN.mmdb", "ASN.mmdb"),
+];
 pub const MANIFEST: &str = "geodata.json";
 const JOURNAL: &str = "geo-transaction.json";
 const COMMITTED_SUFFIX: &str = ".committed";
@@ -205,19 +211,13 @@ pub async fn download_geo_via(
 ) -> Result<GeoManifest> {
     let routes: Vec<_> = routes.iter().map(DownloadRoute::new).collect();
     let release = fetch_release_via(&routes, RELEASE).await?;
-    let mapping = [
-        ("geoip.dat", "GeoIP.dat"),
-        ("geosite.dat", "GeoSite.dat"),
-        ("country.mmdb", "Country.mmdb"),
-        ("GeoLite2-ASN.mmdb", "ASN.mmdb"),
-    ];
     let mut manifest = GeoManifest {
         version: format!("{} · {}", release.tag_name, release.published_at),
         updated: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         installed_at: None,
         files: vec![],
     };
-    for (remote, local) in mapping {
+    for (remote, local) in RELEASE_ASSETS {
         let asset = release
             .assets
             .iter()

@@ -5,6 +5,14 @@ Unicode true
 !include "FileFunc.nsh"
 !include "nsDialogs.nsh"
 
+!ifdef NSIS_WIN32_MAKENSIS
+  !define COMPILER_PATH_SEPARATOR "\"
+!else
+  !define COMPILER_PATH_SEPARATOR "/"
+!endif
+!searchreplace INSTALLER_LANGUAGES "${__FILEDIR__}/../translations/windows/nsis" "/" "${COMPILER_PATH_SEPARATOR}"
+!searchreplace INSTALLER_ICON "${__FILEDIR__}/../resources/icons/app.ico" "/" "${COMPILER_PATH_SEPARATOR}"
+
 !ifndef APP_VERSION
 !define APP_VERSION "0.5.2-dev.1"
 !endif
@@ -20,6 +28,8 @@ Unicode true
 !ifndef OUTPUT
   !define OUTPUT "../dist/Clash-of-Rust-${APP_VERSION}-windows-${APP_ARCH}-setup.exe"
 !endif
+!searchreplace OUTPUT_FILE "${OUTPUT}" "/" "${COMPILER_PATH_SEPARATOR}"
+!searchreplace LICENSE_FILE "${PAYLOAD}/LICENSE" "/" "${COMPILER_PATH_SEPARATOR}"
   !define PRODUCT_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRust"
   !define LEGACY_KEY "${PRODUCT_KEY}"
   !define APP_MUTEX "Local\ClashOfRust.Desktop"
@@ -29,7 +39,7 @@ Unicode true
   RequestExecutionLevel admin
 
 Name "Clash of Rust"
-OutFile "${OUTPUT}"
+OutFile "${OUTPUT_FILE}"
 InstallDir "$PROGRAMFILES64\Clash of Rust"
 InstallDirRegKey ${PRODUCT_HIVE} "${PRODUCT_KEY}" "InstallLocation"
 SetCompressor /SOLID lzma
@@ -51,10 +61,10 @@ VIProductVersion "${APP_NUMERIC_VERSION}"
 !macroend
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "${__FILEDIR__}/../resources/icons/app.ico"
-!define MUI_UNICON "${__FILEDIR__}/../resources/icons/app.ico"
+!define MUI_ICON "${INSTALLER_ICON}"
+!define MUI_UNICON "${INSTALLER_ICON}"
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "${PAYLOAD}/LICENSE"
+!insertmacro MUI_PAGE_LICENSE "${LICENSE_FILE}"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
   !define MUI_FINISHPAGE_RUN
@@ -87,8 +97,8 @@ Var InstallTarget
 Var InstallWin32Error
 Var InstallFailureCode
 
-!include /CHARSET=UTF8 "${__FILEDIR__}/../translations/windows/nsis/en.nsh"
-!include /CHARSET=UTF8 "${__FILEDIR__}/../translations/windows/nsis/zh-CN.nsh"
+!include /CHARSET=UTF8 "${INSTALLER_LANGUAGES}${COMPILER_PATH_SEPARATOR}en.nsh"
+!include /CHARSET=UTF8 "${INSTALLER_LANGUAGES}${COMPILER_PATH_SEPARATOR}zh-CN.nsh"
 
 !macro Payload ACTION
   !insertmacro ${ACTION} "${PAYLOAD}/clash-of-rust.exe" "." "clash-of-rust.exe"
@@ -96,7 +106,7 @@ Var InstallFailureCode
   !insertmacro ${ACTION} "${PAYLOAD}/cor.exe" "." "cor.exe"
   !insertmacro ${ACTION} "${PAYLOAD}/clash-tun-launcher.exe" "." "clash-tun-launcher.exe"
   !insertmacro ${ACTION} "${PAYLOAD}/LICENSE" "." "LICENSE"
-  !insertmacro ${ACTION} "${__FILEDIR__}/../resources/icons/app.ico" "resources" "clash-of-rust-${APP_VERSION}.ico"
+  !insertmacro ${ACTION} "${INSTALLER_ICON}" "resources" "clash-of-rust-${APP_VERSION}.ico"
   !insertmacro ${ACTION} "${PAYLOAD}/resources/mihomo.exe" "resources" "mihomo.exe"
   !insertmacro ${ACTION} "${PAYLOAD}/resources/GeoIP.dat" "resources" "GeoIP.dat"
   !insertmacro ${ACTION} "${PAYLOAD}/resources/GeoSite.dat" "resources" "GeoSite.dat"
@@ -138,7 +148,9 @@ Var InstallFailureCode
   ${If} ${Errors}
     Call FailInstallWrite
   ${EndIf}
-  File "/oname=${NAME}" "${SOURCE}"
+  !searchreplace SOURCE_FILE "${SOURCE}" "/" "${COMPILER_PATH_SEPARATOR}"
+  File "/oname=${NAME}" "${SOURCE_FILE}"
+  !undef SOURCE_FILE
   ${If} ${Errors}
     Call FailInstallWrite
   ${EndIf}

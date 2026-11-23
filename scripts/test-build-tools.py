@@ -8035,8 +8035,12 @@ runpy.run_path(str(script), run_name='__main__')
     def test_windows_installer_uses_complete_localized_messages(self):
         source = (build.ROOT/'installer/clash-of-rust.nsi').read_text(encoding='utf-8')
         catalogs = build.ROOT/'translations/windows/nsis'
-        includes = re.findall(r'^!include /CHARSET=UTF8 "[^"\n]*/windows/nsis/([^"/]+)\.nsh"$',
-                              source, re.M)
+        self.assertIn(
+            r'!searchreplace INSTALLER_LANGUAGES "${__FILEDIR__}/../translations/windows/nsis" "/" "${COMPILER_PATH_SEPARATOR}"',
+            source)
+        includes = re.findall(
+            r'^!include /CHARSET=UTF8 "\$\{INSTALLER_LANGUAGES\}\$\{COMPILER_PATH_SEPARATOR\}([^"/]+)\.nsh"$',
+            source, re.M)
         self.assertCountEqual(includes, [catalog.stem for catalog in catalogs.glob('*.nsh')])
         self.assertEqual(includes[:1], ['en'])
         keys = set(re.findall(r'\$\((Installer\w+)\)', source))

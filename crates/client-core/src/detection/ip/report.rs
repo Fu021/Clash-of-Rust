@@ -87,7 +87,7 @@ fn localized_check_detail<'a>(
 ) -> Cow<'a, str> {
     if result.state == State::Failed && result.summary == ip_check::PLATFORM_ERROR_WITH_EXIT_SUMMARY
     {
-        return Cow::Borrowed(detail);
+        return crate::error_message::localize(detail, language);
     }
     if let Some(evidence) = detail.strip_prefix(NATIVE_REGION_DETAIL_PREFIX) {
         return Cow::Owned(messages::ip_native_region_evidence(language, evidence));

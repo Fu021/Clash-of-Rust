@@ -89,7 +89,7 @@ Rust 新增文案时，为对应目录的各个 `<语言标签>.json` 添加相�
 安装和卸载向导直接打开，语言跟随当前用户的 Windows 显示语言。NSIS 先匹配完整语言，再匹配主语言，均未匹配时用首个加载的英文词库。参见 [NSIS 手册 §4.10.1](https://nsis.sourceforge.io/Docs/Chapter4.html)。
 
 - 添加 `translations/windows/nsis/<语言标签>.nsh`，文件名与客户端注册表的语言标签一致。以 `en.nsh` 为模板，使用对应的 NSIS `MUI_LANGUAGE` 和语言 ID，补齐 `InstallerVersionInfo` 及全部 `LangString`，保留变量、路径和换行占位符。
-- 在 [`clash-of-rust.nsi`](../installer/clash-of-rust.nsi) 的语言加载区以 UTF-8 加载词库，保持 `en.nsh` 第一个加载。将新语言的卸载快捷方式名登记到 `DeleteUninstallShortcuts`，让重装和卸载能够清理旧语言留下的快捷方式。
+- 在 [`clash-of-rust.nsi`](../installer/clash-of-rust.nsi) 的语言加载区沿用 `INSTALLER_LANGUAGES` 和 `COMPILER_PATH_SEPARATOR`，以 UTF-8 加载词库，保持 `en.nsh` 第一个加载。将新语言的卸载快捷方式名登记到 `DeleteUninstallShortcuts`，让重装和卸载能够清理旧语言留下的快捷方式。
 - 运行以下检查。缺少词库、漏加载、缺消息键或漏登快捷方式清理项都会失败。CI 也运行这两项检查。
 
   ```sh

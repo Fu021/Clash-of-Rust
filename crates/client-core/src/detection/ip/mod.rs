@@ -398,6 +398,20 @@ mod tests {
         assert_eq!(result.response_millis(), None);
         assert!(result.detail.contains("检测响应不是有效 JSON"));
         assert!(result.detail.contains("chatgpt.com 同域探针出口：8.8.8.8"));
+        let service = Service {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            group: "Fixture".into(),
+            url: "https://chatgpt.com".into(),
+        };
+        assert_eq!(
+            crate::ip_report::detail_in(
+                &service,
+                &Ok(result.clone()),
+                crate::config::Language::English,
+            ),
+            "The check returned invalid JSON\nSame-domain probe exit (chatgpt.com): 8.8.8.8"
+        );
         assert_eq!(result.target_exit.unwrap().ip.to_string(), "8.8.8.8");
         assert!(
             combine_target_exit(Err(anyhow::anyhow!("检测失败")), None, "chatgpt.com").is_err()
