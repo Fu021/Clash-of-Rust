@@ -15,6 +15,7 @@
 - Android CI [39984691528](https://github.com/Fu021/Clash-of-Rust/actions/runs/39984691528)：NDK 28.2 archive 损坏，`sdkmanager` 返回非零。
 - Android CI [39032112812](https://github.com/Fu021/Clash-of-Rust/actions/runs/39032112812)、[39004271043](https://github.com/Fu021/Clash-of-Rust/actions/runs/39004271043)、[39002539543](https://github.com/Fu021/Clash-of-Rust/actions/runs/39002539543)：三种 ABI 的编译或 lint 错误。
 - CI [38966108986](https://github.com/Fu021/Clash-of-Rust/actions/runs/38966108986)：Android Clippy 拒绝可合并 `if`。
+- CI [45084537617](https://github.com/Fu021/Clash-of-Rust/actions/runs/45084537617)：Android 宿主测试通过后，目标 Clippy 发现参数数量问题；64 位 ABI 另因类型布局触发枚举体积告警。
 - CI [44522461401](https://github.com/Fu021/Clash-of-Rust/actions/runs/44522461401) 初次尝试的 Android ARM64 在 AGP classpath 解析时报告 40 个 Maven 坐标找不到，同提交单作业复跑通过。随后抽查 Kotlin、annotations 和 Guava 的 POM 地址返回 HTTP 200，原 runner 的 HTTP 状态未知。[共享 Maven 缓存](../workflows/ci.md#android-工具与原包)先验证实际任务所需依赖，再供三个 ABI 离线构建。
 - 修复提交 `3fe26d8`、`023b126`、`4827013`、`65f3962`、`65446a7`、`7a24898` 等 Android 依赖与 native host 修复。
 
@@ -30,6 +31,7 @@
 
 - 三种 ABI 都要编译；x86_64 还要运行模拟器集成测试。
 - JNI 类型以锁定依赖的实际定义为准；当前 `jni-sys` 的 `jboolean` 是 Rust `bool`。宿主测试不编译仅在 Android 启用的入口，不能代替三个目标的交叉编译。
+- Android 专属代码须在各目标执行严格 Clippy；不同 ABI 的类型布局可能触发不同告警，宿主检查不能替代目标检查。
 - 新增 native 依赖必须固定来源、版本和校验，并保留许可证。
 - 不把桌面端 feature、线程或文件系统假设带入 Android 宿主。
 

@@ -287,7 +287,7 @@ enum ProtectionChangeKind {
     Disable,
 }
 enum ProtectionAuthorization {
-    Enable(core::claude_check::protection::Protection),
+    Enable(Box<core::claude_check::protection::Protection>),
     Restore,
 }
 struct State {
@@ -661,10 +661,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                         run_loop(
                             startup,
                             session,
-                            receive,
-                            native_events,
-                            visibility,
-                            visible_detail,
+                            SessionInputs { receive, native_events, visibility, visible_detail },
                             weak,
                             profile_gate,
                             recovery,
@@ -902,17 +899,27 @@ async fn open_session(
     }
 }
 
+struct SessionInputs {
+    receive: mpsc::Receiver<Request>,
+    native_events: NativeEventReceiver,
+    visibility: watch::Receiver<bool>,
+    visible_detail: watch::Receiver<Option<ConnectionSelection>>,
+}
+
 async fn run_loop(
     startup: Startup,
     opened: OpenedSession,
-    mut receive: mpsc::Receiver<Request>,
-    mut native_events: NativeEventReceiver,
-    mut visibility: watch::Receiver<bool>,
-    mut visible_detail: watch::Receiver<Option<ConnectionSelection>>,
+    inputs: SessionInputs,
     weak: slint::Weak<AndroidWindow>,
     profile_gate: Arc<RequestGate>,
     recovery: Arc<StartupRecovery>,
 ) -> Result<()> {
+    let SessionInputs {
+        mut receive,
+        mut native_events,
+        mut visibility,
+        mut visible_detail,
+    } = inputs;
     let OpenedSession {
         session,
         incidents,
@@ -1655,7 +1662,7 @@ async fn run_loop(
                                     ensure!(state.session.settings.active_profile.as_deref() == Some(protection.profile_id.as_str()),
                                         "{}", state.presentation_language.text("订阅已变化，请重新开启保护", "The subscription changed; enable protection again"));
                                     let request = next_vpn_authorization(&state.session.store.root)?;
-                                    change.authorization = Some((request, ProtectionAuthorization::Enable(protection)));
+                                    change.authorization = Some((request, ProtectionAuthorization::Enable(Box::new(protection))));
                                     state.protection_status = state.presentation_language.text("正在等待 VPN 授权，当前网络设置保持不变…", "Waiting for VPN authorization; current network settings are unchanged…").into();
                                     request_vpn_authorization(&state.session, state.presentation_language, request)?;
                                     Ok(())
@@ -2780,7 +2787,7 @@ async fn native_event(state: &mut State, value: &Value) -> Result<()> {
                 if let ProtectionAuthorization::Enable(mut protection) = authorization {
                     before_vpn.save_for_disable(&mut protection);
                     state.session.commit_protection(
-                        Some(Arc::new(protection)),
+                        Some(Arc::new(*protection)),
                         state.session.settings.run_mode.clone(),
                     )?;
                 } else if retry {
