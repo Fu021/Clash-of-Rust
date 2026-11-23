@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_recovery_and_its_failure_follow_the_display_language() {
+    fn protection_progress_and_outcomes_follow_the_display_language() {
         for (source, state, english) in [
             (
                 "正在等待 VPN 授权，当前网络设置保持不变…",
@@ -227,6 +227,31 @@ mod tests {
                 "暂时无法读取保护状态：控制接口刷新超时",
                 State::Error,
                 "Protection status temporarily unavailable: Control interface refresh timed out",
+            ),
+            (
+                "Claude 保护已开启",
+                State::Active,
+                "Claude protection enabled",
+            ),
+            (
+                "保护已保存，实时状态待确认",
+                State::Checking,
+                "Protection saved; live status unconfirmed",
+            ),
+            (
+                "Claude 保护已关闭，VPN 状态待确认",
+                State::Checking,
+                "Claude protection disabled; VPN state unconfirmed",
+            ),
+            (
+                "Claude 保护已关闭，原网络状态已恢复",
+                State::Off,
+                "Claude protection disabled; previous network state restored",
+            ),
+            (
+                "Claude 保护已关闭",
+                State::Off,
+                "Claude protection disabled",
             ),
         ] {
             let source_health = Status {

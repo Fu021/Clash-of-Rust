@@ -435,6 +435,16 @@ mod tests {
                 "Status refresh failed: Control interface refresh timed out",
             ),
             (
+                LogMessage::ActionFailed("保护开启失败：确认保护节点超时".into()),
+                "保护开启失败：确认保护节点超时",
+                "Failed to enable protection: Timed out checking the protected node",
+            ),
+            (
+                LogMessage::ActionFailed("保护回滚失败：VPN 授权等待超时\nprovider: 東京".into()),
+                "保护回滚失败：VPN 授权等待超时\nprovider: 東京",
+                "Protection rollback failed: VPN authorization timed out\nprovider: 東京",
+            ),
+            (
                 LogMessage::SubscriptionDownloadFailed(
                     "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅".into(),
                 ),

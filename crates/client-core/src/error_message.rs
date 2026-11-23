@@ -168,6 +168,26 @@ fn english(message: &str) -> Option<&'static str> {
             "Could not confirm protection status; waiting to retry"
         }
         "控制接口刷新超时" => "Control interface refresh timed out",
+        "全部节点复测超时" => "Timed out rechecking all nodes",
+        "节点复测失败" => "Node recheck failed",
+        "保护验证超时" => "Protection verification timed out",
+        "确认保护节点超时" => "Timed out checking the protected node",
+        "订阅已变化，请重新开启保护" => {
+            "The subscription changed; enable protection again"
+        }
+        "VPN 授权入口不可用" => "VPN authorization is unavailable",
+        "VPN 授权等待超时" => "VPN authorization timed out",
+        "VPN 状态正在切换，请重试" => "The VPN state is changing. Try again.",
+        "保护开启失败" => "Failed to enable protection",
+        "保护恢复失败" => "Failed to restore protection",
+        "关闭保护失败" => "Failed to disable protection",
+        "保护切换超时" => "Protection change timed out",
+        "保护验证失败" => "Protection verification failed",
+        "保护回滚失败" => "Protection rollback failed",
+        "无法确认 VPN 启动状态" => "Could not confirm VPN start status",
+        "正在等待 Android VPN 服务结束原请求" => {
+            "Waiting for the Android VPN service to finish the original request"
+        }
         "正在确认当前代理节点…" => "Checking the current proxy node…",
         "正在等待 VPN 授权，当前网络设置保持不变…" => {
             "Waiting for VPN authorization; current network settings are unchanged…"
@@ -181,6 +201,15 @@ fn english(message: &str) -> Option<&'static str> {
         "暂时无法读取保护状态" => "Protection status temporarily unavailable",
         "正在确认 VPN 提交…" => "Confirming the VPN commit…",
         "正在连接保护 VPN…" => "Connecting protected VPN…",
+        "Claude 保护已开启" => "Claude protection enabled",
+        "保护已保存，实时状态待确认" => "Protection saved; live status unconfirmed",
+        "Claude 保护已关闭，VPN 状态待确认" => {
+            "Claude protection disabled; VPN state unconfirmed"
+        }
+        "Claude 保护已关闭，原网络状态已恢复" => {
+            "Claude protection disabled; previous network state restored"
+        }
+        "Claude 保护已关闭" => "Claude protection disabled",
         "控制接口暂不可用，实时拦截未确认；保护规则仍保留。" => {
             "Control interface unavailable; protection rules retained."
         }
@@ -400,6 +429,15 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
         if let Some((prefix, detail)) = message.split_once(delimiter)
             && let Some(translated) = english(prefix)
         {
+            if matches!(prefix, "保护回滚失败" | "无法确认 VPN 启动状态")
+                && let Some((reason, external_detail)) = detail.split_once('\n')
+            {
+                return format!(
+                    "{translated}: {}\n{external_detail}",
+                    localize(reason, language)
+                )
+                .into();
+            }
             return format!("{translated}: {}", localize(detail, language)).into();
         }
     }
@@ -553,6 +591,14 @@ mod tests {
             (
                 "此设置修改需要重载网络，请使用完整保存入口",
                 "This change requires reloading the network; use the full save path",
+            ),
+            (
+                "节点复测失败：全部节点复测超时",
+                "Node recheck failed: Timed out rechecking all nodes",
+            ),
+            (
+                "恢复原网络状态失败：保护验证超时",
+                "Failed to restore the previous network state: Protection verification timed out",
             ),
         ] {
             assert_eq!(localize(message, Language::English), expected);
