@@ -267,38 +267,61 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
 
         def invoke(command, **_kwargs):
             commands.append(list(map(str, command)))
-            if command[:4] == ['sudo', '-n', 'visudo', '-cf']:
-                self.assertEqual(Path(command[4]).read_text(), 'Defaults:corci verifypw=never\n')
+
+        def sudo(*arguments, **options):
+            self.assertEqual(options['timeout'], 15)
+            commands.append(list(map(str, arguments)))
+            if arguments[:2] == ('visudo', '-cf'):
+                self.assertEqual(arguments[2].read_text(), 'Defaults:corci verifypw=never\n')
 
         with patch('pwd.getpwuid', return_value=SimpleNamespace(pw_name='corci')), \
                 patch.object(update.secrets, 'token_hex', return_value='testtoken'), \
-                patch.object(update, 'invoke', side_effect=invoke):
+                patch.object(update, 'invoke', side_effect=invoke), \
+                patch.object(linux_gui, 'fixture_sudo', side_effect=sudo):
             with self.assertRaisesRegex(RuntimeError, 'installation failed'):
                 with update.terminal_authorization():
                     raise RuntimeError('installation failed')
-        self.assertEqual(commands[1][:5], ['sudo', '-n', 'install', '-m', '0440'])
+        self.assertEqual(commands[1][:3], ['install', '-m', '0440'])
         self.assertEqual(commands[1][-1], '/etc/sudoers.d/cor-update-testtoken')
         self.assertEqual(commands[2], ['sudo', '-n', '-v'])
-        self.assertEqual(commands[3], ['sudo', '-n', 'rm', '-f', '--',
-                                       '/etc/sudoers.d/cor-update-testtoken'])
+        self.assertEqual(commands[3], ['rm', '-f', '--', '/etc/sudoers.d/cor-update-testtoken'])
 
     @unittest.skipUnless(hasattr(os, 'geteuid'), 'sudo authorization is Linux-only')
     def test_terminal_authorization_removes_rule_if_validation_fails(self):
-        commands = []
-
-        def invoke(command, **_kwargs):
-            commands.append(list(map(str, command)))
-            if command == ['sudo', '-n', '-v']:
-                raise RuntimeError('authorization failed')
-
         with patch('pwd.getpwuid', return_value=SimpleNamespace(pw_name='corci')), \
                 patch.object(update.secrets, 'token_hex', return_value='testtoken'), \
-                patch.object(update, 'invoke', side_effect=invoke):
+                patch.object(update, 'invoke', side_effect=RuntimeError('authorization failed')) as invoke, \
+                patch.object(linux_gui, 'fixture_sudo') as sudo:
             with self.assertRaisesRegex(RuntimeError, 'authorization failed'):
                 with update.terminal_authorization():
                     self.fail('must not run without validation')
-        self.assertEqual(commands[-1], ['sudo', '-n', 'rm', '-f', '--',
-                                        '/etc/sudoers.d/cor-update-testtoken'])
+        invoke.assert_called_once_with(['sudo', '-n', '-v'], timeout=15, start_new_session=True)
+        self.assertEqual(sudo.call_args.args,
+                         ('rm', '-f', '--', Path('/etc/sudoers.d/cor-update-testtoken')))
+
+    @unittest.skipUnless(sys.platform == 'linux', 'sudo authorization is Linux-only')
+    def test_terminal_authorization_removes_rule_on_interruption_after_install(self):
+        interrupted = KeyboardInterrupt('stop after sudoers install')
+        with patch('pwd.getpwuid', return_value=SimpleNamespace(pw_name='corci')), \
+                patch.object(update, 'invoke') as invoke, \
+                patch.object(linux_gui, 'fixture_sudo') as sudo, self.assertRaises(KeyboardInterrupt) as raised:
+            with update.terminal_authorization(check_interrupted=Mock(side_effect=[None, None, interrupted])):
+                self.fail('must not enter the installation after interruption')
+        self.assertIs(raised.exception, interrupted)
+        invoke.assert_not_called()
+        self.assertEqual([call.args[0] for call in sudo.call_args_list], ['visudo', 'install', 'rm'])
+        self.assertEqual(sudo.call_args.args[-1], sudo.call_args_list[1].args[-1])
+
+    def test_fixture_sudo_leaves_time_to_stop_privileged_commands_and_never_prompts(self):
+        with patch.object(linux_gui, 'run') as run:
+            linux_gui.fixture_sudo('useradd', '--create-home', 'fixture')
+            run.assert_called_once_with(
+                ['sudo', '-n', '/usr/bin/timeout', '--kill-after=5s', '30s', 'useradd', '--create-home', 'fixture'],
+                timeout=45, start_new_session=True, stdin=subprocess.DEVNULL)
+            run.reset_mock()
+            linux_gui.fixture_sudo('chpasswd', input='synthetic credentials', text=True)
+            self.assertNotIn('stdin', run.call_args.kwargs)
+            self.assertEqual(run.call_args.kwargs['input'], 'synthetic credentials')
 
     def test_published_update_checks_channel_versions_and_saved_data(self):
         content = b'published-package'
@@ -737,6 +760,34 @@ with fixture_signals():
         for countdown in ([('继续安装', (700, 520, 46, 14)), ('（2秒）', (750, 520, 36, 14))],
                           [('Continue', (700, 520, 52, 14)), ('(2s)', (755, 520, 22, 14))]):
             self.assertIsNone(linux_gui.screen_label([countdown], labels['continue']))
+
+    def test_gui_primary_button_ocr_requires_exact_text_and_uses_current_bounds(self):
+        bounds = [1050, 119, 88, 36]
+        with patch.object(linux_gui.subprocess, 'check_output', side_effect=[
+                json.dumps([['button.png', bounds], ['countdown.png', [900, 400, 120, 36]]]).encode(),
+                '下 载 安 装\n', '继续安装（2 秒）\n']) as ocr:
+            lines = linux_gui.recognize_primary_update_buttons('frame.png', ('下载安装', '继续安装'))
+        self.assertEqual(linux_gui.screen_label(lines, ('下载安装',)), (1094, 137))
+        self.assertIsNone(linux_gui.screen_label(lines, ('继续安装',)))
+        self.assertIn('7', ocr.call_args.args[0])
+
+    def test_gui_navigation_uses_primary_ocr_only_after_whole_frame_miss(self):
+        labels = linux_gui.UPDATE_LABELS['download']
+        lines = [[(labels[0], (1152, 124, 88, 36))]]
+        with tempfile.TemporaryDirectory() as temporary:
+            navigation = linux_gui.UpdateNavigation(Path(temporary), self.version)
+            navigation.window = 42
+            navigation.geometry = (0, 0, 1280, 900)
+            with patch.object(navigation, 'focus', return_value=42), \
+                    patch.object(linux_gui, 'run'), \
+                    patch.object(linux_gui, 'recognize_update_screen', side_effect=[[], lines]), \
+                    patch.object(linux_gui, 'recognize_primary_update_buttons', return_value=lines) as fallback:
+                self.assertEqual(navigation.locate(labels), (1196, 142))
+                image, sent_labels = fallback.call_args.args
+                self.assertEqual(sent_labels, labels)
+                self.assertFalse(image.parent.exists())
+                self.assertEqual(navigation.locate(labels), (1196, 142))
+                fallback.assert_called_once()
 
     def test_gui_discovery_matches_the_complete_version_with_ocr_spacing(self):
         for words, version, matches in (
@@ -1602,7 +1653,7 @@ with fixture_signals():
         failure = subprocess.CalledProcessError(9, ['useradd'])
 
         def run(arguments, **_kwargs):
-            if arguments[:2] == ['sudo', 'useradd']:
+            if arguments[5:6] == ['useradd']:
                 raise failure
             return subprocess.CompletedProcess(arguments, 0)
 
@@ -1656,7 +1707,9 @@ with fixture_signals():
                 executed.append(command)
                 if command[:3] == ['sudo', 'install', '-d']:
                     Path(command[-1]).mkdir()
-                failed = command == ['sudo', 'rm', '-f', rule]
+                failed = command[5:] == ['rm', '-f', str(rule)]
+                if failed and _kwargs.get('check'):
+                    raise subprocess.CalledProcessError(1, command)
                 return subprocess.CompletedProcess(command, int(failed), stdout='')
 
             def interrupt(_command, home, *_args, **_kwargs):
@@ -1669,7 +1722,7 @@ with fixture_signals():
                 linux_gui.installed_tests(update_case={'format': 'deb'}, package_lock=Mock(),
                                           update_report=Path(temporary)/'desktop-update')
             self.assertIn('remove disposable polkit rule', raised.exception.__notes__[0])
-            self.assertIn(['sudo', 'userdel', '--remove', user], executed)
+            self.assertTrue(any(command[5:] == ['userdel', '--remove', user] for command in executed))
             self.assertEqual(linux_gui.read_object(Path(temporary)/'desktop-update/gui.json'),
                              {'status': 'failed'})
 
@@ -1691,17 +1744,17 @@ with fixture_signals():
                 fixture_account = Path(temporary)/'account'
 
                 def run(command, **_kwargs):
-                    if command[:2] == ['sudo', 'useradd']:
+                    if command[5:6] == ['useradd']:
                         fixture_account.touch()
-                    elif command == ['sudo', 'tee', str(rule)]:
+                    elif command[5:] == ['tee', str(rule)]:
                         fixture_rule.touch()
                     elif command[:3] == ['sudo', 'install', '-d']:
                         Path(command[-1]).mkdir()
-                    elif command == ['sudo', 'rm', '-f', rule]:
+                    elif command[5:] == ['rm', '-f', str(rule)]:
                         self.assertIs(_kwargs['start_new_session'], True)
                         os.kill(os.getpid(), signal.SIGTERM)
                         fixture_rule.unlink()
-                    elif command == ['sudo', 'userdel', '--remove', user]:
+                    elif command[5:] == ['userdel', '--remove', user]:
                         self.assertIs(_kwargs['start_new_session'], True)
                         os.kill(os.getpid(), signal.SIGINT)
                         fixture_account.unlink()

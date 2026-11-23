@@ -4404,10 +4404,13 @@ class BuildTests(unittest.TestCase):
                     linux_gui.installed_tests()
 
             self.assertIs(captured.exception, failure)
-            commands.assert_any_call(['sudo', 'rm', '-f', rule], check=False, timeout=15,
-                                     start_new_session=True)
-            commands.assert_any_call(['sudo', 'userdel', '--remove', user], check=False, timeout=30,
-                                     start_new_session=True)
+            prefix = ['sudo', '-n', '/usr/bin/timeout', '--kill-after=5s']
+            commands.assert_any_call([*prefix, '15s', 'rm', '-f', str(rule)], check=True,
+                                     cwd=linux_gui.ROOT, timeout=30, start_new_session=True,
+                                     stdin=subprocess.DEVNULL)
+            commands.assert_any_call([*prefix, '30s', 'userdel', '--remove', user], check=True,
+                                     cwd=linux_gui.ROOT, timeout=45, start_new_session=True,
+                                     stdin=subprocess.DEVNULL)
             self.assertEqual(json.loads((saved/'desktop/gui.json').read_text()), {'status': 'failed'})
             self.assertEqual((saved/'desktop-session-journal.log').read_text(),
                              'session start diagnostics\npackage version diagnostics\naudit diagnostics\n')

@@ -898,15 +898,22 @@ public class ProxyTunTest {
     }
     private static android.view.accessibility.AccessibilityNodeInfo consentRoot(android.app.UiAutomation automation) {
         android.view.accessibility.AccessibilityNodeInfo active=automation.getRootInActiveWindow();
-        if (active!=null && "com.android.vpndialogs".contentEquals(active.getPackageName())) return active;
+        if (active!=null && android.text.TextUtils.equals(active.getPackageName(), "com.android.vpndialogs"))
+            return active;
         for (android.view.accessibility.AccessibilityWindowInfo window:automation.getWindows()) {
-            if (!window.isActive() && !window.isFocused()) continue;
+            if (window.getType()!=android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) continue;
             android.view.accessibility.AccessibilityNodeInfo root=window.getRoot();
-            if (root!=null && "com.android.vpndialogs".contentEquals(root.getPackageName())) return root;
+            if (root!=null && android.text.TextUtils.equals(root.getPackageName(), "com.android.vpndialogs"))
+                return root;
         }
         return null;
     }
-    private static void consent(boolean allow) throws Exception {
+
+    private interface ConsentWindowAction {
+        void run(android.app.UiAutomation automation) throws Exception;
+    }
+
+    private static void withConsentWindows(ConsentWindowAction action) throws Exception {
         android.app.UiAutomation automation=InstrumentationRegistry.getInstrumentation().getUiAutomation();
         android.accessibilityservice.AccessibilityServiceInfo service=automation.getServiceInfo();
         if (service==null) throw new IOException("Android accessibility automation is unavailable");
@@ -914,33 +921,15 @@ public class ProxyTunTest {
         service.flags |= android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             | android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
         automation.setServiceInfo(service);
-        java.util.concurrent.atomic.AtomicBoolean attempted=new java.util.concurrent.atomic.AtomicBoolean();
         try {
-            await("Android VPN consent did not return to the app",()-> {
-                if (attempted.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true))
-                    return true;
-                android.view.accessibility.AccessibilityNodeInfo root=consentRoot(automation);
-                if (root==null) return false;
-                for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
-                    if (check.isCheckable() && !checked(check))
-                        check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
-                for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
-                    allow ? "android:id/button1" : "android:id/button2")) {
-                    if (button.isEnabled()) {
-                        attempted.set(true);
-                        button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
-                    }
-                }
-                return false;
-            });
+            action.run(automation);
         } catch (AssertionError error) {
             try {
-                StringBuilder details=new StringBuilder("VPN consent accessibility tree; attempted=")
-                    .append(attempted.get());
+                StringBuilder details=new StringBuilder("VPN consent accessibility windows");
                 logConsentNode(automation.getRootInActiveWindow(),0,details);
                 for (android.view.accessibility.AccessibilityWindowInfo window:automation.getWindows()) {
-                    details.append("\nwindow active=").append(window.isActive())
-                        .append(" focused=").append(window.isFocused());
+                    details.append("\nwindow type=").append(window.getType())
+                        .append(" active=").append(window.isActive()).append(" focused=").append(window.isFocused());
                     logConsentNode(window.getRoot(),0,details);
                 }
                 android.util.Log.w("ClashOfRustTest",details.toString());
@@ -952,6 +941,35 @@ public class ProxyTunTest {
             service.flags=originalFlags;
             automation.setServiceInfo(service);
         }
+    }
+
+    private static void awaitConsentWindow(String message) throws Exception {
+        withConsentWindows(automation -> await(message, () -> consentRoot(automation) != null));
+    }
+
+    private static void consent(boolean allow) throws Exception {
+        withConsentWindows(automation -> respondToConsent(automation, allow));
+    }
+
+    private static void respondToConsent(android.app.UiAutomation automation, boolean allow) throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean attempted=new java.util.concurrent.atomic.AtomicBoolean();
+        await("Android VPN consent did not return to the app",()-> {
+            if (attempted.get() && inStage(androidx.test.runner.lifecycle.Stage.RESUMED,true))
+                return true;
+            android.view.accessibility.AccessibilityNodeInfo root=consentRoot(automation);
+            if (root==null) return false;
+            for (android.view.accessibility.AccessibilityNodeInfo check:dialogViews(root,"android:id/checkbox"))
+                if (check.isCheckable() && !checked(check))
+                    check.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+            for (android.view.accessibility.AccessibilityNodeInfo button:dialogViews(root,
+                allow ? "android:id/button1" : "android:id/button2")) {
+                if (button.isEnabled()) {
+                    attempted.set(true);
+                    button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                }
+            }
+            return false;
+        });
     }
     private static void authorization(long request,String status) throws Exception {
         await("VPN authorization did not reach "+status,()-> {
@@ -2819,8 +2837,7 @@ public class ProxyTunTest {
         MainActivity activity = resumedActivity();
         assertNotNull(activity);
         activity.request("{\"op\":\"connect\"}");
-        await("Ordinary VPN consent did not open", () ->
-            consentRoot(InstrumentationRegistry.getInstrumentation().getUiAutomation()) != null);
+        awaitConsentWindow("Ordinary VPN consent did not open");
         MainActivity replacement = recreateDuringVpnPrompt(activity);
         replacement.request("{\"op\":\"authorize-vpn\",\"request\":803}");
         authorization(803, "denied");
@@ -3437,8 +3454,7 @@ public class ProxyTunTest {
             MainActivity replacement = resumedActivity();
             assertNotNull(replacement);
             releasePrepare.countDown();
-            await("Recreated Activity did not launch the existing recovery consent", () ->
-                consentRoot(instrumentation.getUiAutomation()) != null);
+            awaitConsentWindow("Recreated Activity did not launch the existing recovery consent");
             MainActivity promptOwner = recreateDuringVpnPrompt(replacement);
             assertEquals(request, promptRequest.get(promptOwner));
             serial.submit(() -> {}).get(30, TimeUnit.SECONDS);

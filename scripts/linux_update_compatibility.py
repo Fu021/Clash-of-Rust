@@ -534,7 +534,7 @@ def verify_desktop_receipt(desktop, identity, package_format, digest, old_versio
 
 
 def exercise_gui(fixture, old_package, *, check_interrupted=None, run_identity=None):
-    from linux_gui import installed_tests, verify_installed_package
+    from linux_gui import fixture_sudo, installed_tests, verify_installed_package
 
     require_disposable_update_runner()
     package_format = fixture['format']
@@ -565,8 +565,7 @@ def exercise_gui(fixture, old_package, *, check_interrupted=None, run_identity=N
                              'python-pillow', 'strace', check_interrupted=checkpoint)
             checkpoint()
             if Path('/usr/lib/systemd/system/polkit-agent-helper.socket').is_file():
-                invoke(['sudo', '-n', 'systemctl', 'start', 'polkit-agent-helper.socket'],
-                       check_interrupted=checkpoint)
+                fixture_sudo('systemctl', 'start', 'polkit-agent-helper.socket')
         checkpoint()
         step = 'install-previous'
         install_previous(package_format, old_package, check_interrupted=checkpoint)
@@ -609,6 +608,9 @@ def exercise_gui(fixture, old_package, *, check_interrupted=None, run_identity=N
 @contextmanager
 def terminal_authorization(*, check_interrupted=None):
     import pwd
+    from linux_gui import cleanup_steps, fixture_sudo
+
+    checkpoint = check_interrupted or (lambda: None)
     user = pwd.getpwuid(os.geteuid()).pw_name
     require(re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_.-]*\$?', user) is not None,
             'Invalid compatibility test user')
@@ -619,14 +621,18 @@ def terminal_authorization(*, check_interrupted=None):
         source = directory/'sudoers'
         source.write_text(f'Defaults:{user} verifypw=never\n')
         source.chmod(0o644)
-        invoke(['sudo', '-n', 'visudo', '-cf', source], check_interrupted=check_interrupted)
+        checkpoint()
+        fixture_sudo('visudo', '-cf', source, timeout=15)
+        checkpoint()
         try:
-            invoke(['sudo', '-n', 'install', '-m', '0440', source, destination],
-                   check_interrupted=check_interrupted)
-            invoke(['sudo', '-n', '-v'], check_interrupted=check_interrupted)
+            fixture_sudo('install', '-m', '0440', source, destination, timeout=15)
+            checkpoint()
+            invoke(['sudo', '-n', '-v'], timeout=15, start_new_session=True)
+            checkpoint()
             yield
         finally:
-            invoke(['sudo', '-n', 'rm', '-f', '--', destination], timeout=15, start_new_session=True)
+            cleanup_steps(('remove fixture sudoers rule',
+                           lambda: fixture_sudo('rm', '-f', '--', destination, timeout=15)))
 
 
 def require_disposable_update_runner():

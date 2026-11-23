@@ -33,6 +33,7 @@ ACTION = 'org.clashofrust.tun.authorize'
 DESKTOP_TIMEOUT = 360
 DESKTOP_UPDATE_TIMEOUT = 1050
 PRERELEASE_CONFIRMATION_SECONDS = 3
+UPDATE_FIXTURE_ACCENT = ('teal', '#c6613f')
 UPDATE_LABELS = {
     'home': ('首页', 'Home'),
     'settings': ('设置', 'Settings'),
@@ -686,6 +687,52 @@ def recognize_update_screen(image):
     return recognized_lines(result.stdout.decode('utf-8'), scale=2)
 
 
+def recognize_primary_update_buttons(image, labels):
+    prepare = """
+from PIL import Image, ImageChops, ImageOps
+from itertools import groupby
+import json
+import sys
+
+def bands(projection):
+    for marked, group in groupby(enumerate(projection), key=lambda entry: entry[1]):
+        if marked:
+            first = last = next(group)[0]
+            for last, _ in group:
+                pass
+            yield first, last + 1
+
+image = Image.open(sys.argv[1]).convert('RGB')
+red, green, blue = ImageChops.difference(image, Image.new('RGB', image.size, sys.argv[2])).split()
+mask = ImageChops.lighter(ImageChops.lighter(red, green), blue).point(lambda value: 255 if value <= 4 else 0)
+buttons = []
+for top, bottom in bands(mask.getprojection()[1]):
+    if not 26 <= bottom - top <= 60:
+        continue
+    for left, right in bands(mask.crop((0, top, image.width, bottom)).getprojection()[0]):
+        if not 42 <= right - left <= 300:
+            continue
+        text = image.crop((left + 7, top + 4, right - 7, bottom - 4)).convert('L')
+        text = text.point(lambda value: 0 if value >= 180 else 255)
+        text = ImageOps.expand(text, border=6, fill=255)
+        filename = f'{sys.argv[1]}.{len(buttons)}.png'
+        text.resize((text.width * 3, text.height * 3)).save(filename)
+        buttons.append((filename, (left, top, right - left, bottom - top)))
+print(json.dumps(buttons))
+"""
+    buttons = json.loads(subprocess.check_output(
+        ['/usr/bin/python3', '-c', prepare, image, UPDATE_FIXTURE_ACCENT[1]], timeout=10))
+    wanted = set(map(normalize_screen_text, labels))
+    matches = []
+    for filename, bounds in buttons:
+        text = subprocess.check_output(
+            ['tesseract', filename, 'stdout', '--psm', '7', '-l', 'chi_sim+eng'],
+            text=True, timeout=10, env=dict(os.environ, OMP_THREAD_LIMIT='1')).strip()
+        if normalize_screen_text(text) in wanted:
+            matches.append([(text, tuple(bounds))])
+    return matches
+
+
 def redact_update_words(lines, version):
     labels = [label for translations in UPDATE_LABELS.values() for label in translations]
     allowed = {normalize_screen_text(label): label for label in (*labels, version)}
@@ -753,7 +800,7 @@ class UpdateNavigation:
         self.geometry = wait_for('Graphical update window did not maximize and gain focus', ready, timeout=15)
         self.record('window', window=self.window, geometry=self.geometry)
 
-    def capture(self):
+    def capture(self, *, primary_labels=()):
         if self.focus() != self.window:
             return False
         self.lines = []
@@ -763,6 +810,8 @@ class UpdateNavigation:
             if self.focus() != self.window:
                 return False
             self.lines = recognize_update_screen(image)
+            if primary_labels and screen_label(self.lines, primary_labels) is None:
+                self.lines.extend(recognize_primary_update_buttons(image, primary_labels))
         return True
 
     def save_frame(self, name, words):
@@ -800,7 +849,8 @@ class UpdateNavigation:
                         button=button, repeat=repeat, result=result)
 
     def locate(self, labels, *, region=None, contains=False):
-        if not self.capture():
+        primary = not contains and labels in (UPDATE_LABELS['download'], UPDATE_LABELS['continue'])
+        if not (self.capture(primary_labels=labels) if primary else self.capture()):
             return None
         lines = self.lines
         if region:
@@ -1042,7 +1092,8 @@ def gui_update_session(report, case, checks, locate, restart_agent, password_fil
     work.mkdir(mode=0o700)
     os.environ['CLASH_OF_RUST_DATA_DIR'] = str(data)
     env = update_gui_environment(work)
-    write_json(data/'settings.json', {'language': 'zh-CN', 'update_prereleases': published['prerelease'],
+    write_json(data/'settings.json', {'language': 'zh-CN', 'accent_color': UPDATE_FIXTURE_ACCENT[0],
+                                    'update_prereleases': published['prerelease'],
                                     'update_check_interval_minutes': 0, 'proxy_mode': 'off',
                                     'theme_mode': 'light', 'dark': False,
                                     'mixed_port': available_mixed_port()})
@@ -1439,6 +1490,13 @@ def cleanup_steps(*steps):
         print(message, file=sys.stderr, flush=True)
 
 
+def fixture_sudo(*arguments, timeout=30, **options):
+    if 'input' not in options:
+        options['stdin'] = subprocess.DEVNULL
+    return run(['sudo', '-n', '/usr/bin/timeout', '--kill-after=5s', f'{timeout}s', *arguments],
+               timeout=timeout+15, start_new_session=True, **options)
+
+
 def stop_desktop_unit(unit):
     result = subprocess.run(['sudo', '-n', '/usr/bin/timeout', '--kill-after=5s', '25s',
                              'systemctl', 'stop', unit], timeout=35, start_new_session=True)
@@ -1604,8 +1662,7 @@ def run_update_desktop(command, home, package_lock, package_format, uid, *, stop
 
 
 def remove_gui_rule(rule):
-    subprocess.run(['sudo', 'rm', '-f', rule], check=False, timeout=15,
-                   start_new_session=True).check_returncode()
+    fixture_sudo('rm', '-f', rule, timeout=15)
 
 
 def stop_gui_user(user, user_home, uid):
@@ -1632,8 +1689,7 @@ def gui_account(user, user_home, uid=None):
 
 def delete_gui_user(user, user_home, uid):
     if gui_account(user, user_home, uid) is not None:
-        subprocess.run(['sudo', 'userdel', '--remove', user], check=False, timeout=30,
-                       start_new_session=True).check_returncode()
+        fixture_sudo('userdel', '--remove', user)
 
 
 def installed_tests(*, update_case=None, package_lock=None, update_report=None, check_interrupted=None):
@@ -1663,15 +1719,14 @@ def installed_tests(*, update_case=None, package_lock=None, update_report=None, 
             native = platform.freedesktop_os_release().get('ID') in DISTROS
             groups = [] if native or update_case else ['--groups', 'sudo']
             check_interrupted()
-            run(['sudo', 'useradd', '--create-home', *groups,
-                 '--home-dir', home/'home', '--shell', '/bin/bash', user],
-                timeout=30, start_new_session=True)
+            fixture_sudo('useradd', '--create-home', *groups,
+                         '--home-dir', home/'home', '--shell', '/bin/bash', user)
             account = gui_account(user, home/'home')
             if account is None:
                 raise RuntimeError('The disposable GUI user was not created')
             uid = account.pw_uid
             check_interrupted()
-            run(['sudo', 'chpasswd'], input=user+':'+password+'\n', text=True, timeout=30)
+            fixture_sudo('chpasswd', input=user+':'+password+'\n', text=True)
             if update_case or native:
                 from linux_native_guest import distribution
                 if native:
@@ -1690,7 +1745,7 @@ def installed_tests(*, update_case=None, package_lock=None, update_report=None, 
                             f' if (action.id === "{action}" && subject.user === "{user}"{extra})'
                             f' return ["unix-user:{user}"];'
                             ' });\n')
-                run(['sudo', 'tee', rule], input=contents, text=True, stdout=subprocess.DEVNULL, timeout=15)
+                fixture_sudo('tee', rule, input=contents, text=True, stdout=subprocess.DEVNULL, timeout=15)
             run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report], timeout=15)
             password_file = home/'password'
             descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -4,13 +4,17 @@
 
 每次兼容运行实际安装同源候选包，执行和 CI 相同的基础系统代理和 TUN 流量检查，包含 DNS 与退出恢复。回执列出 `system_proxy` 与 `tun`。新增平台的完整验收可在目标配置中启用 `full_desktop`，覆盖 [三端、桌面登录与包生命周期](install-validation.md#新平台完整验收)。
 
+## Linux 跨版本更新
+
 发布后需要验证真实跨版本更新时，在各发行版入口同时填写 `update_from_ci` 和 `update_release`：前者指向旧版成功的 push CI，后者为已公开的目标 Release 标签。作业校验旧版候选包、来源提交以及目标安装包和 SHA256 附件，再在一次性 runner 或虚拟机中安装旧版。DEB 与官方 Arch 包通过 `cor` 发现、下载并安装实际 Release；RPM 检查 DNF 或 Zypper 提示，再通过对应包管理器安装 Release 的 RPM。所有路径核对已安装包、客户端和后台版本，以及已有设置、测试订阅和停止状态下的内核；结果单独写入 `published-update.json`。常规兼容回执仍只说明其列出的基础检查；该终端验收不代表 GUI 图形授权通过。旧 CI 附件或 Arch 兼容回执过期后须选择可验证的旧版来源。
 
 Ubuntu 24.04 x64 的 GitHub 托管 runner 和 Arch x64 的一次性来宾在终端验收通过后额外执行 GUI 更新验收：从界面发现并下载目标版本，经真实图形 polkit 授权分别验证取消、包管理器锁导致的安装失败、释放锁后重试及升级，再检查已安装包、设置、测试订阅和后台内核状态。结果另写入 `published-gui-update.json`。离线脚本回归或终端报告不能代替真实图形验收；在相应环境实测并取得通过报告前，不能声称 GUI 更新验收已通过。
 
-GUI 夹具收到中断信号后会完成清理并保留原始失败。图形代理重启后仍有注册时序风险。[polkit 的公开 D-Bus 接口](https://polkit.pages.freedesktop.org/polkit/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html)没有会话代理注册查询。若实际安装未弹出授权窗口，应查看对应会话的 polkit 注册日志。
+GUI 夹具收到中断信号后会完成清理并保留原始失败。测试账户和临时授权规则使用非交互 `sudo`，由提权后的独立超时约束命令；客户端的真实授权流程不变。识别旧版白字按钮时，整页 OCR 未命中才裁取固定测试强调色内的按钮并识别全文；找不到标签则失败，不按猜测坐标点击。图形代理重启后仍有注册时序风险。[polkit 的公开 D-Bus 接口](https://polkit.pages.freedesktop.org/polkit/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html)没有会话代理注册查询。若实际安装未弹出授权窗口，应查看对应会话的 polkit 注册日志。
 
 2026-11-22 使用 `59b91a03`、CI `45011206632`、旧候选 CI `44943304678` 和公开预发布 `v0.7.3-dev.2.live-language`，以下八套共 21 个目标的跨版本终端报告通过：[Ubuntu](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456673)、[Debian](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456896)、[Mint](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456401)、[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456816)、[Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456535)、[Fedora](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456876)、[openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456820)及 [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013457070)。Arch 旧包来自 CI 候选；GUI 图形授权与失败恢复不在此批报告范围。
+
+## 原生包兼容矩阵
 
 | 手动入口 | 固定来宾及架构 | 原生安装路径 |
 | --- | --- | --- |
