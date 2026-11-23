@@ -157,6 +157,9 @@ msgstr "{} items"
 msgid "启用 IPv6"
 msgstr "Enable IPv6"
 
+msgid "请先断开 VPN，再修改 IPv6"
+msgstr "Disconnect the VPN before changing IPv6"
+
 msgid "启用 UDP"
 msgstr "Enable UDP"
 

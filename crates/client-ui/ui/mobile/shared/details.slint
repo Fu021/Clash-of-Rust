@@ -71,8 +71,8 @@ export component MobileConnectionDetails inherits VerticalLayout {
 component MobileEditorActions inherits HorizontalLayout {
     spacing: MobileTypography.small-gap;
     MButton { text: @tr("取消"); enabled: !MobileData.profile-busy; clicked => { MobileView.back(); } }
-    MButton { text: MobileView.detail == 2 ? @tr("保存规则") : MobileData.profile-busy ? @tr("正在保存…") : @tr("保存订阅"); primary: true;
-        enabled: !MobileData.working && !MobileData.profile-busy;
+    MButton { geometry-key: MobileView.detail == 3 ? "profile-save" : ""; text: MobileView.detail == 2 ? @tr("保存规则") : MobileData.profile-busy ? @tr("正在保存…") : @tr("保存订阅"); primary: true;
+        enabled: !MobileData.working && !MobileData.profile-busy && (MobileView.detail != 3 || MobileView.selected-id != "" || !MobileData.profile-file-pending);
         busy: MobileView.detail == 3 && MobileData.profile-busy;
         clicked => {
             if MobileView.detail == 2 {
@@ -189,9 +189,20 @@ export component MobileDetails inherits PageSurface {
                     init => { MobileView.profile-name-target = self.target; MobileView.profile-name-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
-                if MobileView.selected-id == "": MButton { text: @tr("选择本地文件"); enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
+                if MobileView.selected-id == "": HorizontalLayout { spacing: MobileTypography.small-gap;
+                    MButton { geometry-key: "profile-pick-file"; text: @tr("选择本地文件");
+                        enabled: !MobileData.profile-busy && !MobileData.profile-file-pending;
+                        clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); }
+                    }
+                    if MobileData.profile-file-selected: MButton { geometry-key: "profile-clear-file"; text: @tr("移除");
+                        enabled: !MobileData.profile-busy && !MobileData.profile-file-pending;
+                        clicked => { MobileActions.request(MobileIntent.profile-clear-file, "", ""); }
+                    }
+                }
                 MSmall { text: @tr("订阅地址（本地配置可留空）"); }
-                source-field := MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
+                source-field := MField { geometry-key: "profile-source"; placeholder: "https://example.com/subscription";
+                    enabled: !MobileData.profile-busy && (MobileView.selected-id != "" || (!MobileData.profile-file-selected && !MobileData.profile-file-pending));
+                    text <=> MobileView.profile-source;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                     changed target => { MobileView.profile-source-target = self.target; }
                     changed has-focus => {

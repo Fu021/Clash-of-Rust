@@ -28,7 +28,7 @@ component AndroidNetwork inherits VerticalLayout {
         }
         if AndroidData.ports-dirty: MButton { text: @tr("保存端口"); primary: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.save-ports, MobileData.mixed-port, ""); } }
         MDivider { }
-        NetworkToggles { show-fake-ip-exclusions: true; }
+        NetworkToggles { show-fake-ip-exclusions: true; ipv6-locked: AndroidData.ipv6-locked; }
     }
 }
 component AndroidConnection inherits VerticalLayout {

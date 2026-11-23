@@ -45,11 +45,38 @@ pub(crate) fn project(status: &str, mut health: Status, language: Language) -> (
     (status, health)
 }
 
+pub(crate) fn authorization_failure(result: &Value) -> &str {
+    result["error"]
+        .as_str()
+        .filter(|detail| !detail.is_empty())
+        .unwrap_or("VPN 授权已取消或失效")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clash_mobile_runtime::core::{claude_check::guard::Snapshot, protection::status::State};
     use serde_json::json;
+
+    #[test]
+    fn cancelled_authorization_reprojects_when_language_changes() {
+        let cancellation = json!({"granted":false, "error":""});
+        let status = authorization_failure(&cancellation);
+        for (language, expected) in [
+            (Language::SimplifiedChinese, "VPN 授权已取消或失效"),
+            (
+                Language::English,
+                "VPN authorization was cancelled or expired",
+            ),
+        ] {
+            assert_eq!(project(status, Status::default(), language).0, expected);
+        }
+        let failure = json!({"granted":false, "error":"System component failed (fixture)"});
+        assert_eq!(
+            authorization_failure(&failure),
+            "System component failed (fixture)"
+        );
+    }
 
     fn pending_restoration(connected: bool) -> Option<PendingVpnRestoration> {
         Some(PendingVpnRestoration {

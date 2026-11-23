@@ -68,7 +68,6 @@
     <string name="import_default_name">Imported configuration</string>
     <string name="vpn_authorization_pending">A VPN authorization request is already in progress.</string>
     <string name="vpn_authorization_open_failed">Could not open VPN authorization: %1$s</string>
-    <string name="vpn_authorization_cancelled">VPN authorization was cancelled or expired.</string>
     <string name="vpn_authorization_cancelled_short">VPN authorization cancelled</string>
     <string name="vpn_plan_save_failed">Could not save the VPN connection plan.</string>
     <string name="vpn_route_pending">The system has not finished switching VPN routes.</string>

@@ -118,7 +118,7 @@ pub fn localize_installation_message(message: &str, language: Language) -> Cow<'
             })
             .unwrap_or_else(|| (reason, String::new()))
         };
-        let reason = super::localize_check_detail(reason);
+        let reason = super::localize_check_error(reason, Language::English);
         return format!("Update failed: {reason}{recovery}").into();
     }
     localize_installation_reason(message)

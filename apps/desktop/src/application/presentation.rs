@@ -1524,7 +1524,9 @@ impl App {
                             format!("{summary}\n{duration}\n\n{detail}")
                         }
                     }
-                    Some(Err(error)) => error.clone(),
+                    Some(outcome @ Err(_)) => {
+                        ip_report::detail_in(service, outcome, language).into_owned()
+                    }
                     None => language.text("尚未完成检测", "Check not completed").into(),
                 }
                 .into(),

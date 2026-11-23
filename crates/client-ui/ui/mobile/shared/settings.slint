@@ -64,6 +64,7 @@ export component AppearanceSettings inherits VerticalLayout {
 }
 export component NetworkToggles inherits VerticalLayout {
     in property <bool> show-fake-ip-exclusions;
+    in property <bool> ipv6-locked;
     alignment: start; spacing: MobileTypography.small-gap;
     MSwitch { title: @tr("DNS 覆盖"); checked: MobileData.dns-override || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.dns-override, value ? "true" : "false", ""); }
@@ -75,7 +76,9 @@ export component NetworkToggles inherits VerticalLayout {
     if root.show-fake-ip-exclusions: MDivider { }
     if root.show-fake-ip-exclusions: MRow { title: @tr("Fake-IP 排除项"); value: @tr("{} 项", MobileData.fake-ip-exclusions.length); clicked => { MobileView.detail = 14; } }
     MDivider { }
-    MSwitch { title: @tr("启用 IPv6"); checked: MobileData.ipv6 || MobileData.protected; enabled: !MobileData.protected && !MobileData.protection-pending;
+    MSwitch { geometry-key: "ipv6-toggle"; title: @tr("启用 IPv6"); checked: MobileData.ipv6 || MobileData.protected;
+        subtitle: root.ipv6-locked ? @tr("请先断开 VPN，再修改 IPv6") : "";
+        enabled: !root.ipv6-locked && !MobileData.protected && !MobileData.protection-pending;
         toggled(value) => { MobileActions.request(MobileIntent.ipv6, value ? "true" : "false", ""); }
     }
     MDivider { }

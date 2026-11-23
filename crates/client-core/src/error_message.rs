@@ -34,6 +34,21 @@ fn english(message: &str) -> Option<&'static str> {
         "下载速度持续下降" => "Download speed remained low after a drop",
         "检查更新失败" => "Update check failed",
         "下载更新失败" => "Update download failed",
+        "更新失败" => "Update failed",
+        "无法创建更新连接" => "Could not create an update connection",
+        "更新信息超过大小限制" => "Update information exceeds the size limit",
+        "当前客户端版本号无效" => "The current client version is invalid",
+        "安装包平台无效" => "Invalid package platform",
+        "安装包大小无效" => "Invalid package size",
+        "更新地址无效" => "Invalid update URL",
+        "更新缓存路径无效" => "Invalid update cache path",
+        "发布元数据与校验文件不一致" => {
+            "Release metadata does not match the checksum file"
+        }
+        "更新校验文件格式无效" => "The update checksum file is invalid",
+        "安装包大小与发布信息不一致" => "Package size does not match the release",
+        "安装包超过预期大小" => "Package exceeds the expected size",
+        "安装包大小或 SHA256 校验失败" => "Package size or SHA256 verification failed",
         "无法创建订阅下载连接" => "Could not create the subscription download connection",
         "订阅超过 10 MiB 限制" => "Subscription exceeds the 10 MiB limit",
         "订阅在下载期间已改变，已保留现有配置" => {
@@ -73,6 +88,11 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "配置中没有 proxies 或 proxy-providers" => {
             "The configuration has no proxies or proxy-providers"
+        }
+        "订阅 sniffer 必须是配置对象" => "The subscription's sniffer must be a mapping",
+        "订阅 sniff 必须是配置对象" => "The subscription's sniff must be a mapping",
+        "订阅嗅探协议必须是配置对象" => {
+            "The subscription's sniff protocol must be a mapping"
         }
         "配置超过 10 MiB 限制" => "Configuration exceeds the 10 MiB limit",
         "设置已被另一客户端修改，请刷新后重试" => {
@@ -140,8 +160,12 @@ fn english(message: &str) -> Option<&'static str> {
         "TUN 未连接，Claude 保护接管未就绪" => {
             "TUN is not connected; Claude protection is not ready"
         }
+        "VPN 授权已取消或失效" => "VPN authorization was cancelled or expired",
         "正在确认保护连接与实时拦截状态" => {
             "Checking the protection connection and live blocking"
+        }
+        "暂时无法确认保护状态，正在等待重新验证" => {
+            "Could not confirm protection status; waiting to retry"
         }
         "控制接口暂不可用，实时拦截未确认；保护规则仍保留。" => {
             "Control interface unavailable; protection rules retained."
@@ -190,6 +214,15 @@ fn english(message: &str) -> Option<&'static str> {
         "已有客户端使用这个数据目录，请关闭另一个实例" => {
             "Another client is using this data directory; close it first"
         }
+        "本机控制端点必须归当前用户所有且仅当前用户可读写" => {
+            "The current user must own the local control endpoint and have exclusive read and write access"
+        }
+        "已有不同配置的 CLI 登录服务，请先从原数据目录移除它" => {
+            "A CLI login service is configured for another data directory. Remove it from that directory first"
+        }
+        "无法读取 CLI 登录自启配置" => {
+            "Could not read the CLI login service configuration"
+        }
         "无法读取设置文件" => "Could not read the settings file",
         "设置文件格式错误" => "Invalid settings file",
         "无法读取订阅索引" => "Could not read the subscription index",
@@ -208,7 +241,35 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "系统通知内容无效" => "Invalid system notification",
         "TUN 配置无效" => "Invalid TUN configuration",
+        "系统没有 /dev/net/tun，请检查 TUN 驱动；容器或 WSL 需要提供 TUN 设备" => {
+            "/dev/net/tun is missing. Check the TUN driver; containers and WSL need access to a TUN device"
+        }
+        "TUN 设备不是字符设备" => "The TUN device is not a character device",
+        "无法访问 /dev/net/tun，请检查设备访问权限" => {
+            "Cannot access /dev/net/tun; check device permissions"
+        }
+        "启动环境禁止获取网络权限，请从系统应用菜单启动客户端" => {
+            "This environment blocks network permissions. Launch the client from the system app menu"
+        }
+        "启动环境限制了 TUN 网络权限，请检查容器或沙箱设置" => {
+            "This environment restricts TUN permissions; check container or sandbox settings"
+        }
+        "无法启动 TUN 授权助手" => "Could not start the TUN authorization helper",
+        "TUN 授权未生效，请检查安装助手的网络权限与 DNS 助手" => {
+            "TUN authorization did not take effect. Check the installation helper's network permissions and the DNS helper"
+        }
+        "TUN 授权已取消，当前代理模式保持不变" => {
+            "TUN authorization cancelled; proxy mode is unchanged"
+        }
+        "无法获得 TUN 管理员授权，请检查 polkit 服务及终端认证" => {
+            "Could not get administrator authorization for TUN; check polkit and terminal authentication"
+        }
+        "无法获得 TUN 授权，请检查 polkit 与桌面认证代理" => {
+            "Could not authorize TUN; check polkit and the desktop authentication agent"
+        }
+        "TUN 授权失败" => "TUN authorization failed",
         "DNS 配置无效" => "Invalid DNS configuration",
+        "响应没有出口 IP" => "The response did not contain an exit IP address",
         "内核拒绝配置后恢复失败" => {
             "Could not restore the core after it rejected the configuration"
         }
@@ -282,6 +343,37 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
     if let Some(translated) = english(message) {
         return Cow::Borrowed(translated);
     }
+    for (prefix, summary) in [
+        ("更新服务器返回 HTTP ", "The update server returned HTTP"),
+        ("安装包下载返回 HTTP ", "Package download returned HTTP"),
+    ] {
+        if let Some(status) = message.strip_prefix(prefix).filter(|value| {
+            let number = value.split_once(' ').map_or(*value, |(number, _)| number);
+            reqwest::StatusCode::from_bytes(number.as_bytes()).is_ok()
+        }) {
+            return format!("{summary} {status}").into();
+        }
+    }
+    if let Some((version, platform)) = message
+        .strip_prefix("版本 ")
+        .and_then(|value| value.strip_suffix('）'))
+        .and_then(|value| value.split_once(" 缺少本平台安装包或校验文件（"))
+        && semver::Version::parse(version).is_ok()
+        && !platform.is_empty()
+        && platform
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
+    {
+        return format!("Release {version} is missing the package or checksum for {platform}")
+            .into();
+    }
+    if let Some(status) = message
+        .strip_prefix("出口 IP 查询未返回有效结果（HTTP ")
+        .and_then(|value| value.strip_suffix('）'))
+        .filter(|value| reqwest::StatusCode::from_bytes(value.as_bytes()).is_ok())
+    {
+        return format!("Exit IP lookup returned no valid result (HTTP {status})").into();
+    }
     if let Some(body) = message.strip_suffix("（已尝试可用代理和直连）")
         && let Some(details) = localize_routes(body)
     {
@@ -340,9 +432,6 @@ pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
         }
         "无法确定应用数据目录" => "Could not determine the application data directory",
         "本机控制端点文件无效" => "Invalid local control endpoint file",
-        "本机控制端点必须归当前用户所有且仅当前用户可读写" => {
-            "The current user must own the local control endpoint and have exclusive read and write access"
-        }
         "本机控制端点文件过大" => "Local control endpoint file is too large",
         "本机控制协议不兼容，请升级客户端或退出旧版 GUI／cor 后台后重试" => {
             "Incompatible local control protocol. Update the client or quit the older GUI or cor backend, then try again"
@@ -377,7 +466,7 @@ pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
                 return format!("IP lookup returned HTTP {status} without a valid exit address")
                     .into();
             }
-            return Cow::Borrowed(message);
+            return localize(message, language);
         }
     };
     match detail {
@@ -394,10 +483,19 @@ mod tests {
     fn actual_configuration_and_rule_errors_follow_the_display_language() {
         let subscription = crate::config::parse_profile("name: example").unwrap_err();
         let rule = crate::rule_manager::parts("DOMAIN,,DIRECT").err().unwrap();
+        let malformed_sniffer = crate::config::runtime_config(
+            "proxies: []\nsniffer: invalid\n",
+            &crate::config::Settings::default(),
+        )
+        .unwrap_err();
         for (error, expected) in [
             (
                 subscription.to_string(),
                 "The configuration has no proxies or proxy-providers",
+            ),
+            (
+                malformed_sniffer.to_string(),
+                "The subscription's sniffer must be a mapping",
             ),
             (rule.to_string(), "Rule content cannot be empty"),
             (
@@ -480,6 +578,10 @@ mod tests {
                 "下载更新失败：系统代理：下载中断或超时: 東京",
                 "Update download failed: System proxy: Download interrupted or timed out: 東京",
             ),
+            (
+                "系统代理：安装包下载返回 HTTP 404 Not Found；直连：安装包大小或 SHA256 校验失败（已尝试可用代理和直连）",
+                "System proxy: Package download returned HTTP 404 Not Found; Direct: Package size or SHA256 verification failed (tried available proxies and direct connections)",
+            ),
         ] {
             assert_eq!(localize(message, Language::English), expected);
             assert_eq!(localize(message, Language::SimplifiedChinese), message);
@@ -500,5 +602,21 @@ mod tests {
             localize("正在确认保护连接与实时拦截状态", Language::English),
             "Checking the protection connection and live blocking"
         );
+    }
+
+    #[test]
+    fn platform_permission_failures_keep_operating_system_details() {
+        let endpoint = "本机控制端点必须归当前用户所有且仅当前用户可读写";
+        assert_eq!(
+            localize_diagnostic(endpoint, Language::English),
+            localize(endpoint, Language::English)
+        );
+        assert_ne!(localize(endpoint, Language::English), endpoint);
+        let tun = "无法访问 /dev/net/tun，请检查设备访问权限: 系统返回 EPERM";
+        assert_eq!(
+            localize(tun, Language::English),
+            "Cannot access /dev/net/tun; check device permissions: 系统返回 EPERM"
+        );
+        assert_eq!(localize(tun, Language::SimplifiedChinese), tun);
     }
 }

@@ -836,7 +836,7 @@ impl UpdateStatus {
                 )
                 .into(),
             Self::CheckFailed(error) => {
-                core::update::localize_check_error(error, language).into_owned()
+                crate::update_presentation::check_failure(error, language).into_owned()
             }
             Self::ChannelChanged => language
                 .text(
@@ -876,11 +876,7 @@ impl UpdateStatus {
                     "Download complete; confirm installation in the system dialog",
                 )
                 .into(),
-            Self::Failed(error) => format!(
-                "{}{}",
-                language.text("更新失败：", "Update failed: "),
-                core::error_message::localize(error, language)
-            ),
+            Self::Failed(error) => crate::update_presentation::download_failure(error, language),
         }
     }
 }
@@ -1881,7 +1877,7 @@ async fn run_loop(
                                 state.update_package=package;
                             }
                             Err(error)=>{
-                                let message = core::update::localize_check_error(
+                                let message = crate::update_presentation::check_failure(
                                     &error,
                                     state.presentation_language,
                                 )
@@ -1907,7 +1903,7 @@ async fn run_loop(
                                 state.update_downloaded=true;state.update_status=UpdateStatus::Downloaded;
                                 if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                             }
-                            Err(error)=>{state.update_status=UpdateStatus::Failed(error.clone());state.notice=format!("{}{error}", state.presentation_language.text("更新失败：", "Update failed: "));state.notice_error=true;},
+                            Err(error)=>{state.notice=format!("更新失败：{error}");state.update_status=UpdateStatus::Failed(error);state.notice_error=true;},
                         }
                     }
                     _ => {}
@@ -2960,10 +2956,7 @@ async fn native_event(state: &mut State, value: &Value) -> Result<()> {
                 return Ok(());
             }
             if !result["granted"].as_bool().unwrap_or(false) {
-                let reason = result["error"]
-                    .as_str()
-                    .filter(|text| !text.is_empty())
-                    .unwrap_or(language.text("VPN 授权已取消", "VPN authorization cancelled"));
+                let reason = protection_presentation::authorization_failure(result);
                 rollback_protection(state, reason);
                 return Ok(());
             }
@@ -3354,14 +3347,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             state.profile_picker.discard();
             state.picked_profile_name = None;
         }
+        MobileIntent::ProfileClearFile => state.profile_picker.clear_file(),
         MobileIntent::SaveProfile => {
             if selected.is_empty() {
-                let draft = state
-                    .profile_picker
-                    .draft()
-                    .and_then(|draft| draft.content.as_ref().map(Arc::clone));
-                let content = draft.as_deref();
-                session.save_profile(None, &a, &b, content).await?;
+                let content = state.profile_picker.save_content(&b, language)?;
+                session.save_profile(None, &a, b.trim(), content).await?;
             } else {
                 session.edit_profile(&selected, &a, &b)?;
             }
@@ -3624,14 +3614,10 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             .clone();
         }
         MobileIntent::RuleSelect if b == "profile" => {
-            let id = session
-                .profiles
-                .iter()
-                .find(|p| p.name == a)
-                .context(language.text("订阅不存在", "Subscription not found"))?
-                .id
-                .clone();
-            session.select_rules(&id)?;
+            if session.rule_profile != a {
+                session.select_rules(&a)?;
+                state.rule_page = 0;
+            }
         }
         MobileIntent::FakeIp => session.set_fake_ip(a == "true")?,
         MobileIntent::FakeIpAdd
@@ -3662,19 +3648,11 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 json!({"op":"open-url","url":"https://github.com/Fu021/Clash-of-Rust/releases"}),
             )?;
         }
-        MobileIntent::DnsOverride | MobileIntent::Ipv6 | MobileIntent::Udp => {
-            ensure!(
-                !session.vpn || intent != MobileIntent::Ipv6,
-                "{}",
-                language.text(
-                    "请先断开 VPN，再修改 IPv6",
-                    "Disconnect the VPN before changing IPv6"
-                )
-            );
+        MobileIntent::Ipv6 => settings_input::save_ipv6(session, a.parse()?, language)?,
+        MobileIntent::DnsOverride | MobileIntent::Udp => {
             let mut next = session.settings.clone();
             match intent {
                 MobileIntent::DnsOverride => next.dns_override = a == "true",
-                MobileIntent::Ipv6 => next.ipv6 = a == "true",
                 _ => next.udp = a == "true",
             }
             session.commit_settings(next)?;
@@ -3990,7 +3968,7 @@ struct Projection {
     download: String,
     groups: Vec<GroupView>,
     profiles: Vec<config::Profile>,
-    rule_profiles: Vec<String>,
+    rule_profiles: Vec<(String, String)>,
     connections: Vec<api::Connection>,
     rules: Vec<(usize, rule_manager::Row)>,
     policies: Vec<String>,
@@ -4003,6 +3981,7 @@ struct Projection {
     rates: (String, String),
     platform: Value,
     rule_profile: String,
+    rule_profile_label: String,
     completed: Option<MobileIntent>,
     categories: Vec<(String, String, String, i32)>,
     sites: Vec<ReportRow>,
@@ -4026,6 +4005,8 @@ struct Projection {
     rule_form: Option<RuleForm>,
     rule_editor: Option<RuleEditor>,
     picked_profile_name: Option<String>,
+    profile_file_selected: bool,
+    profile_file_pending: bool,
     update_status: String,
     update_busy: bool,
     update_downloading: bool,
@@ -4569,7 +4550,7 @@ fn project(state: &mut State) -> Projection {
         rule_profiles: s
             .profiles
             .iter()
-            .map(|profile| profile.name.clone())
+            .map(|profile| (profile.id.clone(), profile.name.clone()))
             .collect(),
         connections,
         rates: (
@@ -4577,7 +4558,8 @@ fn project(state: &mut State) -> Projection {
             format!("{}/s", bytes(s.rates.1)),
         ),
         platform: s.platform.clone(),
-        rule_profile: s
+        rule_profile: s.rule_profile.clone(),
+        rule_profile_label: s
             .profiles
             .iter()
             .find(|p| p.id == s.rule_profile)
@@ -4617,6 +4599,11 @@ fn project(state: &mut State) -> Projection {
         rule_form: state.rule_form.clone(),
         rule_editor: state.rule_editor.clone(),
         picked_profile_name: state.picked_profile_name.take(),
+        profile_file_selected: state
+            .profile_picker
+            .draft()
+            .is_some_and(|draft| draft.content.is_some()),
+        profile_file_pending: state.profile_picker.pending().is_some(),
         update_status: state.update_status.render(language),
         update_busy: state.update_busy,
         update_downloading: state.update_downloading,
@@ -4957,7 +4944,10 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     if p.completed == Some(MobileIntent::RuleSelect) {
         ui.global::<MobileView>().set_rule_selected(false);
     }
+    data.set_profile_file_selected(p.profile_file_selected);
+    data.set_profile_file_pending(p.profile_file_pending);
     if let Some(name) = p.picked_profile_name
+        && ui.get_current_detail() == 3
         && ui.global::<MobileView>().get_selected_id().is_empty()
     {
         let view = ui.global::<MobileView>();
@@ -4978,7 +4968,9 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_upload_rate(p.rates.0.into());
     data.set_download_rate(p.rates.1.into());
     data.set_rule_profile(p.rule_profile.into());
+    data.set_rule_profile_label(p.rule_profile_label.into());
     let android = ui.global::<AndroidData>();
+    android.set_ipv6_locked(!settings_input::ipv6_change_available(&p.platform));
     android.set_protection_retry(p.protection_retry);
     android.set_update_status(p.update_status.into());
     android.set_update_busy(p.update_busy);
@@ -5189,7 +5181,15 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     ));
     data.set_rule_profiles(stable(
         data.get_rule_profiles(),
-        rows(p.rule_profiles.into_iter().map(Into::into).collect()),
+        rows(
+            p.rule_profiles
+                .into_iter()
+                .map(|(id, label)| SelectOption {
+                    id: id.into(),
+                    label: label.into(),
+                })
+                .collect(),
+        ),
     ));
     data.set_rule_policies(stable(
         data.get_rule_policies(),

@@ -75,6 +75,11 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value, language: Language)
             let skipped = row["authentication_check_skipped"].as_bool() == Some(true);
             let summary = if skipped {
                 ip_report::authentication_check_skipped_in(language).into()
+            } else if row["state"] == "Failed"
+                && row["summary"].as_str().is_none_or(str::is_empty)
+                && let Some(error) = row["detail"].as_str()
+            {
+                clean(&clash_client_core::error_message::localize(error, language))
             } else if row["summary"].as_str().is_none_or(str::is_empty) {
                 text_in(row, "detail", language)
             } else {
@@ -608,5 +613,28 @@ mod tests {
             }
         }
         assert_eq!(report["non_red"], 2);
+    }
+
+    #[test]
+    fn ip_results_translate_exit_failures_and_keep_raw_evidence() {
+        let original = "出口 IP 查询未返回有效结果（HTTP 503）";
+        let report = serde_json::json!({"results": [
+            {"id":"exit-ip","name":"Exit IP","state":"Failed","detail":original},
+            {"id":"example","name":"Example","state":"Failed","detail":"提供方原文"}
+        ]});
+        for (language, expected) in [
+            (Language::SimplifiedChinese, original),
+            (
+                Language::English,
+                "Exit IP lookup returned no valid result (HTTP 503)",
+            ),
+        ] {
+            let mut output = Vec::new();
+            ip_results(&mut output, &report, language).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(expected), "{output}");
+            assert!(output.contains("提供方原文"), "{output}");
+        }
+        assert_eq!(report["results"][0]["detail"], original);
     }
 }

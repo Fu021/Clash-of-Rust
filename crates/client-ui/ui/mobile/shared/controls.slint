@@ -4,7 +4,7 @@ import { GeometryTarget } from "../../components/geometry.slint";
 import { RuleDragHandle } from "../../components/rule-drag.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
-import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent, SelectOption } from "state.slint";
 import { ListView as SlintListView } from "std-widgets.slint";
 
 export component MAppIcon inherits Rectangle {
@@ -369,29 +369,37 @@ export component MSelect inherits Rectangle {
     changed enabled => { if !root.enabled { popup.close(); } }
     changed error-active => { if root.error-active { popup.close(); } }
     in property <[string]> options;
+    in property <[SelectOption]> keyed-options;
+    property <int> option-count: root.keyed-options.length > 0 ? root.keyed-options.length : root.options.length;
     in property <string> value;
+    in property <string> value-label: root.display-value(root.value);
     pure callback display-value(string) -> string;
     display-value(value) => { value }
     callback selected(int, string);
     height: button.height; vertical-stretch: 0; min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
-    button := MButton { width: parent.width; text: root.display-value(root.value); dropdown: true; enabled: root.enabled; clicked => { popup.show(); } }
+    button := MButton { width: parent.width; text: root.value-label; dropdown: true; enabled: root.enabled; clicked => { popup.show(); } }
     popup := PopupWindow {
         y: root.height + 4px; width: max(root.width, 200px);
-        height: min(300px, root.options.length * 52px + 16px);
+        height: min(300px, root.option-count * 52px + 16px);
         close-policy: close-on-click-outside;
         Rectangle { entrance := Entrance { } opacity: entrance.progress; background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.line;
             MScroll { VerticalLayout { alignment: start; spacing: 4px; padding: MobileTypography.small-gap;
-                for option[i] in root.options: MButton { width: popup.width - 16px; text: root.display-value(option); selected: option == root.value;
+                for i in root.option-count: entry := MButton {
+                    property <bool> keyed: root.keyed-options.length > 0;
+                    property <string> option: self.keyed ? root.keyed-options[i].id : root.options[i];
+                    width: popup.width - 16px;
+                    text: self.keyed ? root.keyed-options[i].label : root.display-value(self.option);
+                    selected: self.option == root.value;
                     geometry-key: root.geometry-key == "" ? "" : "option:" + root.geometry-key + "/" + i;
                     enabled: root.enabled;
-                    clicked => { root.selected(i, option); popup.close(); }
+                    clicked => { root.selected(i, entry.option); popup.close(); }
                 }
             } }
         }
     }
     GeometryTarget {
         key: root.geometry-key == "" ? "" : "popup:" + root.geometry-key;
-        bounds: [root.absolute-position.x, root.absolute-position.y + root.height + 4px, max(root.width, 200px), min(300px, root.options.length * 52px + 16px)];
+        bounds: [root.absolute-position.x, root.absolute-position.y + root.height + 4px, max(root.width, 200px), min(300px, root.option-count * 52px + 16px)];
     }
 }
 export component MTag inherits Rectangle {

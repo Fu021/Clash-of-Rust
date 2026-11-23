@@ -46,6 +46,7 @@ fn allowed(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::ProfileNew
             | MobileIntent::ProfileClose
             | MobileIntent::PickFile
+            | MobileIntent::ProfileClearFile
             | MobileIntent::ConnectionPage
             | MobileIntent::RulePage
             | MobileIntent::RuleFilter

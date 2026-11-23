@@ -557,7 +557,11 @@ component RulesToolbar inherits VerticalLayout {
     property <bool> short: root.available-height < 420px || MobileView.keyboard-inset > 0px;
     alignment: start; spacing: MobileTypography.gap; vertical-stretch: 0;
     HorizontalLayout { spacing: MobileTypography.small-gap;
-        MSelect { enabled: !MobileData.working; options: MobileData.rule-profiles; value: MobileData.rule-profile; selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); } }
+        MSelect {
+            geometry-key: "rule-profile"; enabled: !MobileData.working && MobileData.rule-profiles.length > 0;
+            keyed-options: MobileData.rule-profiles; value: MobileData.rule-profile; value-label: MobileData.rule-profile-label;
+            selected(index, value) => { MobileActions.request(MobileIntent.rule-select, value, "profile"); }
+        }
         MTag { text: MobileData.rule-dirty ? @tr("尚未应用") : @tr("已载入"); tone: MobileData.rule-dirty ? 2 : 1; }
     }
     GridLayout { spacing: MobileTypography.small-gap;

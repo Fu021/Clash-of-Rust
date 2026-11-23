@@ -68,7 +68,6 @@
     <string name="import_default_name">导入配置</string>
     <string name="vpn_authorization_pending">已有 VPN 授权正在进行</string>
     <string name="vpn_authorization_open_failed">无法打开 VPN 授权：%1$s</string>
-    <string name="vpn_authorization_cancelled">VPN 授权已取消或失效</string>
     <string name="vpn_authorization_cancelled_short">VPN 授权已取消</string>
     <string name="vpn_plan_save_failed">无法保存 VPN 连接计划。</string>
     <string name="vpn_route_pending">系统尚未完成 VPN 路由切换</string>

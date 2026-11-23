@@ -33,7 +33,11 @@ mod startup_events;
 mod startup_presentation;
 #[cfg(any(target_os = "android", test))]
 mod startup_protection;
+#[cfg(any(target_os = "android", test))]
+mod update_presentation;
 #[cfg(all(test, not(target_os = "android"), feature = "mobile-ui-tests"))]
 mod test_ui {
     slint::include_modules!();
 }
+#[cfg(all(test, not(target_os = "android"), feature = "mobile-ui-tests"))]
+mod ui_controls_tests;

@@ -5,7 +5,7 @@ import { ControlAccess } from "../../components/control-access.slint";
 
 export enum MobileIntent {
     navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, group-expansion, group-page, group-pagination, profile-page, profile-pagination, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
-    import-profile, profile-new, profile-close, pick-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
+    import-profile, profile-new, profile-close, pick-file, profile-clear-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe, network-tool, probe-cancel,
@@ -25,6 +25,11 @@ export struct ConnectionDetailSnapshot {
     rows: [DetailItem],
 }
 
+export struct SelectOption {
+    id: string,
+    label: string,
+}
+
 export global MobileData {
     in-out property <string> version;
     in-out property <string> language: "system";
@@ -35,6 +40,8 @@ export global MobileData {
     in-out property <bool> vpn-pending;
     in-out property <bool> working;
     in-out property <bool> profile-busy;
+    in-out property <bool> profile-file-selected;
+    in-out property <bool> profile-file-pending;
     in-out property <bool> geo-updating;
     in-out property <bool> delay-busy;
     in-out property <string> profile;
@@ -75,8 +82,9 @@ export global MobileData {
     in-out property <bool> connection-detail-snapshots;
     in-out property <ConnectionDetailSnapshot> connection-detail;
     in-out property <[RuleItem]> rules;
-    in-out property <[string]> rule-profiles;
+    in-out property <[SelectOption]> rule-profiles;
     in-out property <string> rule-profile;
+    in-out property <string> rule-profile-label;
     in-out property <bool> protection-supported: true;
     in-out property <[string]> rule-policies;
     in-out property <[string]> rule-types;

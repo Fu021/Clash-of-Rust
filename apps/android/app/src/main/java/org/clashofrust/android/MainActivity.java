@@ -37,7 +37,7 @@ public final class MainActivity extends NativeActivity {
     private static volatile String vpnAuthorizationState = "{}";
     static JSONObject authorizationState() throws Exception { return new JSONObject(vpnAuthorizationState); }
     private boolean tileConnect;
-    boolean waitingForInstallPermission;
+    UpdateInstaller.PermissionRequest installPermission;
     private boolean canLaunchFilePicker;
     private String exportContent;
     private volatile String documentFailure;
@@ -75,11 +75,13 @@ public final class MainActivity extends NativeActivity {
             if (vpnPrompt && !vpnAuthorizationOnly) TunnelService.resumeRequest(this, vpnStartRequest);
         }
         if (state != null) filePicker.restoreCode(state.getInt(PICKER_STATE, 0));
+        installPermission = new UpdateInstaller.PermissionRequest(
+            getSharedPreferences("update-install", MODE_PRIVATE), state);
         super.onCreate(state);
         IncidentNotifications.opened(this, getIntent());
         try { networkOverview = new NetworkOverview(this); }
         catch (RuntimeException error) { android.util.Log.w("ClashOfRust", "Network overview unavailable", error); }
-        UpdateInstaller.pruneInstalled(this);
+        if (!installPermission.pending()) UpdateInstaller.pruneInstalled(this);
         configureSystemBars(dark);
         // Slint's Android helper also registers a PRIORITY_DEFAULT back callback.
         // Stay above that callback but below system overlays so a single app path
@@ -98,6 +100,7 @@ public final class MainActivity extends NativeActivity {
         vpn.putLong("authorization-request", vpnAuthorizationRequest);
         state.putBundle(VPN_STATE, vpn);
         state.putInt(PICKER_STATE, filePicker.lastCode());
+        installPermission.save(state);
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
@@ -144,11 +147,6 @@ public final class MainActivity extends NativeActivity {
     }
     @Override protected void onResume() {
         super.onResume(); emit("visible", true);
-        if (waitingForInstallPermission) {
-            waitingForInstallPermission=false;
-            if (getPackageManager().canRequestPackageInstalls()) UpdateInstaller.launch(this);
-            else emit("notice",AppLanguage.current(this).getString(R.string.update_permission_missing));
-        }
     }
     @Override protected void onPostResume() {
         super.onPostResume();
@@ -156,7 +154,9 @@ public final class MainActivity extends NativeActivity {
         preparePendingRecoveryConsent();
         canLaunchFilePicker = true;
         launchFilePicker();
+        UpdateInstaller.resume(this);
     }
+    static MainActivity resumedActivity() { return resumedVpnActivity; }
     @Override protected void onPause() {
         canLaunchFilePicker = false;
         if (resumedVpnActivity == this) resumedVpnActivity = null;
@@ -591,6 +591,10 @@ public final class MainActivity extends NativeActivity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (UpdateInstaller.PermissionRequest.handles(request)) {
+            UpdateInstaller.permissionReturned(this, request);
+            return;
+        }
         if (request == VPN) {
             if (!vpnPrompt) return;
             vpnPrompt = false;
@@ -601,7 +605,7 @@ public final class MainActivity extends NativeActivity {
                 vpnAuthorizationRequest = 0;
                 if (pending != 0) {
                     boolean granted = result == RESULT_OK && VpnService.prepare(this) == null;
-                    authorizationResult(pending, granted, granted ? "" : AppLanguage.current(this).getString(R.string.vpn_authorization_cancelled));
+                    authorizationResult(pending, granted, "");
                 }
                 return;
             }

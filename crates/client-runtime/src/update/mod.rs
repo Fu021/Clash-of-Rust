@@ -162,106 +162,11 @@ pub fn localize_check_error(
     error: &str,
     language: clash_client_core::config::Language,
 ) -> Cow<'_, str> {
-    use clash_client_core::config::Language;
-    if language == Language::SimplifiedChinese {
-        return error.into();
-    }
-    for (prefix, summary) in [
-        ("检查更新失败（已尝试 ", "Update check failed"),
-        ("检查更新超时（已尝试 ", "Update check timed out"),
-    ] {
-        let Some(rest) = error.strip_prefix(prefix) else {
-            continue;
-        };
-        let Some((attempts, detail)) = rest.split_once(" 次）") else {
-            return error.into();
-        };
-        let Ok(count) = attempts.parse::<usize>() else {
-            return error.into();
-        };
-        let detail = if detail.is_empty() {
-            String::new()
-        } else if let Some(detail) = detail.strip_prefix('：') {
-            format!(": {}", localize_check_detail(detail))
-        } else {
-            return error.into();
-        };
-        let unit = if count == 1 { "attempt" } else { "attempts" };
-        return format!("{summary} after {count} {unit}{detail}").into();
-    }
-    localize_check_detail(error)
-}
-
-fn localize_check_detail(error: &str) -> Cow<'_, str> {
-    if let Some(body) = error.strip_suffix("（已尝试可用代理和直连）") {
-        let (prefix, body) = match body.strip_prefix("暂时无法获取预发布版本列表：") {
-            Some(body) => ("Could not get the pre-release list: ", body),
-            None => ("", body),
-        };
-        let mut details = String::new();
-        for (index, detail) in body.split('；').enumerate() {
-            let translated = localize_check_route(detail);
-            if index > 0 {
-                details.push_str(if translated == detail { "；" } else { "; " });
-            }
-            details.push_str(&translated);
-        }
-        return format!("{prefix}{details} (tried available proxies and direct connections)")
-            .into();
-    }
-    localize_check_route(error)
-}
-
-fn localize_check_route(error: &str) -> Cow<'_, str> {
-    for (prefix, label) in [
-        ("内核代理：", "Core proxy"),
-        ("系统代理：", "System proxy"),
-        ("内核直连：", "Core direct"),
-        ("系统网络：", "System network"),
-        ("直连：", "Direct"),
-    ] {
-        if let Some(detail) = error.strip_prefix(prefix) {
-            return format!("{label}: {}", localize_check_reason(detail)).into();
-        }
-    }
-    localize_check_reason(error)
-}
-
-fn localize_check_reason(error: &str) -> Cow<'_, str> {
-    for (prefix, label) in [
-        ("GitHub API", "GitHub API"),
-        ("Release 订阅", "Release feed"),
-        ("安装包信息", "Package information"),
-        ("下载", "Download"),
-    ] {
-        if let Some(reason) = error.strip_prefix(prefix) {
-            let reason = match reason {
-                "连接超时" => Some("connection timed out"),
-                "证书校验失败，请检查系统时间或代理证书" => Some(
-                    "certificate verification failed; check the system clock or proxy certificate",
-                ),
-                "域名解析失败" => Some("DNS resolution failed"),
-                "代理连接失败" => Some("proxy connection failed"),
-                "网络连接失败" => Some("network connection failed"),
-                _ => None,
-            };
-            if let Some(reason) = reason {
-                return format!("{label}: {reason}").into();
-            }
-        }
-    }
-    match error {
-        "GitHub 暂时限制请求，请稍后再试" => {
-            return "GitHub is temporarily rate limiting requests; retry later".into();
-        }
-        "Release 信息格式无效" => return "Release information is invalid".into(),
-        "Release 订阅格式无效" => return "Release feed is invalid".into(),
-        _ => {}
-    }
-    if let Some(status) = error.strip_prefix("GitHub 返回 HTTP ") {
-        return format!("GitHub returned HTTP {status}").into();
-    }
-    install::localize_installation_reason(error)
+    clash_client_core::update::localize_check_error_with(
+        error,
+        language,
+        install::localize_installation_reason,
+    )
 }
 
 impl State {

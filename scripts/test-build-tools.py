@@ -6259,17 +6259,18 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertEqual(errors, [])
 
     def test_android_network_runs_exclude_keyboard_without_hiding_failures(self):
-        network_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
-                       'applicationRoutingPersistsAndKeepsOtherAppsOnline',
-                       'quickTileRestoresColdCoreWithoutOpeningTheActivity',
-                       'measurementDiagnosticsDistinguishFailuresAndExport')
+        candidate_cases=('localProxyAndRealTunCarryTrafficAndDisconnectCleanly',
+                         'applicationRoutingPersistsAndKeepsOtherAppsOnline',
+                         'quickTileRestoresColdCoreWithoutOpeningTheActivity',
+                         'measurementDiagnosticsDistinguishFailuresAndExport',
+                         'updateInstallConsentRestoresOnceAndRejectsReplacedApk')
         for failed_case, log_error, captured_log in (
                 (None,None,'network test complete'),
-                (network_cases[0],None,'network test failed'),
-                (network_cases[1],None,'application routing test failed'),
-                (network_cases[2],None,'tile test failed'),
-                (network_cases[3],None,'diagnostic export test failed'),
-                (network_cases[0],None,'instrumentation transport timeout'),
+                (candidate_cases[0],None,'network test failed'),
+                (candidate_cases[1],None,'application routing test failed'),
+                (candidate_cases[2],None,'tile test failed'),
+                (candidate_cases[3],None,'diagnostic export test failed'),
+                (candidate_cases[0],None,'instrumentation transport timeout'),
                 (None,RuntimeError('Android test log end marker is missing'),'partial log'),
                 (None,None,'Mobile runtime stopped: core failure')):
             with self.subTest(failed_case=failed_case,log_error=log_error,log=captured_log), \
@@ -6303,7 +6304,7 @@ runpy.run_path(str(script), run_name='__main__')
                             android_build.test('x64',root/'app.apk',root/'test.apk')
                     else:
                         android_build.test('x64',root/'app.apk',root/'test.apk')
-                    self.assertEqual(cases,list(network_cases))
+                    self.assertEqual(cases,list(candidate_cases))
                     self.assertTrue(all('getprop' in call.args[0] for call in properties.call_args_list))
                     self.assertFalse(any('input_method' in call.args[0] for call in commands.call_args_list))
                     pull.assert_called_once_with(
@@ -6318,7 +6319,7 @@ runpy.run_path(str(script), run_name='__main__')
                 self.assertFalse((report/'input-method-status.json').exists())
                 self.assertTrue((report/'instrumentation.txt').is_file())
                 statuses = json.loads((report/'instrumentation-status.json').read_text())['cases']
-                self.assertEqual([record['case'] for record in statuses], list(network_cases))
+                self.assertEqual([record['case'] for record in statuses], list(candidate_cases))
                 self.assertTrue(all(record['completed'] for record in statuses))
                 self.assertEqual([record['case'] for record in statuses if not record['passed']],
                                  [failed_case] if failed_case else [])
@@ -6380,22 +6381,32 @@ runpy.run_path(str(script), run_name='__main__')
                         with self.assertRaises(ValueError):
                             android_build.validate_measurement_diagnostics(directory, api)
 
-    def test_android_routing_policy_requires_both_real_network_cases(self):
-        cases = ('basicSystemProxyAndTun', 'applicationRoutingPersistsAndKeepsOtherAppsOnline')
-        for failed in (None, *cases):
-            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as temporary:
+    def test_android_candidate_runs_selected_network_cases_and_update_installer(self):
+        proxy = 'org.clashofrust.android.ProxyTunTest#'
+        update = 'updateInstallConsentRestoresOnceAndRejectsReplacedApk'
+        update_test = 'org.clashofrust.android.UpdateInstallerTest#' + update
+        basic = proxy + 'basicSystemProxyAndTun'
+        routing = proxy + 'applicationRoutingPersistsAndKeepsOtherAppsOnline'
+        source = (build.ROOT/'apps/android/app/src/androidTest/java/org/clashofrust/android/UpdateInstallerTest.java').read_text()
+        self.assertRegex(source, r'@Test\s+public\s+void\s+'+update+r'\s*\(')
+        full_cases = (basic, routing, update_test)
+        for basic_only, failed in ((True, None), *((False, failed) for failed in (None, *full_cases))):
+            with self.subTest(basic_only=basic_only, failed=failed), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 observed = []
                 def invoke(command, **kwargs):
                     if 'instrument' in command:
-                        case = command[command.index('class') + 1].split('#')[1]
+                        case = command[command.index('class') + 1]
                         observed.append(case)
-                        result = 'FAILURES!!!' if case == failed else 'OK (1 test)'
+                        result = 'OK (1 test)'
+                        if case == failed:
+                            result = 'OK (0 tests)' if case == update_test else 'FAILURES!!!'
                         return subprocess.CompletedProcess(command, 0, result, '')
                     return subprocess.CompletedProcess(command, 0, '', '')
                 with patch.dict(os.environ, {
                         'COR_CI_EXTENDED_TESTS': 'false',
                         'COR_CI_ANDROID_ROUTING_TESTS': 'true',
+                        'COR_CI_ANDROID_DIAGNOSTICS_TESTS': 'false',
                     }), \
                         patch.object(android_build, 'ROOT', root), \
                         patch.object(android_build, 'run'), \
@@ -6409,12 +6420,15 @@ runpy.run_path(str(script), run_name='__main__')
                         with self.assertRaisesRegex(RuntimeError, 'Android integration test failed'):
                             android_build.test('x64', root/'app.apk', root/'test.apk')
                     else:
-                        android_build.test('x64', root/'app.apk', root/'test.apk')
-                    self.assertEqual(observed, list(cases))
+                        android_build.test('x64', root/'app.apk', root/'test.apk', basic_only=basic_only)
+                    self.assertEqual(observed, [basic] if basic_only else list(full_cases))
                     origin.return_value.shutdown.assert_called_once()
                 report = root/'target/android-report/x64'
                 self.assertTrue((report/'instrumentation.txt').is_file())
                 self.assertTrue((report/'runtime-status.json').is_file())
+                statuses = json.loads((report/'instrumentation-status.json').read_text())['cases']
+                self.assertEqual([(entry['case'], entry['passed']) for entry in statuses],
+                                 [(case.split('#')[1], case != failed) for case in observed])
 
     def test_device_properties_retry_only_transient_adb_errors_and_keep_terminal_failure(self):
         command = [android_build.ADB, 'shell', 'getprop', 'ro.product.manufacturer']

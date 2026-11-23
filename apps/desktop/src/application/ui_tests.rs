@@ -3047,6 +3047,34 @@ fn ip_report_uses_emoji_in_summary_rows_and_details() {
 }
 
 #[test]
+fn ip_report_localizes_an_open_exit_failure_without_changing_the_outcome() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Websites);
+    let original = "出口 IP 查询未返回有效结果（HTTP 503）";
+    app.site_results.push(Some(Err(original.into())));
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    let _ = app.ui_intent(Intent::SiteDetail, "exit-ip", "");
+    for (language, expected) in [
+        (Language::SimplifiedChinese, original),
+        (
+            Language::English,
+            "Exit IP lookup returned no valid result (HTTP 503)",
+        ),
+    ] {
+        app.presentation_language = language;
+        app.present_slint(&data, &mut models);
+        assert_eq!(data.get_modal_description(), expected);
+        assert_eq!(
+            app.site_results[0].as_ref().unwrap().as_ref().unwrap_err(),
+            original
+        );
+    }
+}
+
+#[test]
 fn ip_report_shows_each_target_exit_and_its_measurement_state() {
     let preview = std::env::var_os("COR_IP_DESKTOP_PREVIEW");
     ui_testing::initialize(1100, if preview.is_some() { 1800 } else { 900 });

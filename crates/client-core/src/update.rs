@@ -7,9 +7,11 @@ use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 use tokio::io::AsyncWriteExt;
 pub mod channel;
+mod error;
 mod retry;
 mod route;
 pub mod schedule;
+pub use error::{localize_check_error, localize_check_error_with};
 pub use retry::check as retry_check;
 pub use route::Observer as RouteObserver;
 

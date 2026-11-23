@@ -156,8 +156,9 @@ slint::slint! {
         out property <string> drag-id <=> MobileView.rule-drag-id;
         out property <string> drag-target <=> MobileView.rule-drag-target;
         init => {
-            MobileData.rule-profiles = ["我的订阅"];
-            MobileData.rule-profile = "我的订阅";
+            MobileData.rule-profiles = [{id: "first-profile", label: "我的订阅"}, {id: "second-profile", label: "我的订阅"}];
+            MobileData.rule-profile = "first-profile";
+            MobileData.rule-profile-label = "我的订阅";
             MobileData.rules = [
                 { id: "first", position: "1", kind: "DOMAIN-SUFFIX", value: "first.test", policy: "DIRECT", source: "自定义", enabled: true },
                 { id: "second", position: "2", kind: "DOMAIN-SUFFIX", value: "second.test", policy: "Proxy", source: "订阅", enabled: true },

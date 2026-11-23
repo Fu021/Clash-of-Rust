@@ -73,7 +73,7 @@ pub fn detail_in<'a>(
             english_check_detail(service, result, &result.detail)
         }
         Ok(result) => Cow::Borrowed(&result.detail),
-        Err(error) => Cow::Borrowed(error),
+        Err(error) => crate::error_message::localize(error, language),
     }
 }
 

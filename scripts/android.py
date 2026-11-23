@@ -1488,6 +1488,9 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                ('subscriptionKeyboardProbeCapturesBothFields' if ime_probe
                 else 'subscriptionFieldsShowImeAcceptTextAndReopenAfterBack',)
                if ime_only else ('basicSystemProxyAndTun',) if basic_only else android_cases())
+        selections = [('ProxyTunTest', case) for case in cases]
+        if not any((routing_only, applications_only, diagnostics_only, ime_only, basic_only)):
+            selections.append(('UpdateInstallerTest', 'updateInstallConsentRestoresOnceAndRejectsReplacedApk'))
         failures=[]
         for iteration in range(1,ime_rounds+1):
             if ime_only:
@@ -1495,14 +1498,14 @@ def test(arch, apk=None, test_apk=None, ime_only=False, ime_probe=False,
                 for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
                     run([ADB,'shell','settings','put','global',setting,animation_scale])
                 print(f'IME round {iteration}: system animation scale {animation_scale}',flush=True)
-            for case in cases:
+            for test_class, case in selections:
                 stop_app_before_test()
                 started=time.monotonic()
                 status={'case':case,'round':iteration,'completed':False,'passed':False}
                 statuses.append(status)
                 write_json(report/'instrumentation-status.json',{'schema':1,'cases':statuses})
                 command = [ADB,'shell','am','instrument','-w','-e','class',
-                    'org.clashofrust.android.ProxyTunTest#'+case,
+                    f'org.clashofrust.android.{test_class}#{case}',
                     '-e','ime_round',str(iteration),
                     '-e','ime_probe',str(ime_probe).lower(),
                     'org.clashofrust.android.test/androidx.test.runner.AndroidJUnitRunner']
