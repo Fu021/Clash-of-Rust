@@ -2787,6 +2787,12 @@ public class ProxyTunTest {
             waitForAppWindow();
         }
 
+        if (Build.VERSION.SDK_INT >= 33) {
+            String permission = android.Manifest.permission.POST_NOTIFICATIONS;
+            shell("pm grant " + context.getPackageName() + " " + permission);
+            assertEquals("Could not grant notification permission for the VPN start test",
+                android.content.pm.PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(permission));
+        }
         assertNotNull(VpnService.prepare(context));
         MainActivity activity = resumedActivity();
         assertNotNull(activity);
@@ -2796,8 +2802,8 @@ public class ProxyTunTest {
         MainActivity replacement = recreateDuringVpnPrompt(activity);
         replacement.request("{\"op\":\"authorize-vpn\",\"request\":803}");
         authorization(803, "denied");
-        consent(true);
         try {
+            consent(true);
             await("Ordinary consent did not start the VPN after recreation", () -> {
                 if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
                 return TunnelService.connected();
