@@ -508,6 +508,87 @@ fn certificate_display_parser_is_bounded_and_rejects_truncation() {
 }
 
 #[test]
+fn certificate_name_placeholders_translate_only_in_human_output() {
+    fn field(tag: u8, value: &[u8]) -> Vec<u8> {
+        assert!(value.len() < 128);
+        [&[tag, value.len() as u8], value].concat()
+    }
+
+    fn name(value: &[u8]) -> Vec<u8> {
+        let attribute = [b"\x06\x03\x55\x04\x03".as_slice(), &field(0x0c, value)].concat();
+        field(0x31, &field(0x30, &attribute))
+    }
+
+    fn report(subject: &[u8], issuer: &[u8]) -> Report {
+        let body = [
+            b"\x02\x01\x01\x30\x00".as_slice(),
+            &field(0x30, issuer),
+            &field(0x30, b"\x17\x0d250101000000Z\x17\x0d270101000000Z"),
+            &field(0x30, subject),
+        ]
+        .concat();
+        let mut entries = Vec::new();
+        super::transport::certificate_entries(&field(0x30, &field(0x30, &body)), &mut entries)
+            .unwrap();
+        Report {
+            schema: 1,
+            tool: Tool::Tls,
+            target: "https://example.test".into(),
+            elapsed_ms: 1,
+            status: "complete",
+            entries,
+        }
+    }
+
+    let missing = "证书未提供通用名称";
+    let undecodable = "无法解码的名称";
+    let placeholders = report(&[], &name(&[0xff]));
+    let external = report(&name(missing.as_bytes()), &name(undecodable.as_bytes()));
+    let original = serde_json::to_value(&placeholders).unwrap();
+    let entries = original["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries[0],
+        serde_json::json!({"label":"证书主体","detail":missing,"success":true,"code":"ok"})
+    );
+    assert_eq!(
+        entries[1],
+        serde_json::json!({"label":"签发者","detail":undecodable,"success":true,"code":"ok"})
+    );
+    let external_json = serde_json::to_value(&external).unwrap();
+    assert_eq!(
+        &entries[..2],
+        &external_json["entries"].as_array().unwrap()[..2]
+    );
+    assert_eq!(
+        placeholders.lines()[2..4],
+        [
+            format!("证书主体 · {missing}"),
+            format!("签发者 · {undecodable}")
+        ]
+    );
+    assert_eq!(
+        placeholders.lines_in(Language::English)[2..4],
+        [
+            "Certificate subject · Certificate has no common name",
+            "Issuer · Could not decode the name",
+        ]
+    );
+    assert_eq!(
+        external.lines_in(Language::English)[2..4],
+        [
+            format!("Certificate subject · {missing}"),
+            format!("Issuer · {undecodable}"),
+        ]
+    );
+    let mut display = placeholders.clone();
+    display.localize_route_for_display(Language::English);
+    assert_eq!(display.entries[0].detail, "Certificate has no common name");
+    assert_eq!(display.entries[1].detail, "Could not decode the name");
+    assert_eq!(serde_json::to_value(&placeholders).unwrap(), original);
+}
+
+#[test]
 fn unavailable_results_are_not_reported_as_success_or_failure() {
     let mut report = Report {
         schema: 1,

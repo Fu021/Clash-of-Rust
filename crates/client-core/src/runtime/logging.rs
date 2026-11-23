@@ -86,6 +86,11 @@ pub fn display(message: &str, language: crate::config::Language) -> Cow<'_, str>
             for (prefix, translated) in [
                 ("代理恢复失败：", "Proxy recovery failed: "),
                 ("操作失败：", "Operation failed: "),
+                ("定时测速失败：", "Scheduled speed test failed: "),
+                (
+                    "节点状态复测未完成，已保留网络设置：",
+                    "Node state recheck did not finish; network settings retained: ",
+                ),
                 (
                     "全部节点经两个独立目标复测仍不可达；",
                     "All nodes remain unreachable after two independent checks; ",
@@ -230,6 +235,20 @@ mod tests {
                 crate::config::Language::English
             ),
             "[Client] Proxy recovery failed: provider 原文"
+        );
+        assert_eq!(
+            display(
+                "[客户端] 定时测速失败：下载响应不完整（HTTP 206）",
+                Language::English
+            ),
+            "[Client] Scheduled speed test failed: Incomplete download response (HTTP 206)"
+        );
+        assert_eq!(
+            display(
+                "[客户端] 节点状态复测未完成，已保留网络设置：provider 原文",
+                Language::English
+            ),
+            "[Client] Node state recheck did not finish; network settings retained: provider 原文"
         );
         for external in ["[内核] 配置已导入/更新", "[客户端] 未知事件：provider 原文"]
         {

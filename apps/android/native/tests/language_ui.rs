@@ -140,6 +140,63 @@ fn capture_report_previews(window: &AndroidWindow, adapter: &MinimalSoftwareWind
 }
 
 #[test]
+fn android_ip_category_title_refreshes_in_the_open_detail() {
+    use i_slint_core::{
+        items::{ComplexText, ItemRc, SimpleText},
+        window::WindowInner,
+    };
+    use std::ops::ControlFlow;
+
+    let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();
+    adapter.set_size(slint::PhysicalSize::new(393, 852));
+    let window = AndroidWindow::new().unwrap();
+    language_ui::install(&window);
+    window.global::<Motion>().set_enabled(false);
+    window.set_current_page(7);
+    window.set_current_detail(6);
+    let view = window.global::<MobileView>();
+    view.set_category("北美".into());
+    window.show().unwrap();
+
+    let tree = ItemRc::new_root(WindowInner::from_pub(window.window()).component());
+    let visible_text = |expected: &str| {
+        slint::platform::update_timers_and_animations();
+        tree.visit_descendants(|item| {
+            let text = item
+                .downcast::<ComplexText>()
+                .map(|text| text.as_pin_ref().text())
+                .or_else(|| {
+                    item.downcast::<SimpleText>()
+                        .map(|text| text.as_pin_ref().text())
+                });
+            if text.is_some_and(|text| text == expected) && item.is_visible() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .is_some()
+    };
+
+    language_ui::apply(&window, Language::SimplifiedChinese).unwrap();
+    assert!(visible_text("北美"));
+    language_ui::apply(&window, Language::English).unwrap();
+    assert!(visible_text("North America"));
+    assert!(!visible_text("北美"));
+    assert_eq!(view.get_category(), "北美");
+    assert_eq!(window.get_current_detail(), 6);
+    view.set_category("all".into());
+    assert!(visible_text("All results"));
+    view.set_category("自定义分类".into());
+    assert!(visible_text("自定义分类"));
+    language_ui::apply(&window, Language::SimplifiedChinese).unwrap();
+    view.set_category("北美".into());
+    assert!(visible_text("北美"));
+    window.hide().unwrap();
+}
+
+#[test]
 fn android_window_loads_both_catalogs_and_preserves_report_section_keys() {
     let adapter = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Headless(adapter.clone()))).unwrap();

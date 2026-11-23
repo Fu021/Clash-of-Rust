@@ -187,10 +187,7 @@ pub(super) async fn execute(
                         .await
                         .map(|()| language.text("订阅已更新", "Subscription updated").into())
                 }
-                None => Err(anyhow::anyhow!(
-                    "{}",
-                    language.text("配置不存在", "Configuration not found")
-                )),
+                None => Err(anyhow::anyhow!("配置不存在")),
             })
         }
         _ => None,
@@ -336,13 +333,7 @@ pub(super) async fn execute(
             }
             Action::FakeIp(fake_ip) => {
                 if fake_ip && !engine.settings.dns_override {
-                    anyhow::bail!(
-                        "{}",
-                        language.text(
-                            "请先开启 DNS 覆盖，再启用 Fake-IP",
-                            "Enable DNS override before enabling Fake-IP",
-                        )
-                    );
+                    anyhow::bail!("请先开启 DNS 覆盖，再启用 Fake-IP");
                 }
                 let settings = Settings {
                     fake_ip,

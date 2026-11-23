@@ -1,5 +1,10 @@
 use crate::config::Language;
 
+pub(super) const CERTIFICATE_NAME_MISSING: (&str, &str) =
+    ("证书未提供通用名称", "Certificate has no common name");
+pub(super) const CERTIFICATE_NAME_UNDECODABLE: (&str, &str) =
+    ("无法解码的名称", "Could not decode the name");
+
 pub(super) fn label(value: &str, language: Language) -> String {
     if language == Language::SimplifiedChinese {
         return value.to_owned();

@@ -189,7 +189,7 @@ export component MobileDetails inherits PageSurface {
                     init => { MobileView.profile-name-target = self.target; MobileView.profile-name-focused = self.has-focus; }
                     edited(value) => { MobileView.draft-dirty = true; }
                 }
-                MButton { text: @tr("选择本地文件"); enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
+                if MobileView.selected-id == "": MButton { text: @tr("选择本地文件"); enabled: !MobileData.profile-busy; clicked => { MobileActions.request(MobileIntent.pick-file, "", ""); } }
                 MSmall { text: @tr("订阅地址（本地配置可留空）"); }
                 source-field := MField { placeholder: "https://example.com/subscription"; enabled: !MobileData.profile-busy; text <=> MobileView.profile-source;
                     property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
@@ -309,6 +309,7 @@ export component MobileModal inherits Rectangle {
                             } else {
                                 MobileView.draft-dirty = false;
                                 if MobileView.pending-detail == 0 { MobileActions.request(MobileIntent.rule-discard, "", ""); }
+                                if MobileView.pending-detail == 3 { MobileActions.request(MobileIntent.profile-close, "", ""); }
                                 if MobileView.pending-page >= 0 { MobileView.navigate(MobileView.pending-page); }
                                 MobileView.pending-page = -1; MobileView.detail = 0;
                             }

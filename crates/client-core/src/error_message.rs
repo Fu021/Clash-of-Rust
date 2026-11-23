@@ -194,6 +194,18 @@ fn english(message: &str) -> Option<&'static str> {
         "设置文件格式错误" => "Invalid settings file",
         "无法读取订阅索引" => "Could not read the subscription index",
         "订阅索引格式错误" => "Invalid subscription index",
+        "订阅索引或设置缺失，但订阅文件仍在；请恢复原文件后重试" => {
+            "The subscription index or settings are missing while subscription files remain; restore the original files and try again"
+        }
+        "订阅索引为空，但订阅文件仍在；请恢复原索引后重试" => {
+            "The subscription index is empty while subscription files remain; restore the original index and try again"
+        }
+        "上次配置提交尚未恢复，请重新启动客户端" => {
+            "The previous configuration transaction has not been recovered; restart the client"
+        }
+        "此设置修改需要重载网络，请使用完整保存入口" => {
+            "This change requires reloading the network; use the full save path"
+        }
         "系统通知内容无效" => "Invalid system notification",
         "TUN 配置无效" => "Invalid TUN configuration",
         "DNS 配置无效" => "Invalid DNS configuration",
@@ -335,6 +347,12 @@ pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
         "本机控制协议不兼容，请升级客户端或退出旧版 GUI／cor 后台后重试" => {
             "Incompatible local control protocol. Update the client or quit the older GUI or cor backend, then try again"
         }
+        "等待后台退出时读取控制端点失败" => {
+            "Could not read the control endpoint while waiting for the backend to exit"
+        }
+        "等待后台退出超时" => "Timed out waiting for the backend to exit",
+        "无法连接本机客户端后台" => "Could not connect to the local client backend",
+        "命令超过 8 MiB 限制" => "Command exceeds the 8 MiB limit",
         "无法检查后台的占用锁" => "Could not check the backend lock",
         "后台响应超过 32 MiB 限制" => "Backend response exceeds the 32 MiB limit",
         "单项检测超过 15 秒" => "Probe timed out after 15 seconds",
@@ -407,6 +425,27 @@ mod tests {
             localize("位置应为 1–12", Language::English),
             "Position must be between 1 and 12"
         );
+        for (message, expected) in [
+            (
+                "订阅索引或设置缺失，但订阅文件仍在；请恢复原文件后重试",
+                "The subscription index or settings are missing while subscription files remain; restore the original files and try again",
+            ),
+            (
+                "订阅索引为空，但订阅文件仍在；请恢复原索引后重试",
+                "The subscription index is empty while subscription files remain; restore the original index and try again",
+            ),
+            (
+                "上次配置提交尚未恢复，请重新启动客户端",
+                "The previous configuration transaction has not been recovered; restart the client",
+            ),
+            (
+                "此设置修改需要重载网络，请使用完整保存入口",
+                "This change requires reloading the network; use the full save path",
+            ),
+        ] {
+            assert_eq!(localize(message, Language::English), expected);
+            assert_eq!(localize(message, Language::SimplifiedChinese), message);
+        }
     }
 
     #[test]

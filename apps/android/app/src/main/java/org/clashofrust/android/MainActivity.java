@@ -13,12 +13,20 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 
 public final class MainActivity extends NativeActivity {
     static { System.loadLibrary("clash_mobile"); }
-    private static final int VPN = 10, OPEN = 11, SAVE = 12, NOTIFICATIONS = 13;
+    private static final int VPN = 10, SAVE = 12, NOTIFICATIONS = 13;
     private static final String VPN_STATE = "org.clashofrust.android.vpn-state";
+    private static final String PICKER_STATE = "org.clashofrust.android.picker-state";
+    private static final FilePicker filePicker = new FilePicker();
+    private static final ThreadPoolExecutor documentReaders =
+        new ThreadPoolExecutor(0, 2, 30, TimeUnit.SECONDS, new SynchronousQueue<>());
     private static final Handler recoveryConsentHandler = new Handler(Looper.getMainLooper());
     private static MainActivity resumedVpnActivity;
     private volatile boolean vpnPrompt;
@@ -30,6 +38,7 @@ public final class MainActivity extends NativeActivity {
     static JSONObject authorizationState() throws Exception { return new JSONObject(vpnAuthorizationState); }
     private boolean tileConnect;
     boolean waitingForInstallPermission;
+    private boolean canLaunchFilePicker;
     private String exportContent;
     private volatile String documentFailure;
     private volatile NetworkOverview networkOverview;
@@ -44,6 +53,14 @@ public final class MainActivity extends NativeActivity {
             android.util.Log.e("ClashOfRust", "Native event delivery failed", error);
         }
     }
+    private static void emitFileError(int request, String message) {
+        try { emit("file-error", new JSONObject().put("request", request).put("message", message)); }
+        catch (Exception error) { android.util.Log.e("ClashOfRust", "Local file error delivery failed", error); }
+    }
+    private static void emitFileCancelled(int request) {
+        try { emit("file-cancelled", new JSONObject().put("request", request)); }
+        catch (Exception error) { android.util.Log.e("ClashOfRust", "Local file cancellation delivery failed", error); }
+    }
     @Override public void onCreate(Bundle state) {
         boolean dark = Appearance.dark(this, Appearance.mode(this));
         setTheme(dark ? R.style.ClientDark : R.style.ClientLight);
@@ -57,6 +74,7 @@ public final class MainActivity extends NativeActivity {
             vpnAuthorizationRequest = vpn.getLong("authorization-request");
             if (vpnPrompt && !vpnAuthorizationOnly) TunnelService.resumeRequest(this, vpnStartRequest);
         }
+        if (state != null) filePicker.restoreCode(state.getInt(PICKER_STATE, 0));
         super.onCreate(state);
         IncidentNotifications.opened(this, getIntent());
         try { networkOverview = new NetworkOverview(this); }
@@ -70,6 +88,7 @@ public final class MainActivity extends NativeActivity {
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT + 1, this::handleBack);
     }
     @Override protected void onSaveInstanceState(Bundle state) {
+        canLaunchFilePicker = false;
         super.onSaveInstanceState(state);
         Bundle vpn = new Bundle();
         vpn.putBoolean("prompt", vpnPrompt);
@@ -78,6 +97,7 @@ public final class MainActivity extends NativeActivity {
         vpn.putBoolean("authorization-only", vpnAuthorizationOnly);
         vpn.putLong("authorization-request", vpnAuthorizationRequest);
         state.putBundle(VPN_STATE, vpn);
+        state.putInt(PICKER_STATE, filePicker.lastCode());
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
@@ -134,14 +154,21 @@ public final class MainActivity extends NativeActivity {
         super.onPostResume();
         resumedVpnActivity = this;
         preparePendingRecoveryConsent();
+        canLaunchFilePicker = true;
+        launchFilePicker();
     }
     @Override protected void onPause() {
+        canLaunchFilePicker = false;
         if (resumedVpnActivity == this) resumedVpnActivity = null;
         emit("visible", false);
         super.onPause();
     }
     @Override protected void onDestroy() {
-        if (isFinishing()) TunnelService.cancelStart(this, vpnStartRequest);
+        if (isFinishing()) {
+            TunnelService.cancelStart(this, vpnStartRequest);
+            int request = filePicker.abandon();
+            if (request != 0) emitFileCancelled(request);
+        }
         NetworkOverview current = networkOverview;
         networkOverview = null;
         if (current != null) current.close();
@@ -272,9 +299,21 @@ public final class MainActivity extends NativeActivity {
                     catch (Exception error) { copied.cancel(false); throw error; }
                     break;
                 }
-                case "pick-file": runOnUiThread(() -> startActivityForResult(
-                    new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
-                        .addCategory(Intent.CATEGORY_OPENABLE), OPEN)); break;
+                case "pick-file": {
+                    if (!(data.get("request") instanceof Integer request) || request <= 0)
+                        throw new IOException(AppLanguage.current(this).getString(R.string.import_request_invalid));
+                    runOnUiThread(() -> {
+                        if (resumedVpnActivity == null && isFinishing()) {
+                            emitFileCancelled(request);
+                        } else if (!filePicker.reserve(request)) {
+                            emitFileError(request, AppLanguage.current(this).getString(
+                                R.string.import_in_progress));
+                        } else if (resumedVpnActivity != null) {
+                            resumedVpnActivity.launchFilePicker();
+                        }
+                    });
+                    break;
+                }
                 case "export": {
                     String name = data.getString("name"), content = data.getString("content");
                     runOnUiThread(() -> {
@@ -474,6 +513,82 @@ public final class MainActivity extends NativeActivity {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 14);
     }
+    static final class FilePicker {
+        private int lastCode = 0x3fff;
+        private int request;
+        private boolean launched;
+
+        boolean reserve(int nextRequest) {
+            if (request != 0) return request == nextRequest;
+            request = nextRequest;
+            return true;
+        }
+
+        int launch() {
+            if (request == 0 || launched) return 0;
+            if (lastCode == 0xffff) throw new IllegalStateException("File picker request codes exhausted");
+            launched = true;
+            return ++lastCode;
+        }
+
+        int complete(int code) {
+            return launched && code == lastCode ? abandon() : 0;
+        }
+
+        int abandon() {
+            int previous = request;
+            request = 0;
+            launched = false;
+            return previous;
+        }
+
+        int lastCode() { return lastCode; }
+
+        void restoreCode(int code) {
+            if (code <= 0xffff && !launched) lastCode = Math.max(lastCode, code);
+        }
+    }
+
+    private void launchFilePicker() {
+        if (!canLaunchFilePicker || isFinishing() || isDestroyed()) return;
+        try {
+            int code = filePicker.launch();
+            if (code != 0) {
+                startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
+                    .addCategory(Intent.CATEGORY_OPENABLE), code);
+            }
+        } catch (RuntimeException error) {
+            emitFileError(filePicker.abandon(), AppLanguage.current(this).getString(R.string.import_failed, error));
+        }
+    }
+
+    private static void readPickedFile(Context context, Uri uri, int request) {
+        try {
+            ContentResolver resolver = context.getContentResolver();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            try (InputStream in = resolver.openInputStream(uri)) {
+                if (in == null) throw new IOException(AppLanguage.current(context).getString(R.string.import_read_failed));
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = in.read(buffer)) != -1) {
+                    if (out.size() + count > 10 * 1024 * 1024)
+                        throw new IOException(AppLanguage.current(context).getString(R.string.import_too_large));
+                    out.write(buffer, 0, count);
+                }
+            }
+            String name = AppLanguage.current(context).getString(R.string.import_default_name);
+            try (android.database.Cursor cursor = resolver.query(uri,
+                    new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) name = cursor.getString(0);
+            }
+            emit("file", new JSONObject().put("request", request).put("name", name)
+                .put("content", out.toString(StandardCharsets.UTF_8.name())));
+        } catch (Exception error) {
+            android.util.Log.e("ClashOfRust", "DOCUMENT_IMPORT_FAILED (" + error.getClass().getSimpleName() + ")");
+            emitFileError(request, AppLanguage.current(context).getString(R.string.import_failed, error));
+        }
+    }
+
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == VPN) {
@@ -500,47 +615,43 @@ public final class MainActivity extends NativeActivity {
             }
             return;
         }
-        if (request != OPEN && request != SAVE) return;
+        if (request != SAVE) {
+            int picker = filePicker.complete(request);
+            if (picker == 0) return;
+            if (result == RESULT_CANCELED) {
+                emitFileCancelled(picker);
+                return;
+            }
+            Uri uri = data == null ? null : data.getData();
+            if (result != RESULT_OK || uri == null) {
+                emitFileError(picker, AppLanguage.current(this).getString(R.string.import_read_failed));
+                return;
+            }
+            Context context = getApplicationContext();
+            try { documentReaders.execute(() -> readPickedFile(context, uri, picker)); }
+            catch (RejectedExecutionException error) {
+                emitFileError(picker, AppLanguage.current(this).getString(R.string.import_failed, error));
+            }
+            return;
+        }
         String content = exportContent;
-        if (request == SAVE) exportContent = null;
+        exportContent = null;
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         var worker = Executors.newSingleThreadExecutor();
         worker.execute(() -> {
             try {
-                if (request == SAVE) {
-                    if (content == null) throw new IOException(AppLanguage.current(this).getString(R.string.export_expired));
-                    try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
-                        if (out == null) throw new IOException(AppLanguage.current(this).getString(R.string.export_write_failed));
-                        out.write(content.getBytes(StandardCharsets.UTF_8));
-                    }
-                    emit("export-notice", AppLanguage.current(this).getString(R.string.export_complete));
-                } else {
-                    try (InputStream in = getContentResolver().openInputStream(uri)) {
-                        if (in == null) throw new IOException(AppLanguage.current(this).getString(R.string.import_read_failed));
-                        ByteArrayOutputStream out = new ByteArrayOutputStream();
-                        byte[] buffer = new byte[8192];
-                        int count;
-                        while ((count = in.read(buffer)) != -1) {
-                            if (out.size() + count > 10 * 1024 * 1024) throw new IOException(AppLanguage.current(this).getString(R.string.import_too_large));
-                            out.write(buffer, 0, count);
-                        }
-                        String name=AppLanguage.current(this).getString(R.string.import_default_name);
-                        try (android.database.Cursor cursor=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)) {
-                            if (cursor!=null && cursor.moveToFirst()) name=cursor.getString(0);
-                        }
-                        JSONObject file = new JSONObject().put("name", name)
-                            .put("content", out.toString(StandardCharsets.UTF_8.name()));
-                        emit("file", file);
-                    }
+                if (content == null) throw new IOException(AppLanguage.current(this).getString(R.string.export_expired));
+                try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (out == null) throw new IOException(AppLanguage.current(this).getString(R.string.export_write_failed));
+                    out.write(content.getBytes(StandardCharsets.UTF_8));
                 }
+                emit("export-notice", AppLanguage.current(this).getString(R.string.export_complete));
             } catch (Exception error) {
                 documentFailure = error.toString();
                 android.util.Log.e("ClashOfRust",
-                    (request == SAVE ? "DOCUMENT_EXPORT_FAILED" : "DOCUMENT_IMPORT_FAILED")
-                        + " (" + error.getClass().getSimpleName() + ")");
-                emit(request == SAVE ? "export-error" : "error", AppLanguage.current(this).getString(
-                    request == SAVE ? R.string.export_failed : R.string.import_failed, error));
+                    "DOCUMENT_EXPORT_FAILED (" + error.getClass().getSimpleName() + ")");
+                emit("export-error", AppLanguage.current(this).getString(R.string.export_failed, error));
             }
         });
         worker.shutdown();

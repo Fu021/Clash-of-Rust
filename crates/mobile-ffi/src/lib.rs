@@ -126,6 +126,19 @@ impl Session {
     pub fn open(root: PathBuf, native: Arc<dyn NativeHost>) -> Result<Self> {
         let store = Store::at(root)?;
         core::profile_transaction::recover(&store.root)?;
+        let saved_profiles = has_saved_profile_files(&store.root)?;
+        if saved_profiles {
+            for name in ["settings.json", "profiles.json"] {
+                let path = store.root.join(name);
+                match std::fs::symlink_metadata(&path) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        anyhow::bail!("订阅索引或设置缺失，但订阅文件仍在；请恢复原文件后重试");
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
         core::geodata::recover(&store.runtime())?;
         let protection_pending =
             match std::fs::symlink_metadata(store.root.join(PROTECTION_RECOVERY_FILE)) {
@@ -139,6 +152,12 @@ impl Session {
             store.load_settings()?
         };
         let mut profiles = store.profiles()?;
+        if saved_profiles {
+            ensure!(
+                !profiles.is_empty(),
+                "订阅索引为空，但订阅文件仍在；请恢复原索引后重试"
+            );
+        }
         let first_profile =
             !protection_pending && profiles.is_empty() && settings.active_profile.is_none();
         if !first_profile {
@@ -186,12 +205,15 @@ impl Session {
             }
         }
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
-        let draft = ProfileRules::for_profile(&settings, id, false)
+        let builtin = profiles
+            .iter()
+            .any(|profile| profile.id == id && profile.is_default());
+        let draft = ProfileRules::for_profile(&settings, id, builtin)
             .as_ref()
             .clone();
         let document = Document::from_raw(
             id,
-            false,
+            builtin,
             &core::config::read_profile(&store.profile_path(id)?)?,
         )?;
         let rule_profile = id.to_owned();
@@ -220,11 +242,41 @@ impl Session {
             native,
         })
     }
+
+    fn ensure_storage_ready(&self) -> Result<()> {
+        ensure!(
+            !core::profile_transaction::pending(&self.store.root)?,
+            "上次配置提交尚未恢复，请重新启动客户端"
+        );
+        Ok(())
+    }
+
+    /// Persist settings that do not change the generated runtime configuration.
+    /// Use `commit_settings` when the change may affect networking, protection,
+    /// the active profile, or the running core.
+    pub fn save_preferences(&mut self, settings: Settings) -> Result<()> {
+        self.ensure_storage_ready()?;
+        settings.validate()?;
+        self.settings.require_settings_change(&settings)?;
+        ensure!(
+            self.runtime(&settings)? == self.runtime(&self.settings)?,
+            "此设置修改需要重载网络，请使用完整保存入口"
+        );
+        self.store.save_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
+    }
+
     pub fn profile(&self) -> &Profile {
         self.profiles
             .iter()
             .find(|p| Some(&p.id) == self.settings.active_profile.as_ref())
             .expect("validated profile")
+    }
+    pub fn profile_builtin(&self, id: &str) -> bool {
+        self.profiles
+            .iter()
+            .any(|profile| profile.id == id && profile.is_default())
     }
     pub fn raw(&self) -> Result<String> {
         core::config::read_profile(&self.store.profile_path(&self.profile().id)?)
@@ -235,7 +287,7 @@ impl Session {
     pub fn runtime(&self, settings: &Settings) -> Result<String> {
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
         let raw = core::config::read_profile(&self.store.profile_path(id)?)?;
-        let runtime = mobile_runtime(&raw, settings, id)?;
+        let runtime = mobile_runtime(&raw, settings, id, self.profile_builtin(id))?;
         self.application_runtime(&raw, &runtime, settings, id)
     }
 
@@ -249,8 +301,14 @@ impl Session {
             .active_profile
             .as_deref()
             .context("Missing active profile")?;
+        let builtin = store
+            .profiles()?
+            .iter()
+            .find(|item| item.id == profile)
+            .context("当前订阅已丢失")?
+            .is_default();
         let source = core::config::read_profile(&store.profile_path(profile)?)?;
-        let runtime = mobile_runtime(&source, &settings, profile)?;
+        let runtime = mobile_runtime(&source, &settings, profile, builtin)?;
         let expected = core::application_rules::runtime(
             &source,
             &runtime,
@@ -258,18 +316,36 @@ impl Session {
             profile,
             application_rules_supported,
         )?;
-        let saved =
-            read_saved_configuration(&store.runtime().join("config.yaml"), 20 * 1024 * 1024)?;
-        ensure!(
-            saved == expected.as_bytes(),
-            "The saved runtime configuration does not match the active profile and settings"
-        );
+        let path = store.runtime().join("config.yaml");
+        let saved = read_saved_configuration(&path, 20 * 1024 * 1024)?;
+        if saved != expected.as_bytes() {
+            let legacy = if builtin {
+                let runtime = mobile_runtime(&source, &settings, profile, false)?;
+                Some(core::application_rules::runtime(
+                    &source,
+                    &runtime,
+                    &settings,
+                    profile,
+                    application_rules_supported,
+                )?)
+            } else {
+                None
+            };
+            ensure!(
+                legacy
+                    .as_deref()
+                    .is_some_and(|legacy| saved == legacy.as_bytes()),
+                "The saved runtime configuration does not match the active profile and settings"
+            );
+            atomic_write(&path, expected.as_bytes())?;
+        }
         Ok((expected, settings))
     }
     pub fn initialize(&mut self) -> Result<()> {
         self.initialize_with_protection_sync(true)
     }
     fn initialize_with_protection_sync(&mut self, sync: bool) -> Result<()> {
+        self.ensure_storage_ready()?;
         let native_running = self.native.request(json!({"op":"state"}))?["running"] == true;
         let controller = if native_running {
             None
@@ -368,6 +444,7 @@ impl Session {
         Ok(manifest)
     }
     pub fn commit_settings(&mut self, settings: Settings) -> Result<()> {
+        self.ensure_storage_ready()?;
         self.settings.require_settings_change(&settings)?;
         ensure!(
             settings.claude_protection == self.settings.claude_protection,
@@ -546,13 +623,19 @@ impl Session {
         }
         settings.validate()?;
         let raw = self.runtime(&settings)?;
-        let old_raw = self.runtime(&self.settings)?;
+        let api = self.api.reconfigured(&settings)?;
+        let route = core::active_route::root(&raw)?;
+        let path = self.store.runtime().join("config.yaml");
+        let old_raw = self
+            .running
+            .then(|| core::config::read_runtime_config(&path))
+            .transpose()?;
         let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
         tx.stage(
             &self.store.root.join("settings.json"),
             &serde_json::to_vec_pretty(&settings)?,
         )?;
-        tx.stage(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
+        tx.stage(&path, raw.as_bytes())?;
         tx.prepare()?;
         let protection_changed = self.settings.claude_protection != settings.claude_protection;
         if protection_changed
@@ -562,36 +645,37 @@ impl Session {
             tx.rollback()?;
             return Err(error);
         }
-        if self.running
+        if let Some(old_raw) = &old_raw
             && let Err(error) = self
                 .native
                 .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&settings)}))
         {
-            tx.rollback()?;
-            self.native
-                .request(
-                    json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}),
-                )
-                .context("内核拒绝配置后恢复失败")?;
+            let disk = tx.rollback();
+            let runtime = self.native.request(
+                json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}),
+            );
+            disk.context("配置写入失败，磁盘恢复也失败")?;
+            runtime.context("内核拒绝配置后恢复失败")?;
             if protection_changed {
                 self.native.request(json!({"op":"protection-sync"}))?;
             }
             return Err(error);
         }
         if let Err(error) = tx.commit() {
-            tx.rollback().context("配置写入失败，磁盘恢复也失败")?;
-            if self.running {
+            let disk = tx.rollback();
+            let runtime = old_raw.as_ref().map(|old_raw| {
                 self.native
                     .request(json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}))
-                    .context("配置保存失败，内核恢复也失败")?;
-            }
+            }).transpose();
+            disk.context("配置写入失败，磁盘恢复也失败")?;
+            runtime.context("配置保存失败，内核恢复也失败")?;
             if protection_changed {
                 self.native.request(json!({"op":"protection-sync"}))?;
             }
             return Err(error);
         }
-        self.api = self.api.reconfigured(&settings)?;
-        self.route = core::active_route::root(&raw)?;
+        self.api = api;
+        self.route = route;
         self.settings = settings;
         if protection_changed {
             self.native.request(json!({"op":"protection-sync"}))?;
@@ -724,14 +808,8 @@ impl Session {
         content: Option<&str>,
     ) -> Result<()> {
         self.settings.require_mutable()?;
-        if let Some(id) = id {
-            self.require_unprotected_profile(id)?;
-            ensure!(
-                self.profiles
-                    .iter()
-                    .any(|profile| profile.id == id && !profile.is_default()),
-                "默认直连配置不能编辑，或订阅已不存在"
-            );
+        if let (Some(id), None) = (id, content) {
+            return self.edit_profile(id, name, source);
         }
         ensure!(!name.trim().is_empty(), "订阅名称不能为空");
         ensure!(
@@ -743,35 +821,63 @@ impl Session {
         );
         let (raw, usage) = if let Some(raw) = content {
             (raw.to_owned(), None)
-        } else if source.is_empty()
-            || id.is_some_and(|id| {
-                self.profiles.iter().any(|profile| {
-                    profile.id == id && profile.is_local() && profile.source == source
-                })
-            })
-        {
-            let id = id.context("本地配置需要导入文件")?;
-            (
-                core::config::read_profile(&self.store.profile_path(id)?)?,
-                None,
-            )
         } else {
-            let url = core::probe::validate_url(source)?;
-            core::subscription::download_routes(
-                &url,
-                &core::network::download_routes(
-                    self.running.then_some(self.settings.download_ports()),
-                    None,
-                ),
-            )
-            .await
-            .context(if id.is_some() {
-                "订阅更新失败，已保留原配置与运行状态"
-            } else {
-                "订阅下载失败"
-            })?
+            ensure!(!source.is_empty(), "本地配置需要导入文件");
+            self.download_subscription(source)
+                .await
+                .context("订阅下载失败")?
         };
         self.save_profile_content(id, name, source, raw, usage)
+    }
+
+    async fn download_subscription(&self, source: &str) -> Result<(String, Option<String>)> {
+        let url = core::probe::validate_url(source)?;
+        core::subscription::download_routes(
+            &url,
+            &core::network::download_routes(
+                self.running.then_some(self.settings.download_ports()),
+                None,
+            ),
+        )
+        .await
+    }
+
+    /// Editing subscription metadata never downloads or replaces the cached YAML.
+    /// A changed source is loaded only by the explicit update action.
+    pub fn edit_profile(&mut self, id: &str, name: &str, source: &str) -> Result<()> {
+        self.ensure_storage_ready()?;
+        self.require_unprotected_profile(id)?;
+        let name = name.trim();
+        let source = source.trim();
+        ensure!(!name.is_empty(), "订阅名称不能为空");
+        ensure!(
+            !self
+                .profiles
+                .iter()
+                .any(|profile| profile.name == name && profile.id != id),
+            "订阅名称已存在"
+        );
+        let mut profiles = self.profiles.clone();
+        let profile = profiles
+            .iter_mut()
+            .find(|profile| profile.id == id)
+            .context("订阅不存在")?;
+        ensure!(!profile.is_default(), "默认直连配置不能编辑");
+        if source.is_empty() && !profile.source.is_empty() {
+            anyhow::bail!("配置名称与来源不能为空");
+        }
+        if source.split_once(':').is_some_and(|(scheme, _)| {
+            scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+        }) {
+            core::probe::validate_url(source).context("订阅 URL 无效")?;
+        } else if source.contains("://") {
+            anyhow::bail!("订阅链接仅支持 HTTP 或 HTTPS");
+        }
+        profile.name = name.to_owned();
+        profile.source = source.to_owned();
+        self.store.save_profiles(&profiles)?;
+        self.profiles = profiles;
+        Ok(())
     }
 
     pub fn update_subscription(
@@ -801,9 +907,15 @@ impl Session {
         raw: String,
         usage: Option<String>,
     ) -> Result<()> {
+        self.ensure_storage_ready()?;
         self.settings.require_mutable()?;
         if let Some(id) = id {
-            self.require_unprotected_profile(id)?;
+            ensure!(
+                self.profiles
+                    .iter()
+                    .any(|profile| profile.id == id && !profile.is_default()),
+                "默认直连配置不能编辑，或订阅已不存在"
+            );
         }
         core::config::parse_profile(&raw)?;
         let id = id
@@ -826,19 +938,19 @@ impl Session {
             profiles.push(profile);
         }
         let active = self.settings.active_profile.as_deref() == Some(&id);
-        let old_raw = active.then(|| self.runtime(&self.settings)).transpose()?;
-        let new_runtime = if active {
-            let rules = ProfileRules::for_profile(&self.settings, &id, false);
-            let runtime = android_safe_config(&core::config::runtime_config_with_rules(
-                &raw,
-                &self.settings,
-                Some(&rules),
-                false,
-            )?)?;
-            Some(self.application_runtime(&raw, &runtime, &self.settings, &id)?)
-        } else {
-            None
-        };
+        let path = self.store.runtime().join("config.yaml");
+        let old_raw = (active && self.running)
+            .then(|| core::config::read_runtime_config(&path))
+            .transpose()?;
+        let runtime = mobile_runtime(&raw, &self.settings, &id, false)?;
+        let new_runtime = active
+            .then(|| self.application_runtime(&raw, &runtime, &self.settings, &id))
+            .transpose()?;
+        let new_route = new_runtime
+            .as_deref()
+            .map(core::active_route::root)
+            .transpose()?;
+        let document = Document::from_raw(&id, false, &raw)?;
         let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
         tx.stage(&self.store.profile_path(&id)?, raw.as_bytes())?;
         tx.stage(
@@ -846,42 +958,41 @@ impl Session {
             &serde_json::to_vec_pretty(&profiles)?,
         )?;
         if let Some(raw) = &new_runtime {
-            tx.stage(&self.store.runtime().join("config.yaml"), raw.as_bytes())?;
+            tx.stage(&path, raw.as_bytes())?;
         }
         tx.prepare()?;
-        if self.running
-            && let Some(raw) = &new_runtime
-            && let Err(error) = self
-                .native
-                .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}))
-        {
-            tx.rollback()?;
-            if let Some(raw) = &old_raw {
-                self.native.request(
-                    json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
-                )?;
-            }
-            return Err(error);
-        }
-        if let Err(error) = tx.commit() {
-            tx.rollback()?;
+        let result = (|| {
             if self.running
-                && let Some(raw) = old_raw
+                && let Some(raw) = &new_runtime
             {
                 self.native.request(
                     json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
                 )?;
             }
+            tx.commit()
+        })();
+        if let Err(error) = result {
+            let disk = tx.rollback();
+            let runtime = old_raw
+                .as_ref()
+                .map(|raw| {
+                    self.native.request(
+                        json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
+                    )
+                })
+                .transpose();
+            disk.context("配置写入失败，磁盘恢复也失败")?;
+            runtime.context("配置保存失败，内核恢复也失败")?;
             return Err(error);
         }
         self.profiles = profiles;
-        if let Some(raw) = new_runtime {
-            self.route = core::active_route::root(&raw)?;
+        if let Some(route) = new_route {
+            self.route = route;
             self.node.clear();
             self.clear_snapshot();
         }
         if self.rule_profile == id {
-            self.rule_document = Document::from_raw(&id, false, &raw)?;
+            self.rule_document = document;
         }
         Ok(())
     }
@@ -896,9 +1007,13 @@ impl Session {
             .find(|p| p.id == id)
             .context("订阅不存在")?
             .clone();
+        ensure!(!profile.is_default(), "默认直连配置不能编辑");
         ensure!(!profile.is_local(), "本地配置没有更新地址");
-        self.save_profile(Some(id), &profile.name, &profile.source, None)
+        let (raw, usage) = self
+            .download_subscription(&profile.source)
             .await
+            .context("订阅更新失败，已保留原配置与运行状态")?;
+        self.save_profile_content(Some(id), &profile.name, &profile.source, raw, usage)
     }
     pub fn activate(&mut self, id: &str) -> Result<()> {
         ensure!(
@@ -910,12 +1025,16 @@ impl Session {
         next.active_profile = Some(id.into());
         // Keep an unapplied rules draft attached to its original subscription.
         // Otherwise the rule page follows the newly active subscription.
-        let follow =
-            self.draft == *ProfileRules::for_profile(&self.settings, &self.rule_profile, false);
+        let follow = self.draft
+            == *ProfileRules::for_profile(
+                &self.settings,
+                &self.rule_profile,
+                self.profile_builtin(&self.rule_profile),
+            );
         let document = if follow {
             Some(Document::from_raw(
                 id,
-                false,
+                self.profile_builtin(id),
                 &core::config::read_profile(&self.store.profile_path(id)?)?,
             )?)
         } else {
@@ -927,7 +1046,7 @@ impl Session {
         if let Some(document) = document {
             self.rule_profile = id.to_owned();
             self.rule_document = document;
-            self.draft = ProfileRules::for_profile(&self.settings, id, false)
+            self.draft = ProfileRules::for_profile(&self.settings, id, self.profile_builtin(id))
                 .as_ref()
                 .clone();
         }
@@ -963,13 +1082,13 @@ impl Session {
             let next_id = settings.active_profile.as_deref().context("尚未选择订阅")?;
             let document = Document::from_raw(
                 next_id,
-                false,
+                self.profile_builtin(next_id),
                 &core::config::read_profile(&self.store.profile_path(next_id)?)?,
             )?;
             Some((
                 next_id.to_owned(),
                 document,
-                ProfileRules::for_profile(&settings, next_id, false)
+                ProfileRules::for_profile(&settings, next_id, self.profile_builtin(next_id))
                     .as_ref()
                     .clone(),
             ))
@@ -1002,27 +1121,33 @@ impl Session {
                 .native
                 .request(json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&settings)}))
         {
-            tx.rollback()?;
-            if let Some(raw) = &old_runtime {
+            let disk = tx.rollback();
+            let runtime = old_runtime.as_ref().map_or(Ok(()), |raw| {
                 self.native
                     .request(
                         json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
                     )
-                    .context("删除订阅失败，原运行配置恢复失败")?;
-            }
+                    .map(|_| ())
+            });
+            disk.context("删除订阅失败，磁盘恢复也失败")?;
+            runtime.context("删除订阅失败，原运行配置恢复失败")?;
             return Err(error);
         }
         if let Err(error) = tx.commit() {
-            tx.rollback()?;
-            if self.running
-                && let Some(raw) = &old_runtime
-            {
-                self.native
-                    .request(
-                        json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
-                    )
-                    .context("删除订阅失败，原运行配置恢复失败")?;
-            }
+            let disk = tx.rollback();
+            let runtime = if self.running {
+                old_runtime.as_ref().map_or(Ok(()), |raw| {
+                    self.native
+                        .request(
+                            json!({"op":"reload","config":raw,"ipv6":effective_ipv6(&self.settings)}),
+                        )
+                        .map(|_| ())
+                })
+            } else {
+                Ok(())
+            };
+            disk.context("删除订阅失败，磁盘恢复也失败")?;
+            runtime.context("删除订阅失败，原运行配置恢复失败")?;
             return Err(error);
         }
         self.profiles = profiles;
@@ -1041,15 +1166,19 @@ impl Session {
     }
     pub fn select_rules(&mut self, id: &str) -> Result<()> {
         ensure!(self.profiles.iter().any(|p| p.id == id), "订阅不存在");
-        let saved = ProfileRules::for_profile(&self.settings, &self.rule_profile, false);
+        let saved = ProfileRules::for_profile(
+            &self.settings,
+            &self.rule_profile,
+            self.profile_builtin(&self.rule_profile),
+        );
         ensure!(self.draft == *saved, "请先应用或放弃当前规则修改");
         self.rule_document = Document::from_raw(
             id,
-            false,
+            self.profile_builtin(id),
             &core::config::read_profile(&self.store.profile_path(id)?)?,
         )?;
         self.rule_profile = id.to_owned();
-        self.draft = ProfileRules::for_profile(&self.settings, id, false)
+        self.draft = ProfileRules::for_profile(&self.settings, id, self.profile_builtin(id))
             .as_ref()
             .clone();
         Ok(())
@@ -1162,11 +1291,24 @@ impl Session {
         Ok(())
     }
     pub fn apply_rules(&mut self) -> Result<()> {
+        self.ensure_storage_ready()?;
         self.settings.require_mutable()?;
+        let profile = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id == self.rule_profile)
+            .context("订阅不存在")?;
         let mut next = self.settings.clone();
         next.rule_profiles
-            .insert(self.rule_profile.clone(), Arc::new(self.draft.clone()));
-        if next.active_profile.as_deref() == Some(&self.rule_profile) {
+            .insert(profile.id.clone(), Arc::new(self.draft.clone()));
+        let active = next.active_profile.as_deref() == Some(profile.id.as_str());
+        if !active || !self.running {
+            let raw = core::config::read_profile(&self.store.profile_path(&profile.id)?)?;
+            let runtime = mobile_runtime(&raw, &next, &profile.id, profile.is_default())?;
+            let runtime = self.application_runtime(&raw, &runtime, &next, &profile.id)?;
+            validate_custom_rule_references(&runtime, &self.draft)?;
+        }
+        if active {
             self.commit_settings(next)
         } else {
             self.store.save_settings(&next)?;
@@ -1180,14 +1322,66 @@ pub fn effective_ipv6(settings: &Settings) -> bool {
     settings.ipv6 || settings.claude_protection.is_some()
 }
 
-fn mobile_runtime(source: &str, settings: &Settings, profile: &str) -> Result<String> {
-    let rules = ProfileRules::for_profile(settings, profile, false);
+fn mobile_runtime(
+    source: &str,
+    settings: &Settings,
+    profile: &str,
+    builtin: bool,
+) -> Result<String> {
+    let rules = ProfileRules::for_profile(settings, profile, builtin);
     android_safe_config(&core::config::runtime_config_with_rules(
         source,
         settings,
         Some(&rules),
-        false,
+        builtin,
     )?)
+}
+
+fn validate_custom_rule_references(runtime: &str, draft: &ProfileRules) -> Result<()> {
+    if !draft.custom.iter().any(|rule| rule.enabled) {
+        return Ok(());
+    }
+    let mut config: yaml_serde::Value = yaml_serde::from_str(runtime)?;
+    config.apply_merge()?;
+    let targets: std::collections::BTreeSet<_> = ["proxies", "proxy-groups"]
+        .into_iter()
+        .filter_map(|key| config[key].as_sequence())
+        .flatten()
+        .filter_map(|entry| entry["name"].as_str())
+        .chain([
+            "DIRECT",
+            "REJECT",
+            "REJECT-DROP",
+            "COMPATIBLE",
+            "PASS",
+            "PASS-RULE",
+            "GLOBAL",
+        ])
+        .collect();
+    for rule in draft.custom.iter().filter(|rule| rule.enabled) {
+        let parts = core::rule_manager::parts(&rule.rule)?;
+        if parts.kind == "SUB-RULE" {
+            ensure!(
+                config["sub-rules"].get(parts.policy).is_some(),
+                "sub-rule [{}] not found",
+                parts.policy
+            );
+        } else {
+            ensure!(
+                targets.contains(parts.policy),
+                "proxy [{}] not found",
+                parts.policy
+            );
+        }
+        if parts.kind == "RULE-SET" {
+            ensure!(
+                config["rule-providers"].get(parts.payload).is_some(),
+                "rule set [{}] not found",
+                parts.payload
+            );
+        }
+    }
+    Ok(())
 }
 
 fn read_saved_configuration(path: &std::path::Path, limit: u64) -> Result<Vec<u8>> {
@@ -1206,6 +1400,21 @@ fn read_saved_configuration(path: &std::path::Path, limit: u64) -> Result<Vec<u8
         "Saved configuration exceeds its size limit"
     );
     Ok(bytes)
+}
+
+fn has_saved_profile_files(root: &std::path::Path) -> Result<bool> {
+    for entry in std::fs::read_dir(root.join("profiles"))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir()
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "yaml")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn read_saved_settings(root: &std::path::Path) -> Result<Settings> {
@@ -1393,6 +1602,44 @@ mod tests {
     }
 
     #[test]
+    fn cold_android_runtime_migrates_legacy_builtin_shortcuts_without_accepting_stale_yaml() {
+        struct Host;
+        impl NativeHost for Host {
+            fn request(&self, _: Value) -> Result<Value> {
+                Ok(json!({"ok":true}))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Host)).unwrap();
+        let profile = session.profile().id.clone();
+        let mut settings = session.settings.clone();
+        settings.rule_overrides.enabled = [true; 5];
+        session.commit_settings(settings.clone()).unwrap();
+        let source = session.raw().unwrap();
+        let legacy_runtime = mobile_runtime(&source, &settings, &profile, false).unwrap();
+        let legacy = session
+            .application_runtime(&source, &legacy_runtime, &settings, &profile)
+            .unwrap();
+        let expected = session.runtime(&settings).unwrap();
+        assert_ne!(legacy, expected);
+        let path = session.store.runtime().join("config.yaml");
+        atomic_write(&path, legacy.as_bytes()).unwrap();
+
+        let (migrated, _) = Session::cold_android_runtime(root.path(), false).unwrap();
+        assert_eq!(migrated, expected);
+        assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+
+        atomic_write(
+            &path,
+            legacy
+                .replacen("rules:", "rules:\n  - DOMAIN,stale.example.test,DIRECT", 1)
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(Session::cold_android_runtime(root.path(), false).is_err());
+    }
+
+    #[test]
     fn pending_protection_recovery_does_not_replace_missing_settings_with_defaults() {
         struct Host;
         impl NativeHost for Host {
@@ -1536,6 +1783,167 @@ mod tests {
     }
 
     #[test]
+    fn preference_save_honors_pending_recovery_and_preserves_existing_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let settings_path = root.path().join("settings.json");
+        let original = std::fs::read(&settings_path).unwrap();
+        let original_session = session.settings.clone();
+        let mut transaction =
+            core::profile_transaction::Transaction::new(&session.store.root).unwrap();
+        transaction.stage(&settings_path, b"{}").unwrap();
+        transaction.prepare().unwrap();
+
+        let mut next = session.settings.clone();
+        next.delay_interval_minutes = next.delay_interval_minutes.saturating_add(1);
+        let error = session.save_preferences(next).unwrap_err();
+        assert!(error.to_string().contains("尚未恢复"), "{error:#}");
+        assert_eq!(session.settings, original_session);
+        assert_eq!(std::fs::read(&settings_path).unwrap(), original);
+
+        drop(transaction);
+        assert!(core::profile_transaction::recover(&session.store.root).unwrap());
+        let mut next = session.settings.clone();
+        next.delay_interval_minutes = next.delay_interval_minutes.saturating_add(1);
+        session.save_preferences(next.clone()).unwrap();
+        assert_eq!(session.settings, next);
+        assert_eq!(session.store.load_settings().unwrap(), next);
+    }
+
+    #[test]
+    fn preference_save_rejects_settings_that_change_the_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let settings_path = root.path().join("settings.json");
+        let original = std::fs::read(&settings_path).unwrap();
+        let mut next = session.settings.clone();
+        next.ipv6 = !next.ipv6;
+        let error = session.save_preferences(next).unwrap_err();
+        assert!(error.to_string().contains("完整保存入口"), "{error:#}");
+        assert_eq!(std::fs::read(settings_path).unwrap(), original);
+    }
+
+    #[test]
+    fn missing_settings_or_empty_index_with_saved_profiles_refuses_to_seed_a_new_active_profile() {
+        for empty_index in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+            let id = session.profile().id.clone();
+            let profile = session.store.profile_path(&id).unwrap();
+            let original = std::fs::read(&profile).unwrap();
+            drop(session);
+
+            let settings = root.path().join("settings.json");
+            let index = root.path().join("profiles.json");
+            if empty_index {
+                std::fs::write(&index, b"[]").unwrap();
+            } else {
+                std::fs::remove_file(&settings).unwrap();
+                std::fs::remove_file(&index).unwrap();
+            }
+
+            let error = Session::open(root.path().into(), Arc::new(Fake))
+                .err()
+                .expect("saved profile files without an index must stop startup");
+            assert!(error.to_string().contains("订阅文件仍在"), "{error:#}");
+            assert_eq!(std::fs::read(&profile).unwrap(), original);
+            if empty_index {
+                assert!(settings.exists());
+                assert_eq!(std::fs::read(&index).unwrap(), b"[]");
+            } else {
+                assert!(!settings.exists());
+                assert!(!index.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn pending_recovery_blocks_direct_profile_and_settings_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let id = session.profile().id.clone();
+        let settings = session.store.root.join("settings.json");
+        let index = session.store.root.join("profiles.json");
+        let settings_before = std::fs::read(&settings).unwrap();
+        let index_before = std::fs::read(&index).unwrap();
+
+        let mut tx = core::profile_transaction::Transaction::new(&session.store.root).unwrap();
+        tx.stage(&settings, b"{}").unwrap();
+        tx.prepare().unwrap();
+        drop(tx);
+        assert!(core::profile_transaction::pending(&session.store.root).unwrap());
+
+        for error in [
+            session.edit_profile(&id, "Blocked", "").unwrap_err(),
+            session.apply_rules().unwrap_err(),
+            session
+                .commit_settings(session.settings.clone())
+                .unwrap_err(),
+        ] {
+            assert!(
+                error.to_string().contains("上次配置提交尚未恢复"),
+                "{error:#}"
+            );
+        }
+        assert_eq!(std::fs::read(settings).unwrap(), settings_before);
+        assert_eq!(std::fs::read(index).unwrap(), index_before);
+    }
+
+    #[tokio::test]
+    async fn delete_restores_the_old_runtime_even_when_disk_rollback_fails() {
+        struct Host {
+            reloads: std::sync::Mutex<Vec<String>>,
+            block: std::sync::Mutex<Option<PathBuf>>,
+        }
+        impl NativeHost for Host {
+            fn request(&self, request: Value) -> Result<Value> {
+                if request["op"] == "reload" {
+                    let config = request["config"].as_str().unwrap().to_owned();
+                    self.reloads.lock().unwrap().push(config);
+                    if let Some(path) = self.block.lock().unwrap().take() {
+                        std::fs::remove_file(&path)?;
+                        std::fs::create_dir(&path)?;
+                        anyhow::bail!("simulated reload failure");
+                    }
+                }
+                Ok(json!({"running":false}))
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let native = Arc::new(Host {
+            reloads: Default::default(),
+            block: Default::default(),
+        });
+        let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+        session
+            .save_profile(
+                None,
+                "Active",
+                "",
+                Some("proxies: []\nrules: ['MATCH,DIRECT']\n"),
+            )
+            .await
+            .unwrap();
+        let active = session.profiles.last().unwrap().id.clone();
+        session.activate(&active).unwrap();
+        session.initialize().unwrap();
+        let old_runtime = session.runtime(&session.settings).unwrap();
+        *native.block.lock().unwrap() = Some(root.path().join("runtime/config.yaml"));
+
+        let error = session.delete(&active).unwrap_err();
+        assert!(error.to_string().contains("磁盘恢复也失败"), "{error:#}");
+        let reloads = native.reloads.lock().unwrap();
+        assert_eq!(reloads.len(), 2);
+        assert_eq!(reloads[1], old_runtime);
+        assert_eq!(
+            session.settings.active_profile.as_deref(),
+            Some(active.as_str())
+        );
+        assert!(session.profiles.iter().any(|profile| profile.id == active));
+    }
+
+    #[test]
     fn invalid_profile_indexes_preserve_the_active_profile_and_live_core() {
         #[derive(Default)]
         struct RunningHost(std::sync::Mutex<Vec<String>>);
@@ -1577,8 +1985,8 @@ mod tests {
         drop(original);
 
         for (contents, reason) in [
-            (None, "当前订阅已丢失"),
-            (Some(b"[]".as_slice()), "当前订阅已丢失"),
+            (None, "订阅索引或设置缺失，但订阅文件仍在"),
+            (Some(b"[]".as_slice()), "订阅索引为空，但订阅文件仍在"),
             (Some(incomplete_index.as_slice()), "当前订阅已丢失"),
             (Some(incomplete_legacy_index.as_slice()), "当前订阅已丢失"),
             (Some(b"[{invalid index".as_slice()), "订阅索引格式错误"),
@@ -1925,6 +2333,99 @@ mod tests {
                 raw
             );
         }
+    }
+
+    #[tokio::test]
+    async fn editing_subscription_metadata_keeps_the_cache_and_invalidates_old_downloads() {
+        struct Offline;
+        impl NativeHost for Offline {
+            fn request(&self, _: Value) -> Result<Value> {
+                panic!("editing subscription metadata must not touch the core");
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Offline)).unwrap();
+        let original = "proxies: []\nrules: ['MATCH,DIRECT']\n";
+        session
+            .save_profile_content(
+                None,
+                "Remote",
+                "https://old.example.test/sub",
+                original.into(),
+                Some("fixture usage".into()),
+            )
+            .unwrap();
+        let id = session.profiles[1].id.clone();
+        session.profiles[1].updated = 42;
+        session.store.save_profiles(&session.profiles).unwrap();
+        session.activate(&id).unwrap();
+        session.running = true;
+        session.vpn = true;
+        session.node = "retained node".into();
+        session
+            .save_rule("", "DOMAIN,draft.example.test,REJECT", 1)
+            .unwrap();
+        let draft = session.draft.clone();
+        let document = serde_json::to_value(session.document()).unwrap();
+        let profile = session.profile().clone();
+        let pending =
+            core::subscription::schedule::PendingUpdate::capture(profile.clone(), &session.store)
+                .unwrap();
+        let index = root.path().join("profiles.json");
+        let old_index = std::fs::read(&index).unwrap();
+        let settings = root.path().join("settings.json");
+        let old_settings = std::fs::read(&settings).unwrap();
+        let runtime = session.store.runtime().join("config.yaml");
+        let old_runtime = std::fs::read(&runtime).unwrap();
+        let source = "http://127.0.0.1:1/new";
+        for invalid in [
+            "",
+            "https://[",
+            "ftp://host.test/sub",
+            "HTTPS://user@host.test/sub",
+        ] {
+            assert!(session.edit_profile(&id, "Renamed", invalid).is_err());
+            assert_eq!(std::fs::read(&index).unwrap(), old_index);
+            assert_eq!(session.profile(), &profile);
+        }
+        let default = session.profiles[0].id.clone();
+        assert!(session.edit_profile(&default, "Renamed", source).is_err());
+
+        let backup = root.path().join("index-backup");
+        std::fs::rename(&index, &backup).unwrap();
+        std::fs::create_dir(&index).unwrap();
+        assert!(session.edit_profile(&id, "Renamed", source).is_err());
+        assert_eq!(session.profile(), &profile);
+        assert_eq!(std::fs::read(&backup).unwrap(), old_index);
+        std::fs::remove_dir(&index).unwrap();
+        std::fs::rename(backup, &index).unwrap();
+
+        session
+            .save_profile(Some(&id), "  Renamed  ", &format!(" {source} "), None)
+            .await
+            .unwrap();
+        assert!(
+            !session
+                .update_subscription(&pending, "proxies: {}\n".into(), None)
+                .unwrap()
+        );
+        let expected = Profile {
+            name: "Renamed".into(),
+            source: source.into(),
+            ..profile
+        };
+        assert_eq!(session.profile(), &expected);
+        assert_eq!(session.raw().unwrap(), original);
+        assert_eq!(session.draft, draft);
+        assert_eq!(session.rule_profile, id);
+        assert_eq!(serde_json::to_value(session.document()).unwrap(), document);
+        assert_eq!(session.node, "retained node");
+        assert!(session.running && session.vpn);
+        assert_eq!(std::fs::read(settings).unwrap(), old_settings);
+        assert_eq!(std::fs::read(runtime).unwrap(), old_runtime);
+        let reopened = Session::open(root.path().into(), Arc::new(Offline)).unwrap();
+        assert_eq!(reopened.profile(), &expected);
+        assert_eq!(reopened.raw().unwrap(), original);
     }
 
     #[tokio::test]
@@ -2331,6 +2832,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mobile_startup_validates_saved_protection_route() {
+        use crate::core::claude_check::protection::{Previous, Protection};
+
+        let root = tempfile::tempdir().unwrap();
+        let native = Arc::new(Fake);
+        let session = Session::open(root.path().into(), native.clone()).unwrap();
+        let protection = Protection::new(
+            session.profile().id.clone(),
+            "CI-TUN-origin".into(),
+            Previous {
+                mode: session.settings.run_mode.clone(),
+                proxy_mode: core::model::ProxyMode::Off,
+                selectors: Vec::new(),
+            },
+        );
+        let path = root.path().join("settings.json");
+        let mut saved = serde_json::to_value(&session.settings).unwrap();
+        saved["claude_protection"] = serde_json::to_value(&protection).unwrap();
+        let valid = serde_json::to_vec(&saved).unwrap();
+        saved["claude_protection"]["route"] = json!("CI-saved-protection");
+        let invalid = serde_json::to_vec(&saved).unwrap();
+        std::fs::write(&path, &invalid).unwrap();
+        let error = Session::open(root.path().into(), native.clone())
+            .err()
+            .expect("mobile startup accepted the invalid protection route");
+        assert_eq!(error.to_string(), "Claude 保护线路无效");
+        assert_eq!(std::fs::read(&path).unwrap(), invalid);
+
+        std::fs::write(&path, valid).unwrap();
+        let reopened = Session::open(root.path().into(), native).unwrap();
+        assert_eq!(
+            reopened.settings.claude_protection.as_deref(),
+            Some(&protection)
+        );
+        assert!(!reopened.running && !reopened.vpn);
+    }
+
     #[tokio::test]
     async fn mobile_protection_survives_reopen_and_restores_network_preferences() {
         use crate::core::claude_check::protection::{Previous, Protection};
@@ -2595,6 +3134,8 @@ mod tests {
         assert!(error.to_string().contains("请先关闭 Claude 保护"));
         let error = session.update_profile(&id).await.unwrap_err();
         assert!(error.to_string().contains("请先关闭 Claude 保护"));
+        let error = session.edit_profile(&id, "Changed", "").unwrap_err();
+        assert!(error.to_string().contains("请先关闭 Claude 保护"));
         assert!(session.set_fake_ip(false).is_err());
         let error = session.apply_rules().unwrap_err();
         assert!(error.to_string().contains("请先关闭 Claude 保护"));
@@ -2732,6 +3273,247 @@ mod tests {
                 .is_empty()
         );
     }
+    #[tokio::test]
+    async fn builtin_rule_identity_uses_the_index_and_still_allows_custom_rules() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let default = session.profile().id.clone();
+        session.profiles[0].name = "Renamed built-in".into();
+        session.store.save_profiles(&session.profiles).unwrap();
+        let mut settings = session.settings.clone();
+        settings.rule_overrides.enabled = [true; 5];
+        session.commit_settings(settings).unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        assert!(session.document().builtin);
+        assert_eq!(session.draft.enabled, [false; 5]);
+        let custom = "DOMAIN,custom.example.test,REJECT";
+        session.save_rule("", custom, 1).unwrap();
+        session.apply_rules().unwrap();
+        let runtime = session.runtime(&session.settings).unwrap();
+        assert!(runtime.contains(custom));
+        assert!(!runtime.contains(core::config::SUBSCRIPTION_RULES[0]));
+        assert_eq!(
+            Session::cold_android_runtime(root.path(), false).unwrap().0,
+            runtime
+        );
+        session
+            .save_profile(
+                None,
+                "默认直连",
+                "default.yaml",
+                Some("proxies: []\nrules: ['MATCH,DIRECT']\n"),
+            )
+            .await
+            .unwrap();
+        let imported = session.profiles[1].id.clone();
+        session.activate(&imported).unwrap();
+        assert!(!session.document().builtin);
+        assert_eq!(session.draft.enabled, [true; 5]);
+        assert!(
+            session
+                .runtime(&session.settings)
+                .unwrap()
+                .contains(core::config::SUBSCRIPTION_RULES[0])
+        );
+        session.delete(&imported).unwrap();
+        assert_eq!(session.rule_profile, default);
+        assert!(session.document().builtin);
+        assert_eq!(session.draft.custom[0].rule, custom);
+    }
+
+    #[tokio::test]
+    async fn inactive_rules_validate_references_without_reloading_the_active_profile() {
+        struct Offline;
+        impl NativeHost for Offline {
+            fn request(&self, _: Value) -> Result<Value> {
+                panic!("applying inactive rules must not reload the active profile");
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Offline)).unwrap();
+        let active = session.profile().id.clone();
+        let mut settings = session.settings.clone();
+        settings.run_mode = "direct".into();
+        session.commit_settings(settings).unwrap();
+        session.running = true;
+        session.vpn = true;
+        let raw = "proxies: []\nproxy-groups: [{name: Fallback, type: select, proxies: [DIRECT]}]\nrules: ['MATCH,DIRECT']\n";
+        session
+            .save_profile(None, "Inactive", "", Some(raw))
+            .await
+            .unwrap();
+        let inactive = session.profiles[1].id.clone();
+        session.select_rules(&inactive).unwrap();
+        session
+            .save_rule("", "DOMAIN,custom.example.test,Missing", 1)
+            .unwrap();
+        let selected = format!("c:{}", session.draft.custom[0].id);
+        let settings = session.settings.clone();
+        let settings_path = root.path().join("settings.json");
+        let runtime_path = session.store.runtime().join("config.yaml");
+        let old_settings = std::fs::read(&settings_path).unwrap();
+        let old_runtime = std::fs::read(&runtime_path).unwrap();
+        let profile_path = session.store.profile_path(&inactive).unwrap();
+        for (rule, reason) in [
+            ("DOMAIN,custom.example.test,Missing", "proxy [Missing]"),
+            ("RULE-SET,Missing,Fallback", "rule set [Missing]"),
+            (
+                "SUB-RULE,(DOMAIN,custom.example.test),Missing",
+                "sub-rule [Missing]",
+            ),
+        ] {
+            session.save_rule(&selected, rule, 1).unwrap();
+            let draft = session.draft.clone();
+            let error = session.apply_rules().unwrap_err();
+            assert!(error.to_string().contains(reason), "{error:#}");
+            assert_eq!(session.draft, draft);
+            assert_eq!(session.settings, settings);
+            assert_eq!(std::fs::read(&settings_path).unwrap(), old_settings);
+        }
+        session
+            .save_rule(&selected, "DOMAIN,custom.example.test,Fallback", 1)
+            .unwrap();
+        let draft = session.draft.clone();
+        let index_path = root.path().join("profiles.json");
+        let old_index = std::fs::read(&index_path).unwrap();
+        let malformed = "proxies: []\nrules: [42]\n";
+        assert!(
+            session
+                .save_profile(Some(&inactive), "Replacement", "", Some(malformed))
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&index_path).unwrap(), old_index);
+        assert_eq!(std::fs::read_to_string(&profile_path).unwrap(), raw);
+        std::fs::write(&profile_path, malformed).unwrap();
+        assert!(session.apply_rules().is_err());
+        assert_eq!(session.draft, draft);
+        assert_eq!(std::fs::read(&settings_path).unwrap(), old_settings);
+        std::fs::write(&profile_path, raw).unwrap();
+        session.apply_rules().unwrap();
+        assert_eq!(session.store.load_settings().unwrap(), session.settings);
+        assert_eq!(*session.settings.rule_profiles[&inactive], draft);
+        assert_eq!(session.profile().id, active);
+        assert!(session.running && session.vpn);
+        assert_eq!(std::fs::read_to_string(profile_path).unwrap(), raw);
+        assert_eq!(std::fs::read(runtime_path).unwrap(), old_runtime);
+    }
+
+    #[tokio::test]
+    async fn saving_an_unselected_profile_validates_its_rules_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let raw = "proxies: []\nrules: ['MATCH,DIRECT']\n";
+        session
+            .save_profile(None, "Inactive", "", Some(raw))
+            .await
+            .unwrap();
+        let inactive = session.profiles.last().unwrap().id.clone();
+        let profile = session.store.profile_path(&inactive).unwrap();
+        let index = root.path().join("profiles.json");
+        let index_before = std::fs::read(&index).unwrap();
+
+        assert!(
+            session
+                .save_profile(
+                    Some(&inactive),
+                    "Replacement",
+                    "",
+                    Some("proxies: []\nrules: [42]\n"),
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&profile).unwrap(), raw.as_bytes());
+        assert_eq!(std::fs::read(index).unwrap(), index_before);
+    }
+
+    #[tokio::test]
+    async fn unselected_profile_update_validates_the_full_runtime_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::open(root.path().into(), Arc::new(Fake)).unwrap();
+        let raw = "proxies: []\nrules: ['MATCH,DIRECT']\n";
+        session
+            .save_profile(None, "Inactive", "", Some(raw))
+            .await
+            .unwrap();
+        let inactive = session.profiles.last().unwrap().id.clone();
+        let path = session.store.profile_path(&inactive).unwrap();
+        let index = root.path().join("profiles.json");
+        let index_before = std::fs::read(&index).unwrap();
+        let error = session
+            .save_profile(
+                Some(&inactive),
+                "Inactive",
+                "",
+                Some("proxies: []\nrules: ['MATCH,DIRECT']\nsniffer: invalid\n"),
+            )
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("sniffer"), "{error:#}");
+        assert_eq!(std::fs::read(path).unwrap(), raw.as_bytes());
+        assert_eq!(std::fs::read(index).unwrap(), index_before);
+    }
+
+    #[test]
+    fn failed_active_rule_reload_restores_the_persisted_runtime_and_keeps_the_draft() {
+        struct Host {
+            reloads: std::sync::Mutex<Vec<String>>,
+            block_runtime_save: Option<PathBuf>,
+        }
+        impl NativeHost for Host {
+            fn request(&self, request: Value) -> Result<Value> {
+                assert_eq!(request["op"], "reload");
+                let config = request["config"].as_str().unwrap();
+                self.reloads.lock().unwrap().push(config.into());
+                if config.contains("reject-reload.example.test") {
+                    if let Some(path) = &self.block_runtime_save {
+                        std::fs::remove_file(path).unwrap();
+                        std::fs::create_dir(path).unwrap();
+                    } else {
+                        anyhow::bail!("simulated rejection");
+                    }
+                }
+                Ok(json!({"ok":true}))
+            }
+        }
+        for blocked in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let runtime = root.path().join("runtime/config.yaml");
+            let native = Arc::new(Host {
+                reloads: Default::default(),
+                block_runtime_save: blocked.then(|| runtime.clone()),
+            });
+            let mut session = Session::open(root.path().into(), native.clone()).unwrap();
+            let mut settings = session.settings.clone();
+            settings.run_mode = "direct".into();
+            session.commit_settings(settings.clone()).unwrap();
+            let old_runtime = session.runtime(&settings).unwrap() + "\n# live before apply\n";
+            std::fs::write(&runtime, &old_runtime).unwrap();
+            session.running = true;
+            session
+                .save_rule("", "DOMAIN,reject-reload.example.test,REJECT", 1)
+                .unwrap();
+            let draft = session.draft.clone();
+            let error = session.apply_rules().unwrap_err().to_string();
+            if blocked {
+                assert!(error.contains("磁盘恢复也失败"), "{error}");
+                std::fs::remove_dir(&runtime).unwrap();
+                assert!(core::profile_transaction::recover(&session.store.root).unwrap());
+            } else {
+                assert!(error.contains("simulated rejection"), "{error}");
+                assert!(!core::profile_transaction::recover(&session.store.root).unwrap());
+            }
+            assert_eq!(session.settings, settings);
+            assert_eq!(session.store.load_settings().unwrap(), settings);
+            assert_eq!(std::fs::read_to_string(runtime).unwrap(), old_runtime);
+            assert_eq!(session.draft, draft);
+            let requests = native.reloads.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1], old_runtime);
+        }
+    }
+
     #[test]
     fn mobile_rule_moves_and_disabled_edits_preserve_identity_and_draft() {
         let root = tempfile::tempdir().unwrap();

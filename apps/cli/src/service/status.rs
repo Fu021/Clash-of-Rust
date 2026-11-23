@@ -3,6 +3,7 @@ use crate::{args::Args, backend};
 use anyhow::ensure;
 #[cfg(any(unix, test))]
 use anyhow::{Context, Result};
+use clash_client_core::config::Language;
 use clash_client_runtime::{
     config::Store,
     control::{Endpoint, Owner},
@@ -32,12 +33,18 @@ pub(super) fn configuration(path: &std::path::Path, expected: &str) -> Value {
 
 pub(super) async fn enrich(args: &Args, mut value: Value) -> Value {
     let owner = async {
-        let Some(_) = backend::connect(args, false).await? else {
-            return Ok(None);
-        };
-        Endpoint::read(&Store {
+        let store = Store {
             root: backend::data_root(args)?,
+        };
+        if backend::discover_reachable(&store, backend::timeout(args)?, || {
+            Language::SimplifiedChinese
         })
+        .await?
+        .is_none()
+        {
+            return Ok(None);
+        }
+        Endpoint::read(&store)
     };
     match tokio::time::timeout(std::time::Duration::from_secs(3), owner).await {
         Ok(Ok(endpoint)) => {

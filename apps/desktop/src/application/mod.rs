@@ -63,6 +63,157 @@ fn tray_unavailable(error: &str) -> String {
         format!("托盘不可用：{error}；关闭窗口将退出。")
     }
 }
+
+fn english_desktop_notice(message: &str) -> Option<String> {
+    fn tray_detail(detail: &str) -> &str {
+        match detail {
+            "当前桌面没有可用托盘宿主" => "No system tray host is available",
+            _ => detail,
+        }
+    }
+    if let Some(status) = message
+        .strip_prefix("界面进程已退出（")
+        .and_then(|tail| tail.strip_suffix("），可从托盘或 Dock 重新打开；后台代理仍在运行。"))
+    {
+        return Some(format!(
+            "The window process exited ({status}). Reopen it from the tray or Dock; the background proxy is still running."
+        ));
+    }
+    if let Some(detail) = message
+        .strip_prefix("托盘不可用：")
+        .and_then(|tail| tail.strip_suffix("；关闭窗口将退出。"))
+    {
+        return Some(format!(
+            "System tray unavailable: {}. Closing the window will exit the app.",
+            tray_detail(detail)
+        ));
+    }
+    match message {
+        "界面与后台版本不一致，请重新安装完整客户端。" => {
+            return Some(
+                "The window and background service versions do not match. Reinstall the full client."
+                    .into(),
+            );
+        }
+        "界面进程已退出" => return Some("The window process exited".into()),
+        "没有可用的界面窗口" => return Some("No window is available".into()),
+        "配置不存在" => return Some("Configuration not found".into()),
+        "请先开启 DNS 覆盖，再启用 Fake-IP" => {
+            return Some("Enable DNS override before enabling Fake-IP".into());
+        }
+        "已打开系统通知设置，请允许 Clash of Rust 发送通知。" => {
+            return Some(
+                "Notification settings opened; allow Clash of Rust to send notifications.".into(),
+            );
+        }
+        "端口必须为 1–65535 的整数" => {
+            return Some("Port must be an integer from 1 to 65535".into());
+        }
+        "请输入 0–10080 分钟，0 表示关闭自动检查更新" => {
+            return Some("Enter 0–10080 minutes; 0 disables automatic update checks".into());
+        }
+        "请输入 0–10080 分钟，0 表示关闭订阅自动更新" => {
+            return Some("Enter 0–10080 minutes; 0 disables automatic subscription updates".into());
+        }
+        "请输入 0–1440 分钟，0 表示关闭定时测速" => {
+            return Some("Enter 0–1440 minutes; 0 disables scheduled speed tests".into());
+        }
+        "请输入要排除的域名" => return Some("Enter a domain to exclude".into()),
+        "内核已退出，请查看日志或重试启动。" => {
+            return Some("The core exited; check the logs or try starting it again.".into());
+        }
+        "该订阅已被另一客户端删除，未保存的规则草稿仍保留在当前页面。" =>
+        {
+            return Some(
+                "Another client deleted this subscription. The unsaved rule draft remains on this page.".into(),
+            );
+        }
+        "剪贴板为空或内容超过 64 KiB；请复制采样 JSON。" => {
+            return Some("Clipboard is empty or exceeds 64 KiB; copy the sampling JSON.".into());
+        }
+        "剪贴板不是有效的检测 JSON" => {
+            return Some("Clipboard does not contain valid check JSON".into());
+        }
+        "浏览器采样格式无效" => return Some("Invalid browser sample".into()),
+        "检测报告格式无效" => return Some("Invalid check report".into()),
+        "请导入浏览器采样或 Code 终端报告" => {
+            return Some("Import a browser sample or Code terminal report".into());
+        }
+        _ => {}
+    }
+    let (summary, detail) = message.split_once('：')?;
+    let (label, detail) = match summary {
+        "检查更新失败" => {
+            let detail = update::localize_check_error(detail, Language::English);
+            if detail.starts_with("Update check ") {
+                return Some(detail.into_owned());
+            }
+            ("Update check failed", detail)
+        }
+        "无法打开 Release 页面" => ("Could not open the release page", detail.into()),
+        "无法保存窗口状态" => ("Could not save window state", detail.into()),
+        "退出失败" => ("Exit failed", detail.into()),
+        "读取上次安装结果失败" => (
+            "Could not read the previous installation result",
+            detail.into(),
+        ),
+        "无法保存安装失败确认" => {
+            let reason = detail
+                .strip_suffix("；请稍后重试关闭提示。")
+                .unwrap_or(detail);
+            return Some(format!(
+                "Could not acknowledge the installation failure: {reason}. Try closing this notice again later."
+            ));
+        }
+        "界面启动失败，可从托盘重试" => (
+            "Could not launch the window. Retry from the tray",
+            detail.into(),
+        ),
+        "界面错误" => ("Window error", english_window_error(detail)),
+        "菜单栏图标不可用" => ("Menu bar icon unavailable", tray_detail(detail).into()),
+        "初始化失败" => (
+            "Initialization failed",
+            clash_client_core::error_message::localize(detail, Language::English),
+        ),
+        "系统通知失败" | "通知权限检查失败" | "通知设置打开失败" => (
+            match summary {
+                "系统通知失败" => "System notification failed",
+                "通知权限检查失败" => "Notification permission check failed",
+                _ => "Could not open notification settings",
+            },
+            platform::notification::localize_error(detail, Language::English),
+        ),
+        "诊断已导出" => ("Diagnostics exported", detail.into()),
+        "诊断采集或导出失败" => ("Failed to collect or export diagnostics", detail.into()),
+        "无法打开问题反馈页面" => ("Failed to open the issue page", detail.into()),
+        "节点复测失败" => ("Node recheck failed", detail.into()),
+        "无法自动打开浏览器" => ("Could not open the browser", detail.into()),
+        "报告已导出" => ("Report exported", detail.into()),
+        _ => return None,
+    };
+    Some(format!("{label}: {detail}"))
+}
+
+fn english_window_error(message: &str) -> Cow<'_, str> {
+    if message == "重复的界面初始化消息" {
+        return Cow::Borrowed("Duplicate window initialization message");
+    }
+    for (prefix, label) in [
+        ("界面操作数据过大：", "Window action data is too large"),
+        ("无法显示窗口：", "Could not show the window"),
+        ("无法唤醒窗口：", "Could not raise the window"),
+    ] {
+        if let Some(detail) = message.strip_prefix(prefix) {
+            return format!("{label}: {detail}").into();
+        }
+    }
+    Cow::Borrowed(message)
+}
+
+fn test_notification_text(language: Language) -> &'static str {
+    language.text("喵!", "Meow!")
+}
+
 fn update_restart() -> bool {
     std::env::args_os().any(|arg| arg == "--update-result")
 }
@@ -419,6 +570,7 @@ struct App {
     privacy_hidden: bool,
     exiting: bool,
     notice: String,
+    notice_followups: Vec<String>,
     error: bool,
     notice_critical: bool,
     notice_network_recovery: bool,
@@ -626,6 +778,7 @@ impl App {
             geo_status,
             geo_updating: false,
             notice,
+            notice_followups: Vec::new(),
             error,
             notice_critical: core_failure.is_some(),
             notice_network_recovery: false,
@@ -914,13 +1067,10 @@ impl App {
         self.reset_site_filters();
         self.claude.close();
         self.claude.reports = Default::default();
-        self.claude.status = self
-            .presentation_language
-            .text(
-                "网络配置已改变，请重新检测地区线索。",
-                "Network settings changed; run the region check again.",
-            )
-            .into();
+        self.claude.status = claude_view::Status::Text(
+            "网络配置已改变，请重新检测地区线索。",
+            "Network settings changed; run the region check again.",
+        );
     }
 
     fn clear_network_test(&mut self) {
@@ -1081,9 +1231,7 @@ impl App {
                         self.update_unreachable_notice(message);
                     }
                     Ok(None) => {}
-                    Err(error) => {
-                        self.update_unreachable_notice(format!("节点复测失败：{error}"))
-                    }
+                    Err(error) => self.update_unreachable_notice(format!("节点复测失败：{error}")),
                 }
                 return self.dispatch(Action::Refresh);
             }
@@ -1100,17 +1248,19 @@ impl App {
                 let language = self.presentation_language;
                 return Task::perform(
                     async move {
-                        match platform::notification::show("Clash of Rust", "喵!").await {
+                        match platform::notification::show(
+                            "Clash of Rust",
+                            test_notification_text(language),
+                        )
+                        .await
+                        {
                             Err(error)
                                 if error.is::<platform::notification::PermissionDenied>() =>
                             {
                                 Message::NotificationPermissionDenied
                             }
                             result => Message::NotificationFinished(
-                                result.map_err(|error| format!(
-                                    "{}{error:#}",
-                                    language.text("系统通知失败：", "System notification failed: ")
-                                )),
+                                result.map_err(|error| format!("{error:#}")),
                             ),
                         }
                     },
@@ -1131,10 +1281,7 @@ impl App {
                             self.confirmation = None;
                         }
                     }
-                    Err(error) => self.show_notice(format!(
-                        "{}{error}",
-                        self.presentation_language.text("通知权限检查失败：", "Notification permission check failed: ")
-                    ), true),
+                    Err(error) => self.show_notice(format!("通知权限检查失败：{error}"), true),
                 }
                 self.offer_notification_settings();
             }
@@ -1145,21 +1292,15 @@ impl App {
             }
             Message::NotificationSettingsOpened(result) => match result {
                 Ok(()) => self.show_notice(
-                    self.presentation_language.text(
-                        "已打开系统通知设置，请允许 Clash of Rust 发送通知。",
-                        "Notification settings opened; allow Clash of Rust to send notifications.",
-                    ).into(),
+                    "已打开系统通知设置，请允许 Clash of Rust 发送通知。".into(),
                     false,
                 ),
-                Err(error) => self.show_notice(format!(
-                    "{}{error}",
-                    self.presentation_language.text("通知设置打开失败：", "Could not open notification settings: ")
-                ), true),
+                Err(error) => self.show_notice(format!("通知设置打开失败：{error}"), true),
             },
             Message::NotificationFinished(result) => {
                 self.notification_busy = false;
                 if let Err(error) = result {
-                    self.show_notice(error, true);
+                    self.show_notice(format!("系统通知失败：{error}"), true);
                 }
             }
             Message::RestartCore => {
@@ -1240,19 +1381,7 @@ impl App {
                     match &result {
                         Err(reason) => {
                             let previous = self.notice_revision;
-                            let language = self.presentation_language;
-                            let detail = update::localize_check_error(reason, language);
-                            let notice = if language == Language::English
-                                && detail.starts_with("Update check ")
-                            {
-                                detail.into_owned()
-                            } else {
-                                format!(
-                                    "{}{detail}",
-                                    language.text("检查更新失败：", "Update check failed: ")
-                                )
-                            };
-                            self.show_notice(notice, true);
+                            self.show_notice(format!("检查更新失败：{reason}"), true);
                             self.update_check_notice_revision =
                                 (self.notice_revision != previous).then_some(self.notice_revision);
                         }
@@ -1428,10 +1557,7 @@ impl App {
             }
             Message::ReleaseOpened(result) => {
                 if let Err(error) = result {
-                    self.show_notice(format!(
-                        "{}{error}",
-                        self.presentation_language.text("无法打开 Release 页面：", "Could not open the release page: ")
-                    ), true);
+                    self.show_notice(format!("无法打开 Release 页面：{error}"), true);
                 }
             }
             Message::Navigate(page) => {
@@ -1709,10 +1835,7 @@ impl App {
             }
             Message::WindowStateSaved(result) => {
                 if let Err(error) = result {
-                    self.show_notice(format!(
-                        "{}{error}",
-                        self.presentation_language.text("无法保存窗口状态：", "Could not save window state: ")
-                    ), true);
+                    self.show_notice(format!("无法保存窗口状态：{error}"), true);
                 }
             }
             Message::Window((
@@ -1764,10 +1887,7 @@ impl App {
                     return self.dispatch(Action::SavePorts(mixed_port));
                 }
                 _ => {
-                    self.show_notice(self.presentation_language.text(
-                        "端口必须为 1–65535 的整数",
-                        "Port must be an integer from 1 to 65535",
-                    ).into(), true);
+                    self.show_notice("端口必须为 1–65535 的整数".into(), true);
                 }
             },
             Message::UpdateGeo => {
@@ -1810,10 +1930,12 @@ impl App {
                     Ok(()) => {
                         self.reset_network_results();
                         self.show_notice(
-                            self.presentation_language.text(
-                                "GeoIP、GeoSite、Country、ASN 数据已全部更新",
-                                "GeoIP, GeoSite, Country and ASN data updated",
-                            ).into(),
+                            self.presentation_language
+                                .text(
+                                    "GeoIP、GeoSite、Country、ASN 数据已全部更新",
+                                    "GeoIP, GeoSite, Country and ASN data updated",
+                                )
+                                .into(),
                             false,
                         );
                     }
@@ -1893,8 +2015,12 @@ impl App {
                             self.show_unreachable_nodes(&group, delays.len());
                         } else {
                             let message = match self.presentation_language {
-                                Language::SimplifiedChinese => format!("{group}：{good}/{} 个节点可达", delays.len()),
-                                Language::English => format!("{group}: {good}/{} nodes reachable", delays.len()),
+                                Language::SimplifiedChinese => {
+                                    format!("{group}：{good}/{} 个节点可达", delays.len())
+                                }
+                                Language::English => {
+                                    format!("{group}: {good}/{} nodes reachable", delays.len())
+                                }
                             };
                             self.show_notice(message, false);
                         }
@@ -1934,10 +2060,7 @@ impl App {
                 Ok(minutes) if minutes <= 10080 => {
                     return self.dispatch(Action::UpdateInterval(minutes));
                 }
-                _ => self.show_notice(self.presentation_language.text(
-                    "请输入 0–10080 分钟，0 表示关闭自动检查更新",
-                    "Enter 0–10080 minutes; 0 disables automatic update checks",
-                ).into(), true),
+                _ => self.show_notice("请输入 0–10080 分钟，0 表示关闭自动检查更新".into(), true),
             },
             Message::SaveSubscriptionInterval => {
                 match self.subscription_interval_input.trim().parse::<u32>() {
@@ -1945,10 +2068,7 @@ impl App {
                         return self.dispatch(Action::SubscriptionInterval(minutes));
                     }
                     _ => {
-                        self.show_notice(self.presentation_language.text(
-                            "请输入 0–10080 分钟，0 表示关闭订阅自动更新",
-                            "Enter 0–10080 minutes; 0 disables automatic subscription updates",
-                        ).into(), true)
+                        self.show_notice("请输入 0–10080 分钟，0 表示关闭订阅自动更新".into(), true)
                     }
                 }
             }
@@ -1957,10 +2077,7 @@ impl App {
                     return self.dispatch(Action::DelayInterval(minutes));
                 }
                 _ => {
-                    self.show_notice(self.presentation_language.text(
-                        "请输入 0–1440 分钟，0 表示关闭定时测速",
-                        "Enter 0–1440 minutes; 0 disables scheduled speed tests",
-                    ).into(), true);
+                    self.show_notice("请输入 0–1440 分钟，0 表示关闭定时测速".into(), true);
                 }
             },
             Message::FakeIpEditor(open) => {
@@ -1976,17 +2093,11 @@ impl App {
             }
             Message::FakeIpAdd => {
                 if !self.settings.dns_override {
-                    self.fake_ip_error = self.presentation_language.text(
-                        "请先开启 DNS 覆盖",
-                        "Enable DNS override first",
-                    ).into();
+                    self.fake_ip_error = "请先开启 DNS 覆盖".into();
                 } else {
                     match parse_fake_ip_exclusions(&self.fake_ip_input) {
                         Ok(values) if values.is_empty() => {
-                            self.fake_ip_error = self.presentation_language.text(
-                                "请输入要排除的域名",
-                                "Enter a domain to exclude",
-                            ).into();
+                            self.fake_ip_error = "请输入要排除的域名".into();
                         }
                         Ok(values) => {
                             let mut settings = self.settings.clone();
@@ -2015,10 +2126,7 @@ impl App {
             }
             Message::FakeIpRestoreDefaults => {
                 if !self.settings.dns_override {
-                    self.fake_ip_error = self.presentation_language.text(
-                        "请先开启 DNS 覆盖",
-                        "Enable DNS override first",
-                    ).into();
+                    self.fake_ip_error = "请先开启 DNS 覆盖".into();
                 } else {
                     self.fake_ip_error.clear();
                     return self.dispatch(Action::FakeIpRestoreDefaults);
@@ -2474,10 +2582,8 @@ impl App {
                     {
                         if self.rule_state.dirty() || self.rule_state.has_editor() {
                             self.show_notice(
-                                self.presentation_language.text(
-                                    "该订阅已被另一客户端删除，未保存的规则草稿仍保留在当前页面。",
-                                    "Another client deleted this subscription. The unsaved rule draft remains on this page.",
-                                ).into(),
+                                "该订阅已被另一客户端删除，未保存的规则草稿仍保留在当前页面。"
+                                    .into(),
                                 true,
                             );
                         } else {
@@ -2494,10 +2600,10 @@ impl App {
                     self.group_offsets.clear();
                     self.cancel_site_checks();
                     self.claude.close();
-                    self.claude.status = self.presentation_language.text(
+                    self.claude.status = claude_view::Status::Text(
                         "内核已停止；已获得的报告保留，网络结果可能已过期。",
                         "The core stopped. Reports are retained; network results may be outdated.",
-                    ).into();
+                    );
                 }
                 let core_failed =
                     !reply.running && (reply.start_requested || self.snapshot.running);
@@ -2514,10 +2620,7 @@ impl App {
                             .as_ref()
                             .err()
                             .cloned()
-                            .unwrap_or_else(|| self.presentation_language.text(
-                                "内核已退出，请查看日志或重试启动。",
-                                "The core exited; check the logs or try starting it again.",
-                            ).into()),
+                            .unwrap_or_else(|| "内核已退出，请查看日志或重试启动。".into()),
                     );
                 }
                 self.snapshot.running = reply.running;
@@ -2820,19 +2923,14 @@ impl App {
                 Ok(()) => return desktop_runtime::exit(),
                 Err(error) => {
                     self.exiting = false;
-                    self.show_critical(format!(
-                        "{}{error}",
-                        self.presentation_language.text("退出失败：", "Exit failed: ")
-                    ));
+                    self.show_critical(format!("退出失败：{error}"));
                     if self.updates.busy() {
                         if let Some(session) = &self.updates.installing {
                             session.cancel();
                         }
                         self.updates.progress = None;
-                        self.updates.failure = Some(self.presentation_language.text(
-                            "更新失败：客户端无法正常退出，请检查代理恢复或内核状态",
-                            "Update failed: the client could not exit. Check proxy recovery and core status.",
-                        ).into());
+                        self.updates.failure =
+                            Some("更新失败：客户端无法正常退出，请检查代理恢复或内核状态".into());
                     }
                 }
             },
@@ -2842,31 +2940,18 @@ impl App {
 
     fn install_download(&mut self, downloaded: Arc<update::Downloaded>) -> Task<Message> {
         if self.settings.claude_protection.is_some() || self.claude.protection_pending.is_some() {
-            self.fail_update(
-                self.presentation_language
-                    .text(
-                        clash_client_core::protection::READ_ONLY_NOTICE,
-                        "Disable Claude protection first; network changes and updates are locked while protection is active",
-                    )
-                    .into(),
-            );
+            self.fail_update(clash_client_core::protection::READ_ONLY_NOTICE.into());
             return Task::none();
         }
         self.updates.prepare_install(downloaded.clone());
         let data_dir = startup_store().ok().map(|store| store.root);
-        let language = self.presentation_language;
         Task::perform(
             async move {
                 match tokio::task::spawn_blocking(move || update::handoff_at(downloaded, data_dir))
                     .await
                 {
                     Ok(result) => result.map_err(|error| format!("{error:#}")),
-                    Err(_) => Err(language
-                        .text(
-                            "安装助手无法启动，请重试",
-                            "Could not start the installation helper; try again",
-                        )
-                        .into()),
+                    Err(_) => Err("安装助手无法启动，请重试".into()),
                 }
             },
             Message::UpdateHandoff,
@@ -3611,6 +3696,12 @@ mod async_state_tests {
     use super::*;
     fn app() -> App {
         App::initial_state(Err(anyhow::anyhow!("state test")), None)
+    }
+
+    #[test]
+    fn desktop_test_notification_text_follows_the_selected_language() {
+        assert_eq!(test_notification_text(Language::SimplifiedChinese), "喵!");
+        assert_eq!(test_notification_text(Language::English), "Meow!");
     }
     #[test]
     fn core_initialization_preserves_a_tray_failure_as_a_recoverable_warning() {

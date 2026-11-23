@@ -413,7 +413,7 @@ fn field<'a>(data: &mut &'a [u8]) -> Result<(u8, &'a [u8])> {
     Ok((tag, value))
 }
 
-fn common_name(mut sequence: &[u8]) -> Result<String> {
+fn common_name(mut sequence: &[u8]) -> Result<Option<&[u8]>> {
     for _ in 0..32 {
         if sequence.is_empty() {
             break;
@@ -428,15 +428,24 @@ fn common_name(mut sequence: &[u8]) -> Result<String> {
             if tag == 6 && identifier == [0x55, 4, 3] {
                 let (tag, value) = field(&mut pair)?;
                 if matches!(tag, 12 | 19 | 20 | 22) {
-                    return Ok(bounded(
-                        std::str::from_utf8(value).unwrap_or("无法解码的名称"),
-                        160,
-                    ));
+                    return Ok(Some(value));
                 }
             }
         }
     }
-    Ok("证书未提供通用名称".into())
+    Ok(None)
+}
+
+fn certificate_name_entry(label: &str, sequence: &[u8]) -> Result<Entry> {
+    let name = common_name(sequence)?.map(std::str::from_utf8).transpose();
+    let (detail, english) = match name {
+        Ok(Some(name)) => return Ok(Entry::ok(label, bounded(name, 160))),
+        Ok(None) => text::CERTIFICATE_NAME_MISSING,
+        Err(_) => text::CERTIFICATE_NAME_UNDECODABLE,
+    };
+    let mut entry = Entry::ok(label, detail);
+    entry.detail_english = Some(english.into());
+    Ok(entry)
 }
 
 pub(super) fn certificate_entries(der: &[u8], entries: &mut Vec<Entry>) -> Result<()> {
@@ -457,8 +466,8 @@ pub(super) fn certificate_entries(der: &[u8], entries: &mut Vec<Entry>) -> Resul
     let (_, before) = field(&mut validity)?;
     let (_, after) = field(&mut validity)?;
     let (_, subject) = field(&mut body)?;
-    entries.push(Entry::ok("证书主体", common_name(subject)?));
-    entries.push(Entry::ok("签发者", common_name(issuer)?));
+    entries.push(certificate_name_entry("证书主体", subject)?);
+    entries.push(certificate_name_entry("签发者", issuer)?);
     entries.push(Entry::ok(
         "有效期（UTC）",
         format!(

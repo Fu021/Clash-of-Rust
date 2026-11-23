@@ -5,7 +5,7 @@ import { ControlAccess } from "../../components/control-access.slint";
 
 export enum MobileIntent {
     navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, group-expansion, group-page, group-pagination, profile-page, profile-pagination, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
-    import-profile, pick-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
+    import-profile, profile-new, profile-close, pick-file, activate-profile, update-profile, save-profile, delete-profile, application-policy,
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe, network-tool, probe-cancel,
@@ -215,6 +215,7 @@ export global MobileView {
         if self.draft-dirty {
             self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {
+            if self.detail == 3 { MobileActions.request(MobileIntent.profile-close, "", ""); }
             self.dismiss-connection-detail();
             if self.page != destination { self.network-open = false; self.query = ""; }
             self.page = destination; self.detail = 0; self.rule-selected = false; self.rule-drag-id = ""; self.rule-drag-target = "";
@@ -239,6 +240,7 @@ export global MobileView {
         if self.draft-dirty {
             self.pending-page = -1; self.pending-detail = self.detail; self.detail = 12;
         } else {
+            if self.detail == 3 { MobileActions.request(MobileIntent.profile-close, "", ""); }
             self.dismiss-connection-detail();
             self.detail = self.detail == 16 ? 6 : 0;
         }

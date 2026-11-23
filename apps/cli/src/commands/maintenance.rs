@@ -80,7 +80,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                         .positional
                         .first()
                         .cloned()
-                        .unwrap_or_else(|| "喵!".into()),
+                        .unwrap_or_else(|| args.language().text("喵!", "Meow!").into()),
                 },
             )
             .await?;

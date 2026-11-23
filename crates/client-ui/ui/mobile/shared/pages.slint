@@ -282,11 +282,11 @@ export component MobileSubscriptions inherits PageSurface {
                 }
             }
             MField { placeholder: @tr("粘贴订阅链接"); text <=> MobileView.profile-source; enabled: !MobileData.protected && !MobileData.protection-pending; }
-            MButton { text: @tr("导入"); compact: true; primary: true; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending; width: max(64px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0;
+            MButton { geometry-key: "profile-add"; text: @tr("导入"); compact: true; primary: true; enabled: !MobileData.profile-busy && !MobileData.protected && !MobileData.protection-pending; width: max(64px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0;
                 property <[length]> target: [self.absolute-position.x, self.absolute-position.y, self.width, self.height];
                 changed target => { MobileView.profile-add-target = self.target; }
                 init => { MobileView.profile-add-target = self.target; }
-                clicked => { MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.detail = 3; }
+                clicked => { MobileActions.request(MobileIntent.profile-new, "", ""); MobileView.selected-id = ""; MobileView.profile-name = ""; MobileView.detail = 3; }
             }
           }
         }
@@ -381,7 +381,9 @@ component ConnectionsToolbar inherits VerticalLayout {
         }
         MButton { col: 1; row: parent.narrow ? 1 : 0;
             geometry-key: "connections-close-all";
-            text: @tr("关闭全部"); width: max(100px, MobileTypography.font-size(15) * 6 + 16px); horizontal-stretch: 0; danger: true; enabled: !MobileData.protected && !MobileData.protection-pending; clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
+            text: @tr("关闭全部"); width: max(100px, MobileTypography.font-size(15) * 6 + 16px); horizontal-stretch: 0; danger: true;
+            enabled: MobileData.core-running && !MobileData.working && !MobileData.protected && !MobileData.protection-pending;
+            clicked => { MobileActions.request(MobileIntent.close-all, "", ""); } }
         MSmall { col: 0; row: 1; colspan: parent.narrow ? 1 : 2; text: @tr("{} 条活跃连接", MobileData.connection-count); preferred-width: 0px; }
     }
 }

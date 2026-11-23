@@ -171,6 +171,15 @@ impl Transaction {
         Ok(())
     }
 }
+pub fn pending(root: &Path) -> Result<bool> {
+    match fs::symlink_metadata(root.join(JOURNAL)) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("无法检查配置恢复记录：{}", root.display()))
+        }
+    }
+}
 fn remove_if_present(path: &Path) -> Result<()> {
     match remove_file(path) {
         Ok(()) => Ok(()),

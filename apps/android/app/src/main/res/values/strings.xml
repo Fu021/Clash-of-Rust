@@ -5,6 +5,9 @@
     <string name="vpn_disconnected">VPN disconnected</string>
     <string name="vpn_cancelled">VPN connection cancelled</string>
     <string name="vpn_recovery_timeout">VPN recovery timed out. Retry network recovery.</string>
+    <string name="protection_recovery_record_invalid">The protection recovery record is missing or invalid.</string>
+    <string name="protection_recovery_cleanup_incomplete">VPN cleanup did not complete during protection recovery.</string>
+    <string name="protection_recovery_commit_failed">Could not commit the verified protection recovery record.</string>
     <string name="vpn_permission_expired">VPN authorization expired. Open the app to reconnect.</string>
     <string name="vpn_permission_revoked">VPN authorization was revoked by the system.</string>
     <string name="vpn_establish_denied">The system refused to establish the VPN.</string>
@@ -59,6 +62,8 @@
     <string name="export_complete">File exported</string>
     <string name="import_read_failed">Could not read the selected file.</string>
     <string name="import_failed">Could not import the file: %1$s</string>
+    <string name="import_in_progress">A local configuration picker is already open.</string>
+    <string name="import_request_invalid">The local file request is invalid.</string>
     <string name="import_too_large">The subscription exceeds 10 MiB.</string>
     <string name="import_default_name">Imported configuration</string>
     <string name="vpn_authorization_pending">A VPN authorization request is already in progress.</string>

@@ -3452,7 +3452,7 @@ public class ProxyTunTest {
         JSONObject saved = new JSONObject(new String(original, StandardCharsets.UTF_8));
         saved.put("claude_protection", new JSONObject()
             .put("profile_id", saved.getString("active_profile")).put("node", "CI-TUN-origin")
-            .put("route", "CI-saved-protection")
+            .put("route", "COR-Claude-" + UUID.randomUUID().toString().replace("-", ""))
             .put("previous", new JSONObject().put("mode", saved.getString("run_mode"))
                 .put("proxy_mode", "off").put("selectors", new JSONArray())));
         byte[] protectedSettings = saved.toString().getBytes(StandardCharsets.UTF_8);
@@ -3468,14 +3468,19 @@ public class ProxyTunTest {
         try {
             java.nio.file.Files.write(settings.toPath(), protectedSettings);
             InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::recreate);
-            long initial = awaitNewAuthorization(previous, "pending");
             int[] beforeInitialDenial = new int[1];
-            await("The replacement Activity did not expose its notice state", () -> {
+            await("The replacement Activity did not load the saved protection fixture", () -> {
                 JSONObject ui = MainActivity.diagnostics();
                 if (!ui.optBoolean("live") || ui.optLong("ui_generation") <= uiGeneration) return false;
+                if (ui.optBoolean("notice_error") && ui.optBoolean("notice_modal")
+                        && !ui.optBoolean("working") && previewBounds(ui, "notice-retry-core") != null) {
+                    fail("Mobile startup rejected the saved protection fixture before VPN authorization; see logcat");
+                }
+                if (!ui.optBoolean("protected")) return false;
                 beforeInitialDenial[0] = ui.getInt("notice_revision");
                 return true;
             });
+            long initial = awaitNewAuthorization(previous, "pending");
             consent(false);
             awaitProtectionDenial(initial, beforeInitialDenial[0]);
             assertArrayEquals(protectedSettings, java.nio.file.Files.readAllBytes(settings.toPath()));

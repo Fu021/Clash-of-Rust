@@ -516,8 +516,11 @@ async fn profile_list_localizes_human_output_and_preserves_machine_output() {
     server.abort();
 }
 
-async fn subscription_backend(root: &std::path::Path) -> tokio::task::JoinHandle<()> {
-    use clash_client_core::{config, rule_manager::Document};
+async fn mock_control_backend(
+    root: &std::path::Path,
+    mut respond: impl FnMut(&serde_json::Value) -> serde_json::Value + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
+    use clash_client_core::config::atomic_write;
     use clash_client_runtime::control::PROTOCOL;
     use serde_json::{Value, json};
     use tokio::{
@@ -531,11 +534,30 @@ async fn subscription_backend(root: &std::path::Path) -> tokio::task::JoinHandle
         "protocol": PROTOCOL, "port": listener.local_addr().unwrap().port(),
         "pid": std::process::id(), "owner": "daemon", "token": token,
     });
-    config::atomic_write(
+    atomic_write(
         &root.join("control.json"),
         &serde_json::to_vec(&endpoint).unwrap(),
     )
     .unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let size = stream.read_u32().await.unwrap();
+            let mut request = vec![0; size as usize];
+            stream.read_exact(&mut request).await.unwrap();
+            let request: Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(request["token"], token);
+            let response = serde_json::to_vec(&respond(&request["operation"])).unwrap();
+            stream.write_u32(response.len() as u32).await.unwrap();
+            stream.write_all(&response).await.unwrap();
+        }
+    })
+}
+
+async fn subscription_backend(root: &std::path::Path) -> tokio::task::JoinHandle<()> {
+    use clash_client_core::{config, rule_manager::Document};
+    use serde_json::json;
+
     let meta = json!({"result": {
         "profiles": [{"id": "fixture", "name": "本地订阅", "source": "/fixture.yaml",
             "updated": 0, "usage": null, "builtin": false}],
@@ -552,33 +574,74 @@ async fn subscription_backend(root: &std::path::Path) -> tokio::task::JoinHandle
     let document = json!({"result": document});
     let error = config::parse_profile("name: sample").unwrap_err();
     let import_error = json!({"result": null, "error": format!("{error:#}")});
-    tokio::spawn(async move {
-        loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let size = stream.read_u32().await.unwrap();
-            let mut request = vec![0; size as usize];
-            stream.read_exact(&mut request).await.unwrap();
-            let request: Value = serde_json::from_slice(&request).unwrap();
-            assert_eq!(request["token"], token);
-            let operation = &request["operation"];
-            let response = match operation["command"].as_str() {
-                Some("meta") => &meta,
-                Some("rule-document") => {
-                    assert_eq!(operation["id"], "fixture");
-                    &document
-                }
-                Some("import") => {
-                    assert_eq!(operation["id"], "fixture");
-                    assert_eq!(operation["expect_current"], true);
-                    &import_error
-                }
-                command => panic!("unexpected backend command {command:?}"),
-            };
-            let response = serde_json::to_vec(response).unwrap();
-            stream.write_u32(response.len() as u32).await.unwrap();
-            stream.write_all(&response).await.unwrap();
+    mock_control_backend(root, move |operation| {
+        match operation["command"].as_str() {
+            Some("meta") => &meta,
+            Some("rule-document") => {
+                assert_eq!(operation["id"], "fixture");
+                &document
+            }
+            Some("import") => {
+                assert_eq!(operation["id"], "fixture");
+                assert_eq!(operation["expect_current"], true);
+                &import_error
+            }
+            command => panic!("unexpected backend command {command:?}"),
+        }
+        .clone()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn notify_localizes_the_default_and_preserves_explicit_messages() {
+    use serde_json::{Value, json};
+
+    let root = tempfile::tempdir().unwrap();
+    let (send, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let server = mock_control_backend(root.path(), move |operation| {
+        match operation["command"].as_str() {
+            Some("meta") => json!({"result": {
+                "profiles": [], "settings": {}, "running": false,
+                "geo": {"version": "test", "updated": 0, "files": []},
+                "version": "test", "owner": "daemon", "executable": "",
+            }}),
+            Some("notify") => {
+                assert_eq!(operation["title"], "Clash of Rust");
+                send.send(operation["message"].clone()).unwrap();
+                json!({"result": null})
+            }
+            command => panic!("unexpected backend command {command:?}"),
         }
     })
+    .await;
+    for (language, message, expected) in [
+        ("en", None, "Meow!"),
+        ("zh-CN", None, "喵!"),
+        ("en", Some("用户正文: custom"), "用户正文: custom"),
+    ] {
+        let mut command = cor();
+        command
+            .args([
+                "notify",
+                "--lang",
+                language,
+                "--timeout=2",
+                "--json",
+                "--data-dir",
+            ])
+            .arg(root.path())
+            .args(message);
+        let output = tokio::process::Command::from(command)
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(received.try_recv().unwrap(), expected);
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["data"], json!({"sent": true}));
+    }
+    server.abort();
 }
 
 #[tokio::test]
@@ -740,6 +803,129 @@ fn english_cli_explains_confirmation_and_terminal_requirements() {
         assert!(error.contains(expected), "{error}");
     }
     assert!(!data.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn service_status_localizes_a_real_service_query_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let systemctl = root.path().join("systemctl");
+    std::fs::write(&systemctl, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+    std::fs::set_permissions(systemctl, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let result = cor()
+        .args(["service", "status", "--lang=en", "--quiet", "--data-dir"])
+        .arg(root.path().join("data"))
+        .env("PATH", root.path())
+        .env("XDG_CONFIG_HOME", root.path().join("config"))
+        .env_remove("SUDO_COMMAND")
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let output = String::from_utf8(result.stdout).unwrap();
+    assert!(
+        output.contains("Query failed: Login service query timed out after 5 seconds"),
+        "{output}"
+    );
+    assert!(!root.path().join("data").exists());
+    assert!(!root.path().join("config").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn service_status_localizes_native_failures_and_preserves_machine_errors() {
+    use clash_client_runtime::{config::Store, platform::cli_service};
+    use serde_json::{Value, json};
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let _owner = Store { root: data.clone() }.instance_lock().unwrap();
+    let backend_cause = "无法检查后台的占用锁: fixture backend failure";
+    let server = mock_control_backend(&data, move |operation| {
+        assert_eq!(operation["command"], "meta");
+        json!({"result": null, "error": backend_cause})
+    })
+    .await;
+
+    let config = root.path().join("config");
+    std::fs::create_dir_all(config.join("systemd/user").join(cli_service::NAME)).unwrap();
+    let systemctl = root.path().join("systemctl");
+    std::fs::write(
+        &systemctl,
+        "#!/bin/sh\nprintf '%s\\n' 'fixture: 系统原文' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(systemctl, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let status = |language: &str, format: Option<&str>| {
+        let mut command = cor();
+        command
+            .args([
+                "service",
+                "status",
+                "--lang",
+                language,
+                "--quiet",
+                "--data-dir",
+            ])
+            .arg(&data)
+            .args(format)
+            .env("PATH", root.path())
+            .env("XDG_CONFIG_HOME", &config)
+            .env_remove("SUDO_COMMAND");
+        async move {
+            let output = tokio::process::Command::from(command)
+                .output()
+                .await
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout).unwrap()
+        }
+    };
+
+    let english = status("en", None).await;
+    for expected in [
+        "Query failed: Could not read the CLI login startup configuration: ",
+        "Query failed: Login service query failed: fixture: 系统原文",
+        &format!(
+            "Query failed: The running backend is temporarily unreachable; preserve the diagnostic state: {backend_cause}"
+        ),
+    ] {
+        assert!(english.contains(expected), "{english}");
+    }
+    let chinese = status("zh-CN", None).await;
+    assert!(
+        chinese.contains("登录服务查询失败：fixture: 系统原文"),
+        "{chinese}"
+    );
+    assert!(chinese.contains("无法读取 CLI 登录自启配置："), "{chinese}");
+    assert!(chinese.contains(backend_cause), "{chinese}");
+
+    for format in ["--json", "--jsonl"] {
+        let english = status("en", Some(format)).await;
+        assert_eq!(english, status("zh-CN", Some(format)).await);
+        let response: Value = serde_json::from_str(&english).unwrap();
+        let value = &response["data"];
+        assert_eq!(value["ownership"], "unknown");
+        assert!(value["owner_pid"].is_null());
+        assert_eq!(
+            value["service_error"],
+            "登录服务查询失败：fixture: 系统原文"
+        );
+        assert!(
+            value["config_error"]
+                .as_str()
+                .unwrap()
+                .starts_with("无法读取 CLI 登录自启配置：")
+        );
+        assert_eq!(
+            value["backend_error"],
+            format!("存活的后台暂时不可达，请先保留排障现场: {backend_cause}")
+        );
+    }
+    server.abort();
 }
 
 #[cfg(target_os = "linux")]

@@ -1,5 +1,6 @@
 use crate::args::Args;
 use anyhow::{Context, Result, bail, ensure};
+use clash_client_core::config::Language;
 use clash_client_runtime::{
     config::Store,
     control::{self, Command, Meta, Owner, Poll, Remote},
@@ -19,6 +20,10 @@ impl std::fmt::Display for Unavailable {
     }
 }
 impl std::error::Error for Unavailable {}
+
+pub(crate) const RUNNING_BACKEND_UNREACHABLE: &str = "存活的后台暂时不可达，请先保留排障现场";
+pub(crate) const RUNNING_BACKEND_UNREACHABLE_EN: &str =
+    "The running backend is temporarily unreachable; preserve the diagnostic state";
 
 pub fn store(args: &Args) -> Result<Store> {
     Store::at(data_root(args)?)
@@ -48,23 +53,29 @@ pub fn timeout(args: &Args) -> Result<Duration> {
     Ok(Duration::from_secs(value as u64))
 }
 
-async fn reachable(
-    store: &Store,
-    remote: &Remote,
-    language: clash_client_core::config::Language,
-) -> Result<bool> {
+async fn reachable(store: &Store, remote: &Remote, language: Language) -> Result<bool> {
     match remote.request::<Meta>(Command::Meta).await {
         Ok(_) => Ok(true),
         Err(error) if owner_locked(store)? => Err(error.context(Unavailable(
             language
-                .text(
-                    "存活的后台暂时不可达，请先保留排障现场",
-                    "The running backend is temporarily unreachable; preserve the diagnostic state",
-                )
+                .text(RUNNING_BACKEND_UNREACHABLE, RUNNING_BACKEND_UNREACHABLE_EN)
                 .into(),
         ))),
         Err(_) => Ok(false),
     }
+}
+
+pub(crate) async fn discover_reachable(
+    store: &Store,
+    timeout: Duration,
+    language: impl FnOnce() -> Language,
+) -> Result<Option<Remote>> {
+    if let Some(remote) = Remote::discover(store, timeout)?
+        && reachable(store, &remote, language()).await?
+    {
+        return Ok(Some(remote));
+    }
+    Ok(None)
 }
 
 pub async fn observed_snapshot(args: &Args, scope: Scope) -> Result<Option<(Remote, Poll)>> {
@@ -100,9 +111,7 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
             root: data_root(args)?,
         }
     };
-    if let Some(remote) = Remote::discover(&store, timeout(args)?)?
-        && reachable(&store, &remote, args.language()).await?
-    {
+    if let Some(remote) = discover_reachable(&store, timeout(args)?, || args.language()).await? {
         return Ok(Some(remote));
     }
     if !spawn {
@@ -163,17 +172,17 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
             && store.instance_lock().is_ok()
         {
             bail!(Unavailable(match args.language() {
-                clash_client_core::config::Language::SimplifiedChinese =>
+                Language::SimplifiedChinese =>
                     format!("后台启动失败（{status}）；请查看 {}", log.display()),
-                clash_client_core::config::Language::English =>
+                Language::English =>
                     format!("Backend startup failed ({status}); see {}", log.display()),
             }));
         }
         if tokio::time::Instant::now() >= deadline {
             bail!(Unavailable(match args.language() {
-                clash_client_core::config::Language::SimplifiedChinese =>
+                Language::SimplifiedChinese =>
                     format!("等待后台启动超时；请查看 {}", log.display()),
-                clash_client_core::config::Language::English =>
+                Language::English =>
                     format!("Timed out waiting for the backend; see {}", log.display()),
             }));
         }

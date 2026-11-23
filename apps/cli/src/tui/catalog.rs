@@ -1,6 +1,9 @@
-use super::{form::Form, model::State, render::Tone, settings};
+use super::{form::Form, model::State, render, render::Tone, settings};
 use anyhow::{Context, Result, ensure};
-use clash_client_core::{config::Language, subscription};
+use clash_client_core::{
+    config::{Language, Profile},
+    subscription,
+};
 use clash_client_runtime::control::{Command, Poll, Remote};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
@@ -180,52 +183,146 @@ pub(super) fn profiles(state: &State, width: usize, height: usize) -> Vec<(Strin
             height,
         );
     }
-    let rows = items.iter().enumerate().map(|(index, id)| {
+    let row = |index, id: &str| {
         let profile = poll
             .meta
             .profiles
             .iter()
-            .find(|profile| profile.id == *id)
+            .find(|profile| profile.id == id)
             .unwrap();
-        let current = poll.meta.settings.active_profile.as_deref() == Some(*id);
-        let local = profile.is_local();
-        let mut text = format!(
-            "{} {}{} · {}",
-            if index == state.selected { "›" } else { " " },
-            if current {
-                language.text("[当前] ", "[Current] ")
-            } else {
-                ""
-            },
-            crate::output::profile_name(profile, language),
-            if profile.builtin {
-                language.text("内置", "Built-in")
-            } else if local {
-                language.text("本地", "Local")
-            } else {
-                language.text("远程", "Remote")
-            },
-        );
-        if !profile.builtin && !local {
-            let separator = " · ";
-            let summary =
-                subscription::summary(profile.usage.as_deref(), profile.updated, language);
-            let row_width = text.replace(char::is_control, " ").width();
-            if row_width + separator.width() + summary.as_str().width() <= width {
-                text.push_str(separator);
-                text.push_str(&summary);
-            }
-        }
+        let current = poll.meta.settings.active_profile.as_deref() == Some(id);
+        let selected = index == state.selected;
         (
-            text,
-            if index == state.selected {
+            profile_lines(profile, current, selected, width, height, language),
+            if selected {
                 Tone::Selected
             } else {
                 Tone::Plain
             },
         )
-    });
-    super::render::list(header, rows, state.selected, width, height)
+    };
+    let reserved_rows = items
+        .get(state.selected)
+        .map_or(1, |id| row(state.selected, id).0.len());
+    let rows = items.iter().enumerate().map(|(index, id)| row(index, id));
+    render::list_rows(header, rows, state.selected, width, height, reserved_rows)
+}
+
+fn profile_lines(
+    profile: &Profile,
+    current: bool,
+    selected: bool,
+    width: usize,
+    height: usize,
+    language: Language,
+) -> Vec<String> {
+    let name = crate::output::profile_name(profile, language).replace(char::is_control, " ");
+    let marker = if selected { "›" } else { " " };
+    let current = if current {
+        language.text("[当前] ", "[Current] ")
+    } else {
+        ""
+    };
+    let min_name_width = name.width().min(3);
+    let current = if width >= marker.width() + 1 + current.width() + min_name_width {
+        current
+    } else {
+        ""
+    };
+    let local = profile.is_local();
+    let source = if profile.builtin {
+        language.text("内置", "Built-in")
+    } else if local {
+        language.text("本地", "Local")
+    } else {
+        language.text("远程", "Remote")
+    };
+    let title = format!("{marker} {current}{name} · {source}");
+    if profile.builtin || local {
+        return render::wrap(&title, width);
+    }
+
+    let summary = subscription::summary(profile.usage.as_deref(), profile.updated, language);
+    let inline = format!("{title} · {summary}");
+    if inline.width() <= width {
+        return vec![inline];
+    }
+
+    let name_width =
+        width.saturating_sub(marker.width() + 1 + current.width() + 3 + source.width());
+    let mut lines = vec![if title.width() <= width {
+        title
+    } else if name_width < min_name_width {
+        render::fit(&format!("{marker} {current}{name}"), width)
+    } else {
+        let name = render::fit(&name, name_width);
+        format!("{marker} {current}{} · {source}", name.trim_end())
+    }];
+    lines.extend(profile_summary_lines(
+        &summary,
+        width,
+        height.saturating_sub(1),
+        language,
+    ));
+    lines
+}
+
+fn profile_summary_lines(
+    summary: &str,
+    width: usize,
+    height: usize,
+    language: Language,
+) -> Vec<String> {
+    if height == 0 {
+        return Vec::new();
+    }
+    let mut parts = summary.split(" · ").collect::<Vec<_>>();
+    let mut lines = pack_summary(&parts, width);
+    if lines.len() > height.min(2)
+        && parts
+            .last()
+            .is_some_and(|part| part.starts_with(language.text("更新 ", "Updated ")))
+    {
+        parts.pop();
+        lines = pack_summary(&parts, width);
+    }
+    if lines.len() > height
+        && let Some(expiry) = parts.last().filter(|part| {
+            **part == language.text("不限期", "No expiry")
+                || part.starts_with(language.text("到期 ", "Expires "))
+        })
+    {
+        let mut expiry_lines = render::wrap(expiry, width);
+        if expiry_lines.len() > height
+            && let Some(date) = expiry.strip_prefix(language.text("到期 ", "Expires "))
+            && date.starts_with(|character: char| character.is_ascii_digit())
+            && date.width() <= width
+        {
+            expiry_lines = vec![date.into()];
+        }
+        lines = pack_summary(&parts[..parts.len() - 1], width);
+        lines.truncate(height.saturating_sub(expiry_lines.len()));
+        lines.extend(expiry_lines);
+    }
+    lines.truncate(height);
+    lines
+}
+
+fn pack_summary(parts: &[&str], width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for part in parts {
+        if part.width() > width {
+            lines.extend(render::wrap(part, width));
+        } else if let Some(line) = lines.last_mut()
+            && line.width() + 3 + part.width() <= width
+        {
+            line.push_str(" · ");
+            line.push_str(part);
+        } else {
+            lines.push((*part).into());
+        }
+    }
+    lines
 }
 
 pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {

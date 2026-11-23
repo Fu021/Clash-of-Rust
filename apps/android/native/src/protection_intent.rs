@@ -43,6 +43,9 @@ fn allowed(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::GroupPagination
             | MobileIntent::ProfilePage
             | MobileIntent::ProfilePagination
+            | MobileIntent::ProfileNew
+            | MobileIntent::ProfileClose
+            | MobileIntent::PickFile
             | MobileIntent::ConnectionPage
             | MobileIntent::RulePage
             | MobileIntent::RuleFilter

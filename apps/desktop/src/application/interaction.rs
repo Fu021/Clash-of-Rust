@@ -277,16 +277,9 @@ impl App {
             Message::ReportIssue(context) => self.prepare_diagnostics(context, true),
             Message::DiagnosticsExported(result) => {
                 self.diagnosing = false;
-                let language = self.presentation_language;
                 match result {
                     Ok((path, url)) => {
-                        self.show_notice_followup(
-                            format!(
-                                "{}{path}",
-                                language.text("诊断已导出：", "Diagnostics exported: ")
-                            ),
-                            false,
-                        );
+                        self.show_notice_followup(format!("诊断已导出：{path}"), false);
                         if let Some(url) = url {
                             let url = url.clone();
                             return Some(Task::perform(
@@ -300,29 +293,15 @@ impl App {
                             ));
                         }
                     }
-                    Err(error) => self.show_notice_followup(
-                        format!(
-                            "{}{error}",
-                            language.text(
-                                "诊断采集或导出失败：",
-                                "Failed to collect or export diagnostics: "
-                            )
-                        ),
-                        true,
-                    ),
+                    Err(error) => {
+                        self.show_notice_followup(format!("诊断采集或导出失败：{error}"), true)
+                    }
                 }
                 none()
             }
             Message::IssueOpened(result) => {
                 if let Err(error) = result {
-                    self.show_notice_followup(
-                        format!(
-                            "{}{error}",
-                            self.presentation_language
-                                .text("无法打开问题反馈页面：", "Failed to open the issue page: ")
-                        ),
-                        true,
-                    );
+                    self.show_notice_followup(format!("无法打开问题反馈页面：{error}"), true);
                 }
                 none()
             }
@@ -969,6 +948,7 @@ mod tests {
     #[test]
     fn english_diagnostics_feedback_preserves_paths_and_failure_details() {
         let mut app = app();
+        app.dismiss_notice();
         app.presentation_language = Language::English;
         app.diagnosing = true;
         let _ = app.update(Message::DiagnosticsExported(Ok((
@@ -976,12 +956,12 @@ mod tests {
             None,
         ))));
         assert!(!app.diagnosing);
-        assert!(app.notice.contains("Diagnostics exported: /tmp/诊断.json"));
+        assert_eq!(app.display_notice(), "Diagnostics exported: /tmp/诊断.json");
         app.dismiss_notice();
 
         let _ = app.update(Message::DiagnosticsExported(Err("磁盘已满".into())));
         assert!(
-            app.notice
+            app.display_notice()
                 .contains("Failed to collect or export diagnostics: 磁盘已满")
         );
         assert!(app.error);
@@ -989,7 +969,7 @@ mod tests {
 
         let _ = app.update(Message::IssueOpened(Err("browser unavailable".into())));
         assert!(
-            app.notice
+            app.display_notice()
                 .contains("Failed to open the issue page: browser unavailable")
         );
         assert!(app.error);

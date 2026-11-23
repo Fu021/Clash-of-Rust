@@ -5,6 +5,7 @@ use crate::{
     list_presentation::{
         self, CONNECTION_PAGE_SIZE, ConnectionPageCursor, ConnectionPager, LogMessage,
     },
+    profile_picker::{Outcome, ProfilePicker, Settlement},
     protection_presentation::{self, PendingVpnRestoration, VpnRestoration},
     request_gate::RequestGate,
     settings_input, site_report,
@@ -312,7 +313,7 @@ struct State {
     connection_detail: Option<Detail>,
     ip_results: Vec<core::ip_report::ResultSlot>,
     claude: Option<core::claude_check::Report>,
-    claude_status: String,
+    claude_status: ClaudeStatus,
     protection_change: Option<ProtectionChange>,
     saved_protection_recovery: SavedProtectionRecovery,
     protection_disable_confirmation: Option<PendingVpnRestoration>,
@@ -336,7 +337,7 @@ struct State {
     probe_busy: bool,
     network_tool: i32,
     probe_codes: Vec<&'static str>,
-    geo: String,
+    geo: Option<String>,
     geo_updating: bool,
     node_pages: BTreeMap<String, usize>,
     node_delays: BTreeMap<String, u32>,
@@ -352,7 +353,7 @@ struct State {
     rule_form: Option<RuleForm>,
     rule_editor: Option<RuleEditor>,
     update_package: Option<core::update::Package>,
-    update_status: String,
+    update_status: UpdateStatus,
     update_busy: bool,
     update_downloading: bool,
     update_progress: f32,
@@ -360,6 +361,8 @@ struct State {
     update_path: PathBuf,
     update_generation: u64,
     update_confirmation: Option<core::update::channel::Consent>,
+    profile_picker: ProfilePicker,
+    picked_profile_name: Option<String>,
 }
 
 #[unsafe(no_mangle)]
@@ -734,6 +737,154 @@ enum Update {
     Downloaded(u64, std::result::Result<(), String>),
     IncidentPresented(u64),
 }
+
+#[derive(Clone)]
+enum ClaudeStatus {
+    NotChecked,
+    Checking,
+    ProtectionPaused,
+    Stopped,
+    Complete,
+    Failed(String),
+    SubscriptionChanged,
+}
+
+impl ClaudeStatus {
+    fn render(&self, language: config::Language) -> String {
+        match self {
+            Self::NotChecked => language.text("尚未检测", "Not checked").into(),
+            Self::Checking => language
+                .text(
+                    "正在检测，浏览器将自动采样…",
+                    "Checking; browser sampling starts automatically…",
+                )
+                .into(),
+            Self::ProtectionPaused => language
+                .text(
+                    "保护切换或恢复待处理，网络检测已暂停",
+                    "Network checks are paused while a protection change or recovery is pending",
+                )
+                .into(),
+            Self::Stopped => language
+                .text(
+                    "已停止检测，保留上次完成的报告",
+                    "Check stopped; the previous report is preserved",
+                )
+                .into(),
+            Self::Complete => language
+                .text(
+                    "检测完成 · 浏览器及网络采样已结束",
+                    "Check complete · browser and network sampling finished",
+                )
+                .into(),
+            Self::Failed(error) => format!(
+                "{}{}",
+                language.text("检测失败：", "Check failed: "),
+                core::error_message::localize(error, language)
+            ),
+            Self::SubscriptionChanged => language
+                .text(
+                    "订阅已更新，请重新检测地区线索。",
+                    "Subscription updated; run the check again.",
+                )
+                .into(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum UpdateStatus {
+    NotChecked,
+    Checking,
+    Available {
+        version: String,
+        preview: bool,
+        size: u64,
+    },
+    NoUpdate,
+    CheckFailed(String),
+    ChannelChanged,
+    ProtectionPaused,
+    Cancelled,
+    PreparingDownload,
+    Connecting(core::update::Progress),
+    Downloading(core::update::Progress),
+    Downloaded,
+    Failed(String),
+}
+
+impl UpdateStatus {
+    fn render(&self, language: config::Language) -> String {
+        match self {
+            Self::NotChecked => language.text("尚未检查更新", "Updates not checked").into(),
+            Self::Checking => language
+                .text("正在检查更新…", "Checking for updates…")
+                .into(),
+            Self::Available {
+                version,
+                preview,
+                size,
+            } => format!(
+                "{} · {:.1} MiB",
+                core::update::channel::description_in(version, *preview, core::VERSION, language),
+                *size as f64 / 1024.0 / 1024.0
+            ),
+            Self::NoUpdate => language
+                .text(
+                    "当前更新通道没有可用的 Android 更新",
+                    "No Android update is available in the current channel",
+                )
+                .into(),
+            Self::CheckFailed(error) => {
+                core::update::localize_check_error(error, language).into_owned()
+            }
+            Self::ChannelChanged => language
+                .text(
+                    "更新通道已更改，请检查更新",
+                    "Update channel changed; check for updates",
+                )
+                .into(),
+            Self::ProtectionPaused => language
+                .text(
+                    "Claude 保护期间暂停客户端更新",
+                    "Updates are paused while Claude protection is active",
+                )
+                .into(),
+            Self::Cancelled => language
+                .text(
+                    "下载已取消，可重新下载",
+                    "Download cancelled; you can retry",
+                )
+                .into(),
+            Self::PreparingDownload => language.text("正在下载更新…", "Downloading update…").into(),
+            Self::Connecting(progress) => format!(
+                "{} · {}",
+                language.text("正在连接下载", "Connecting to download"),
+                progress.routing_in(language)
+            ),
+            Self::Downloading(progress) => format!(
+                "{} {}/{} · {}/s · {}",
+                language.text("下载", "Download"),
+                bytes(progress.received),
+                bytes(progress.total),
+                bytes(progress.bytes_per_second),
+                progress.routing_in(language)
+            ),
+            Self::Downloaded => language
+                .text(
+                    "下载完成，请在系统界面确认安装",
+                    "Download complete; confirm installation in the system dialog",
+                )
+                .into(),
+            Self::Failed(error) => format!(
+                "{}{}",
+                language.text("更新失败：", "Update failed: "),
+                core::error_message::localize(error, language)
+            ),
+        }
+    }
+}
+
 struct Startup {
     root: PathBuf,
     update_path: PathBuf,
@@ -951,7 +1102,7 @@ async fn run_loop(
         connection_detail: None,
         ip_results: vec![None; core::ip_check::services().len()],
         claude: None,
-        claude_status: startup.language.text("尚未检测", "Not checked").into(),
+        claude_status: ClaudeStatus::NotChecked,
         protection_change: None,
         saved_protection_recovery,
         protection_disable_confirmation: None,
@@ -975,10 +1126,7 @@ async fn run_loop(
         probe_busy: false,
         network_tool: 0,
         probe_codes: Vec::new(),
-        geo: startup
-            .language
-            .text("Geo 数据状态不可用", "Geo data status unavailable")
-            .into(),
+        geo: None,
         geo_updating: false,
         node_pages: BTreeMap::new(),
         node_delays: BTreeMap::new(),
@@ -994,10 +1142,7 @@ async fn run_loop(
         rule_form: None,
         rule_editor: None,
         update_package: None,
-        update_status: startup
-            .language
-            .text("尚未检查更新", "Updates not checked")
-            .into(),
+        update_status: UpdateStatus::NotChecked,
         update_busy: false,
         update_downloading: false,
         update_progress: 0.0,
@@ -1005,6 +1150,8 @@ async fn run_loop(
         update_path: startup.update_path,
         update_generation: 0,
         update_confirmation: None,
+        profile_picker: ProfilePicker::default(),
+        picked_profile_name: None,
     };
     if let Some(error) = state.saved_protection_recovery.last_error() {
         present_rollback(&mut state, RollbackProgress::Failed(error));
@@ -1029,8 +1176,7 @@ async fn run_loop(
             .push_back(("ERROR".into(), state.notice.clone().into()));
     }
     if let Ok(manifest) = core::geodata::read_manifest(&state.session.store.runtime()) {
-        state.geo =
-            core::geodata::localize_status(&manifest.display_status(), state.presentation_language);
+        state.geo = Some(manifest.display_status());
     }
     let mut restore_protection = state.session.settings.claude_protection.is_some();
     let (updates, mut update_rx) = mpsc::channel::<Update>(32);
@@ -1125,7 +1271,6 @@ async fn run_loop(
                 }
                 let edited_profile = match intent {
                     MobileIntent::UpdateProfile => Some(request.a.as_str()),
-                    MobileIntent::SaveProfile => Some(request.selected.as_str()),
                     _ => None,
                 };
                 let subscription_affects_active = edited_profile.is_some_and(|id| {
@@ -1155,7 +1300,7 @@ async fn run_loop(
                         state.probe = vec![message.into()];
                         state.probe_codes.clear();
                     } else if intent == MobileIntent::ClaudeStart {
-                        state.claude_status = message.into();
+                        state.claude_status = ClaudeStatus::ProtectionPaused;
                     } else {
                         state.notice = message.into();
                         state.notice_error = true;
@@ -1198,7 +1343,7 @@ async fn run_loop(
                         if let Some(job) = update_job.take() { job.abort(); let _ = job.await; }
                         state.update_busy = false; state.update_downloading = false;
                         state.update_downloaded = false; state.update_progress = 0.0;
-                        state.update_status = state.presentation_language.text("下载已取消，可重新下载", "Download cancelled; you can retry").into();
+                        state.update_status = UpdateStatus::Cancelled;
                         for path in [&state.update_path, &state.update_path.with_extension("partial")] {
                             if let Err(error) = tokio::fs::remove_file(path).await
                                 && error.kind() != std::io::ErrorKind::NotFound {
@@ -1248,10 +1393,10 @@ async fn run_loop(
                     if let Some(job) = claude_job.take() { job.abort(); }
                     state.claude_generation = state.claude_generation.wrapping_add(1);
                     state.claude_busy = false;
-                    state.claude_status = state.presentation_language.text("已停止检测，保留上次完成的报告", "Check stopped; the previous report is preserved").into();
+                    state.claude_status = ClaudeStatus::Stopped;
                 } else if intent==MobileIntent::CheckUpdate {
                     if !blocked_during_protection(&mut state) && !state.update_busy {
-                        state.update_busy=true;state.update_downloading=false;state.update_status=state.presentation_language.text("正在检查更新…", "Checking for updates…").into();state.update_progress=0.0;
+                        state.update_busy=true;state.update_downloading=false;state.update_status=UpdateStatus::Checking;state.update_progress=0.0;
                         update_schedule.checked(std::time::Instant::now());
                         state.update_generation = state.update_generation.wrapping_add(1);
                         state.update_confirmation = None;
@@ -1280,7 +1425,7 @@ async fn run_loop(
                         if state.update_downloaded && state.update_path.is_file() {
                             if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                         } else {
-                            state.update_busy=true;state.update_downloading=true;state.update_status=state.presentation_language.text("正在下载更新…", "Downloading update…").into();state.update_progress=0.0;
+                            state.update_busy=true;state.update_downloading=true;state.update_status=UpdateStatus::PreparingDownload;state.update_progress=0.0;
                             let path=state.update_path.clone();
                             let port=state.session.settings.download_ports();let send=updates.clone();
                             let download_api=state.session.api.clone();
@@ -1355,7 +1500,7 @@ async fn run_loop(
                         if let Some(job) = update_job.take() { job.abort(); let _ = job.await; }
                         state.update_busy = false; state.update_downloading = false;
                         state.update_downloaded = false; state.update_progress = 0.0;
-                        state.update_status = state.presentation_language.text("Claude 保护期间暂停客户端更新", "Updates are paused while Claude protection is active").into();
+                        state.update_status = UpdateStatus::ProtectionPaused;
                         if let Some(job) = geo_job.take() { job.abort(); let _ = job.await; }
                         state.geo_updating = false;
                         subscription_generation = subscription_generation.wrapping_add(1);
@@ -1394,7 +1539,8 @@ async fn run_loop(
                         && state.saved_protection_recovery.is_active();
                     match handle(&mut state, request).await {
                         Ok(()) => {
-                            if !recovering_protection
+                            if intent != MobileIntent::PickFile
+                                && !recovering_protection
                                 && (intent != MobileIntent::RestartCore
                                     || state.protection_rollback_error.is_none())
                             {
@@ -1648,8 +1794,8 @@ async fn run_loop(
                     Some(Update::Claude(generation,result)) if generation == state.claude_generation => {
                         claude_job = None; state.claude_busy = false; immediate = true;
                         match result {
-                            Ok(report) => {state.claude=Some(report); state.claude_status=state.presentation_language.text("检测完成 · 浏览器及网络采样已结束", "Check complete · browser and network sampling finished").into(); state.notice=state.presentation_language.text("检测完成", "Check complete").into();}
-                            Err(error) => {state.claude_status=format!("{}{error}", state.presentation_language.text("检测失败：", "Check failed: ")); state.notice=error;state.notice_error=true;}
+                            Ok(report) => {state.claude=Some(report); state.claude_status=ClaudeStatus::Complete; state.notice=state.presentation_language.text("检测完成", "Check complete").into();}
+                            Err(error) => {state.claude_status=ClaudeStatus::Failed(error.clone()); state.notice=error;state.notice_error=true;}
                         }
                     }
                     Some(Update::ProtectionPrepared(ticket, result)) => {
@@ -1692,7 +1838,7 @@ async fn run_loop(
                         refresh_generation += 1;
                         refresh_requested = true;
                         match result.and_then(|staged|state.session.install_geo(staged.path()).map_err(|e|format!("{e:#}"))) {
-                            Ok(manifest)=> {state.geo=core::geodata::localize_status(&manifest.display_status(), state.presentation_language);state.notice=state.presentation_language.text("Geo 数据已更新", "Geo data updated").into();},
+                            Ok(manifest)=> {state.geo=Some(manifest.display_status());state.notice=state.presentation_language.text("Geo 数据已更新", "Geo data updated").into();},
                             Err(error)=>{state.notice=format!("Geo 更新失败：{error}");state.notice_error=true;},
                         }
                     }
@@ -1730,30 +1876,38 @@ async fn run_loop(
                         state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(package)=>{
-                                state.update_status=package.as_ref().map(|p|format!("{} · {:.1} MiB",core::update::channel::description_in(&p.version,p.preview,core::VERSION,state.presentation_language),p.size as f64/1024.0/1024.0))
-                                .unwrap_or_else(||state.presentation_language.text("当前更新通道没有可用的 Android 更新", "No Android update is available in the current channel").into());
+                                state.update_status=package.as_ref().map_or(UpdateStatus::NoUpdate,|p|UpdateStatus::Available{version:p.version.clone(),preview:p.preview,size:p.size});
                                 state.update_downloaded=state.update_downloaded && state.update_package.as_ref().map(|p|&p.version)==package.as_ref().map(|p|&p.version);
                                 state.update_package=package;
                             }
-                            Err(error)=>{state.update_status=error.clone();state.notice=format!("{}{error}", state.presentation_language.text("检查更新失败：", "Update check failed: "));state.notice_error=true;},
+                            Err(error)=>{
+                                let message = core::update::localize_check_error(
+                                    &error,
+                                    state.presentation_language,
+                                )
+                                .into_owned();
+                                state.update_status=UpdateStatus::CheckFailed(error);
+                                state.notice=message;
+                                state.notice_error=true;
+                            },
                         }
                     }
                     Some(Update::DownloadProgress(generation,value)) if generation == state.update_generation =>{
                         state.update_progress=value.received as f32/value.total.max(1) as f32;
                         state.update_status=if value.received==0 {
-                            format!("{} · {}",state.presentation_language.text("正在连接下载", "Connecting to download"),value.routing_in(state.presentation_language))
+                            UpdateStatus::Connecting(value)
                         } else {
-                            format!("{} {}/{} · {}/s · {}",state.presentation_language.text("下载", "Download"),bytes(value.received),bytes(value.total),bytes(value.bytes_per_second),value.routing_in(state.presentation_language))
+                            UpdateStatus::Downloading(value)
                         };
                     }
                     Some(Update::Downloaded(generation,result)) if generation == state.update_generation =>{
                         state.update_busy=false;state.update_downloading=false;
                         match result {
                             Ok(())=>{
-                                state.update_downloaded=true;state.update_status=state.presentation_language.text("下载完成，请在系统界面确认安装", "Download complete; confirm installation in the system dialog").into();
+                                state.update_downloaded=true;state.update_status=UpdateStatus::Downloaded;
                                 if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                             }
-                            Err(error)=>{state.update_status=error.clone();state.notice=format!("{}{error}", state.presentation_language.text("更新失败：", "Update failed: "));state.notice_error=true;},
+                            Err(error)=>{state.update_status=UpdateStatus::Failed(error.clone());state.notice=format!("{}{error}", state.presentation_language.text("更新失败：", "Update failed: "));state.notice_error=true;},
                         }
                     }
                     _ => {}
@@ -1794,7 +1948,7 @@ async fn run_loop(
                     && state.session.running && !state.update_busy
                     && state.session.settings.claude_protection.is_none() && state.protection_change.is_none()
                     && !state.saved_protection_recovery.is_active() {
-                    update_schedule.checked(std::time::Instant::now());state.update_busy=true;state.update_downloading=false;state.update_status=state.presentation_language.text("正在检查更新…", "Checking for updates…").into();
+                    update_schedule.checked(std::time::Instant::now());state.update_busy=true;state.update_downloading=false;state.update_status=UpdateStatus::Checking;
                     state.update_generation = state.update_generation.wrapping_add(1);
                     state.update_confirmation = None;
                     update_job=Some(start_update_check(state.session.settings.download_ports(),state.session.settings.update_prereleases,state.update_generation,updates.clone()));
@@ -2670,13 +2824,7 @@ fn start_claude_check(
     state.claude_generation = state.claude_generation.wrapping_add(1);
     state.claude_busy = true;
     let generation = state.claude_generation;
-    state.claude_status = state
-        .presentation_language
-        .text(
-            "正在检测，浏览器将自动采样…",
-            "Checking; browser sampling starts automatically…",
-        )
-        .into();
+    state.claude_status = ClaudeStatus::Checking;
     let port = state.session.settings.mixed_port;
     let api = state.session.api.clone();
     let host = state.session.native.clone();
@@ -2721,6 +2869,71 @@ fn start_claude_check(
             ))
             .await;
     }));
+}
+
+fn picker_request(value: &Value, language: config::Language) -> Result<i32> {
+    value["value"]["request"]
+        .as_i64()
+        .and_then(|request| i32::try_from(request).ok())
+        .context(language.text("本地文件请求无效", "Invalid local file request"))
+}
+
+fn unique_profile_name(state: &State, base: &str) -> String {
+    let mut name = base.to_owned();
+    let mut suffix = 2;
+    while state
+        .session
+        .profiles
+        .iter()
+        .any(|profile| profile.name == name)
+    {
+        name = format!("{base} ({suffix})");
+        suffix += 1;
+    }
+    name
+}
+
+fn settle_picker(
+    state: &mut State,
+    request: i32,
+    selected_name: Option<String>,
+    language: config::Language,
+) {
+    match state.profile_picker.settle(request, selected_name) {
+        Some(Settlement::Selected) => {
+            state.picked_profile_name = state
+                .profile_picker
+                .draft()
+                .map(|draft| draft.fields.name.clone());
+            state.notice = language
+                .text(
+                    "已选择本地配置，保存后生效",
+                    "Local configuration selected; save to apply",
+                )
+                .into();
+            state.notice_error = false;
+        }
+        Some(Settlement::Cancelled) => {
+            state.notice = language
+                .text(
+                    "已取消选择本地配置",
+                    "Local configuration selection cancelled",
+                )
+                .into();
+            state.notice_error = false;
+        }
+        Some(Settlement::Failed(error)) => {
+            state.notice = error;
+            state.notice_error = true;
+        }
+        Some(Settlement::Blocked) => {
+            state.notice = language
+                .text("本地配置尚未就绪", "The local configuration is not ready")
+                .into();
+            state.notice_error = true;
+        }
+        None => {}
+    }
 }
 
 async fn native_event(state: &mut State, value: &Value) -> Result<()> {
@@ -2834,43 +3047,58 @@ async fn native_event(state: &mut State, value: &Value) -> Result<()> {
             );
         }
         "file" => {
-            ensure!(
-                !state.saved_protection_recovery.is_active(),
-                "{}",
-                language.text(
-                    "请等待原网络状态恢复",
-                    "Wait for the previous network state to be restored"
-                )
-            );
+            let request = picker_request(value, language)?;
             let base = value["value"]["name"]
                 .as_str()
                 .unwrap_or(language.text("导入配置", "Imported configuration"));
-            let mut name = base.to_owned();
-            let mut suffix = 2;
-            while state.session.profiles.iter().any(|p| p.name == name) {
-                name = format!("{base} ({suffix})");
-                suffix += 1;
+            let outcome = if state.saved_protection_recovery.is_active() {
+                Outcome::Failed(
+                    language
+                        .text(
+                            "请等待原网络状态恢复",
+                            "Wait for the previous network state to be restored",
+                        )
+                        .into(),
+                )
+            } else if let Some(content) = value["value"]["content"].as_str() {
+                Outcome::Selected {
+                    content: Arc::from(content),
+                }
+            } else {
+                Outcome::Failed(
+                    language
+                        .text("导入内容为空", "The imported content is empty")
+                        .into(),
+                )
+            };
+            if !state.profile_picker.complete(request, outcome) {
+                EVENTS.finish_file(request);
+                return Ok(());
             }
-            state
-                .session
-                .save_profile(
-                    None,
-                    &name,
-                    "",
-                    Some(
-                        value["value"]["content"].as_str().context(
-                            language.text("导入内容为空", "The imported content is empty"),
-                        )?,
-                    ),
-                )
-                .await?;
-            state.completed = Some(MobileIntent::SaveProfile);
-            state.notice = language
-                .text(
-                    "配置已导入，请选择启用",
-                    "Configuration imported; select it to activate",
-                )
-                .into();
+            let name = unique_profile_name(state, base);
+            settle_picker(state, request, Some(name), language);
+            EVENTS.finish_file(request);
+        }
+        "file-cancelled" => {
+            let request = picker_request(value, language)?;
+            if state.profile_picker.complete(request, Outcome::Cancelled) {
+                settle_picker(state, request, None, language);
+            }
+            EVENTS.finish_file(request);
+        }
+        "file-error" => {
+            let request = picker_request(value, language)?;
+            let error = value["value"]["message"]
+                .as_str()
+                .unwrap_or(language.text("导入配置失败", "Failed to import configuration"))
+                .to_owned();
+            if state
+                .profile_picker
+                .complete(request, Outcome::Failed(error))
+            {
+                settle_picker(state, request, None, language);
+            }
+            EVENTS.finish_file(request);
         }
         _ => {}
     }
@@ -3097,15 +3325,51 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             };
         }
         MobileIntent::PickFile => {
-            session.native.request(json!({"op":"pick-file"}))?;
+            let request = state.profile_picker.begin().context(language.text(
+                "请先打开添加订阅表单",
+                "Open the add subscription form first",
+            ))?;
+            EVENTS.expect_file(request);
+            if let Err(error) = session
+                .native
+                .request(json!({"op":"pick-file", "request":request}))
+            {
+                state.profile_picker.complete(request, Outcome::Cancelled);
+                state.profile_picker.settle(request, None);
+                EVENTS.finish_file(request);
+                return Err(error);
+            }
+        }
+        MobileIntent::ProfileNew => {
+            if let Some(request) = state.profile_picker.pending() {
+                EVENTS.finish_file(request);
+            }
+            state.profile_picker.open(String::new());
+            state.picked_profile_name = None;
+        }
+        MobileIntent::ProfileClose => {
+            if let Some(request) = state.profile_picker.pending() {
+                EVENTS.finish_file(request);
+            }
+            state.profile_picker.discard();
+            state.picked_profile_name = None;
         }
         MobileIntent::SaveProfile => {
-            let id = session
-                .profiles
-                .iter()
-                .find(|p| p.id == selected)
-                .map(|p| p.id.clone());
-            session.save_profile(id.as_deref(), &a, &b, None).await?;
+            if selected.is_empty() {
+                let draft = state
+                    .profile_picker
+                    .draft()
+                    .and_then(|draft| draft.content.as_ref().map(Arc::clone));
+                let content = draft.as_deref();
+                session.save_profile(None, &a, &b, content).await?;
+            } else {
+                session.edit_profile(&selected, &a, &b)?;
+            }
+            if let Some(request) = state.profile_picker.pending() {
+                EVENTS.finish_file(request);
+            }
+            state.profile_picker.discard();
+            state.picked_profile_name = None;
             state.notice = language.text("订阅已保存", "Subscription saved").into();
         }
         MobileIntent::ActivateProfile => {
@@ -3135,10 +3399,18 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             }
         }
         MobileIntent::CloseAll => {
+            ensure!(
+                session.running,
+                "{}",
+                language.text("请先启动内核", "Start the core first")
+            );
             session.api.close_connections().await?;
             if let Some(detail) = state.connection_detail.as_mut() {
                 detail.wait_for_all_close_confirmation();
             }
+            state.notice = language
+                .text("连接已全部关闭", "All connections closed")
+                .into();
         }
         MobileIntent::ConnectionSort => {
             if a != state.connection_sort {
@@ -3181,7 +3453,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::ExportLogs => {
             session.native.request(json!({"op":"export","name":"clash-of-rust-logs.txt",
                 "content":format!("Android UI: {}\n{}",PRESENTATION.lock().map(|s|s.clone()).unwrap_or_default(),
-                    state.logs.iter().map(|(level,line)|format!("[{level}] {}", line.display(language))).collect::<Vec<_>>().join("\n"))}))?;
+                    state.logs.iter().map(|(level,line)|format!("[{level}] {}", line.display(config::Language::SimplifiedChinese))).collect::<Vec<_>>().join("\n"))}))?;
         }
         MobileIntent::ExportDiagnostics
         | MobileIntent::CopyDiagnostics
@@ -3193,14 +3465,19 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 "measurements":session.api.measurement_diagnostics(),
                 "network_tool":core::network_tools::Tool::at(state.network_tool).ok().map(|tool| tool.id()),
                 "network_tests":state.probe,"network_test_codes":state.probe_codes,
-                "site_results":core::support::ip_results(&state.ip_results),"claude_status":state.claude_status,
+                "site_results":core::support::ip_results(&state.ip_results),"claude_status":state.claude_status.render(language),
                 "presentation":PRESENTATION.lock().map(|value|value.clone()).unwrap_or_default(),
                 "platform":session.native.request(json!({"op":"diagnostics"})).map_err(|error|format!("{error:#}")),
             });
             let lines = state
                 .logs
                 .iter()
-                .map(|(level, line)| format!("[{level}] {}", line.display(language)))
+                .map(|(level, line)| {
+                    format!(
+                        "[{level}] {}",
+                        line.display(config::Language::SimplifiedChinese)
+                    )
+                })
                 .collect();
             let report = tokio::task::spawn_blocking(move || {
                 core::support::issue_report(&root, context, lines)
@@ -3341,7 +3618,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session.draft = rule_manager::ProfileRules::for_profile(
                 &session.settings,
                 &session.rule_profile,
-                false,
+                session.profile_builtin(&session.rule_profile),
             )
             .as_ref()
             .clone();
@@ -3414,18 +3691,12 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             let mut next = session.settings.clone();
             next.update_prereleases = a == "true";
             // This is an updater preference; it must not reload the core or VPN.
-            session.store.save_settings(&next)?;
-            session.settings = next;
+            session.save_preferences(next)?;
             state.update_generation = state.update_generation.wrapping_add(1);
             state.update_confirmation = None;
             state.update_package = None;
             state.update_downloaded = false;
-            state.update_status = language
-                .text(
-                    "更新通道已更改，请检查更新",
-                    "Update channel changed; check for updates",
-                )
-                .into();
+            state.update_status = UpdateStatus::ChannelChanged;
             if let Err(error) = tokio::fs::remove_file(&state.update_path).await
                 && error.kind() != std::io::ErrorKind::NotFound
             {
@@ -3461,14 +3732,12 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::Interval => {
             let mut next = session.settings.clone();
             next.delay_interval_minutes = settings_input::parse_number(&a)?;
-            session.store.save_settings(&next)?;
-            session.settings = next;
+            session.save_preferences(next)?;
         }
         MobileIntent::SubscriptionInterval => {
             let mut next = session.settings.clone();
             next.subscription_update_interval_minutes = a.trim().parse()?;
-            session.store.save_settings(&next)?;
-            session.settings = next;
+            session.save_preferences(next)?;
             state.notice = language
                 .text(
                     "订阅自动更新间隔已保存",
@@ -3479,8 +3748,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
         MobileIntent::UpdateInterval => {
             let mut next = session.settings.clone();
             next.update_check_interval_minutes = a.trim().parse()?;
-            session.store.save_settings(&next)?;
-            session.settings = next;
+            session.save_preferences(next)?;
             state.notice = language
                 .text("自动检查更新间隔已保存", "Update check interval saved")
                 .into();
@@ -3668,13 +3936,7 @@ fn reset_subscription_results(
     state.claude_busy = false;
     state.ip_results.fill(None);
     state.claude = None;
-    state.claude_status = state
-        .presentation_language
-        .text(
-            "订阅已更新，请重新检测地区线索。",
-            "Subscription updated; run the check again.",
-        )
-        .into();
+    state.claude_status = ClaudeStatus::SubscriptionChanged;
     state.probe = Default::default();
     state.probe_codes.clear();
     state.probe_busy = false;
@@ -3763,6 +4025,7 @@ struct Projection {
     rule_page: (usize, usize),
     rule_form: Option<RuleForm>,
     rule_editor: Option<RuleEditor>,
+    picked_profile_name: Option<String>,
     update_status: String,
     update_busy: bool,
     update_downloading: bool,
@@ -3906,7 +4169,11 @@ fn project(state: &mut State) -> Projection {
         None
     };
     let rules = state.rule_rows.as_deref().unwrap_or_default();
-    let saved = rule_manager::ProfileRules::for_profile(&s.settings, &s.rule_profile, false);
+    let saved = rule_manager::ProfileRules::for_profile(
+        &s.settings,
+        &s.rule_profile,
+        s.profile_builtin(&s.rule_profile),
+    );
     let connections = state.connection_page.project(
         if matches!(state.page, 0 | 3) {
             &s.connections.connections
@@ -3928,6 +4195,7 @@ fn project(state: &mut State) -> Projection {
         .collect::<Vec<_>>();
     let rule_count = rules.len();
     let rule_page = state.rule_page.min(rule_count.saturating_sub(1) / 100);
+    state.rule_page = rule_page;
     let rules = rules
         .into_iter()
         .skip(rule_page * 100)
@@ -4331,7 +4599,15 @@ fn project(state: &mut State) -> Projection {
         probe: state.probe.clone(),
         probe_busy: state.probe_busy,
         network_tool: state.network_tool,
-        geo: state.geo.clone(),
+        geo: state
+            .geo
+            .as_deref()
+            .map(|status| core::geodata::localize_status(status, language))
+            .unwrap_or_else(|| {
+                language
+                    .text("Geo 数据状态不可用", "Geo data status unavailable")
+                    .into()
+            }),
         group_page,
         profile_page,
         rules,
@@ -4340,7 +4616,8 @@ fn project(state: &mut State) -> Projection {
         rule_page: (rule_page, rule_count),
         rule_form: state.rule_form.clone(),
         rule_editor: state.rule_editor.clone(),
-        update_status: state.update_status.clone(),
+        picked_profile_name: state.picked_profile_name.take(),
+        update_status: state.update_status.render(language),
         update_busy: state.update_busy,
         update_downloading: state.update_downloading,
         update_progress: state.update_progress,
@@ -4360,7 +4637,7 @@ fn project(state: &mut State) -> Projection {
         geo_updating: state.geo_updating,
         delay_busy: state.delay_scope.is_some(),
         site_summary: report.totals.summary_in(language),
-        claude_status: state.claude_status.clone(),
+        claude_status: state.claude_status.render(language),
         protection_pending,
         protection_retry: !protection_pending
             && (protection_error.is_some()
@@ -4680,6 +4957,14 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     if p.completed == Some(MobileIntent::RuleSelect) {
         ui.global::<MobileView>().set_rule_selected(false);
     }
+    if let Some(name) = p.picked_profile_name
+        && ui.global::<MobileView>().get_selected_id().is_empty()
+    {
+        let view = ui.global::<MobileView>();
+        view.set_profile_name(name.into());
+        view.set_profile_source("".into());
+        view.set_draft_dirty(true);
+    }
     data.set_protection_supported(true);
     data.set_protected(p.settings.claude_protection.is_some());
     data.set_protection_pending(p.protection_pending);
@@ -4717,7 +5002,9 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             .unwrap_or(language.text("全部应用", "All apps"))
             .into(),
     );
-    if p.completed == Some(MobileIntent::SavePorts) {
+    if p.completed == Some(MobileIntent::SavePorts)
+        && data.get_mixed_port().trim().parse::<u16>() == Ok(p.settings.mixed_port)
+    {
         android.set_ports_dirty(false);
     }
     if matches!(

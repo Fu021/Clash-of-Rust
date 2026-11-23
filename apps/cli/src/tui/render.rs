@@ -99,33 +99,63 @@ pub(super) fn list(
     width: usize,
     height: usize,
 ) -> Vec<(String, Tone)> {
+    list_rows(
+        header,
+        items.map(|(text, tone)| (wrap(&text, width), tone)),
+        selected,
+        width,
+        height,
+        1,
+    )
+}
+
+pub(super) fn list_rows(
+    header: Vec<(String, Tone)>,
+    items: impl Iterator<Item = (Vec<String>, Tone)>,
+    selected: usize,
+    width: usize,
+    height: usize,
+    reserved_rows: usize,
+) -> Vec<(String, Tone)> {
     if height == 0 {
         return Vec::new();
     }
     let mut lines: Vec<_> = header
         .into_iter()
         .flat_map(|(text, tone)| wrap(&text, width).into_iter().map(move |text| (text, tone)))
-        .take(height - 1)
+        .take(height.saturating_sub(reserved_rows.max(1)))
         .collect();
     let available = height - lines.len();
     let mut rows = Vec::new();
+    let mut item_starts = Vec::new();
     let mut selected_range = (0, 0);
-    for (index, (text, tone)) in items
+    for (index, (item_lines, tone)) in items
         .enumerate()
         .skip(selected.saturating_sub(available - 1))
         .take(available)
     {
         let start = rows.len();
-        rows.extend(wrap(&text, width).into_iter().map(|text| (text, tone)));
+        item_starts.push(start);
+        rows.extend(item_lines.into_iter().map(|text| (text, tone)));
         if index == selected {
             selected_range = (start, rows.len());
         }
     }
-    let offset = if selected_range.1 - selected_range.0 >= available {
-        selected_range.0
-    } else {
-        selected_range.1.saturating_sub(available)
-    };
+    if selected_range.1 - selected_range.0 > available {
+        let selected_rows = &rows[selected_range.0..selected_range.1];
+        lines.push(selected_rows[0].clone());
+        if available > 1 {
+            let tail = selected_rows.len().saturating_sub(available - 1);
+            lines.extend(selected_rows[tail..].iter().cloned());
+        }
+        return lines;
+    }
+    let offset = selected_range.1.saturating_sub(available);
+    let offset = item_starts
+        .into_iter()
+        .find(|start| *start >= offset)
+        .unwrap_or(selected_range.0)
+        .min(selected_range.0);
     lines.extend(rows.into_iter().skip(offset).take(available));
     lines
 }

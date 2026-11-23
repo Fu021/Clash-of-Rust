@@ -8,6 +8,9 @@ mod connection_detail;
 mod incident_delivery;
 #[cfg(any(target_os = "android", test))]
 mod list_presentation;
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod profile_picker;
 #[cfg(any(target_os = "android", all(test, feature = "mobile-ui-tests")))]
 mod protection_intent;
 #[cfg(any(target_os = "android", test))]

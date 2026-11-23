@@ -4,6 +4,48 @@ use std::time::Instant;
 
 pub(super) const LIFETIME: Duration = Duration::from_secs(5);
 
+fn append_notice_text(notice: &mut String, text: &str) {
+    if !notice.is_empty() {
+        notice.push_str("\n\n");
+    }
+    notice.push_str(text);
+}
+
+pub(super) fn localize_notice(text: &str, error: bool, language: Language) -> Cow<'_, str> {
+    if language == Language::English
+        && let Some(translated) = english_desktop_notice(text)
+    {
+        return Cow::Owned(translated);
+    }
+    if error {
+        clash_client_core::error_message::localize(text, language)
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+pub(super) fn localize_update_message(message: &str, language: Language) -> Cow<'_, str> {
+    if language == Language::English
+        && let Some(reason) = message.strip_prefix("更新失败：")
+    {
+        let english = match reason {
+            "客户端无法正常退出，请检查代理恢复或内核状态" => {
+                "the client could not exit. Check proxy recovery and core status."
+            }
+            "安装助手无法启动，请重试" => {
+                "Could not start the installation helper; try again"
+            }
+            clash_client_core::protection::READ_ONLY_NOTICE => {
+                return format!("Update failed: {}", localize_notice(reason, true, language))
+                    .into();
+            }
+            _ => return update::localize_installation_message(message, language),
+        };
+        return format!("Update failed: {english}").into();
+    }
+    update::localize_installation_message(message, language)
+}
+
 pub(super) struct UnreachableNotice {
     context: Option<String>,
     count: usize,
@@ -74,16 +116,7 @@ impl App {
             Ok(Some(status)) if status.needs_notification() => status,
             Ok(_) => return,
             Err(error) => {
-                self.show_notice_followup(
-                    format!(
-                        "{}{error:#}",
-                        self.presentation_language.text(
-                            "读取上次安装结果失败：",
-                            "Could not read the previous installation result: "
-                        )
-                    ),
-                    true,
-                );
+                self.show_notice_followup(format!("读取上次安装结果失败：{error:#}"), true);
                 return;
             }
         };
@@ -113,19 +146,13 @@ impl App {
                 true
             }
             Err(error) => {
-                let message = match self.presentation_language {
-                    Language::SimplifiedChinese => format!(
-                        "{}\n\n无法保存安装失败确认：{error:#}；请稍后重试关闭提示。",
-                        status.message
-                    ),
-                    Language::English => format!(
-                        "{}\n\nCould not acknowledge the installation failure: {}. Try closing this notice again later.",
-                        update::localize_installation_message(&status.message, Language::English),
-                        error.root_cause()
-                    ),
-                };
-                if self.notice != message {
-                    self.show_notice(message, true);
+                let detail = format!("无法保存安装失败确认：{error:#}；请稍后重试关闭提示。");
+                if self.notice != status.message
+                    || self.notice_followups.as_slice() != std::slice::from_ref(&detail)
+                {
+                    self.notice.clone_from(&status.message);
+                    self.notice_followups.clear();
+                    self.show_notice_followup(detail, true);
                 }
                 self.notice_update_failure = true;
                 false
@@ -154,7 +181,7 @@ impl App {
     pub(super) fn show_copy_failure(&mut self) {
         if self.notice_visible {
             self.record_notice_issue(
-                desktop_view::CopyFeedback::Failed.text(self.presentation_language),
+                desktop_view::CopyFeedback::Failed.text(Language::SimplifiedChinese),
                 false,
             );
             self.notice_copy_failed = true;
@@ -178,7 +205,7 @@ impl App {
             protected: self.settings.claude_protection.is_some(),
         };
         let revision = self.notice_revision;
-        self.show_notice(notice.display(self.presentation_language), true);
+        self.show_notice(notice.display(Language::SimplifiedChinese), true);
         if self.notice_revision != revision {
             self.notice_network_recovery = true;
             self.unreachable_notice = Some(notice);
@@ -194,17 +221,56 @@ impl App {
 
     pub(super) fn show_notice_followup(&mut self, text: String, error: bool) {
         if self.notice_visible && self.error {
-            let update_failure = self.notice_update_failure;
-            let text = if self.notice.is_empty() {
-                text
-            } else {
-                format!("{}\n\n{text}", self.notice)
-            };
-            self.present_notice(text, true, self.notice_critical, self.notice_copy_failed);
-            self.notice_update_failure = update_failure;
+            if error {
+                self.record_notice_issue(&text, self.notice_critical);
+            }
+            self.notice_followups.push(text);
+            self.notice_network_recovery = false;
+            self.notice_started = Some(Instant::now());
+            self.notice_revision = self.notice_revision.wrapping_add(1);
         } else {
             self.show_notice(text, error);
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn raw_notice(&self) -> Cow<'_, str> {
+        if self.notice_followups.is_empty() {
+            return Cow::Borrowed(&self.notice);
+        }
+        let mut text = self.notice.clone();
+        for followup in &self.notice_followups {
+            append_notice_text(&mut text, followup);
+        }
+        Cow::Owned(text)
+    }
+
+    pub(super) fn display_notice(&self) -> Cow<'_, str> {
+        self.display_notice_in(self.presentation_language)
+    }
+
+    pub(super) fn display_notice_in(&self, language: Language) -> Cow<'_, str> {
+        if !self.notice_visible {
+            return Cow::Borrowed("");
+        }
+        let primary = if self.notice_update_failure {
+            localize_update_message(&self.notice, language)
+        } else if let Some(notice) = &self.unreachable_notice {
+            Cow::Owned(notice.display(language))
+        } else {
+            localize_notice(&self.notice, self.error, language)
+        };
+        if self.notice_followups.is_empty() && !self.notice_copy_failed {
+            return primary;
+        }
+        let mut text = primary.into_owned();
+        for followup in &self.notice_followups {
+            append_notice_text(&mut text, &localize_notice(followup, true, language));
+        }
+        if self.notice_copy_failed {
+            append_notice_text(&mut text, desktop_view::CopyFeedback::Failed.text(language));
+        }
+        Cow::Owned(text)
     }
 
     fn record_notice_issue(&mut self, text: &str, critical: bool) {
@@ -218,7 +284,7 @@ impl App {
     fn present_notice(&mut self, text: String, error: bool, critical: bool, copy_failed: bool) {
         if error {
             let issue = if copy_failed && text.is_empty() {
-                desktop_view::CopyFeedback::Failed.text(self.presentation_language)
+                desktop_view::CopyFeedback::Failed.text(Language::SimplifiedChinese)
             } else {
                 &text
             };
@@ -228,6 +294,7 @@ impl App {
             return;
         }
         self.notice = text;
+        self.notice_followups.clear();
         self.error = error;
         self.notice_critical = critical;
         self.notice_network_recovery = false;
@@ -523,7 +590,7 @@ mod tests {
             let _ = app.update(Message::DismissNotice);
             assert!(app.notice_visible && app.error && app.notice_update_failure);
             assert!(app.notice.starts_with(failure));
-            assert_eq!(app.notice.matches("无法保存安装失败确认").count(), 1);
+            assert_eq!(app.raw_notice().matches("无法保存安装失败确认").count(), 1);
             assert_eq!(app.issue_events.len(), previous_events + 1);
         }
         assert!(
@@ -563,13 +630,14 @@ mod tests {
         lock.lock().unwrap();
         let _ = app.update(Message::DismissNotice);
         assert!(
-            app.notice
+            app.display_notice()
                 .starts_with("Update failed: Installation authorization cancelled")
         );
         assert!(
-            app.notice
+            app.display_notice()
                 .contains("Could not acknowledge the installation failure")
         );
+        assert_eq!(app.notice, failure);
         assert_eq!(
             update::installation_status(data.path())
                 .unwrap()
@@ -664,9 +732,9 @@ mod tests {
         assert_eq!(app.notice, "全部节点不可达，TUN 仍开启。");
         assert!(app.error && app.notice_network_recovery);
         app.show_notice_followup("诊断已导出：测试路径".into(), false);
-        let diagnostic = app.notice.clone();
+        let diagnostic = app.raw_notice().into_owned();
         app.update_unreachable_notice("迟到的节点复测结果".into());
-        assert_eq!(app.notice, diagnostic);
+        assert_eq!(app.raw_notice(), diagnostic);
         app.dismiss_notice();
         app.update_unreachable_notice("关闭后的节点复测结果".into());
         assert!(!app.notice_visible);
@@ -684,7 +752,7 @@ mod tests {
         assert!(app.error && !app.notice_critical);
         app.show_notice_followup("诊断已导出：测试路径".into(), false);
         assert!(app.notice.starts_with("Geo 更新失败"));
-        assert!(app.notice.contains("诊断已导出"));
+        assert!(app.raw_notice().contains("诊断已导出"));
         assert!(app.error && !app.notice_critical);
         app.show_critical("内核无法启动".into());
         app.show_notice("检查更新失败".into(), true);
@@ -694,7 +762,7 @@ mod tests {
         assert_eq!(app.issue_events.back().unwrap()["error"], "检查更新失败");
         app.show_notice_followup("诊断导出失败：测试磁盘不可写".into(), true);
         assert!(app.notice.starts_with("内核无法启动"));
-        assert!(app.notice.contains("诊断导出失败"));
+        assert!(app.raw_notice().contains("诊断导出失败"));
         assert!(app.notice_critical);
         app.dismiss_notice();
         app.show_notice("已保存".into(), false);
@@ -779,7 +847,7 @@ mod tests {
         let mut app = App::initial_state(Err(anyhow::anyhow!("test")), None);
         app.prepare_initialization(Some(("更新失败：安装目录不可写".into(), true)));
         app.show_notice_followup("诊断已导出".into(), false);
-        assert!(app.notice.contains("安装目录不可写") && app.notice.contains("诊断已导出"));
+        assert!(app.notice.contains("安装目录不可写") && app.raw_notice().contains("诊断已导出"));
         let _ = app.update(Message::DismissNotice);
         assert!(!app.notice_visible);
         assert!(app.updates.failure.is_none());

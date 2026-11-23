@@ -4916,17 +4916,24 @@ fn english_desktop_validation_and_errors_follow_language() {
     app.mixed_port = "0".into();
     let _ = app.update(Message::SavePorts);
     assert!(
-        app.notice
+        app.display_notice()
             .contains("Port must be an integer from 1 to 65535")
     );
 
     app.update_interval_input = "10081".into();
     let _ = app.update(Message::SaveUpdateInterval);
-    assert!(app.notice.contains("0 disables automatic update checks"));
+    assert!(
+        app.display_notice()
+            .contains("0 disables automatic update checks")
+    );
 
     app.settings.dns_override = false;
     let _ = app.update(Message::FakeIpAdd);
-    assert_eq!(app.fake_ip_error, "Enable DNS override first");
+    assert_eq!(app.fake_ip_error, "请先开启 DNS 覆盖");
+    assert_eq!(
+        notice::localize_notice(&app.fake_ip_error, true, app.presentation_language),
+        "Enable DNS override first"
+    );
 
     let _ = app.update(Message::ProbeCancel);
     assert_eq!(app.test_results, ["Check cancelled"]);

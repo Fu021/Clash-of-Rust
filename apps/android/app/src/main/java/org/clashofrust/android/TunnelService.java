@@ -383,7 +383,8 @@ public final class TunnelService extends VpnService {
             if (vpnMatches && matches && guardMatches) {
                 java.nio.file.Path record = recoveryRecord(context).toPath();
                 if (!Files.isRegularFile(record, LinkOption.NOFOLLOW_LINKS)) {
-                    throw new IOException("The protection recovery record is missing or invalid");
+                    throw new IOException(AppLanguage.current(context).getString(
+                        R.string.protection_recovery_record_invalid));
                 }
                 java.nio.file.Path committed = record.resolveSibling("protection-recovery-committed.json");
                 requireRecoveryBeforeDeadline(context, deadline, elapsedRealtime.getAsLong());
@@ -392,7 +393,8 @@ public final class TunnelService extends VpnService {
                 } else if (active != null && !active.stopping) {
                     try {
                         if (!active.disconnect(request, false, true)) {
-                            throw new IOException("VPN cleanup did not complete during protection recovery");
+                            throw new IOException(AppLanguage.current(context).getString(
+                                R.string.protection_recovery_cleanup_incomplete));
                         }
                     } catch (Exception error) {
                         lastError = error.toString();
@@ -410,7 +412,8 @@ public final class TunnelService extends VpnService {
                         try { Mobile.stopTun(); active.forwardingHeld = true; }
                         catch (Exception stop) { error.addSuppressed(stop); }
                     }
-                    throw new IOException("Could not commit the verified protection recovery record", error);
+                    throw new IOException(AppLanguage.current(context).getString(
+                        R.string.protection_recovery_commit_failed), error);
                 }
                 completedRecovery = request;
                 if (live) active.forwardingHeld = false;

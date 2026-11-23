@@ -15,6 +15,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::io::Write;
 
+mod service_status;
+
 pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
     let first = args.positional.first().map(String::as_str).unwrap_or("");
     let language = args.language();
@@ -448,7 +450,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                         field_in(
                             out,
                             language.text("查询失败", "Query failed"),
-                            &clean(error),
+                            &clean(&service_status::error_in(name, error, language)),
                             language,
                         )?;
                     }

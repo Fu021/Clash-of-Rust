@@ -10,6 +10,7 @@ import { Wordmark, ConnectionPower } from "../../components/brand.slint";
 import { RuleShortcutsDialog } from "../../components/rule-shortcuts.slint";
 import { GeometryTarget } from "../../components/geometry.slint";
 import { ReportText } from "../../components/report.slint";
+import { IpStatusText } from "../../components/ip-status.slint";
 
 component RulesShortcutButton inherits MButton {
     geometry-key: "rule-shortcuts-open";
@@ -101,7 +102,15 @@ export component MobileFrame inherits Rectangle {
         root.previous-rule-profile = root.rule-profile;
     }
     changed modal-notice => { if self.modal-notice { keys.focus(); } }
-    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP" : MobileView.detail == 15 ? @tr("规则操作") : MobileView.detail == 16 ? @tr("检测详情") : MobileView.detail == 1 ? ReportText.section-title(MobileView.claude-section) : MobileView.detail == 2 ? @tr("编辑规则") : MobileView.detail == 3 ? (MobileView.selected-id == "" ? @tr("添加订阅") : @tr("编辑订阅")) : MobileView.detail == 5 ? @tr("连接详情") : MobileView.detail == 6 ? (MobileView.category == "all" ? @tr("全部检测结果") : MobileView.category) : @tr("日志详情");
+    property <string> detail-title: MobileView.detail == 14 ? "Fake-IP"
+        : MobileView.detail == 15 ? @tr("规则操作")
+        : MobileView.detail == 16 ? @tr("检测详情")
+        : MobileView.detail == 1 ? ReportText.section-title(MobileView.claude-section)
+        : MobileView.detail == 2 ? @tr("编辑规则")
+        : MobileView.detail == 3 ? (MobileView.selected-id == "" ? @tr("添加订阅") : @tr("编辑订阅"))
+        : MobileView.detail == 5 ? @tr("连接详情")
+        : MobileView.detail == 6 ? (MobileView.category == "all" ? @tr("全部检测结果") : IpStatusText.label(MobileView.category))
+        : @tr("日志详情");
     property <duration> notice-start;
     property <int> notice-revision: MobileView.notice-revision;
     property <float> notice-elapsed: MobileView.notice-elapsed;

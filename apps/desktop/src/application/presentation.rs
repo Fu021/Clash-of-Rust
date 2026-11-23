@@ -483,39 +483,7 @@ impl App {
             self.notice_started
                 .map_or(0.0, |started| started.elapsed().as_secs_f32())
         );
-        let notice = if self.notice_visible {
-            if self.notice_update_failure {
-                update::localize_installation_message(&self.notice, language)
-            } else if let Some(notice) = &self.unreachable_notice {
-                Cow::Owned(notice.display(language))
-            } else if let Some(detail) = self
-                .notice_network_recovery
-                .then(|| self.notice.strip_prefix("节点复测失败："))
-                .flatten()
-            {
-                Cow::Owned(format!(
-                    "{}{detail}",
-                    language.text("节点复测失败：", "Node recheck failed: ")
-                ))
-            } else if self.error {
-                clash_client_core::error_message::localize(&self.notice, language)
-            } else {
-                Cow::Borrowed(self.notice.as_str())
-            }
-        } else {
-            Cow::Borrowed("")
-        };
-        let notice = if self.notice_visible && self.notice_copy_failed {
-            let failure = desktop_view::CopyFeedback::Failed.text(language);
-            if notice.is_empty() {
-                Cow::Borrowed(failure)
-            } else {
-                Cow::Owned(format!("{notice}\n\n{failure}"))
-            }
-        } else {
-            notice
-        };
-        text!(get_notice, set_notice, notice);
+        text!(get_notice, set_notice, self.display_notice());
         text!(get_query, set_query, &self.query);
         text!(
             get_profile,
@@ -599,7 +567,7 @@ impl App {
         text!(
             get_fake_ip_error,
             set_fake_ip_error,
-            clash_client_core::error_message::localize(&self.fake_ip_error, language)
+            notice::localize_notice(&self.fake_ip_error, true, language)
         );
         text!(
             get_geo_status,
@@ -700,7 +668,7 @@ impl App {
             .as_deref()
             .or(self.updates.outcome.as_deref())
             .or(self.updates.install_stage.as_deref())
-            .map(|message| update::localize_installation_message(message, language))
+            .map(|message| notice::localize_update_message(message, language))
             .or_else(|| download_status.as_deref().map(Cow::Borrowed))
             .unwrap_or_else(|| self.updates.status_in(language));
         text!(get_update_status, set_update_status, update_status);
@@ -1175,7 +1143,7 @@ impl App {
         data.set_claude_clues(counts[2].to_string().into());
         data.set_browser_session(self.claude.session.is_some());
         data.set_claude_busy(self.claude.busy());
-        data.set_claude_status(self.claude.status.display(language).into());
+        data.set_claude_status(self.claude.status.display(language).as_ref().into());
         data.set_claude_error(self.claude.error);
         data.set_claude_guard(self.claude.guard_status.as_str().into());
         data.set_protection_status(

@@ -99,6 +99,7 @@ struct DesktopHost {
     #[cfg(target_os = "macos")]
     next_picker: u64,
 }
+
 pub(super) fn run(
     startup: Option<tray::Startup>,
     state: window_state::State,
@@ -434,7 +435,10 @@ impl DesktopHost {
                     self.models = ViewModels::default();
                     self.data = UiData::default();
                     self.last_frame = None;
-                    self.app.show_notice(format!("界面进程已退出（{status}），可从托盘或 Dock 重新打开；后台代理仍在运行。"),true);
+                    self.app.show_notice(
+                        format!("界面进程已退出（{status}），可从托盘或 Dock 重新打开；后台代理仍在运行。"),
+                        true,
+                    );
                 }
             }
         }
@@ -834,4 +838,122 @@ impl native::Host for DesktopHost {
 #[cfg(test)]
 pub(super) fn invalidate_window_for_test(window: &slint::Window) {
     clash_desktop_ui::invalidate_window(window);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_frame_localizes_window_failures_without_changing_original_notices() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("fixture")), None);
+        let data = UiData::default();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+
+        for (original, english) in [
+            (
+                "界面进程已退出（exit status: 2），可从托盘或 Dock 重新打开；后台代理仍在运行。",
+                "The window process exited (exit status: 2). Reopen it from the tray or Dock; the background proxy is still running.",
+            ),
+            (
+                "界面与后台版本不一致，请重新安装完整客户端。",
+                "The window and background service versions do not match. Reinstall the full client.",
+            ),
+            (
+                "界面启动失败，可从托盘重试：权限不足",
+                "Could not launch the window. Retry from the tray: 权限不足",
+            ),
+            (
+                "界面错误：无法显示窗口：native error: 2",
+                "Window error: Could not show the window: native error: 2",
+            ),
+            ("界面进程已退出", "The window process exited"),
+            ("没有可用的界面窗口", "No window is available"),
+            (
+                "初始化失败：无法读取设置文件: native error",
+                "Initialization failed: Could not read the settings file: native error",
+            ),
+            (
+                "托盘不可用：当前桌面没有可用托盘宿主；关闭窗口将退出。",
+                "System tray unavailable: No system tray host is available. Closing the window will exit the app.",
+            ),
+        ] {
+            app.dismiss_notice();
+            app.show_notice(original.into(), true);
+            for (language, expected) in [
+                (Language::English, english),
+                (Language::SimplifiedChinese, original),
+            ] {
+                app.presentation_language = language;
+                app.present(&data, &mut models);
+                assert_eq!(data.snapshot().notice.as_str(), expected);
+                assert_eq!(app.notice, original);
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_frame_localizes_notification_timeout_and_preserves_copy_feedback() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("fixture")), None);
+        app.dismiss_notice();
+        app.presentation_language = Language::English;
+        let _ = app.update(Message::NotificationFinished(Err(
+            "系统通知服务响应超时: deadline has elapsed".into(),
+        )));
+        app.show_copy_failure();
+        let data = UiData::default();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+        app.present(&data, &mut models);
+        assert_eq!(
+            data.snapshot().notice.as_str(),
+            "System notification failed: The system notification service timed out: deadline has elapsed\n\nCould not write to the system clipboard. Please try again."
+        );
+        assert_eq!(
+            app.notice,
+            "系统通知失败：系统通知服务响应超时: deadline has elapsed"
+        );
+    }
+
+    #[test]
+    fn diagnostic_followups_keep_the_primary_warning_localized_in_the_frame() {
+        let mut app = App::initial_state(Err(anyhow::anyhow!("fixture")), None);
+        app.dismiss_notice();
+        app.presentation_language = Language::English;
+        let original = "界面与后台版本不一致，请重新安装完整客户端。";
+        app.show_critical(original.into());
+        let data = UiData::default();
+        let mut models = ViewModels::default();
+        models.attach(&data);
+        app.present(&data, &mut models);
+        let primary = data.snapshot().notice;
+        assert_eq!(
+            primary.as_str(),
+            "The window and background service versions do not match. Reinstall the full client."
+        );
+
+        let path = "/tmp/本机 诊断.json";
+        let native = "磁盘不可写: EIO\n\n无法打开问题反馈页面：这段属于系统";
+        let _ = app.update(Message::DiagnosticsExported(Ok((path.into(), None))));
+        let _ = app.update(Message::DiagnosticsExported(Err(native.into())));
+        app.present(&data, &mut models);
+        assert_eq!(
+            data.snapshot().notice.as_str(),
+            format!(
+                "{}\n\nDiagnostics exported: {path}\n\nFailed to collect or export diagnostics: {native}",
+                primary.as_str()
+            )
+        );
+        assert!(app.notice_critical && app.error);
+        assert_eq!(app.notice, original);
+
+        app.presentation_language = Language::SimplifiedChinese;
+        app.present(&data, &mut models);
+        assert_eq!(data.snapshot().notice.as_str(), app.raw_notice().as_ref());
+        app.dismiss_notice();
+        app.show_notice("next notice".into(), false);
+        app.present(&data, &mut models);
+        assert_eq!(data.snapshot().notice.as_str(), "next notice");
+    }
 }

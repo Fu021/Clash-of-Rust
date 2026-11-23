@@ -1572,6 +1572,123 @@ fn mobile_connection_details_gate_rows_and_actions_by_id_request_and_status() {
 }
 
 #[test]
+fn mobile_connections_gate_close_all_on_core_and_protection_state() {
+    let (adapter, clock) = headless(360, 640);
+    let probe = MobileConnectionsProbe::new().unwrap();
+    let data = probe.global::<MobileData>();
+    probe.set_text_scale(1.3);
+    let position = Rc::new(Cell::new(None));
+    let observed = position.clone();
+    let geometry = probe.global::<UiGeometry>();
+    geometry.on_measured(move |key, bounds| {
+        if key == "connections-close-all" {
+            let bounds = bounds.iter().collect::<Vec<_>>();
+            observed.set(Some(LogicalPosition::new(
+                bounds[0] + bounds[2] / 2.,
+                bounds[1] + bounds[3] / 2.,
+            )));
+        }
+    });
+    geometry.set_enabled(true);
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let recorded = requests.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, _, _| recorded.borrow_mut().push(intent));
+    probe.show().unwrap();
+    advance(&clock, Duration::from_millis(300));
+    frame(&adapter, 360, 640);
+    let click = || {
+        let position = position.get().expect("close all must be visible");
+        probe.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        advance(&clock, Duration::from_millis(50));
+        probe.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        advance(&clock, Duration::from_millis(50));
+    };
+    for (running, working, protected, pending) in [
+        (false, false, false, false),
+        (true, true, false, false),
+        (true, false, true, false),
+        (true, false, false, true),
+    ] {
+        data.set_core_running(running);
+        data.set_working(working);
+        data.set_protected(protected);
+        data.set_protection_pending(pending);
+        click();
+        assert!(requests.borrow().is_empty());
+    }
+    data.set_protection_pending(false);
+    click();
+    assert_eq!(requests.borrow().as_slice(), &[MobileIntent::CloseAll]);
+    probe.hide().unwrap();
+}
+
+#[test]
+fn mobile_rules_keep_new_rule_available_when_shortcuts_are_unavailable() {
+    let (adapter, clock) = headless(360, 640);
+    let probe = AndroidPreview::new().unwrap();
+    probe.set_preview_page(4);
+    let data = probe.global::<MobileData>();
+    data.set_rule_profile("默认直连".into());
+    data.set_shortcut_available(Rc::new(slint::VecModel::from(vec![false; 5])).into());
+
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let observed = targets.clone();
+    let geometry = probe.global::<UiGeometry>();
+    geometry.on_measured(move |key, bounds| {
+        observed
+            .borrow_mut()
+            .insert(key.to_string(), bounds.iter().collect::<Vec<_>>());
+    });
+    geometry.set_enabled(true);
+    let toggles = Rc::new(Cell::new(0));
+    let recorded = toggles.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, _, _| {
+            if intent == MobileIntent::RuleShortcut {
+                recorded.set(recorded.get() + 1);
+            }
+        });
+    probe.show().unwrap();
+    let render = || {
+        advance(&clock, Duration::from_millis(300));
+        frame(&adapter, 360, 640);
+    };
+    render();
+    let click = |key: &str| {
+        let bounds = targets.borrow()[key].clone();
+        let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+        probe.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        advance(&clock, Duration::from_millis(50));
+        probe.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        render();
+    };
+    click("rule-shortcuts-open");
+    assert!(probe.get_preview_shortcuts());
+    click("rule-shortcut:0");
+    assert_eq!(toggles.get(), 0);
+    click("rule-shortcuts-close");
+    assert!(!probe.get_preview_shortcuts());
+    click("preview-rule-add");
+    assert_eq!(probe.get_preview_detail(), 2);
+    probe.hide().unwrap();
+}
+
+#[test]
 fn mobile_rule_editor_reselecting_a_mode_preserves_the_unsaved_rule() {
     let (adapter, clock) = headless(393, 852);
     let probe = AndroidPreview::new().unwrap();
@@ -3306,6 +3423,62 @@ fn mobile_subscription_search_and_pagination_remain_available_during_protection(
     assert_eq!(
         events.borrow().last().unwrap(),
         &(MobileIntent::Query, "profiles".into(), "x".into())
+    );
+    profiles.hide().unwrap();
+}
+
+#[test]
+fn mobile_new_subscription_entry_keeps_a_pasted_link_and_starts_a_fresh_draft() {
+    let (adapter, clock) = headless(393, 852);
+    let profiles = MobileProfilesProbe::new().unwrap();
+    let targets = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    let measured_targets = targets.clone();
+    profiles
+        .global::<UiGeometry>()
+        .on_measured(move |key, bounds| {
+            measured_targets
+                .borrow_mut()
+                .insert(key.to_string(), bounds.iter().collect::<Vec<f32>>());
+        });
+    profiles.global::<UiGeometry>().set_enabled(true);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    profiles
+        .global::<MobileActions>()
+        .on_request(move |intent, first, second| {
+            recorded.borrow_mut().push((intent, first, second))
+        });
+    profiles.show().unwrap();
+    let view = profiles.global::<MobileView>();
+    view.set_profile_source("https://example.com/subscription".into());
+    advance(&clock, Duration::from_secs(1));
+    frame(&adapter, 393, 852);
+    let bounds = targets.borrow()["profile-add"].clone();
+    let position = LogicalPosition::new(bounds[0] + bounds[2] / 2., bounds[1] + bounds[3] / 2.);
+    profiles
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+    advance(&clock, Duration::from_millis(50));
+    profiles
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    advance(&clock, Duration::from_millis(50));
+    assert_eq!(
+        events.borrow().last().unwrap(),
+        &(MobileIntent::ProfileNew, "".into(), "".into())
+    );
+    assert_eq!(profiles.get_detail(), 3);
+    assert!(profiles.get_selected_id().is_empty());
+    assert!(view.get_profile_name().is_empty());
+    assert_eq!(
+        view.get_profile_source().as_str(),
+        "https://example.com/subscription"
     );
     profiles.hide().unwrap();
 }

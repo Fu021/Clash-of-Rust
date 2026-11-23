@@ -709,7 +709,7 @@ fn profile_list_localizes_only_the_builtin_default_name() {
 }
 
 #[test]
-fn profile_list_shows_localized_usage_only_when_it_fits() {
+fn profile_list_keeps_localized_usage_and_expiry_visible_beside_long_names() {
     use chrono::{DateTime, Local};
     use clash_client_core::config::{Language, Profile};
     use unicode_width::UnicodeWidthStr;
@@ -723,11 +723,12 @@ fn profile_list_shows_localized_usage_only_when_it_fits() {
         .with_timezone(&Local)
         .format("%Y-%m-%d");
     let no_expiry = "upload=1048576; download=2147483648; total=3221225472; expire=0";
+    let with_expiry = no_expiry.replace("expire=0", &format!("expire={expiry_timestamp}"));
     let profiles: Vec<_> = [
         ("旅行节点", Some(no_expiry.into())),
         ("限期订阅", Some(format!("expire={expiry_timestamp}"))),
         ("备用订阅", None),
-        (long_name.as_str(), Some(no_expiry.into())),
+        (long_name.as_str(), Some(with_expiry)),
     ]
     .into_iter()
     .map(|(name, usage)| Profile {
@@ -771,17 +772,216 @@ fn profile_list_shows_localized_usage_only_when_it_fits() {
                     "{columns}: {row}"
                 );
             }
-            if columns == 120 {
-                let long_row = format!("{long_name} · {remote}");
+        }
+        state.selected = profiles.len() - 1;
+        for (columns, rows) in [(32, 5), (40, 24), (120, 30)] {
+            let frame = render::frame(&state, columns, rows);
+            assert_eq!(frame.len(), rows);
+            assert!(frame.iter().all(|line| line.text.width() < columns));
+            let selected = frame
+                .iter()
+                .filter(|line| line.tone == render::Tone::Selected)
+                .map(|line| line.text.trim())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(selected.starts_with("› 跨地域"), "{selected}");
+            assert!(
+                selected.contains(language.text("已用 2/3 GiB", "Used 2/3 GiB")),
+                "{selected}"
+            );
+            assert!(selected.contains(&expected[1]), "{selected}");
+            assert_eq!(selected.contains(&long_name), columns == 120, "{selected}");
+        }
+        state.key(Key::Enter);
+        let form = state.form.as_ref().unwrap();
+        assert_eq!(form.fields[0].value, long_name);
+        assert_eq!(form.visible_value(0), long_name);
+        state.key(Key::Escape);
+        state.selected = 0;
+    }
+    assert_eq!(state.poll.as_ref().unwrap().meta.profiles, profiles);
+}
+
+#[test]
+fn short_profile_list_keeps_partial_usage_expiry_and_update_visible() {
+    use clash_client_core::config::{Language, Profile};
+
+    let mut state = State::new(true);
+    state.page = Page::Profiles;
+    let usage = "upload=1048576; total=3221225472; expire=1813147200";
+    let updated = 1795392000;
+    let name = "Selected 跨地域远程线路".repeat(7);
+    state.poll.as_mut().unwrap().meta.profiles = vec![
+        Profile {
+            id: "other".into(),
+            name: "Other".into(),
+            source: "https://example.test/other".into(),
+            updated: 0,
+            usage: None,
+            builtin: false,
+        },
+        Profile {
+            id: "selected".into(),
+            name: name.clone(),
+            source: "https://example.test/selected".into(),
+            updated,
+            usage: Some(usage.into()),
+            builtin: false,
+        },
+    ];
+    state.selected = 1;
+
+    for language in [Language::English, Language::SimplifiedChinese] {
+        state.language = language;
+        for columns in [32, 44] {
+            let frame = render::frame(&state, columns, 5);
+            let selected = frame
+                .iter()
+                .filter(|line| line.tone == render::Tone::Selected)
+                .map(|line| line.text.trim())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(selected.contains("Selected"), "{columns}: {selected}");
+            let updated_prefix = language.text("更新", "Updated");
+            let summary = clash_client_core::subscription::summary(Some(usage), updated, language);
+            for part in summary
+                .split(" · ")
+                .filter(|part| !part.starts_with(updated_prefix))
+            {
                 assert!(
-                    frame
-                        .iter()
-                        .any(|line| line.text.trim_end().ends_with(&long_row))
+                    selected.contains(part),
+                    "{columns}: {part} missing from {selected}"
                 );
             }
         }
     }
+}
+
+#[test]
+fn very_short_profile_list_prioritizes_expiry_over_update_after_language_switch() {
+    use clash_client_core::config::{Language, LanguagePreference, Profile};
+    use unicode_width::UnicodeWidthStr;
+
+    let mut state = State::new(true);
+    state.page = Page::Profiles;
+    let name = "旅行🌍Travel".repeat(8);
+    let usage = "expire=1813147200";
+    let profiles = vec![Profile {
+        id: "travel".into(),
+        name: name.clone(),
+        source: "https://example.test/travel".into(),
+        updated: 1795392000,
+        usage: Some(usage.into()),
+        builtin: false,
+    }];
+    state.poll.as_mut().unwrap().meta.profiles = profiles.clone();
+    let mut args = crate::args::parse(["ui"].map(str::to_owned)).unwrap();
+
+    for (preference, language) in [
+        (LanguagePreference::English, Language::English),
+        (
+            LanguagePreference::SimplifiedChinese,
+            Language::SimplifiedChinese,
+        ),
+        (LanguagePreference::English, Language::English),
+    ] {
+        state.language_preference = preference;
+        crate::tui::settings::sync_language(&mut state, &mut args, true, 31);
+        assert_eq!(state.language, language);
+        assert_eq!(state.items()[state.selected], "travel");
+        let expiry = clash_client_core::subscription::summary(Some(usage), 0, language);
+        let frame = render::frame(&state, 32, 4);
+        let selected = frame
+            .iter()
+            .filter(|line| line.tone == render::Tone::Selected)
+            .map(|line| line.text.trim_end())
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 2);
+        assert!(selected[0].starts_with("› 旅行🌍Travel"), "{selected:?}");
+        assert_eq!(selected[1], expiry);
+        assert!(frame.iter().all(|line| line.text.width() < 32));
+    }
+    state.poll.as_mut().unwrap().meta.settings.active_profile = Some("travel".into());
+    let expiry = clash_client_core::subscription::summary(Some(usage), 0, Language::English);
+    for (columns, title, date) in [
+        (13, "› 旅行", expiry.strip_prefix("Expires ").unwrap()),
+        (24, "› [Current] 旅行", expiry.as_str()),
+    ] {
+        let frame = render::frame(&state, columns, 4);
+        assert!(
+            frame.iter().any(|line| {
+                line.tone == render::Tone::Selected && line.text.starts_with(title)
+            })
+        );
+        assert!(
+            frame.iter().any(|line| {
+                line.tone == render::Tone::Selected && line.text.trim_end() == date
+            })
+        );
+    }
+    state.key(Key::Enter);
+    let form = state.form.as_ref().unwrap();
+    assert_eq!(form.fields[0].value, "travel");
+    assert_eq!(form.visible_value(0), name);
     assert_eq!(state.poll.as_ref().unwrap().meta.profiles, profiles);
+}
+
+#[test]
+fn profile_scroll_never_displays_expiry_without_its_subscription_title() {
+    use clash_client_core::config::{Language, Profile};
+
+    let mut state = State::new(true);
+    state.page = Page::Profiles;
+    state.language = Language::English;
+    let usage = "upload=1048576; download=2147483648; total=3221225472; expire=1813147200";
+    state.poll.as_mut().unwrap().meta.profiles = [
+        ("first", "First", "/tmp/first.yaml", None),
+        (
+            "remote",
+            "Travel",
+            "https://example.test/travel",
+            Some(usage),
+        ),
+        ("last", "Last", "/tmp/last.yaml", None),
+    ]
+    .into_iter()
+    .map(|(id, name, source, usage)| Profile {
+        id: id.into(),
+        name: name.into(),
+        source: source.into(),
+        updated: 0,
+        usage: usage.map(str::to_owned),
+        builtin: false,
+    })
+    .collect();
+    let frame_text = |state: &State, rows| {
+        render::frame(state, 32, rows)
+            .into_iter()
+            .map(|line| line.text.trim_end().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    state.key(Key::Up);
+    assert_eq!(state.items()[state.selected], "first");
+    state.key(Key::Down);
+    let remote = frame_text(&state, 8);
+    assert!(remote.contains("› Travel · Remote"), "{remote}");
+    assert!(remote.contains("Expires "), "{remote}");
+    state.key(Key::Down);
+    state.key(Key::Down);
+    assert_eq!(state.items()[state.selected], "last");
+    let cramped = frame_text(&state, 8);
+    assert!(cramped.contains("› Last · Local"), "{cramped}");
+    assert!(
+        !cramped.contains("Expires ") || cramped.contains("Travel · Remote"),
+        "{cramped}"
+    );
+    let taller = frame_text(&state, 16);
+    assert!(taller.contains("Travel · Remote"), "{taller}");
+    assert!(taller.contains("Expires "), "{taller}");
+    state.key(Key::Up);
+    assert_eq!(state.items()[state.selected], "remote");
+    assert_eq!(frame_text(&state, 8), remote);
 }
 
 #[test]

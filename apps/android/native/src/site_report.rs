@@ -38,6 +38,29 @@ pub(crate) fn country_label(
     }
 }
 
+fn category_title(group: &str, language: Language) -> &str {
+    if language == Language::SimplifiedChinese {
+        return group;
+    }
+    match group {
+        "IP信息" => "IP information",
+        "全球" => "Global",
+        "东南亚" => "Southeast Asia",
+        "体育" => "Sports",
+        "其他" => "Other",
+        "北美" => "North America",
+        "南美" => "South America",
+        "台湾" => "Taiwan",
+        "大洋洲" => "Oceania",
+        "日本" => "Japan",
+        "欧洲" => "Europe",
+        "非洲" => "Africa",
+        "韩国" => "South Korea",
+        "香港" => "Hong Kong",
+        _ => group,
+    }
+}
+
 pub(crate) fn detail_rows(
     service: &Service,
     outcome: Option<&Result<CheckResult, String>>,
@@ -68,7 +91,7 @@ pub(crate) fn detail_rows(
         ),
         (
             language.text("分类", "Category").into(),
-            service.group.clone(),
+            category_title(&service.group, language).into(),
         ),
         (
             language.text("地区", "Region").into(),
@@ -82,6 +105,40 @@ pub(crate) fn detail_rows(
 mod tests {
     use super::*;
     use clash_mobile_runtime::core::ip_check::{State, TargetExit, services};
+
+    #[test]
+    fn site_report_localizes_category_details_and_keeps_category_keys() {
+        let report = ip_report::Report::from_results(&[]);
+        for (group, english) in [
+            ("北美", "North America"),
+            ("全球", "Global"),
+            ("IP信息", "IP information"),
+            ("韩国", "South Korea"),
+            ("AI", "AI"),
+            ("自定义分类", "自定义分类"),
+        ] {
+            let service = Service {
+                id: "fixture".into(),
+                name: "上游服务".into(),
+                group: group.into(),
+                url: "https://fixture.example".into(),
+            };
+            let outcome = Err("上游原文".into());
+            for (language, expected) in [
+                (Language::SimplifiedChinese, group),
+                (Language::English, english),
+            ] {
+                let rows = detail_rows(&service, Some(&outcome), "fixture", "", language);
+                let value = |key| rows.iter().find(|row| row.0 == key).unwrap().1.as_str();
+                assert_eq!(value(language.text("分类", "Category")), expected);
+                assert_eq!(value(language.text("平台", "Service")), service.name);
+                assert_eq!(value(language.text("详情", "Details")), "上游原文");
+                if let Some(category) = report.categories.iter().find(|item| item.name == group) {
+                    assert_eq!(category_row(category, language).0, group);
+                }
+            }
+        }
+    }
 
     #[test]
     fn site_report_localizes_native_region_details_and_keeps_upstream_text() {

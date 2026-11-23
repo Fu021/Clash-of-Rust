@@ -36,4 +36,6 @@
 
 下载沿用订阅现有代理/直连、慢速与断流回退。定时下载成功后先校验 YAML，再核对当前所有者已载入的订阅、来源、开关和保护状态，以及文件是否被编辑；任一变化即丢弃结果。成功才更新内容、用量和更新时间，刷新界面并清理旧测速与检测结果；保留未应用的规则草稿。失败记录原因及“保留原配置与运行状态”，格式错误另按上文通知；不改内容、设置、草稿或检测结果。下次重试从本次尝试开始计时，不会持续请求。跨 Activity 取消回归与真实设备验证分别记录于[Android 生命周期复盘](agent-failures/android.md)，实现接入不代表已经完成设备验收。
 
+所有订阅内容在写入前完成 YAML 与规则结构校验，未选中的订阅也不能用错误规则覆盖有效缓存。配置事务恢复记录未清除时，移动会话拒绝设置、订阅和规则写盘并要求重启；启动时若 `profiles/` 已有 YAML 而 `settings.json`、`profiles.json` 缺失或索引为空，也拒绝创建新默认订阅，保留原文件供恢复。
+
 权威实现见[共享调度](../crates/client-core/src/subscription/schedule.rs)、[桌面/CLI 后台](../crates/client-runtime/src/control/subscriptions.rs)与[Android 宿主](../apps/android/native/src/android.rs)。
