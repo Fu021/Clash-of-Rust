@@ -1038,7 +1038,10 @@ fn long_subscription_names_preserve_visible_actions_and_the_full_model() {
 fn closing_a_foreground_window_while_the_tray_starts_waits_before_exiting() {
     let mut app = fixture(Page::Home);
     app.visible = true;
-    app.tray_startup = Some(tray::Startup::new(Duration::from_millis(1)));
+    app.tray_startup = Some(tray::Startup::new(
+        Duration::from_millis(1),
+        app.presentation_language,
+    ));
     let id = runtime::window::Id::unique();
 
     let _ = app.update(Message::Window((

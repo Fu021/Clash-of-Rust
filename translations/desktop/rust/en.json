@@ -107,7 +107,6 @@
   "fake_ip_source_custom": "Custom",
   "fake_ip_source_custom_and_dns": "Custom, DNS override",
   "fake_ip_source_dns": "DNS override",
-  "file_picker_closed": "File picker closed",
   "geo_data_updated": "GeoIP, GeoSite, Country and ASN data updated",
   "install_prerelease_continue": "Continue",
   "install_prerelease_title": "Install pre-release {version}?",

@@ -447,9 +447,10 @@ impl App {
                     Err(error) => Message::FilePicked(edit, Err(error)),
                 });
                 #[cfg(not(target_os = "macos"))]
-                let task = Task::perform(clash_of_rust::file_dialog::choose(), move |r| {
-                    Message::FilePicked(edit, r)
-                });
+                let task = Task::perform(
+                    clash_of_rust::file_dialog::choose(self.presentation_language),
+                    move |r| Message::FilePicked(edit, r),
+                );
                 task
             }
             #[cfg(target_os = "macos")]
@@ -460,7 +461,7 @@ impl App {
                     Task::perform(
                         async move {
                             receiver.await.unwrap_or_else(|_| {
-                                Err(messages::file_picker_closed(language).into())
+                                Err(clash_of_rust::file_dialog::closed_message(language).into())
                             })
                         },
                         move |result| Message::FilePicked(edit, result),

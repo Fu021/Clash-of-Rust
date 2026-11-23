@@ -107,7 +107,6 @@
   "fake_ip_source_custom": "用户自定义",
   "fake_ip_source_custom_and_dns": "用户自定义、DNS 覆盖",
   "fake_ip_source_dns": "DNS 覆盖",
-  "file_picker_closed": "文件选择器已关闭",
   "geo_data_updated": "GeoIP、GeoSite、Country、ASN 数据已全部更新",
   "install_prerelease_continue": "继续安装",
   "install_prerelease_title": "安装预发布版 {version}？",

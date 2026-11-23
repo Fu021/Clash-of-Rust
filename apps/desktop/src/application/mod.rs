@@ -610,6 +610,7 @@ impl App {
             app.settings = settings;
             app.sync_appearance();
         }
+        app.presentation_language = app.settings.language.resolve_desktop();
         app.set_window_size(window_state.size());
         app.window_state = window_state;
         app.prepare_initialization(update::startup_outcome());
@@ -1314,6 +1315,9 @@ impl App {
                             }
                             self.settings = engine.settings.clone();
                             self.presentation_language = self.settings.language.resolve_desktop();
+                            if let Some(tray) = &self.tray {
+                                tray.update(&self.snapshot, self.presentation_language);
+                            }
                             self.refresh_network_result();
                             if !self.rule_state.dirty() && !self.rule_state.has_editor() {
                                 self.rule_state = rules_view::State::default();
@@ -2255,7 +2259,7 @@ impl App {
             Message::Tray(command) => {
                 // Native check items toggle on click; keep marks tied to confirmed core state.
                 if let Some(tray) = &self.tray {
-                    tray.refresh(&self.snapshot);
+                    tray.refresh(&self.snapshot, self.presentation_language);
                 }
                 match command {
                     tray::Command::Show => {
@@ -2311,7 +2315,7 @@ impl App {
                     match result {
                         Ok(tray) => {
                             self.tray_failure = None;
-                            tray.update(&self.snapshot);
+                            tray.update(&self.snapshot, self.presentation_language);
                             tray.speed(&self.snapshot, self.settings.tray_speed);
                             self.tray = Some(tray);
                             if let Some(id) = self.tray_close_requested.take() {
@@ -2667,7 +2671,7 @@ impl App {
                     });
                 }
                 if let Some(tray) = &self.tray {
-                    tray.update(&self.snapshot);
+                    tray.update(&self.snapshot, self.presentation_language);
                     tray.speed(&self.snapshot, self.settings.tray_speed);
                 }
                 if core_failed {

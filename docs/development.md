@@ -68,7 +68,7 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 
 | 资源 | 路径与构建入口 |
 | --- | --- |
-| Rust | `shared/`、`cli/`、`runtime/`、`desktop/rust/`、`android/rust/` 分别由 `client-core`、CLI、`client-runtime`、桌面宿主、Android Rust 宿主的 `build.rs` 通过 [`compile_catalog.rs`](../translations/compile_catalog.rs) 生成各自的 `OUT_DIR/messages.rs`。 |
+| Rust | `shared/`、`cli/`、`runtime/`、`desktop/rust/`、`desktop/native/`、`android/rust/` 分别供 `client-core`、CLI、`client-runtime`、桌面宿主、`desktop-shell`、Android Rust 宿主使用。各自的 `build.rs` 通过 [`compile_catalog.rs`](../translations/compile_catalog.rs) 生成 `OUT_DIR/messages.rs`。 |
 | Slint | `client-ui` 和 Android Rust 宿主分别内嵌 `desktop/slint/<Slint 标签>/LC_MESSAGES/clash-client-ui.po` 和 `android/slint/<Slint 标签>/LC_MESSAGES/clash-android.po`。简体中文使用 `@tr` 的源文。 |
 | Android Java | `android/system/values*/strings.xml` 由 `scripts/android.py` 复制到 Gradle 生成资源目录，Java 按资源 ID 读取。 |
 | Windows 安装器 | `windows/nsis/<语言标签>.nsh` 维护安装和卸载文案，由 [`clash-of-rust.nsi`](../installer/clash-of-rust.nsi) 加载。 |
@@ -81,7 +81,7 @@ Rust 新增文案时，为对应目录的各个 `<语言标签>.json` 添加相�
 
 在同一次变更中补齐客户端、Windows 安装与卸载向导、Linux 应用菜单。
 
-1. 在 [`languages.rs`](../translations/languages.rs) 注册语言标签、菜单名称、Slint 标签及系统匹配规则，补齐表中的五套 Rust 目录、两套 Slint 目录和 Java 资源。GUI、TUI 和 Android 语言菜单、CLI 可选标签及 Android 系统语言匹配共用注册表。
+1. 在 [`languages.rs`](../translations/languages.rs) 注册语言标签、菜单名称、Slint 标签及系统匹配规则，补齐表中的 Rust、Slint 和 Java 资源。GUI、TUI 和 Android 语言菜单、CLI 可选标签及 Android 系统语言匹配共用注册表。
 2. 完成 [Windows 安装与卸载语言清单](#windows-安装与卸载语言清单)。
 3. 同步 [`clash-of-rust.desktop`](../resources/linux/clash-of-rust.desktop) 的 `Comment[语言]`。Linux 应用菜单按桌面会话语言读取对应注释。
 4. 按[平台编译边界](#平台编译边界)分别运行桌面与移动测试，在四端检查系统匹配、手动切换和英文回退，覆盖旧设置、长文本、带参数消息与 Android 资源限定符。行为规则见[语言与展示](ui-design.md#语言与展示)，自动选测见 [CI](workflows/ci.md#ci)。

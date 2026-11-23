@@ -1,4 +1,5 @@
 //! Native tray uses AppKit's main thread on macOS, its own thread elsewhere.
+use crate::{config::Language, messages};
 use std::{
     sync::{OnceLock, mpsc},
     time::{Duration, Instant},
@@ -48,11 +49,12 @@ pub struct Startup {
     ready: mpsc::Receiver<Result<Guard, String>>,
     cancel: mpsc::Sender<()>,
     diagnostics: std::sync::Arc<std::sync::Mutex<startup_diagnostics::Diagnostics>>,
+    language: Language,
 }
 
 impl Startup {
     #[cfg(not(target_os = "macos"))]
-    pub fn new(timeout: Duration) -> Self {
+    pub fn new(timeout: Duration, language: Language) -> Self {
         let (ready_tx, ready) = mpsc::channel();
         let (cancel, cancelled) = mpsc::channel();
         let started = Instant::now();
@@ -67,7 +69,7 @@ impl Startup {
                     return;
                 }
                 report.lock().unwrap().attempt();
-                match start() {
+                match start(language) {
                     Ok(guard) => {
                         report.lock().unwrap().success();
                         // A dropped receiver also drops the guard and native icon.
@@ -98,11 +100,12 @@ impl Startup {
             ready,
             cancel,
             diagnostics,
+            language,
         }
     }
 
     #[cfg(target_os = "macos")]
-    pub fn new(timeout: Duration) -> Self {
+    pub fn new(timeout: Duration, language: Language) -> Self {
         let (sender, ready) = mpsc::channel();
         let (cancel, cancelled) = mpsc::channel();
         let diagnostics = std::sync::Arc::new(std::sync::Mutex::new(
@@ -114,11 +117,13 @@ impl Startup {
             timeout,
             deadline: None,
             diagnostics: diagnostics.clone(),
+            language,
         });
         Self {
             ready,
             cancel,
             diagnostics,
+            language,
         }
     }
 
@@ -130,7 +135,9 @@ impl Startup {
         match self.ready.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err("托盘初始化线程已结束".into())),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err(messages::tray_startup_ended(self.language).into()))
+            }
         }
     }
 }
@@ -149,14 +156,29 @@ pub struct Guard {
 
 pub use clash_client_runtime::tray_model::Nodes;
 
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct State {
+    language: Language,
     mode: String,
     system_proxy: bool,
     tun: bool,
     running: bool,
     nodes: Option<std::sync::Arc<Nodes>>,
     speed: Option<(u64, u64)>,
+}
+
+impl State {
+    fn new(language: Language) -> Self {
+        Self {
+            language,
+            mode: String::new(),
+            system_proxy: false,
+            tun: false,
+            running: false,
+            nodes: None,
+            speed: None,
+        }
+    }
 }
 
 fn tray_icon(kind: crate::icons::Kind) -> Icon {
@@ -203,14 +225,14 @@ fn speed(value: u64) -> String {
 }
 
 impl Guard {
-    pub fn update(&self, snapshot: &crate::engine::Snapshot) {
-        self.publish(snapshot, false);
+    pub fn update(&self, snapshot: &crate::engine::Snapshot, language: Language) {
+        self.publish(snapshot, language, false);
     }
 
     /// Native check items toggle before their command is delivered. Reapply
     /// confirmed state even when clicking an already-selected mode.
-    pub fn refresh(&self, snapshot: &crate::engine::Snapshot) {
-        self.publish(snapshot, true);
+    pub fn refresh(&self, snapshot: &crate::engine::Snapshot, language: Language) {
+        self.publish(snapshot, language, true);
     }
 
     pub fn nodes(&self, nodes: Option<Nodes>) {
@@ -232,9 +254,10 @@ impl Guard {
         }
     }
 
-    fn publish(&self, snapshot: &crate::engine::Snapshot, force: bool) {
+    fn publish(&self, snapshot: &crate::engine::Snapshot, language: Language, force: bool) {
         let changed = self.updates.send_if_modified(|current| {
             if !force
+                && current.language == language
                 && current.mode == snapshot.mode
                 && current.system_proxy == snapshot.system_proxy
                 && current.tun == snapshot.tun
@@ -242,6 +265,7 @@ impl Guard {
             {
                 false
             } else {
+                current.language = language;
                 current.mode.clone_from(&snapshot.mode);
                 current.system_proxy = snapshot.system_proxy;
                 current.tun = snapshot.tun;
@@ -274,7 +298,11 @@ impl Guard {
 }
 
 struct Checks {
+    language: Language,
+    show: MenuItem,
+    routing_mode: Submenu,
     modes: [(CheckMenuItem, &'static str); 3],
+    proxy_mode: Submenu,
     system_proxy: CheckMenuItem,
     tun: CheckMenuItem,
     off: CheckMenuItem,
@@ -283,10 +311,32 @@ struct Checks {
     last_nodes: Option<std::sync::Arc<Nodes>>,
     nodes_ready: bool,
     traffic: MenuItem,
+    exit: MenuItem,
 }
 
 impl Checks {
     fn update(&mut self, state: State) {
+        let language = state.language;
+        let language_changed = self.language != language;
+        if language_changed {
+            self.language = language;
+            self.show.set_text(messages::tray_show(language));
+            self.routing_mode.set_text(messages::tray_mode(language));
+            for ((item, _), text) in self.modes.iter().zip([
+                messages::tray_rule(language),
+                messages::tray_global(language),
+                messages::tray_direct(language),
+            ]) {
+                item.set_text(text);
+            }
+            self.proxy_mode
+                .set_text(messages::tray_proxy_mode(language));
+            self.system_proxy
+                .set_text(messages::tray_system_proxy(language));
+            self.tun.set_text(messages::tray_tun(language));
+            self.off.set_text(messages::tray_off(language));
+            self.exit.set_text(messages::tray_close(language));
+        }
         for (item, mode) in &self.modes {
             item.set_checked(state.running && state.mode == *mode);
             item.set_enabled(state.running);
@@ -297,10 +347,10 @@ impl Checks {
         self.tun.set_enabled(state.running);
         self.off.set_checked(!state.system_proxy && !state.tun);
         self.traffic.set_text(state.speed.map_or_else(
-            || "托盘速度显示已关闭".into(),
+            || messages::tray_speed_off(language).into(),
             |(up, down)| format!("↑ {}  ↓ {}", speed(up), speed(down)),
         ));
-        if !self.nodes_ready || self.last_nodes != state.nodes {
+        if language_changed || !self.nodes_ready || self.last_nodes != state.nodes {
             self.nodes_ready = true;
             if let Some(events) = EVENTS.get() {
                 let mut commands = events.commands.lock().unwrap();
@@ -308,11 +358,11 @@ impl Checks {
                 while self.nodes.remove_at(0).is_some() {}
                 self.node_items.clear();
                 if let Some(nodes) = &state.nodes {
-                    self.nodes.set_text(format!(
-                        "节点 · {}{}",
-                        nodes.group,
-                        if nodes.locked { " · 已锁定" } else { "" }
-                    ));
+                    self.nodes.set_text(if nodes.locked {
+                        messages::tray_locked_group(language, &nodes.group)
+                    } else {
+                        messages::tray_node_group(language, &nodes.group)
+                    });
                     for name in &nodes.names {
                         let item = CheckMenuItem::new(
                             name,
@@ -330,20 +380,21 @@ impl Checks {
                     }
                     if nodes.total > nodes.names.len() {
                         let _ = self.nodes.append(&MenuItem::new(
-                            "更多节点请在代理页选择",
+                            messages::tray_more_nodes(language),
                             false,
                             None,
                         ));
                     }
                 } else {
-                    self.nodes.set_text("节点");
+                    self.nodes.set_text(messages::tray_nodes(language));
                     let _ = self.nodes.append(&MenuItem::new(
-                        "当前路由没有可手动选择的组",
+                        messages::tray_no_group(language),
                         false,
                         None,
                     ));
                 }
-                let refresh = MenuItem::new("刷新节点菜单", state.running, None);
+                let refresh =
+                    MenuItem::new(messages::tray_refresh_nodes(language), state.running, None);
                 let _ = self.nodes.append(&refresh);
                 commands.retain(|(_, command)| !matches!(command, Command::RefreshNodes));
                 commands.push((refresh.id().clone(), Command::RefreshNodes));
@@ -374,14 +425,14 @@ impl Drop for Guard {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn start() -> anyhow::Result<Guard> {
+fn start(language: Language) -> anyhow::Result<Guard> {
     #[cfg(any(windows, target_os = "linux"))]
     crate::platform::ensure_tray_available()?;
     let events = events();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     // Only the newest state matters; a stalled tray must not accumulate polls.
-    let (update_tx, mut update_rx) = watch::channel(State::default());
+    let (update_tx, mut update_rx) = watch::channel(State::new(language));
     std::thread::spawn(move || {
         #[cfg(windows)]
         let thread_id = unsafe {
@@ -396,7 +447,7 @@ pub fn start() -> anyhow::Result<Guard> {
             );
             windows_sys::Win32::System::Threading::GetCurrentThreadId()
         };
-        let created = create_native(events);
+        let created = create_native(events, language);
         match created {
             Ok((icon, mut checks)) => {
                 let mut icon_kind = crate::icons::Kind::App;
@@ -506,16 +557,19 @@ fn events() -> &'static Events {
     })
 }
 
-fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks)> {
+fn create_native(
+    events: &Events,
+    language: Language,
+) -> anyhow::Result<(tray_icon::TrayIcon, Checks)> {
     let menu = Menu::new();
     let mut commands = Vec::new();
-    let show = MenuItem::new("显示窗口", true, None);
+    let show = MenuItem::new(messages::tray_show(language), true, None);
     menu.append(&show)?;
     commands.push((show.id().clone(), Command::Show));
-    let modes = Submenu::new("运行模式", true);
-    let rule = CheckMenuItem::new("规则模式", false, false, None);
-    let global = CheckMenuItem::new("全局模式", false, false, None);
-    let direct = CheckMenuItem::new("直连模式", false, false, None);
+    let modes = Submenu::new(messages::tray_mode(language), true);
+    let rule = CheckMenuItem::new(messages::tray_rule(language), false, false, None);
+    let global = CheckMenuItem::new(messages::tray_global(language), false, false, None);
+    let direct = CheckMenuItem::new(messages::tray_direct(language), false, false, None);
     for (item, command) in [
         (&rule, Command::Rule),
         (&global, Command::Global),
@@ -525,27 +579,32 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
         commands.push((item.id().clone(), command));
     }
     menu.append(&modes)?;
-    let proxy_modes = Submenu::new("代理模式", true);
-    let system_proxy = CheckMenuItem::new("系统代理", false, false, None);
-    let tun = CheckMenuItem::new("TUN模式", false, false, None);
-    let off = CheckMenuItem::new("关闭", true, true, None);
+    let proxy_modes = Submenu::new(messages::tray_proxy_mode(language), true);
+    let system_proxy =
+        CheckMenuItem::new(messages::tray_system_proxy(language), false, false, None);
+    let tun = CheckMenuItem::new(messages::tray_tun(language), false, false, None);
+    let off = CheckMenuItem::new(messages::tray_off(language), true, true, None);
     proxy_modes.append_items(&[&system_proxy, &tun, &off])?;
     menu.append(&proxy_modes)?;
-    let nodes = Submenu::new("节点", true);
-    let refresh = MenuItem::new("加载节点菜单", true, None);
+    let nodes = Submenu::new(messages::tray_nodes(language), true);
+    let refresh = MenuItem::new(messages::tray_load_nodes(language), true, None);
     nodes.append(&refresh)?;
     menu.append(&nodes)?;
     commands.push((refresh.id().clone(), Command::RefreshNodes));
-    let traffic = MenuItem::new("托盘速度显示已关闭", false, None);
+    let traffic = MenuItem::new(messages::tray_speed_off(language), false, None);
     menu.append(&traffic)?;
-    let exit = MenuItem::new("退出", true, None);
+    let exit = MenuItem::new(messages::tray_close(language), true, None);
     menu.append(&exit)?;
     commands.push((system_proxy.id().clone(), Command::SystemProxy));
     commands.push((tun.id().clone(), Command::Tun));
     commands.push((off.id().clone(), Command::ProxyOff));
     commands.push((exit.id().clone(), Command::Exit));
     let checks = Checks {
+        language,
+        show,
+        routing_mode: modes,
         modes: [(rule, "rule"), (global, "global"), (direct, "direct")],
+        proxy_mode: proxy_modes,
         system_proxy,
         tun,
         off,
@@ -554,6 +613,7 @@ fn create_native(events: &Events) -> anyhow::Result<(tray_icon::TrayIcon, Checks
         last_nodes: None,
         nodes_ready: false,
         traffic,
+        exit,
     };
     let builder = TrayIconBuilder::new()
         .with_tooltip("Clash of Rust")
@@ -581,6 +641,7 @@ struct MacPending {
     timeout: Duration,
     deadline: Option<Instant>,
     diagnostics: std::sync::Arc<std::sync::Mutex<startup_diagnostics::Diagnostics>>,
+    language: Language,
 }
 #[cfg(target_os = "macos")]
 static MAC_PENDING: std::sync::Mutex<Vec<MacPending>> = std::sync::Mutex::new(Vec::new());
@@ -645,7 +706,7 @@ pub fn pump() {
             .deadline
             .get_or_insert_with(|| Instant::now() + pending.timeout);
         pending.diagnostics.lock().unwrap().attempt();
-        match start() {
+        match start(pending.language) {
             Ok(guard) => {
                 pending.diagnostics.lock().unwrap().success();
                 let _ = pending.ready.send(Ok(guard));
@@ -672,22 +733,22 @@ pub fn pump() {
     });
 }
 #[cfg(target_os = "macos")]
-pub fn start() -> anyhow::Result<Guard> {
+fn start(language: Language) -> anyhow::Result<Guard> {
     anyhow::ensure!(
         unsafe { libc::pthread_main_np() } != 0,
-        "macOS 托盘只能在主线程创建"
+        messages::tray_main_thread(language)
     );
     let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
     anyhow::ensure!(
         objc2_app_kit::NSApplication::sharedApplication(mtm).isRunning(),
-        "macOS 桌面事件循环尚未启动"
+        messages::tray_waiting_for_event_loop(language)
     );
     anyhow::ensure!(
         MAC_NATIVE.with_borrow(Option::is_none),
-        "macOS 托盘已经创建"
+        messages::tray_already_started(language)
     );
-    let (icon, checks) = create_native(events())?;
-    let (updates, receiver) = watch::channel(State::default());
+    let (icon, checks) = create_native(events(), language)?;
+    let (updates, receiver) = watch::channel(State::new(language));
     let (stop, stopped) = mpsc::channel();
     MAC_NATIVE.with_borrow_mut(|native| {
         *native = Some(MacNative {
@@ -745,4 +806,28 @@ fn mac_item_healthy(icon: &tray_icon::TrayIcon) -> bool {
                     })
             })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publishes_language_changes_without_a_network_change() {
+        let (updates, mut receiver) = watch::channel(State::new(Language::English));
+        let guard = Guard {
+            shutdown: None,
+            updates,
+            thread_id: 0,
+        };
+        let snapshot = crate::engine::Snapshot::default();
+
+        guard.update(&snapshot, Language::English);
+        assert!(!receiver.has_changed().unwrap());
+        for language in [Language::SimplifiedChinese, Language::English] {
+            guard.update(&snapshot, language);
+            assert!(receiver.has_changed().unwrap());
+            assert_eq!(receiver.borrow_and_update().language, language);
+        }
+    }
 }

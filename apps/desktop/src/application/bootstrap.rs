@@ -96,7 +96,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
         }
         file
     };
-    let _gui_session = clash_of_rust::control::GuiSession::register(startup_store()?)?;
+    let store = startup_store()?;
+    let language = LanguagePreference::read(&store.root)
+        .unwrap_or_default()
+        .resolve_desktop();
+    let _gui_session = clash_of_rust::control::GuiSession::register(store)?;
     #[cfg(windows)]
     if let Err(error) = platform::notification::prepare_process() {
         eprintln!("通知窗口身份初始化失败：{error:#}");
@@ -115,7 +119,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
     } else {
         tray::FOREGROUND_START_TIMEOUT
     };
-    let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(tray_timeout)));
+    let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(tray_timeout, language)));
     #[cfg(any(windows, target_os = "linux"))]
     std::thread::spawn(platform::migrate_autostart);
     let state = startup_store()

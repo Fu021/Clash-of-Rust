@@ -13,6 +13,9 @@ serde_json.workspace = true
 reqwest.workspace = true
 uuid.workspace = true
 
+[build-dependencies]
+serde_json.workspace = true
+
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tray-icon = { workspace = true }
 

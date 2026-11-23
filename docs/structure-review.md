@@ -73,6 +73,7 @@ Clash-of-Rust/
 │   ├── runtime/                  桌面与 CLI 共用运行库的 Rust 消息
 │   ├── desktop/
 │   │   ├── rust/                 桌面宿主的 Rust 消息
+│   │   ├── native/               原生托盘和文件选择器消息
 │   │   └── slint/                桌面 Slint 翻译
 │   ├── android/
 │   │   ├── rust/                 Android Rust 宿主消息

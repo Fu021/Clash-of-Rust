@@ -573,7 +573,7 @@ fn packet(bytes: &[u8]) {
                     data.set_focus_target(target.into());
                     data.set_focus_revision(data.get_focus_revision().wrapping_add(1));
                 }
-                WindowCommand::PickFile(id) => pick_file(id, &front.output),
+                WindowCommand::PickFile(id) => pick_file(id, &front.window, &front.output),
             },
             HostPacket::Open { .. } => {
                 send(&front.output, UiEvent::Error("重复的界面初始化消息".into()))
@@ -582,14 +582,19 @@ fn packet(bytes: &[u8]) {
     });
 }
 #[cfg(target_os = "macos")]
-fn pick_file(id: u64, output: &mpsc::Sender<UiEvent>) {
-    match clash_desktop_shell::file_dialog::begin() {
+fn pick_file(id: u64, window: &AppWindow, output: &mpsc::Sender<UiEvent>) {
+    use clash_client_core::config::LanguagePreference;
+    use clash_desktop_shell::file_dialog;
+    let language = LanguagePreference::from_tag(window.global::<UiData>().get_language().as_str())
+        .unwrap_or_default()
+        .resolve_desktop();
+    match file_dialog::begin(language) {
         Ok(receiver) => {
             let output = output.clone();
             std::thread::spawn(move || {
                 let result = receiver
                     .blocking_recv()
-                    .unwrap_or_else(|_| Err("文件选择器已关闭".into()));
+                    .unwrap_or_else(|_| Err(file_dialog::closed_message(language).into()));
                 send(&output, UiEvent::FilePicked { id, result });
             });
         }
@@ -603,7 +608,7 @@ fn pick_file(id: u64, output: &mpsc::Sender<UiEvent>) {
     }
 }
 #[cfg(not(target_os = "macos"))]
-fn pick_file(id: u64, output: &mpsc::Sender<UiEvent>) {
+fn pick_file(id: u64, _: &AppWindow, output: &mpsc::Sender<UiEvent>) {
     send(
         output,
         UiEvent::FilePicked {
