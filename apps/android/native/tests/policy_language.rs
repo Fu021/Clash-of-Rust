@@ -79,6 +79,37 @@ async fn application_rules_localize_views_and_keep_action_values() {
     assert!(editor.view(&session, Language::English).editing);
 }
 
+#[tokio::test]
+async fn invalid_application_rule_name_uses_the_display_language() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = Session::open(directory.path().to_owned(), Arc::new(Host)).unwrap();
+    let mut editor = application_policies::Editor::default();
+    editor
+        .request(&mut session, "open", "", Language::English)
+        .await
+        .unwrap();
+    editor
+        .request(&mut session, "new", "", Language::English)
+        .await
+        .unwrap();
+    let error = editor
+        .request(&mut session, "save", "\n直连\ntrue", Language::English)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, "规则名称需为 1～40 个字符，不含换行");
+    assert_eq!(
+        clash_mobile_runtime::core::error_message::localize(&error, Language::English),
+        "Rule names must contain 1–40 characters without line breaks"
+    );
+    assert_eq!(
+        clash_mobile_runtime::core::error_message::localize(&error, Language::SimplifiedChinese),
+        error
+    );
+    assert!(editor.view(&session, Language::English).editing);
+    assert!(session.settings.application_rules.is_empty());
+}
+
 #[test]
 fn protected_application_routing_reports_the_selected_language() {
     let adapter = MinimalSoftwareWindow::new(

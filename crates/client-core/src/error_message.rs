@@ -35,6 +35,30 @@ fn english(message: &str) -> Option<&'static str> {
         "检查更新失败" => "Update check failed",
         "下载更新失败" => "Update download failed",
         "更新失败" => "Update failed",
+        "当前更新通道没有可安装的版本" => {
+            "No installable version on the current update channel"
+        }
+        "更新通道已改变，请重新检查更新" => {
+            "The update channel changed. Check for updates again"
+        }
+        "桌面客户端已变化，请重新执行更新" => {
+            "The desktop client changed. Retry the update"
+        }
+        "当前平台不支持 Linux 终端安装交接" => {
+            "Linux terminal installation handoff is unavailable on this platform"
+        }
+        "自动启动仅支持终端安装" => {
+            "Automatic startup is available only for terminal installations"
+        }
+        "更新交接失败，已重新启动内核" => {
+            "Update handoff failed and the core restarted"
+        }
+        "更新交接失败，重新启动内核也失败" => {
+            "Update handoff failed and the core could not restart"
+        }
+        "更新交接失败，已保留旧版本" => {
+            "Update handoff failed and the previous version was kept"
+        }
         "无法创建更新连接" => "Could not create an update connection",
         "更新信息超过大小限制" => "Update information exceeds the size limit",
         "当前客户端版本号无效" => "The current client version is invalid",
@@ -62,6 +86,36 @@ fn english(message: &str) -> Option<&'static str> {
             "Import and select a subscription first"
         }
         "配置名称与来源不能为空" => "Configuration name and source are required",
+        "订阅已切换，请重新打开应用规则" => {
+            "The subscription changed. Reopen application rules"
+        }
+        "当前系统不支持按应用指定出口，需要 Android 10 或更新版本" => {
+            "Per-app outbound rules require Android 10 or later"
+        }
+        "应用规则标识无效" => "Invalid application rule ID",
+        "规则名称需为 1～40 个字符，不含换行" => {
+            "Rule names must contain 1–40 characters without line breaks"
+        }
+        "请至少选择一个应用" => "Select at least one app",
+        "请选择规则组的出口" => "Choose an outbound for the rule group",
+        "规则名称已存在，请换一个名称" => {
+            "Rule name already exists. Choose another name"
+        }
+        "部分应用已属于其他规则组，请先编辑原规则组" => {
+            "Some apps already belong to another rule group. Edit that group first"
+        }
+        "应用规则最多 256 条" => "Application rules are limited to 256 entries",
+        "应用包名无效" => "Invalid application package name",
+        "同一应用只能有一条应用规则" => "Each app can have only one application rule",
+        "同一规则组的名称、出口和失效策略必须一致" => {
+            "A rule group's name, outbound and fallback policy must match"
+        }
+        "应用规则目标无效" => "Invalid application rule target",
+        "请选择策略组或节点" => "Select a proxy group or node",
+        "节点身份无效" => "Invalid node identity",
+        "配置无效" => "Invalid configuration",
+        "策略组配置无效" => "Invalid proxy group configuration",
+        "应用内部策略组名称冲突" => "Internal application proxy group name conflicts",
         "订阅 URL 无效" => "Invalid subscription URL",
         "订阅链接仅支持 HTTP 或 HTTPS" => "Subscription URLs must use HTTP or HTTPS",
         "请输入订阅 URL 或本地 YAML 路径" => {
@@ -80,6 +134,9 @@ fn english(message: &str) -> Option<&'static str> {
         "删除订阅失败，原运行配置恢复失败" => {
             "Subscription deletion failed; the previous running configuration could not be restored"
         }
+        "删除订阅失败，磁盘恢复也失败" => {
+            "Subscription deletion failed and the previous files could not be restored"
+        }
         "YAML 配置格式错误" | "本地订阅 YAML 格式错误" => {
             "Invalid YAML configuration"
         }
@@ -94,6 +151,17 @@ fn english(message: &str) -> Option<&'static str> {
         "订阅嗅探协议必须是配置对象" => {
             "The subscription's sniff protocol must be a mapping"
         }
+        "订阅 dns 必须是配置对象" => "The subscription's DNS must be a mapping",
+        "DNS 配置缺失" => "DNS configuration is missing",
+        "fake-ip-filter-mode 必须是字符串" => "fake-ip-filter-mode must be a string",
+        "fake-ip-filter 必须是列表" => "fake-ip-filter must be a list",
+        "fake-ip-filter 条目必须是字符串" => "fake-ip-filter entries must be strings",
+        "不支持的 fake-ip-filter-mode" => "Unsupported fake-ip-filter-mode",
+        "rule-providers 必须是配置对象" => "rule-providers must be a mapping",
+        "代理集合 override 必须是配置对象" => "Provider override must be a mapping",
+        "代理集合 override-expr 必须是列表" => "Provider override-expr must be a list",
+        "订阅 rules 必须是规则列表" => "The subscription's rules must be a list",
+        "订阅规则必须是字符串" => "Subscription rules must be strings",
         "配置超过 10 MiB 限制" => "Configuration exceeds the 10 MiB limit",
         "设置已被另一客户端修改，请刷新后重试" => {
             "Settings changed in another client; refresh and try again"
@@ -172,6 +240,13 @@ fn english(message: &str) -> Option<&'static str> {
         "节点复测失败" => "Node recheck failed",
         "保护验证超时" => "Protection verification timed out",
         "确认保护节点超时" => "Timed out checking the protected node",
+        "保护节点无效" | "Claude 保护节点无效" => "Invalid Claude protection node",
+        "保护服务锁不可用" => "Protection service lock unavailable",
+        "无法启动后台保护服务" => "Could not start the background protection service",
+        "保护服务不可用" => "Protection service unavailable",
+        "保护服务已停止" => "The protection service stopped",
+        "保护服务未确认状态切换" => "The protection service did not confirm the change",
+        "保护状态不可用" => "Protection status unavailable",
         "订阅已变化，请重新开启保护" => {
             "The subscription changed; enable protection again"
         }
@@ -216,6 +291,7 @@ fn english(message: &str) -> Option<&'static str> {
         "实时拦截已停止，请重新开启 Claude 保护。" => {
             "Live blocking stopped; restart Claude protection."
         }
+        "实时拦截停止" => "Live blocking stopped",
         "异常连接关闭失败" => "Failed to close an unexpected connection",
         "异常连接关闭失败，请检查内核状态。" => {
             "Failed to close an unexpected connection; check the core."
@@ -268,6 +344,7 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "无法读取设置文件" => "Could not read the settings file",
         "设置文件格式错误" => "Invalid settings file",
+        "保存窗口状态任务失败" => "Window state save task failed",
         "无法读取本地设置" => "Could not read local settings",
         "本地设置格式错误" => "Invalid local settings",
         "本地设置文件过大" => "The local settings file is too large",
@@ -562,6 +639,59 @@ mod tests {
         ] {
             assert_eq!(localize(&error, Language::English), expected);
             assert_eq!(localize(&error, Language::SimplifiedChinese), error);
+        }
+    }
+
+    #[test]
+    fn malformed_subscription_dns_errors_keep_provider_details() {
+        for (raw, expected) in [
+            (
+                "proxies: []\ndns: invalid\n",
+                "The subscription's DNS must be a mapping",
+            ),
+            (
+                "proxies: []\ndns: {fake-ip-filter-mode: 42}\n",
+                "fake-ip-filter-mode must be a string",
+            ),
+            (
+                "proxies: []\ndns: {fake-ip-filter: invalid}\n",
+                "fake-ip-filter must be a list",
+            ),
+            (
+                "proxies: []\ndns: {fake-ip-filter-mode: provider-value}\n",
+                "Unsupported fake-ip-filter-mode: provider-value",
+            ),
+        ] {
+            let error = crate::config::runtime_config(raw, &crate::config::Settings::default())
+                .unwrap_err()
+                .to_string();
+            assert_eq!(localize(&error, Language::English), expected);
+            assert_eq!(localize(&error, Language::SimplifiedChinese), error);
+        }
+    }
+
+    #[test]
+    fn update_handoff_errors_describe_the_recovery_and_keep_external_details() {
+        for (original, translated) in [
+            (
+                "更新通道已改变，请重新检查更新",
+                "The update channel changed. Check for updates again",
+            ),
+            (
+                "更新交接失败，已重新启动内核: native error",
+                "Update handoff failed and the core restarted: native error",
+            ),
+            (
+                "更新交接失败，重新启动内核也失败：native error 原文",
+                "Update handoff failed and the core could not restart: native error 原文",
+            ),
+            (
+                "更新交接失败，已保留旧版本: native error",
+                "Update handoff failed and the previous version was kept: native error",
+            ),
+        ] {
+            assert_eq!(localize(original, Language::English), translated);
+            assert_eq!(localize(original, Language::SimplifiedChinese), original);
         }
     }
 

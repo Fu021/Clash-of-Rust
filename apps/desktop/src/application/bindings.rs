@@ -875,6 +875,10 @@ mod tests {
                 "Initialization failed: Could not read the settings file: native error",
             ),
             (
+                "无法保存窗口状态：保存窗口状态任务失败: native detail 原文",
+                "Could not save window state: Window state save task failed: native detail 原文",
+            ),
+            (
                 "托盘不可用：当前桌面没有可用托盘宿主；关闭窗口将退出。",
                 "System tray unavailable: No system tray host is available. Closing the window will exit the app.",
             ),

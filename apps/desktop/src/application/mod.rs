@@ -151,7 +151,10 @@ fn english_desktop_notice(message: &str) -> Option<String> {
             ("Update check failed", detail)
         }
         "无法打开 Release 页面" => ("Could not open the release page", detail.into()),
-        "无法保存窗口状态" => ("Could not save window state", detail.into()),
+        "无法保存窗口状态" => (
+            "Could not save window state",
+            clash_client_core::error_message::localize(detail, Language::English),
+        ),
         "退出失败" => ("Exit failed", detail.into()),
         "读取上次安装结果失败" => (
             "Could not read the previous installation result",

@@ -273,6 +273,33 @@ mod tests {
     }
 
     #[test]
+    fn native_service_errors_follow_the_display_language() {
+        for (source, english) in [
+            ("保护状态不可用", "Protection status unavailable"),
+            (
+                "实时拦截停止：保护服务已停止",
+                "Live blocking stopped: The protection service stopped",
+            ),
+            (
+                "保护服务未确认状态切换: native error 原文",
+                "The protection service did not confirm the change: native error 原文",
+            ),
+        ] {
+            let original = Status::observe(true, false, true, true, Some((false, source)));
+            for (language, expected) in [
+                (Language::SimplifiedChinese, source),
+                (Language::English, english),
+                (Language::SimplifiedChinese, source),
+            ] {
+                let (status, health) = project(source, original.clone(), language);
+                assert_eq!(status, expected);
+                assert_eq!(health.message, expected);
+                assert_eq!(health.state, State::Error);
+            }
+        }
+    }
+
+    #[test]
     fn protection_readiness_message_follows_language_without_changing_state() {
         for (health, state, english) in [
             (
