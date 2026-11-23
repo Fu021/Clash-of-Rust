@@ -421,6 +421,11 @@ fn legacy_message(message: &str, language: Language) -> Option<&'static str> {
             "This environment restricts TUN permissions; check container or sandbox settings"
         }
         "无法启动 TUN 授权助手" => "Could not start the TUN authorization helper",
+        "无法创建 TUN 会话进程" => messages::macos_tun_spawn_failed(language),
+        "无法读取 TUN 会话启动状态" => {
+            messages::macos_tun_start_status_unavailable(language)
+        }
+        "TUN 助手响应无效" => messages::macos_tun_invalid_helper_response(language),
         "TUN 授权未生效，请检查安装助手的网络权限与 DNS 助手" => {
             "TUN authorization did not take effect. Check the installation helper's network permissions and the DNS helper"
         }
@@ -518,6 +523,27 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
     }
     if let Some(translated) = legacy_message(message, language) {
         return Cow::Borrowed(translated);
+    }
+    if let Some((reason, status)) = message
+        .strip_prefix("TUN 会话准备失败：")
+        .and_then(|detail| detail.strip_suffix("；请保留网络助手日志"))
+        .and_then(|detail| detail.split_once("；子进程状态："))
+    {
+        match reason {
+            "准备内核或通信接口超时" => {
+                return messages::macos_tun_ready_timeout(language, status).into();
+            }
+            "子进程未返回有效就绪回执" => {
+                return messages::macos_tun_invalid_ready_receipt(language, status).into();
+            }
+            _ => {}
+        }
+    }
+    if let Some(detail) = message
+        .strip_prefix("TUN 授权助手未就绪：")
+        .and_then(|detail| detail.strip_suffix("；请检查安装包与系统日志"))
+    {
+        return messages::macos_tun_helper_not_ready(language, localize(detail, language)).into();
     }
     if let Some(asset) = message.strip_prefix("Geo 发布缺少 ")
         && crate::geodata::RELEASE_ASSETS
@@ -909,5 +935,30 @@ mod tests {
             "Cannot access /dev/net/tun; check device permissions: 系统返回 EPERM"
         );
         assert_eq!(localize(tun, Language::SimplifiedChinese), tun);
+    }
+
+    #[test]
+    fn macos_tun_startup_errors_keep_helper_evidence() {
+        for (message, expected) in [
+            (
+                "TUN 会话准备失败：准备内核或通信接口超时；子进程状态：Ok(None)；请保留网络助手日志",
+                "Timed out starting the TUN core or socket. Process status: Ok(None). Keep the network helper logs.",
+            ),
+            (
+                "TUN 会话准备失败：子进程未返回有效就绪回执；子进程状态：Ok(Some(ExitStatus(unix_wait_status(256))))；请保留网络助手日志",
+                "The TUN process did not report readiness. Process status: Ok(Some(ExitStatus(unix_wait_status(256)))). Keep the network helper logs.",
+            ),
+            (
+                "无法创建 TUN 会话进程: No such file or directory (os error 2)",
+                "Could not start the TUN process: No such file or directory (os error 2)",
+            ),
+            (
+                "TUN 授权助手未就绪：TUN 助手响应无效；请检查安装包与系统日志",
+                "The TUN helper is not ready. Invalid response from the TUN helper. Check the installer and system logs.",
+            ),
+        ] {
+            assert_eq!(localize(message, Language::English), expected);
+            assert_eq!(localize(message, Language::SimplifiedChinese), message);
+        }
     }
 }
