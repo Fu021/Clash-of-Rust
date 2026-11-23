@@ -15,13 +15,6 @@ fn next_id() -> Option<i32> {
         .ok()
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct Fields {
-    pub name: String,
-    pub source: String,
-    pub dirty: bool,
-}
-
 pub(crate) enum Outcome {
     Selected { content: Arc<str> },
     Cancelled,
@@ -29,7 +22,7 @@ pub(crate) enum Outcome {
 }
 
 pub(crate) enum Settlement {
-    Selected,
+    Selected(String),
     Cancelled,
     Failed(String),
     Blocked,
@@ -40,10 +33,9 @@ struct Selection {
     outcome: Option<Outcome>,
 }
 
-pub(crate) struct Draft {
-    pub id: i32,
-    pub fields: Fields,
-    pub content: Option<Arc<str>>,
+#[derive(Default)]
+struct Draft {
+    content: Option<Arc<str>>,
     selection: Option<Selection>,
 }
 
@@ -53,27 +45,16 @@ pub(crate) struct ProfilePicker {
 }
 
 impl ProfilePicker {
-    pub fn open(&mut self, source: String) {
-        let id = next_id().expect("profile picker sequence");
-        self.draft = Some(Draft {
-            id,
-            fields: Fields {
-                source,
-                ..Fields::default()
-            },
-            content: None,
-            selection: None,
-        });
+    pub fn open(&mut self) {
+        self.draft = Some(Draft::default());
     }
 
-    pub fn draft(&self) -> Option<&Draft> {
+    fn draft(&self) -> Option<&Draft> {
         self.draft.as_ref()
     }
 
-    pub fn edit(&mut self, fields: Fields) {
-        if let Some(draft) = &mut self.draft {
-            draft.fields = fields;
-        }
+    pub fn file_selected(&self) -> bool {
+        self.draft().is_some_and(|draft| draft.content.is_some())
     }
 
     pub fn discard(&mut self) {
@@ -108,12 +89,6 @@ impl ProfilePicker {
             )
         );
         Ok(content)
-    }
-
-    pub fn saved(&mut self, id: i32) {
-        if self.draft().is_some_and(|draft| draft.id == id) {
-            self.discard();
-        }
     }
 
     pub fn begin(&mut self) -> Option<i32> {
@@ -162,12 +137,7 @@ impl ProfilePicker {
             Outcome::Selected { content } => match selected_name {
                 Some(name) => {
                     draft.content = Some(content);
-                    draft.fields = Fields {
-                        name,
-                        source: String::new(),
-                        dirty: true,
-                    };
-                    Settlement::Selected
+                    Settlement::Selected(name)
                 }
                 None => Settlement::Blocked,
             },
@@ -190,13 +160,13 @@ mod tests {
     #[test]
     fn an_abandoned_picker_cannot_complete_a_new_draft() {
         let mut picker = ProfilePicker::default();
-        picker.open("https://example.com/old".into());
+        picker.open();
         let first = picker.begin().unwrap();
         assert!(picker.begin().is_none());
         picker.discard();
         assert!(!picker.complete(first, file("stale")));
 
-        picker.open("https://example.com/new".into());
+        picker.open();
         let second = picker.begin().unwrap();
         assert_ne!(first, second);
         assert!(!picker.complete(first, file("stale")));
@@ -206,65 +176,64 @@ mod tests {
         assert_eq!(picker.pending(), Some(second));
         assert!(matches!(
             picker.settle(second, Some("new.yaml".into())),
-            Some(Settlement::Selected)
+            Some(Settlement::Selected(name)) if name == "new.yaml"
         ));
-        let draft = picker.draft().unwrap();
-        assert_eq!(draft.fields.name, "new.yaml");
-        assert_eq!(draft.content.as_deref(), Some("current"));
+        assert!(picker.file_selected());
+        assert_eq!(
+            picker.save_content("", Language::English).unwrap(),
+            Some("current")
+        );
     }
 
     #[test]
-    fn cancel_and_failure_preserve_the_selected_content_and_edited_fields() {
+    fn cancel_and_failure_preserve_the_selected_content() {
         let mut picker = ProfilePicker::default();
-        picker.open(String::new());
+        picker.open();
         let initial = picker.begin().unwrap();
         assert!(picker.complete(initial, file("initial")));
         picker.settle(initial, Some("initial.yaml".into()));
-        picker.edit(Fields {
-            name: "renamed".into(),
-            source: "https://example.com/draft".into(),
-            dirty: true,
-        });
         for outcome in [Outcome::Cancelled, Outcome::Failed("read failed".into())] {
             let request = picker.begin().unwrap();
             assert!(picker.complete(request, outcome));
-            assert!(picker.settle(request, None).is_some());
+            match picker.settle(request, None).unwrap() {
+                Settlement::Cancelled => {}
+                Settlement::Failed(error) => assert_eq!(error, "read failed"),
+                _ => panic!("unexpected file selection result"),
+            }
             assert!(picker.pending().is_none());
-            let draft = picker.draft().unwrap();
-            assert_eq!(draft.fields.name, "renamed");
-            assert_eq!(draft.fields.source, "https://example.com/draft");
-            assert_eq!(draft.content.as_deref(), Some("initial"));
-            assert!(draft.fields.dirty);
+            assert_eq!(
+                picker.save_content("", Language::English).unwrap(),
+                Some("initial")
+            );
         }
     }
 
     #[test]
-    fn recreation_can_read_the_draft_and_deliver_a_result_once() {
+    fn a_file_selection_result_is_consumed_once() {
         let mut picker = ProfilePicker::default();
-        picker.open("https://example.com/source".into());
+        picker.open();
         let request = picker.begin().unwrap();
         assert!(picker.complete(request, file("yaml")));
-        let restored = picker.draft().unwrap();
-        assert_eq!(restored.fields.source, "https://example.com/source");
         assert_eq!(picker.result().unwrap().0, request);
-        let id = restored.id;
-        picker.settle(request, Some("received (2).yaml".into()));
-        assert_eq!(picker.draft().unwrap().fields.name, "received (2).yaml");
+        assert!(matches!(
+            picker.settle(request, Some("received (2).yaml".into())),
+            Some(Settlement::Selected(name)) if name == "received (2).yaml"
+        ));
         assert!(picker.result().is_none());
         assert!(!picker.complete(request, file("duplicate")));
-        picker.saved(id);
-        assert!(picker.draft().is_none());
+        picker.discard();
+        assert!(!picker.file_selected());
     }
 
     #[test]
     fn a_new_picker_never_reuses_an_abandoned_request() {
         let mut first = ProfilePicker::default();
-        first.open(String::new());
+        first.open();
         let abandoned = first.begin().unwrap();
         first.discard();
 
         let mut replacement = ProfilePicker::default();
-        replacement.open(String::new());
+        replacement.open();
         let current = replacement.begin().unwrap();
 
         assert!(current > abandoned);
@@ -278,7 +247,7 @@ mod tests {
         let url = "https://example.test/subscription";
         let language = Language::English;
         assert!(picker.save_content(url, language).is_err());
-        picker.open(url.into());
+        picker.open();
         assert_eq!(picker.save_content(url, language).unwrap(), None);
 
         let request = picker.begin().unwrap();
@@ -294,6 +263,6 @@ mod tests {
         picker.clear_file();
         assert_eq!(picker.save_content(url, language).unwrap(), None);
         assert!(!picker.complete(request, file("late file")));
-        assert_eq!(picker.draft().unwrap().fields.name, "local.yaml");
+        assert!(!picker.file_selected());
     }
 }

@@ -144,6 +144,33 @@ impl AndroidControls {
 }
 
 #[test]
+fn android_claude_browser_retry_dispatches_only_the_browser_intent() {
+    let controls = AndroidControls::new(8);
+    let data = controls.window.global::<MobileData>();
+    data.set_claude_status("Network check complete".into());
+    data.set_claude_browser_status("Waiting for browser sample…".into());
+    data.set_claude_busy(true);
+    controls.render();
+    assert!(
+        !controls
+            .targets
+            .borrow()
+            .contains_key("claude-browser-retry")
+    );
+
+    data.set_claude_busy(false);
+    data.set_claude_browser_status("Could not open the browser".into());
+    data.set_claude_browser_retry(true);
+    controls.render();
+    controls.requests.borrow_mut().clear();
+    controls.click("claude-browser-retry", None);
+    assert_eq!(
+        controls.requests.borrow().as_slice(),
+        &[(MobileIntent::ClaudeBrowserRetry, "".into(), "".into())]
+    );
+}
+
+#[test]
 fn android_rules_select_subscription_id_when_display_names_match() {
     let controls = AndroidControls::new(4);
     let data = controls.window.global::<MobileData>();

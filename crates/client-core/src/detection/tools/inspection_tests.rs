@@ -297,3 +297,48 @@ async fn stability_distinguishes_http_errors_from_transport_failures() {
         assert!(statuses.detail.contains(status));
     }
 }
+#[test]
+fn http_header_placeholders_follow_language_and_keep_machine_values() {
+    use reqwest::header::HeaderValue;
+
+    let report = Report {
+        schema: 1,
+        tool: Tool::Http,
+        target: "https://example.test".into(),
+        elapsed_ms: 1,
+        status: "complete",
+        entries: vec![
+            http::header_entry("content-type", &HeaderValue::from_static("text/plain")),
+            http::header_entry(
+                "content-type",
+                &HeaderValue::from_bytes(b"text/\xff").unwrap(),
+            ),
+            http::header_entry(
+                "content-security-policy",
+                &HeaderValue::from_static("default-src 'none'"),
+            ),
+        ],
+    };
+    let original = serde_json::to_value(&report).unwrap();
+    let chinese = report.lines();
+    assert_eq!(
+        &chinese[2..],
+        [
+            "content-type · text/plain",
+            "content-type · 无法显示",
+            "content-security-policy · 已设置（策略正文已隐藏）",
+        ]
+    );
+    assert_eq!(
+        &report.lines_in(Language::English)[2..],
+        [
+            "content-type · text/plain",
+            "content-type · Cannot display value",
+            "content-security-policy · Set; policy content hidden",
+        ]
+    );
+    assert_eq!(report.lines(), chinese);
+    assert_eq!(serde_json::to_value(&report).unwrap(), original);
+    assert_eq!(original["entries"][1]["detail"], "无法显示");
+    assert!(!original.to_string().contains("default-src"));
+}

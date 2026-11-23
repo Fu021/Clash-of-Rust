@@ -390,9 +390,17 @@ public final class MainActivity extends NativeActivity {
                     Uri url = Uri.parse(data.getString("url"));
                     if (!"https".equals(url.getScheme()) && !"http".equals(url.getScheme()))
                         throw new IOException(AppLanguage.current(this).getString(R.string.link_scheme));
+                    long browserSample = data.optLong("claude_browser_sample");
                     runOnUiThread(() -> {
+                        if (browserSample != 0 && (isFinishing() || isDestroyed())) {
+                            emit("claude-browser-open-failed", browserSample);
+                            return;
+                        }
                         try { startActivity(new Intent(Intent.ACTION_VIEW, url)); }
-                        catch (RuntimeException error) { emit("link-error", AppLanguage.current(this).getString(R.string.link_open_failed, error)); }
+                        catch (RuntimeException error) {
+                            if (browserSample != 0) emit("claude-browser-open-failed", browserSample);
+                            else emit("link-error", AppLanguage.current(this).getString(R.string.link_open_failed, error));
+                        }
                     });
                     break;
                 }

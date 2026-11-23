@@ -70,6 +70,7 @@ fn allowed(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::SiteProbe
             | MobileIntent::SiteDetail
             | MobileIntent::ClaudeStart
+            | MobileIntent::ClaudeBrowserRetry
             | MobileIntent::ClaudeCancel
             | MobileIntent::ExportReport
             | MobileIntent::NodeDelay

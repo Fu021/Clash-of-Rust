@@ -16,7 +16,7 @@ GUI 导出 JSON 到应用数据目录的 `diagnostics`，包括已采集线索�
 
 ## 配置扫描
 
-本节的 Desktop、CLI 和项目扫描仅适用于桌面端。Android 使用 VPN 下的网络、DNS、WebRTC 与系统浏览器自动采样，支持取消检测及导出报告，不扫描桌面项目或终端配置。离开检测页会取消当前任务并忽略迟到结果，VPN 与实时保护继续由原生服务运行。
+本节的 Desktop、CLI 和项目扫描仅适用于桌面端。Android 使用 VPN 下的网络、DNS、WebRTC 与系统浏览器自动采样，不扫描桌面项目或终端配置。网络结果完成后先显示；浏览器打不开或采样超时可单独重试。取消检测或离开页面时保留已取得的结果，忽略迟到回传；VPN 与实时保护继续由原生服务运行。
 
 自动读取 `~/.claude.json` 的项目目录记录及 `.claude/projects/*/sessions-index.json` 的项目路径元数据，同时支持本应用启动环境中的 `CLAUDE_CONFIG_DIR`。检查全局 `settings.json`、已记录项目的 `.claude/settings.json` 与 `.claude/settings.local.json`、本机的 `managed-settings.json` 和 `managed-settings.d/*.json`；当前工作目录中可识别的项目也会加入；已记录的子目录项目会同时检查仓库根目录的本地配置。路径去重，已删除项目另行计数。
 

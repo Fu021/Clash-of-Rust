@@ -125,29 +125,12 @@ pub(super) fn dns_entries(value: &serde_json::Value, kind: &str) -> Result<Vec<E
         ),
     )];
     if let Some(answers) = answers {
-        for answer in answers.iter().take(16) {
-            let record_type = answer.get("type").and_then(serde_json::Value::as_u64);
-            let data = answer
-                .get("data")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("未提供");
-            entries.push(Entry::ok(
-                "记录",
-                format!(
-                    "类型 {} · TTL {} s · {}",
-                    record_type.map_or_else(|| "未提供".into(), |number| number.to_string()),
-                    answer
-                        .get("TTL")
-                        .and_then(serde_json::Value::as_u64)
-                        .map_or_else(|| "未提供".into(), |number| number.to_string()),
-                    if matches!(kind, "TXT" | "SOA") || matches!(record_type, Some(6 | 16)) {
-                        "正文已隐藏".into()
-                    } else {
-                        bounded(data, 256)
-                    }
-                ),
-            ));
-        }
+        entries.extend(
+            answers
+                .iter()
+                .take(16)
+                .map(|answer| dns_record(answer, kind)),
+        );
         if answers.len() > 16 {
             entries.push(Entry::unknown(
                 "回答上限",
@@ -164,6 +147,40 @@ pub(super) fn dns_entries(value: &serde_json::Value, kind: &str) -> Result<Vec<E
         ));
     }
     Ok(entries)
+}
+
+fn dns_record(answer: &serde_json::Value, query_type: &str) -> Entry {
+    let record_type = answer.get("type").and_then(serde_json::Value::as_u64);
+    let hidden = matches!(query_type, "TXT" | "SOA") || matches!(record_type, Some(6 | 16));
+    let data = if hidden {
+        None
+    } else {
+        answer
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .map(|data| bounded(data, 256))
+    };
+    let record_type = record_type.map(|number| number.to_string());
+    let ttl = answer
+        .get("TTL")
+        .and_then(serde_json::Value::as_u64)
+        .map(|number| number.to_string());
+    let detail = |language: Language| {
+        let unavailable = language.text("未提供", "unavailable");
+        let data = if hidden {
+            language.text("正文已隐藏", "Content hidden")
+        } else {
+            data.as_deref().unwrap_or(unavailable)
+        };
+        format!(
+            "{} {} · TTL {} s · {data}",
+            language.text("类型", "Type"),
+            record_type.as_deref().unwrap_or(unavailable),
+            ttl.as_deref().unwrap_or(unavailable),
+        )
+    };
+    Entry::ok("记录", detail(Language::SimplifiedChinese))
+        .with_english_detail(detail(Language::English))
 }
 
 pub(super) async fn controller_json(
@@ -188,6 +205,17 @@ pub(super) async fn controller_json(
     }
     serde_json::from_slice(&bytes)
         .map_err(|_| error::failure("controller_response_invalid", "控制接口响应格式无效"))
+}
+
+pub(super) fn header_entry(name: &str, value: &reqwest::header::HeaderValue) -> Entry {
+    if name == "content-security-policy" {
+        return Entry::ok(name, "已设置（策略正文已隐藏）")
+            .with_english_detail("Set; policy content hidden");
+    }
+    match value.to_str() {
+        Ok(value) => Entry::ok(name, bounded(value, 256)),
+        Err(_) => Entry::ok(name, "无法显示").with_english_detail("Cannot display value"),
+    }
 }
 
 pub(super) async fn inspect(
@@ -234,14 +262,7 @@ pub(super) async fn inspect(
         "referrer-policy",
     ] {
         if let Some(value) = response.headers().get(name) {
-            report.entries.push(Entry::ok(
-                name,
-                if name == "content-security-policy" {
-                    "已设置（策略正文已隐藏）".into()
-                } else {
-                    bounded(value.to_str().unwrap_or("无法显示"), 256)
-                },
-            ));
+            report.entries.push(header_entry(name, value));
         }
     }
     if response.status().is_redirection() {

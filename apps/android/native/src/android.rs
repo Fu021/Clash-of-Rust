@@ -1,10 +1,12 @@
 use crate::{
+    claude_results::{self, BrowserStatus},
     connection_detail::{
         self, CONNECTIONS_PAGE, Detail, Selection as ConnectionSelection, Status as DetailStatus,
     },
     list_presentation::{
         self, CONNECTION_PAGE_SIZE, ConnectionPageCursor, ConnectionPager, LogMessage,
     },
+    network_probe::NetworkProbe,
     profile_picker::{Outcome, ProfilePicker, Settlement},
     protection_presentation::{self, PendingVpnRestoration, VpnRestoration},
     request_gate::RequestGate,
@@ -58,6 +60,8 @@ static PRESENTATION: Mutex<String> = Mutex::new(String::new());
 static FIRST_APPEARANCE: Mutex<Option<(bool, i32)>> = Mutex::new(None);
 static UI_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SESSION_ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CLAUDE_BROWSER_LAUNCHES: claude_results::BrowserLaunches =
+    claude_results::BrowserLaunches::new();
 static UI_LIFETIME: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
 // NativeActivity can recreate an Activity before the previous native thread
@@ -185,7 +189,12 @@ pub extern "system" fn Java_org_clashofrust_android_MainActivity_nativeEvent(
 ) {
     unowned_env
         .with_env(|env| -> jni::errors::Result<()> {
-            match serde_json::from_str(&text.try_to_string(env)?) {
+            match serde_json::from_str::<Value>(&text.try_to_string(env)?) {
+                Ok(ref event) if event["event"] == "claude-browser-open-failed" => {
+                    if let Some(ticket) = event["value"].as_i64() {
+                        CLAUDE_BROWSER_LAUNCHES.open_failed(ticket);
+                    }
+                }
                 Ok(event) => EVENTS.dispatch(event),
                 Err(error) => log::warn!("Invalid Android event: {error}"),
             }
@@ -312,8 +321,9 @@ struct State {
     connection_sort: String,
     connection_detail: Option<Detail>,
     ip_results: Vec<core::ip_report::ResultSlot>,
-    claude: Option<core::claude_check::Report>,
+    claude: claude_results::Results,
     claude_status: ClaudeStatus,
+    claude_browser_status: BrowserStatus,
     protection_change: Option<ProtectionChange>,
     saved_protection_recovery: SavedProtectionRecovery,
     protection_disable_confirmation: Option<PendingVpnRestoration>,
@@ -333,10 +343,9 @@ struct State {
     generation: u64,
     visible: bool,
     completed: Option<MobileIntent>,
-    probe: Vec<String>,
+    probe: NetworkProbe,
     probe_busy: bool,
     network_tool: i32,
-    probe_codes: Vec<&'static str>,
     geo: Option<String>,
     geo_updating: bool,
     node_pages: BTreeMap<String, usize>,
@@ -711,7 +720,11 @@ enum Update {
     ),
     Ip(u64, usize, core::ip_report::ResultSlot),
     IpDone(u64),
-    Claude(u64, std::result::Result<core::claude_check::Report, String>),
+    ClaudeNetwork(u64, std::result::Result<core::claude_check::Report, String>),
+    ClaudeBrowser(
+        i64,
+        std::result::Result<core::claude_check::Report, BrowserStatus>,
+    ),
     ProtectionPrepared(
         String,
         std::result::Result<core::claude_check::protection::Protection, String>,
@@ -753,12 +766,7 @@ impl ClaudeStatus {
     fn render(&self, language: config::Language) -> String {
         match self {
             Self::NotChecked => language.text("尚未检测", "Not checked").into(),
-            Self::Checking => language
-                .text(
-                    "正在检测，浏览器将自动采样…",
-                    "Checking; browser sampling starts automatically…",
-                )
-                .into(),
+            Self::Checking => language.text("正在检测网络…", "Checking network…").into(),
             Self::ProtectionPaused => language
                 .text(
                     "保护切换或恢复待处理，网络检测已暂停",
@@ -766,16 +774,10 @@ impl ClaudeStatus {
                 )
                 .into(),
             Self::Stopped => language
-                .text(
-                    "已停止检测，保留上次完成的报告",
-                    "Check stopped; the previous report is preserved",
-                )
+                .text("网络检测已停止", "Network check stopped")
                 .into(),
             Self::Complete => language
-                .text(
-                    "检测完成 · 浏览器及网络采样已结束",
-                    "Check complete · browser and network sampling finished",
-                )
+                .text("网络检测已完成", "Network check complete")
                 .into(),
             Self::Failed(error) => format!(
                 "{}{}",
@@ -1097,8 +1099,9 @@ async fn run_loop(
         connection_sort: "下载速度 ↓".into(),
         connection_detail: None,
         ip_results: vec![None; core::ip_check::services().len()],
-        claude: None,
+        claude: Default::default(),
         claude_status: ClaudeStatus::NotChecked,
+        claude_browser_status: BrowserStatus::Idle,
         protection_change: None,
         saved_protection_recovery,
         protection_disable_confirmation: None,
@@ -1121,7 +1124,6 @@ async fn run_loop(
         probe: Default::default(),
         probe_busy: false,
         network_tool: 0,
-        probe_codes: Vec::new(),
         geo: None,
         geo_updating: false,
         node_pages: BTreeMap::new(),
@@ -1178,7 +1180,7 @@ async fn run_loop(
     let (updates, mut update_rx) = mpsc::channel::<Update>(32);
     let (overview_send, mut overview_rx) = mpsc::channel(16);
     let mut checks: Option<tokio::task::JoinHandle<()>> = None;
-    let mut claude_job: Option<tokio::task::JoinHandle<()>> = None;
+    let mut claude_jobs = ClaudeJobs::default();
     let mut rollback_dns_job: Option<ProtectionJob> = None;
     let mut address_job: Option<tokio::task::JoinHandle<()>> = None;
     let mut log_job: Option<tokio::task::JoinHandle<()>> = None;
@@ -1250,7 +1252,6 @@ async fn run_loop(
                     network_generation = network_generation.wrapping_add(1);
                     if let Some(job) = network_job.take() { job.abort(); }
                     state.probe = Default::default();
-                    state.probe_codes.clear();
                     state.probe_busy = false;
                 }
                 if intent == MobileIntent::ClaudeProtection
@@ -1259,9 +1260,9 @@ async fn run_loop(
                     if let Some(job) = checks.take() { job.abort(); let _ = job.await; }
                     state.generation = state.generation.wrapping_add(1);
                     state.detecting = false;
-                    if let Some(job) = claude_job.take() { job.abort(); let _ = job.await; }
-                    state.claude_generation = state.claude_generation.wrapping_add(1);
-                    state.claude_busy = false;
+                    for job in claude_jobs.stop(&mut state).into_iter().flatten() {
+                        let _ = job.await;
+                    }
                     if let Some(job) = address_job.take() { job.abort(); let _ = job.await; }
                     if let Some(job) = recovery_job.take() { job.abort(); let _ = job.await; }
                 }
@@ -1285,7 +1286,7 @@ async fn run_loop(
                 }
                 if matches!(intent, MobileIntent::Probe | MobileIntent::SiteStart | MobileIntent::SiteRetest
                     | MobileIntent::SiteProbe | MobileIntent::NodeDelay | MobileIntent::GroupDelay
-                    | MobileIntent::DelayAll | MobileIntent::ClaudeStart)
+                    | MobileIntent::DelayAll | MobileIntent::ClaudeStart | MobileIntent::ClaudeBrowserRetry)
                     && !can_run_active_probe(&state)
                 {
                     let message = state.presentation_language.text(
@@ -1293,8 +1294,7 @@ async fn run_loop(
                         "Network checks are paused while a protection change or recovery is pending",
                     );
                     if intent == MobileIntent::Probe {
-                        state.probe = vec![message.into()];
-                        state.probe_codes.clear();
+                        state.probe = NetworkProbe::Paused;
                     } else if intent == MobileIntent::ClaudeStart {
                         state.claude_status = ClaudeStatus::ProtectionPaused;
                     } else {
@@ -1311,17 +1311,14 @@ async fn run_loop(
                         if let Some(job) = address_job.take() { job.abort(); }
                         state.connection_detail = None;
                     }
-                    if state.page == 6 && page != 6 {
+                    if state.page == 6 && page != 6 && state.probe_busy {
                         network_generation = network_generation.wrapping_add(1);
                         if let Some(job) = network_job.take() { job.abort(); }
                         state.probe = Default::default();
-                        state.probe_codes.clear();
                         state.probe_busy = false;
                     }
                     if state.page == 8 && page != 8 {
-                        if let Some(job) = claude_job.take() { job.abort(); }
-                        state.claude_generation = state.claude_generation.wrapping_add(1);
-                        state.claude_busy = false;
+                        claude_jobs.stop(&mut state);
                     }
                     state.page = page;
                     state.query.clear();
@@ -1352,20 +1349,17 @@ async fn run_loop(
                     network_generation = network_generation.wrapping_add(1);
                     if let Some(job) = network_job.take() { job.abort(); }
                     state.probe = Default::default();
-                    state.probe_codes.clear();
                     state.probe_busy = false;
                     if intent == MobileIntent::NetworkTool {
                         if let Some(tool) = request.a.parse::<i32>().ok().and_then(|index| core::network_tools::Tool::at(index).ok()) {
                             state.network_tool = tool.index();
                         }
                     } else {
-                        state.probe = vec![state.presentation_language.text("检查已取消", "Check cancelled").into()];
-                        state.probe_codes = vec!["cancelled"];
+                        state.probe = NetworkProbe::Cancelled;
                     }
                 } else if intent == MobileIntent::Probe {
                     if network_job.is_none() && state.page == 6 {
                         state.probe = Default::default();
-                        state.probe_codes.clear();
                         state.probe_busy = true;
                         network_generation = network_generation.wrapping_add(1);
                         let generation = network_generation;
@@ -1386,10 +1380,7 @@ async fn run_loop(
                         }));
                     }
                 } else if intent == MobileIntent::ClaudeCancel {
-                    if let Some(job) = claude_job.take() { job.abort(); }
-                    state.claude_generation = state.claude_generation.wrapping_add(1);
-                    state.claude_busy = false;
-                    state.claude_status = ClaudeStatus::Stopped;
+                    claude_jobs.stop(&mut state);
                 } else if intent==MobileIntent::CheckUpdate {
                     if !blocked_during_protection(&mut state) && !state.update_busy {
                         state.update_busy=true;state.update_downloading=false;state.update_status=UpdateStatus::Checking;state.update_progress=0.0;
@@ -1526,7 +1517,11 @@ async fn run_loop(
                         });
                     }
                 } else if intent == MobileIntent::ClaudeStart {
-                    start_claude_check(&mut state, &mut claude_job, updates.clone());
+                    claude_jobs.start(&mut state, updates.clone());
+                } else if intent == MobileIntent::ClaudeBrowserRetry {
+                    if state.page == 8 && state.claude_browser_status.retryable() {
+                        claude_jobs.start_browser(&mut state, updates.clone());
+                    }
                 } else {
                     state.notice_error = false;
                     state.notice_critical = false;
@@ -1555,7 +1550,7 @@ async fn run_loop(
                                     && !state.saved_protection_recovery.is_active();
                             }
                             if subscription_affects_active {
-                                reset_subscription_results(&mut state, &mut checks, &mut claude_job);
+                                reset_subscription_results(&mut state, &mut checks, &mut claude_jobs);
                             }
                             if matches!(intent,MobileIntent::SelectNode|MobileIntent::ActivateProfile|MobileIntent::UpdateProfile
                                 |MobileIntent::SaveProfile|MobileIntent::DeleteProfile|MobileIntent::RestartCore|MobileIntent::Mode
@@ -1663,11 +1658,8 @@ async fn run_loop(
                         network_job = None;
                         state.probe_busy = false;
                         state.probe = match result {
-                            Ok(report) => {
-                                state.probe_codes = report.entries.iter().map(|entry| entry.code).collect();
-                                report.lines_in(state.presentation_language)
-                            }
-                            Err(error) => vec![format!("{} · {error}", state.presentation_language.text("检查失败", "Check failed"))],
+                            Ok(report) => NetworkProbe::Complete(report),
+                            Err(error) => NetworkProbe::Failed(error),
                         };
                         immediate = true;
                     }
@@ -1787,12 +1779,15 @@ async fn run_loop(
                     }
                     Some(Update::Ip(generation,index,result)) if generation == state.generation => state.ip_results[index]=result,
                     Some(Update::IpDone(generation)) if generation == state.generation => { state.detecting=false; checks=None; }
-                    Some(Update::Claude(generation,result)) if generation == state.claude_generation => {
-                        claude_job = None; state.claude_busy = false; immediate = true;
+                    Some(Update::ClaudeNetwork(generation,result)) if generation == state.claude_generation => {
+                        claude_jobs.network = None; state.claude_busy = false; immediate = true;
                         match result {
-                            Ok(report) => {state.claude=Some(report); state.claude_status=ClaudeStatus::Complete; state.notice=state.presentation_language.text("检测完成", "Check complete").into();}
+                            Ok(report) => {state.claude.network(report); state.claude_status=ClaudeStatus::Complete;}
                             Err(error) => {state.claude_status=ClaudeStatus::Failed(error.clone()); state.notice=error;state.notice_error=true;}
                         }
+                    }
+                    Some(Update::ClaudeBrowser(ticket, result)) => {
+                        immediate |= claude_jobs.finish_browser(ticket, &mut state, result).is_some();
                     }
                     Some(Update::ProtectionPrepared(ticket, result)) => {
                         if let Some(change) = state.protection_change.as_mut()
@@ -1828,7 +1823,6 @@ async fn run_loop(
                         network_generation = network_generation.wrapping_add(1);
                         if let Some(job) = network_job.take() { job.abort(); }
                         state.probe = Default::default();
-                        state.probe_codes.clear();
                         state.probe_busy = false;
                         if let Some(job) = refresh_job.take() { job.abort(); }
                         refresh_generation += 1;
@@ -1847,7 +1841,7 @@ async fn run_loop(
                                         network_generation = network_generation.wrapping_add(1);
                                         if let Some(job) = network_job.take() { job.abort(); }
                                         cancel_delay(&mut state, &mut delay_job);
-                                        reset_subscription_results(&mut state, &mut checks, &mut claude_job);
+                                        reset_subscription_results(&mut state, &mut checks, &mut claude_jobs);
                                         state.rule_rows = None;
                                         if let Some(job) = refresh_job.take() { job.abort(); }
                                         refresh_generation = refresh_generation.wrapping_add(1);
@@ -1860,7 +1854,8 @@ async fn run_loop(
                                 Err(error) => {
                                     if pending.is_current(&state.session.settings, &state.session.profiles, &state.session.store).unwrap_or(false)
                                         && let Some(message) = core::subscription::format_notice(&error) {
-                                        state.notice = format!("订阅定时更新失败，已保留原配置与运行状态：{message}");
+                                        state.notice = LogMessage::SubscriptionDownloadFailed(message)
+                                            .display(state.presentation_language);
                                         state.notice_error = true;
                                     }
                                     state.logs.push_back(("WARN".into(), LogMessage::SubscriptionDownloadFailed(error.to_string())));
@@ -1903,7 +1898,11 @@ async fn run_loop(
                                 state.update_downloaded=true;state.update_status=UpdateStatus::Downloaded;
                                 if let Err(error)=state.session.native.request(json!({"op":"install-update"})) {state.notice=format!("{error:#}");state.notice_error=true;}
                             }
-                            Err(error)=>{state.notice=format!("更新失败：{error}");state.update_status=UpdateStatus::Failed(error);state.notice_error=true;},
+                            Err(error)=>{
+                                state.update_status=UpdateStatus::Failed(error);
+                                state.notice=state.update_status.render(state.presentation_language);
+                                state.notice_error=true;
+                            },
                         }
                     }
                     _ => {}
@@ -2053,7 +2052,7 @@ async fn run_loop(
                 state.notice_critical = true;
             }
             match observe_protection(&mut state, protection_dns_result) {
-                Ok(true) => start_claude_check(&mut state, &mut claude_job, updates.clone()),
+                Ok(true) => claude_jobs.start(&mut state, updates.clone()),
                 Ok(false) => {}
                 Err(error) => {
                     state.protection_observed = false;
@@ -2174,7 +2173,7 @@ async fn run_loop(
                 visible: state.visible && state.page == 0,
                 idle: !profile_gate.busy()
                     && !state.detecting
-                    && !state.claude_busy
+                    && !claude_jobs.busy()
                     && !state.update_busy
                     && !state.geo_updating
                     && state.protection_change.is_none()
@@ -2368,9 +2367,7 @@ async fn run_loop(
     if let Some(job) = checks {
         job.abort();
     }
-    if let Some(job) = claude_job {
-        job.abort();
-    }
+    claude_jobs.stop(&mut state);
     drop(state.protection_change.take());
     drop(rollback_dns_job);
     if let Some(job) = log_job {
@@ -2809,62 +2806,136 @@ fn observe_protection(
     Ok(false)
 }
 
-fn start_claude_check(
-    state: &mut State,
-    job: &mut Option<tokio::task::JoinHandle<()>>,
-    send: mpsc::Sender<Update>,
-) {
-    if let Some(previous) = job.take() {
-        previous.abort();
+#[derive(Default)]
+struct ClaudeJobs {
+    network: Option<tokio::task::JoinHandle<()>>,
+    browser: Option<(i64, tokio::task::JoinHandle<()>)>,
+}
+
+impl ClaudeJobs {
+    fn busy(&self) -> bool {
+        self.network.is_some() || self.browser.is_some()
     }
-    state.claude_generation = state.claude_generation.wrapping_add(1);
-    state.claude_busy = true;
-    let generation = state.claude_generation;
-    state.claude_status = ClaudeStatus::Checking;
-    let port = state.session.settings.mixed_port;
-    let api = state.session.api.clone();
-    let host = state.session.native.clone();
-    *job = Some(tokio::spawn(async move {
-        let result = async {
-            let client = core::claude_check::client(Some(port))?;
-            let browser = core::claude_check::browser::Session::start(client.clone()).await?;
-            host.request(json!({"op":"open-url","url":browser.url}))?;
-            let mut report = core::claude_check::Report::new(
-                core::claude_check::Environment::Core,
-                "Android 网络环境",
-            );
-            core::claude_check::network(&client, &mut report, "内核代理").await;
-            if let Ok(routes) = api
-                .get::<core::claude_check::ObservedConnections>("connections")
-                .await
-            {
-                report.routes = routes.connections;
-            }
-            core::claude_check::enhanced::extend(&client, &mut report).await;
-            report
-                .signals
-                .extend(core::claude_check::system_dns(&client, "Android 系统").await);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-            loop {
-                if let Some(sample) = browser.next_report() {
-                    report.signals.extend(sample.signals);
-                    break;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-            Ok::<_, anyhow::Error>(report)
+
+    fn stop(&mut self, state: &mut State) -> [Option<tokio::task::JoinHandle<()>>; 2] {
+        let network = self.network.take();
+        let browser = self.browser.take().map(|(_, job)| job);
+        if let Some(job) = &network {
+            job.abort();
+            state.claude_generation = state.claude_generation.wrapping_add(1);
+            state.claude_busy = false;
+            state.claude_status = ClaudeStatus::Stopped;
         }
-        .await;
-        let _ = send
-            .send(Update::Claude(
-                generation,
-                result.map_err(|error| error.to_string()),
-            ))
+        if let Some(job) = &browser {
+            job.abort();
+            state.claude_browser_status = BrowserStatus::Stopped;
+        }
+        [network, browser]
+    }
+
+    fn start(&mut self, state: &mut State, send: mpsc::Sender<Update>) {
+        self.stop(state);
+        state.claude.begin();
+        state.claude_generation = state.claude_generation.wrapping_add(1);
+        state.claude_busy = true;
+        let generation = state.claude_generation;
+        state.claude_status = ClaudeStatus::Checking;
+        let port = state.session.settings.mixed_port;
+        let api = state.session.api.clone();
+        let network_send = send.clone();
+        self.network = Some(tokio::spawn(async move {
+            let result = async {
+                let client = core::claude_check::client(Some(port))?;
+                let mut report = core::claude_check::Report::new(
+                    core::claude_check::Environment::Core,
+                    "Android 网络环境",
+                );
+                core::claude_check::network(&client, &mut report, "内核代理").await;
+                if let Ok(routes) = api
+                    .get::<core::claude_check::ObservedConnections>("connections")
+                    .await
+                {
+                    report.routes = routes.connections;
+                }
+                core::claude_check::enhanced::extend(&client, &mut report).await;
+                report
+                    .signals
+                    .extend(core::claude_check::system_dns(&client, "Android 系统").await);
+                Ok::<_, anyhow::Error>(report)
+            }
             .await;
-    }));
+            let _ = network_send
+                .send(Update::ClaudeNetwork(
+                    generation,
+                    result.map_err(|error| error.to_string()),
+                ))
+                .await;
+        }));
+        self.start_browser(state, send);
+    }
+
+    fn start_browser(&mut self, state: &mut State, send: mpsc::Sender<Update>) {
+        if self.browser.is_some() {
+            return;
+        }
+        let mut launch = CLAUDE_BROWSER_LAUNCHES.register();
+        let ticket = launch.ticket;
+        let port = state.session.settings.mixed_port;
+        let host = state.session.native.clone();
+        state.claude_browser_status = BrowserStatus::Sampling;
+        let job = tokio::spawn(async move {
+            let result = async {
+                let client = core::claude_check::client(Some(port))
+                    .map_err(|_| BrowserStatus::Unavailable)?;
+                let browser = core::claude_check::browser::Session::start(client)
+                    .await
+                    .map_err(|_| BrowserStatus::Unavailable)?;
+                host.request(json!({
+                    "op":"open-url","url":browser.url,"claude_browser_sample":ticket
+                }))
+                .map_err(|_| BrowserStatus::OpenFailed)?;
+                let read = async {
+                    loop {
+                        if let Some(sample) = browser.next_report() {
+                            return Ok(sample);
+                        }
+                        if browser.finished() {
+                            return Err(BrowserStatus::Unavailable);
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                };
+                tokio::select! {
+                    _ = &mut launch.failure => Err(BrowserStatus::OpenFailed),
+                    result = tokio::time::timeout(Duration::from_secs(120), read) =>
+                        result.map_err(|_| BrowserStatus::TimedOut)?,
+                }
+            }
+            .await;
+            let _ = send.send(Update::ClaudeBrowser(ticket, result)).await;
+        });
+        self.browser = Some((ticket, job));
+    }
+
+    fn finish_browser(
+        &mut self,
+        ticket: i64,
+        state: &mut State,
+        result: std::result::Result<core::claude_check::Report, BrowserStatus>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let (active_ticket, _) = self.browser.as_ref()?;
+        if *active_ticket != ticket {
+            return None;
+        }
+        state.claude_browser_status = match result {
+            Ok(report) => {
+                state.claude.browser(report);
+                BrowserStatus::Complete
+            }
+            Err(status) => status,
+        };
+        self.browser.take().map(|(_, job)| job)
+    }
 }
 
 fn picker_request(value: &Value, language: config::Language) -> Result<i32> {
@@ -2896,11 +2967,8 @@ fn settle_picker(
     language: config::Language,
 ) {
     match state.profile_picker.settle(request, selected_name) {
-        Some(Settlement::Selected) => {
-            state.picked_profile_name = state
-                .profile_picker
-                .draft()
-                .map(|draft| draft.fields.name.clone());
+        Some(Settlement::Selected(name)) => {
+            state.picked_profile_name = Some(name);
             state.notice = language
                 .text(
                     "已选择本地配置，保存后生效",
@@ -3337,7 +3405,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             if let Some(request) = state.profile_picker.pending() {
                 EVENTS.finish_file(request);
             }
-            state.profile_picker.open(String::new());
+            state.profile_picker.open();
             state.picked_profile_name = None;
         }
         MobileIntent::ProfileClose => {
@@ -3454,7 +3522,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 "core_running":session.running,"vpn_connected":session.vpn,
                 "measurements":session.api.measurement_diagnostics(),
                 "network_tool":core::network_tools::Tool::at(state.network_tool).ok().map(|tool| tool.id()),
-                "network_tests":state.probe,"network_test_codes":state.probe_codes,
+                "network_tests":state.probe.lines(language),"network_test_codes":state.probe.codes(),
                 "site_results":core::support::ip_results(&state.ip_results),"claude_status":state.claude_status.render(language),
                 "presentation":PRESENTATION.lock().map(|value|value.clone()).unwrap_or_default(),
                 "platform":session.native.request(json!({"op":"diagnostics"})).map_err(|error|format!("{error:#}")),
@@ -3757,7 +3825,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
             session
                 .native
                 .request(json!({"op":"export","name":"claude-report.json",
-                "content":serde_json::to_string_pretty(&json!({"detection":state.claude,"enforcement":state.guard_snapshot,"protection_enabled":session.settings.claude_protection.is_some()}))?}))?;
+                "content":serde_json::to_string_pretty(&json!({"detection":state.claude.report(),"enforcement":state.guard_snapshot,"protection_enabled":session.settings.claude_protection.is_some()}))?}))?;
         }
         MobileIntent::ClaudeProtection => {
             let Some(saved) = session.settings.claude_protection.clone() else {
@@ -3900,23 +3968,19 @@ fn cancel_delay(state: &mut State, job: &mut Option<tokio::task::JoinHandle<()>>
 fn reset_subscription_results(
     state: &mut State,
     checks: &mut Option<tokio::task::JoinHandle<()>>,
-    claude_job: &mut Option<tokio::task::JoinHandle<()>>,
+    claude_jobs: &mut ClaudeJobs,
 ) {
     if let Some(job) = checks.take() {
         job.abort();
     }
-    if let Some(job) = claude_job.take() {
-        job.abort();
-    }
+    claude_jobs.stop(state);
     state.generation = state.generation.wrapping_add(1);
-    state.claude_generation = state.claude_generation.wrapping_add(1);
     state.detecting = false;
-    state.claude_busy = false;
     state.ip_results.fill(None);
-    state.claude = None;
+    state.claude = Default::default();
     state.claude_status = ClaudeStatus::SubscriptionChanged;
+    state.claude_browser_status = BrowserStatus::Idle;
     state.probe = Default::default();
-    state.probe_codes.clear();
     state.probe_busy = false;
 }
 fn start_delay(
@@ -3988,6 +4052,8 @@ struct Projection {
     site_regions: Vec<String>,
     site_details: Vec<(String, String)>,
     claude_busy: bool,
+    claude_browser_status: &'static str,
+    claude_browser_retry: bool,
     claude: Vec<ReportRow>,
     claude_counts: (usize, usize, usize),
     progress: (usize, usize),
@@ -4283,7 +4349,7 @@ fn project(state: &mut State) -> Projection {
     }
     let mut claude = vec![];
     let mut claude_counts = (0, 0, 0);
-    if let Some(report) = &state.claude {
+    if let Some(report) = state.claude.report() {
         for signal in &report.signals {
             let country_label =
                 if signal.group == core::claude_check::Group::Dns && !signal.ip.is_empty() {
@@ -4572,13 +4638,16 @@ fn project(state: &mut State) -> Projection {
             .chain(site_regions)
             .collect(),
         site_details,
-        claude_busy: state.claude_busy,
+        claude_busy: state.claude_busy || state.claude_browser_status == BrowserStatus::Sampling,
+        claude_browser_status: state.claude_browser_status.render(language),
+        claude_browser_retry: state.claude_browser_status.retryable()
+            && can_run_active_probe(state),
         claude: claude_headers,
         claude_counts,
         progress: (report.totals.completed(), report.totals.total()),
         detecting: state.detecting,
         exit,
-        probe: state.probe.clone(),
+        probe: state.probe.lines(language),
         probe_busy: state.probe_busy,
         network_tool: state.network_tool,
         geo: state
@@ -4599,10 +4668,7 @@ fn project(state: &mut State) -> Projection {
         rule_form: state.rule_form.clone(),
         rule_editor: state.rule_editor.clone(),
         picked_profile_name: state.picked_profile_name.take(),
-        profile_file_selected: state
-            .profile_picker
-            .draft()
-            .is_some_and(|draft| draft.content.is_some()),
+        profile_file_selected: state.profile_picker.file_selected(),
         profile_file_pending: state.profile_picker.pending().is_some(),
         update_status: state.update_status.render(language),
         update_busy: state.update_busy,
@@ -4773,6 +4839,8 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_site_summary(p.site_summary.into());
     data.set_claude_status(p.claude_status.into());
     data.set_claude_busy(p.claude_busy);
+    data.set_claude_browser_status(p.claude_browser_status.into());
+    data.set_claude_browser_retry(p.claude_browser_retry);
     data.set_site_regions(stable(
         data.get_site_regions(),
         rows(p.site_regions.into_iter().map(Into::into).collect()),

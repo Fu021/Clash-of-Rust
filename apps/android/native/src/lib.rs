@@ -3,6 +3,9 @@ mod android;
 #[cfg(any(target_os = "android", test))]
 mod application_routing_mode;
 #[cfg(any(target_os = "android", test))]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod claude_results;
+#[cfg(any(target_os = "android", test))]
 mod connection_detail;
 #[cfg(any(target_os = "android", test))]
 mod incident_delivery;
@@ -10,6 +13,8 @@ mod incident_delivery;
 mod list_presentation;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod network_probe;
+#[cfg(any(target_os = "android", test))]
 mod profile_picker;
 #[cfg(any(target_os = "android", all(test, feature = "mobile-ui-tests")))]
 mod protection_intent;

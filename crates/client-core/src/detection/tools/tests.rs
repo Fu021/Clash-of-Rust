@@ -228,6 +228,57 @@ fn english_dns_report_translates_generated_fields_without_changing_evidence() {
 }
 
 #[test]
+fn dns_record_placeholders_follow_language_without_translating_record_data() {
+    let mut report = Report {
+        schema: 1,
+        tool: Tool::Dns,
+        target: "https://example.test".into(),
+        elapsed_ms: 1,
+        status: "complete",
+        entries: http::dns_entries(
+            &serde_json::json!({
+                "Status": 0,
+                "Answer": [
+                    {"type": 5, "TTL": 60},
+                    {"type": 5, "TTL": 60, "data": "未提供"},
+                    {"type": 5, "TTL": 60, "data": "正文已隐藏"}
+                ]
+            }),
+            "CNAME",
+        )
+        .unwrap(),
+    };
+    report.entries.extend(
+        http::dns_entries(
+            &serde_json::json!({
+                "Status": 0,
+                "Answer": [{"data": "private text"}]
+            }),
+            "TXT",
+        )
+        .unwrap(),
+    );
+    let original = serde_json::to_value(&report).unwrap();
+    let chinese = report.lines_in(Language::SimplifiedChinese);
+    assert_eq!(chinese[3], "记录 · 类型 5 · TTL 60 s · 未提供");
+    assert_eq!(chinese[3], chinese[4]);
+    assert_eq!(chinese[7], "记录 · 类型 未提供 · TTL 未提供 s · 正文已隐藏");
+
+    let english = report.lines_in(Language::English);
+    assert_eq!(english[3], "Record · Type 5 · TTL 60 s · unavailable");
+    assert_eq!(english[4], "Record · Type 5 · TTL 60 s · 未提供");
+    assert_eq!(english[5], "Record · Type 5 · TTL 60 s · 正文已隐藏");
+    assert_eq!(
+        english[7],
+        "Record · Type unavailable · TTL unavailable s · Content hidden"
+    );
+    assert_eq!(report.lines_in(Language::SimplifiedChinese), chinese);
+    assert_eq!(serde_json::to_value(&report).unwrap(), original);
+    assert!(!original.to_string().contains("private text"));
+    assert_eq!(original["entries"][1], original["entries"][2]);
+}
+
+#[test]
 fn english_network_results_translate_generated_values_only() {
     for (label, detail, code, expected) in [
         (

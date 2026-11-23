@@ -711,7 +711,7 @@ fn profile_list_localizes_only_the_builtin_default_name() {
 #[test]
 fn profile_list_keeps_localized_usage_and_expiry_visible_beside_long_names() {
     use chrono::{DateTime, Local};
-    use clash_client_core::config::{Language, Profile};
+    use clash_client_core::config::{Language, LanguagePreference, Profile};
     use unicode_width::UnicodeWidthStr;
 
     let mut state = State::new(true);
@@ -741,9 +741,19 @@ fn profile_list_keeps_localized_usage_and_expiry_visible_beside_long_names() {
     })
     .collect();
     state.poll.as_mut().unwrap().meta.profiles = profiles.clone();
+    let mut args = crate::args::parse(["ui"].map(str::to_owned)).unwrap();
 
-    for language in [Language::English, Language::SimplifiedChinese] {
-        state.language = language;
+    for (preference, language) in [
+        (LanguagePreference::English, Language::English),
+        (
+            LanguagePreference::SimplifiedChinese,
+            Language::SimplifiedChinese,
+        ),
+        (LanguagePreference::English, Language::English),
+    ] {
+        state.language_preference = preference;
+        crate::tui::settings::sync_language(&mut state, &mut args, true, 31);
+        assert_eq!(state.language, language);
         let remote = language.text("远程", "Remote");
         let expected = [
             language
@@ -771,6 +781,12 @@ fn profile_list_keeps_localized_usage_and_expiry_visible_beside_long_names() {
                         .any(|line| line.text.trim_end().ends_with(&row)),
                     "{columns}: {row}"
                 );
+                if columns == 32 {
+                    assert!(
+                        frame.iter().any(|line| line.text.trim_end() == summary),
+                        "{columns}: {summary}"
+                    );
+                }
             }
         }
         state.selected = profiles.len() - 1;

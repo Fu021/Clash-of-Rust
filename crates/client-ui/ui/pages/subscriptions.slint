@@ -74,6 +74,10 @@ component ProfileCard inherits ContentPanel {
             spacing: 8px;
             Caption { text: @tr("名称：{}", root.profile.name); wrap: word-wrap; }
             Caption { text: @tr("来源：{}", root.profile.source); wrap: word-wrap; }
+            if root.list-view && !root.profile.local && root.profile.detail != "": usage := VerticalLayout {
+                Caption { text: root.profile.detail; wrap: word-wrap; }
+                GeometryTarget { key: "profile-usage:" + root.profile.id; bounds: [usage.absolute-position.x, usage.absolute-position.y, usage.width, usage.height]; }
+            }
             ActionButton {
                 text: @tr("删除订阅"); compact: true; quiet: true; danger: !root.profile.builtin;
                 geometry-key: "profile-delete:" + root.profile.id;

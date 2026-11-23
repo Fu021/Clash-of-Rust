@@ -297,6 +297,11 @@ impl Entry {
     fn error(label: &str, detail: impl Into<String>, code: &'static str) -> Self {
         Self::new(label, detail, Some(false), code)
     }
+
+    fn with_english_detail(mut self, detail: impl AsRef<str>) -> Self {
+        self.detail_english = Some(bounded(detail.as_ref(), 2048));
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

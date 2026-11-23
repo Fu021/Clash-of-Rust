@@ -950,6 +950,15 @@ export component MobileAiCheck inherits PageSurface {
             }
         }
         MSmall { text: MobileData.claude-status; wrap: word-wrap; }
+        if MobileData.claude-browser-status != "": VerticalLayout {
+            spacing: MobileTypography.small-gap;
+            MSmall { text: MobileData.claude-browser-status; wrap: word-wrap; }
+            if MobileData.claude-browser-retry: MButton {
+                geometry-key: "claude-browser-retry";
+                text: @tr("重试浏览器采样");
+                clicked => { MobileActions.request(MobileIntent.claude-browser-retry, "", ""); }
+            }
+        }
         if MobileData.claude-results.length > 0: VerticalLayout { spacing: 8px;
             HorizontalLayout { cross-axis-alignment: center;
                 MSmall { text: @tr("报告摘要"); font-weight: 600; }

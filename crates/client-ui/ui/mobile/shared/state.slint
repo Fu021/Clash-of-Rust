@@ -9,7 +9,7 @@ export enum MobileIntent {
     connection-sort, connection-detail, close-connection, close-all, copy,
     rule-select, rule-edit, rule-add, rule-save, rule-move, rule-drop, rule-enable, rule-restore, rule-filter, rule-delete, rule-apply, rule-discard,
     rule-shortcut, log-level, clear-logs, export-logs, export-diagnostics, copy-diagnostics, report-issue, probe, network-tool, probe-cancel,
-    site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-cancel, claude-protection, export-report,
+    site-start, site-cancel, site-category, site-filter, site-retest, site-probe, site-detail, claude-start, claude-browser-retry, claude-cancel, claude-protection, export-report,
     appearance, accent, text-scale, language, dns-override, ipv6, udp, save-ports, interval, subscription-interval, update-interval, update-geo, check-update, install-update, cancel-update, open-release, update-prereleases, fake-ip, fake-ip-add, fake-ip-remove, fake-ip-restore-defaults,
 }
 export global MobileActions {
@@ -93,6 +93,8 @@ export global MobileData {
     in-out property <[FakeIpExclusionItem]> fake-ip-exclusions;
     in-out property <int> fake-ip-removed-defaults;
     in-out property <bool> claude-busy;
+    in-out property <string> claude-browser-status;
+    in-out property <bool> claude-browser-retry;
     in-out property <[LogItem]> logs;
     in-out property <[CategoryPair]> categories;
     in-out property <[ReportItem]> site-results;

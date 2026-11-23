@@ -1953,6 +1953,19 @@ fn subscription_usage_changes_language_without_altering_metadata() {
     let usage = "upload=1048576; download=2147483648; total=3221225472; expire=0";
     app.profiles[0].source = "https://example.test/subscription".into();
     app.profiles[0].usage = Some(usage.into());
+    let timestamp = 1813147200;
+    let mut dated = app.profiles[0].clone();
+    dated.id = "dated".into();
+    dated.usage = Some(format!("expire={timestamp}"));
+    let mut missing = dated.clone();
+    missing.id = "missing".into();
+    missing.usage = None;
+    app.profiles.extend([dated, missing]);
+    let profiles = app.profiles.clone();
+    let date = chrono::DateTime::from_timestamp(timestamp, 0)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d");
     app.settings.language = LanguagePreference::SimplifiedChinese;
     app.presentation_language = Language::SimplifiedChinese;
     let window = AppWindow::new().unwrap();
@@ -1960,23 +1973,51 @@ fn subscription_usage_changes_language_without_altering_metadata() {
     let mut models = ViewModels::default();
     models.attach(&data);
     app.present_slint(&data, &mut models);
+    let _events = pointer_events(&window);
+    window.show().unwrap();
+    motion_frame(&window, 0);
     let rows = data.get_profiles();
-    assert_eq!(rows.row_data(0).unwrap().detail, "已用 2/3 GiB · 不限期");
-    for (language, expected) in [
-        (LanguagePreference::English, "Used 2/3 GiB · No expiry"),
+    let assert_summaries = |used, expires, unavailable| {
+        assert_eq!(rows, data.get_profiles());
+        assert_eq!(rows.row_data(0).unwrap().detail, used);
+        assert_eq!(
+            rows.row_data(1).unwrap().detail,
+            format!("{expires} {date}")
+        );
+        assert_eq!(rows.row_data(2).unwrap().detail, unavailable);
+    };
+    assert_summaries("已用 2/3 GiB · 不限期", "到期", "未提供用量与到期");
+
+    click_target(&window, "profiles-view");
+    motion_frame(&window, 0);
+    click_target(&window, "profile-detail:fixture");
+    for (language, used, expires, unavailable) in [
+        (
+            LanguagePreference::English,
+            "Used 2/3 GiB · No expiry",
+            "Expires",
+            "Usage and expiry unavailable",
+        ),
         (
             LanguagePreference::SimplifiedChinese,
             "已用 2/3 GiB · 不限期",
+            "到期",
+            "未提供用量与到期",
         ),
     ] {
         let mut reply = synchronized_reply(&app);
         reply.settings.language = language;
         let _ = app.update(Message::Finished(Box::new(reply)));
         app.present_slint(&data, &mut models);
-        assert_eq!(rows, data.get_profiles());
-        assert_eq!(rows.row_data(0).unwrap().detail, expected);
-        assert_eq!(app.profiles[0].usage.as_deref(), Some(usage));
+        track_targets(&window);
+        motion_frame(&window, 0);
+        assert_summaries(used, expires, unavailable);
+        assert_eq!(app.profiles, profiles);
+        let summary = target_bounds("profile-usage:fixture");
+        let delete = target_bounds("profile-delete:fixture");
+        assert!(summary[1] + summary[3] <= delete[1]);
     }
+    window.hide().unwrap();
 }
 
 #[test]

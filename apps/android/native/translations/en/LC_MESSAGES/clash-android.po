@@ -1386,3 +1386,6 @@ msgstr "Some icons could not be loaded; generic icons are shown."
 
 msgid "重试"
 msgstr "Retry"
+
+msgid "重试浏览器采样"
+msgstr "Retry browser sample"
