@@ -2604,6 +2604,9 @@ public class ProxyTunTest {
                     && repairedLanguage.equals(ui.optString("presentation_language"));
             });
             assertTrue(CoreBridge.ready());
+            assertEquals("Recovered settings must show the app scope in the selected language",
+                ApplicationRouting.load(context).summary(context),
+                MainActivity.diagnostics().getString("application_scope"));
             assertEquals("Recovery reopened the session more than once", beforeRecovery + 1,
                 MainActivity.diagnostics().getLong("session_attempts"));
             assertEquals("Recovery initialized the core more than once",

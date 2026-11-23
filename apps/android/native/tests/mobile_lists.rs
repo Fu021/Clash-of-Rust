@@ -22,8 +22,8 @@ slint::slint! {
     import { MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
     import { MobileData } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
     export { MobileData, ConnectionDetailSnapshot, ConnectionDetailStatus } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
-    export { DetailItem } from "../../../../crates/client-ui/ui/models.slint";
-    import { MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow } from "../../../../crates/client-ui/ui/mobile/shared/pages.slint";
+    export { DetailItem, LogItem } from "../../../../crates/client-ui/ui/models.slint";
+    import { MobileProxies, MobileSubscriptions, MobileConnections, MobileRules, MobileNetwork, RulesRow, LogsRow } from "../../../../crates/client-ui/ui/mobile/shared/pages.slint";
     import { MobileModal } from "../../../../crates/client-ui/ui/mobile/shared/details.slint";
     import { AppearanceSettings } from "../../../../crates/client-ui/ui/mobile/shared/settings.slint";
     import { AndroidSurface } from "../../../../crates/client-ui/ui/mobile/android/app.slint";
@@ -40,7 +40,7 @@ slint::slint! {
     export { ConnectionItem } from "../../../../crates/client-ui/ui/models.slint";
     export { ReportItem } from "../../../../crates/client-ui/ui/models.slint";
     export { MobileActions, MobileIntent, MobileView } from "../../../../crates/client-ui/ui/mobile/shared/state.slint";
-    import { GroupItem, ProfileItem, ConnectionItem, ReportItem } from "../../../../crates/client-ui/ui/models.slint";
+    import { GroupItem, ProfileItem, ConnectionItem, ReportItem, LogItem } from "../../../../crates/client-ui/ui/models.slint";
     import { Theme } from "../../../../crates/client-ui/ui/theme/palette.slint";
     export { UiGeometry } from "../../../../crates/client-ui/ui/components/geometry.slint";
 
@@ -55,6 +55,11 @@ slint::slint! {
             compact: true; primary: true; enabled: root.enabled;
             clicked => { root.clicks += 1; }
         }
+    }
+
+    export component MobileLogRowProbe inherits Window {
+        in-out property <LogItem> entry;
+        LogsRow { x: 0px; y: 0px; width: parent.width; item: root.entry; }
     }
 
     export component NetworkToolboxProbe inherits Window {
@@ -3291,6 +3296,69 @@ fn compact_mobile_buttons_keep_their_touch_targets() {
     }
     compact.hide().unwrap();
     drop(compact);
+}
+
+#[test]
+fn mobile_log_row_does_not_open_or_copy_a_replacement_received_mid_press() {
+    let (adapter, clock) = headless(393, 240);
+    let probe = MobileLogRowProbe::new().unwrap();
+    probe.show().unwrap();
+    let view = probe.global::<MobileView>();
+    let row = LogicalPosition::new(40., 70.);
+    let copy = LogicalPosition::new(350., 35.);
+    let press = |position| {
+        probe.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+    };
+    let release = |position| {
+        probe.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    };
+    let show = |message: &str| {
+        probe.set_entry(LogItem {
+            message: message.into(),
+            level: "INFO".into(),
+            ..Default::default()
+        });
+        advance(&clock, Duration::from_millis(40));
+        frame(&adapter, 393, 240);
+    };
+    let copied = Rc::new(RefCell::new(Vec::new()));
+    let captured = copied.clone();
+    probe
+        .global::<MobileActions>()
+        .on_request(move |intent, value, _| {
+            if intent == MobileIntent::Copy {
+                captured.borrow_mut().push(value);
+            }
+        });
+    show("original entry");
+    press(row);
+    release(row);
+    assert_eq!(view.get_log_message(), "original entry");
+    view.set_detail(0);
+    view.set_log_message("".into());
+    press(row);
+    show("replacement entry");
+    release(row);
+    assert_eq!(view.get_detail(), 0);
+    assert!(view.get_log_message().is_empty());
+    press(row);
+    release(row);
+    assert_eq!(view.get_log_message(), "replacement entry");
+    view.set_detail(0);
+    press(copy);
+    show("newest entry");
+    release(copy);
+    assert!(copied.borrow().is_empty());
+    press(copy);
+    release(copy);
+    assert_eq!(copied.borrow().as_slice(), ["newest entry"]);
+    probe.hide().unwrap();
 }
 
 #[test]

@@ -774,6 +774,61 @@ fn usage_errors_follow_the_selected_language_without_initializing_the_backend() 
 }
 
 #[test]
+fn offline_node_list_localizes_invalid_saved_data_without_writing_it() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = root.path().join("settings.json");
+    let profile_id = "00000000-0000-4000-8000-000000000001";
+    let profile_dir = root.path().join("profiles");
+    let profile = profile_dir.join(format!("{profile_id}.yaml"));
+    std::fs::create_dir(&profile_dir).unwrap();
+    let assert_localized_failure = |language, expected| {
+        let result = cor()
+            .args([language, "node", "list", "--data-dir"])
+            .arg(root.path())
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        assert!(result.stdout.is_empty());
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(stderr.starts_with(&format!("cor: {expected}")), "{stderr}");
+        assert!(!root.path().join("control.json").exists());
+    };
+    for (settings_text, profile_text, chinese, english) in [
+        (
+            r#"{"language":"#,
+            "",
+            "本地设置格式错误",
+            "Invalid local settings: EOF while parsing a value",
+        ),
+        (
+            r#"{"active_profile":"00000000-0000-4000-8000-000000000001"}"#,
+            "proxies: [{type: socks5}]\n",
+            "节点或策略组缺少名称",
+            "A node or proxy group is missing its name",
+        ),
+        (
+            r#"{"active_profile":"00000000-0000-4000-8000-000000000001"}"#,
+            "proxy-groups: [{name: '', type: select}]\n",
+            "节点或策略组名称为空",
+            "A node or proxy group has an empty name",
+        ),
+    ] {
+        std::fs::write(&settings, settings_text).unwrap();
+        std::fs::write(&profile, profile_text).unwrap();
+        assert_localized_failure("--lang=zh-CN", chinese);
+        assert_localized_failure("--lang=en", english);
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), settings_text);
+        assert_eq!(std::fs::read_to_string(&profile).unwrap(), profile_text);
+    }
+
+    std::fs::remove_file(&settings).unwrap();
+    std::fs::create_dir(&settings).unwrap();
+    assert_localized_failure("--lang=zh-CN", "无法读取本地设置:");
+    assert_localized_failure("--lang=en", "Could not read local settings:");
+    assert!(settings.is_dir());
+}
+
+#[test]
 fn english_cli_explains_confirmation_and_terminal_requirements() {
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("unused");

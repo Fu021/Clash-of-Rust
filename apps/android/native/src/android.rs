@@ -4947,9 +4947,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     });
     android.set_notification_speeds(p.platform["notification_speeds"].as_bool().unwrap_or(true));
     android.set_application_scope(
-        p.platform["application_scope"]
-            .as_str()
-            .unwrap_or(language.text("全部应用", "All apps"))
+        crate::application_routing_mode::scope_label(&p.platform["application_scope"], language)
             .into(),
     );
     if p.completed == Some(MobileIntent::SavePorts)
@@ -5444,6 +5442,7 @@ fn presentation_snapshot(ui: &AndroidWindow) -> Value {
     let mut snapshot = json!({"core_running":data.get_core_running(),"vpn":data.get_vpn_connected(),
             "session_attempts":SESSION_ATTEMPTS.load(std::sync::atomic::Ordering::Acquire),
             "language":data.get_language().as_str(),"presentation_language":data.get_presentation_language().as_str(),
+            "application_scope":android.get_application_scope().as_str(),
             "page":ui.get_current_page(),"detail":ui.get_current_detail(),
             "working":data.get_working(),"profile_busy":data.get_profile_busy(),
             "draft_dirty":view.get_draft_dirty(),"modal":view.get_modal(),

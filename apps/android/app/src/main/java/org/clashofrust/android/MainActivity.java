@@ -210,13 +210,16 @@ public final class MainActivity extends NativeActivity {
                 case "hold-vpn-recovery": TunnelService.holdRecovery(this); break;
                 case "state": {
                     TunnelService.refreshNotificationChannel(AppLanguage.current(this));
+                    ApplicationRouting routing = ApplicationRouting.load(this);
                     return CoreBridge.state(this)
                         .put("network_revision",networkRevision())
                         .put("font_sizes",systemFontSizes())
                         .put("dark", Appearance.systemDark(this))
                         .put("notification_speeds",getSharedPreferences("appearance",MODE_PRIVATE).getBoolean("notification-speeds",true))
                         .put("incident_notifications", IncidentNotifications.state(this))
-                        .put("application_scope",ApplicationRouting.load(this).summary(this)).toString();
+                        .put("application_scope", new JSONObject()
+                            .put("mode", routing.mode)
+                            .put("selected", routing.packages.size())).toString();
                 }
                 case "network-info": {
                     NetworkOverview current = networkOverview;

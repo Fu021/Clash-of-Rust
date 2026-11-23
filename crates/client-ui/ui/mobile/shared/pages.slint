@@ -766,7 +766,7 @@ component LogsToolbar inherits VerticalLayout {
         }
     }
 }
-component LogsRow inherits MCard {
+component LogCard inherits MCard {
     in property <LogItem> item;
     interactive: true; clicked => { MobileView.log-message = root.item.message; MobileView.detail = 10; }
     border-radius: 0px; border-width: 0px; vertical-padding: 6px; gap: 0px;
@@ -777,6 +777,10 @@ component LogsRow inherits MCard {
         MCopyButton { value: root.item.message; quiet: true; width: 64px; horizontal-stretch: 0; }
     }
     Text { text: root.item.message; color: Theme.ink; wrap: word-wrap; overflow: elide; vertical-alignment: top; min-width: 0px; height: MobileTypography.font-size(14) * 2.8; font-size: MobileTypography.font-size(14); }
+}
+export component LogsRow inherits VerticalLayout {
+    in property <LogItem> item;
+    for entry in [root.item]: LogCard { item: entry; }
 }
 export component MobileLogs inherits PageSurface {
     clip: true;

@@ -1,4 +1,17 @@
+use clash_mobile_runtime::core::config::Language;
+use serde_json::Value;
 use std::collections::BTreeSet;
+
+pub(super) fn scope_label(scope: &Value, language: Language) -> String {
+    let selected = scope["selected"].as_u64().unwrap_or_default();
+    match (scope["mode"].as_str(), language) {
+        (Some("only"), Language::English) => format!("Only {selected} selected"),
+        (Some("only"), Language::SimplifiedChinese) => format!("仅选中 {selected} 个应用"),
+        (Some("exclude"), Language::English) => format!("{selected} excluded"),
+        (Some("exclude"), Language::SimplifiedChinese) => format!("排除 {selected} 个应用"),
+        _ => language.text("全部应用", "All apps").into(),
+    }
+}
 
 pub(super) fn selection_after_mode_change(
     current: &str,
@@ -19,6 +32,21 @@ pub(super) fn selection_after_mode_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_scope_renders_in_either_language_without_a_native_refresh() {
+        for (mode, selected, chinese, english) in [
+            ("all", 5, "全部应用", "All apps"),
+            ("only", 2, "仅选中 2 个应用", "Only 2 selected"),
+            ("exclude", 1, "排除 1 个应用", "1 excluded"),
+        ] {
+            let scope = serde_json::json!({"mode": mode, "selected": selected});
+            assert_eq!(scope_label(&scope, Language::SimplifiedChinese), chinese);
+            assert_eq!(scope_label(&scope, Language::English), english);
+            assert_eq!(scope_label(&scope, Language::SimplifiedChinese), chinese);
+        }
+        assert_eq!(scope_label(&Value::Null, Language::English), "All apps");
+    }
 
     fn captured(
         mode: &str,

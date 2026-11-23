@@ -11,7 +11,9 @@ pub(super) fn saved(store: &Store) -> Result<Proxies> {
     let settings = match std::fs::File::open(store.root.join("settings.json")) {
         Ok(file) => {
             let mut bytes = Vec::new();
-            file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+            file.take(1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .context("无法读取本地设置")?;
             ensure!(bytes.len() <= 1024 * 1024, "本地设置文件过大");
             serde_json::from_slice::<Settings>(&bytes).context("本地设置格式错误")?
         }

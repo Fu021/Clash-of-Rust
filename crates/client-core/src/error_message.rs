@@ -268,6 +268,11 @@ fn english(message: &str) -> Option<&'static str> {
         }
         "无法读取设置文件" => "Could not read the settings file",
         "设置文件格式错误" => "Invalid settings file",
+        "无法读取本地设置" => "Could not read local settings",
+        "本地设置格式错误" => "Invalid local settings",
+        "本地设置文件过大" => "The local settings file is too large",
+        "节点或策略组缺少名称" => "A node or proxy group is missing its name",
+        "节点或策略组名称为空" => "A node or proxy group has an empty name",
         "无法读取订阅索引" => "Could not read the subscription index",
         "订阅索引格式错误" => "Invalid subscription index",
         "订阅索引或设置缺失，但订阅文件仍在；请恢复原文件后重试" => {
