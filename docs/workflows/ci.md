@@ -82,6 +82,8 @@ Ubuntu 20.04 构建容器使用官方 HTTPS APT 源，首次安装证书包前�
 
 Go 审计只查询声明的模块路径，不执行更新。Android 公共任务一次准备已校验的模块下载包和绑定工具，经本轮附件分发给三个 ABI；各 ABI 的 `GOCACHE` 只存 GitHub。
 
+`gomobile bind` 遇到 Go 校验服务的暂时连接故障时，使用同一模块及编译缓存随机退避重试。遇到 HTTP/2 流错误后，本次绑定的后续尝试改用 HTTP/1.1。模块校验、HTTPS 和依赖锁文件照常生效，校验不符和编译错误直接失败。
+
 ### Ubuntu 20.04 编译与验证环境
 
 Linux CI 从固定 digest 的 Ubuntu 容器编译。宿主先下载并校验内核与 Geo 文件，挂载后由容器复核。编译容器按架构及镜像 digest 使用 GitHub Actions 缓存，未命中时从官方镜像构建。

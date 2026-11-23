@@ -431,10 +431,29 @@ def bind_core(arch, env):
     # VpnService owns routing and package exclusions. The default Android
     # listener tries to read root-only /data/system/packages.xml; cmfa
     # selects the upstream app-hosted path. Our TUN explicitly uses gVisor.
-    run(['gomobile', 'bind', '-target', 'android/'+ABIS[arch][3], '-androidapi', '26',
-         '-tags', 'cmfa,with_gvisor',
-         '-javapkg', 'org.clashofrust.nativecore', '-ldflags=-s -w -extldflags=-Wl,-z,max-page-size=16384',
-         '-o', aar, '.'], cwd=ANDROID/'core', env=env)
+    command = ['gomobile', 'bind', '-target', 'android/'+ABIS[arch][3], '-androidapi', '26',
+               '-tags', 'cmfa,with_gvisor', '-javapkg', 'org.clashofrust.nativecore',
+               '-ldflags=-s -w -extldflags=-Wl,-z,max-page-size=16384', '-o', aar, '.']
+    transient = re.compile(
+        r'reading https://sum\.golang\.org/\S+:[^\r\n]*?'
+        r'(stream error:|connection reset|connection timed out|i/o timeout|unexpected EOF'
+        r'|TLS handshake timeout|(?:429|50[0234])\s+(?:Too Many|Bad Gateway|Service|Gateway))',
+        re.I)
+    for attempt in range(6):
+        status, tail = streamed_command(command, cwd=ANDROID/'core', env=env)
+        if status == 0:
+            return
+        failure = transient.search(tail)
+        if attempt == 5 or not failure:
+            raise subprocess.CalledProcessError(status, command, output=tail)
+        if failure[1].lower() == 'stream error:':
+            debug = [option for option in env.get('GODEBUG', '').split(',')
+                     if option and not option.startswith('http2client=')]
+            env = dict(env, GODEBUG=','.join([*debug, 'http2client=0']))
+        delay = random.uniform(10, 25) * (attempt + 1)
+        print(f'Go checksum service connection failed; retrying binding with the same cache in {delay:.0f}s',
+              flush=True)
+        time.sleep(delay)
 
 
 def prepare_maven_cache():

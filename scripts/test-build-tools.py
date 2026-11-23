@@ -8280,6 +8280,37 @@ runpy.run_path(str(script), run_name='__main__')
             spawn.assert_called_once()
             delay.assert_not_called()
 
+    def test_android_binding_retries_checksum_transport_failures_with_the_same_cache(self):
+        reset = ('gomobile: go mod tidy failed: exit status 1\n'
+                 'go: example.com/module: verifying go.mod: reading '
+                 'https://sum.golang.org/tile/8/0/081: stream error: stream ID 2277; '
+                 'INTERNAL_ERROR; received from peer\n')
+        env = {'GODEBUG': 'tlsmlkem=0,http2client=1', 'GOCACHE': 'abi-cache', 'GOSUMDB': 'sum.golang.org'}
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(android_build, 'ANDROID', Path(temporary)), \
+             patch.object(android_build, 'ensure_binding_tool'), \
+             patch.object(android_build.time, 'sleep') as delay, \
+             patch.object(android_build.random, 'uniform', return_value=17), \
+             patch.object(android_build, 'streamed_command', side_effect=[(1, reset), (0, '')]) as bind:
+            android_build.bind_core('x64', env)
+            first, second = bind.call_args_list
+            self.assertEqual(first.args, second.args)
+            self.assertEqual(first.kwargs['env'], env)
+            self.assertEqual(second.kwargs['env'], dict(env, GODEBUG='tlsmlkem=0,http2client=0'))
+            delay.assert_called_once_with(17)
+        for failure, attempts in ((reset, 6), ('verifying module: checksum mismatch', 1),
+                                  ('core.go:12: undefined: Binding', 1)):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary, \
+                 patch.object(android_build, 'ANDROID', Path(temporary)), \
+                 patch.object(android_build, 'ensure_binding_tool'), \
+                 patch.object(android_build.time, 'sleep') as delay, \
+                 patch.object(android_build, 'streamed_command', return_value=(1, failure)) as bind:
+                with self.assertRaises(subprocess.CalledProcessError) as raised:
+                    android_build.bind_core('x64', env)
+                self.assertEqual(raised.exception.output, failure)
+                self.assertEqual(bind.call_count, attempts)
+                self.assertEqual(delay.call_count, attempts - 1)
+
     def test_android_cross_clippy_rebuilds_its_host_and_abi_profiles_once(self):
         target = 'x86_64-linux-android'
         command = ['cargo', 'clippy', '--target', target, '--release', '--locked']
