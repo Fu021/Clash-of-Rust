@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, VecDeque};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LogMessage {
     Raw(String),
+    ActionFailed(String),
     NodesUnreachable,
     StatusRefreshFailed(String),
     SubscriptionUpdateFailed,
@@ -32,6 +33,7 @@ impl LogMessage {
     pub(crate) fn display(&self, language: Language) -> String {
         match self {
             Self::Raw(value) => value.clone(),
+            Self::ActionFailed(detail) => error_message::localize(detail, language).into_owned(),
             Self::NodesUnreachable => language
                 .text(
                     "全部节点经两个独立目标复测仍不可达，VPN 保持连接",
@@ -417,6 +419,11 @@ mod tests {
         assert!(chinese[1].1.ends_with("provider 原始错误"));
         assert_eq!(entries, original);
         for (message, chinese, english) in [
+            (
+                LogMessage::ActionFailed("YAML 配置格式错误: provider 原始错误".into()),
+                "YAML 配置格式错误: provider 原始错误",
+                "Invalid YAML configuration: provider 原始错误",
+            ),
             (
                 LogMessage::StatusRefreshFailed("timeout".into()),
                 "状态刷新失败：timeout",

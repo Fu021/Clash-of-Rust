@@ -450,6 +450,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                     | "rule-shortcuts-open"
                     | "notice-retry-core"
                     | "retry-core"
+                    | "retry-protection"
             ))
         {
             return;
@@ -1576,7 +1577,7 @@ async fn run_loop(
                             state.notice_error = true;
                             state.notice_critical = intent == MobileIntent::RestartCore;
                             log::error!("{}",state.notice);
-                            state.logs.push_back(("ERROR".into(),state.notice.clone().into()));
+                            state.logs.push_back(("ERROR".into(), LogMessage::ActionFailed(state.notice.clone())));
                         }
                     }
                 }

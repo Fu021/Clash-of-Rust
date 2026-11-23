@@ -62,7 +62,11 @@ fn main() {
         users::prepare(&args)?;
         #[cfg(windows)]
         if let Err(error) = clash_client_runtime::platform::notification::prepare_process() {
-            eprintln!("通知初始化失败：{error:#}");
+            eprintln!(
+                "{}{error:#}",
+                args.language()
+                    .text("通知初始化失败：", "Notification initialization failed: ")
+            );
             diagnostics::failure_hint(Some(&args));
         }
         anyhow::ensure!(
