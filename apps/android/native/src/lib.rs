@@ -9,6 +9,9 @@ mod claude_results;
 mod connection_detail;
 #[cfg(any(target_os = "android", test))]
 mod incident_delivery;
+#[cfg(all(test, not(target_os = "android"), feature = "mobile-ui-tests"))]
+#[path = "../tests/language_ui.rs"]
+mod language_ui_tests;
 #[cfg(any(target_os = "android", test))]
 mod list_presentation;
 #[cfg(any(target_os = "android", test))]

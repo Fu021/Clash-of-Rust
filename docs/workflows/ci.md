@@ -64,7 +64,7 @@ Linux x64 的固定 Android Emulator 37.2.13 使用 [Google 官方归档](https:
 
 共享 Go 下载在矩阵启动前执行 `go mod tidy -diff`，先拒绝未规范化的锁文件，避免三种 Android ABI 完成 Rust 编译后才发现同一问题。
 
-`Prepare Android Maven dependencies` 按固定 runner、工具基线、Gradle 配置和依赖声明恢复精确缓存。未命中时，单个 runner 使用实际 Go AAR 和应用资源在线执行 `assembleRelease`、`assembleReleaseAndroidTest` 和 `lintRelease`，只复制 `caches/modules-2` 的构件与解析元数据，再从独立 Gradle home 清理并离线重跑这三个任务。此作业只产出 Maven 依赖，安装候选仍由三种 ABI 各自完整构建和验收。
+`Prepare Android Maven dependencies` 按固定 runner、工具基线、Gradle 配置和依赖声明恢复精确缓存。未命中时，单个 runner 使用实际 Go AAR 和应用资源在线执行 `assembleRelease`、`assembleReleaseAndroidTest` 和 `lintRelease`。HTTP 429 随机退避后最多重试四次，复用已下载的模块。在线成功后只复制 `caches/modules-2` 的构件与解析元数据，再从独立 Gradle home 清理并离线重跑这三个任务。此作业只产出 Maven 依赖，安装候选仍由三种 ABI 各自完整构建和验收。
 
 准备作业通过同轮 `android-maven-dependencies` 附件向三个 ABI 提供相同的依赖，三者都用 `--offline` 执行正式 Gradle 任务。仅 `main` 保存跨运行缓存，每次失效后重新在线准备。Gradle 转换及构建产物在各自 runner 生成。调整预热任务覆盖范围时更新缓存键的方案版本。
 

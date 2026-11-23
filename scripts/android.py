@@ -7,6 +7,7 @@ import io
 import json
 import math
 import os
+import random
 import re
 from pathlib import Path
 import shutil
@@ -338,9 +339,13 @@ def gradle(*args, arch=None, offline=False):
     return [*command, *args]
 
 
-def seed_icons():
+def seed_resources():
+    generated = ANDROID/'app/generated-res'
+    if generated.exists():
+        shutil.rmtree(generated)
+    shutil.copytree(ROOT/'translations/android/res', generated)
     # Android adaptive launchers do not need the 1254-pixel source artwork.
-    logo = ANDROID/'app/generated-res/drawable-nodpi/app_logo.png'
+    logo = generated/'drawable-nodpi/app_logo.png'
     logo.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT/'resources/icons/app-android.png', logo)
     shutil.copy2(ROOT/'resources/icons/app.png', logo.with_name('notification_logo.png'))
@@ -351,7 +356,7 @@ def seed_assets():
     from build_inputs import resource_release
     target = ANDROID/'app/offline-assets'
     target.mkdir(parents=True, exist_ok=True)
-    seed_icons()
+    seed_resources()
     release = resource_release('geo', target/'geodata.json')
     records = []
     for remote, local in {'geoip.dat':'GeoIP.dat', 'geosite.dat':'GeoSite.dat', 'country.mmdb':'Country.mmdb', 'GeoLite2-ASN.mmdb':'ASN.mmdb'}.items():
@@ -438,10 +443,20 @@ def prepare_maven_cache():
     cache = home / modules
     arch = 'x64'
     bind_core(arch, dict(os.environ, ANDROID_NDK_HOME=os.environ['ANDROID_NDK_ROOT']))
-    seed_icons()
+    seed_resources()
     with tempfile.TemporaryDirectory(prefix='cor-gradle-online-', dir=home.parent) as temporary:
         online = dict(os.environ, GRADLE_USER_HOME=temporary)
-        run(gradle(*GRADLE_BUILD_TASKS, arch=arch), cwd=ROOT, env=online)
+        command = gradle(*GRADLE_BUILD_TASKS, arch=arch)
+        for attempt in range(5):
+            status, tail = streamed_command(command, cwd=ROOT, env=online)
+            if status == 0:
+                break
+            if 'Received status code 429' not in tail or attempt == 4:
+                raise subprocess.CalledProcessError(status, command, output=tail)
+            delay = random.uniform(15, 45) * (attempt + 1)
+            print(f'Maven rate limited; retrying with the same Gradle cache in {delay:.0f}s',
+                  flush=True)
+            time.sleep(delay)
         if cache.exists():
             shutil.rmtree(cache)
         shutil.copytree(Path(temporary) / modules, cache,
@@ -484,16 +499,12 @@ def build(arch, gradle_offline=False):
     targets = ['--all-targets', '--features', 'clash-android/mobile-ui-tests'] if ui_tests else ['--lib']
     cargo_build(['cargo', 'clippy', *packages, '--release', *targets, '--locked', '--', '-D', 'warnings'],
                 cwd=ROOT, env=build_env)
-    if extended_tests() or enabled('COR_CI_ANDROID_ROUTING_TESTS'):
-        run(['cargo', 'test', *packages, '--release', '--locked', '--lib',
-             '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT, env=build_env)
-    else:
-        run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--lib',
-             '--', '--test-threads=1'], cwd=ROOT, env=build_env)
-    if ui_tests:
-        run(['cargo', 'test', '-p', 'clash-android', '--release', '--locked', '--features', 'mobile-ui-tests',
-             '--test', 'mobile_lists', '--test', 'scroll_remount', '--test', 'claude_report_blocks', '--test', 'language_ui',
-             '--', '--test-threads=1'], cwd=ROOT, env=build_env)
+    test_packages = packages if extended_tests() or enabled('COR_CI_ANDROID_ROUTING_TESTS') else ['-p', 'clash-android']
+    ui_targets = (['--features', 'clash-android/mobile-ui-tests',
+                   '--test', 'mobile_lists', '--test', 'scroll_remount', '--test', 'claude_report_blocks']
+                  if ui_tests else [])
+    run(['cargo', 'test', *test_packages, '--release', '--locked', '--lib', *ui_targets,
+         '--no-fail-fast', '--', '--test-threads=1'], cwd=ROOT, env=build_env)
     ndk = Path(os.environ['ANDROID_NDK_ROOT'])
     toolchain = ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin'
     clang = toolchain/(clang_target+'26-clang')

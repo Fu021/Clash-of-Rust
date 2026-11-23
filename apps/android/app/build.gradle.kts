@@ -57,7 +57,6 @@ android {
     sourceSets["main"].jniLibs.directories.add(layout.projectDirectory.dir("native-libs").asFile.path)
     sourceSets["main"].assets.directories.add(layout.projectDirectory.dir("offline-assets").asFile.path)
     sourceSets["main"].res.directories.add(layout.projectDirectory.dir("generated-res").asFile.path)
-    sourceSets["main"].res.directories.add(rootProject.layout.projectDirectory.dir("../../translations/android/res").asFile.path)
     lint { abortOnError = true }
 }
 dependencies {

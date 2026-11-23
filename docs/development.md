@@ -22,8 +22,10 @@
 
 ```sh
 CARGO_TARGET_DIR=target/desktop cargo test -p clash-client-ui --test desktop_lists --release --locked -- --test-threads=1
-CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --features mobile-ui-tests --test mobile_lists --test scroll_remount --test claude_report_blocks --test language_ui --release --locked -- --test-threads=1
+CARGO_TARGET_DIR=target/mobile cargo test -p clash-android --features mobile-ui-tests --lib --test mobile_lists --test scroll_remount --test claude_report_blocks --release --locked -- --test-threads=1
 ```
+
+Android 的生产窗口回归通过 `--lib` 共用一次 Slint 编译；列表、滚动和报告探针继续使用各自的轻量窗口。
 
 本地 `target` 体积和可回收构建产物按[磁盘管理](workflows/local-development.md#本地-rust-构建与磁盘管理)检查；不能把另一端已有的构建结果当作当前端的验证。
 本地 `scripts/android.py build` 默认使用 `target/mobile`，也可指定其他独立的 `CARGO_TARGET_DIR`；手工执行 Cargo 时同样显式选择所属端的目录。
@@ -64,7 +66,7 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 
 仓库根目录的 [`translations/`](../translations/) 集中维护可见文案。Rust 共享文案放在 `shared/<语言标签>.json`，终端专属文案放在 `cli/<语言标签>.json`。新增或迁移 Rust 文案时，使用稳定的 `snake_case` 消息键和 `{name}` 参数，在调用处使用生成的 `messages::消息键(language, ...)`。生成器校验各语言的键和参数，按参数名排序生成函数签名，模板可按语言需要调整参数位置。
 
-Slint 界面使用 `@tr`，桌面和 Android 分别从 `desktop/<语言标签>/LC_MESSAGES/clash-client-ui.po` 和 `android/slint/<语言标签>/LC_MESSAGES/clash-android.po` 内嵌目录。简体中文使用现有 `@tr` 源文。Android 宿主使用 `android/res/values*/strings.xml`，Java 通过资源 ID 取文案。
+Slint 界面使用 `@tr`，桌面和 Android 分别从 `desktop/<语言标签>/LC_MESSAGES/clash-client-ui.po` 和 `android/slint/<语言标签>/LC_MESSAGES/clash-android.po` 内嵌目录。简体中文使用现有 `@tr` 源文。Android 打包脚本将 `android/res/values*/strings.xml` 和图标一起放入 Gradle 的生成资源目录，Java 通过资源 ID 取文案。仅更新翻译时可继续复用 Maven 依赖缓存。
 
 新增语言时在 [`languages.rs`](../translations/languages.rs) 注册标签、语言原名、Slint 标签与系统匹配规则，再为共享、CLI、桌面、Android 界面和 Android 宿主提供对应的翻译。语言菜单使用注册表，在实际应用入口验证系统匹配、手动切换和回退。旧的双语字面量和按语言拼接的文案在迁移相应模块时改用消息键。
 

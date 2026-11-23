@@ -25,10 +25,6 @@ required-features = ["mobile-ui-tests"]
 name = "claude_report_blocks"
 required-features = ["mobile-ui-tests"]
 
-[[test]]
-name = "language_ui"
-required-features = ["mobile-ui-tests"]
-
 [target.'cfg(target_os = "android")'.dependencies]
 clash-mobile-runtime = { path = "../../../crates/mobile-ffi" }
 slint = { version = "=1.19.0", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-skia-opengl", "unstable-fontique-012"] }

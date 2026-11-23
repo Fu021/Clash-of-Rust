@@ -2829,27 +2829,22 @@ class BuildTests(unittest.TestCase):
             self.assertTrue(ci_test_policy.update_tests())
 
     def test_ci_mobile_ui_targets_exist_and_run_only_in_android_job(self):
-        source = (build.ROOT/'scripts/android.py').read_text()
-        calls = [
-            node for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == 'run' and node.args and isinstance(node.args[0], ast.List)
-            and any(isinstance(item, ast.Constant) and item.value == 'mobile_lists'
-                    for item in node.args[0].elts)
-        ]
-        self.assertEqual(len(calls), 1)
-        command = [item.value for item in calls[0].args[0].elts if isinstance(item, ast.Constant)]
-        self.assertIn('clash-android', command)
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui'):
-            self.assertIn(target, command)
-            path = build.ROOT/'apps/android/native/tests'/(target+'.rs')
+        native = build.ROOT/'apps/android/native'
+        manifest = tomllib.loads((native/'Cargo.toml').read_text())
+        probes = ('mobile_lists', 'scroll_remount', 'claude_report_blocks')
+        self.assertFalse(manifest['package']['autotests'])
+        self.assertEqual({target['name']: target['required-features'] for target in manifest['test']},
+                         {probe: ['mobile-ui-tests'] for probe in probes})
+        for target in (*probes, 'language_ui', 'policy_language'):
+            path = native/'tests'/(target+'.rs')
             self.assertRegex(path.read_text(), r'#\[test\]\s*fn\s+')
-        tests = build.ROOT/'apps/android/native/tests'
-        self.assertIn('mod policy_language;', (tests/'language_ui.rs').read_text())
-        self.assertRegex((tests/'policy_language.rs').read_text(), r'#\[test\]\s*fn\s+')
-        self.assertNotIn('policy_language', command)
+        library = (native/'src/lib.rs').read_text()
+        self.assertIn('#[path = "../tests/language_ui.rs"]\nmod language_ui_tests;', library)
+        language = (native/'tests/language_ui.rs').read_text()
+        self.assertIn('mod policy_language;', language)
+        self.assertNotIn('slint::include_modules!', language)
         desktop = (build.ROOT/'scripts/run-ci.py').read_text()
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui', 'policy_language'):
+        for target in (*probes, 'language_ui', 'policy_language'):
             self.assertNotIn("'"+target+"'", desktop)
 
     def test_linux_network_selection_survives_sudo(self):
@@ -3473,14 +3468,15 @@ class BuildTests(unittest.TestCase):
                 android_build.build('x64')
         self.assertIn('--all-targets', clippy.call_args.args[0])
         self.assertIn('clash-android/mobile-ui-tests', clippy.call_args.args[0])
-        self.assertEqual(len(commands), 2)
-        self.assertIn('--lib', commands[0])
-        self.assertEqual(commands[1][commands[1].index('-p')+1], 'clash-android')
-        self.assertIn('mobile-ui-tests', commands[1])
-        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks', 'language_ui'):
-            self.assertIn(target, commands[1])
-        self.assertNotIn('policy_language', commands[1])
-        self.assertNotIn('--no-run', commands[1])
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        self.assertIn('--lib', command)
+        self.assertEqual(command[command.index('-p')+1], 'clash-android')
+        self.assertIn('clash-android/mobile-ui-tests', command)
+        for target in ('mobile_lists', 'scroll_remount', 'claude_report_blocks'):
+            self.assertIn(target, command)
+        self.assertNotIn('language_ui', command)
+        self.assertNotIn('--no-run', command)
 
     def test_linux_ci_prepares_resources_on_host_before_entering_container(self):
         with patch.object(sys, 'argv', ['linux_ci.py', 'ci']), \
@@ -7910,35 +7906,63 @@ runpy.run_path(str(script), run_name='__main__')
             (cache / 'interrupted-restore').touch()
             dependencies = {'files-2.1/artifact.jar', 'metadata-2.107/descriptor.bin'}
 
-            def run_gradle(command, *, cwd, env=None):
+            def run_online(command, *, cwd, env):
                 self.assertEqual(tuple(command[-3:]), android_build.GRADLE_BUILD_TASKS)
-                if env is not None:
-                    online_home = Path(env['GRADLE_USER_HOME'])
-                    self.assertNotEqual(online_home, home)
-                    self.assertNotIn('--offline', command)
-                    for name in dependencies | {'modules-2.lock', 'gc.properties', '../transforms/result'}:
-                        path = online_home / 'caches/modules-2' / name
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        path.touch()
-                else:
-                    self.assertIn('--offline', command)
-                    self.assertIn('clean', command)
-                    self.assertFalse((home / 'caches/transforms').exists())
-                    self.assertEqual({path.relative_to(cache).as_posix()
-                                      for path in cache.rglob('*') if path.is_file()}, dependencies)
-                    (cache / 'modules-2.lock').touch()
-                    (cache / 'gc.properties').touch()
+                online_home = Path(env['GRADLE_USER_HOME'])
+                self.assertNotEqual(online_home, home)
+                self.assertNotIn('--offline', command)
+                for name in dependencies | {'modules-2.lock', 'gc.properties', '../transforms/result'}:
+                    path = online_home / 'caches/modules-2' / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.touch()
+                if download.call_count == 1:
+                    return 1, 'Received status code 429 from server: Too Many Requests'
+                return 0, ''
+
+            def verify_offline(command, *, cwd):
+                self.assertEqual(tuple(command[-3:]), android_build.GRADLE_BUILD_TASKS)
+                self.assertIn('--offline', command)
+                self.assertIn('clean', command)
+                self.assertFalse((home / 'caches/transforms').exists())
+                self.assertEqual({path.relative_to(cache).as_posix()
+                                  for path in cache.rglob('*') if path.is_file()}, dependencies)
+                (cache / 'modules-2.lock').touch()
+                (cache / 'gc.properties').touch()
 
             with patch.dict(os.environ, {'GRADLE_USER_HOME': str(home), 'ANDROID_NDK_ROOT': '/ndk'}), \
                     patch.object(android_build, 'bind_core') as bind, \
-                    patch.object(android_build, 'seed_icons'), \
-                    patch.object(android_build, 'run', side_effect=run_gradle) as gradle_run:
+                    patch.object(android_build, 'seed_resources') as seed, \
+                    patch.object(android_build, 'streamed_command', side_effect=run_online) as download, \
+                    patch.object(android_build, 'run', side_effect=verify_offline) as gradle_run, \
+                    patch.object(android_build.random, 'uniform', return_value=23) as jitter, \
+                    patch.object(android_build.time, 'sleep') as delay:
                 android_build.prepare_maven_cache()
             self.assertEqual(bind.call_args.args[0], 'x64')
             self.assertEqual(bind.call_args.args[1]['ANDROID_NDK_HOME'], '/ndk')
-            self.assertEqual(gradle_run.call_count, 2)
+            seed.assert_called_once_with()
+            self.assertEqual(download.call_count, 2)
+            self.assertEqual(download.call_args_list[0], download.call_args_list[1])
+            jitter.assert_called_once_with(15, 45)
+            delay.assert_called_once_with(23)
+            gradle_run.assert_called_once()
             self.assertEqual({path.relative_to(cache).as_posix() for path in cache.rglob('*') if path.is_file()},
                              dependencies)
+
+    def test_android_generated_resources_package_translations_and_remove_stale_locales(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            android = Path(temporary)
+            generated = android/'app/generated-res'
+            stale = generated/'values-test'
+            stale.mkdir(parents=True)
+            (stale/'strings.xml').touch()
+            with patch.object(android_build, 'ANDROID', android):
+                android_build.seed_resources()
+            source = build.ROOT/'translations/android/res'
+            self.assertFalse(stale.exists())
+            for catalog in source.glob('values*/strings.xml'):
+                self.assertEqual((generated/catalog.relative_to(source)).read_bytes(), catalog.read_bytes())
+            self.assertTrue((generated/'drawable-nodpi/app_logo.png').is_file())
+            self.assertTrue((generated/'drawable-nodpi/notification_logo.png').is_file())
 
     def test_android_ci_waits_for_one_maven_cache_and_builds_each_abi_offline(self):
         workflow = (build.ROOT / '.github/workflows/ci.yml').read_text()
