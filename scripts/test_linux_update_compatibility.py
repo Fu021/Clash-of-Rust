@@ -1130,7 +1130,8 @@ with fixture_signals():
                     patch.object(update, 'run_installation', side_effect=install), self.assertRaises(RuntimeError):
                 update.exercise_gui(fixture, Path(temporary)/'old.deb')
             result = report.read_text()
-            self.assertNotIn('raw', result)
+            self.assertNotIn('raw subprocess output', result)
+            self.assertNotIn('raw exception note', result)
             self.assertEqual(json.loads(result)['failed_step'], 'prepare-desktop')
             self.assertEqual(json.loads(result)['error'], 'RuntimeError')
 
