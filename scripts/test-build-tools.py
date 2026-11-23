@@ -7068,13 +7068,19 @@ runpy.run_path(str(script), run_name='__main__')
                     with self.assertRaisesRegex(RuntimeError, 'cor-ci emulator'):
                         android_build.protection_death_device()
                     self.assertEqual(probe.call_count, len(values))
+            device = [android_build.ADB, '-s', 'emulator-5554']
+            sdk_probe = device + ['shell', 'getprop', 'ro.build.version.sdk']
             with patch.object(android_build.subprocess, 'check_output',
-                              side_effect=['emulator-5554\n', f'{avd_path}\nOK\n', '36\n', identity, '1\n']) as probe:
-                device = [android_build.ADB, '-s', 'emulator-5554']
+                              side_effect=['emulator-5554\n', f'{avd_path}\nOK\n',
+                                           subprocess.TimeoutExpired(sdk_probe, 15), '36\n',
+                                           identity, '1\n']) as probe, \
+                    patch.object(android_build.time, 'sleep') as delay:
                 self.assertEqual(android_build.protection_death_device(), (device, identity))
+                delay.assert_called_once_with(1)
                 self.assertEqual(probe.call_args_list[1].args[0], device + ['emu', 'avd', 'path'])
-                self.assertEqual(probe.call_args_list[2].args[0], device + ['shell', 'getprop', 'ro.build.version.sdk'])
-                self.assertEqual(probe.call_args_list[3].args[0],
+                self.assertEqual([request.args[0] for request in probe.call_args_list[2:4]],
+                                 [sdk_probe, sdk_probe])
+                self.assertEqual(probe.call_args_list[4].args[0],
                                  device + ['shell', 'cat', android_build.PROTECTION_DEATH_GUEST_LAUNCH])
                 self.assertEqual(probe.call_args.args[0], device + android_build.PROTECTION_DEATH_BOOT_COUNT)
             launch_file.write_text('b' * 32 + ':1')

@@ -1161,8 +1161,7 @@ def protection_death_device(device=None, *, launch_identity=None, expected_path=
     device = cor_ci_device(avd_path, device)
     if (not re.fullmatch(r'[0-9a-f]{32}', token) or not re.fullmatch(r'[0-9]+', boot_count) or
             (launch_identity is not None and saved_launch != launch_identity) or
-            subprocess.check_output(device + ['shell', 'getprop', 'ro.build.version.sdk'],
-                                    text=True, timeout=15).strip() != '36' or
+            device_property('ro.build.version.sdk', adb=device) != '36' or
             subprocess.check_output(device + ['shell', 'cat', PROTECTION_DEATH_GUEST_LAUNCH],
                                     text=True, timeout=15).strip() != saved_launch or
             subprocess.check_output(device + PROTECTION_DEATH_BOOT_COUNT,
