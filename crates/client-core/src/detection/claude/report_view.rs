@@ -129,19 +129,19 @@ pub fn group_blocks_in<T>(rows: Vec<BlockRow<T>>, language: Language) -> Vec<Rep
             if section.len() > 1 {
                 summary.push(match language {
                     Language::SimplifiedChinese => format!("{} 组结果", section.len()),
-                    Language::English => format!("{} result groups", section.len()),
+                    _ => format!("{} result groups", section.len()),
                 });
             }
             if risks > 0 {
                 summary.push(match language {
                     Language::SimplifiedChinese => format!("{risks} 项风险"),
-                    Language::English => format!("Risks: {risks}"),
+                    _ => format!("Risks: {risks}"),
                 });
             }
             if disagreements > 0 {
                 summary.push(match language {
                     Language::SimplifiedChinese => format!("{disagreements} 项来源不一致"),
-                    Language::English => format!("Source disagreements: {disagreements}"),
+                    _ => format!("Source disagreements: {disagreements}"),
                 });
             }
             let title = primary.title.trim();
@@ -198,7 +198,7 @@ pub fn group_blocks_in<T>(rows: Vec<BlockRow<T>>, language: Language) -> Vec<Rep
                     Language::SimplifiedChinese => {
                         format!("{} 项结果，点击查看详情", section.len())
                     }
-                    Language::English => format!("Results: {}; open for details", section.len()),
+                    _ => format!("Results: {}; open for details", section.len()),
                 }
             } else {
                 overview
@@ -207,13 +207,13 @@ pub fn group_blocks_in<T>(rows: Vec<BlockRow<T>>, language: Language) -> Vec<Rep
             if risks > 0 {
                 attention.push(match language {
                     Language::SimplifiedChinese => format!("{risks} 项需关注"),
-                    Language::English => format!("Attention: {risks}"),
+                    _ => format!("Attention: {risks}"),
                 });
             }
             if disagreements > 0 {
                 attention.push(match language {
                     Language::SimplifiedChinese => format!("{disagreements} 项来源不一致"),
-                    Language::English => format!("Source disagreements: {disagreements}"),
+                    _ => format!("Source disagreements: {disagreements}"),
                 });
             }
             ReportBlock {
@@ -281,19 +281,19 @@ pub fn route_group_value_in(routes: &[&Route], language: Language) -> String {
     let count = if routes.iter().any(|route| route.host.trim().is_empty()) {
         match language {
             Language::SimplifiedChinese => format!("{} 条记录", routes.len()),
-            Language::English => format!("{} records", routes.len()),
+            _ => format!("{} records", routes.len()),
         }
     } else if hosts.len() == routes.len() {
         match language {
             Language::SimplifiedChinese => format!("{} 个域名", hosts.len()),
-            Language::English => format!("{} domains", hosts.len()),
+            _ => format!("{} domains", hosts.len()),
         }
     } else {
         match language {
             Language::SimplifiedChinese => {
                 format!("{} 个域名 · {} 条记录", hosts.len(), routes.len())
             }
-            Language::English => format!("{} domains · {} records", hosts.len(), routes.len()),
+            _ => format!("{} domains · {} records", hosts.len(), routes.len()),
         }
     };
     let value = routes.first().map_or_else(

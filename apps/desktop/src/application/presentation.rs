@@ -48,7 +48,7 @@ fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32, language: Langua
                 Language::SimplifiedChinese => {
                     clash_of_rust::probe::country_name(&signal.country).unwrap_or_default()
                 }
-                Language::English => clash_client_core::countries::english_name(&signal.country)
+                _ => clash_client_core::countries::english_name(&signal.country)
                     .unwrap_or_default()
                     .to_owned(),
             }
@@ -57,31 +57,25 @@ fn claude_report_item(entry: claude_view::Entry<'_>, tone: i32, language: Langua
     };
     let (_, flag) = clash_of_rust::flags::label(&country);
     let (detail, source) = match entry {
-        claude_view::Entry::Config(finding) => (finding.explanation(), finding.path.clone()),
+        claude_view::Entry::Config(finding) => (
+            finding.explanation_in(language),
+            finding.source_in(language).into(),
+        ),
         claude_view::Entry::Clean(path) => (String::new(), path.into()),
         claude_view::Entry::Signal(_, signal) => {
             (signal.explanation_in(language), signal.source_in(language))
         }
         claude_view::Entry::Route(route) => (
             route.explanation_in(language),
-            language
-                .text("内核连接记录", "Core connection records")
-                .into(),
+            messages::claude_core_connection_records(language).into(),
         ),
         claude_view::Entry::GuardRoute(route) => (
             route.explanation_in(language),
-            language
-                .text(
-                    "实时拦截 · 内核连接记录",
-                    "Live blocking · core connection records",
-                )
-                .into(),
+            messages::claude_live_blocking_source(language).into(),
         ),
         claude_view::Entry::Routes(routes) => (
             clash_of_rust::claude_check::route_group_detail_in(&routes, language),
-            language
-                .text("内核连接记录", "Core connection records")
-                .into(),
+            messages::claude_core_connection_records(language).into(),
         ),
     };
     ReportItem {
@@ -228,24 +222,16 @@ impl App {
                     id: group_name.clone(),
                     title: group_name,
                     current: proxy.now.shared().into(),
-                    detail: match language {
-                        Language::SimplifiedChinese => {
-                            format!("{} · {} 个节点", proxy.kind, proxy.all.len())
-                        }
-                        Language::English => format!("{} · {} nodes", proxy.kind, proxy.all.len()),
-                    }
-                    .into(),
+                    detail: messages::proxy_group_detail(language, proxy.all.len(), &proxy.kind)
+                        .into(),
                     expanded,
                     testing: self.testing_groups.contains(group.as_str()),
                     page: if expanded {
-                        format!(
-                            "{} · {}–{}",
-                            match language {
-                                Language::SimplifiedChinese => format!("{count} 个节点"),
-                                Language::English => format!("{count} nodes"),
-                            },
+                        messages::proxy_group_page(
+                            language,
+                            count,
+                            (start + PAGE_SIZE).min(count),
                             if count == 0 { 0 } else { start + 1 },
-                            (start + PAGE_SIZE).min(count)
                         )
                     } else {
                         String::new()
@@ -333,18 +319,12 @@ impl App {
         data.set_previous(offset > 0);
         data.set_next(offset + step < total);
         data.set_page_status(
-            match self.presentation_language {
-                Language::SimplifiedChinese => format!(
-                    "{total} 条 · {}–{}",
-                    if total == 0 { 0 } else { offset + 1 },
-                    (offset + step).min(total)
-                ),
-                Language::English => format!(
-                    "{total} items · {}–{}",
-                    if total == 0 { 0 } else { offset + 1 },
-                    (offset + step).min(total)
-                ),
-            }
+            messages::page_range(
+                self.presentation_language,
+                (offset + step).min(total),
+                if total == 0 { 0 } else { offset + 1 },
+                total,
+            )
             .into(),
         );
     }
@@ -427,11 +407,9 @@ impl App {
                         .map(|entry| FakeIpExclusionItem {
                             domain: entry.domain.into(),
                             source: match (entry.custom, entry.dns_override) {
-                                (true, true) => {
-                                    language.text("用户自定义、DNS 覆盖", "Custom, DNS override")
-                                }
-                                (true, false) => language.text("用户自定义", "Custom"),
-                                _ => language.text("DNS 覆盖", "DNS override"),
+                                (true, true) => messages::fake_ip_source_custom_and_dns(language),
+                                (true, false) => messages::fake_ip_source_custom(language),
+                                _ => messages::fake_ip_source_dns(language),
                             }
                             .into(),
                         })
@@ -491,10 +469,9 @@ impl App {
             self.profiles
                 .iter()
                 .find(|profile| self.settings.active_profile.as_deref() == Some(&profile.id))
-                .map_or(
-                    language.text("未选择订阅", "No subscription selected"),
-                    |profile| profile.name.as_str()
-                )
+                .map_or(messages::subscription_not_selected(language), |profile| {
+                    profile.display_name(language)
+                })
         );
         text!(
             get_node,
@@ -642,23 +619,16 @@ impl App {
         let download_status = self.updates.progress.as_ref().map(|progress| {
             let language = self.presentation_language;
             if progress.route.is_empty() {
-                language
-                    .text("正在准备下载…", "Preparing download…")
-                    .to_owned()
+                messages::download_preparing(language).to_owned()
             } else if progress.received == 0 {
-                format!(
-                    "{} · {}",
-                    language.text("正在连接下载", "Connecting to download"),
-                    progress.routing_in(language)
-                )
+                messages::download_connecting(language, progress.routing_in(language))
             } else {
-                format!(
-                    "{} {}/{} · {}/s · {}",
-                    language.text("下载", "Download"),
+                messages::download_progress(
+                    language,
                     bytes(progress.received),
-                    bytes(progress.total),
-                    bytes(progress.bytes_per_second),
                     progress.routing_in(language),
+                    bytes(progress.bytes_per_second),
+                    bytes(progress.total),
                 )
             }
         });
@@ -704,7 +674,8 @@ impl App {
                 .profiles
                 .iter()
                 .filter(|profile| {
-                    contains_query(&profile.name, &query) || contains_query(&profile.source, &query)
+                    profile.matches_name(profile.display_name(language), &query)
+                        || contains_query(&profile.source, &query)
                 })
                 .collect();
             let step = if self.settings.profiles_paginated {
@@ -726,13 +697,13 @@ impl App {
                     .take(step)
                     .map(|profile| ProfileItem {
                         id: profile.id.as_str().into(),
-                        name: profile.name.as_str().into(),
+                        name: profile.display_name(language).into(),
                         source: profile.source.as_str().into(),
                         active: self.settings.active_profile.as_deref() == Some(&profile.id),
                         local: profile.is_local(),
                         builtin: profile.is_default(),
                         detail: if profile.is_local() {
-                            language.text("本地配置", "Local configuration").into()
+                            shared_messages::subscription_local_configuration(language).into()
                         } else {
                             clash_client_core::subscription::summary(
                                 profile.usage.as_deref(),
@@ -831,13 +802,15 @@ impl App {
                 .iter()
                 .map(|profile| Choice {
                     id: profile.id.as_str().into(),
-                    label: profile.name.as_str().into(),
+                    label: profile.display_name(language).into(),
                 })
                 .collect(),
         ));
         data.set_rule_profile_options(strings(
             data.get_rule_profile_options(),
-            self.profiles.iter().map(|profile| &profile.name),
+            self.profiles
+                .iter()
+                .map(|profile| profile.display_name(language)),
         ));
         let selected_profile = self.profiles.iter().find(|profile| {
             state
@@ -845,7 +818,11 @@ impl App {
                 .as_ref()
                 .is_some_and(|doc| doc.profile_id == profile.id)
         });
-        data.set_rule_profile(selected_profile.map_or("", |profile| &profile.name).into());
+        data.set_rule_profile(
+            selected_profile
+                .map_or("", |profile| profile.display_name(language))
+                .into(),
+        );
         data.set_rule_profile_id(selected_profile.map_or("", |profile| &profile.id).into());
         data.set_rule_types(strings(
             data.get_rule_types(),
@@ -860,41 +837,32 @@ impl App {
             data.get_rule_policies(),
             document.map_or(&[][..], |doc| doc.policies.as_slice()),
         ));
+        let shortcuts: [_; clash_client_core::config::SUBSCRIPTION_RULES.len()] = [
+            messages::shortcut_block_ads(language),
+            messages::shortcut_private_domains(language),
+            messages::shortcut_private_ips(language),
+            messages::shortcut_china_domains(language),
+            messages::shortcut_china_ips(language),
+        ];
         data.set_shortcuts(strings(
             data.get_shortcuts(),
-            rules_view::SHORTCUT_LABELS
-                .iter()
-                .enumerate()
-                .map(|(index, label)| {
-                    let label = language.text(
-                        label,
-                        [
-                            "Block ads",
-                            "Private domains direct",
-                            "Private IPs direct",
-                            "China domains direct",
-                            "China IPs direct",
-                        ][index],
-                    );
-                    if document.is_some_and(|doc| doc.included[index]) {
-                        format!(
-                            "{label}{}",
-                            language.text(" · 订阅已包含", " · Included in subscription")
-                        )
-                    } else {
-                        label.into()
-                    }
-                }),
+            shortcuts.into_iter().enumerate().map(|(index, label)| {
+                if document.is_some_and(|doc| doc.included[index]) {
+                    messages::shortcut_already_in_subscription(language, label)
+                } else {
+                    label.into()
+                }
+            }),
         ));
         data.set_shortcut_available(model(
             data.get_shortcut_available(),
-            (0..rules_view::SHORTCUT_LABELS.len())
+            (0..shortcuts.len())
                 .map(|index| document.is_some_and(|doc| !doc.builtin && !doc.included[index]))
                 .collect(),
         ));
         data.set_shortcut_values(model(
             data.get_shortcut_values(),
-            (0..rules_view::SHORTCUT_LABELS.len())
+            (0..shortcuts.len())
                 .map(|index| {
                     document.is_some_and(|doc| doc.included[index] || state.draft.enabled[index])
                 })
@@ -919,9 +887,7 @@ impl App {
                         position: (index + 1).to_string().into(),
                         kind: parts
                             .as_ref()
-                            .map_or(language.text("复杂规则", "Complex rule"), |parts| {
-                                parts.kind
-                            })
+                            .map_or(messages::rule_complex(language), |parts| parts.kind)
                             .into(),
                         value: parts
                             .as_ref()
@@ -943,13 +909,7 @@ impl App {
         let report = ip_report::Report::from_results(&self.site_results);
         let total = report.totals.total();
         let completed = report.totals.completed();
-        data.set_site_progress(
-            format!(
-                "{} {completed} / {total}",
-                language.text("完成", "Completed")
-            )
-            .into(),
-        );
+        data.set_site_progress(messages::site_check_progress(language, completed, total).into());
         data.set_site_fraction(if total == 0 {
             0.0
         } else {
@@ -1004,24 +964,8 @@ impl App {
         ));
         let exit = self.site_result(0).and_then(|result| result.as_ref().ok());
         let summary = exit.map_or_else(
-            || {
-                language
-                    .text(
-                        "完成检测后显示出口与各类平台结果",
-                        "Run the check to see the exit and service results",
-                    )
-                    .into()
-            },
-            |exit| match language {
-                Language::SimplifiedChinese => format!(
-                    "Cloudflare 探针出口：{} · 各平台识别到 {} 个地区",
-                    exit.summary, region_count
-                ),
-                Language::English => format!(
-                    "Cloudflare probe exit: {} · {region_count} regions identified",
-                    exit.summary
-                ),
-            },
+            || messages::site_check_empty(language).into(),
+            |exit| messages::site_exit_summary(language, &exit.summary, region_count),
         );
         data.set_site_summary(summary.into());
         let (country, flag) =
@@ -1029,7 +973,7 @@ impl App {
         data.set_site_exit_country(
             match language {
                 Language::SimplifiedChinese => country,
-                Language::English => clash_client_core::countries::country_code(country)
+                _ => clash_client_core::countries::country_code(country)
                     .and_then(clash_client_core::countries::english_name)
                     .unwrap_or(country),
             }
@@ -1145,17 +1089,11 @@ impl App {
         data.set_claude_busy(self.claude.busy());
         data.set_claude_status(self.claude.status.display(language).as_ref().into());
         data.set_claude_error(self.claude.error);
-        data.set_claude_guard(self.claude.guard_status.as_str().into());
+        data.set_claude_guard(self.claude.guard_status_in(language).into());
         data.set_protection_status(
             match self.claude.protection_pending {
-                Some(true) => language.text(
-                    "正在开启保护，切换 TUN、规则与 DNS…",
-                    "Enabling protection and switching TUN, rules, and DNS…",
-                ),
-                Some(false) => language.text(
-                    "正在关闭保护，恢复原网络状态…",
-                    "Disabling protection and restoring network settings…",
-                ),
+                Some(true) => messages::claude_protection_enabling(language),
+                Some(false) => messages::claude_protection_disabling(language),
                 None => "",
             }
             .into(),
@@ -1181,32 +1119,22 @@ impl App {
                 .as_ref()
                 .map_or(String::new(), |audit| {
                     let missing = if audit.missing_projects > 0 {
-                        match language {
-                            Language::SimplifiedChinese => {
-                                format!(" · {} 个目录已不存在", audit.missing_projects)
-                            }
-                            Language::English => {
-                                format!(" · {} directories missing", audit.missing_projects)
-                            }
-                        }
+                        messages::claude_audit_missing(language, audit.missing_projects)
                     } else {
                         String::new()
                     };
                     let incomplete = if audit.incomplete {
-                        language.text(" · 扫描未完成，详见浏览器与配置", " · Scan incomplete")
+                        messages::claude_audit_incomplete(language)
                     } else {
                         ""
                     };
-                    match language {
-                        Language::SimplifiedChinese => format!(
-                            "已检查 {} 个已记录项目 · {} 份配置{missing}{incomplete}",
-                            audit.projects, audit.files
-                        ),
-                        Language::English => format!(
-                            "Checked {} projects · {} configuration files{missing}{incomplete}",
-                            audit.projects, audit.files
-                        ),
-                    }
+                    messages::claude_audit_summary(
+                        language,
+                        audit.files,
+                        incomplete,
+                        missing,
+                        audit.projects,
+                    )
                 })
                 .into(),
         );
@@ -1245,15 +1173,7 @@ impl App {
         data.set_claude_next(!summary && (page + 1) * page_size < entries.len());
         let pages = entries.len().div_ceil(page_size).max(1);
         data.set_claude_result_status(
-            match language {
-                Language::SimplifiedChinese => {
-                    format!("列出 {} 项 · 第 {} / {} 页", entries.len(), page + 1, pages)
-                }
-                Language::English => {
-                    format!("{} results · Page {} / {}", entries.len(), page + 1, pages)
-                }
-            }
-            .into(),
+            messages::claude_result_page(language, entries.len(), page + 1, pages).into(),
         );
         reconcile(&models.claude_results, {
             let rows = entries
@@ -1348,13 +1268,7 @@ impl App {
             data.set_modal_accept(if wait == 0 {
                 confirmation.accept.into()
             } else {
-                match language {
-                    Language::SimplifiedChinese => {
-                        format!("{}（{wait} 秒）", confirmation.accept)
-                    }
-                    Language::English => format!("{} ({wait}s)", confirmation.accept),
-                }
-                .into()
+                messages::confirmation_countdown(language, confirmation.accept, wait).into()
             });
             data.set_modal_can_accept(wait == 0 && !self.working && !self.exiting);
             data.set_modal_danger(!matches!(
@@ -1364,7 +1278,7 @@ impl App {
             ));
         } else if let Some(editor) = &self.profile_editor {
             kind = 2;
-            data.set_modal_title(language.text("编辑订阅", "Edit subscription").into());
+            data.set_modal_title(messages::subscription_edit_title(language).into());
             data.set_edit_name(editor.name.as_str().into());
             data.set_edit_source(editor.source.as_str().into());
             data.set_modal_error(
@@ -1372,11 +1286,11 @@ impl App {
                     .as_ref()
                     .into(),
             );
-            data.set_modal_accept(language.text("保存", "Save").into());
+            data.set_modal_accept(messages::button_save(language).into());
         } else if self.import_open {
             kind = 3;
-            data.set_modal_title(language.text("添加订阅", "Add subscription").into());
-            data.set_modal_accept(language.text("导入", "Import").into());
+            data.set_modal_title(messages::subscription_add_title(language).into());
+            data.set_modal_accept(messages::button_import(language).into());
             data.set_modal_can_accept(!self.working && !self.profile_source.trim().is_empty());
         } else if let Some(profile) = self
             .rule_state
@@ -1385,28 +1299,22 @@ impl App {
             .filter(|_| !rules_locked)
         {
             kind = 6;
-            data.set_modal_title(
-                language
-                    .text("切换规则配置？", "Switch rule configuration?")
-                    .into(),
-            );
+            let name = self
+                .profiles
+                .iter()
+                .find(|candidate| candidate.id == profile.id)
+                .map_or(profile.name.as_str(), |candidate| {
+                    candidate.display_name(language)
+                });
+            data.set_modal_title(messages::rule_switch_configuration_title(language).into());
             data.set_modal_description(
-                match language {
-                    Language::SimplifiedChinese => {
-                        format!("当前未应用的草稿将丢弃，切换到“{}”。", profile.name)
-                    }
-                    Language::English => format!(
-                        "Discard the unapplied draft and switch to “{}”.",
-                        profile.name
-                    ),
-                }
-                .into(),
+                messages::rule_switch_configuration_detail(language, name).into(),
             );
-            data.set_modal_accept(language.text("放弃并切换", "Discard and switch").into());
+            data.set_modal_accept(messages::rule_switch_configuration_confirm(language).into());
         } else if let Some(editor) = self.rule_state.editor.as_ref().filter(|_| !rules_locked) {
             kind = 4;
-            data.set_modal_title(language.text("编辑规则", "Edit rule").into());
-            data.set_modal_accept(language.text("保存到草稿", "Save to draft").into());
+            data.set_modal_title(messages::rule_edit_title(language).into());
+            data.set_modal_accept(messages::rule_save_draft(language).into());
             data.set_rule_text_mode(editor.text_mode);
             data.set_rule_raw(editor.raw.as_str().into());
             data.set_rule_kind(editor.kind.as_str().into());
@@ -1422,49 +1330,33 @@ impl App {
             );
         } else if self.rule_state.move_open && !rules_locked {
             kind = 5;
-            data.set_modal_title(language.text("移动到指定位置", "Move to position").into());
-            data.set_modal_accept(language.text("移动", "Move").into());
+            data.set_modal_title(messages::rule_move_title(language).into());
+            data.set_modal_accept(messages::rule_move_confirm(language).into());
             data.set_rule_move_position(self.rule_state.move_position.as_str().into());
         } else if let Some(guide) = self.claude.guide {
             match guide {
                 claude_view::Guide::Protection => {
                     kind = 7;
                     let wait = self.claude.protection_wait();
-                    data.set_modal_title(
-                        language
-                            .text("开启 Claude 保护？", "Enable Claude protection?")
-                            .into(),
-                    );
-                    data.set_modal_description(language.text(
-                        "将锁定当前具体节点和运行模式（规则或全局），启用 TUN、严格路由、IPv6 接管、UDP、广泛规则、加密 DNS 与实时异常连接拦截，并关闭当前内核连接，让应用重新建立连接。全局出口为 DIRECT 时无法开启；直连模式下将使用规则模式。\n\n这些设置可能影响其他应用、国内网站与内网服务；节点故障时相关解析也可能失败。节点域名沿用原节点 DNS 在本地解析；公网域名通过保护节点使用加密 DNS，局域网名称保留本地解析。\n\n原代理模式、DNS、UDP、规则和节点选择会保存；重启后仍保留，关闭保护后恢复。\n\n不能保证消除所有地区线索或满足服务的账号资格要求。",
-                        "Locks the current node and routing mode (rule or global), enables TUN, strict routing, IPv6 handling, UDP, broad rules, encrypted DNS and live blocking of unexpected connections, then closes current core connections so apps can reconnect. Protection cannot start with DIRECT as the global exit; direct mode switches to rule mode.\n\nThese settings may affect other apps, local websites and private network services. DNS lookups may fail if the node fails. Node domains use the original node DNS locally; public domains use encrypted DNS through the protected node, while local network names remain locally resolved.\n\nThe previous proxy mode, DNS, UDP, rules and node selection are saved across restarts and restored when protection is disabled.\n\nProtection cannot eliminate every regional signal or guarantee account eligibility.",
-                    ).into());
+                    data.set_modal_title(messages::claude_protection_title(language).into());
+                    data.set_modal_description(messages::claude_protection_detail(language).into());
                     data.set_modal_accept(if wait == 0 {
-                        language
-                            .text("开启并重新检测", "Enable and check again")
-                            .into()
+                        messages::claude_protection_confirm(language).into()
                     } else {
-                        match language {
-                            Language::SimplifiedChinese => format!("请阅读（{wait} 秒）"),
-                            Language::English => format!("Please read ({wait}s)"),
-                        }
-                        .into()
+                        messages::claude_protection_countdown(language, wait).into()
                     });
                     data.set_modal_can_accept(wait == 0 && !self.working && !self.claude.busy());
                 }
                 claude_view::Guide::Supplement => {
                     kind = 8;
-                    data.set_modal_title(language.text("补充采样", "Additional sample").into());
-                    data.set_modal_description(language.text(
-                        "自动浏览器检测来自本机检测页面。需要核对 Claude 网页本身的设置时，可在该网页的开发者工具 Console 运行采样脚本，再导入结果。",
-                        "Automatic browser checks use a local test page. To check the Claude website itself, run the sampling script in its developer console and import the result.",
-                    ).into());
+                    data.set_modal_title(messages::claude_supplement_title(language).into());
+                    data.set_modal_description(messages::claude_supplement_detail(language).into());
                 }
             }
         } else if let Some(id) = &self.connection_detail {
             kind = 10;
             data.set_connection_selected_id(id.as_str().into());
-            data.set_modal_title(language.text("连接详情", "Connection details").into());
+            data.set_modal_title(messages::connection_details_title(language).into());
             let connection = self
                 .snapshot
                 .connections
@@ -1477,25 +1369,18 @@ impl App {
             });
             data.set_modal_copy(
                 rows.iter()
-                    .map(|row| format!("{}{}{}", row.label, language.text("：", ": "), row.value))
+                    .map(|row| messages::connection_details_line(language, &row.label, &row.value))
                     .collect::<Vec<_>>()
                     .join("\n")
                     .into(),
             );
             data.set_connection_details(model(data.get_connection_details(), rows));
             if connection.is_none() {
-                data.set_modal_description(
-                    language
-                        .text(
-                            "此连接已结束，详情不再保留。",
-                            "This connection has ended; its details are no longer available.",
-                        )
-                        .into(),
-                );
+                data.set_modal_description(messages::connection_details_ended(language).into());
             }
         } else if let Some(line) = &self.log_detail {
             kind = 13;
-            data.set_modal_title(language.text("日志详情", "Log details").into());
+            data.set_modal_title(messages::log_details_title(language).into());
             let message = clash_client_core::runtime::logging::display(line, language);
             data.set_modal_description(message.as_ref().into());
             data.set_modal_copy(message.as_ref().into());
@@ -1527,7 +1412,7 @@ impl App {
                     Some(outcome @ Err(_)) => {
                         ip_report::detail_in(service, outcome, language).into_owned()
                     }
-                    None => language.text("尚未完成检测", "Check not completed").into(),
+                    None => messages::site_check_not_completed(language).into(),
                 }
                 .into(),
             );
@@ -1543,9 +1428,9 @@ impl App {
             });
         } else if self.accent_open {
             kind = 12;
-            data.set_modal_title(language.text("强调色", "Accent color").into());
+            data.set_modal_title(messages::accent_color_title(language).into());
             data.set_modal_can_accept(!self.exiting);
-            data.set_modal_accept(language.text("完成", "Done").into());
+            data.set_modal_accept(messages::button_done(language).into());
         } else {
             kind = 0;
         }

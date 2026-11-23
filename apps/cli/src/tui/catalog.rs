@@ -1,20 +1,30 @@
 use super::{form::Form, model::State, render, render::Tone, settings};
+use crate::messages;
 use anyhow::{Context, Result, ensure};
 use clash_client_core::{
     config::{Language, Profile},
-    subscription,
+    subscription::{self, SummaryPart},
 };
 use clash_client_runtime::control::{Command, Poll, Remote};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use unicode_width::UnicodeWidthStr;
+
+#[derive(Clone)]
+pub(super) enum ShortcutReadError {
+    ProfileChanged,
+    Backend(Arc<anyhow::Error>),
+}
 
 #[derive(Clone)]
 pub(super) struct Shortcuts {
     pub profile: String,
     pub revision: u64,
     pub included: [bool; 5],
-    pub document: Option<std::sync::Arc<clash_client_core::rule_manager::Document>>,
-    pub error: Option<String>,
+    pub document: Option<Arc<clash_client_core::rule_manager::Document>>,
+    pub error: Option<ShortcutReadError>,
     pub sampled: Instant,
 }
 
@@ -23,6 +33,15 @@ impl Shortcuts {
         poll.meta.settings.active_profile.as_deref() == Some(self.profile.as_str())
             && poll.meta.view_revision == self.revision
     }
+
+    pub fn error_in(&self, language: Language) -> Option<String> {
+        self.error.as_ref().map(|error| match error {
+            ShortcutReadError::ProfileChanged => {
+                messages::tui_shortcuts_profile_changed(language).into()
+            }
+            ShortcutReadError::Backend(error) => crate::output::localized_error(error, language),
+        })
+    }
 }
 
 pub(super) async fn read_shortcuts(
@@ -30,7 +49,6 @@ pub(super) async fn read_shortcuts(
     poll: &Poll,
     cached: Option<Shortcuts>,
     include_rules: bool,
-    language: Language,
 ) -> Option<Shortcuts> {
     let profile = poll.meta.settings.active_profile.as_ref()?;
     if let Some(cached) = cached.filter(|cached| {
@@ -49,25 +67,14 @@ pub(super) async fn read_shortcuts(
     let (included, document, error) = match document {
         Ok(document) if document.profile_id == *profile => (
             document.included,
-            include_rules.then(|| std::sync::Arc::new(document)),
+            include_rules.then(|| Arc::new(document)),
             None,
         ),
-        Ok(_) => (
-            [false; 5],
-            None,
-            Some(
-                language
-                    .text(
-                        "订阅已变化，请刷新后重试",
-                        "The subscription changed; refresh and try again",
-                    )
-                    .into(),
-            ),
-        ),
+        Ok(_) => ([false; 5], None, Some(ShortcutReadError::ProfileChanged)),
         Err(error) => (
             [false; 5],
             None,
-            Some(crate::output::localized_error(&error, language)),
+            Some(ShortcutReadError::Backend(Arc::new(error))),
         ),
     };
     Some(Shortcuts {
@@ -94,12 +101,9 @@ fn included(state: &State, key: &str) -> Result<bool> {
             "快捷规则状态尚未读取，请刷新",
             "Rule shortcut status is unavailable; refresh to retry",
         ))?;
-    ensure!(
-        status.error.is_none(),
-        "{}{}",
-        language.text("读取快捷规则失败：", "Failed to read rule shortcuts: "),
-        status.error.as_deref().unwrap_or_default()
-    );
+    if let Some(error) = status.error_in(language) {
+        anyhow::bail!("{}", messages::tui_shortcuts_read_failed(language, error));
+    }
     let index = settings::RULE_KEYS
         .iter()
         .position(|candidate| *candidate == key)
@@ -216,7 +220,9 @@ fn profile_lines(
     height: usize,
     language: Language,
 ) -> Vec<String> {
-    let name = crate::output::profile_name(profile, language).replace(char::is_control, " ");
+    let name = profile
+        .display_name(language)
+        .replace(char::is_control, " ");
     let marker = if selected { "›" } else { " " };
     let current = if current {
         language.text("[当前] ", "[Current] ")
@@ -242,8 +248,11 @@ fn profile_lines(
         return render::wrap(&title, width);
     }
 
-    let summary = subscription::summary(profile.usage.as_deref(), profile.updated, language);
-    let inline = format!("{title} · {summary}");
+    let summary = subscription::summary_parts(profile.usage.as_deref(), profile.updated, language);
+    let inline = std::iter::once(title.as_str())
+        .chain(summary.iter().map(SummaryPart::text))
+        .collect::<Vec<_>>()
+        .join(" · ");
     if inline.width() <= width {
         return vec![inline];
     }
@@ -262,43 +271,33 @@ fn profile_lines(
         &summary,
         width,
         height.saturating_sub(1),
-        language,
     ));
     lines
 }
 
-fn profile_summary_lines(
-    summary: &str,
-    width: usize,
-    height: usize,
-    language: Language,
-) -> Vec<String> {
+fn profile_summary_lines(parts: &[SummaryPart], width: usize, height: usize) -> Vec<String> {
     if height == 0 {
         return Vec::new();
     }
-    let mut parts = summary.split(" · ").collect::<Vec<_>>();
-    let mut lines = pack_summary(&parts, width);
-    if lines.len() > height.min(2)
-        && parts
-            .last()
-            .is_some_and(|part| part.starts_with(language.text("更新 ", "Updated ")))
-    {
-        parts.pop();
-        lines = pack_summary(&parts, width);
-    }
+    let mut lines = pack_summary(parts, width);
+    let parts =
+        if lines.len() > height.min(2) && matches!(parts.last(), Some(SummaryPart::Updated(_))) {
+            let shorter = &parts[..parts.len() - 1];
+            lines = pack_summary(shorter, width);
+            shorter
+        } else {
+            parts
+        };
     if lines.len() > height
-        && let Some(expiry) = parts.last().filter(|part| {
-            **part == language.text("不限期", "No expiry")
-                || part.starts_with(language.text("到期 ", "Expires "))
-        })
+        && let Some(SummaryPart::Expiry { label, date }) = parts.last()
     {
-        let mut expiry_lines = render::wrap(expiry, width);
+        let mut expiry_lines = render::wrap(label, width);
         if expiry_lines.len() > height
-            && let Some(date) = expiry.strip_prefix(language.text("到期 ", "Expires "))
+            && let Some(date) = date
             && date.starts_with(|character: char| character.is_ascii_digit())
             && date.width() <= width
         {
-            expiry_lines = vec![date.into()];
+            expiry_lines = vec![date.clone()];
         }
         lines = pack_summary(&parts[..parts.len() - 1], width);
         lines.truncate(height.saturating_sub(expiry_lines.len()));
@@ -308,9 +307,9 @@ fn profile_summary_lines(
     lines
 }
 
-fn pack_summary(parts: &[&str], width: usize) -> Vec<String> {
+fn pack_summary(parts: &[SummaryPart], width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
-    for part in parts {
+    for part in parts.iter().map(SummaryPart::text) {
         if part.width() > width {
             lines.extend(render::wrap(part, width));
         } else if let Some(line) = lines.last_mut()
@@ -319,10 +318,23 @@ fn pack_summary(parts: &[&str], width: usize) -> Vec<String> {
             line.push_str(" · ");
             line.push_str(part);
         } else {
-            lines.push((*part).into());
+            lines.push(part.into());
         }
     }
     lines
+}
+
+#[test]
+fn a_cramped_subscription_keeps_its_expiry_with_reordered_words() {
+    let parts = [
+        SummaryPart::Usage("2/3 GiB".into()),
+        SummaryPart::Expiry {
+            label: "2027-05-14 · valid through".into(),
+            date: Some("2027-05-14".into()),
+        },
+        SummaryPart::Updated("Recorded at 05-01 12:00".into()),
+    ];
+    assert_eq!(profile_summary_lines(&parts, 10, 1), ["2027-05-14"]);
 }
 
 pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, Tone)> {
@@ -336,7 +348,7 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
                 .iter()
                 .find(|profile| Some(&profile.id) == poll.meta.settings.active_profile.as_ref())
         })
-        .map(|profile| crate::output::profile_name(profile, language))
+        .map(|profile| profile.display_name(language))
         .unwrap_or(language.text("未选择", "None selected"));
     let header = vec![
         (
@@ -406,13 +418,9 @@ pub(super) fn rules(state: &State, width: usize, height: usize) -> Vec<(String, 
                         )
                     },
                     |status| {
-                        status.error.as_ref().map(|error| {
-                            format!(
-                                "{}{error}",
-                                language
-                                    .text("读取快捷规则失败：", "Failed to read rule shortcuts: ",)
-                            )
-                        })
+                        status
+                            .error_in(language)
+                            .map(|error| messages::tui_shortcuts_read_failed(language, error))
                     },
                 ),
         },

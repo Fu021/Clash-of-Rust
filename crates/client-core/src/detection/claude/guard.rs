@@ -285,7 +285,7 @@ fn notification_text(hosts: &[String], node: &str, language: Language) -> (Strin
                 node
             ),
         ),
-        Language::English => (
+        _ => (
             "Clash of Rust · Claude protection".into(),
             format!(
                 "Claude or a related service used a different route. Attempted to close the connection.\nDomains: {}\nProtected node: {}\nSee Claude check for details.",

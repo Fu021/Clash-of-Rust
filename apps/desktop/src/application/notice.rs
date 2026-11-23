@@ -12,7 +12,15 @@ fn append_notice_text(notice: &mut String, text: &str) {
 }
 
 pub(super) fn localize_notice(text: &str, error: bool, language: Language) -> Cow<'_, str> {
-    if language == Language::English
+    if let Some(detail) = text.strip_prefix("检查更新失败：") {
+        return match update::check_error_text(detail, language) {
+            update::CheckErrorText::RetrySummary(text) => text,
+            update::CheckErrorText::Detail(detail) => {
+                crate::messages::notice_update_check_failed(language, detail).into()
+            }
+        };
+    }
+    if language != Language::SimplifiedChinese
         && let Some(translated) = english_desktop_notice(text)
     {
         return Cow::Owned(translated);
@@ -25,23 +33,22 @@ pub(super) fn localize_notice(text: &str, error: bool, language: Language) -> Co
 }
 
 pub(super) fn localize_update_message(message: &str, language: Language) -> Cow<'_, str> {
-    if language == Language::English
+    if language != Language::SimplifiedChinese
         && let Some(reason) = message.strip_prefix("更新失败：")
     {
-        let english = match reason {
+        let detail = match reason {
             "客户端无法正常退出，请检查代理恢复或内核状态" => {
-                "the client could not exit. Check proxy recovery and core status."
+                crate::messages::notice_update_client_exit_failed(language).into()
             }
             "安装助手无法启动，请重试" => {
-                "Could not start the installation helper; try again"
+                crate::messages::notice_update_helper_start_failed(language).into()
             }
             clash_client_core::protection::READ_ONLY_NOTICE => {
-                return format!("Update failed: {}", localize_notice(reason, true, language))
-                    .into();
+                localize_notice(reason, true, language)
             }
             _ => return update::localize_installation_message(message, language),
         };
-        return format!("Update failed: {english}").into();
+        return crate::messages::notice_update_failed(language, detail).into();
     }
     update::localize_installation_message(message, language)
 }
@@ -57,24 +64,13 @@ impl UnreachableNotice {
         let context = self
             .context
             .as_deref()
-            .unwrap_or_else(|| language.text("本次定时测速", "Scheduled latency test"));
+            .unwrap_or_else(|| messages::scheduled_latency_test(language));
         let detail = if self.protected {
-            language.text(
-                "请检查 Claude 保护线路。",
-                "Check the Claude protection route.",
-            )
+            messages::unreachable_check_protection(language)
         } else {
-            language.text(
-                "请更换节点；更新失败后会自动尝试直连。",
-                "Choose another node; failed updates will retry using a direct connection.",
-            )
+            messages::unreachable_choose_node(language)
         };
-        match language {
-            Language::SimplifiedChinese => {
-                format!("{context}：{} 个节点不可达。{detail}", self.count)
-            }
-            Language::English => format!("{context}: {} nodes unreachable. {detail}", self.count),
-        }
+        messages::nodes_unreachable(language, context, self.count, detail)
     }
 }
 

@@ -15,6 +15,18 @@ mod language_ui_tests;
 #[cfg(any(target_os = "android", test))]
 mod list_presentation;
 #[cfg(any(target_os = "android", test))]
+#[cfg_attr(
+    not(target_os = "android"),
+    allow(
+        dead_code,
+        reason = "Some messages are used only by the Android device host"
+    )
+)]
+mod messages {
+    use clash_mobile_runtime::core::config::Language;
+    include!(concat!(env!("OUT_DIR"), "/messages.rs"));
+}
+#[cfg(any(target_os = "android", test))]
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod network_probe;
 #[cfg(any(target_os = "android", test))]

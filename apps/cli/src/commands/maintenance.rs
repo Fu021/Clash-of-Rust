@@ -417,7 +417,7 @@ fn update_install_prompt(
                 available.version
             )
         }
-        clash_client_core::config::Language::English => {
+        _ => {
             format!(
                 "Download and install {channel} {}, stopping the current core and backend?",
                 available.version

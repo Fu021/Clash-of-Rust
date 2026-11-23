@@ -25,6 +25,9 @@ mod ui_testing;
 #[cfg(test)]
 mod ui_tests;
 mod window_state;
+use crate::messages;
+use clash_client_core::messages as shared_messages;
+use clash_client_core::model::contains_query;
 use clash_of_rust::{
     config::{
         AccentColor, Language, LanguagePreference, Profile, Settings, Store, ThemeMode,
@@ -143,13 +146,6 @@ fn english_desktop_notice(message: &str) -> Option<String> {
     }
     let (summary, detail) = message.split_once('：')?;
     let (label, detail) = match summary {
-        "检查更新失败" => {
-            let detail = update::localize_check_error(detail, Language::English);
-            if detail.starts_with("Update check ") {
-                return Some(detail.into_owned());
-            }
-            ("Update check failed", detail)
-        }
         "无法打开 Release 页面" => ("Could not open the release page", detail.into()),
         "无法保存窗口状态" => (
             "Could not save window state",
@@ -214,7 +210,7 @@ fn english_window_error(message: &str) -> Cow<'_, str> {
 }
 
 fn test_notification_text(language: Language) -> &'static str {
-    language.text("喵!", "Meow!")
+    messages::test_notification(language)
 }
 
 fn update_restart() -> bool {
@@ -234,22 +230,6 @@ const GROUP_SEARCH_EXPANSION_LIMIT: usize = 4;
 
 fn last_page_offset(total: usize) -> usize {
     total.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE
-}
-
-// Most host names and rules are ASCII; avoid allocating lowercase copies for
-// every entry on every redraw. Unicode names still use Unicode case conversion.
-fn contains_query(value: &str, lower_query: &str) -> bool {
-    if lower_query.is_empty() {
-        return true;
-    }
-    if value.is_ascii() && lower_query.is_ascii() {
-        value
-            .as_bytes()
-            .windows(lower_query.len())
-            .any(|part| part.eq_ignore_ascii_case(lower_query.as_bytes()))
-    } else {
-        value.to_lowercase().contains(lower_query)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,21 +446,12 @@ impl NetworkResult {
     fn lines(&self, language: Language) -> Vec<String> {
         match self {
             Self::Report(report) => report.lines_in(language),
-            Self::Cancelled => vec![language.text("检查已取消", "Check cancelled").into()],
-            Self::ProtectionPending => vec![
-                language
-                    .text(
-                        "Claude 保护切换中，请稍后重试",
-                        "Claude protection is changing; try again shortly",
-                    )
-                    .into(),
-            ],
-            Self::Failed(error) => {
-                vec![format!(
-                    "{} · {error}",
-                    language.text("检查失败", "Check failed")
-                )]
-            }
+            Self::Cancelled => vec![shared_messages::network_tool_cancelled(language).into()],
+            Self::ProtectionPending => vec![messages::claude_protection_changing(language).into()],
+            Self::Failed(error) => vec![shared_messages::network_tool_failed(
+                language,
+                clash_client_core::error_message::localize(error, language),
+            )],
         }
     }
 
@@ -934,10 +905,7 @@ impl App {
                 || self.claude.protection_pending.is_some())
         {
             self.show_notice(
-                self.presentation_language.text(
-                    "Claude 保护已锁定当前运行模式，请先关闭保护再切换模式",
-                    "Claude protection has locked the routing mode; disable protection before changing it",
-                ).into(),
+                messages::claude_mode_locked(self.presentation_language).into(),
                 false,
             );
             return Task::none();
@@ -947,10 +915,7 @@ impl App {
                 || self.claude.protection_pending.is_some())
         {
             self.show_notice(
-                self.presentation_language.text(
-                    "Claude 保护已锁定当前节点，请先关闭保护再切换节点",
-                    "Claude protection has locked the current node; disable protection before changing it",
-                ).into(),
+                messages::claude_node_locked(self.presentation_language).into(),
                 false,
             );
             return Task::none();
@@ -1070,10 +1035,7 @@ impl App {
         self.reset_site_filters();
         self.claude.close();
         self.claude.reports = Default::default();
-        self.claude.status = claude_view::Status::Text(
-            "网络配置已改变，请重新检测地区线索。",
-            "Network settings changed; run the region check again.",
-        );
+        self.claude.status = claude_view::Status::NetworkChanged;
     }
 
     fn clear_network_test(&mut self) {
@@ -1423,21 +1385,14 @@ impl App {
                         return Task::none();
                     }
                     let language = self.presentation_language;
-                    let title = match language {
-                        Language::SimplifiedChinese => {
-                            format!("安装预发布版 {}？", available.version)
-                        }
-                        Language::English => {
-                            format!("Install pre-release {}?", available.version)
-                        }
-                    };
+                    let title = messages::install_prerelease_title(language, &available.version);
                     let task = self.ask(
                         &title,
                         language.text(
                             update::channel::PRERELEASE_WARNING,
                             "Pre-releases may contain undiscovered bugs that cause crashes, network problems or configuration incompatibilities. Back up your configuration before installing.",
                         ).into(),
-                        language.text("继续安装", "Continue"),
+                        messages::install_prerelease_continue(language),
                         desktop_view::Pending::InstallUpdate(available.version),
                     );
                     self.confirmation.as_mut().unwrap().ready_at =
@@ -1933,12 +1888,7 @@ impl App {
                     Ok(()) => {
                         self.reset_network_results();
                         self.show_notice(
-                            self.presentation_language
-                                .text(
-                                    "GeoIP、GeoSite、Country、ASN 数据已全部更新",
-                                    "GeoIP, GeoSite, Country and ASN data updated",
-                                )
-                                .into(),
+                            messages::geo_data_updated(self.presentation_language).into(),
                             false,
                         );
                     }
@@ -2021,7 +1971,7 @@ impl App {
                                 Language::SimplifiedChinese => {
                                     format!("{group}：{good}/{} 个节点可达", delays.len())
                                 }
-                                Language::English => {
+                                _ => {
                                     format!("{group}: {good}/{} nodes reachable", delays.len())
                                 }
                             };
@@ -2039,7 +1989,7 @@ impl App {
                     Err(error) => {
                         let message = match self.presentation_language {
                             Language::SimplifiedChinese => format!("{group} 测速失败：{error}"),
-                            Language::English => format!("{group} speed test failed: {error}"),
+                            _ => format!("{group} speed test failed: {error}"),
                         };
                         self.show_notice(message, true);
                     }
@@ -2603,10 +2553,7 @@ impl App {
                     self.group_offsets.clear();
                     self.cancel_site_checks();
                     self.claude.close();
-                    self.claude.status = claude_view::Status::Text(
-                        "内核已停止；已获得的报告保留，网络结果可能已过期。",
-                        "The core stopped. Reports are retained; network results may be outdated.",
-                    );
+                    self.claude.status = claude_view::Status::CoreStopped;
                 }
                 let core_failed =
                     !reply.running && (reply.start_requested || self.snapshot.running);
@@ -2642,7 +2589,7 @@ impl App {
                         }
                     }
                     if let Some(guard) = &snapshot.claude_guard {
-                        self.claude.guard_report(guard, self.presentation_language);
+                        self.claude.guard_report(guard);
                     } else if reply.scope == Scope::Claude {
                         self.claude.clear_guard();
                     }
@@ -2886,10 +2833,7 @@ impl App {
                 if self.tray_startup.is_some() && self.tray_close_requested.is_none() {
                     self.tray_close_requested = Some(id);
                     self.show_notice(
-                        self.presentation_language.text(
-                            "桌面托盘正在初始化，完成后会自动关闭窗口；再次关闭可退出程序。",
-                            "The tray is starting. The window will close when ready; close again to exit.",
-                        ).into(),
+                        messages::tray_starting(self.presentation_language).into(),
                         false,
                     );
                     return Task::none();
@@ -3170,7 +3114,7 @@ impl App {
             .and_then(|result| result.as_ref().ok())
             .map(|result| site_result_country(result, language))
             .filter(|country| !country.is_empty())
-            .unwrap_or_else(|| language.text("未识别", "Unknown"));
+            .unwrap_or_else(|| messages::site_country_unknown(language));
         contains_query(&service.name, query)
             || contains_query(&service.group, query)
             || contains_query(status.label_in(language), query)
@@ -3231,7 +3175,7 @@ fn site_result_country(result: &ip_check::CheckResult, language: Language) -> &s
     ));
     match language {
         Language::SimplifiedChinese => country,
-        Language::English => clash_client_core::countries::country_code(country)
+        _ => clash_client_core::countries::country_code(country)
             .and_then(clash_client_core::countries::english_name)
             .unwrap_or(country),
     }

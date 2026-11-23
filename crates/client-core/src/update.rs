@@ -11,7 +11,7 @@ mod error;
 mod retry;
 mod route;
 pub mod schedule;
-pub use error::{localize_check_error, localize_check_error_with};
+pub use error::{CheckErrorText, localize_check_error, localize_check_error_with};
 pub use retry::check as retry_check;
 pub use route::Observer as RouteObserver;
 
@@ -33,19 +33,14 @@ impl Progress {
     }
 
     pub fn routing_in(&self, language: crate::config::Language) -> String {
-        let route = match (language, self.route) {
-            (crate::config::Language::English, "内核代理") => "Core proxy",
-            (crate::config::Language::English, "系统代理") => "System proxy",
-            (crate::config::Language::English, "内核直连") => "Core direct",
-            (crate::config::Language::English, "系统网络") => "System network",
-            (crate::config::Language::English, "直连") => "Direct",
-            _ => self.route,
-        };
+        use crate::messages;
+        let route =
+            crate::network::localized_route_label(self.route, language).unwrap_or(self.route);
         match self.outbound.as_deref() {
             Some(node) if node == "DIRECT" || node.starts_with("DIRECT → ") => {
-                format!("{route} · {} ({node})", language.text("直连", "Direct"))
+                messages::download_route_progress_direct(language, node, route)
             }
-            Some(node) => format!("{route} · {node}"),
+            Some(node) => messages::download_route_progress_outbound(language, node, route),
             None => route.to_owned(),
         }
     }

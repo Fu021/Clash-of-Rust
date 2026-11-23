@@ -13,6 +13,8 @@ pub struct ProbeResult {
     pub detail: String,
 }
 
+pub const HTTP_HEADER_TIMING_EVIDENCE: &str = "响应头耗时，不是 ICMP 延迟";
+
 pub fn validate_url(input: &str) -> Result<Url> {
     let url = Url::parse(input)?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
@@ -368,7 +370,7 @@ async fn website_with_route(
         }
         parse_exit_ip(&bytes)?.to_string()
     } else {
-        format!("HTTP {status} · 响应头耗时，不是 ICMP 延迟")
+        format!("HTTP {status} · {HTTP_HEADER_TIMING_EVIDENCE}")
     };
     Ok(ProbeResult {
         url: input,

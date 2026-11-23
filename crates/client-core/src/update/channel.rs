@@ -1,4 +1,5 @@
 //! One release-selection policy for desktop, CLI and Android.
+use crate::messages;
 use semver::Version;
 
 pub const PRERELEASE_WARNING: &str = "预发布版本可能存在尚未发现的风险与 Bug，可能导致程序崩溃、网络异常或配置兼容问题。建议先备份配置，确认后再下载安装。";
@@ -74,24 +75,15 @@ pub fn description_in(
     language: crate::config::Language,
 ) -> String {
     if preview {
-        format!(
-            "{} {version}",
-            language.text("发现预发布版", "Pre-release available:")
-        )
+        messages::update_channel_preview_available(language, version)
     } else if Version::parse(current)
         .ok()
         .zip(Version::parse(version).ok())
         .is_some_and(|(current, target)| target.cmp_precedence(&current).is_lt())
     {
-        format!(
-            "{} {version}",
-            language.text("可返回正式版", "Stable release available:")
-        )
+        messages::update_channel_stable_available(language, version)
     } else {
-        format!(
-            "{} {version}",
-            language.text("发现新版本", "Update available:")
-        )
+        messages::update_channel_release_available(language, version)
     }
 }
 

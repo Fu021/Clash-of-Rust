@@ -22,7 +22,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use clash_mobile_runtime::{NativeHost, Session, Snapshot, core};
-use core::{api, config, proxy_order, rule_manager};
+use core::{api, config, model::contains_query, proxy_order, rule_manager};
 use futures_util::{StreamExt, stream};
 use jni::{
     EnvUnowned, JValue, jni_sig, jni_str,
@@ -1693,12 +1693,12 @@ async fn run_loop(
                                     };
                                     match state.presentation_language {
                                         config::Language::SimplifiedChinese => format!("本次测速：{} 个节点不可达。{detail}", values.len()),
-                                        config::Language::English => format!("{} nodes unreachable. {detail}", values.len()),
+                                        _ => format!("{} nodes unreachable. {detail}", values.len()),
                                     }
                                 } else {
                                     match state.presentation_language {
                                         config::Language::SimplifiedChinese => format!("测速完成 · {} 项，{} 项超时", values.len(), failed),
-                                        config::Language::English => format!("Speed test complete · {} checked, {} timed out", values.len(), failed),
+                                        _ => format!("Speed test complete · {} checked, {} timed out", values.len(), failed),
                                     }
                                 };
                                 state.notice_network_recovery = unavailable;
@@ -2730,7 +2730,7 @@ fn observe_protection(
                         "保护节点：{} · 已拦截 {} 条",
                         protection.node, state.guard_snapshot.blocked
                     ),
-                    config::Language::English => format!(
+                    _ => format!(
                         "Protected node: {} · Blocked {}",
                         protection.node, state.guard_snapshot.blocked
                     ),
@@ -4058,10 +4058,7 @@ fn project(state: &mut State) -> Projection {
                     .copied()
                     .or_else(|| s.proxies.proxies.get(node).and_then(|n| n.delay))
             },
-            |node| {
-                list_presentation::contains_query(node, &query)
-                    || list_presentation::contains_query(name.as_str(), &query)
-            },
+            |node| contains_query(node, &query) || contains_query(name.as_str(), &query),
         );
         let count = indices.len();
         let page = state
@@ -4112,6 +4109,7 @@ fn project(state: &mut State) -> Projection {
         &query,
         state.profile_page,
         s.settings.profiles_paginated,
+        language,
     );
     let profile_page = (matching_profiles.index, matching_profiles.total);
     let profiles = matching_profiles.items.into_iter().cloned().collect();
@@ -4258,7 +4256,7 @@ fn project(state: &mut State) -> Projection {
                         config::Language::SimplifiedChinese => {
                             core::probe::country_name(&signal.country).unwrap_or_default()
                         }
-                        config::Language::English => core::countries::english_name(&signal.country)
+                        _ => core::countries::english_name(&signal.country)
                             .unwrap_or_default()
                             .to_owned(),
                     }
@@ -4507,7 +4505,7 @@ fn project(state: &mut State) -> Projection {
         settings: s.settings.clone(),
         running: s.running,
         vpn: s.vpn,
-        profile: s.profile().name.clone(),
+        profile: s.profile().display_name(language).into(),
         node,
         total: s.count,
         upload: bytes(s.connections.upload_total),
@@ -4517,7 +4515,7 @@ fn project(state: &mut State) -> Projection {
         rule_profiles: s
             .profiles
             .iter()
-            .map(|profile| (profile.id.clone(), profile.name.clone()))
+            .map(|profile| (profile.id.clone(), profile.display_name(language).into()))
             .collect(),
         connections,
         rates: (
@@ -4530,7 +4528,7 @@ fn project(state: &mut State) -> Projection {
             .profiles
             .iter()
             .find(|p| p.id == s.rule_profile)
-            .map(|p| p.name.clone())
+            .map(|profile| profile.display_name(language).into())
             .unwrap_or_default(),
         completed: state.completed,
         categories,
@@ -4829,17 +4827,10 @@ fn apply(ui: &AndroidWindow, p: Projection) {
         } else {
             1
         };
-        let label = match (language, paginated, profiles) {
-            (config::Language::SimplifiedChinese, true, _) => {
-                format!("{} / {pages} · {count} 条", page + 1)
-            }
-            (config::Language::English, true, _) => {
-                format!("{} / {pages} · {count} items", page + 1)
-            }
-            (config::Language::SimplifiedChinese, false, true) => format!("{count} 条订阅"),
-            (config::Language::SimplifiedChinese, false, false) => format!("{count} 个代理组"),
-            (config::Language::English, false, true) => format!("{count} subscriptions"),
-            (config::Language::English, false, false) => format!("{count} groups"),
+        let label = match (paginated, profiles) {
+            (true, _) => crate::messages::list_page(language, count, page + 1, pages),
+            (false, true) => crate::messages::list_subscription_count(language, count),
+            (false, false) => crate::messages::list_group_count(language, count),
         };
         if profiles {
             data.set_profile_page(label.into());
@@ -4868,7 +4859,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                 page + 1,
                 count.div_ceil(size).max(1)
             ),
-            config::Language::English => format!(
+            _ => format!(
                 "{} / {} · {count} items",
                 page + 1,
                 count.div_ceil(size).max(1)
@@ -4984,7 +4975,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
             config::Language::SimplifiedChinese => {
                 format!("完成 {} / {}", p.progress.0, p.progress.1)
             }
-            config::Language::English => format!("Completed {} / {}", p.progress.0, p.progress.1),
+            _ => format!("Completed {} / {}", p.progress.0, p.progress.1),
         }
         .into(),
     );
@@ -4993,7 +4984,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     data.set_exit_country(
         match language {
             config::Language::SimplifiedChinese => exit_country,
-            config::Language::English => core::countries::country_code(exit_country)
+            _ => core::countries::country_code(exit_country)
                 .and_then(core::countries::english_name)
                 .unwrap_or(exit_country),
         }
@@ -5216,10 +5207,10 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                     let local = profile.is_local();
                     ProfileItem {
                         id: profile.id.clone().into(),
-                        name: profile.name.into(),
+                        name: profile.display_name(language).into(),
                         source: profile.source.clone().into(),
                         detail: if local {
-                            language.text("本地配置", "Local configuration").into()
+                            core::messages::subscription_local_configuration(language).into()
                         } else {
                             core::subscription::summary(
                                 profile.usage.as_deref(),
@@ -5273,7 +5264,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                             config::Language::SimplifiedChinese => {
                                 format!("{} · {count} 个节点", group.kind)
                             }
-                            config::Language::English => format!("{} · {count} nodes", group.kind),
+                            _ => format!("{} · {count} nodes", group.kind),
                         }
                         .into(),
                         current: group.now.as_str().into(),
@@ -5299,7 +5290,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
                             config::Language::SimplifiedChinese => {
                                 format!("{} / {} · {count} 个", page + 1, count.div_ceil(48).max(1))
                             }
-                            config::Language::English => format!(
+                            _ => format!(
                                 "{} / {} · {count} items",
                                 page + 1,
                                 count.div_ceil(48).max(1)

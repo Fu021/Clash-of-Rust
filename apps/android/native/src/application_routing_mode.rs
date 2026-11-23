@@ -2,14 +2,14 @@ use clash_mobile_runtime::core::config::Language;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+use crate::messages;
+
 pub(super) fn scope_label(scope: &Value, language: Language) -> String {
     let selected = scope["selected"].as_u64().unwrap_or_default();
-    match (scope["mode"].as_str(), language) {
-        (Some("only"), Language::English) => format!("Only {selected} selected"),
-        (Some("only"), Language::SimplifiedChinese) => format!("仅选中 {selected} 个应用"),
-        (Some("exclude"), Language::English) => format!("{selected} excluded"),
-        (Some("exclude"), Language::SimplifiedChinese) => format!("排除 {selected} 个应用"),
-        _ => language.text("全部应用", "All apps").into(),
+    match scope["mode"].as_str() {
+        Some("only") => messages::routing_scope_only(language, selected),
+        Some("exclude") => messages::routing_scope_exclude(language, selected),
+        _ => messages::routing_scope_all(language).into(),
     }
 }
 

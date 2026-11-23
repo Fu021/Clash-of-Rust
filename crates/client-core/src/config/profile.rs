@@ -1,5 +1,9 @@
+use super::Language;
+use crate::{messages, model::contains_query};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::Path;
+
+pub(super) const DEFAULT_NAME: &str = "默认直连";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Profile {
@@ -18,6 +22,19 @@ impl Profile {
 
     pub fn is_local(&self) -> bool {
         !reqwest::Url::parse(&self.source).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+    }
+
+    pub fn display_name(&self, language: Language) -> &str {
+        if self.is_default() && self.name == DEFAULT_NAME {
+            messages::subscription_default_direct(language)
+        } else {
+            &self.name
+        }
+    }
+
+    pub fn matches_name(&self, display_name: &str, lower_query: &str) -> bool {
+        contains_query(&self.name, lower_query)
+            || (display_name != self.name && contains_query(display_name, lower_query))
     }
 }
 
@@ -44,7 +61,7 @@ impl<'de> Deserialize<'de> for Profile {
         };
         if record.builtin.is_none() {
             profile.builtin = profile.is_local()
-                && profile.name == "默认直连"
+                && profile.name == DEFAULT_NAME
                 && Path::new(&profile.source)
                     .file_name()
                     .is_some_and(|name| name == "default.yaml");
@@ -65,12 +82,21 @@ mod tests {
         });
         let mut profile: Profile = serde_json::from_value(legacy.clone()).unwrap();
         assert!(profile.is_default());
+        let display_name = profile.display_name(Language::English);
+        assert_eq!(display_name, "Default direct");
+        assert!(profile.matches_name(display_name, "default direct"));
+        assert!(profile.matches_name(display_name, DEFAULT_NAME));
+        assert_eq!(
+            serde_json::to_value(&profile).unwrap()["name"],
+            DEFAULT_NAME
+        );
         profile.name = "Direct connection".into();
         profile.source = "/new/resources/default.yaml".into();
         let current = serde_json::to_value(&profile).unwrap();
         assert_eq!(current["builtin"], true);
         let loaded: Profile = serde_json::from_value(current).unwrap();
         assert!(loaded.is_default());
+        assert_eq!(loaded.display_name(Language::English), "Direct connection");
         for source in [
             "https://example.invalid/default.yaml",
             "/imports/other.yaml",

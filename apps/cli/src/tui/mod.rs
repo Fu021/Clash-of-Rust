@@ -62,7 +62,7 @@ async fn read(
             return Ok(Reply::Snapshot(None, None));
         };
         let shortcuts = if page == Page::Rules {
-            catalog::read_shortcuts(&remote, &poll, cached, include_rules, language).await
+            catalog::read_shortcuts(&remote, &poll, cached, include_rules).await
         } else {
             None
         };
@@ -224,7 +224,7 @@ async fn save_command(
             })
             .await?;
         let shortcuts = if shortcut {
-            catalog::read_shortcuts(&remote, &poll, None, include_rules, language).await
+            catalog::read_shortcuts(&remote, &poll, None, include_rules).await
         } else {
             None
         };
@@ -344,7 +344,10 @@ pub async fn run(args: &Args) -> Result<()> {
                                 state.execution = Some(operation);
                                 state.message = None;
                             }
-                            Err(error) => state.message = Some(format!("{error:#}")),
+                            Err(error) => {
+                                state.message =
+                                    Some(crate::output::localized_error(&error, state.language))
+                            }
                         }
                     }
                 }
@@ -686,13 +689,10 @@ pub async fn run(args: &Args) -> Result<()> {
         {
             let mut completed = update_request.take().unwrap();
             let result = match (&mut completed.0).await {
-                Ok(result) => result.map_err(|error| format!("{error:#}")),
-                Err(error) => Err(format!(
-                    "{}{error}",
-                    state
-                        .language
-                        .text("更新检查任务失败：", "Update check failed: ")
-                )),
+                Ok(result) => {
+                    result.map_err(|error| home::CheckFailure::Check(format!("{error:#}")))
+                }
+                Err(error) => Err(home::CheckFailure::Task(error.to_string())),
             };
             home::accept(&mut state, result);
             dirty = true;
@@ -700,7 +700,10 @@ pub async fn run(args: &Args) -> Result<()> {
         if update_request.is_none() && home::due(&mut state, std::time::Instant::now()) {
             match check_update(&mut state) {
                 Ok(job) => update_request = Some(job),
-                Err(error) => state.updates.result = Some(Err(format!("{error:#}"))),
+                Err(error) => {
+                    state.updates.result =
+                        Some(Err(home::CheckFailure::Check(format!("{error:#}"))))
+                }
             }
             dirty = true;
         }

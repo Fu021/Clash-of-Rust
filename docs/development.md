@@ -64,16 +64,46 @@ flock --shared --nonblock --conflict-exit-code 75 9 || exit "$?"
 
 ## 翻译资源
 
-仓库根目录的 [`translations/`](../translations/) 集中维护可见文案。Rust 共享文案放在 `shared/<语言标签>.json`，终端专属文案放在 `cli/<语言标签>.json`。新增或迁移 Rust 文案时，使用稳定的 `snake_case` 消息键和 `{name}` 参数，在调用处使用生成的 `messages::消息键(language, ...)`。生成器校验各语言的键和参数，按参数名排序生成函数签名，模板可按语言需要调整参数位置。
+仓库根目录的 [`translations/`](../translations/) 集中维护客户端与 Windows 安装器的翻译资源。以下目录以 `translations/` 为起点。
 
-Slint 界面使用 `@tr`，桌面和 Android 分别从 `desktop/<语言标签>/LC_MESSAGES/clash-client-ui.po` 和 `android/slint/<语言标签>/LC_MESSAGES/clash-android.po` 内嵌目录。简体中文使用现有 `@tr` 源文。Android 打包脚本将 `android/res/values*/strings.xml` 和图标一起放入 Gradle 的生成资源目录，Java 通过资源 ID 取文案。仅更新翻译时可继续复用 Maven 依赖缓存。
+| 资源 | 路径与构建入口 |
+| --- | --- |
+| Rust | `shared/`、`cli/`、`runtime/`、`desktop/rust/`、`android/rust/` 分别由 `client-core`、CLI、`client-runtime`、桌面宿主、Android Rust 宿主的 `build.rs` 通过 [`compile_catalog.rs`](../translations/compile_catalog.rs) 生成各自的 `OUT_DIR/messages.rs`。 |
+| Slint | `client-ui` 和 Android Rust 宿主分别内嵌 `desktop/slint/<Slint 标签>/LC_MESSAGES/clash-client-ui.po` 和 `android/slint/<Slint 标签>/LC_MESSAGES/clash-android.po`。简体中文使用 `@tr` 的源文。 |
+| Android Java | `android/system/values*/strings.xml` 由 `scripts/android.py` 复制到 Gradle 生成资源目录，Java 按资源 ID 读取。 |
+| Windows 安装器 | `windows/nsis/<语言标签>.nsh` 维护安装和卸载文案，由 [`clash-of-rust.nsi`](../installer/clash-of-rust.nsi) 加载。 |
 
-新增语言时在 [`languages.rs`](../translations/languages.rs) 注册标签、语言原名、Slint 标签与系统匹配规则，再为共享、CLI、桌面、Android 界面和 Android 宿主提供对应的翻译。语言菜单使用注册表，在实际应用入口验证系统匹配、手动切换和回退。旧的双语字面量和按语言拼接的文案在迁移相应模块时改用消息键。
+Rust 新增文案时，为对应目录的各个 `<语言标签>.json` 添加相同的 `snake_case` 消息键和 `{name}` 参数集合，并在调用处使用生成的 `messages::消息键(language, ...)`。参数按名称排序传入，模板可按各语言习惯调整顺序，字面花括号写成 `{{` 和 `}}`。编译期校验目录中的语言文件、消息键和参数，英文目录提供回退文案。界面静态文本使用 `@tr` 或 Android 资源 ID。
+
+### 新增语言
+
+在同一次变更中补齐客户端、Windows 安装与卸载向导、Linux 应用菜单。
+
+1. 在 [`languages.rs`](../translations/languages.rs) 注册语言标签、菜单名称、Slint 标签及系统匹配规则，补齐表中的五套 Rust 目录、两套 Slint 目录和 Java 资源。GUI、TUI 和 Android 语言菜单、CLI 可选标签及 Android 系统语言匹配共用注册表。
+2. 完成 [Windows 安装与卸载语言清单](#windows-安装与卸载语言清单)。
+3. 同步 [`clash-of-rust.desktop`](../resources/linux/clash-of-rust.desktop) 的 `Comment[语言]`。Linux 应用菜单按桌面会话语言读取对应注释。
+4. 按[平台编译边界](#平台编译边界)分别运行桌面与移动测试，在四端检查系统匹配、手动切换和英文回退，覆盖旧设置、长文本、带参数消息与 Android 资源限定符。行为规则见[语言与展示](ui-design.md#语言与展示)，自动选测见 [CI](workflows/ci.md#ci)。
+
+#### Windows 安装与卸载语言清单
+
+安装和卸载向导直接打开，语言跟随当前用户的 Windows 显示语言。NSIS 先匹配完整语言，再匹配主语言，均未匹配时用首个加载的英文词库。参见 [NSIS 手册 §4.10.1](https://nsis.sourceforge.io/Docs/Chapter4.html)。
+
+- 添加 `translations/windows/nsis/<语言标签>.nsh`，文件名与客户端注册表的语言标签一致。以 `en.nsh` 为模板，使用对应的 NSIS `MUI_LANGUAGE` 和语言 ID，补齐 `InstallerVersionInfo` 及全部 `LangString`，保留变量、路径和换行占位符。
+- 在 [`clash-of-rust.nsi`](../installer/clash-of-rust.nsi) 的语言加载区以 UTF-8 加载词库，保持 `en.nsh` 第一个加载。将新语言的卸载快捷方式名登记到 `DeleteUninstallShortcuts`，让重装和卸载能够清理旧语言留下的快捷方式。
+- 运行以下检查。缺少词库、漏加载、缺消息键或漏登快捷方式清理项都会失败。CI 也运行这两项检查。
+
+  ```sh
+  python3 scripts/test-build-tools.py \
+    BuildTests.test_language_registry_has_bundled_platform_resources \
+    BuildTests.test_windows_installer_uses_complete_localized_messages
+  ```
+
+- 编译 Windows x64 和 ARM64 安装包。在隔离 Windows 环境分别使用新增语言及一种主语言尚未受支持的显示语言，核对安装和卸载向导、英文回退、切换系统语言后重装或卸载的快捷方式清理，以及静默更新。
 
 ## 修改前后都要检查
 
 - GUI/CLI 共享数据目录、后台所有者和内核；检查两端刷新、退出与重新附加，避免重复内核、轮询或测速。
-- 语言仅在展示边界转换；协议键、持久化值、筛选与排序标识、节点和订阅名称、JSON 字段及外部原始证据保持原样。新增可见文案同时检查两种语言、旧数据和长文本布局，语言选择规则见[界面设计](ui-design.md#语言与展示)。
+- 语言仅在展示边界转换。内置默认直连名称由共享层按当前语言生成。协议键、持久化值、筛选与排序标识、用户命名、JSON 字段及外部原始证据保持原样。新增可见文案同时检查两种语言、旧数据和长文本布局，语言选择规则见[界面设计](ui-design.md#语言与展示)。
 - 界面选项贯通 Slint 状态/回调、协议、宿主、业务、持久化和刷新，并检查桌面/移动端。协议变更同步收发端、序列化、预览和测试，明确兼容性与版本变化。
 - 外部更新不得覆盖规则、订阅或设置草稿；保留并发校验、删除确认、原订阅与配置原子保存/回滚，覆盖拒绝、超时、退出和重启恢复。
 - 规则新增、编辑和启用统一拒绝重复的启用规则，表单拒绝越界位置；数量上限等校验通过后才替换草稿，拒绝不得污染原草稿。拖动按起始规则 ID 提交，筛选或分页变化后立即失效，不能只等待异步状态回调清理。

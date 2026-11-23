@@ -29,8 +29,30 @@ fn date(seconds: u64, pattern: &str) -> Option<String> {
         .map(|date| date.format(pattern).to_string())
 }
 
-/// Keep the used/quota pair and expiry date; omit redundant transfer breakdowns.
+pub enum SummaryPart {
+    Usage(String),
+    Expiry { label: String, date: Option<String> },
+    Updated(String),
+}
+
+impl SummaryPart {
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Usage(text) | Self::Expiry { label: text, .. } | Self::Updated(text) => text,
+        }
+    }
+}
+
 pub fn summary(value: Option<&str>, updated: u64, language: Language) -> String {
+    summary_parts(value, updated, language)
+        .iter()
+        .map(SummaryPart::text)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Keep the used/quota pair and expiry date; omit redundant transfer breakdowns.
+pub fn summary_parts(value: Option<&str>, updated: u64, language: Language) -> Vec<SummaryPart> {
     let (mut upload, mut download, mut total, mut expire) = (None, None, None, None);
     for field in value.unwrap_or_default().split(';') {
         let Some((name, value)) = field.trim().split_once('=') else {
@@ -62,44 +84,60 @@ pub fn summary(value: Option<&str>, updated: u64, language: Language) -> String 
         } else {
             traffic(used)
         };
-        parts.push(messages::subscription_usage_used(language, usage));
+        parts.push(SummaryPart::Usage(messages::subscription_usage_used(
+            language, usage,
+        )));
     } else {
         if let Some(upload) = upload {
-            parts.push(messages::subscription_usage_upload(
+            parts.push(SummaryPart::Usage(messages::subscription_usage_upload(
                 language,
                 traffic(upload),
-            ));
+            )));
         }
         if let Some(download) = download {
-            parts.push(messages::subscription_usage_download(
+            parts.push(SummaryPart::Usage(messages::subscription_usage_download(
                 language,
                 traffic(download),
-            ));
+            )));
         }
         if let Some(total) = quota {
-            parts.push(messages::subscription_usage_total(language, traffic(total)));
+            parts.push(SummaryPart::Usage(messages::subscription_usage_total(
+                language,
+                traffic(total),
+            )));
         }
     }
     if let Some(expire) = expire {
-        parts.push(if expire == 0 {
-            messages::subscription_no_expiry(language).into()
+        let (label, expiry_date) = if expire == 0 {
+            (messages::subscription_no_expiry(language).into(), None)
         } else {
-            messages::subscription_expiry(
+            let expiry_date = date(expire, "%Y-%m-%d");
+            let label = messages::subscription_expiry(
                 language,
-                date(expire, "%Y-%m-%d")
-                    .unwrap_or_else(|| messages::subscription_unknown_date(language).into()),
-            )
+                expiry_date
+                    .as_deref()
+                    .unwrap_or_else(|| messages::subscription_unknown_date(language)),
+            );
+            (label, expiry_date)
+        };
+        parts.push(SummaryPart::Expiry {
+            label,
+            date: expiry_date,
         });
     }
     if parts.is_empty() {
-        parts.push(messages::subscription_metadata_unavailable(language).into());
+        parts.push(SummaryPart::Usage(
+            messages::subscription_metadata_unavailable(language).into(),
+        ));
     }
     if updated != 0
         && let Some(updated) = date(updated, "%m-%d %H:%M")
     {
-        parts.push(messages::subscription_metadata_updated(language, updated));
+        parts.push(SummaryPart::Updated(
+            messages::subscription_metadata_updated(language, updated),
+        ));
     }
-    parts.join(" · ")
+    parts
 }
 
 #[cfg(test)]

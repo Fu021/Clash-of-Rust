@@ -4,6 +4,7 @@ use super::{
     rows, table,
 };
 use crate::args::Args;
+use crate::messages;
 use anyhow::Result;
 use clash_client_core::{
     config::Language,
@@ -34,11 +35,11 @@ fn builtin(row: &Value) -> bool {
 }
 fn group_kind(row: &Value, language: Language) -> String {
     clean(match kind(row) {
-        "Selector" => language.text("手动选择", "Manual selection"),
-        "URLTest" => language.text("自动测速", "Automatic testing"),
-        "Fallback" => language.text("故障转移", "Fallback"),
-        "LoadBalance" => language.text("负载均衡", "Load balancing"),
-        "Relay" => language.text("链式代理", "Relay"),
+        "Selector" => messages::output_group_selector(language),
+        "URLTest" => messages::output_group_url_test(language),
+        "Fallback" => messages::output_group_fallback(language),
+        "LoadBalance" => messages::output_group_load_balance(language),
+        "Relay" => messages::output_group_relay(language),
         other => other,
     })
 }
@@ -58,11 +59,7 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value, language: Language)
         };
         counts.0[status as usize] += 1;
     }
-    let total = counts.total();
-    let heading = match language {
-        Language::SimplifiedChinese => format!("IP 检测完成 · 共 {total} 项"),
-        Language::English => format!("IP check complete · Total {total}"),
-    };
+    let heading = messages::output_ip_check_complete(language, counts.total());
     let summary = counts.summary_in(language);
     if summary.is_empty() {
         writeln!(out, "{heading}")?;
@@ -103,11 +100,11 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value, language: Language)
     table::write_in(
         out,
         &[
-            language.text("项目", "Item"),
-            language.text("状态", "Status"),
-            language.text("结果", "Result"),
-            language.text("地区", "Region"),
-            language.text("耗时", "Duration"),
+            messages::output_column_item(language),
+            messages::output_column_status(language),
+            messages::output_column_result(language),
+            messages::output_column_region(language),
+            messages::output_column_duration(language),
         ],
         &cells,
         table::width(),
@@ -118,19 +115,12 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value, language: Language)
         .filter(|row| row.get("target_exit").is_some())
         .collect::<Vec<_>>();
     if !exits.is_empty() {
-        writeln!(
-            out,
-            "\n{}",
-            language.text(
-                "分流出口 · 同域探针（本应用内核的本次请求）",
-                "Service exits · Same-domain probes"
-            )
-        )?;
+        writeln!(out, "\n{}", messages::output_ip_service_exits(language))?;
         for row in exits {
             let exit = &row["target_exit"];
             let address = exit["ip"]
                 .as_str()
-                .unwrap_or_else(|| language.text("未确认", "Unconfirmed"));
+                .unwrap_or_else(|| messages::output_unconfirmed(language));
             field_in(
                 out,
                 &text_in(row, "name", language),
@@ -145,31 +135,20 @@ pub(super) fn ip_results(out: &mut dyn Write, value: &Value, language: Language)
 pub(super) fn nodes(out: &mut dyn Write, args: &Args, value: &Value) -> Result<()> {
     let language = args.language();
     if value["offline"] == true {
-        writeln!(
-            out,
-            "{}\n",
-            language.text(
-                "内核未运行；显示已保存订阅，未测速。远程节点提供者及动态筛选成员未展开。",
-                "Core stopped; showing saved subscriptions without latency tests. Remote providers and dynamic members are not expanded."
-            )
-        )?;
+        writeln!(out, "{}\n", messages::output_nodes_offline(language))?;
     }
     let entries = rows(&value["items"]);
     if let Some(name) = args.positional.first() {
         field_in(
             out,
-            language.text("策略组", "Group"),
+            messages::output_node_group(language),
             &clean(name),
             language,
         )?;
         writeln!(out)?;
     }
     if entries.is_empty() {
-        writeln!(
-            out,
-            "{}",
-            language.text("未找到匹配的节点或策略组", "No matching nodes or groups")
-        )?;
+        writeln!(out, "{}", messages::output_nodes_no_match(language))?;
     }
     let selected_column = !args.positional.is_empty();
     for section in ["groups", "nodes", "builtins"] {
@@ -197,10 +176,10 @@ pub(super) fn nodes(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 ]),
                 _ => line.push(
                     match row["name"].as_str().unwrap_or("") {
-                        "DIRECT" => language.text("直连", "Direct"),
-                        "REJECT" => language.text("拦截连接", "Reject connections"),
-                        "REJECT-DROP" => language.text("丢弃连接", "Drop connections"),
-                        _ => language.text("内核内置动作", "Built-in action"),
+                        "DIRECT" => messages::output_builtin_direct(language),
+                        "REJECT" => messages::output_builtin_reject(language),
+                        "REJECT-DROP" => messages::output_builtin_drop(language),
+                        _ => messages::output_builtin_action(language),
                     }
                     .into(),
                 ),
@@ -208,7 +187,7 @@ pub(super) fn nodes(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             if selected_column {
                 line.push(
                     if row["selected"] == true {
-                        language.text("当前", "Current")
+                        messages::output_current(language)
                     } else {
                         "—"
                     }
@@ -221,33 +200,34 @@ pub(super) fn nodes(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             continue;
         }
         let heading = match section {
-            "groups" => language.text("策略组", "Groups"),
-            "nodes" => language.text("节点", "Nodes"),
-            _ => language.text("内置出站", "Built-in routes"),
+            "groups" => messages::output_node_groups(language),
+            "nodes" => messages::output_nodes_heading(language),
+            _ => messages::output_builtin_routes(language),
         };
-        match language {
-            Language::SimplifiedChinese => writeln!(out, "{heading}（{}）", cells.len())?,
-            Language::English => writeln!(out, "{heading} ({})", cells.len())?,
-        }
+        writeln!(
+            out,
+            "{}",
+            messages::output_with_detail(language, cells.len(), heading)
+        )?;
         let mut headers = match section {
             "groups" => vec![
-                language.text("名称", "Name"),
-                language.text("类型", "Type"),
-                language.text("当前选择", "Selected"),
-                language.text("成员数", "Members"),
+                messages::output_column_name(language),
+                messages::output_column_type(language),
+                messages::output_column_selected(language),
+                messages::output_column_members(language),
             ],
             "nodes" => vec![
-                language.text("名称", "Name"),
-                language.text("协议", "Protocol"),
-                language.text("延迟", "Latency"),
+                messages::output_column_name(language),
+                messages::output_column_protocol(language),
+                messages::output_column_latency(language),
             ],
             _ => vec![
-                language.text("名称", "Name"),
-                language.text("作用", "Action"),
+                messages::output_column_name(language),
+                messages::output_column_action(language),
             ],
         };
         if selected_column {
-            headers.push(language.text("状态", "Status"));
+            headers.push(messages::output_column_status(language));
         }
         table::write_in(out, &headers, &cells, table::width(), language)?;
         writeln!(out)?;
@@ -265,8 +245,8 @@ pub(super) fn delays(out: &mut dyn Write, args: &Args, value: &Value) -> Result<
         table::write_in(
             out,
             &[
-                language.text("节点 / 策略组", "Node / group"),
-                language.text("延迟", "Latency"),
+                messages::output_column_node_or_group(language),
+                messages::output_column_latency(language),
             ],
             &cells,
             table::width(),
@@ -277,43 +257,18 @@ pub(super) fn delays(out: &mut dyn Write, args: &Args, value: &Value) -> Result<
             .filter(|v| v.as_u64().is_some_and(|n| n > 0))
             .count();
         let failed = map.len() - available;
-        match language {
-            Language::SimplifiedChinese => {
-                writeln!(out, "测速完成：{available} 项可达，{failed} 项超时或不可达")?
-            }
-            Language::English => writeln!(
-                out,
-                "Speed test complete: {available} reachable, {failed} timed out or unreachable"
-            )?,
-        }
+        writeln!(
+            out,
+            "{}",
+            messages::output_delay_summary(language, available, failed)
+        )?;
         if (args.flag("all") || args.get("group").is_some())
             && !map.is_empty()
             && map.values().all(|delay| delay.as_u64() == Some(0))
         {
-            writeln!(
-                out,
-                "{}",
-                language.text(
-                    "全部节点不可达。请更换节点；更新失败后会自动尝试直连。",
-                    "All nodes are unreachable. Choose another node; updates retry directly after a failure."
-                )
-            )?;
-            writeln!(
-                out,
-                "{}",
-                language.text(
-                    "接管状态：cor status · 关闭代理：cor proxy off",
-                    "Status: cor status · Turn off proxy: cor proxy off"
-                )
-            )?;
-            writeln!(
-                out,
-                "{}",
-                language.text(
-                    "导出诊断：cor diagnose --output cor-diagnose.json",
-                    "Export diagnostics: cor diagnose --output cor-diagnose.json"
-                )
-            )?;
+            writeln!(out, "{}", messages::output_delay_all_failed(language))?;
+            writeln!(out, "{}", messages::output_status_and_proxy_hint(language))?;
+            writeln!(out, "{}", messages::output_export_diagnosis_hint(language))?;
         }
     }
     Ok(())
@@ -322,11 +277,7 @@ pub(super) fn delays(out: &mut dyn Write, args: &Args, value: &Value) -> Result<
 pub(super) fn profiles(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> {
     let entries = rows(value);
     if entries.is_empty() {
-        writeln!(
-            out,
-            "{}",
-            language.text("未找到匹配的订阅", "No matching subscriptions")
-        )?;
+        writeln!(out, "{}", messages::output_profiles_no_match(language))?;
     }
     for (index, row) in entries.iter().enumerate() {
         if index > 0 {
@@ -336,7 +287,7 @@ pub(super) fn profiles(out: &mut dyn Write, value: &Value, language: Language) -
             out,
             "{}{}",
             if row["active"] == true {
-                language.text("[当前] ", "[Current] ")
+                messages::output_profile_current_prefix(language)
             } else {
                 ""
             },
@@ -345,21 +296,22 @@ pub(super) fn profiles(out: &mut dyn Write, value: &Value, language: Language) -
         if let Some(owner) = row["owner"].as_str() {
             let owner = clean(owner);
             let uid = text_in(row, "uid", language);
-            match language {
-                Language::SimplifiedChinese => writeln!(out, "  所属用户：{owner}（UID {uid}）")?,
-                Language::English => writeln!(out, "  Owner: {owner} (UID {uid})")?,
-            }
+            writeln!(
+                out,
+                "  {}",
+                messages::output_profile_owner(language, owner, uid)
+            )?;
             field_in(
                 out,
-                language.text("  数据目录", "  Data directory"),
+                &format!("  {}", messages::output_profile_data_directory(language)),
                 &text_in(row, "data_dir", language),
                 language,
             )?;
         }
         for (label, key) in [
             ("ID", "id"),
-            (language.text("来源", "Source"), "source"),
-            (language.text("更新", "Updated"), "updated"),
+            (messages::output_column_source(language), "source"),
+            (messages::output_profile_updated(language), "updated"),
         ] {
             field_in(
                 out,
@@ -376,10 +328,11 @@ pub(super) fn profiles(out: &mut dyn Write, value: &Value, language: Language) -
             )?;
         }
     }
-    match language {
-        Language::SimplifiedChinese => writeln!(out, "共 {} 个订阅", entries.len())?,
-        Language::English => writeln!(out, "{} subscriptions", entries.len())?,
-    }
+    writeln!(
+        out,
+        "{}",
+        messages::output_profile_total(language, entries.len())
+    )?;
     Ok(())
 }
 
@@ -391,20 +344,19 @@ pub(super) fn rules(out: &mut dyn Write, value: &Value, language: Language) -> R
             vec![
                 text_in(row, "position", language),
                 if row["enabled"] == true {
-                    language.text("启用", "Enabled")
+                    messages::output_rule_enabled(language)
                 } else {
-                    language.text("停用", "Disabled")
+                    messages::output_rule_disabled(language)
                 }
                 .into(),
-                format!(
-                    "{}{}",
-                    text_in(row, "source", language),
-                    if row["duplicate"] == true {
-                        language.text("（重复）", " (duplicate)")
-                    } else {
-                        ""
-                    }
-                ),
+                if row["duplicate"] == true {
+                    messages::output_rule_duplicate_source(
+                        language,
+                        text_in(row, "source", language),
+                    )
+                } else {
+                    text_in(row, "source", language)
+                },
                 text_in(row, "rule", language),
             ]
         })
@@ -412,10 +364,10 @@ pub(super) fn rules(out: &mut dyn Write, value: &Value, language: Language) -> R
     table::write_in(
         out,
         &[
-            language.text("序号", "Position"),
-            language.text("状态", "Status"),
-            language.text("来源", "Source"),
-            language.text("规则", "Rule"),
+            messages::output_column_position(language),
+            messages::output_column_status(language),
+            messages::output_column_source(language),
+            messages::output_column_rule(language),
         ],
         &cells,
         table::width(),
@@ -426,14 +378,7 @@ pub(super) fn rules(out: &mut dyn Write, value: &Value, language: Language) -> R
 
 pub(super) fn connections(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> {
     if value["offline"] == true {
-        writeln!(
-            out,
-            "{}",
-            language.text(
-                "内核未运行，没有活动连接；查询未启动后台或内核。",
-                "Core stopped; no active connections. This query did not start the core."
-            )
-        )?;
+        writeln!(out, "{}", messages::output_connections_offline(language))?;
         return table::page_in(out, value, language);
     }
     let entries: Vec<_> = if value.get("items").is_some() {
@@ -442,46 +387,35 @@ pub(super) fn connections(out: &mut dyn Write, value: &Value, language: Language
         vec![value]
     };
     if entries.is_empty() {
-        writeln!(
-            out,
-            "{}",
-            language.text("未找到匹配的连接", "No matching connections")
-        )?;
+        writeln!(out, "{}", messages::output_connections_no_match(language))?;
     }
     for (index, row) in entries.iter().enumerate() {
         if index > 0 {
             writeln!(out)?;
         }
-        match language {
-            Language::SimplifiedChinese => writeln!(
-                out,
-                "{}（{}）",
-                text_in(row, "name", language),
-                text_in(row, "network", language)
-            )?,
-            Language::English => writeln!(
-                out,
-                "{} ({})",
-                text_in(row, "name", language),
-                text_in(row, "network", language)
-            )?,
-        }
+        writeln!(
+            out,
+            "{}",
+            messages::output_with_detail(
+                language,
+                text_in(row, "network", language),
+                text_in(row, "name", language)
+            )
+        )?;
         field_in(out, "  ID", &text_in(row, "id", language), language)?;
+        let rule = text_in(row, "rule", language);
+        let rule = if let Some(payload) = row["rule_payload"]
+            .as_str()
+            .filter(|payload| !payload.is_empty())
+        {
+            messages::output_with_detail(language, clean(payload), rule)
+        } else {
+            rule
+        };
         field_in(
             out,
-            language.text("  规则", "  Rule"),
-            &format!(
-                "{}{}",
-                text_in(row, "rule", language),
-                row["rule_payload"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .map(|s| match language {
-                        Language::SimplifiedChinese => format!("（{}）", clean(s)),
-                        Language::English => format!(" ({})", clean(s)),
-                    })
-                    .unwrap_or_default()
-            ),
+            &format!("  {}", messages::output_column_rule(language)),
+            &rule,
             language,
         )?;
         let chain = rows(&row["chain"])
@@ -493,7 +427,7 @@ pub(super) fn connections(out: &mut dyn Write, value: &Value, language: Language
             .join(" → ");
         field_in(
             out,
-            language.text("  线路", "  Route"),
+            &format!("  {}", messages::output_connection_route(language)),
             if chain.is_empty() { "—" } else { &chain },
             language,
         )?;
@@ -501,19 +435,16 @@ pub(super) fn connections(out: &mut dyn Write, value: &Value, language: Language
         let download_rate = text_in(row, "download_rate", language);
         let upload = text_in(row, "upload", language);
         let download = text_in(row, "download", language);
-        match language {
-            Language::SimplifiedChinese => {
-                writeln!(out, "  速度：上传 {upload_rate} / 下载 {download_rate}")?;
-                writeln!(out, "  流量：上传 {upload} / 下载 {download}")?;
-            }
-            Language::English => {
-                writeln!(
-                    out,
-                    "  Speed: Upload {upload_rate} / Download {download_rate}"
-                )?;
-                writeln!(out, "  Traffic: Upload {upload} / Download {download}")?;
-            }
-        }
+        writeln!(
+            out,
+            "  {}",
+            messages::output_connection_speed(language, download_rate, upload_rate)
+        )?;
+        writeln!(
+            out,
+            "  {}",
+            messages::output_connection_traffic(language, download, upload)
+        )?;
         if value.get("items").is_none() {
             for key in [
                 "host",

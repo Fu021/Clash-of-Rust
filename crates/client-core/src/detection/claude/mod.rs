@@ -1045,15 +1045,8 @@ mod tests {
             assert!(empty.context_only());
         }
         assert_eq!(Route::default().display_title(), "连接检查");
-        let finding = audit::Finding {
-            level: audit::Level::Incomplete,
-            field: " ".into(),
-            path: "fixture".into(),
-            value: String::new(),
-            reason: "未读取".into(),
-            advice: String::new(),
-        };
-        assert_eq!(finding.display_title(), "项目配置");
+        let audit = audit::scan_available(None, &audit::Scan::default());
+        assert_eq!(audit.findings[0].display_title(), "扫描");
     }
     #[test]
     fn traces_require_host_country_and_public_ip() {

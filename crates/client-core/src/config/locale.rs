@@ -142,7 +142,7 @@ impl Language {
     pub fn text<'a>(self, chinese: &'a str, english: &'a str) -> &'a str {
         match self {
             Self::SimplifiedChinese => chinese,
-            Self::English => english,
+            _ => english,
         }
     }
 

@@ -389,7 +389,7 @@ fn notice(state: &State) -> (String, Tone) {
                 Language::SimplifiedChinese => {
                     format!("保存{title}为「{value}」？Enter 确认 · Esc 取消{authorization}")
                 }
-                Language::English => {
+                _ => {
                     format!("Save {title} as {value}? Enter confirm · Esc cancel{authorization}")
                 }
             };
@@ -400,7 +400,7 @@ fn notice(state: &State) -> (String, Tone) {
                 "执行 cor {}？Enter 确认 · Esc 取消；授权和结果将在普通终端显示",
                 operation.path
             ),
-            Language::English => format!(
+            _ => format!(
                 "Run cor {}? Enter confirm · Esc cancel; authorization and results appear in the terminal",
                 operation.path
             ),
@@ -444,7 +444,7 @@ fn notice(state: &State) -> (String, Tone) {
                 },
                 available.version,
             ),
-            Language::English => format!(
+            _ => format!(
                 "{}Install {} {}? Confirm and authorize in the terminal.",
                 if available.preview {
                     "Pre-releases may cause crashes, network problems or configuration incompatibilities. Back up your configuration before installing. "
@@ -466,7 +466,7 @@ fn notice(state: &State) -> (String, Tone) {
                 "切换 {} → {}？ Enter 确认 · Esc 取消",
                 target.group, target.node
             ),
-            Language::English => format!(
+            _ => format!(
                 "Switch {} → {}? Enter confirm · Esc cancel",
                 target.group, target.node
             ),

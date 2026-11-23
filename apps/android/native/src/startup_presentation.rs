@@ -1,12 +1,9 @@
+use crate::messages;
 use clash_mobile_runtime::core::{config::Language, error_message};
 
 pub(crate) fn failure(error: &str, detail: Option<&str>, language: Language) -> String {
     let error = error_message::localize(error, language);
-    let mut message = format!(
-        "{}{error}\n{}",
-        language.text("应用初始化失败：", "App initialization failed: "),
-        language.text("请检查问题后重试。", "Check the problem and retry.")
-    );
+    let mut message = messages::startup_failed(language, error);
     if let Some(detail) = detail {
         message.push_str("\n\n");
         message.push_str(&error_message::localize(detail, language));

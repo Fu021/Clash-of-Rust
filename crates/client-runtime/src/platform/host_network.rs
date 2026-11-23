@@ -1,3 +1,4 @@
+use crate::messages;
 use clash_client_core::config::Language;
 use serde_json::{Value, json};
 
@@ -467,15 +468,12 @@ pub fn holder_summary_in(routes: &Value, language: Language) -> Option<String> {
             .unwrap_or_default();
         let owners = holder_labels(holders);
         evidence.push(if owners.is_empty() {
-            format!(
-                "{interface}{}",
-                language.text("：未找到持有进程", ": No holder found")
-            )
+            messages::tun_holders_missing(language, interface)
         } else {
-            format!(
-                "{interface}{}{}",
-                language.text("：", ": "),
-                owners.join(language.text("、", ", "))
+            messages::tun_holders_summary(
+                language,
+                interface,
+                owners.join(messages::tun_holder_list_separator(language)),
             )
         });
     }
@@ -484,13 +482,13 @@ pub fn holder_summary_in(routes: &Value, language: Language) -> Option<String> {
     }
     let state = match routes["tun_holders"]["state"].as_str() {
         Some("complete") => "",
-        Some("partial") => language.text("；扫描不完整", "; Scan incomplete"),
-        Some("unavailable") => language.text("；扫描不可用", "; Scan unavailable"),
+        Some("partial") => messages::tun_scan_partial_suffix(language),
+        Some("unavailable") => messages::tun_scan_unavailable_suffix(language),
         _ => "",
     };
     Some(format!(
         "{}{state}",
-        evidence.join(language.text("；", "; "))
+        evidence.join(messages::tun_summary_separator(language))
     ))
 }
 
@@ -548,52 +546,27 @@ pub fn notice_in(routes: &Value, language: Language) -> Option<String> {
             .unwrap_or_default();
         let owners = holder_labels(holders);
         evidence.push(if !owners.is_empty() {
-            format!(
-                "{interface}{}{}",
-                language.text("；持有进程 ", "; Holders: "),
-                owners.join(language.text("、", ", "))
+            messages::tun_holders_found(
+                language,
+                interface,
+                owners.join(messages::tun_holder_list_separator(language)),
             )
         } else if routes["holder_scope"] == "all_users" {
             match routes["tun_holders"]["state"].as_str() {
-                Some("complete") => format!(
-                    "{interface}{}",
-                    language.text(
-                        "；跨用户扫描未找到持有进程",
-                        "; No holder found in the all-user scan"
-                    )
-                ),
-                _ => format!(
-                    "{interface}{}",
-                    language.text("；跨用户持有进程读取不完整", "; All-user scan incomplete")
-                ),
+                Some("complete") => messages::tun_holders_all_users_missing(language, interface),
+                _ => messages::tun_holders_all_users_partial(language, interface),
             }
         } else if routes["tun_holders"]["state"] == "complete" {
-            format!(
-                "{interface}{}",
-                language.text(
-                    "；当前用户范围未发现持有进程，跨用户检查请运行 sudo cor status --all-users",
-                    "; No holder found for the current user; run sudo cor status --all-users to check all users"
-                )
-            )
+            messages::tun_holders_current_user_missing(language, interface)
         } else {
-            format!(
-                "{interface}{}",
-                language.text(
-                    "；当前用户持有进程读取不完整，跨用户检查请运行 sudo cor status --all-users",
-                    "; Current-user scan incomplete; run sudo cor status --all-users to check all users"
-                )
-            )
+            messages::tun_holders_current_user_partial(language, interface)
         });
     }
     if evidence.is_empty() {
         if !bypass {
             return None;
         }
-        evidence.push(
-            language
-                .text("未能读取具体接口", "Interface unavailable")
-                .into(),
-        );
+        evidence.push(messages::tun_interface_unavailable(language).into());
     }
     let uncertain = warnings
         .iter()
@@ -602,36 +575,20 @@ pub fn notice_in(routes: &Value, language: Language) -> Option<String> {
         .iter()
         .any(|warning| warning == "tun_current_uid_route_bypass");
     let message = if uid_bypass {
-        language.text(
-            "检测到 TUN 路由，但当前用户的 TCP/443 样本仍绕过 TUN",
-            "TUN route detected, but the current user's TCP/443 sample bypasses it",
-        )
+        messages::tun_uid_route_bypass(language)
     } else if bypass && external {
-        language.text(
-            "检测到 TUN 路由异常，同时存在外部 TUN 接管",
-            "TUN routing issue and an external TUN detected",
-        )
+        messages::tun_route_bypass_external(language)
     } else if bypass {
-        language.text(
-            "TUN 已开启，但示例路由显示仍有流量绕过 TUN",
-            "TUN is enabled, but sampled routes bypass it",
-        )
+        messages::tun_route_bypass(language)
     } else if uncertain {
-        language.text(
-            "检测到流量经过 TUN，本程序代理状态暂时无法读取",
-            "Traffic uses TUN; this application's proxy status is unavailable",
-        )
+        messages::tun_proxy_status_unavailable(language)
     } else {
-        language.text(
-            "检测到流量经过外部 TUN，本程序的“关闭代理”无法关闭它",
-            "Traffic uses an external TUN; this app cannot turn it off",
-        )
+        messages::tun_external(language)
     };
-    Some(format!(
-        "{message}{}{}{}",
-        language.text("（", " ("),
-        evidence.join(language.text("；", "; ")),
-        language.text("）。", ").")
+    Some(messages::tun_notice(
+        language,
+        evidence.join(messages::tun_summary_separator(language)),
+        message,
     ))
 }
 

@@ -15,10 +15,10 @@ Unicode true
 !define APP_ARCH "x64"
 !endif
 !ifndef PAYLOAD
-  !define PAYLOAD "..\bundle"
+  !define PAYLOAD "../bundle"
 !endif
 !ifndef OUTPUT
-  !define OUTPUT "..\dist\Clash-of-Rust-${APP_VERSION}-windows-${APP_ARCH}-setup.exe"
+  !define OUTPUT "../dist/Clash-of-Rust-${APP_VERSION}-windows-${APP_ARCH}-setup.exe"
 !endif
   !define PRODUCT_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClashOfRust"
   !define LEGACY_KEY "${PRODUCT_KEY}"
@@ -41,32 +41,33 @@ SetCompressor /SOLID lzma
 ShowInstDetails show
 ShowUninstDetails show
 VIProductVersion "${APP_NUMERIC_VERSION}"
-VIAddVersionKey /LANG=2052 "ProductName" "Clash of Rust"
-VIAddVersionKey /LANG=2052 "FileDescription" "Clash of Rust Windows 安装程序"
-VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"
-VIAddVersionKey /LANG=2052 "ProductVersion" "${APP_VERSION}"
-VIAddVersionKey /LANG=2052 "LegalCopyright" "Clash of Rust contributors · GPL-3.0-only"
+
+!macro InstallerVersionInfo LANGUAGE DESCRIPTION
+  VIAddVersionKey "/LANG=${LANGUAGE}" "ProductName" "Clash of Rust"
+  VIAddVersionKey "/LANG=${LANGUAGE}" "FileDescription" "${DESCRIPTION}"
+  VIAddVersionKey "/LANG=${LANGUAGE}" "FileVersion" "${APP_VERSION}"
+  VIAddVersionKey "/LANG=${LANGUAGE}" "ProductVersion" "${APP_VERSION}"
+  VIAddVersionKey "/LANG=${LANGUAGE}" "LegalCopyright" "Clash of Rust contributors · GPL-3.0-only"
+!macroend
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "${__FILEDIR__}\..\resources\icons\app.ico"
-!define MUI_UNICON "${__FILEDIR__}\..\resources\icons\app.ico"
+!define MUI_ICON "${__FILEDIR__}/../resources/icons/app.ico"
+!define MUI_UNICON "${__FILEDIR__}/../resources/icons/app.ico"
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "${PAYLOAD}\LICENSE"
+!insertmacro MUI_PAGE_LICENSE "${PAYLOAD}/LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
   !define MUI_FINISHPAGE_RUN
   !define MUI_FINISHPAGE_RUN_FUNCTION LaunchClient
-  !define MUI_FINISHPAGE_RUN_TEXT "立即启动 Clash of Rust"
+  !define MUI_FINISHPAGE_RUN_TEXT "$(InstallerLaunch)"
   !define MUI_FINISHPAGE_SHOWREADME ""
-  !define MUI_FINISHPAGE_SHOWREADME_TEXT "添加快捷方式"
+  !define MUI_FINISHPAGE_SHOWREADME_TEXT "$(InstallerAddShortcuts)"
   !define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateShortcuts
 !insertmacro MUI_PAGE_FINISH
 UninstPage custom un.DataOptions un.DataOptionsLeave
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
-!insertmacro MUI_LANGUAGE "SimpChinese"
-
 Var ExistingDir
 Var ResultCode
 Var LegacyInstall
@@ -86,28 +87,31 @@ Var InstallTarget
 Var InstallWin32Error
 Var InstallFailureCode
 
+!include /CHARSET=UTF8 "${__FILEDIR__}/../translations/windows/nsis/en.nsh"
+!include /CHARSET=UTF8 "${__FILEDIR__}/../translations/windows/nsis/zh-CN.nsh"
+
 !macro Payload ACTION
-  !insertmacro ${ACTION} "${PAYLOAD}\clash-of-rust.exe" "." "clash-of-rust.exe"
-  !insertmacro ${ACTION} "${PAYLOAD}\clash-desktop-ui.exe" "." "clash-desktop-ui.exe"
-  !insertmacro ${ACTION} "${PAYLOAD}\cor.exe" "." "cor.exe"
-  !insertmacro ${ACTION} "${PAYLOAD}\clash-tun-launcher.exe" "." "clash-tun-launcher.exe"
-  !insertmacro ${ACTION} "${PAYLOAD}\LICENSE" "." "LICENSE"
-  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\icons\app.ico" "resources" "clash-of-rust-${APP_VERSION}.ico"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\mihomo.exe" "resources" "mihomo.exe"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\GeoIP.dat" "resources" "GeoIP.dat"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\GeoSite.dat" "resources" "GeoSite.dat"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\Country.mmdb" "resources" "Country.mmdb"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\ASN.mmdb" "resources" "ASN.mmdb"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\geodata.json" "resources" "geodata.json"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\core.json" "resources" "core.json"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\default.yaml" "resources" "default.yaml"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\settings-defaults.json" "resources" "settings-defaults.json"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\THIRD-PARTY-NOTICES.txt" "resources" "THIRD-PARTY-NOTICES.txt"
-  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\fonts\LICENSE.txt" "resources" "SourceHanSans-LICENSE.txt"
-  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\fonts\LICENSE-NotoEmoji.txt" "resources" "NotoEmoji-LICENSE.txt"
-  !insertmacro ${ACTION} "${__FILEDIR__}\..\resources\countries\LICENSE-Unicode.txt" "resources" "Unicode-LICENSE.txt"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\ip-check\LICENSE" "resources/ip-check" "LICENSE"
-  !insertmacro ${ACTION} "${PAYLOAD}\resources\ip-check\SOURCE.md" "resources/ip-check" "SOURCE.md"
+  !insertmacro ${ACTION} "${PAYLOAD}/clash-of-rust.exe" "." "clash-of-rust.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}/clash-desktop-ui.exe" "." "clash-desktop-ui.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}/cor.exe" "." "cor.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}/clash-tun-launcher.exe" "." "clash-tun-launcher.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}/LICENSE" "." "LICENSE"
+  !insertmacro ${ACTION} "${__FILEDIR__}/../resources/icons/app.ico" "resources" "clash-of-rust-${APP_VERSION}.ico"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/mihomo.exe" "resources" "mihomo.exe"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/GeoIP.dat" "resources" "GeoIP.dat"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/GeoSite.dat" "resources" "GeoSite.dat"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/Country.mmdb" "resources" "Country.mmdb"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/ASN.mmdb" "resources" "ASN.mmdb"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/geodata.json" "resources" "geodata.json"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/core.json" "resources" "core.json"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/default.yaml" "resources" "default.yaml"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/settings-defaults.json" "resources" "settings-defaults.json"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/THIRD-PARTY-NOTICES.txt" "resources" "THIRD-PARTY-NOTICES.txt"
+  !insertmacro ${ACTION} "${__FILEDIR__}/../resources/fonts/LICENSE.txt" "resources" "SourceHanSans-LICENSE.txt"
+  !insertmacro ${ACTION} "${__FILEDIR__}/../resources/fonts/LICENSE-NotoEmoji.txt" "resources" "NotoEmoji-LICENSE.txt"
+  !insertmacro ${ACTION} "${__FILEDIR__}/../resources/countries/LICENSE-Unicode.txt" "resources" "Unicode-LICENSE.txt"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/ip-check/LICENSE" "resources/ip-check" "LICENSE"
+  !insertmacro ${ACTION} "${PAYLOAD}/resources/ip-check/SOURCE.md" "resources/ip-check" "SOURCE.md"
 !macroend
 
 !macro PreflightFile SOURCE DIRECTORY NAME
@@ -156,7 +160,7 @@ Function FailInstallWrite
   Call RestoreUpdate
   SetErrorLevel $InstallFailureCode
   IfSilent write_failed_silent
-    MessageBox MB_OK|MB_ICONSTOP "安装未完成：$InstallFile 无法写入。请检查文件占用、磁盘空间与写入权限后重试。"
+    MessageBox MB_OK|MB_ICONSTOP "$(InstallerWriteFailed)"
   write_failed_silent:
   Abort
 FunctionEnd
@@ -212,7 +216,7 @@ Function LaunchClient
     StrCpy $ResultCode 1
   ${EndIf}
   ${If} $ResultCode != 0
-    MessageBox MB_OK|MB_ICONINFORMATION "安装已完成，请从开始菜单启动 Clash of Rust。"
+    MessageBox MB_OK|MB_ICONINFORMATION "$(InstallerLaunchFromStart)"
   ${EndIf}
 FunctionEnd
 
@@ -222,7 +226,7 @@ FunctionEnd
     System::Call 'kernel32::CloseHandle(p r0)'
     IfSilent ${PREFIX}silent ${PREFIX}interactive
     ${PREFIX}interactive:
-      MessageBox MB_OK|MB_ICONEXCLAMATION "Clash of Rust 正在运行。请先退出程序，再重新运行安装或卸载。"
+      MessageBox MB_OK|MB_ICONEXCLAMATION "$(InstallerClientRunning)"
     ${PREFIX}silent:
       SetErrorLevel 3
       Abort
@@ -232,13 +236,13 @@ FunctionEnd
 Function .onInit
 !if "${APP_ARCH}" == "arm64"
   ${IfNot} ${IsNativeARM64}
-    MessageBox MB_OK|MB_ICONSTOP "此安装包需要 ARM64 Windows。"
+    MessageBox MB_OK|MB_ICONSTOP "$(InstallerRequiresArm64)"
     SetErrorLevel 4
     Abort
   ${EndIf}
 !else if "${APP_ARCH}" == "x64"
   ${IfNot} ${RunningX64}
-    MessageBox MB_OK|MB_ICONSTOP "此安装包需要 64 位 Windows。"
+    MessageBox MB_OK|MB_ICONSTOP "$(InstallerRequiresX64)"
     SetErrorLevel 4
     Abort
   ${EndIf}
@@ -297,7 +301,7 @@ Function .onInit
       SetErrorLevel 2
       Abort
     reinstall_prompt:
-      MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "检测到已安装 Clash of Rust。是否先卸载现有版本，再继续安装？$\r$\n$\r$\n订阅和个人设置将保留。选择“否”将取消本次安装。" IDYES uninstall_existing
+      MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "$(InstallerConfirmReplace)" IDYES uninstall_existing
       SetErrorLevel 2
       Abort
     uninstall_existing:
@@ -405,7 +409,7 @@ Function ShutdownExisting
   shutdown_failed:
     IfSilent shutdown_silent shutdown_prompt
     shutdown_prompt:
-      MessageBox MB_OK|MB_ICONSTOP "现有客户端未能正常退出。请先从托盘退出程序，再重新运行安装包。未开始卸载或安装。"
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerShutdownFailed)"
     shutdown_silent:
     SetErrorLevel 5
     Abort
@@ -432,7 +436,7 @@ Function RemoveExisting
       RMDir "$ExistingDir"
       Goto removal_done
     uninstall_failed:
-      MessageBox MB_OK|MB_ICONSTOP "无法完整卸载现有版本。请退出程序并手动卸载后重试。未开始安装新版本。"
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerRemoveOldFailed)"
       SetErrorLevel 5
       Abort
   ${EndIf}
@@ -568,20 +572,20 @@ Function un.onInit
 FunctionEnd
 
 Function un.DataOptions
-  !insertmacro MUI_HEADER_TEXT "配置和数据" "选择是否同时删除当前 Windows 用户的 Clash of Rust 数据。"
+  !insertmacro MUI_HEADER_TEXT "$(InstallerDataTitle)" "$(InstallerDataDescription)"
   nsDialogs::Create 1018
   Pop $DataOptionsDialog
   ${If} $DataOptionsDialog == error
     Abort
   ${EndIf}
-  ${NSD_CreateCheckbox} 0 12u 100% 14u "删除所有配置和数据"
+  ${NSD_CreateCheckbox} 0 12u 100% 14u "$(InstallerDeleteData)"
   Pop $DeleteDataCheckbox
   ${NSD_SetState} $DeleteDataCheckbox $DeleteUserData
-  ${NSD_CreateLabel} 0 40u 100% 14u "勾选后会删除以下目录："
+  ${NSD_CreateLabel} 0 40u 100% 14u "$(InstallerDeleteDirectory)"
   Pop $0
   ${If} $UserDataDir == ""
     EnableWindow $DeleteDataCheckbox 0
-    ${NSD_CreateLabel} 0 62u 100% 24u "无法确定数据目录，将保留配置和数据。"
+    ${NSD_CreateLabel} 0 62u 100% 24u "$(InstallerKeepUnknownDirectory)"
     Pop $0
   ${Else}
     ${NSD_CreateLabel} 0 62u 100% 24u "$UserDataDir"
@@ -609,7 +613,7 @@ Function un.RemoveUserData
   ${If} ${Errors}
     IfSilent data_remove_failed data_remove_prompt
     data_remove_prompt:
-      MessageBox MB_OK|MB_ICONSTOP "部分配置或数据无法删除，卸载未完成。请关闭占用文件的程序后重试。$\r$\n$\r$\n$UserDataDir"
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerDeleteDataFailed)"
     data_remove_failed:
       SetErrorLevel 7
       Abort
@@ -617,11 +621,17 @@ Function un.RemoveUserData
   data_removed:
 FunctionEnd
 
+!macro DeleteUninstallShortcuts
+  Delete "$SMPROGRAMS\Clash of Rust\${INSTALLER_UNINSTALL_SHORTCUT_EN}.lnk"
+  Delete "$SMPROGRAMS\Clash of Rust\${INSTALLER_UNINSTALL_SHORTCUT_ZH_CN}.lnk"
+!macroend
+
 Function CreateShortcuts
   SetShellVarContext all
   CreateDirectory "$SMPROGRAMS\Clash of Rust"
   CreateShortcut "$SMPROGRAMS\Clash of Rust\Clash of Rust.lnk" "$INSTDIR\clash-of-rust.exe" "" "$INSTDIR\resources\clash-of-rust-${APP_VERSION}.ico" 0
-  CreateShortcut "$SMPROGRAMS\Clash of Rust\卸载 Clash of Rust.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\resources\clash-of-rust-${APP_VERSION}.ico" 0
+  !insertmacro DeleteUninstallShortcuts
+  CreateShortcut "$SMPROGRAMS\Clash of Rust\$(InstallerUninstallShortcut).lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\resources\clash-of-rust-${APP_VERSION}.ico" 0
   CreateShortcut "$DESKTOP\Clash of Rust.lnk" "$INSTDIR\clash-of-rust.exe" "" "$INSTDIR\resources\clash-of-rust-${APP_VERSION}.ico" 0
   System::Call 'shell32::SHChangeNotify(l 0x08000000, i 0, p 0, p 0)'
 FunctionEnd
@@ -636,14 +646,14 @@ Section "Uninstall"
     nsExec::ExecToLog '"$INSTDIR\cor.exe" --quiet --timeout 30 stop'
     Pop $0
     ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONSTOP "无法停止命令行后台，请先执行 cor stop 后重试卸载。"
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerStopCliFailed)"
       SetErrorLevel 6
       Abort
     ${EndIf}
     nsExec::ExecToLog '"$INSTDIR\cor.exe" --quiet --yes service remove'
     Pop $0
     ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONSTOP "无法清理命令行登录启动任务，请先执行 cor service remove --yes。"
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerRemoveCliAutostartFailed)"
       SetErrorLevel 6
       Abort
     ${EndIf}
@@ -651,7 +661,7 @@ Section "Uninstall"
   IfFileExists "$INSTDIR\clash-tun-launcher.exe" 0 service_removed
     ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-service-uninstall' $0
     ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONSTOP "无法移除网络助手，请关闭 TUN 后重试卸载。"
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerRemoveNetworkHelperFailed)"
       SetErrorLevel 6
       Abort
     ${EndIf}
@@ -660,7 +670,7 @@ Section "Uninstall"
     ${If} $0 == "$INSTDIR\clash-of-rust.exe"
       ExecWait '"$INSTDIR\clash-of-rust.exe" --autostart-remove' $0
       ${If} $0 != 0
-        MessageBox MB_OK|MB_ICONSTOP "无法清理登录启动任务，请检查任务计划程序服务后重试卸载。"
+        MessageBox MB_OK|MB_ICONSTOP "$(InstallerRemoveAutostartFailed)"
         SetErrorLevel 6
         Abort
       ${EndIf}
@@ -708,7 +718,7 @@ Section "Uninstall"
       DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClashOfRust"
     ${EndIf}
     Delete "$SMPROGRAMS\Clash of Rust\Clash of Rust.lnk"
-    Delete "$SMPROGRAMS\Clash of Rust\卸载 Clash of Rust.lnk"
+    !insertmacro DeleteUninstallShortcuts
     RMDir "$SMPROGRAMS\Clash of Rust"
   Call un.RemoveUserData
   DeleteRegKey ${PRODUCT_HIVE} "${PRODUCT_KEY}"
@@ -719,7 +729,7 @@ Section "Uninstall"
   uninstall_locked:
     IfSilent uninstall_locked_silent uninstall_locked_prompt
     uninstall_locked_prompt:
-      MessageBox MB_OK|MB_ICONSTOP "程序或内核文件正在使用，卸载未完成。请退出 Clash of Rust 后重试。"
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerFilesInUse)"
     uninstall_locked_silent:
       SetErrorLevel 3
       Abort

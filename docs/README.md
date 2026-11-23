@@ -29,6 +29,7 @@
 | 修改 Android 宿主、VPN 或输入法 | [Android 开发说明](../apps/android/README.md)；[输入法兼容性复盘](agent-failures/android-ime.md) |
 | 完成功能或修复后的循环审查 | [loop 工作流](loop-workflow.md)、[逐项清单](loop-checklist.md)及[代表尺寸与 UI 检查](loop-ui.md) |
 | 查构建脚本入口、职责与调用关系 | [脚本维护说明](../scripts/README.md) |
+| 调整界面文案或新增语言 | [翻译资源](development.md#翻译资源) |
 
 iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、可连接的客户端。平台支持和设备验证以项目首页及各端说明为准。
 

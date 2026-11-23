@@ -43,8 +43,20 @@ pub enum Event {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Status {
     Message(String),
-    Text(&'static str, &'static str),
     Copy(desktop_view::CopyFeedback),
+    NetworkChanged,
+    CoreStopped,
+    ScanningConfiguration,
+    CheckingRegion,
+    WaitingForBrowser,
+    Complete,
+    LocalSamplingComplete,
+    StartingBrowserCheck,
+    Stopped,
+    ReceiverClosed,
+    SampleImported,
+    SampleReceived,
+    ReceiverExpired,
 }
 
 impl Default for Status {
@@ -67,12 +79,29 @@ impl From<&str> for Status {
 
 impl Status {
     pub(super) fn display(&self, language: Language) -> Cow<'_, str> {
-        match self {
-            Self::Message(message) => notice::localize_notice(message, false, language),
-            Self::Text(chinese, english) => Cow::Borrowed(language.text(chinese, english)),
-            Self::Copy(feedback) => Cow::Borrowed(feedback.text(language)),
-        }
+        Cow::Borrowed(match self {
+            Self::Message(message) => return notice::localize_notice(message, false, language),
+            Self::Copy(feedback) => feedback.text(language),
+            Self::NetworkChanged => messages::claude_network_changed(language),
+            Self::CoreStopped => messages::claude_core_stopped(language),
+            Self::ScanningConfiguration => messages::claude_scanning_configuration(language),
+            Self::CheckingRegion => messages::claude_checking_region(language),
+            Self::WaitingForBrowser => messages::claude_waiting_for_browser(language),
+            Self::Complete => messages::claude_check_complete(language),
+            Self::LocalSamplingComplete => messages::claude_local_sampling_complete(language),
+            Self::StartingBrowserCheck => messages::claude_starting_browser_check(language),
+            Self::Stopped => messages::claude_check_stopped(language),
+            Self::ReceiverClosed => messages::claude_receiver_closed(language),
+            Self::SampleImported => messages::claude_sample_imported(language),
+            Self::SampleReceived => messages::claude_sample_received(language),
+            Self::ReceiverExpired => messages::claude_receiver_expired(language),
+        })
     }
+}
+
+struct GuardStatus {
+    connected: bool,
+    blocked: u64,
 }
 
 #[derive(Default)]
@@ -87,7 +116,7 @@ pub struct State {
     pub(super) protection_opened: Option<std::time::Instant>,
     pub reports: [Option<Report>; 4],
     pub session: Option<Session>,
-    pub(super) guard_status: String,
+    guard_status: Option<GuardStatus>,
     pub(super) generation: u64,
     pub(super) aborters: Vec<AbortHandle>,
     pub(super) local_busy: bool,
@@ -123,22 +152,20 @@ impl Entry<'_> {
 
     pub(super) fn title_value(&self, language: Language) -> (String, String) {
         match self {
-            Self::Config(finding) => (
-                finding.display_title().to_owned(),
-                if finding.value.trim().is_empty() {
-                    language.text("未提供", "Not provided").into()
-                } else {
-                    finding.value.clone()
-                },
-            ),
+            Self::Config(finding) => {
+                let value = finding.display_value_in(language);
+                (
+                    finding.display_title_in(language).to_owned(),
+                    if value.trim().is_empty() {
+                        messages::claude_config_not_provided(language).into()
+                    } else {
+                        value.to_owned()
+                    },
+                )
+            }
             Self::Clean(_) => (
-                language.text("项目配置", "Project configuration").into(),
-                language
-                    .text(
-                        "未发现额外代理或地区覆盖",
-                        "No extra proxy or region overrides",
-                    )
-                    .into(),
+                messages::claude_project_configuration(language).into(),
+                messages::claude_no_config_overrides(language).into(),
             ),
             Self::Signal(_, signal) => (
                 signal.display_title_in(language),
@@ -156,9 +183,7 @@ impl Entry<'_> {
                 route.display_outcome_in(language),
             ),
             Self::Routes(routes) => (
-                language
-                    .text("Claude 域名选路", "Claude domain routes")
-                    .into(),
+                messages::claude_domain_routes(language).into(),
                 check::route_group_value_in(routes, language),
             ),
         }
@@ -180,28 +205,30 @@ impl State {
         })
     }
     pub(crate) fn clear_guard(&mut self) {
-        self.guard_status.clear();
+        self.guard_status = None;
         if let Some(report) = &mut self.reports[index(Environment::Desktop)]
             && let Some(signal) = report.signals.iter_mut().find(|signal| signal.is_guard())
         {
             check::guard::mark_report_history(signal);
         }
     }
-    pub(crate) fn guard_report(&mut self, snapshot: &check::guard::Snapshot, language: Language) {
-        let status = if snapshot.connected {
-            language.text("后台实时保护中", "Live protection active")
+    pub(super) fn guard_status_in(&self, language: Language) -> String {
+        let Some(guard) = &self.guard_status else {
+            return String::new();
+        };
+        let status = if guard.connected {
+            messages::claude_guard_active(language)
         } else {
-            language.text("实时保护暂未确认", "Live protection unconfirmed")
+            messages::claude_guard_unconfirmed(language)
         };
-        self.guard_status = match language {
-            Language::SimplifiedChinese => {
-                format!("{status} · 已关闭 {} 条异常连接", snapshot.blocked)
-            }
-            Language::English => format!(
-                "{status} · {} abnormal connections closed",
-                snapshot.blocked
-            ),
-        };
+        messages::claude_guard_summary(language, guard.blocked, status)
+    }
+
+    pub(crate) fn guard_report(&mut self, snapshot: &check::guard::Snapshot) {
+        self.guard_status = Some(GuardStatus {
+            connected: snapshot.connected,
+            blocked: snapshot.blocked,
+        });
         let mut report = Report::new(
             Environment::Desktop,
             "Claude 保护的后台监测与拦截记录，按服务域名匹配",
@@ -374,30 +401,15 @@ impl State {
             return;
         }
         self.status = if self.audit_busy {
-            Status::Text(
-                "正在扫描 Claude 项目配置…",
-                "Scanning Claude project configuration…",
-            )
+            Status::ScanningConfiguration
         } else if self.local_busy || self.network_busy {
-            Status::Text(
-                "正在检测本机与网络地区线索…",
-                "Checking local and network region signals…",
-            )
+            Status::CheckingRegion
         } else if self.browser_busy {
-            Status::Text(
-                "浏览器正在自动检测，等待报告回传…",
-                "Browser check running; waiting for its report…",
-            )
+            Status::WaitingForBrowser
         } else if self.reports[index(Environment::Web)].is_some() {
-            Status::Text(
-                "检测完成，配置风险和地区线索已列在下方。",
-                "Check complete; results are shown below.",
-            )
+            Status::Complete
         } else {
-            Status::Text(
-                "配置与本机采样完成；浏览器采样尚未完成，可重新检测。",
-                "Local sampling complete; the browser check can be retried.",
-            )
+            Status::LocalSamplingComplete
         };
     }
     pub(super) fn selected(&self) -> impl Iterator<Item = &Report> {
@@ -446,10 +458,7 @@ impl App {
                 self.claude.close();
                 self.claude.reports = Default::default();
                 self.claude.error = false;
-                self.claude.status = Status::Text(
-                    "正在扫描项目配置，并自动打开浏览器检测…",
-                    "Scanning project configuration and opening the browser check…",
-                );
+                self.claude.status = Status::StartingBrowserCheck;
                 self.claude.results_page = 0;
                 self.claude.results_filter = None;
                 self.claude.audit = None;
@@ -509,10 +518,7 @@ impl App {
             }
             Event::Cancel => {
                 self.claude.close();
-                self.claude.status = Status::Text(
-                    "已停止检测，已获得的报告保留。",
-                    "Check stopped; collected reports retained.",
-                );
+                self.claude.status = Status::Stopped;
             }
             Event::ResultsPage(page) => self.claude.results_page = page,
             Event::ResultsFilter(filter) => {
@@ -606,8 +612,7 @@ impl App {
                 self.claude.session = None;
                 self.claude.browser_busy = false;
                 self.claude.session_starting = false;
-                self.claude.status =
-                    Status::Text("浏览器回传入口已关闭。", "Browser report receiver closed.");
+                self.claude.status = Status::ReceiverClosed;
             }
             Event::CopySiteScript => {
                 self.copy_request = Some(desktop_view::CopyRequest::ClaudeScript);
@@ -656,10 +661,7 @@ impl App {
                     Ok(report) => {
                         self.claude.store(report);
                         self.claude.error = false;
-                        self.claude.status = Status::Text(
-                            "采样报告已导入；来源与实测范围见各项详情。",
-                            "Sample report imported.",
-                        );
+                        self.claude.status = Status::SampleImported;
                     }
                     Err(error) => {
                         self.fail_claude_check(error);
@@ -724,16 +726,12 @@ impl App {
                         if web {
                             self.claude.sampling_status();
                         } else {
-                            self.claude.status =
-                                Status::Text("已收到补充采样报告。", "Additional sample received.");
+                            self.claude.status = Status::SampleReceived;
                         }
                     } else if session.finished() {
                         self.claude.session = None;
                         self.claude.browser_busy = false;
-                        self.claude.status = Status::Text(
-                            "回传入口已到期，请重新打开。",
-                            "Report receiver expired; reopen it.",
-                        );
+                        self.claude.status = Status::ReceiverExpired;
                     }
                 }
             }

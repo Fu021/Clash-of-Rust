@@ -39,14 +39,15 @@ fn parameters(mut text: &str) -> Option<BTreeSet<&str>> {
     Some(result)
 }
 
-pub fn compile(directory: &Path, output: &Path) {
+pub fn compile(root: &Path, catalog: &str, output: &Path) {
+    let directory = root.join(catalog);
     println!("cargo:rerun-if-changed={}", directory.display());
     println!(
         "cargo:rerun-if-changed={}",
-        directory.join("../languages.rs").display()
+        root.join("languages.rs").display()
     );
     let mut catalogs = BTreeMap::<String, BTreeMap<String, String>>::new();
-    for entry in fs::read_dir(directory).expect("Read translation directory") {
+    for entry in fs::read_dir(&directory).expect("Read translation directory") {
         let path = entry.expect("Read translation entry").path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
             continue;

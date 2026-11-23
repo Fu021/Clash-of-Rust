@@ -1,6 +1,7 @@
 //! Connection sampling and ordering without retaining a second metadata snapshot.
 use crate::api::{Connection, ConnectionRates};
 use crate::config::Language;
+use crate::messages;
 use std::{cmp::Ordering, time::Duration};
 
 pub fn hostname(connection: &Connection) -> &str {
@@ -58,19 +59,19 @@ pub fn detail_values_in(
     let rate = |value: Option<u64>| value.map_or_else(|| "—".into(), |v| format!("{}/s", bytes(v)));
     vec![
         (
-            language.text("连接名称", "Connection"),
+            messages::connection_title(language),
             name(connection).to_owned(),
         ),
         (
-            language.text("域名", "Domain"),
+            messages::connection_domain(language),
             connection.metadata.host.to_string(),
         ),
         (
-            language.text("嗅探域名", "Sniffed domain"),
+            messages::connection_sniffed_domain(language),
             connection.metadata.sniff_host.to_string(),
         ),
         (
-            language.text("目标 IP", "Destination IP"),
+            messages::connection_destination_ip(language),
             if connection.metadata.destination_ip.is_empty() {
                 resolved.to_owned()
             } else {
@@ -78,25 +79,25 @@ pub fn detail_values_in(
             },
         ),
         (
-            language.text("目标端口", "Destination port"),
+            messages::connection_destination_port(language),
             connection.metadata.destination_port.to_string(),
         ),
         (
-            language.text("协议", "Protocol"),
+            messages::connection_protocol(language),
             connection.metadata.network.to_string(),
         ),
         (
-            language.text("进程", "Process"),
+            messages::connection_process(language),
             connection.metadata.process.to_string(),
         ),
         (
-            language.text("匹配规则", "Matched rule"),
+            messages::connection_matched_rule(language),
             format!("{} {}", connection.rule, connection.rule_payload)
                 .trim()
                 .to_owned(),
         ),
         (
-            language.text("代理链", "Proxy chain"),
+            messages::connection_proxy_chain(language),
             connection
                 .chains
                 .iter()
@@ -106,29 +107,26 @@ pub fn detail_values_in(
                 .join(" → "),
         ),
         (
-            language.text("上传速度", "Upload speed"),
+            messages::connection_upload_speed(language),
             rate(connection.rates.map(|r| r.upload)),
         ),
         (
-            language.text("下载速度", "Download speed"),
+            messages::connection_download_speed(language),
             rate(connection.rates.map(|r| r.download)),
         ),
         (
-            language.text("累计上传", "Uploaded"),
+            messages::connection_uploaded(language),
             bytes(connection.upload),
         ),
         (
-            language.text("累计下载", "Downloaded"),
+            messages::connection_downloaded(language),
             bytes(connection.download),
         ),
         (
-            language.text("开始时间", "Started"),
+            messages::connection_started(language),
             connection.start.to_string(),
         ),
-        (
-            language.text("连接 ID", "Connection ID"),
-            connection.id.to_string(),
-        ),
+        (messages::connection_id(language), connection.id.to_string()),
     ]
 }
 
@@ -265,16 +263,7 @@ pub fn matches_query(connection: &Connection, lower_query: &str) -> bool {
         ]
         .into_iter()
         .chain(connection.chains.iter().map(|name| name.as_str()))
-        .any(|field| {
-            if field.is_ascii() && word.is_ascii() {
-                field
-                    .as_bytes()
-                    .windows(word.len())
-                    .any(|part| part.eq_ignore_ascii_case(word.as_bytes()))
-            } else {
-                field.to_lowercase().contains(word)
-            }
-        })
+        .any(|field| crate::model::contains_query(field, word))
     })
 }
 

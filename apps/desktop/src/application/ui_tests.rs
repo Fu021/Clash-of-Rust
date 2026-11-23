@@ -230,6 +230,11 @@ fn english_update_results_localize_projection_without_changing_failure_state() {
     assert_eq!(data.get_notice(), expected);
     assert!(data.get_update_status().ends_with(expected));
     assert!(app.updates.status.contains(reason));
+    app.presentation_language = Language::SimplifiedChinese;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_notice(), reason);
+    assert!(data.get_update_status().ends_with(reason));
+    assert!(!data.get_update_status().contains("检查失败：检查更新失败"));
 }
 
 #[test]
@@ -3410,7 +3415,7 @@ fn ip_report_projects_skipped_authentication_and_real_zero_in_both_languages() {
                 category.detail,
                 match language {
                     Language::SimplifiedChinese => format!("结果未确认 1 · 未检测 {pending}"),
-                    Language::English => format!("Unconfirmed 1 · Not checked {pending}"),
+                    _ => format!("Unconfirmed 1 · Not checked {pending}"),
                 }
             );
             let country = if skipped && language == Language::English {
@@ -3590,6 +3595,23 @@ fn english_claude_report_keeps_original_keys_and_evidence() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Claude);
     app.presentation_language = Language::English;
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".claude");
+    let settings = config.join("settings.json");
+    std::fs::create_dir(&config).unwrap();
+    std::fs::write(&settings, r#"{"env":{"NO_PROXY":"claude.ai"}}"#).unwrap();
+    let audit = clash_of_rust::claude_check::audit::scan(
+        clash_of_rust::claude_check::audit::Inputs {
+            home: home.path().to_owned(),
+            config,
+            current: None,
+            managed: Vec::new(),
+            mixed_port: 7890,
+        },
+        &Default::default(),
+    );
+    app.claude.audit = Some(audit);
+    let original_audit = serde_json::to_value(&app.claude.audit).unwrap();
     let mut report = Report::new(Environment::Core, "fixture");
     report.signals.push(Signal::new(
         Group::Quality,
@@ -3631,6 +3653,22 @@ fn english_claude_report_keeps_original_keys_and_evidence() {
     assert_eq!(routes.value, "2 domains · Route recorded");
     assert!(routes.detail.contains("api.anthropic.com"));
     assert!(routes.detail.contains("claude.ai"));
+    let proxy_bypass = rows.iter().find(|row| row.title == "NO_PROXY").unwrap();
+    assert_eq!(
+        proxy_bypass.value,
+        "Matches Claude domains or all addresses"
+    );
+    assert_eq!(proxy_bypass.source.as_str(), settings.to_str().unwrap());
+    assert!(proxy_bypass.detail.starts_with("Details: Claude requests"));
+    assert!(proxy_bypass.detail.contains("\nAdvice: Remove unintended"));
+    assert_eq!(
+        original_audit["findings"][0]["value"],
+        "包含 Claude 域名或全部地址"
+    );
+    assert_eq!(
+        serde_json::to_value(&app.claude.audit).unwrap(),
+        original_audit
+    );
     assert_eq!(
         serde_json::to_value(app.claude.reports[0].as_ref().unwrap()).unwrap(),
         original
@@ -3901,12 +3939,23 @@ fn claude_guard_block_keeps_status_and_interceptions_together() {
         .into(),
         ..Default::default()
     };
-    app.claude
-        .guard_report(&snapshot, Language::SimplifiedChinese);
+    app.claude.guard_report(&snapshot);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
     let mut models = ViewModels::default();
     models.attach(&data);
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_claude_guard().as_str(),
+        "后台实时保护中 · 已关闭 1 条异常连接"
+    );
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    assert_eq!(
+        data.get_claude_guard().as_str(),
+        "Live protection active · 1 abnormal connections closed"
+    );
+    app.presentation_language = Language::SimplifiedChinese;
     app.present_slint(&data, &mut models);
     let rows = data.get_claude_results();
     let guard_header = rows
@@ -3948,8 +3997,7 @@ fn claude_guard_block_keeps_status_and_interceptions_together() {
     motion_frame(&window, 50);
     assert!(target_bounds(&item_key)[3] > collapsed_height);
     snapshot.total += 1;
-    app.claude
-        .guard_report(&snapshot, Language::SimplifiedChinese);
+    app.claude.guard_report(&snapshot);
     app.present_slint(&data, &mut models);
     motion_frame(&window, 50);
     assert!(

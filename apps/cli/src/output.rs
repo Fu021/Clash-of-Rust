@@ -10,56 +10,23 @@ pub(crate) fn writes_json(args: &Args) -> bool {
     args.get("output").is_some() || args.flag("json") || args.flag("jsonl")
 }
 
-pub(crate) fn profile_name(profile: &Profile, language: Language) -> &str {
-    if profile.is_default() && profile.name == "默认直连" {
-        language.text(&profile.name, "Default direct")
-    } else {
-        &profile.name
-    }
-}
-
 pub(crate) fn profile_list_name<'a>(args: &Args, profile: &'a Profile) -> &'a str {
     if writes_json(args) {
         &profile.name
     } else {
-        profile_name(profile, args.language())
+        profile.display_name(args.language())
     }
 }
 
-pub(crate) fn profile_name_matches(profile: &Profile, display_name: &str, filter: &str) -> bool {
-    profile.name.to_lowercase().contains(filter)
-        || (display_name != profile.name && display_name.to_lowercase().contains(filter))
-}
-
 pub(crate) fn profile_list_matches(args: &Args, profile: &Profile, filter: &str) -> bool {
-    profile.id.contains(filter)
-        || profile_name_matches(profile, profile_list_name(args, profile), filter)
+    profile.id.contains(filter) || profile.matches_name(profile_list_name(args, profile), filter)
 }
 
-pub(crate) fn localized_error(
-    error: &anyhow::Error,
-    language: clash_client_core::config::Language,
-) -> String {
+pub(crate) fn localized_error(error: &anyhow::Error, language: Language) -> String {
     error
         .chain()
         .map(|cause| {
             let message = cause.to_string();
-            if language == Language::English {
-                let translated = match message.as_str() {
-                    "请输入有效的网站地址" => Some("Enter a valid website address"),
-                    "请输入域名或 HTTP/HTTPS 地址" => {
-                        Some("Enter a domain or HTTP/HTTPS URL")
-                    }
-                    "请输入 HTTP/HTTPS 地址" => Some("Enter an HTTP/HTTPS URL"),
-                    "测试地址不支持嵌入用户名密码" => {
-                        Some("Test URLs cannot include credentials")
-                    }
-                    _ => None,
-                };
-                if let Some(translated) = translated {
-                    return translated.into();
-                }
-            }
             let translated = clash_client_core::error_message::localize(&message, language);
             if translated != message {
                 translated.into_owned()
@@ -854,6 +821,23 @@ mod tests {
         assert!(needs_failure_hint(&args, &failed));
         let diagnose = crate::args::parse(vec!["diagnose".into()]).unwrap();
         assert!(needs_failure_hint(&diagnose, &value));
+    }
+
+    #[test]
+    fn status_translates_known_backend_errors_only_in_human_output() {
+        for (raw, expected) in [
+            ("控制接口刷新超时", "Control interface refresh timed out"),
+            ("上游原始错误", "上游原始错误"),
+        ] {
+            let value = json!({"running":null,"backend_error":raw});
+            let human = render_in(&["status"], value.clone(), "en");
+            assert!(human.contains(&format!("Error: {expected}")), "{human}");
+            let exported = render_in(&["status", "--json"], value.clone(), "en");
+            assert_eq!(
+                serde_json::from_str::<Value>(&exported).unwrap()["data"],
+                value
+            );
+        }
     }
 
     #[test]

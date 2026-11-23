@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Clash of Rust
+Comment=Native desktop client for mihomo
+Comment[zh_CN]=基于 mihomo 的原生桌面客户端
+Exec=/usr/bin/clash-of-rust
+Icon=clash-of-rust
+StartupWMClass=clash-of-rust
+Terminal=false
+Categories=Network;

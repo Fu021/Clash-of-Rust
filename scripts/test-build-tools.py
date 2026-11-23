@@ -56,6 +56,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 import tarfile
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 
@@ -2763,13 +2764,16 @@ class BuildTests(unittest.TestCase):
             for path in ('crates/client-ui/ui/mobile/shared/pages.slint',
                          'apps/android/native/src/android.rs',
                          'apps/android/native/tests/mobile_lists.rs',
+                         'translations/android/rust/en.json',
                          'crates/mobile-ffi/src/lib.rs'):
                 selected = ci_test_policy.select([path])
                 self.assertTrue(selected['mobile_ui_tests'], path)
                 self.assertFalse(selected['desktop_ui_tests'], path)
+                self.assertFalse(selected['linux_user_tests'], path)
             for path in ('crates/client-ui/ui/pages/proxies.slint',
                          'crates/client-ui/ui/state.slint',
                          'crates/client-ui/ui/components/desktop-copy.slint',
+                         'translations/desktop/rust/en.json',
                          'apps/desktop/src/application/ui_tests.rs'):
                 selected = ci_test_policy.select([path])
                 self.assertTrue(selected['desktop_ui_tests'], path)
@@ -2788,6 +2792,15 @@ class BuildTests(unittest.TestCase):
                 selected = ci_test_policy.select([path])
                 self.assertTrue(selected['desktop_ui_tests'], path)
                 self.assertTrue(selected['mobile_ui_tests'], path)
+            for path in ('translations/runtime/en.json',
+                         'translations/shared/en.json',
+                         'translations/languages.rs',
+                         'translations/compile_catalog.rs'):
+                selected = ci_test_policy.select([path])
+                self.assertTrue(selected['linux_user_tests'], path)
+                self.assertTrue(selected['desktop_ui_tests'], path)
+                self.assertEqual(selected['mobile_ui_tests'],
+                                 not path.startswith('translations/runtime/'), path)
             for path in ('crates/client-core/src/config/mod.rs',
                          'crates/client-core/src/protection/mod.rs',
                          'crates/mobile-ffi/src/lib.rs',
@@ -2805,6 +2818,7 @@ class BuildTests(unittest.TestCase):
                          'apps/cli/src/tui/mod.rs', 'apps/cli/src/tui/model.rs',
                          'apps/cli/src/tui/form.rs',
                          'installer/clash-of-rust.nsi', 'scripts/windows_ci.py',
+                         'translations/windows/nsis/en.nsh',
                          'scripts/windows_update_tests.py', 'scripts/build-installer.py',
                          'crates/client-runtime/src/platform/windows/mod.rs'):
                 self.assertTrue(ci_test_policy.select([path])['update_tests'])
@@ -7957,12 +7971,90 @@ runpy.run_path(str(script), run_name='__main__')
             (stale/'strings.xml').touch()
             with patch.object(android_build, 'ANDROID', android):
                 android_build.seed_resources()
-            source = build.ROOT/'translations/android/res'
+            source = build.ROOT/'translations/android/system'
             self.assertFalse(stale.exists())
             for catalog in source.glob('values*/strings.xml'):
                 self.assertEqual((generated/catalog.relative_to(source)).read_bytes(), catalog.read_bytes())
             self.assertTrue((generated/'drawable-nodpi/app_logo.png').is_file())
             self.assertTrue((generated/'drawable-nodpi/notification_logo.png').is_file())
+
+    def test_language_registry_has_bundled_platform_resources(self):
+        translations = build.ROOT/'translations'
+        entries = re.findall(
+            r'^\s*\w+\s*=>\s*\("([^"]+)",\s*"[^"]+",\s*"([^"]*)",',
+            (translations/'languages.rs').read_text(encoding='utf-8'), re.MULTILINE)
+        self.assertGreaterEqual(len(entries), 2)
+        windows_catalogs = (translations/'windows/nsis').glob('*.nsh')
+        self.assertEqual({catalog.stem for catalog in windows_catalogs}, {tag for tag, _ in entries})
+        slint_tags = {slint for _, slint in entries if slint}
+        for directory, domain in (('desktop', 'clash-client-ui'), ('android', 'clash-android')):
+            catalogs = (translations/directory/'slint').glob(f'*/LC_MESSAGES/{domain}.po')
+            self.assertEqual({catalog.parent.parent.name for catalog in catalogs}, slint_tags)
+
+        android = translations/'android/system'
+        base_keys = {item.attrib['name'] for item in ET.parse(android/'values/strings.xml').getroot()}
+        for tag, _ in entries:
+            if tag == 'en':
+                continue
+            parts = tag.split('-')
+            qualifiers = ['values-b+' + '+'.join(parts)]
+            if len(parts) == 1:
+                qualifiers.append(f'values-{tag}')
+            if len(parts) == 2 and len(parts[1]) == 2:
+                qualifiers.append(f'values-{parts[0]}-r{parts[1]}')
+            catalogs = [android/qualifier/'strings.xml' for qualifier in qualifiers]
+            with self.subTest(locale=tag):
+                catalog = next((path for path in catalogs if path.is_file()), None)
+                self.assertIsNotNone(catalog)
+                translated_keys = {item.attrib['name'] for item in ET.parse(catalog).getroot()}
+                self.assertEqual(translated_keys, base_keys)
+
+    def test_migrated_rust_views_keep_translatable_text_in_catalogs(self):
+        for path in (
+            'apps/desktop/src/application/commands.rs',
+            'apps/desktop/src/application/presentation.rs',
+            'apps/android/native/src/application_routing.rs',
+            'apps/android/native/src/application_routing_mode.rs',
+            'apps/android/native/src/site_report.rs',
+            'apps/cli/src/output/human/fields.rs',
+            'apps/cli/src/output/human/lists.rs',
+            'apps/cli/src/output/human/table.rs',
+            'apps/cli/src/tui/form.rs',
+            'apps/cli/src/tui/settings.rs',
+            'crates/client-core/src/detection/ip/report.rs',
+            'crates/client-core/src/detection/overview/presentation.rs',
+            'crates/client-core/src/update/channel.rs',
+            'crates/client-core/src/update/error.rs',
+            'crates/client-runtime/src/update/install.rs',
+        ):
+            source = (build.ROOT/path).read_text(encoding='utf-8')
+            production = source.split('\n#[cfg(test)]\nmod tests {', 1)[0]
+            with self.subTest(path=path):
+                self.assertNotRegex(production, r'\.\s*text\s*\(')
+
+    def test_windows_installer_uses_complete_localized_messages(self):
+        source = (build.ROOT/'installer/clash-of-rust.nsi').read_text(encoding='utf-8')
+        catalogs = build.ROOT/'translations/windows/nsis'
+        includes = re.findall(r'^!include /CHARSET=UTF8 "[^"\n]*/windows/nsis/([^"/]+)\.nsh"$',
+                              source, re.M)
+        self.assertCountEqual(includes, [catalog.stem for catalog in catalogs.glob('*.nsh')])
+        self.assertEqual(includes[:1], ['en'])
+        keys = set(re.findall(r'\$\((Installer\w+)\)', source))
+        self.assertTrue(keys)
+        for tag in includes:
+            with self.subTest(tag=tag):
+                catalog = (catalogs/f'{tag}.nsh').read_text(encoding='utf-8')
+                languages = re.findall(r'^!insertmacro MUI_LANGUAGE "(\w+)"$', catalog, re.M)
+                self.assertEqual(len(languages), 1)
+                lang_id = '${LANG_' + languages[0].upper() + '}'
+                self.assertIn(f'!insertmacro InstallerVersionInfo {lang_id} "', catalog)
+                translated = re.findall(rf'^LangString (\w+) {re.escape(lang_id)} "', catalog, re.M)
+                self.assertCountEqual(translated, keys)
+                shortcuts = re.findall(r'^!define (INSTALLER_UNINSTALL_SHORTCUT_\w+) "', catalog, re.M)
+                self.assertEqual(len(shortcuts), 1)
+                shortcut = '${' + shortcuts[0] + '}'
+                self.assertIn(f'LangString InstallerUninstallShortcut {lang_id} "{shortcut}"', catalog)
+                self.assertIn(rf'Delete "$SMPROGRAMS\Clash of Rust\{shortcut}.lnk"', source)
 
     def test_android_ci_waits_for_one_maven_cache_and_builds_each_abi_offline(self):
         workflow = (build.ROOT / '.github/workflows/ci.yml').read_text()
@@ -8733,12 +8825,17 @@ runpy.run_path(str(script), run_name='__main__')
                     source = root/'resources'/name
                     source.parent.mkdir(parents=True, exist_ok=True)
                     source.write_bytes(b'fixture')
+                desktop_entry = 'linux/clash-of-rust.desktop'
+                shutil.copyfile(build.ROOT/'resources'/desktop_entry, root/'resources'/desktop_entry)
                 artifact = root/'dist/Clash-of-Rust-0.7.1-linux-amd64.deb'
                 artifact.write_bytes(b'previous package')
                 def package(command):
                     self.assertEqual(command[:7], [
                         'dpkg-deb', '--build', '--root-owner-group',
                         '--uniform-compression', '-Zxz', '-z9', '-Sextreme'])
+                    menu = Path(command[-2])/'usr/share/applications/clash-of-rust.desktop'
+                    self.assertEqual(menu.read_bytes(), (root/'resources'/desktop_entry).read_bytes())
+                    self.assertIn('Comment[zh_CN]=', menu.read_text(encoding='utf-8'))
                     Path(command[-1]).write_bytes(b'new package')
                     if fail:
                         raise subprocess.CalledProcessError(2, command)

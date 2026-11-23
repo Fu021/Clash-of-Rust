@@ -29,7 +29,7 @@ pub(super) async fn choose(
         "{}",
         match language {
             Language::SimplifiedChinese => format!("没有可选择的{title}"),
-            Language::English => format!("No {title} available"),
+            _ => format!("No {title} available"),
         }
     );
     let title = title.to_owned();
@@ -73,7 +73,7 @@ fn pick(
             .collect();
         match language {
             Language::SimplifiedChinese => writeln!(output, "{title}（{} 项）", matches.len())?,
-            Language::English => writeln!(output, "{title} ({} results)", matches.len())?,
+            _ => writeln!(output, "{title} ({} results)", matches.len())?,
         }
         for (index, name) in matches.iter().take(50).enumerate() {
             writeln!(output, "  {}. {}", index + 1, clean(name))?;

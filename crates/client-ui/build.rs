@@ -1,5 +1,5 @@
 fn main() {
-    let translations = "../../translations/desktop";
+    let translations = "../../translations/desktop/slint";
     println!("cargo:rerun-if-changed={translations}");
     let config = slint_build::CompilerConfiguration::new()
         .with_edition((1, 19))

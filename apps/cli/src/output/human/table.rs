@@ -1,4 +1,5 @@
 use super::fields::scalar_in;
+use crate::messages;
 use anyhow::Result;
 use clash_client_core::config::Language;
 use serde_json::Value;
@@ -31,7 +32,7 @@ pub(super) fn write_in(
     language: Language,
 ) -> Result<()> {
     if rows.is_empty() {
-        writeln!(out, "{}", language.text("无记录", "No records"))?;
+        writeln!(out, "{}", messages::output_no_records(language))?;
         return Ok(());
     }
     let mut widths: Vec<_> = headers.iter().map(|s| s.width()).collect();
@@ -49,7 +50,7 @@ pub(super) fn write_in(
             }
             for (header, cell) in headers.iter().zip(row) {
                 if cell != "—" {
-                    writeln!(out, "{header}{}{cell}", language.text("：", ": "))?;
+                    super::field_in(out, header, cell, language)?;
                 }
             }
         }
@@ -106,31 +107,16 @@ pub(super) fn page_in(out: &mut dyn Write, value: &Value, language: Language) ->
     let count = value["items"].as_array().map_or(0, Vec::len);
     let offset = value["offset"].as_u64().unwrap_or(0);
     let total = value["total"].as_u64().unwrap_or(count as u64);
-    if count == 0 && total > 0 {
-        match language {
-            Language::SimplifiedChinese => {
-                writeln!(out, "此页无记录（共 {total} 项，起始位置 {offset}）")?
-            }
-            Language::English => writeln!(
-                out,
-                "No records on this page ({total} total, offset {offset})"
-            )?,
-        }
+    let footer = if count == 0 && total > 0 {
+        messages::output_page_empty(language, offset, total)
     } else if offset > 0 || total > count as u64 {
         let first = offset.saturating_add(1);
         let last = offset.saturating_add(count as u64);
-        match language {
-            Language::SimplifiedChinese => {
-                writeln!(out, "显示第 {first}–{last} 项，共 {total} 项")?
-            }
-            Language::English => writeln!(out, "Showing {first}–{last} of {total}")?,
-        }
+        messages::output_page_range(language, first, last, total)
     } else {
-        match language {
-            Language::SimplifiedChinese => writeln!(out, "共 {total} 项")?,
-            Language::English => writeln!(out, "{total} total")?,
-        }
-    }
+        messages::output_page_total(language, total)
+    };
+    writeln!(out, "{footer}")?;
     Ok(())
 }
 

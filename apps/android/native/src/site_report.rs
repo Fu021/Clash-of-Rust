@@ -6,7 +6,8 @@ use clash_mobile_runtime::core::{
     probe,
 };
 
-use crate::list_presentation::contains_query;
+use crate::messages;
+use clash_mobile_runtime::core::model::contains_query;
 
 pub(crate) fn category_row(
     category: &ip_report::Category,
@@ -33,7 +34,7 @@ pub(crate) fn country_label(
         Language::SimplifiedChinese => {
             probe::country_name(country).unwrap_or_else(|| country.into())
         }
-        Language::English => countries::country_code(countries::country_text(country))
+        _ => countries::country_code(countries::country_text(country))
             .and_then(countries::english_name)
             .unwrap_or(country)
             .into(),
@@ -41,24 +42,21 @@ pub(crate) fn country_label(
 }
 
 fn category_title(group: &str, language: Language) -> &str {
-    if language == Language::SimplifiedChinese {
-        return group;
-    }
     match group {
-        "IP信息" => "IP information",
-        "全球" => "Global",
-        "东南亚" => "Southeast Asia",
-        "体育" => "Sports",
-        "其他" => "Other",
-        "北美" => "North America",
-        "南美" => "South America",
-        "台湾" => "Taiwan",
-        "大洋洲" => "Oceania",
-        "日本" => "Japan",
-        "欧洲" => "Europe",
-        "非洲" => "Africa",
-        "韩国" => "South Korea",
-        "香港" => "Hong Kong",
+        "IP信息" => messages::site_group_ip_information(language),
+        "全球" => messages::site_group_global(language),
+        "东南亚" => messages::site_group_southeast_asia(language),
+        "体育" => messages::site_group_sports(language),
+        "其他" => messages::site_group_other(language),
+        "北美" => messages::site_group_north_america(language),
+        "南美" => messages::site_group_south_america(language),
+        "台湾" => messages::site_group_taiwan(language),
+        "大洋洲" => messages::site_group_oceania(language),
+        "日本" => messages::site_group_japan(language),
+        "欧洲" => messages::site_group_europe(language),
+        "非洲" => messages::site_group_africa(language),
+        "韩国" => messages::site_group_south_korea(language),
+        "香港" => messages::site_group_hong_kong(language),
         _ => group,
     }
 }
@@ -116,30 +114,33 @@ pub(crate) fn detail_rows(
     let skipped = matches!(outcome, Some(Ok(result)) if result.authentication_check_skipped);
     let mut rows = vec![
         (
-            language.text("平台", "Service").into(),
+            messages::site_report_service(language).into(),
             service.name.clone(),
         ),
-        (language.text("结果", "Result").into(), summary.into()),
+        (
+            messages::site_report_result(language).into(),
+            summary.into(),
+        ),
     ];
     if let Some(Ok(result)) = outcome {
         let duration = ip_report::response_duration_in(result, language);
         if !duration.is_empty() {
-            rows.push((language.text("耗时", "Duration").into(), duration));
+            rows.push((messages::site_report_duration(language).into(), duration));
         }
     }
     rows.extend([
         (
-            language.text("详情", "Details").into(),
+            messages::site_report_details(language).into(),
             outcome.map_or_else(String::new, |outcome| {
                 ip_report::detail_in(service, outcome, language).into_owned()
             }),
         ),
         (
-            language.text("分类", "Category").into(),
+            messages::site_report_category(language).into(),
             category_title(&service.group, language).into(),
         ),
         (
-            language.text("地区", "Region").into(),
+            messages::site_report_region(language).into(),
             countries::localized_name(ip_report::country_in(country, skipped, language), language),
         ),
     ]);
@@ -339,7 +340,7 @@ mod tests {
                     summary,
                     match language {
                         Language::SimplifiedChinese => format!("结果未确认 1 · 未检测 {pending}"),
-                        Language::English => format!("Unconfirmed 1 · Not checked {pending}"),
+                        _ => format!("Unconfirmed 1 · Not checked {pending}"),
                     }
                 );
                 assert!(list_detail.contains("203.0.113.13"));

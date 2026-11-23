@@ -386,9 +386,9 @@ impl State {
                 .profiles
                 .iter()
                 .filter(|profile| {
-                    let display_name = crate::output::profile_name(profile, self.language);
+                    let display_name = profile.display_name(self.language);
                     profile.id.to_lowercase().contains(&query)
-                        || crate::output::profile_name_matches(profile, display_name, &query)
+                        || profile.matches_name(display_name, &query)
                 })
                 .map(|profile| profile.id.as_str())
                 .collect(),

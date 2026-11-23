@@ -5,12 +5,14 @@ mod fields;
 mod lists;
 mod table;
 use crate::args::Args;
+use crate::messages;
 use anyhow::Result;
 use clash_client_core::claude_check::{
     Group, Report, group_routes, order_summary, route_group_value_in, summary_order,
 };
 use clash_client_core::config::Language;
-use fields::{clean, label, label_in, scalar_in, text, text_in};
+use clash_client_core::error_message::localize_diagnostic;
+use fields::{clean, label_in, scalar_in, text_in};
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::Write;
@@ -87,7 +89,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                 Language::SimplifiedChinese => {
                     writeln!(out, "Clash of Rust {version}（{os} / {arch}）")?
                 }
-                Language::English => writeln!(out, "Clash of Rust {version} ({os} / {arch})")?,
+                _ => writeln!(out, "Clash of Rust {version} ({os} / {arch})")?,
             }
             Ok(())
         }
@@ -266,31 +268,23 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
             out,
             language.text("配置校验通过", "Configuration is valid"),
         ),
-        "config set" => {
-            match language {
-                Language::SimplifiedChinese => {
-                    writeln!(out, "已保存设置：{}（{}）", label(first), clean(first))?
-                }
-                Language::English => writeln!(
-                    out,
-                    "Saved setting: {} ({})",
-                    label_in(first, language),
-                    clean(first)
-                )?,
-            }
-            Ok(())
-        }
+        "config set" => message(
+            out,
+            &messages::output_saved_setting(
+                language,
+                messages::output_annotated_value(language, label_in(first, language), clean(first)),
+            ),
+        ),
         "config get" => {
             if args.positional.is_empty()
                 && let Some(fields) = value.as_object()
             {
                 for (key, value) in fields {
-                    let name = match language {
-                        Language::SimplifiedChinese => format!("{}（{}）", label(key), clean(key)),
-                        Language::English => {
-                            format!("{} ({})", label_in(key, language), clean(key))
-                        }
-                    };
+                    let name = messages::output_annotated_value(
+                        language,
+                        label_in(key, language),
+                        clean(key),
+                    );
                     match key.as_str() {
                         "rule_profiles" => {
                             let count = value.as_object().map_or(0, |settings| settings.len());
@@ -298,7 +292,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                                 Language::SimplifiedChinese => {
                                     format!("已保存 {count} 个订阅的规则设置；详见 cor rule list")
                                 }
-                                Language::English => {
+                                _ => {
                                     format!("Rule settings for {count} subscriptions; see cor rule list")
                                 }
                             };
@@ -313,7 +307,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                                 Language::SimplifiedChinese => {
                                     format!("{count} / 5 项已开启；详见 cor rule shortcut")
                                 }
-                                Language::English => {
+                                _ => {
                                     format!("{count} / 5 enabled; see cor rule shortcut")
                                 }
                             };
@@ -547,7 +541,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
         "update install" if value["state"] == "succeeded" => message(
             out,
             &clash_client_runtime::update::localize_installation_message(
-                &text(value, "message"),
+                &text_in(value, "message", language),
                 language,
             ),
         ),
@@ -578,7 +572,7 @@ pub(super) fn write(out: &mut dyn Write, args: &Args, value: &Value) -> Result<(
                     out,
                     language.text("安装结果", "Installation result"),
                     &clash_client_runtime::update::localize_installation_message(
-                        &text(value, "message"),
+                        &text_in(value, "message", language),
                         language,
                     ),
                     language,
@@ -641,10 +635,7 @@ fn claude_summary(
 ) -> Result<()> {
     let report = Report::deserialize(value.get("report").unwrap_or(value))?;
     let (_, risk, _) = report.counts();
-    match language {
-        Language::SimplifiedChinese => writeln!(out, "Claude 检测 · {risk} 项需关注")?,
-        Language::English => writeln!(out, "Claude check · Attention: {risk}")?,
-    }
+    writeln!(out, "{}", messages::output_claude_summary(language, risk))?;
     let mut entries: Vec<_> = report
         .signals
         .iter()
@@ -661,7 +652,7 @@ fn claude_summary(
         field_in(
             out,
             &if risk {
-                format!("{} · {title}", language.text("需关注", "Attention"))
+                messages::output_claude_attention(language, title)
             } else {
                 title
             },
@@ -678,18 +669,13 @@ fn claude_summary(
             let value = if route.chain.trim().is_empty() {
                 outcome
             } else {
-                format!(
-                    "{outcome} · {}{}",
-                    language.text("线路：", "Route: "),
-                    route.chain.trim()
-                )
+                messages::output_claude_route_result(language, route.chain.trim(), outcome)
             };
             field_in(
                 out,
-                &format!(
-                    "{} · {}",
-                    language.text("选路异常", "Unexpected route"),
-                    clean(route.display_title_in(language))
+                &messages::output_claude_unexpected_route(
+                    language,
+                    clean(route.display_title_in(language)),
                 ),
                 &clean(&value),
                 language,
@@ -697,43 +683,34 @@ fn claude_summary(
         } else if routes.len() > 1 {
             field_in(
                 out,
-                language.text("Claude 域名选路", "Claude domain routes"),
+                messages::output_claude_domain_routes(language),
                 &clean(&route_group_value_in(&routes, language)),
                 language,
             )?;
         } else {
             field_in(
                 out,
-                &format!(
-                    "{} · {}",
-                    language.text("Claude 选路", "Claude route"),
-                    clean(route.display_title_in(language))
-                ),
+                &messages::output_claude_route(language, clean(route.display_title_in(language))),
                 &clean(&route.display_outcome_in(language)),
                 language,
             )?;
         }
     }
-    writeln!(
-        out,
-        "{}cor {command} --details",
-        language.text("查看完整报告：", "Full report: ")
-    )?;
-    Ok(())
+    message(out, &messages::output_claude_full_report(language, command))
 }
 
 fn status(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> {
     if let Some(error) = value["backend_error"].as_str() {
         field_in(
             out,
-            language.text("内核", "Core"),
-            language.text("状态读取失败", "Status unavailable"),
+            messages::output_core(language),
+            messages::output_status_unavailable(language),
             language,
         )?;
         field_in(
             out,
-            language.text("失败原因", "Error"),
-            &clean(error),
+            messages::output_failure_reason(language),
+            &clean(&localize_diagnostic(error, language)),
             language,
         )?;
     } else {
@@ -745,7 +722,7 @@ fn status(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> 
         }
         field_in(
             out,
-            language.text("内核", "Core"),
+            messages::output_core(language),
             &state.join(" · "),
             language,
         )?;
@@ -755,11 +732,13 @@ fn status(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> 
     }
     let proxy = text_in(value, "proxy", language);
     let mode = text_in(value, "mode", language);
-    let proxy_status = match language {
-        Language::SimplifiedChinese => format!("{proxy} · {mode}模式"),
-        Language::English => format!("{proxy} · {mode} mode"),
-    };
-    field_in(out, language.text("代理", "Proxy"), &proxy_status, language)?;
+    let proxy_status = messages::output_status_proxy_mode(language, mode, proxy);
+    field_in(
+        out,
+        messages::output_proxy(language),
+        &proxy_status,
+        language,
+    )?;
     if !value["profile"].is_null() {
         field_in(
             out,
@@ -780,21 +759,15 @@ fn status(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> 
         .filter(|items| !items.is_empty());
     if let Some(route) = route {
         let name = if value["protected"] == true {
-            language.text("保护节点", "Protected node")
+            messages::output_status_protected_node(language)
         } else if value["mode"] == "rule" {
-            language.text("规则参考线路", "Reference route")
+            messages::output_status_reference_route(language)
         } else {
-            language.text("当前线路", "Current route")
+            messages::output_status_current_route(language)
         };
         field_in(out, name, &route.join(" → "), language)?;
         if value["mode"] == "rule" && value["protected"] != true {
-            message(
-                out,
-                language.text(
-                    "实际连接可能使用其他规则；可用 cor connection list 查看",
-                    "Other rules may route connections differently; run cor connection list",
-                ),
-            )?;
+            message(out, messages::output_status_reference_route_hint(language))?;
         }
     } else if !value["node"].is_null() {
         field_in(
@@ -807,31 +780,20 @@ fn status(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> 
     if !value["protected"].is_null() {
         field_in(
             out,
-            language.text("Claude 保护", "Claude protection"),
+            messages::output_claude_protection(language),
             &text_in(value, "protected", language),
             language,
         )?;
     }
-    let traffic = match language {
-        Language::SimplifiedChinese => format!(
-            "下载 {} · 上传 {} · {} 个连接",
-            text_in(value, "download_rate", language),
-            text_in(value, "upload_rate", language),
-            text_in(value, "connections", language)
-        ),
-        Language::English => format!(
-            "Download {} · Upload {} · {} {}",
-            text_in(value, "download_rate", language),
-            text_in(value, "upload_rate", language),
-            text_in(value, "connections", language),
-            if value["connections"].as_u64() == Some(1) {
-                "connection"
-            } else {
-                "connections"
-            },
-        ),
+    let connections = text_in(value, "connections", language);
+    let download = text_in(value, "download_rate", language);
+    let upload = text_in(value, "upload_rate", language);
+    let traffic = if value["connections"].as_u64() == Some(1) {
+        messages::output_status_traffic_one(language, connections, download, upload)
+    } else {
+        messages::output_status_traffic_many(language, connections, download, upload)
     };
-    field_in(out, language.text("流量", "Traffic"), &traffic, language)?;
+    field_in(out, messages::output_traffic(language), &traffic, language)?;
     network_notice(out, &value["host_routes"], language)
 }
 
@@ -840,24 +802,21 @@ fn network_notice(out: &mut dyn Write, value: &Value, language: Language) -> Res
         writeln!(out)?;
         field_in(
             out,
-            language.text("网络提醒", "Network notice"),
+            messages::output_network_notice(language),
             &clean(&notice),
             language,
         )?;
         return field_in(
             out,
-            language.text("下一步", "Next"),
-            language.text(
-                "导出报告：cor diagnose --output cor-diagnose.json",
-                "Export diagnostics: cor diagnose --output cor-diagnose.json",
-            ),
+            messages::output_next_step(language),
+            messages::output_diagnose_export_hint(language),
             language,
         );
     }
     if let Some(summary) = crate::host_network::holder_summary_in(value, language) {
         field_in(
             out,
-            language.text("TUN 持有进程", "TUN holders"),
+            messages::output_tun_holders(language),
             &clean(&summary),
             language,
         )?;
@@ -866,54 +825,50 @@ fn network_notice(out: &mut dyn Write, value: &Value, language: Language) -> Res
 }
 
 fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()> {
-    use clash_client_core::error_message::localize_diagnostic;
+    use clash_client_core::probe::HTTP_HEADER_TIMING_EVIDENCE;
 
     if value["offline"] == true {
-        for (chinese, english, key) in [
-            ("客户端版本", "Client version", "version"),
-            ("采集时间", "Captured", "captured_at"),
-            ("程序路径", "Executable", "executable"),
-            ("数据目录", "Data directory", "data_directory"),
+        for (label, key) in [
+            (
+                messages::output_diagnose_client_version(language),
+                "version",
+            ),
+            (messages::output_diagnose_captured(language), "captured_at"),
+            (messages::output_diagnose_executable(language), "executable"),
+            (
+                messages::output_profile_data_directory(language),
+                "data_directory",
+            ),
         ] {
-            field_in(
-                out,
-                language.text(chinese, english),
-                &text_in(value, key, language),
-                language,
-            )?;
+            field_in(out, label, &text_in(value, key, language), language)?;
         }
         let log = &value["local_evidence"]["daemon_log"];
         let log_state = match log["state"].as_str() {
-            Some("collected") => language.text("已采集", "Collected").to_owned(),
-            Some("missing") => language.text("未找到", "Not found").to_owned(),
-            Some("withheld") => language.text("已隐藏", "Withheld").to_owned(),
-            Some("unavailable") => language.text("不可用", "Unavailable").to_owned(),
+            Some("collected") => messages::output_diagnose_collected(language).to_owned(),
+            Some("missing") => messages::output_diagnose_missing(language).to_owned(),
+            Some("withheld") => messages::output_diagnose_withheld(language).to_owned(),
+            Some("unavailable") => messages::output_diagnose_unavailable(language).to_owned(),
             _ => text_in(log, "state", language),
         };
         field_in(
             out,
-            language.text("后台日志采集", "Background log capture"),
+            messages::output_diagnose_log_capture(language),
             &log_state,
             language,
         )?;
         network_notice(out, &value["host_routes"], language)?;
-        return message(
-            out,
-            language.text(
-                "仅收集本地现场，未检测网络或连接后台；用 --output cor-diagnose.json 保存完整报告。",
-                "Local evidence only; no network tests or background connection. Save the full report with --output cor-diagnose.json.",
-            ),
-        );
+        return message(out, messages::output_diagnose_offline(language));
     }
     field_in(
         out,
-        language.text("DNS 检测域名", "DNS test domain"),
+        messages::output_diagnose_dns_host(language),
         &text_in(value, "dns_host", language),
         language,
     )?;
-    for (chinese, english, key) in [
-        ("系统 DNS", "System DNS", "system_dns"),
-        ("当前内核 DNS", "Current core DNS", "core_dns"),
+    let separator = messages::output_list_separator(language);
+    for (label, key) in [
+        (messages::output_system_dns(language), "system_dns"),
+        (messages::output_diagnose_core_dns(language), "core_dns"),
     ] {
         let result = &value[key];
         let description = if let Some(answers) = result["Ok"].as_array() {
@@ -922,42 +877,31 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
                 .filter_map(Value::as_str)
                 .map(clean)
                 .collect::<Vec<_>>()
-                .join(language.text("、", ", "))
+                .join(separator)
         } else if let Some(error) = result["Err"].as_str() {
-            format!(
-                "{}{}",
-                language.text("失败：", "Failed: "),
-                clean(&localize_diagnostic(error, language))
-            )
+            messages::output_diagnose_failed(language, clean(&localize_diagnostic(error, language)))
         } else {
-            language.text("未检测", "Not checked").to_owned()
+            messages::output_diagnose_not_checked(language).to_owned()
         };
-        field_in(out, language.text(chinese, english), &description, language)?;
+        field_in(out, label, &description, language)?;
     }
-    for (chinese, english, key) in [
+    for (label, key) in [
         (
-            "系统路由 HTTP（不使用代理环境变量）",
-            "System route HTTP (without proxy environment variables)",
+            messages::output_diagnose_system_http(language),
             "system_route_http",
         ),
-        ("本地代理 HTTP", "Local proxy HTTP", "http"),
-        ("代理 IPv4 出口", "Proxy IPv4 exit", "ipv4"),
-        ("代理 IPv6 出口", "Proxy IPv6 exit", "ipv6"),
+        (messages::output_diagnose_proxy_http(language), "http"),
+        (messages::output_diagnose_proxy_ipv4(language), "ipv4"),
+        (messages::output_diagnose_proxy_ipv6(language), "ipv6"),
     ] {
         let probe = &value[key];
         let status = &probe["status"];
         let description = if let Some(error) = probe["error"].as_str() {
-            format!(
-                "{}{}",
-                language.text("失败：", "Failed: "),
-                clean(&localize_diagnostic(error, language))
-            )
+            messages::output_diagnose_failed(language, clean(&localize_diagnostic(error, language)))
         } else if status.is_number() {
             let detail = text_in(probe, "detail", language);
-            let detail = if language == Language::English
-                && detail == format!("HTTP {status} · 响应头耗时，不是 ICMP 延迟")
-            {
-                format!("HTTP {status} · Response header time, not ICMP latency")
+            let detail = if detail == format!("HTTP {status} · {HTTP_HEADER_TIMING_EVIDENCE}") {
+                messages::output_diagnose_http_detail(language, status)
             } else {
                 detail
             };
@@ -967,14 +911,14 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
                 text_in(probe, "millis", language)
             )
         } else {
-            language.text("未检测", "Not checked").to_owned()
+            messages::output_diagnose_not_checked(language).to_owned()
         };
-        field_in(out, language.text(chinese, english), &description, language)?;
+        field_in(out, label, &description, language)?;
     }
     if let Some(error) = value["backend_error"].as_str() {
         field_in(
             out,
-            language.text("后台", "Background"),
+            messages::output_diagnose_background(language),
             &clean(&localize_diagnostic(error, language)),
             language,
         )?;
@@ -989,12 +933,12 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
     .into_iter()
     .filter_map(|(key, name)| (environment[key] == true).then_some(name))
     .collect();
-    let configured = configured.join(language.text("、", ", "));
+    let configured = configured.join(separator);
     field_in(
         out,
-        language.text("终端代理环境变量", "Terminal proxy environment variables"),
+        messages::output_diagnose_proxy_environment(language),
         if configured.is_empty() {
-            language.text("未检测到常见代理变量", "None detected")
+            messages::output_diagnose_proxy_environment_empty(language)
         } else {
             &configured
         },
@@ -1003,7 +947,7 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
     if value["tun_configuration"]["state"] == "observed" {
         field_in(
             out,
-            language.text("TUN 配置", "TUN configuration"),
+            messages::output_diagnose_tun_configuration(language),
             &tun_configuration(&value["tun_configuration"], language),
             language,
         )?;
@@ -1013,12 +957,18 @@ fn diagnose(out: &mut dyn Write, value: &Value, language: Language) -> Result<()
 
 fn tun_configuration(value: &Value, language: Language) -> String {
     let mut parts = Vec::new();
-    for (chinese, english, key) in [
-        ("自动路由", "Auto route", "auto_route"),
-        ("严格路由", "Strict route", "strict_route"),
-        ("DNS 劫持", "DNS hijack", "dns_hijack"),
-        ("IPv4 路由段", "IPv4 route ranges", "inet4_route_address"),
-        ("IPv6 路由段", "IPv6 route ranges", "inet6_route_address"),
+    for (label, key) in [
+        (messages::output_tun_auto_route(language), "auto_route"),
+        (messages::output_tun_strict_route(language), "strict_route"),
+        (messages::output_tun_dns_hijack(language), "dns_hijack"),
+        (
+            messages::output_tun_ipv4_ranges(language),
+            "inet4_route_address",
+        ),
+        (
+            messages::output_tun_ipv6_ranges(language),
+            "inet6_route_address",
+        ),
     ] {
         let value = &value[key];
         if value.is_null() {
@@ -1032,18 +982,16 @@ fn tun_configuration(value: &Value, language: Language) -> String {
                     _ => value.to_string(),
                 })
                 .collect::<Vec<_>>()
-                .join(language.text("、", ", ")),
+                .join(messages::output_list_separator(language)),
             Value::String(value) => clean(value),
             _ => value.to_string(),
         };
         if !text.is_empty() {
-            parts.push(format!("{}={text}", language.text(chinese, english)));
+            parts.push(format!("{label}={text}"));
         }
     }
     if parts.is_empty() {
-        language
-            .text("已读取，但未声明覆盖限制", "Read; no route limits declared")
-            .into()
+        messages::output_tun_no_limits(language).into()
     } else {
         parts.join(" · ")
     }
@@ -1054,7 +1002,11 @@ fn message(out: &mut dyn Write, message: &str) -> Result<()> {
     Ok(())
 }
 fn field_in(out: &mut dyn Write, key: &str, value: &str, language: Language) -> Result<()> {
-    writeln!(out, "{key}{}{value}", language.text("：", ": "))?;
+    writeln!(
+        out,
+        "{key}{}{value}",
+        messages::output_field_separator(language)
+    )?;
     Ok(())
 }
 fn rows(value: &Value) -> &[Value] {
@@ -1073,7 +1025,7 @@ pub(super) fn download_progress(
             fields::bytes(progress.total),
             fields::bytes(progress.bytes_per_second)
         ),
-        Language::English => format!(
+        _ => format!(
             "Download: {} / {} · Speed: {}/s · Route: {route}",
             fields::bytes(progress.received),
             fields::bytes(progress.total),
@@ -1113,12 +1065,7 @@ fn tree(
                     continue;
                 }
                 let name = if settings {
-                    match language {
-                        Language::SimplifiedChinese => format!("{}（{}）", label(key), clean(key)),
-                        Language::English => {
-                            format!("{} ({})", label_in(key, language), clean(key))
-                        }
-                    }
+                    messages::output_annotated_value(language, label_in(key, language), clean(key))
                 } else {
                     clean(label_in(key, language))
                 };
@@ -1160,7 +1107,7 @@ fn tree(
                         Language::SimplifiedChinese => {
                             writeln!(out, "{indent}第 {} 项", index + 1)?
                         }
-                        Language::English => writeln!(out, "{indent}Item {}", index + 1)?,
+                        _ => writeln!(out, "{indent}Item {}", index + 1)?,
                     }
                     tree(out, value, depth + 1, false, language, context)?;
                 } else {

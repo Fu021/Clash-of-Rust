@@ -388,7 +388,7 @@ fn review_input(state: &mut State) {
     };
     let description = match state.language {
         Language::SimplifiedChinese => format!("保存规则：{}", input.raw),
-        Language::English => format!("Save rule: {}", input.raw),
+        _ => format!("Save rule: {}", input.raw),
     };
     review(state, change, description);
 }
@@ -432,7 +432,7 @@ fn review_operation(state: &mut State) {
     };
     let description = match state.language {
         Language::SimplifiedChinese => format!("{label}规则：{}", row.raw),
-        Language::English => format!("{label} rule: {}", row.raw),
+        _ => format!("{label} rule: {}", row.raw),
     };
     review(state, change, description);
 }
@@ -478,14 +478,11 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
         if let Some(error) = state
             .shortcuts
             .as_ref()
-            .and_then(|status| status.error.as_ref())
+            .and_then(|status| status.error_in(language))
         {
             lines.extend(wrapped(
                 vec![(
-                    match language {
-                        Language::SimplifiedChinese => format!("读取规则失败：{error}"),
-                        Language::English => format!("Failed to load rules: {error}"),
-                    },
+                    crate::messages::tui_rules_read_failed(language, error),
                     Tone::Warning,
                 )],
                 width,
@@ -506,23 +503,19 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
     if let Some(error) = state
         .shortcuts
         .as_ref()
-        .and_then(|status| status.error.as_ref())
+        .and_then(|status| status.error_in(language))
     {
         lines.push((
-            match language {
-                Language::SimplifiedChinese => format!("读取规则失败，旧列表仅供参考：{error}"),
-                Language::English => format!("Failed to load rules; showing old list: {error}"),
-            },
+            crate::messages::tui_rules_read_failed_showing_old(language, error),
             Tone::Warning,
         ));
     }
     if let Some(input) = &browser.input {
         lines.push((
-            match (language, input.id.is_some()) {
-                (Language::SimplifiedChinese, true) => "编辑规则 · 单行文本",
-                (Language::SimplifiedChinese, false) => "新增规则 · 单行文本",
-                (Language::English, true) => "Edit rule · Single line",
-                (Language::English, false) => "Add rule · Single line",
+            if input.id.is_some() {
+                crate::messages::tui_rule_edit_heading(language)
+            } else {
+                crate::messages::tui_rule_add_heading(language)
             }
             .into(),
             Tone::Accent,
@@ -541,7 +534,7 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
                 Language::SimplifiedChinese => {
                     format!("策略：{}", browser.document.policies.join(" / "))
                 }
-                Language::English => format!("Policies: {}", browser.document.policies.join(" / ")),
+                _ => format!("Policies: {}", browser.document.policies.join(" / ")),
             },
             Tone::Muted,
         ));
@@ -611,7 +604,7 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
                 Language::SimplifiedChinese => {
                     format!("{} 条 · 来源：订阅 / 自定义 / 快捷规则", browser.rows.len())
                 }
-                Language::English => {
+                _ => {
                     format!(
                         "{} rules · Subscription / Custom / Shortcut",
                         browser.rows.len()

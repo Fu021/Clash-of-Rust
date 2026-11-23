@@ -1,4 +1,5 @@
 //! Automatic routes shared by update discovery, installers and subscriptions.
+use crate::{config::Language, messages};
 use anyhow::Result;
 use reqwest::ClientBuilder;
 
@@ -73,6 +74,17 @@ impl Route {
             None => builder,
         })
     }
+}
+
+pub(crate) fn localized_route_label(label: &str, language: Language) -> Option<&'static str> {
+    Some(match label {
+        "内核代理" => messages::download_route_core_proxy(language),
+        "系统代理" => messages::download_route_system_proxy(language),
+        "内核直连" => messages::download_route_core_direct(language),
+        "系统网络" => messages::download_route_system_network(language),
+        "直连" => messages::download_route_direct(language),
+        _ => return None,
+    })
 }
 
 pub fn request_error(error: reqwest::Error, target: &str) -> anyhow::Error {

@@ -1,3 +1,4 @@
+use crate::messages;
 use clash_mobile_runtime::core::{claude_check::Report, config::Language};
 use std::sync::{
     Mutex,
@@ -131,12 +132,12 @@ impl BrowserStatus {
     pub(crate) fn render(self, language: Language) -> &'static str {
         match self {
             Self::Idle => "",
-            Self::Sampling => language.text("等待浏览器采样…", "Waiting for browser sample…"),
-            Self::Complete => language.text("浏览器采样已完成", "Browser sample complete"),
-            Self::OpenFailed => language.text("无法打开浏览器", "Could not open the browser"),
-            Self::Unavailable => language.text("浏览器采样失败", "Browser sampling failed"),
-            Self::TimedOut => language.text("浏览器采样超时", "Browser sampling timed out"),
-            Self::Stopped => language.text("浏览器采样已停止", "Browser sampling stopped"),
+            Self::Sampling => messages::claude_browser_sampling(language),
+            Self::Complete => messages::claude_browser_complete(language),
+            Self::OpenFailed => messages::claude_browser_open_failed(language),
+            Self::Unavailable => messages::claude_browser_unavailable(language),
+            Self::TimedOut => messages::claude_browser_timed_out(language),
+            Self::Stopped => messages::claude_browser_stopped(language),
         }
     }
 }

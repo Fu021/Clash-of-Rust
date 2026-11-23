@@ -146,7 +146,7 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 clash_client_core::config::Language::SimplifiedChinese => {
                     format!("删除订阅“{}”？", p.name)
                 }
-                clash_client_core::config::Language::English => {
+                _ => {
                     format!("Delete subscription “{}”?", p.name)
                 }
             };

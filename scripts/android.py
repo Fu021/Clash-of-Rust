@@ -343,7 +343,7 @@ def seed_resources():
     generated = ANDROID/'app/generated-res'
     if generated.exists():
         shutil.rmtree(generated)
-    shutil.copytree(ROOT/'translations/android/res', generated)
+    shutil.copytree(ROOT/'translations/android/system', generated)
     # Android adaptive launchers do not need the 1254-pixel source artwork.
     logo = generated/'drawable-nodpi/app_logo.png'
     logo.parent.mkdir(parents=True, exist_ok=True)

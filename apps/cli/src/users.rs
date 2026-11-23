@@ -382,8 +382,7 @@ mod linux {
                 let name = &account.name;
                 anyhow::anyhow!(match language {
                     Language::SimplifiedChinese => format!("用户 {name} 的订阅索引格式无效"),
-                    Language::English =>
-                        format!("Invalid subscription index format for user {name}"),
+                    _ => format!("Invalid subscription index format for user {name}"),
                 })
             })?;
             let settings =

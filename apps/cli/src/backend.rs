@@ -174,16 +174,14 @@ pub async fn connect(args: &Args, spawn: bool) -> Result<Option<Remote>> {
             bail!(Unavailable(match args.language() {
                 Language::SimplifiedChinese =>
                     format!("后台启动失败（{status}）；请查看 {}", log.display()),
-                Language::English =>
-                    format!("Backend startup failed ({status}); see {}", log.display()),
+                _ => format!("Backend startup failed ({status}); see {}", log.display()),
             }));
         }
         if tokio::time::Instant::now() >= deadline {
             bail!(Unavailable(match args.language() {
                 Language::SimplifiedChinese =>
                     format!("等待后台启动超时；请查看 {}", log.display()),
-                Language::English =>
-                    format!("Timed out waiting for the backend; see {}", log.display()),
+                _ => format!("Timed out waiting for the backend; see {}", log.display()),
             }));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

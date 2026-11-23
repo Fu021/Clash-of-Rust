@@ -1,3 +1,4 @@
+use crate::messages;
 use anyhow::{Context, Result, ensure};
 #[cfg(test)]
 use clash_mobile_runtime::core::config::Settings;
@@ -482,10 +483,7 @@ impl SavedProtectionRecovery {
 
     fn reopen(&self, root: &Path, language: Language) {
         let mut recovery = self.lock();
-        let interrupted = language.text(
-            "上次保护切换未完成，请重试恢复原网络状态",
-            "The previous protection change was interrupted. Retry to restore the previous network state.",
-        );
+        let interrupted = messages::protection_change_interrupted(language);
         if let Some(rollback) = recovery.as_mut() {
             match &mut rollback.phase {
                 RollbackPhase::Applying {
@@ -515,14 +513,7 @@ impl SavedProtectionRecovery {
             Err(_) => Some(Rollback {
                 record: None,
                 phase: RollbackPhase::Failed,
-                last_error: Some(
-                    language
-                        .text(
-                            "无法读取保护恢复记录，已暂停 VPN 自动连接",
-                            "The protection recovery record could not be read. Automatic VPN connection is paused.",
-                        )
-                        .into(),
-                ),
+                last_error: Some(messages::protection_record_unreadable(language).into()),
             }),
         };
     }

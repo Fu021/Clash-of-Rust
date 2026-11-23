@@ -1,3 +1,4 @@
+use crate::messages;
 use anyhow::{Context, Result, ensure};
 use clash_mobile_runtime::core::config::Language;
 use std::sync::{
@@ -70,23 +71,19 @@ impl ProfilePicker {
     }
 
     pub fn save_content(&self, source: &str, language: Language) -> Result<Option<&str>> {
-        let draft = self.draft().context(language.text(
-            "请先打开添加订阅表单",
-            "Open the add subscription form first",
-        ))?;
+        let draft = self
+            .draft()
+            .context(messages::open_subscription_form(language))?;
         ensure!(
             draft.selection.is_none(),
             "{}",
-            language.text("请等待文件选择完成", "Wait for file selection to finish")
+            messages::wait_for_file_selection(language)
         );
         let content = draft.content.as_deref();
         ensure!(
             content.is_none() || source.trim().is_empty(),
             "{}",
-            language.text(
-                "请选择本地文件或输入订阅链接，两者只能选一个",
-                "Choose either a local file or a subscription URL"
-            )
+            messages::subscription_source_conflict(language)
         );
         Ok(content)
     }

@@ -1,9 +1,10 @@
 use crate::tui::{
-    home,
+    home::{self, CheckFailure},
     input::Key,
     model::{Action, Page, State, demo_poll},
     render,
 };
+use clash_client_core::config::Language;
 use clash_client_runtime::{
     control::Owner,
     update::{Asset, Available, Package},
@@ -87,7 +88,7 @@ fn home_update_states_never_invent_an_installable_package() {
     assert!(!home::items(&state).contains(&"update_install"));
     home::accept(&mut state, Ok(None));
     assert!(content(&state, 100, 30).contains("当前通道已是最新版本"));
-    home::accept(&mut state, Err("连接失败".into()));
+    home::accept(&mut state, Err(CheckFailure::Check("连接失败".into())));
     assert!(content(&state, 100, 30).contains("检查失败：连接失败"));
     home::accept(&mut state, Ok(Some(available(false))));
     assert!(!home::items(&state).contains(&"update_install"));
@@ -129,20 +130,43 @@ fn english_home_preserves_routes_and_explains_native_updates() {
 
     home::accept(&mut state, Ok(None));
     assert!(content(&state, 120, 40).contains("Up to date on this channel"));
-    home::accept(&mut state, Err("upstream detail".into()));
+    home::accept(
+        &mut state,
+        Err(CheckFailure::Check("upstream detail".into())),
+    );
     assert!(content(&state, 120, 40).contains("Check failed: upstream detail"));
     let reason = "检查更新失败（已尝试 4 次）：校验文件格式无效: 東京";
-    home::accept(&mut state, Err(reason.into()));
+    home::accept(&mut state, Err(CheckFailure::Check(reason.into())));
     let screen = content(&state, 160, 40);
     assert!(
         screen.contains("Update check failed after 4 attempts: The checksum file is invalid: 東京"),
         "{screen}"
     );
     assert!(!screen.contains("Check failed: Update check failed"));
-    assert_eq!(
-        state.updates.result.as_ref().unwrap().as_ref().unwrap_err(),
-        reason
-    );
+    assert!(matches!(
+        &state.updates.result,
+        Some(Err(CheckFailure::Check(error))) if error == reason
+    ));
+    state.set_language(Language::SimplifiedChinese);
+    let screen = content(&state, 160, 40);
+    assert!(screen.contains(reason), "{screen}");
+    assert!(!screen.contains("检查失败：检查更新失败"));
+}
+
+#[test]
+fn update_task_failure_is_rendered_in_the_current_language() {
+    let mut state = state();
+    state.language = Language::SimplifiedChinese;
+    home::begin_check(&mut state, Instant::now()).unwrap();
+    state.language = Language::English;
+    home::accept(&mut state, Err(CheckFailure::Task("task cancelled".into())));
+    let english = content(&state, 120, 40);
+    assert!(english.contains("Update check failed: task cancelled"));
+    assert!(!english.contains("Check failed: Update check failed"));
+    state.language = Language::SimplifiedChinese;
+    let chinese = content(&state, 120, 40);
+    assert!(chinese.contains("更新检查任务失败：task cancelled"));
+    assert!(!chinese.contains("检查失败：更新检查任务失败"));
 }
 
 #[test]
@@ -279,14 +303,17 @@ fn automatic_update_checks_resume_after_repeated_connection_failures() {
     assert!(home::due(&mut state, start));
     home::begin_check(&mut state, start).unwrap();
     assert!(!home::due(&mut state, start + Duration::from_secs(300)));
-    home::accept(&mut state, Err("网络连接失败".into()));
+    home::accept(&mut state, Err(CheckFailure::Check("网络连接失败".into())));
     assert!(content(&state, 120, 40).contains("检查失败：网络连接失败"));
     assert!(!home::due(&mut state, start + Duration::from_secs(299)));
 
     let retry = start + Duration::from_secs(300);
     assert!(home::due(&mut state, retry));
     home::begin_check(&mut state, retry).unwrap();
-    home::accept(&mut state, Err("GitHub 暂不可达".into()));
+    home::accept(
+        &mut state,
+        Err(CheckFailure::Check("GitHub 暂不可达".into())),
+    );
     assert!(content(&state, 120, 40).contains("检查失败：GitHub 暂不可达"));
     assert!(!home::due(&mut state, start + Duration::from_secs(599)));
 

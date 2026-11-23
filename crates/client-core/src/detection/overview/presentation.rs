@@ -1,5 +1,5 @@
 use super::{Health, Status, TARGETS};
-use crate::{config::Language, ip_check};
+use crate::{config::Language, ip_check, messages};
 use std::net::IpAddr;
 
 pub type Probe<T> = Option<Result<T, String>>;
@@ -56,11 +56,11 @@ fn item(id: &str, title: &str, value: &str, detail: &str, tone: i32) -> Item {
 
 fn probe_error(error: &str, language: Language) -> &str {
     match error {
-        "超时" => language.text("超时", "Timed out"),
-        "无法连接" => language.text("无法连接", "Connection failed"),
-        "请求失败" => language.text("请求失败", "Request failed"),
-        "未返回地址" => language.text("未返回地址", "No address returned"),
-        "检测任务中断" => language.text("检测任务中断", "Check interrupted"),
+        "超时" => messages::overview_timeout(language),
+        "无法连接" => messages::overview_connection_failed(language),
+        "请求失败" => messages::overview_request_failed(language),
+        "未返回地址" => messages::overview_no_address(language),
+        "检测任务中断" => messages::overview_interrupted(language),
         _ => error,
     }
 }
@@ -133,15 +133,15 @@ impl View<'_> {
 
     pub fn present_in(&self, language: Language) -> Presentation {
         let waiting = if self.busy {
-            language.text("检测中…", "Checking…")
+            messages::overview_checking(language)
         } else {
             "—"
         };
-        let lan_title = language.text("内网 IP", "Local IP");
-        let dns_title = language.text("DNS 服务器", "DNS servers");
-        let exit_title = language.text("出口 IP", "Exit IP");
-        let lookup_title = language.text("DNS 解析", "DNS lookup");
-        let start_core = language.text("启动内核后检测", "Start the core to check");
+        let lan_title = messages::overview_local_ip(language);
+        let dns_title = messages::overview_dns_servers(language);
+        let exit_title = messages::overview_exit_ip(language);
+        let lookup_title = messages::overview_dns_lookup(language);
+        let start_core = messages::overview_start_core(language);
         let (lan, dns_servers) = match self.host {
             None => (
                 item("lan", lan_title, waiting, "", 4),
@@ -151,14 +151,14 @@ impl View<'_> {
                 item(
                     "lan",
                     lan_title,
-                    language.text("读取失败", "Read failed"),
+                    messages::overview_read_failed(language),
                     probe_error(error, language),
                     3,
                 ),
                 item(
                     "dns",
                     dns_title,
-                    language.text("读取失败", "Read failed"),
+                    messages::overview_read_failed(language),
                     probe_error(error, language),
                     3,
                 ),
@@ -169,14 +169,14 @@ impl View<'_> {
                     info.addresses.iter().any(IpAddr::is_ipv6),
                 ) {
                     (true, true) => "IPv4 + IPv6",
-                    (true, false) => language.text("仅 IPv4", "IPv4 only"),
-                    (false, true) => language.text("仅 IPv6", "IPv6 only"),
+                    (true, false) => messages::overview_ipv4_only(language),
+                    (false, true) => messages::overview_ipv6_only(language),
                     (false, false) => "",
                 };
                 let mut lan = item(
                     "lan",
                     lan_title,
-                    language.text("未检测到", "Not detected"),
+                    messages::overview_not_detected(language),
                     family,
                     2,
                 );
@@ -188,8 +188,8 @@ impl View<'_> {
                 let mut dns = item(
                     "dns",
                     dns_title,
-                    language.text("未读取到", "Not found"),
-                    language.text("系统解析器配置", "System resolver configuration"),
+                    messages::overview_not_found(language),
+                    messages::overview_resolver_configuration(language),
                     2,
                 );
                 if !info.dns.is_empty() {
@@ -206,7 +206,7 @@ impl View<'_> {
             Some(Err(error)) => item(
                 "exit",
                 exit_title,
-                language.text("检测失败", "Check failed"),
+                messages::ip_check_failed(language),
                 probe_error(error, language),
                 3,
             ),
@@ -214,7 +214,7 @@ impl View<'_> {
                 Err(_) => item(
                     "exit",
                     exit_title,
-                    language.text("未确认", "Unconfirmed"),
+                    messages::ip_exit_unconfirmed(language),
                     &result.summary,
                     2,
                 ),
@@ -240,7 +240,7 @@ impl View<'_> {
             Some(Err(error)) => item(
                 "lookup",
                 lookup_title,
-                language.text("解析失败", "Lookup failed"),
+                messages::overview_lookup_failed(language),
                 probe_error(error, language),
                 3,
             ),
@@ -271,8 +271,8 @@ impl View<'_> {
                     _ if !self.running => item(
                         target.id,
                         target.name,
-                        language.text("未检测", "Not checked"),
-                        language.text("内核未运行", "Core stopped"),
+                        messages::ip_status_untested(language),
+                        messages::overview_core_stopped(language),
                         4,
                     ),
                     None => item(target.id, target.name, waiting, "", 4),
@@ -280,59 +280,46 @@ impl View<'_> {
                         target.id,
                         target.name,
                         probe_error(error, language),
-                        language.text("未获得响应", "No response"),
+                        messages::overview_no_response(language),
                         3,
                     ),
-                    Some(Ok(status)) => {
-                        let detail = format!("HTTP {}", status.status);
-                        match status.health {
-                            Health::Ok | Health::Reachable => {
-                                reachable += 1;
-                                item(
-                                    target.id,
-                                    target.name,
-                                    &format!("{} ms", status.millis),
-                                    &if status.health == Health::Reachable {
-                                        format!("{detail} · {}", language.text("可达", "Reachable"))
-                                    } else {
-                                        detail
-                                    },
-                                    if status.health == Health::Ok { 1 } else { 2 },
-                                )
-                                .with_delay(status.millis)
-                            }
-                            Health::Error => item(
+                    Some(Ok(status)) => match status.health {
+                        Health::Ok | Health::Reachable => {
+                            reachable += 1;
+                            item(
                                 target.id,
                                 target.name,
-                                language.text("服务异常", "Service error"),
-                                &detail,
-                                3,
-                            ),
+                                &format!("{} ms", status.millis),
+                                &if status.health == Health::Reachable {
+                                    messages::overview_http_reachable(language, status.status)
+                                } else {
+                                    format!("HTTP {}", status.status)
+                                },
+                                if status.health == Health::Ok { 1 } else { 2 },
+                            )
+                            .with_delay(status.millis)
                         }
-                    }
+                        Health::Error => item(
+                            target.id,
+                            target.name,
+                            messages::overview_service_error(language),
+                            &format!("HTTP {}", status.status),
+                            3,
+                        ),
+                    },
                 }
             })
             .collect();
         let status = if self.busy {
-            language.text("检测中…", "Checking…").to_owned()
+            messages::overview_checking(language).into()
         } else if !self.running {
-            language
-                .text(
-                    "内核未运行，仅显示本机信息",
-                    "Core stopped; showing local information",
-                )
-                .to_owned()
+            messages::overview_core_stopped_local_only(language).into()
         } else if self.dirty {
-            language
-                .text("等待重新检测", "Waiting to recheck")
-                .to_owned()
+            messages::overview_waiting_to_recheck(language).into()
         } else if !self.measured {
             String::new()
         } else {
-            match language {
-                Language::SimplifiedChinese => format!("可访问 {reachable} / {}", TARGETS.len()),
-                Language::English => format!("Reachable {reachable} / {}", TARGETS.len()),
-            }
+            messages::overview_reachable_count(language, reachable, TARGETS.len())
         };
         Presentation {
             network: vec![lan, exit, dns_servers, lookup],

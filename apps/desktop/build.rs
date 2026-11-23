@@ -1,6 +1,15 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
+#[path = "../../translations/compile_catalog.rs"]
+mod compile_catalog;
+
 fn main() {
+    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    compile_catalog::compile(
+        std::path::Path::new("../../translations"),
+        "desktop/rust",
+        &out.join("messages.rs"),
+    );
     println!("cargo:rerun-if-changed=../../resources/icons/app.ico");
     println!("cargo:rerun-if-env-changed=RC");
     println!("cargo:rerun-if-env-changed=CLASH_OF_RUST_BUILD_VERSION");
@@ -18,7 +27,6 @@ fn main() {
         return;
     }
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let numeric = format!("{},{},{},0", parsed.major, parsed.minor, parsed.patch);
     let icon = root
         .join("../../resources/icons/app.ico")

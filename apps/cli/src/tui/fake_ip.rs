@@ -399,7 +399,7 @@ pub(super) fn panel(state: &State, width: usize, height: usize) -> Vec<(String, 
                     Language::SimplifiedChinese => {
                         format!("恢复默认 · {} 项已停用", editor.disabled_defaults)
                     }
-                    Language::English => {
+                    _ => {
                         format!("Restore defaults · {} disabled", editor.disabled_defaults)
                     }
                 },

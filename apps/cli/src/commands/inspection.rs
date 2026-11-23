@@ -935,7 +935,7 @@ async fn ip(args: &Args) -> Result<()> {
                 clash_client_core::config::Language::SimplifiedChinese => {
                     eprintln!("已完成 {}：{name}", results.len() + 1)
                 }
-                clash_client_core::config::Language::English => {
+                _ => {
                     eprintln!("Completed {}: {name}", results.len() + 1)
                 }
             }

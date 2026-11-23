@@ -65,15 +65,33 @@ Clash-of-Rust/
 │   ├── desktop-protocol/          桌面宿主与窗口间的消息协议
 │   ├── desktop-shell/             托盘等桌面原生集成
 │   └── mobile-ffi/                共享移动会话与 NativeHost 原生能力接口
+├── translations/                  客户端与安装器翻译资源
+│   ├── languages.rs              支持语言、菜单名称与系统语言匹配规则
+│   ├── compile_catalog.rs        Rust 目录校验和消息函数生成
+│   ├── shared/                   跨平台业务的 Rust 消息
+│   ├── cli/                      CLI 与 TUI 的 Rust 消息
+│   ├── runtime/                  桌面与 CLI 共用运行库的 Rust 消息
+│   ├── desktop/
+│   │   ├── rust/                 桌面宿主的 Rust 消息
+│   │   └── slint/                桌面 Slint 翻译
+│   ├── android/
+│   │   ├── rust/                 Android Rust 宿主消息
+│   │   ├── slint/                Android Slint 翻译
+│   │   └── system/               Java 宿主的 Android 字符串资源
+│   └── windows/nsis/             Windows 安装与卸载文案
 ├── resources/                     图标、字体、默认配置、检测数据与第三方声明
+├── examples/                      可导入的示例配置
+├── installer/                     Windows 安装脚本与 Arch 原生包配方
+├── native/mihomo-mobile/          原生桥接预留目录，源码见 apps/android/core/
 ├── scripts/                       构建、验证、打包、缓存和 UI 预览入口
 ├── docs/                          使用、开发、工作流、发布说明与失败复盘
 │   └── agent-todo.md              待办规则、持续跟进、交接与进度汇报
 ├── todo/                          本地任务、排期、验证边界与接续条件（Git 忽略）
 ├── website/                       静态产品网站、图文功能说明与公开发行下载入口
-├── vendor/                        带来源、许可证及移除条件的 Slint/winit 局部修复
+├── vendor/                        带来源、许可证及移除条件的 Slint Android 后端与 winit 修复
+├── .cargo/                        Cargo 按目标共享的构建配置
 ├── .github/
-│   ├── workflows/                 CI、发布、内存及 Android/Ubuntu 兼容验证
+│   ├── workflows/                 CI、发布、内存及 Android / Linux 发行版兼容验证
 │   ├── actions/                   工作流共用的下载与缓存操作
 │   └── build-versions.json         工作流工具与资源版本基线
 ├── Cargo.toml / Cargo.lock        Rust workspace、包版本与已解析依赖
@@ -81,7 +99,7 @@ Clash-of-Rust/
 └── AGENTS.md                      agent 跨任务开发约束
 ```
 
-`client-core` 不依赖 GUI；`mobile-ffi` 不依赖 JNI、Slint 或 Android SDK。桌面 GUI 和 CLI 共用运行时，移动端通过 `NativeHost` 接入原生能力。脚本职责和调用关系见[脚本说明](../scripts/README.md)，界面见 [Slint 说明](../crates/client-ui/README.md)，Android 宿主见[平台说明](../apps/android/README.md)。
+`client-core` 不依赖 GUI；`mobile-ffi` 不依赖 JNI、Slint 或 Android SDK。桌面 GUI 和 CLI 共用运行时，移动端通过 `NativeHost` 接入原生能力。脚本职责和调用关系见[脚本说明](../scripts/README.md)，界面见 [Slint 说明](../crates/client-ui/README.md)，Android 宿主见[平台说明](../apps/android/README.md)，新增语言和文案见[翻译资源](development.md#翻译资源)。
 
 ## 收尾验证
 

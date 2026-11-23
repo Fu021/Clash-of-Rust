@@ -532,18 +532,12 @@ impl Editor {
                     language.text("未进入 VPN", "Outside the VPN").into()
                 } else {
                     self.assignment(&application.package)
-                        .map(|name| match (language, name) {
-                            (core::config::Language::SimplifiedChinese, Some(name)) => {
-                                format!("属于 {name}")
+                        .map(|name| match name {
+                            Some(name) => {
+                                crate::messages::application_rule_assigned(language, name)
                             }
-                            (core::config::Language::English, Some(name)) => {
-                                format!("Assigned to {name}")
-                            }
-                            (core::config::Language::SimplifiedChinese, None) => {
-                                "属于已有规则".into()
-                            }
-                            (core::config::Language::English, None) => {
-                                "Assigned to an existing rule".into()
+                            None => {
+                                crate::messages::application_rule_assigned_existing(language).into()
                             }
                         })
                         .unwrap_or_default()

@@ -1,3 +1,4 @@
+use crate::messages;
 use clash_mobile_runtime::core::{config::Language, error_message, update};
 use std::borrow::Cow;
 
@@ -6,8 +7,7 @@ pub(crate) fn check_failure(error: &str, language: Language) -> Cow<'_, str> {
 }
 
 pub(crate) fn download_failure(error: &str, language: Language) -> String {
-    let detail = error_message::localize(error, language);
-    format!("{}{detail}", language.text("更新失败：", "Update failed: "))
+    messages::update_download_failed(language, error_message::localize(error, language))
 }
 
 #[cfg(test)]

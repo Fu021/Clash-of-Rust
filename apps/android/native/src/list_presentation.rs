@@ -1,8 +1,11 @@
+use crate::messages;
 use clash_mobile_runtime::core::{
     api::Connection,
     config::{Language, Profile},
     connection::{Field, Sort, matches_query},
-    error_message, rule_manager,
+    error_message,
+    model::contains_query,
+    rule_manager,
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -34,37 +37,22 @@ impl LogMessage {
         match self {
             Self::Raw(value) => value.clone(),
             Self::ActionFailed(detail) => error_message::localize(detail, language).into_owned(),
-            Self::NodesUnreachable => language
-                .text(
-                    "全部节点经两个独立目标复测仍不可达，VPN 保持连接",
-                    "All nodes remain unreachable after two independent checks; VPN stays connected",
+            Self::NodesUnreachable => messages::nodes_unreachable(language).into(),
+            Self::StatusRefreshFailed(detail) => {
+                messages::status_refresh_failed(language, error_message::localize(detail, language))
+            }
+            Self::SubscriptionUpdateFailed => {
+                messages::scheduled_subscription_update_failed(language).into()
+            }
+            Self::SubscriptionDownloadFailed(detail) => {
+                messages::scheduled_subscription_download_failed(
+                    language,
+                    error_message::localize(detail, language),
                 )
-                .into(),
-            Self::StatusRefreshFailed(detail) => format!(
-                "{}{}",
-                language.text("状态刷新失败：", "Status refresh failed: "),
-                error_message::localize(detail, language)
-            ),
-            Self::SubscriptionUpdateFailed => language
-                .text(
-                    "订阅定时更新失败，已保留原配置与运行状态",
-                    "Scheduled subscription update failed; configuration and connection preserved",
-                )
-                .into(),
-            Self::SubscriptionDownloadFailed(detail) => format!(
-                "{}{}",
-                language.text(
-                    "订阅定时下载失败，已保留原配置与运行状态：",
-                    "Scheduled subscription download failed; configuration and connection preserved: "
-                ),
-                error_message::localize(detail, language)
-            ),
-            Self::SubscriptionPrepareFailed => language
-                .text(
-                    "订阅定时更新失败，已保留原配置",
-                    "Scheduled subscription update failed; configuration preserved",
-                )
-                .into(),
+            }
+            Self::SubscriptionPrepareFailed => {
+                messages::scheduled_subscription_prepare_failed(language).into()
+            }
         }
     }
 }
@@ -118,20 +106,6 @@ impl ConnectionPager {
         let page = page(matches, self.cursor.index, CONNECTION_PAGE_SIZE, true);
         self.cursor.index = page.index;
         page
-    }
-}
-
-pub(crate) fn contains_query(value: &str, lower_query: &str) -> bool {
-    if lower_query.is_empty() {
-        return true;
-    }
-    if value.is_ascii() && lower_query.is_ascii() {
-        value
-            .as_bytes()
-            .windows(lower_query.len())
-            .any(|part| part.eq_ignore_ascii_case(lower_query.as_bytes()))
-    } else {
-        value.to_lowercase().contains(lower_query)
     }
 }
 
@@ -200,11 +174,12 @@ pub(crate) fn profiles<'a>(
     lower_query: &str,
     requested: usize,
     paginated: bool,
+    language: Language,
 ) -> Page<&'a Profile> {
     let matches = profiles
         .iter()
         .filter(|profile| {
-            contains_query(&profile.name, lower_query)
+            profile.matches_name(profile.display_name(language), lower_query)
                 || contains_query(&profile.source, lower_query)
         })
         .collect();
@@ -217,10 +192,6 @@ pub(crate) fn logs(
     lower_query: &str,
     language: Language,
 ) -> Vec<(String, String)> {
-    let other_language = match language {
-        Language::SimplifiedChinese => Language::English,
-        Language::English => Language::SimplifiedChinese,
-    };
     entries
         .iter()
         .rev()
@@ -231,7 +202,10 @@ pub(crate) fn logs(
             let line = message.display(language);
             (contains_query(&line, lower_query)
                 || (!matches!(message, LogMessage::Raw(_))
-                    && contains_query(&message.display(other_language), lower_query)))
+                    && Language::SUPPORTED.iter().copied().any(|candidate| {
+                        candidate != language
+                            && contains_query(&message.display(candidate), lower_query)
+                    })))
             .then(|| (entry_level.clone(), line))
         })
         .collect()
@@ -355,12 +329,13 @@ mod tests {
                 builtin: false,
             })
             .collect::<Vec<_>>();
-        let by_source = super::profiles(&profiles, "example", 1, true);
+        let language = Language::English;
+        let by_source = super::profiles(&profiles, "example", 1, true, language);
         assert_eq!((by_source.index, by_source.total), (1, 61));
         assert_eq!(by_source.items[0].id, "120");
-        let by_name = super::profiles(&profiles, "école", 0, false);
+        let by_name = super::profiles(&profiles, "école", 0, false, language);
         assert_eq!((by_name.total, by_name.items[0].id.as_str()), (1, "121"));
-        let missing = super::profiles(&profiles, "missing", 8, true);
+        let missing = super::profiles(&profiles, "missing", 8, true, language);
         assert_eq!((missing.index, missing.total), (0, 0));
         assert!(missing.items.is_empty());
     }

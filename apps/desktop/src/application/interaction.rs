@@ -23,14 +23,8 @@ pub(super) enum CopyFeedback {
 impl CopyFeedback {
     pub(super) fn text(self, language: Language) -> &'static str {
         match self {
-            Self::ScriptCopied => language.text(
-                "脚本已复制：在 Claude 网页的开发者工具 Console 中运行，再导入脚本复制的 JSON。脚本不读取账号或 Cookie。",
-                "Script copied. Run it in the Claude page's developer console, then import the copied JSON.",
-            ),
-            Self::Failed => language.text(
-                "无法写入系统剪贴板，请重试。",
-                "Could not write to the system clipboard. Please try again.",
-            ),
+            Self::ScriptCopied => messages::claude_script_copied(language),
+            Self::Failed => messages::clipboard_write_failed(language),
         }
     }
 }
@@ -124,12 +118,10 @@ impl App {
             self.notification_guide_pending = false;
             let language = self.presentation_language;
             let _ = self.ask(
-                language.text("允许系统通知", "Allow system notifications"),
-                language.text(
-                    "Claude 保护的异常连接提醒需要系统通知权限。请在系统设置中允许 Clash of Rust 发送通知。",
-                    "Claude protection needs notification permission to report unexpected connections. Allow Clash of Rust notifications in system settings.",
-                ).into(),
-                language.text("打开通知设置", "Open notification settings"), Pending::NotificationSettings,
+                messages::notification_permission_title(language),
+                messages::notification_permission_detail(language).into(),
+                messages::notification_open_settings(language),
+                Pending::NotificationSettings,
             );
         }
     }
@@ -179,30 +171,15 @@ impl App {
         };
         let active = self.settings.active_profile.as_deref() == Some(&id);
         let language = self.presentation_language;
-        let description = match language {
-            Language::SimplifiedChinese => format!(
-                "将删除“{}”及其缓存配置和自定义规则。{}",
-                profile.name,
-                if active {
-                    "此订阅正在使用，将先切换到默认直连；新连接将不再通过此订阅。"
-                } else {
-                    "此操作无法撤销。"
-                }
-            ),
-            Language::English => format!(
-                "Delete “{}” and its cached configuration and custom rules. {}",
-                profile.name,
-                if active {
-                    "This subscription is active; it will switch to the default direct connection first. New connections will no longer use it."
-                } else {
-                    "This action cannot be undone."
-                }
-            ),
+        let description = if active {
+            messages::subscription_delete_active(language, &profile.name)
+        } else {
+            messages::subscription_delete_inactive(language, &profile.name)
         };
         self.ask(
-            language.text("删除订阅？", "Delete subscription?"),
+            messages::subscription_delete_title(language),
             description,
-            language.text("删除订阅", "Delete subscription"),
+            messages::subscription_delete_confirm(language),
             Pending::Delete(id),
         )
     }
@@ -217,12 +194,9 @@ impl App {
         {
             let language = self.presentation_language;
             let task = self.ask(
-                language.text("退出并放弃修改？", "Discard changes and quit?"),
-                language.text(
-                    "有尚未保存或应用的修改。退出后将丢弃这些修改，并关闭内核、恢复系统代理。",
-                    "Unsaved or unapplied changes will be discarded. The core will stop and the system proxy will be restored.",
-                ).into(),
-                language.text("放弃并退出", "Discard and quit"),
+                messages::quit_discard_title(language),
+                messages::quit_discard_detail(language).into(),
+                messages::quit_discard_confirm(language),
                 Pending::Exit,
             );
             return Task::batch([
@@ -247,12 +221,9 @@ impl App {
                 if !self.profile_name.is_empty() || !self.profile_source.is_empty() {
                     let language = self.presentation_language;
                     self.ask(
-                        language.text("放弃订阅草稿？", "Discard subscription draft?"),
-                        language.text(
-                            "名称或来源尚未导入，关闭后会丢弃本次草稿。",
-                            "The name or source has not been imported. Closing will discard this draft.",
-                        ).into(),
-                        language.text("放弃修改", "Discard changes"),
+                        messages::subscription_discard_draft_title(language),
+                        messages::subscription_discard_draft_detail(language).into(),
+                        messages::discard_changes(language),
                         Pending::CloseImport,
                     )
                 } else {
@@ -412,14 +383,9 @@ impl App {
                 {
                     let language = self.presentation_language;
                     self.ask(
-                        language.text("放弃订阅修改？", "Discard subscription changes?"),
-                        language
-                            .text(
-                                "配置名称或来源的修改尚未保存。",
-                                "Changes to the name or source have not been saved.",
-                            )
-                            .into(),
-                        language.text("放弃修改", "Discard changes"),
+                        messages::subscription_discard_edit_title(language),
+                        messages::subscription_discard_edit_detail(language).into(),
+                        messages::discard_changes(language),
                         Pending::CloseProfile,
                     )
                 } else {
@@ -435,13 +401,10 @@ impl App {
                     if p.name.trim().is_empty()
                         || (p.source.trim().is_empty() && !p.original.1.is_empty())
                     {
-                        p.error = self
-                            .presentation_language
-                            .text(
-                                "配置名称与来源不能为空。",
-                                "The configuration name and source are required.",
-                            )
-                            .into();
+                        p.error = messages::subscription_name_and_source_required(
+                            self.presentation_language,
+                        )
+                        .into();
                         return Some(none());
                     }
                     let action = Action::EditProfile(
@@ -497,9 +460,7 @@ impl App {
                     Task::perform(
                         async move {
                             receiver.await.unwrap_or_else(|_| {
-                                Err(language
-                                    .text("文件选择器已关闭", "File picker closed")
-                                    .into())
+                                Err(messages::file_picker_closed(language).into())
                             })
                         },
                         move |result| Message::FilePicked(edit, result),

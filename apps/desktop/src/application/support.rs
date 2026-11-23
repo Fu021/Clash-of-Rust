@@ -27,7 +27,7 @@ impl App {
 
     pub(super) fn diagnostic_context(&self, context: &str) -> serde_json::Value {
         let language = Language::SimplifiedChinese;
-        let languages = [language, Language::English];
+        let languages = Language::SUPPORTED;
         let notice = if self.error { self.notice.as_str() } else { "" };
         let followups = if self.error && self.notice_visible {
             self.notice_followups.as_slice()
@@ -40,7 +40,8 @@ impl App {
         let error = if self.error
             && !context.is_empty()
             && languages
-                .into_iter()
+                .iter()
+                .copied()
                 .any(|language| self.display_notice_in(language) == context)
         {
             if notice.is_empty() && self.notice_copy_failed {
@@ -50,13 +51,16 @@ impl App {
             }
         } else if self.claude.error
             && languages
-                .into_iter()
+                .iter()
+                .copied()
                 .any(|language| self.claude.status.display(language) == context)
         {
             claude_status.as_ref()
         } else if !network_alert.is_empty()
-            && (context == network_alert
-                || context == self.network_watch.notice_in(settings, Language::English))
+            && languages
+                .iter()
+                .copied()
+                .any(|language| self.network_watch.notice_in(settings, language) == context)
         {
             network_alert.as_str()
         } else {
@@ -75,7 +79,8 @@ impl App {
             .filter(|error| !error.is_empty())
             .find(|error| {
                 languages
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .any(|language| notice::localize_notice(error, true, language) == context)
             })
             .unwrap_or(context)

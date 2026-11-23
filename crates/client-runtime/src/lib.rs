@@ -11,6 +11,10 @@ pub mod assets;
 #[path = "diagnostics/claude/mod.rs"]
 pub mod claude_check;
 pub mod engine;
+mod messages {
+    use crate::config::Language;
+    include!(concat!(env!("OUT_DIR"), "/messages.rs"));
+}
 #[path = "engine/network.rs"]
 mod network;
 pub mod platform;

@@ -606,7 +606,7 @@ impl Store {
                 let legacy = record.get("builtin").is_none();
                 let mut profile: Profile = serde_json::from_value(record)?;
                 if legacy
-                    && profile.name == "默认直连"
+                    && profile.name == profile::DEFAULT_NAME
                     && profile.source.is_empty()
                     && self
                         .profile_path(&profile.id)

@@ -4,13 +4,6 @@ use super::*;
 use rule_manager::{CustomRule, Document, Row, Source};
 
 pub(super) use rule_manager::FORM_TYPES as TYPES;
-pub(super) const SHORTCUT_LABELS: [&str; 5] = [
-    "拦截广告",
-    "私有域名直连",
-    "私有 IP 直连",
-    "国内域名直连",
-    "国内 IP 直连",
-];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceFilter {
@@ -486,12 +479,9 @@ impl App {
             Event::Discard => {
                 if state.dirty() || state.editor_modified() {
                     return self.ask(
-                        language.text("放弃规则修改？", "Discard rule changes?"),
-                        language.text(
-                            "当前未应用的规则顺序、快捷规则与自定义规则修改将被丢弃。",
-                            "Unapplied rule order, shortcut and custom rule changes will be discarded.",
-                        ).into(),
-                        language.text("放弃修改", "Discard changes"),
+                        messages::discard_rule_changes_title(language),
+                        messages::discard_rule_changes_detail(language).into(),
+                        messages::discard_changes(language),
                         desktop_view::Pending::Rules(Event::DiscardConfirmed),
                     );
                 }
@@ -520,12 +510,9 @@ impl App {
                     state.pending_profile = None;
                 } else if state.editor_modified() {
                     return self.ask(
-                        language.text("放弃规则编辑？", "Discard rule edit?"),
-                        language.text(
-                            "这条规则的编辑尚未加入草稿。关闭后将丢弃本次编辑，已有规则草稿仍会保留。",
-                            "This edit has not been added to the draft. Closing discards this edit and keeps the existing rule draft.",
-                        ).into(),
-                        language.text("放弃编辑", "Discard edit"),
+                        messages::discard_rule_edit_title(language),
+                        messages::discard_rule_edit_detail(language).into(),
+                        messages::discard_rule_edit_confirm(language),
                         desktop_view::Pending::Rules(Event::CloseEditorConfirmed),
                     );
                 } else {

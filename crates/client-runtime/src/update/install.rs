@@ -1,5 +1,6 @@
 //! A copied native helper survives replacement of the GUI executable. No scripts.
 use super::Downloaded;
+use crate::messages;
 use anyhow::{Context, Result, bail};
 use clash_client_core::config::Language;
 use serde::{Deserialize, Serialize};
@@ -24,71 +25,55 @@ pub fn localize_installation_message(message: &str, language: Language) -> Cow<'
         return message.into();
     }
     let translated = match message {
-        "安装包已校验，正在准备安装" => {
-            Some("Package verified; preparing installation")
-        }
+        "安装包已校验，正在准备安装" => Some(messages::install_preparing(language)),
         "安装包已校验，等待终端授权；后台仍在运行" => Some(
-            "Package verified; waiting for terminal authorization; background process still running",
+            messages::install_waiting_for_terminal_authorization(language),
         ),
         "安装助手正在处理，尚未确认完成" => {
-            Some("Installer running; completion not yet confirmed")
+            Some(messages::install_pending(language))
         }
-        "正在安装，后台已暂停" => Some("Installing; background process paused"),
-        "正在启动安装助手…" => Some("Starting installer…"),
-        "正在挂载更新安装包…" => Some("Mounting update package…"),
+        "正在安装，后台已暂停" => Some(messages::installing_backend_paused(language)),
+        "正在启动安装助手…" => Some(messages::install_starting_helper(language)),
+        "正在挂载更新安装包…" => Some(messages::install_mounting_package(language)),
         "正在校验更新应用、内核与资源…" => {
-            Some("Verifying application, core and resources…")
+            Some(messages::install_verifying_resources(language))
         }
         "正在请求安装授权，请完成系统确认…" => {
-            Some("Waiting for installation authorization; confirm the system prompt…")
+            Some(messages::install_waiting_for_system_authorization(language))
         }
-        "正在准备更新文件…" => Some("Preparing update files…"),
+        "正在准备更新文件…" => Some(messages::install_preparing_files(language)),
         "更新已准备好，正在退出旧客户端…" => {
-            Some("Update ready; closing the previous client…")
+            Some(messages::install_closing_previous_client(language))
         }
-        "正在替换应用文件…" => Some("Replacing application files…"),
+        "正在替换应用文件…" => Some(messages::install_replacing_files(language)),
         "应用已更新，正在清理安装包并重启…" => {
-            Some("Application updated; cleaning up and restarting…")
+            Some(messages::install_cleanup_and_restart(language))
         }
-        "已取消更新下载" => Some("Update download cancelled"),
-        "安装授权已取消" => Some("Installation authorization cancelled"),
-        "安装已取消" => Some("Installation cancelled"),
+        "已取消更新下载" => Some(messages::install_download_cancelled(language)),
         _ => None,
     };
     if let Some(translated) = translated {
         return translated.into();
     }
     if let Some(rest) = message.strip_prefix("已更新至 ") {
-        for (suffix, translated) in [
-            (
-                "；后台和内核已启动",
-                "; background process and core started",
-            ),
-            (
-                "；后台已恢复，内核保持关闭",
-                "; background process restored; core remains stopped",
-            ),
-            (
-                "；可用 cor start 启动后台",
-                "; run cor start to start the background process",
-            ),
-        ] {
-            if let Some(version) = rest.strip_suffix(suffix) {
-                return format!("Updated to {version}{translated}").into();
-            }
+        if let Some(version) = rest.strip_suffix("；后台和内核已启动") {
+            return messages::install_updated_running(language, version).into();
+        }
+        if let Some(version) = rest.strip_suffix("；后台已恢复，内核保持关闭") {
+            return messages::install_updated_core_stopped(language, version).into();
+        }
+        if let Some(version) = rest.strip_suffix("；可用 cor start 启动后台") {
+            return messages::install_updated_start_backend(language, version).into();
         }
         if !rest.contains('；') {
-            return format!("Updated to {rest}").into();
+            return messages::install_updated(language, rest).into();
         }
     }
     if let Some(rest) = message.strip_prefix("已安装 ")
         && let Some((version, detail)) = rest.split_once("，但恢复后台失败：")
         && let Some(reason) = detail.strip_suffix("；请运行 cor status 检查后重试")
     {
-        return format!(
-            "Installed {version}, but could not restore the background process: {reason}; check cor status and retry"
-        )
-        .into();
+        return messages::install_updated_backend_not_restored(language, reason, version).into();
     }
     if let Some(reason) = message.strip_prefix("更新失败：") {
         let (reason, recovery) = if let Some((reason, recovery)) =
@@ -97,17 +82,17 @@ pub fn localize_installation_message(message: &str, language: Language) -> Cow<'
         {
             (
                 reason,
-                format!("; background recovery also failed: {detail}; run cor start"),
+                messages::install_recovery_failed_suffix(language, detail),
             )
         } else {
             [
                 (
                     "；本次未停止原后台",
-                    "; existing background process not stopped",
+                    messages::install_backend_not_stopped_suffix(language),
                 ),
                 (
                     "；已恢复更新前的后台和内核状态",
-                    "; previous background and core state restored",
+                    messages::install_recovered_suffix(language),
                 ),
             ]
             .into_iter()
@@ -118,169 +103,185 @@ pub fn localize_installation_message(message: &str, language: Language) -> Cow<'
             })
             .unwrap_or_else(|| (reason, String::new()))
         };
-        let reason = super::localize_check_error(reason, Language::English);
-        return format!("Update failed: {reason}{recovery}").into();
+        let reason = super::localize_check_error(reason, language);
+        return messages::install_update_failed(language, reason, recovery).into();
     }
-    localize_installation_reason(message)
+    localize_installation_reason(message, language)
 }
 
-pub(super) fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
+pub(super) fn localize_installation_reason(reason: &str, language: Language) -> Cow<'_, str> {
     let translated = match reason {
-        "安装授权已取消" => Some("Installation authorization cancelled"),
-        "安装已取消" => Some("Installation cancelled"),
+        "安装授权已取消" => Some(messages::install_authorization_cancelled(language)),
+        "安装已取消" => Some(messages::install_cancelled(language)),
         "未获得安装授权，未执行停止后台；请在交互终端重试，或由管理员手动安装" => {
-            Some(
-                "Installation authorization denied; retry in an interactive terminal or ask an administrator to install the package",
-            )
+            Some(messages::install_error_terminal_authorization(language))
         }
         "未获得安装授权，未执行停止后台；当前账户无权通过 sudo 安装此软件包" => {
-            Some(
-                "Installation authorization denied; this account cannot install the package with sudo",
-            )
+            Some(messages::install_error_sudo_denied(language))
         }
-        "安装助手意外退出" => Some("Installer exited unexpectedly"),
+        "安装助手意外退出" => Some(messages::install_error_helper_exited(language)),
         "安装助手意外退出，请检查安全软件" => {
-            Some("Installer exited unexpectedly; check security software")
+            Some(messages::install_error_helper_blocked(language))
         }
         "安装准备或授权超时" => {
-            Some("Installation preparation or authorization timed out")
+            Some(messages::install_error_authorization_timeout(language))
         }
         "安装准备或授权超时，客户端仍在运行，请重试或手动安装" => Some(
-            "Installation preparation or authorization timed out; the client is still running; retry or install manually",
+            messages::install_error_authorization_timeout_running(language),
         ),
         "请先使用 EXE 安装程序安装客户端，再使用自动更新" => {
-            Some("Install the client using the EXE installer before using automatic updates")
+            Some(messages::install_error_exe_required(language))
         }
         "请先安装官方 Linux 软件包，再使用自动更新" => {
-            Some("Install the official Linux package before using automatic updates")
+            Some(messages::install_error_linux_package_required(language))
         }
         "该版本缺少官方 Arch 安装包" => {
-            Some("This release does not contain an official Arch package")
+            Some(messages::install_error_no_arch_package(language))
         }
         "该版本缺少本平台安装包或校验文件" => {
-            Some("This release does not contain a package or checksum for this platform")
+            Some(messages::install_error_no_package_or_checksum(language))
         }
-        "该版本不支持自动安装，请从 Release 手动升级" => Some(
-            "This release does not support automatic installation; upgrade manually from Releases",
-        ),
+        "该版本不支持自动安装，请从 Release 手动升级" => {
+            Some(messages::install_error_manual_upgrade_required(language))
+        }
         "安装包已被删除、替换或拦截" => {
-            Some("The package was removed, replaced or blocked")
+            Some(messages::install_error_package_unavailable(language))
         }
-        "安装包必须是普通文件" => Some("The package must be a regular file"),
-        "安装包超过大小限制" => Some("The package exceeds the size limit"),
-        "安装包校验失败，已停止安装" => {
-            Some("Package verification failed; installation stopped")
+        "安装包必须是普通文件" => {
+            Some(messages::install_error_regular_file_required(language))
         }
+        "安装包超过大小限制" => Some(messages::install_error_package_too_large(language)),
+        "安装包校验失败，已停止安装" => Some(
+            messages::install_error_package_verification_failed(language),
+        ),
         "安装包 SHA256 校验失败，请重试" => {
-            Some("Package SHA256 verification failed; retry")
+            Some(messages::install_error_package_checksum_mismatch(language))
         }
-        "安装包大小与 Release 不一致" => Some("Package size does not match the release"),
-        "安装包下载不完整" => Some("Package download is incomplete"),
-        "下载响应不完整（HTTP 206）" => Some("Incomplete download response (HTTP 206)"),
-        "下载持续低于 32 KiB/s" => Some("Download stayed below 32 KiB/s"),
-        "下载速度持续下降" => Some("Download speed remained low after a drop"),
-        "无法读取安装包" => Some("Could not read the package"),
-        "安装包路径无效" => Some("The package path is invalid"),
+        "安装包大小与 Release 不一致" => {
+            Some(messages::install_error_package_size_mismatch(language))
+        }
+        "安装包下载不完整" => Some(messages::install_error_package_incomplete(language)),
+        "下载响应不完整（HTTP 206）" => {
+            Some(messages::install_error_partial_response(language))
+        }
+        "下载持续低于 32 KiB/s" => Some(messages::install_error_download_too_slow(language)),
+        "下载速度持续下降" => {
+            Some(messages::install_error_download_speed_dropped(language))
+        }
+        "无法读取安装包" => Some(messages::install_error_package_unreadable(language)),
+        "安装包路径无效" => Some(messages::install_error_package_path_invalid(language)),
         "无法锁定安装包目录，请关闭占用程序后重试" => {
-            Some("Could not lock the package directory; close programs using it and retry")
+            Some(messages::install_error_package_directory_locked(language))
         }
-        "无法暂存安装包" => Some("Could not stage the package"),
-        "暂存时安装包大小发生变化" => Some("The package size changed while staging"),
+        "无法暂存安装包" => Some(messages::install_error_package_stage_failed(language)),
+        "暂存时安装包大小发生变化" => {
+            Some(messages::install_error_package_size_changed(language))
+        }
         "无法创建下载目录，请检查磁盘权限" => {
-            Some("Could not create the download directory; check disk permissions")
+            Some(messages::install_error_download_directory_failed(language))
         }
         "无法写入安装包，请检查磁盘空间与权限" => {
-            Some("Could not write the package; check disk space and permissions")
+            Some(messages::install_error_package_write_failed(language))
         }
         "写入失败，请检查磁盘空间与权限" => {
-            Some("Write failed; check disk space and permissions")
+            Some(messages::install_error_write_failed(language))
         }
-        "无法保存安装包" => Some("Could not save the package"),
-        "校验文件格式无效" => Some("The checksum file is invalid"),
-        "校验文件下载失败" => Some("Checksum download failed"),
-        "校验文件下载中断" => Some("Checksum download was interrupted"),
-        "校验文件过大" => Some("The checksum file is too large"),
-        "安装包下载失败" => Some("Package download failed"),
-        "安装包信息查询超时" => Some("Package information request timed out"),
-        "无法读取安装包大小" => Some("Could not read the package size"),
-        "安装包大小无效" => Some("The package size is invalid"),
-        "Release 校验信息不一致" => Some("Release checksum information does not match"),
-        "无法创建下载连接" => Some("Could not create a download connection"),
-        "无法创建更新检查连接" => Some("Could not create an update check connection"),
+        "无法保存安装包" => Some(messages::install_error_package_save_failed(language)),
+        "校验文件格式无效" => Some(messages::install_error_checksum_invalid(language)),
+        "校验文件下载失败" => {
+            Some(messages::install_error_checksum_download_failed(language))
+        }
+        "校验文件下载中断" => Some(messages::install_error_checksum_interrupted(language)),
+        "校验文件过大" => Some(messages::install_error_checksum_too_large(language)),
+        "安装包下载失败" => Some(messages::install_error_download_failed(language)),
+        "安装包信息查询超时" => {
+            Some(messages::install_error_package_info_timeout(language))
+        }
+        "无法读取安装包大小" => {
+            Some(messages::install_error_package_size_unreadable(language))
+        }
+        "安装包大小无效" => Some(messages::install_error_package_size_invalid(language)),
+        "Release 校验信息不一致" => {
+            Some(messages::install_error_release_checksum_mismatch(language))
+        }
+        "无法创建下载连接" => {
+            Some(messages::install_error_download_connection_failed(language))
+        }
+        "无法创建更新检查连接" => {
+            Some(messages::install_error_check_connection_failed(language))
+        }
         "更新检查超时，请检查代理或稍后重试" => {
-            Some("Update check timed out; check the proxy or retry later")
+            Some(messages::install_error_check_timeout(language))
         }
         "缺少 pkexec，无法请求安装授权" => {
-            Some("pkexec is unavailable; cannot request installation authorization")
+            Some(messages::install_error_pkexec_missing(language))
         }
         "无法获得安装授权，请检查桌面授权服务" => {
-            Some("Installation authorization failed; check the desktop authorization service")
+            Some(messages::install_error_desktop_authorization(language))
         }
         "DEB 安装失败，请检查包管理器占用、依赖与磁盘空间" => {
-            Some("DEB installation failed; check the package manager, dependencies and disk space")
+            Some(messages::install_error_deb_failed(language))
         }
         "Arch 原生包 安装失败，请检查包管理器占用、依赖与磁盘空间" => {
-            Some(
-                "Arch package installation failed; check the package manager, dependencies and disk space",
-            )
+            Some(messages::install_error_arch_failed(language))
         }
         "客户端未能正常退出或文件被占用，请退出后重试" => {
-            Some("The client could not exit or files are in use; exit and retry")
+            Some(messages::install_error_client_in_use(language))
         }
-        "安装包架构与当前 Windows 不兼容，请下载匹配的安装包" => Some(
-            "The package architecture is incompatible with Windows; download a matching package",
-        ),
+        "安装包架构与当前 Windows 不兼容，请下载匹配的安装包" => {
+            Some(messages::install_error_windows_architecture(language))
+        }
         "安装文件写入失败，具体原因未确认，请导出诊断后重试" => {
-            Some("Installation files could not be written; export diagnostics and retry")
+            Some(messages::install_error_windows_write_failed(language))
         }
         "无法替换主程序：文件被占用或安装目录不可写，已保留旧版本" => {
-            Some(
-                "Could not replace the application: files are in use or the directory is not writable; the previous version was retained",
-            )
+            Some(messages::install_error_windows_application_retained(
+                language,
+            ))
         }
         "无法替换界面程序：文件被占用或安装目录不可写，已恢复旧版本" => {
-            Some(
-                "Could not replace the interface: files are in use or the directory is not writable; the previous version was restored",
-            )
+            Some(messages::install_error_windows_interface_restored(language))
         }
         "无法写入卸载程序：文件被占用或安装目录不可写，已恢复旧版本" => {
-            Some(
-                "Could not write the uninstaller: files are in use or the directory is not writable; the previous version was restored",
-            )
+            Some(messages::install_error_windows_uninstaller_restored(
+                language,
+            ))
         }
         "Windows 网络助手安装失败，已恢复旧版主程序与界面" => Some(
-            "Windows network helper installation failed; the previous application and interface were restored",
+            messages::install_error_windows_network_helper_failed(language),
         ),
         "无法写入安装登记信息，已恢复旧版主程序与界面" => Some(
-            "Could not write installation registration; the previous application and interface were restored",
+            messages::install_error_windows_registration_failed(language),
         ),
-        "安装交接未确认或已超时，已保留旧版本" => Some(
-            "Installation handoff was not confirmed or timed out; the previous version was retained",
-        ),
+        "安装交接未确认或已超时，已保留旧版本" => {
+            Some(messages::install_error_windows_handoff_failed(language))
+        }
         "安装目录中的文件不可写或仍被占用，未替换旧文件，请稍后重试" => {
-            Some(
-                "Installation files are not writable or are in use; old files retained; retry later",
-            )
+            Some(messages::install_error_windows_files_in_use(language))
         }
         _ => None,
     };
     if let Some(translated) = translated {
         return translated.into();
     }
-    for (prefix, translated) in [
-        ("校验文件下载失败（HTTP ", "Checksum download failed"),
-        ("安装包下载失败（HTTP ", "Package download failed"),
+    for (prefix, checksum) in [
+        ("校验文件下载失败（HTTP ", true),
+        ("安装包下载失败（HTTP ", false),
     ] {
         if let Some(status) = reason
             .strip_prefix(prefix)
             .and_then(|rest| rest.strip_suffix('）'))
             .filter(|status| status.parse::<u16>().is_ok())
         {
-            return format!("{translated} (HTTP {status})").into();
+            return if checksum {
+                messages::install_error_checksum_status(language, status).into()
+            } else {
+                messages::install_error_download_status(language, status).into()
+            };
         }
     }
     if let Some(status) = reason.strip_prefix("安装包信息返回 HTTP ") {
-        return format!("Package information returned HTTP {status}").into();
+        return messages::install_error_package_info_status(language, status).into();
     }
     if let Some((cause, file)) = reason
         .strip_prefix("安装未完成：")
@@ -289,19 +290,16 @@ pub(super) fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
     {
         let cause = match cause {
             "没有写入权限、文件只读或被安全软件阻止" => {
-                Some("No write permission, file is read-only, or blocked by security software")
+                Some(messages::install_error_file_permission(language))
             }
-            "磁盘为只读" => Some("Disk is read-only"),
-            "文件仍被占用" => Some("File is still in use"),
-            "磁盘空间不足" => Some("Not enough disk space"),
-            "无法写入文件" => Some("Could not write file"),
+            "磁盘为只读" => Some(messages::install_error_disk_read_only(language)),
+            "文件仍被占用" => Some(messages::install_error_file_in_use(language)),
+            "磁盘空间不足" => Some(messages::install_error_disk_full(language)),
+            "无法写入文件" => Some(messages::install_error_file_write_failed(language)),
             _ => None,
         };
         if let Some(cause) = cause {
-            return format!(
-                "Installation incomplete: {cause} ({file}); resolve the issue and retry"
-            )
-            .into();
+            return messages::install_error_incomplete(language, cause, file).into();
         }
     }
     if let Some(code) = reason
@@ -309,27 +307,27 @@ pub(super) fn localize_installation_reason(reason: &str) -> Cow<'_, str> {
         .and_then(|rest| rest.strip_suffix("），请重试"))
         .filter(|code| code.parse::<u32>().is_ok())
     {
-        return format!("Installer failed (code {code}); retry").into();
+        return messages::install_error_exit_code(language, code).into();
     }
     if let Some((status, detail)) = reason
         .strip_prefix("DEB 安装失败（")
         .and_then(|rest| rest.split_once("）："))
     {
-        return format!("DEB installation failed ({status}): {detail}").into();
+        return messages::install_error_deb_status(language, detail, status).into();
     }
     if let Some((status, detail)) = reason
         .strip_prefix("Arch 原生包 安装失败（")
         .and_then(|rest| rest.split_once("）："))
     {
-        return format!("Arch package installation failed ({status}): {detail}").into();
+        return messages::install_error_arch_status(language, detail, status).into();
     }
     if let Some(detail) = reason.strip_prefix("DEB 安装失败：") {
-        return format!("DEB installation failed: {detail}").into();
+        return messages::install_error_deb_detail(language, detail).into();
     }
     if let Some((context, detail)) = reason.split_once(": ") {
-        let translated = localize_installation_reason(context);
+        let translated = localize_installation_reason(context, language);
         if translated != context {
-            return format!("{translated}: {detail}").into();
+            return messages::install_error_with_detail(language, translated, detail).into();
         }
     }
     reason.into()

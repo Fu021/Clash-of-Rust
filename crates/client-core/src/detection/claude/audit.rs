@@ -1,6 +1,7 @@
 //! Read-only audit of known Claude projects. Never walks the home directory,
 //! executes project hooks, or retains credentials and conversation content.
 use super::preferences::redact_url;
+use crate::{config::Language, messages};
 use serde::{
     Deserialize, Serialize,
     de::{self, IgnoredAny, MapAccess, Visitor},
@@ -52,13 +53,146 @@ pub enum Level {
 }
 impl Level {
     pub fn name(self) -> &'static str {
+        self.name_in(Language::SimplifiedChinese)
+    }
+
+    pub fn name_in(self, language: Language) -> &'static str {
         match self {
-            Self::Issue => "配置问题",
-            Self::Review => "需核对",
-            Self::Incomplete => "未完成检查",
+            Self::Issue => messages::claude_audit_level_issue(language),
+            Self::Review => messages::claude_audit_level_review(language),
+            Self::Incomplete => messages::claude_audit_level_incomplete(language),
         }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+enum FindingKind {
+    UnreadableFile,
+    InvalidEnvironmentField,
+    HttpProxyBypass,
+    EmptyProxy,
+    AllProxyOnly,
+    InvalidProxy,
+    DifferentProxy,
+    ApiOverride,
+    TlsDisabled,
+    CloudProvider,
+    RegionOverride,
+    ConfigDirectoryOverride,
+    RegistryLimit,
+    IndexLimit,
+    CombinedRegistryLimit,
+    ManagedLimit,
+    InvalidJson,
+    HomeUnavailable,
+}
+
+impl FindingKind {
+    fn title(self, language: Language) -> Option<&'static str> {
+        Some(match self {
+            Self::UnreadableFile => messages::claude_audit_file_title(language),
+            Self::RegistryLimit | Self::CombinedRegistryLimit => {
+                messages::claude_audit_registry_title(language)
+            }
+            Self::IndexLimit => messages::claude_audit_index_title(language),
+            Self::ManagedLimit => messages::claude_audit_managed_title(language),
+            Self::InvalidJson => messages::claude_audit_json_title(language),
+            Self::HomeUnavailable => messages::claude_audit_scan_title(language),
+            _ => return None,
+        })
+    }
+
+    fn value(self, language: Language) -> Option<&'static str> {
+        Some(match self {
+            Self::HttpProxyBypass => messages::claude_audit_proxy_bypass_value(language),
+            Self::EmptyProxy => messages::claude_audit_empty_proxy_value(language),
+            Self::CloudProvider => messages::claude_audit_provider_value(language),
+            Self::RegionOverride => messages::claude_audit_region_value(language),
+            Self::ConfigDirectoryOverride => {
+                messages::claude_audit_config_directory_value(language)
+            }
+            _ => return None,
+        })
+    }
+
+    fn explanation(self, language: Language) -> (&'static str, &'static str) {
+        match self {
+            Self::UnreadableFile => (
+                messages::claude_audit_file_reason(language),
+                messages::claude_audit_file_advice(language),
+            ),
+            Self::InvalidEnvironmentField => (
+                messages::claude_audit_environment_reason(language),
+                messages::claude_audit_environment_advice(language),
+            ),
+            Self::HttpProxyBypass => (
+                messages::claude_audit_proxy_bypass_reason(language),
+                messages::claude_audit_proxy_bypass_advice(language),
+            ),
+            Self::EmptyProxy => (
+                messages::claude_audit_empty_proxy_reason(language),
+                messages::claude_audit_empty_proxy_advice(language),
+            ),
+            Self::AllProxyOnly => (
+                messages::claude_audit_all_proxy_reason(language),
+                messages::claude_audit_all_proxy_advice(language),
+            ),
+            Self::InvalidProxy => (
+                messages::claude_audit_invalid_proxy_reason(language),
+                messages::claude_audit_invalid_proxy_advice(language),
+            ),
+            Self::DifferentProxy => (
+                messages::claude_audit_different_proxy_reason(language),
+                messages::claude_audit_different_proxy_advice(language),
+            ),
+            Self::ApiOverride => (
+                messages::claude_audit_api_override_reason(language),
+                messages::claude_audit_api_override_advice(language),
+            ),
+            Self::TlsDisabled => (
+                messages::claude_audit_tls_reason(language),
+                messages::claude_audit_tls_advice(language),
+            ),
+            Self::CloudProvider => (
+                messages::claude_audit_provider_reason(language),
+                messages::claude_audit_provider_advice(language),
+            ),
+            Self::RegionOverride => (
+                messages::claude_audit_region_reason(language),
+                messages::claude_audit_region_advice(language),
+            ),
+            Self::ConfigDirectoryOverride => (
+                messages::claude_audit_config_directory_reason(language),
+                messages::claude_audit_config_directory_advice(language),
+            ),
+            Self::RegistryLimit => (
+                messages::claude_audit_registry_reason(language),
+                messages::claude_audit_registry_advice(language),
+            ),
+            Self::IndexLimit => (
+                messages::claude_audit_index_reason(language),
+                messages::claude_audit_index_advice(language),
+            ),
+            Self::CombinedRegistryLimit => (
+                messages::claude_audit_combined_registry_reason(language),
+                messages::claude_audit_combined_registry_advice(language),
+            ),
+            Self::ManagedLimit => (
+                messages::claude_audit_managed_reason(language),
+                messages::claude_audit_managed_advice(language),
+            ),
+            Self::InvalidJson => (
+                messages::claude_audit_json_reason(language),
+                messages::claude_audit_json_advice(language),
+            ),
+            Self::HomeUnavailable => (
+                messages::claude_audit_home_reason(language),
+                messages::claude_audit_home_advice(language),
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub level: Level,
@@ -67,22 +201,67 @@ pub struct Finding {
     pub value: String,
     pub reason: String,
     pub advice: String,
+    #[serde(skip)]
+    kind: FindingKind,
 }
 impl Finding {
     pub fn display_title(&self) -> &str {
-        if self.field.trim().is_empty() {
-            "项目配置"
+        self.display_title_in(Language::SimplifiedChinese)
+    }
+
+    pub fn display_title_in(&self, language: Language) -> &str {
+        if language == Language::SimplifiedChinese {
+            return match self.field.trim() {
+                "" => messages::claude_audit_configuration_title(language),
+                field => field,
+            };
+        }
+        self.kind.title(language).unwrap_or_else(|| {
+            let field = self.field.trim();
+            if field.is_empty() {
+                messages::claude_audit_configuration_title(language)
+            } else {
+                field
+            }
+        })
+    }
+
+    pub fn display_value_in(&self, language: Language) -> &str {
+        if language == Language::SimplifiedChinese {
+            &self.value
         } else {
-            self.field.trim()
+            self.kind.value(language).unwrap_or(&self.value)
         }
     }
+
+    pub fn source_in(&self, language: Language) -> &str {
+        match self.kind {
+            FindingKind::HomeUnavailable if language != Language::SimplifiedChinese => {
+                messages::claude_audit_home_source(language)
+            }
+            _ => &self.path,
+        }
+    }
+
     pub fn explanation(&self) -> String {
-        [("说明", self.reason.trim()), ("建议", self.advice.trim())]
-            .into_iter()
-            .filter(|(_, value)| !value.is_empty())
-            .map(|(label, value)| format!("{label}：{value}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.explanation_in(Language::SimplifiedChinese)
+    }
+
+    pub fn explanation_in(&self, language: Language) -> String {
+        let (reason, advice) = if language == Language::SimplifiedChinese {
+            (self.reason.trim(), self.advice.trim())
+        } else {
+            self.kind.explanation(language)
+        };
+        [
+            messages::claude_audit_reason_line(language, reason),
+            messages::claude_audit_advice_line(language, advice),
+        ]
+        .into_iter()
+        .zip([reason, advice])
+        .filter_map(|(line, value)| (!value.is_empty()).then_some(line))
+        .collect::<Vec<_>>()
+        .join("\n")
     }
 }
 #[derive(Debug, Clone, Default, Serialize)]
@@ -100,15 +279,7 @@ pub struct Audit {
     pub unreadable: usize,
 }
 impl Audit {
-    fn add(
-        &mut self,
-        level: Level,
-        path: &Path,
-        field: &str,
-        value: String,
-        reason: &str,
-        advice: &str,
-    ) {
+    fn add(&mut self, level: Level, path: &Path, field: &str, value: String, kind: FindingKind) {
         self.incomplete |= level == Level::Incomplete;
         match level {
             Level::Issue => self.issues += 1,
@@ -119,23 +290,25 @@ impl Audit {
             self.omitted += 1;
             return;
         }
+        let language = Language::SimplifiedChinese;
+        let (reason, advice) = kind.explanation(language);
         self.findings.push(Finding {
             level,
             path: display(path),
-            field: field.into(),
-            value,
+            field: kind.title(language).unwrap_or(field).into(),
+            value: kind.value(language).map_or(value, str::to_owned),
             reason: reason.into(),
             advice: advice.into(),
+            kind,
         });
     }
     fn unavailable(&mut self, path: &Path) {
         self.add(
             Level::Incomplete,
             path,
-            "文件检查",
+            "",
             String::new(),
-            "文件不可读、格式无效或超过读取上限，相关覆盖尚未确认。",
-            "核对文件权限和 JSON 格式后重新检测。",
+            FindingKind::UnreadableFile,
         );
     }
 }
@@ -336,8 +509,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                 path,
                 &key,
                 String::new(),
-                "相关环境字段不是字符串或过长。",
-                "核对字段类型，不要把密钥写入代理或地址字段。",
+                FindingKind::InvalidEnvironmentField,
             );
             continue;
         };
@@ -348,9 +520,8 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                     Level::Review,
                     path,
                     &key,
-                    "包含 Claude 域名或全部地址".into(),
-                    "此配置可能让 Claude 请求绕过 HTTP 代理；TUN 是否接管需要结合实时请求确认。",
-                    "移除不需要的绕过项，并重新启动相应会话验证。",
+                    String::new(),
+                    FindingKind::HttpProxyBypass,
                 );
             }
         } else if lower.ends_with("proxy") {
@@ -359,9 +530,8 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                     Level::Review,
                     path,
                     &key,
-                    "空值".into(),
-                    "此配置清空了代理变量，可能覆盖终端中原有的代理。",
-                    "核对是否有其他代理变量或 TUN 接管。",
+                    String::new(),
+                    FindingKind::EmptyProxy,
                 );
                 continue;
             }
@@ -376,8 +546,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                     path,
                     &key,
                     redact_url(&value),
-                    "仅设置 ALL_PROXY 时，Claude Code 请求可能未使用代理。",
-                    "核对 HTTPS_PROXY 或 HTTP_PROXY，并观察实际线路。",
+                    FindingKind::AllProxyOnly,
                 );
             } else if valid.is_none() {
                 audit.add(
@@ -385,8 +554,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                     path,
                     &key,
                     redact_url(&value),
-                    "代理地址无效或协议不受 Claude Code 支持。",
-                    "使用有效的 HTTP/HTTPS 代理地址。",
+                    FindingKind::InvalidProxy,
                 );
             } else if let Some(url) = valid {
                 let local = url.host_str().is_some_and(|h| {
@@ -401,8 +569,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                         path,
                         &key,
                         redact_url(&value),
-                        "代理地址与本应用的混合端口不同，实际出口可能使用另一条线路。",
-                        "核对该代理地址是否符合预期。",
+                        FindingKind::DifferentProxy,
                     );
                 }
             }
@@ -421,8 +588,7 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                     path,
                     &key,
                     redact_url(&value),
-                    "API 地址已覆盖；请核对中转服务的出口。",
-                    "确认目标地址是预期服务，并在实际会话中核对来源。",
+                    FindingKind::ApiOverride,
                 );
             }
         } else if key == "NODE_TLS_REJECT_UNAUTHORIZED" && value == "0" {
@@ -431,17 +597,15 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                 path,
                 &key,
                 "0".into(),
-                "此配置关闭 TLS 证书验证，可能掩盖代理或证书问题。",
-                "恢复证书验证，使用正确的受信任证书。",
+                FindingKind::TlsDisabled,
             );
         } else if key.starts_with("CLAUDE_CODE_USE_") && matches!(value.as_str(), "1" | "true") {
             audit.add(
                 Level::Review,
                 path,
                 &key,
-                "已启用".into(),
-                "会话可能使用云平台提供方；请核对该提供方的出口。",
-                "核对提供方、区域和实际会话配置。",
+                String::new(),
+                FindingKind::CloudProvider,
             );
         } else if matches!(
             key.as_str(),
@@ -452,18 +616,16 @@ fn inspect(audit: &mut Audit, path: &Path, settings: Settings, mixed_port: u16) 
                 Level::Review,
                 path,
                 &key,
-                "已设置区域覆盖".into(),
-                "云平台区域配置可能改变模型请求目的地；是否启用对应提供方尚未确认。",
-                "结合提供方设置核对区域，本项不等同于本机所在地区。",
+                String::new(),
+                FindingKind::RegionOverride,
             );
         } else if key == "CLAUDE_CONFIG_DIR" && !value.is_empty() {
             audit.add(
                 Level::Review,
                 path,
                 &key,
-                "已设置其他配置目录".into(),
-                "此配置可能使会话读取另一套配置；项目级设置是否被忽略取决于 Code 版本。",
-                "核对 Code 的 /status 与实际配置目录。",
+                String::new(),
+                FindingKind::ConfigDirectoryOverride,
             );
         }
     }
@@ -491,10 +653,9 @@ pub fn scan(inputs: Inputs, cancel: &Scan) -> Audit {
                     audit.add(
                         Level::Incomplete,
                         &path,
-                        "项目清单",
+                        "",
                         String::new(),
-                        "项目清单超过 4096 项，部分目录未检查。",
-                        "缩减过期项目记录后重新检测。",
+                        FindingKind::RegistryLimit,
                     );
                 }
                 projects.extend(registry.projects.paths);
@@ -525,10 +686,9 @@ pub fn scan(inputs: Inputs, cancel: &Scan) -> Audit {
                         audit.add(
                             Level::Incomplete,
                             &directory,
-                            "项目索引",
+                            "",
                             String::new(),
-                            "项目索引超过检查上限，部分目录未检查。",
-                            "清理过期项目索引后重新检测。",
+                            FindingKind::IndexLimit,
                         );
                         break;
                     }
@@ -603,10 +763,9 @@ pub fn scan(inputs: Inputs, cancel: &Scan) -> Audit {
         audit.add(
             Level::Incomplete,
             &inputs.config,
-            "项目清单",
+            "",
             String::new(),
-            "合并后的项目清单超过 4096 项，部分项目未检查。",
-            "清理过期项目记录后重新检测。",
+            FindingKind::CombinedRegistryLimit,
         );
     }
     for managed in inputs.managed {
@@ -619,10 +778,9 @@ pub fn scan(inputs: Inputs, cancel: &Scan) -> Audit {
                             audit.add(
                                 Level::Incomplete,
                                 &directory,
-                                "托管配置",
+                                "",
                                 String::new(),
-                                "托管配置目录超过检查上限，部分文件未检查。",
-                                "缩减过期文件后重新检测。",
+                                FindingKind::ManagedLimit,
                             );
                             break;
                         }
@@ -669,10 +827,9 @@ pub fn scan(inputs: Inputs, cancel: &Scan) -> Audit {
             Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => audit.add(
                 Level::Issue,
                 &path,
-                "配置格式",
+                "",
                 String::new(),
-                "配置不是有效的 JSON 对象，或 env 字段格式错误。",
-                "修正 JSON 格式后重新检测。",
+                FindingKind::InvalidJson,
             ),
             Err(_) => audit.unavailable(&path),
         }
@@ -692,11 +849,12 @@ pub fn scan_available(inputs: Option<Inputs>, cancel: &Scan) -> Audit {
             let mut audit = Audit::default();
             audit.add(
                 Level::Incomplete,
-                Path::new("用户目录"),
-                "扫描",
+                Path::new(messages::claude_audit_home_source(
+                    Language::SimplifiedChinese,
+                )),
+                "",
                 String::new(),
-                "无法获取用户目录，尚未检查 Claude 配置。",
-                "核对运行账户后重新检测。",
+                FindingKind::HomeUnavailable,
             );
             audit
         })
@@ -910,6 +1068,35 @@ mod tests {
             7890,
         );
         assert!(audit.findings.is_empty());
+    }
+    #[test]
+    fn localized_findings_preserve_export_and_chinese_field_overrides() {
+        let mut audit = Audit::default();
+        inspect(
+            &mut audit,
+            Path::new("fixture/settings.json"),
+            Settings(vec![("NO_PROXY".into(), Some("*".into()))]),
+            7890,
+        );
+        let finding = &mut audit.findings[0];
+        let exported = serde_json::to_value(&*finding).unwrap();
+        assert!(exported.get("kind").is_none());
+        assert_eq!(finding.display_title_in(Language::English), "NO_PROXY");
+        assert_eq!(
+            finding.display_value_in(Language::English),
+            "Matches Claude domains or all addresses"
+        );
+        assert!(
+            finding
+                .explanation_in(Language::English)
+                .starts_with("Details: ")
+        );
+        assert_eq!(serde_json::to_value(&*finding).unwrap(), exported);
+        finding.field = " ".into();
+        finding.reason = " 自定义原因 ".into();
+        finding.advice.clear();
+        assert_eq!(finding.display_title(), "项目配置");
+        assert_eq!(finding.explanation(), "说明：自定义原因");
     }
     #[test]
     fn nested_project_records_also_check_repository_local_settings() {

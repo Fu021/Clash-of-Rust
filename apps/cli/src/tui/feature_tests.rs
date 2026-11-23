@@ -529,7 +529,12 @@ fn settings_secrets_and_large_rule_collections_do_not_leak_into_frames() {
     for key in clash_client_core::config::READABLE_SETTINGS {
         if !matches!(*key, "theme_mode" | "active_profile") {
             assert!(
-                !form::setting_value(&state.poll.as_ref().unwrap().meta.settings, key).is_null(),
+                !form::setting_value(
+                    &state.poll.as_ref().unwrap().meta.settings,
+                    key,
+                    state.language
+                )
+                .is_null(),
                 "{key}"
             );
         }
@@ -617,7 +622,7 @@ fn wrapped_operation_rows_preserve_descriptions_commands_and_keyboard_selection(
                 .collect::<String>();
             let selected = compact(&selected);
             assert!(
-                selected.contains(&compact(spec.description)),
+                selected.contains(&compact(spec.localized_description(state.language))),
                 "{columns}: {selected}"
             );
             assert!(selected.contains(&compact(&path)), "{columns}: {selected}");

@@ -302,7 +302,7 @@ pub(super) fn connection_rows(state: &State, width: usize) -> Vec<(String, Tone)
             clash_client_core::config::Language::SimplifiedChinese => {
                 format!("连接 {id} 已关闭或当前快照中不存在；Esc 返回列表")
             }
-            clash_client_core::config::Language::English => {
+            _ => {
                 format!(
                     "Connection {id} has closed or is absent from the current snapshot; Esc returns to the list"
                 )

@@ -49,13 +49,15 @@ const NETWORK_KEYS: &[&str] = &[
 pub(super) fn category(key: &str, language: Language) -> &'static str {
     match key {
         "run_mode" | "proxy_mode" | "claude_protection" | "tui_node_sort" | "language" => {
-            language.text("常规", "General")
+            messages::tui_settings_category_general(language)
         }
-        key if NETWORK_KEYS.contains(&key) => language.text("网络", "Network"),
-        "update_prereleases" => language.text("更新", "Updates"),
-        "active_profile" => language.text("订阅", "Subscriptions"),
-        key if key.starts_with("shortcut_") => language.text("快捷规则", "Rule shortcuts"),
-        _ => language.text("计划任务", "Scheduled tasks"),
+        key if NETWORK_KEYS.contains(&key) => messages::tui_settings_category_network(language),
+        "update_prereleases" => messages::tui_settings_category_updates(language),
+        "active_profile" => messages::tui_settings_category_subscriptions(language),
+        key if key.starts_with("shortcut_") => {
+            messages::tui_settings_category_rule_shortcuts(language)
+        }
+        _ => messages::tui_settings_category_scheduled_tasks(language),
     }
 }
 
@@ -75,41 +77,47 @@ pub(super) fn matches_query(key: &str, query: &str, language: Language) -> bool 
     .any(|value| value.to_lowercase().contains(query))
 }
 
-const SHORTCUTS: &[(&str, &str, &str, &str)] = &[
-    ("shortcut_ads", "ads", "广告拦截", "Block ads"),
-    (
-        "shortcut_private_domain",
-        "private-domain",
-        "私有域名直连",
-        "Private domains direct",
-    ),
-    (
-        "shortcut_private_ip",
-        "private-ip",
-        "私有 IP 直连",
-        "Private IPs direct",
-    ),
-    (
-        "shortcut_cn_domain",
-        "cn-domain",
-        "中国域名直连",
-        "China domains direct",
-    ),
-    (
-        "shortcut_cn_ip",
-        "cn-ip",
-        "中国 IP 直连",
-        "China IPs direct",
-    ),
+struct Shortcut {
+    setting: &'static str,
+    command: &'static str,
+    title: fn(Language) -> &'static str,
+}
+
+const SHORTCUTS: &[Shortcut] = &[
+    Shortcut {
+        setting: "shortcut_ads",
+        command: "ads",
+        title: messages::tui_settings_shortcut_ads,
+    },
+    Shortcut {
+        setting: "shortcut_private_domain",
+        command: "private-domain",
+        title: messages::tui_settings_shortcut_private_domain,
+    },
+    Shortcut {
+        setting: "shortcut_private_ip",
+        command: "private-ip",
+        title: messages::tui_settings_shortcut_private_ip,
+    },
+    Shortcut {
+        setting: "shortcut_cn_domain",
+        command: "cn-domain",
+        title: messages::tui_settings_shortcut_cn_domain,
+    },
+    Shortcut {
+        setting: "shortcut_cn_ip",
+        command: "cn-ip",
+        title: messages::tui_settings_shortcut_cn_ip,
+    },
 ];
 
 pub(super) fn title(key: &str, language: Language) -> &str {
     SHORTCUTS
         .iter()
-        .find(|(setting, _, _, _)| *setting == key)
+        .find(|shortcut| shortcut.setting == key)
         .map_or_else(
             || form::setting_title(key, language),
-            |(_, _, chinese, english)| language.text(chinese, english),
+            |shortcut| (shortcut.title)(language),
         )
 }
 
@@ -137,33 +145,33 @@ pub(super) fn language_form(preference: LanguagePreference, language: Language) 
 
 fn enabled_label(enabled: bool, language: Language) -> &'static str {
     if enabled {
-        language.text("开启", "On")
+        messages::tui_settings_enabled(language)
     } else {
-        language.text("关闭", "Off")
+        messages::tui_settings_disabled(language)
     }
 }
 
 fn proxy_mode_label(mode: ProxyMode, language: Language) -> &'static str {
     match mode {
         ProxyMode::Off => enabled_label(false, language),
-        ProxyMode::System => language.text("系统代理", "System proxy"),
+        ProxyMode::System => messages::tui_settings_system_proxy(language),
         ProxyMode::Tun => "TUN",
     }
 }
 
 fn routing_mode_label(mode: &str, language: Language) -> &str {
     match mode {
-        "rule" => language.text("规则", "Rule"),
-        "global" => language.text("全局", "Global"),
-        "direct" => language.text("直连", "Direct"),
+        "rule" => messages::tui_settings_mode_rule(language),
+        "global" => messages::tui_settings_mode_global(language),
+        "direct" => messages::tui_settings_mode_direct(language),
         _ => mode,
     }
 }
 
-pub(super) fn value(poll: &Poll, key: &str) -> Value {
+pub(super) fn value(poll: &Poll, key: &str, language: Language) -> Value {
     if let Some(index) = SHORTCUTS
         .iter()
-        .position(|(setting, _, _, _)| *setting == key)
+        .position(|shortcut| shortcut.setting == key)
     {
         json!(
             poll.meta
@@ -184,7 +192,7 @@ pub(super) fn value(poll: &Poll, key: &str) -> Value {
             "proxy_mode" => json!(poll.snapshot.proxy_mode()),
             "run_mode" if !poll.snapshot.mode.is_empty() => json!(poll.snapshot.mode),
             "fake_ip" => json!(poll.meta.settings.fake_ip_enabled()),
-            _ => form::setting_value(&poll.meta.settings, key),
+            _ => form::setting_value(&poll.meta.settings, key, language),
         }
     }
 }
@@ -195,11 +203,9 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
             Some(&profile.id) == poll.meta.settings.active_profile.as_ref() && !profile.builtin
         })
     {
-        return language
-            .text("仅适用于非内置订阅", "Available for added subscriptions")
-            .into();
+        return messages::tui_settings_shortcut_unavailable(language).into();
     }
-    let value = value(poll, key);
+    let value = value(poll, key, language);
     match key {
         "active_profile" => poll
             .meta
@@ -207,14 +213,14 @@ pub(super) fn display(poll: &Poll, key: &str, language: Language) -> String {
             .iter()
             .find(|profile| Some(&profile.id) == poll.meta.settings.active_profile.as_ref())
             .map_or_else(
-                || language.text("尚未选择", "None selected").into(),
-                |profile| crate::output::profile_name(profile, language).into(),
+                || messages::tui_settings_profile_none(language).into(),
+                |profile| profile.display_name(language).into(),
             ),
         "tui_node_sort" => node_sort_label(poll.meta.settings.tui_node_sort, language).into(),
         "language" => language_display(poll.meta.settings.language, language).into(),
-        "fake_ip" if !poll.meta.settings.dns_override => language
-            .text("关闭（DNS 覆盖未开启）", "Off (DNS override is off)")
-            .into(),
+        "fake_ip" if !poll.meta.settings.dns_override => {
+            messages::tui_settings_fake_ip_disabled(language).into()
+        }
         "fake_ip_exclusions" => {
             let custom = poll.meta.settings.fake_ip_exclusions.len();
             let active = poll.meta.settings.fake_ip_exclusion_entries().len();
@@ -255,35 +261,14 @@ fn node_sort_label(sort: NodeSort, language: Language) -> &'static str {
 
 pub(super) fn hint(key: &str, language: Language) -> &'static str {
     match key {
-        "proxy_mode" | "claude_protection" => language.text(
-            "选择状态后确认；系统授权在普通终端完成，返回后读取实际状态。",
-            "Choose a mode and confirm. Complete any system prompt in the terminal.",
-        ),
-        "active_profile" => language.text(
-            "选择订阅名称；新增、编辑来源、更新和删除在操作页。",
-            "Choose a subscription. Manage subscriptions under Commands.",
-        ),
-        "fake_ip_exclusions" => language.text(
-            "Enter 管理已有排除项、新增项目或恢复默认。",
-            "Press Enter to manage exclusions or restore defaults.",
-        ),
-        "fake_ip" => language.text(
-            "先开启 DNS 覆盖；关闭 DNS 覆盖会同时关闭 Fake-IP。",
-            "Fake-IP requires DNS override.",
-        ),
-        "tui_node_sort" => language.text(
-            "只改变终端节点显示；节点页也可按 s 循环切换。",
-            "Press s on the Nodes page to cycle through sort orders.",
-        ),
+        "proxy_mode" | "claude_protection" => messages::tui_settings_hint_authorize(language),
+        "active_profile" => messages::tui_settings_hint_profile(language),
+        "fake_ip_exclusions" => messages::tui_settings_hint_exclusions(language),
+        "fake_ip" => messages::tui_settings_hint_fake_ip(language),
+        "tui_node_sort" => messages::tui_settings_hint_node_sort(language),
         "language" => "",
-        key if key.starts_with("shortcut_") => language.text(
-            "作用于当前订阅；自定义规则、顺序和订阅原规则在规则页管理。",
-            "Applies to the active subscription. Manage other rules under Rules.",
-        ),
-        _ => language.text(
-            "←→ 或 Space 调整选项，Enter 确认；文字与数值按 Enter 编辑，↓ 选择保存。",
-            "Use ← → or Space to change a choice, Enter to edit, and ↓ to select Save.",
-        ),
+        key if key.starts_with("shortcut_") => messages::tui_settings_hint_shortcut(language),
+        _ => messages::tui_settings_hint_edit(language),
     }
 }
 
@@ -345,15 +330,12 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
             || RULE_KEYS.contains(&key)
             || key == "active_profile",
         "{}",
-        language.text(
-            "该设置请使用操作页的专用入口",
-            "Manage this setting under Commands."
-        )
+        messages::tui_settings_use_command(language)
     );
     if key == "language" {
         return Ok(language_form(poll.meta.settings.language, language));
     }
-    let value = value(poll, key);
+    let value = value(poll, key, language);
     let mut form = Form::setting(key, &value, language);
     let off = enabled_label(false, language);
     let on = enabled_label(true, language);
@@ -370,13 +352,13 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
                 language,
             );
             form.fields.truncate(1);
-            form.fields[0].label = language.text("值", "Value").into();
+            form.fields[0].label = messages::tui_settings_value(language).into();
             form.setting = Some(key.into());
             match key {
                 "run_mode" => {
                     form.fields[0].value = value
                         .as_str()
-                        .context(language.text("运行模式无效", "Invalid routing mode"))?
+                        .context(messages::tui_settings_invalid_routing_mode(language))?
                         .into();
                     choices(
                         &mut form,
@@ -388,7 +370,7 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
                 "proxy_mode" => {
                     form.fields[0].value = value
                         .as_str()
-                        .context(language.text("代理方式无效", "Invalid proxy mode"))?
+                        .context(messages::tui_settings_invalid_proxy_mode(language))?
                         .into();
                     choices(
                         &mut form,
@@ -413,10 +395,7 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
                     ensure!(
                         !poll.meta.profiles.is_empty(),
                         "{}",
-                        language.text(
-                            "没有订阅，请先在操作页添加订阅",
-                            "Add a subscription under Commands."
-                        )
+                        messages::tui_settings_add_profile_first(language)
                     );
                     form.fields[0].value = poll
                         .meta
@@ -428,12 +407,7 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
                         .meta
                         .profiles
                         .iter()
-                        .map(|profile| {
-                            (
-                                profile.id.clone(),
-                                crate::output::profile_name(profile, language).into(),
-                            )
-                        })
+                        .map(|profile| (profile.id.clone(), profile.display_name(language).into()))
                         .collect();
                 }
             }
@@ -442,38 +416,35 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
             &mut form,
             1,
             &[
-                ("name", language.text("节点名称", "Node name")),
+                ("name", messages::tui_settings_sort_node_name(language)),
                 (
                     "latency_ascending",
-                    language.text("延迟从低到高", "Lowest latency first"),
+                    node_sort_label(NodeSort::LatencyAscending, language),
                 ),
                 (
                     "latency_descending",
-                    language.text("延迟从高到低", "Highest latency first"),
+                    node_sort_label(NodeSort::LatencyDescending, language),
                 ),
             ],
         ),
         key if key.starts_with("shortcut_") => {
-            let (_, name, _, _) = SHORTCUTS
+            let shortcut = SHORTCUTS
                 .iter()
-                .find(|(setting, _, _, _)| *setting == key)
+                .find(|shortcut| shortcut.setting == key)
                 .unwrap();
             let id = poll
                 .meta
                 .settings
                 .active_profile
                 .as_ref()
-                .context(language.text("尚未选择订阅", "No subscription selected"))?;
+                .context(messages::tui_settings_profile_required(language))?;
             ensure!(
                 poll.meta
                     .profiles
                     .iter()
                     .any(|profile| profile.id == *id && !profile.builtin),
                 "{}",
-                language.text(
-                    "快捷规则只适用于非内置订阅",
-                    "Rule shortcuts require an added subscription."
-                )
+                messages::tui_settings_shortcut_requires_profile(language)
             );
             form = Form::new_in(
                 form::commands()
@@ -482,9 +453,9 @@ pub(super) fn open(poll: &Poll, key: &str, language: Language) -> Result<Form> {
                 language,
             );
             form.setting = Some(key.into());
-            form.fields[0].value = (*name).into();
+            form.fields[0].value = shortcut.command.into();
             form.fields[0].locked = true;
-            form.fields[1].label = language.text("值", "Value").into();
+            form.fields[1].label = messages::tui_settings_value(language).into();
             form.fields[1].value = if value == true { "on" } else { "off" }.into();
             form.fields[2].value = id.clone();
             form.fields[2].locked = true;
@@ -513,22 +484,19 @@ pub(super) fn command_in(args: &crate::args::Args, language: Language) -> Result
     let first = args
         .positional
         .first()
-        .context(language.text("设置值缺失", "Setting value is missing"))?;
+        .context(messages::tui_settings_missing_value(language))?;
     Ok(match args.path.as_str() {
         "config set" => {
             ensure!(
                 KEYS.contains(&first.as_str())
                     && clash_client_core::config::MUTABLE_SETTINGS.contains(&first.as_str()),
                 "{}",
-                language.text(
-                    "该设置请使用专用入口",
-                    "Use the dedicated action for this setting"
-                )
+                messages::tui_settings_use_dedicated_action(language)
             );
             let raw = args
                 .positional
                 .get(1)
-                .context(language.text("设置值缺失", "Setting value is missing"))?;
+                .context(messages::tui_settings_missing_value(language))?;
             Command::ConfigSet {
                 key: first.clone(),
                 value: serde_json::from_str(raw).unwrap_or_else(|_| json!(raw)),
@@ -541,27 +509,21 @@ pub(super) fn command_in(args: &crate::args::Args, language: Language) -> Result
         "rule shortcut" => Command::ActiveShortcut {
             id: args
                 .get("profile")
-                .context(language.text(
-                    "订阅身份缺失，请重新打开设置",
-                    "Subscription ID is missing; reopen settings",
-                ))?
+                .context(messages::tui_settings_missing_profile_id(language))?
                 .into(),
             index: SHORTCUTS
                 .iter()
-                .position(|(_, name, _, _)| *name == first.as_str())
-                .context(language.text("未知快捷规则", "Unknown rule shortcut"))?,
+                .position(|shortcut| shortcut.command == first.as_str())
+                .context(messages::tui_settings_unknown_shortcut(language))?,
             enabled: args
                 .positional
                 .get(1)
-                .context(language.text("开关状态缺失", "Switch state is missing"))?
+                .context(messages::tui_settings_missing_switch_state(language))?
                 == "on",
         },
         _ => anyhow::bail!(
             "{}",
-            language.text(
-                "该操作需要普通终端授权",
-                "This action requires authorization in the terminal"
-            )
+            messages::tui_settings_requires_authorization(language)
         ),
     })
 }

@@ -1,4 +1,7 @@
-use clash_mobile_runtime::core::{config::Language, error_message, network_tools};
+use crate::messages;
+use clash_mobile_runtime::core::{
+    config::Language, error_message, messages as shared_messages, network_tools,
+};
 
 #[derive(Default)]
 pub(crate) enum NetworkProbe {
@@ -14,19 +17,11 @@ impl NetworkProbe {
     pub(crate) fn lines(&self, language: Language) -> Vec<String> {
         match self {
             Self::Empty => Vec::new(),
-            Self::Paused => vec![
-                language
-                    .text(
-                        "保护切换或恢复待处理，网络检测已暂停",
-                        "Network checks are paused while a protection change or recovery is pending",
-                    )
-                    .into(),
-            ],
-            Self::Cancelled => vec![language.text("检查已取消", "Check cancelled").into()],
-            Self::Failed(error) => vec![format!(
-                "{} · {}",
-                language.text("检查失败", "Check failed"),
-                error_message::localize(error, language)
+            Self::Paused => vec![messages::network_check_paused(language).into()],
+            Self::Cancelled => vec![shared_messages::network_tool_cancelled(language).into()],
+            Self::Failed(error) => vec![shared_messages::network_tool_failed(
+                language,
+                error_message::localize(error, language),
             )],
             Self::Complete(report) => report.lines_in(language),
         }

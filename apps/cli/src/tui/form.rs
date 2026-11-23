@@ -1,4 +1,5 @@
 use crate::args::{Args, COMMANDS, Spec, VALUES};
+use crate::messages;
 use anyhow::{Result, ensure};
 use clash_client_core::config::Language;
 
@@ -30,45 +31,38 @@ pub(super) fn commands() -> impl Iterator<Item = &'static Spec> {
 
 pub(super) fn setting_title(key: &str, language: Language) -> &str {
     match key {
-        "mixed_port" => language.text("混合端口", "Mixed port"),
-        "direct_download_port" => language.text("内核直连端口", "Core direct port"),
-        "secret" => language.text("控制器密钥", "Controller secret"),
-        "dark" => language.text("深色外观", "Dark appearance"),
-        "theme_mode" => language.text("主题", "Theme"),
-        "accent_color" => language.text("强调色", "Accent color"),
-        "text_scale" => language.text("字号百分比", "Text scale (%)"),
-        "tray_speed" => language.text("托盘网速", "Tray transfer rates"),
-        "update_prereleases" => language.text("包含预发布版本", "Include prereleases"),
-        "update_check_interval_minutes" => language.text(
-            "自动检查更新（分钟，0 关闭）",
-            "Update check interval (min, 0 disables)",
-        ),
-        "dns_override" => language.text("DNS 覆盖", "DNS override"),
+        "mixed_port" => messages::tui_setting_title_mixed_port(language),
+        "direct_download_port" => messages::tui_setting_title_direct_download_port(language),
+        "secret" => messages::tui_setting_title_secret(language),
+        "dark" => messages::tui_setting_title_dark(language),
+        "theme_mode" => messages::tui_setting_title_theme(language),
+        "accent_color" => messages::tui_setting_title_accent_color(language),
+        "text_scale" => messages::tui_setting_title_text_scale(language),
+        "tray_speed" => messages::tui_setting_title_tray_speed(language),
+        "update_prereleases" => messages::tui_setting_title_update_prereleases(language),
+        "update_check_interval_minutes" => messages::tui_setting_title_update_interval(language),
+        "dns_override" => messages::tui_setting_title_dns_override(language),
         "fake_ip" => "Fake-IP",
-        "fake_ip_exclusions" => language.text("Fake-IP 排除项", "Fake-IP exclusions"),
+        "fake_ip_exclusions" => messages::tui_setting_title_fake_ip_exclusions(language),
         "fake_ip_disabled_defaults" => {
-            language.text("停用的默认排除项", "Disabled default exclusions")
+            messages::tui_setting_title_fake_ip_disabled_defaults(language)
         }
-        "ipv6" => language.text("启用 IPv6", "Enable IPv6"),
-        "udp" => language.text("启用 UDP", "Enable UDP"),
-        "claude_protection" => language.text("Claude 保护", "Claude protection"),
-        "delay_interval_minutes" => language.text(
-            "定时测速（分钟，0 关闭）",
-            "Latency test interval (min, 0 disables)",
-        ),
-        "subscription_update_interval_minutes" => language.text(
-            "订阅自动更新（分钟，0 关闭）",
-            "Subscription update interval (min, 0 disables)",
-        ),
-        "active_profile" => language.text("当前订阅", "Active subscription"),
-        "run_mode" => language.text("运行模式", "Routing mode"),
-        "proxy_mode" => language.text("代理方式", "Proxy mode"),
-        "node_sort" => language.text("节点排序", "Node sort order"),
-        "tui_node_sort" => language.text("终端节点排序", "Terminal node sort order"),
+        "ipv6" => messages::tui_setting_title_ipv6(language),
+        "udp" => messages::tui_setting_title_udp(language),
+        "claude_protection" => messages::tui_setting_title_claude_protection(language),
+        "delay_interval_minutes" => messages::tui_setting_title_delay_interval(language),
+        "subscription_update_interval_minutes" => {
+            messages::tui_setting_title_subscription_update_interval(language)
+        }
+        "active_profile" => messages::tui_setting_title_active_profile(language),
+        "run_mode" => messages::tui_setting_title_run_mode(language),
+        "proxy_mode" => messages::tui_setting_title_proxy_mode(language),
+        "node_sort" => messages::tui_setting_title_node_sort(language),
+        "tui_node_sort" => messages::tui_setting_title_tui_node_sort(language),
         "language" => clash_client_core::messages::settings_language_title(language),
-        "rule_overrides" => language.text("快捷规则", "Rule shortcuts"),
-        "rule_profiles" => language.text("订阅规则", "Subscription rules"),
-        "application_rules" => language.text("应用规则", "Application rules"),
+        "rule_overrides" => messages::tui_settings_category_rule_shortcuts(language),
+        "rule_profiles" => messages::tui_setting_title_rule_profiles(language),
+        "application_rules" => messages::tui_setting_title_application_rules(language),
         _ => key,
     }
 }
@@ -87,15 +81,11 @@ impl Form {
             .take(spec.max)
             .enumerate()
             .map(|(index, word)| Field {
-                label: format!(
-                    "{}{}",
-                    word.trim_matches(['[', ']']),
-                    if index < spec.min {
-                        language.text("（必填）", " (required)")
-                    } else {
-                        language.text("（可选）", " (optional)")
-                    }
-                ),
+                label: if index < spec.min {
+                    messages::tui_form_required(language, word.trim_matches(['[', ']']))
+                } else {
+                    messages::tui_form_optional(language, word.trim_matches(['[', ']']))
+                },
                 value: String::new(),
                 option: None,
                 secret: false,
@@ -104,20 +94,19 @@ impl Form {
             })
             .collect::<Vec<_>>();
         fields.extend(spec.options.split_whitespace().map(|key| Field {
-            label: format!(
-                "--{key}{}",
+            label: {
                 if spec
                     .required_options()
                     .iter()
                     .any(|(required, _)| *required == key)
                 {
-                    language.text("（必填）", " (required)")
+                    messages::tui_form_required(language, format_args!("--{key}"))
                 } else if VALUES.split_whitespace().any(|value| value == key) {
-                    language.text("（可选）", " (optional)")
+                    messages::tui_form_optional(language, format_args!("--{key}"))
                 } else {
-                    language.text("（true 开启，留空关闭）", " (true to enable, empty to disable)")
+                    messages::tui_form_boolean(language, format_args!("--{key}"))
                 }
-            ),
+            },
             value: String::new(),
             option: Some(key),
             secret: matches!(key, "source"),
@@ -148,7 +137,7 @@ impl Form {
         form.fields[0].secret = false;
         form.fields[0].locked = true;
         form.setting = Some(key.into());
-        form.fields[1].label = language.text("值", "Value").into();
+        form.fields[1].label = messages::tui_settings_value(language).into();
         form.fields[1].secret = key == "secret";
         form.fields[1].value = if key == "secret" {
             String::new()
@@ -262,14 +251,7 @@ impl Form {
                     ensure!(
                         field.value == "true",
                         "{}",
-                        match self.language {
-                            Language::SimplifiedChinese => {
-                                format!("--{key} 请填 true、false 或留空")
-                            }
-                            Language::English => {
-                                format!("--{key} must be true, false, or empty")
-                            }
-                        }
+                        messages::tui_form_invalid_boolean(self.language, key)
                     );
                     words.push(format!("--{key}"));
                 }
@@ -289,10 +271,7 @@ impl Form {
                 ensure!(
                     !missing,
                     "{}",
-                    self.language.text(
-                        "请按顺序填写参数，不能跳过前一个参数",
-                        "Fill arguments in order without skipping an earlier argument"
-                    )
+                    messages::tui_form_missing_earlier_argument(self.language)
                 );
                 let value = if self.setting.as_deref().is_some_and(|key| {
                     matches!(key, "fake_ip_exclusions" | "fake_ip_disabled_defaults")
@@ -312,8 +291,7 @@ impl Form {
         ensure!(
             words.iter().map(String::len).sum::<usize>() <= 65536,
             "{}",
-            self.language
-                .text("表单内容过大", "Form contents are too large")
+            messages::tui_form_contents_too_large(self.language)
         );
         crate::args::parse(words)
     }
@@ -338,12 +316,13 @@ impl Form {
 pub(super) fn setting_value(
     settings: &clash_client_core::config::Settings,
     key: &str,
+    language: Language,
 ) -> serde_json::Value {
     use serde_json::json;
     match key {
         "mixed_port" => json!(settings.mixed_port),
         "direct_download_port" => json!(settings.direct_download_port),
-        "secret" => json!("[已隐藏，编辑时输入新值]"),
+        "secret" => json!(messages::tui_setting_hidden_secret(language)),
         "dark" => json!(settings.dark),
         "theme_mode" => json!(settings.theme_mode),
         "accent_color" => json!(settings.accent_color),
@@ -371,9 +350,12 @@ pub(super) fn setting_value(
         "proxy_groups_paginated" => json!(settings.proxy_groups_paginated),
         "profiles_paginated" => json!(settings.profiles_paginated),
         "rule_overrides" => json!(settings.rule_overrides),
-        "rule_profiles" => json!(format!("{} 份订阅的规则", settings.rule_profiles.len())),
-        "application_rules" => json!(format!(
-            "{} 份订阅的应用规则",
+        "rule_profiles" => json!(messages::tui_setting_rule_profile_count(
+            language,
+            settings.rule_profiles.len()
+        )),
+        "application_rules" => json!(messages::tui_setting_application_rule_profile_count(
+            language,
             settings.application_rules.len()
         )),
         _ => serde_json::Value::Null,

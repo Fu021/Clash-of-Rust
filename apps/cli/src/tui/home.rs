@@ -7,14 +7,19 @@ use super::{
 };
 use crate::messages;
 use anyhow::{Context, Result, ensure};
-use clash_client_core::{config::Language, network::DownloadPorts, update::schedule::Schedule};
-use clash_client_runtime::update::Available;
+use clash_client_core::{network::DownloadPorts, update::schedule::Schedule};
+use clash_client_runtime::update::{Available, CheckErrorText, check_error_text};
 use std::time::Instant;
+
+pub(super) enum CheckFailure {
+    Check(String),
+    Task(String),
+}
 
 #[derive(Default)]
 pub(super) struct Updates {
     pub checking: bool,
-    pub result: Option<Result<Option<Available>, String>>,
+    pub result: Option<Result<Option<Available>, CheckFailure>>,
     pub pending: Option<Available>,
     pub channel: Option<bool>,
     pub schedule: Schedule,
@@ -177,7 +182,7 @@ pub(super) fn begin_check(
     Ok((ports, channel))
 }
 
-pub(super) fn accept(state: &mut State, result: Result<Option<Available>, String>) {
+pub(super) fn accept(state: &mut State, result: Result<Option<Available>, CheckFailure>) {
     state.updates.checking = false;
     state.updates.result = Some(result);
     if state.page == super::model::Page::Home {
@@ -346,70 +351,47 @@ pub(super) fn open(state: &mut State) -> Action {
 fn update_status(state: &State) -> String {
     let language = state.language;
     if state.updates.checking {
-        return language.text("检查中…", "Checking…").into();
+        return messages::tui_update_checking(language).into();
     }
     if state
         .poll
         .as_ref()
         .is_some_and(|poll| poll.meta.settings.claude_protection.is_some())
     {
-        return language
-            .text(
-                "Claude 保护中，检查已暂停",
-                "Update checks paused during Claude protection",
-            )
-            .into();
+        return messages::tui_update_paused_for_protection(language).into();
     }
     match &state.updates.result {
         Some(Ok(Some(update))) => {
-            let release = if update.preview {
-                language.text("预发布版", "pre-release")
+            let offer = if update.preview {
+                messages::tui_update_preview_available(language, &update.version)
             } else {
-                language.text("正式版", "release")
-            };
-            let offer = match language {
-                Language::SimplifiedChinese => format!("发现 {release} {}", update.version),
-                Language::English => format!("Found {release} {}", update.version),
+                messages::tui_update_release_available(language, &update.version)
             };
             match update.package_manager.map(|manager| {
                 clash_client_runtime::update::package_manager_update_hint_in(manager, language)
             }) {
                 Some(hint) => format!("{offer} · {hint}"),
-                None if update.package.is_none() => format!(
-                    "{offer} · {}",
-                    language.text(
-                        "当前平台无自动安装包",
-                        "No automatic installer for this platform"
-                    )
-                ),
+                None if update.package.is_none() => {
+                    messages::tui_update_no_installer(language, offer)
+                }
                 None => offer,
             }
         }
-        Some(Ok(None)) => language
-            .text("当前通道已是最新版本", "Up to date on this channel")
-            .into(),
-        Some(Err(error)) => {
-            let detail = clash_client_runtime::update::localize_check_error(error, language);
-            if language == Language::English && detail.starts_with("Update check ") {
-                detail.into_owned()
-            } else {
-                format!("{}{detail}", language.text("检查失败：", "Check failed: "))
-            }
-        }
+        Some(Ok(None)) => messages::tui_update_up_to_date(language).into(),
+        Some(Err(CheckFailure::Task(error))) => messages::tui_update_task_failed(language, error),
+        Some(Err(CheckFailure::Check(error))) => match check_error_text(error, language) {
+            CheckErrorText::RetrySummary(text) => text.into_owned(),
+            CheckErrorText::Detail(detail) => messages::tui_update_check_failed(language, detail),
+        },
         None => {
             if state
                 .poll
                 .as_ref()
                 .is_some_and(|poll| poll.meta.settings.update_check_interval_minutes == 0)
             {
-                language
-                    .text(
-                        "未检查 · 自动检查已关闭",
-                        "Not checked · automatic checks disabled",
-                    )
-                    .into()
+                messages::tui_update_not_checked_disabled(language).into()
             } else {
-                language.text("未检查", "Not checked").into()
+                messages::tui_update_not_checked(language).into()
             }
         }
     }

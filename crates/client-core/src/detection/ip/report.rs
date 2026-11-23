@@ -1,22 +1,22 @@
 //! A small aggregate over the single set of platform results.
-use crate::config::Language;
 use crate::ip_check::{self, CheckResult, State};
+use crate::{config::Language, messages};
 use std::{borrow::Cow, fmt};
 
 pub type ResultSlot = Option<Result<CheckResult, String>>;
 pub(crate) const NATIVE_REGION_DETAIL_PREFIX: &str = "原生地区检测结果：";
 
 pub fn no_response_measurement_in(language: Language) -> &'static str {
-    language.text("无响应测量", "No response measurement")
+    messages::ip_no_response_measurement(language)
 }
 
 pub fn authentication_check_skipped_in(language: Language) -> &'static str {
-    language.text("未执行认证检测", "Authentication check was not run")
+    messages::ip_authentication_skipped(language)
 }
 
 pub fn country_in(country: &str, authentication_check_skipped: bool, language: Language) -> &str {
     if authentication_check_skipped && country == "未提供" {
-        language.text("未提供", "Not provided")
+        messages::ip_not_provided(language)
     } else {
         country
     }
@@ -55,7 +55,7 @@ pub fn detail_in<'a>(
             authentication_check_skipped_in(language),
             target_exit_detail_in(service, Some(outcome), language),
         ),
-        Ok(result) if language == Language::English => {
+        Ok(result) if language != Language::SimplifiedChinese => {
             let observed = result.target_exit.as_ref();
             if let Some(host) = ip_check::target_host(service)
                 && observed.is_none_or(|exit| exit.host == host)
@@ -63,31 +63,34 @@ pub fn detail_in<'a>(
                     .detail
                     .strip_suffix(&ip_check::target_exit_evidence_suffix(&host, observed))
             {
-                let evidence = english_check_detail(service, result, evidence);
-                let value =
-                    observed.map_or_else(|| "Unconfirmed".to_owned(), |exit| exit.ip.to_string());
-                return Cow::Owned(format!(
-                    "{evidence}\nSame-domain probe exit ({host}): {value}"
+                let evidence = localized_check_detail(service, result, evidence, language);
+                let value = observed.map_or_else(
+                    || messages::ip_exit_unconfirmed(language).to_owned(),
+                    |exit| exit.ip.to_string(),
+                );
+                return Cow::Owned(messages::ip_probe_exit_evidence(
+                    language, evidence, host, value,
                 ));
             }
-            english_check_detail(service, result, &result.detail)
+            localized_check_detail(service, result, &result.detail, language)
         }
         Ok(result) => Cow::Borrowed(&result.detail),
         Err(error) => crate::error_message::localize(error, language),
     }
 }
 
-fn english_check_detail<'a>(
+fn localized_check_detail<'a>(
     service: &ip_check::Service,
     result: &CheckResult,
     detail: &'a str,
+    language: Language,
 ) -> Cow<'a, str> {
     if result.state == State::Failed && result.summary == ip_check::PLATFORM_ERROR_WITH_EXIT_SUMMARY
     {
         return Cow::Borrowed(detail);
     }
     if let Some(evidence) = detail.strip_prefix(NATIVE_REGION_DETAIL_PREFIX) {
-        return Cow::Owned(format!("Native region check result: {evidence}"));
+        return Cow::Owned(messages::ip_native_region_evidence(language, evidence));
     }
     if service.id == "github"
         && let Some((status, phrase)) = detail
@@ -95,12 +98,12 @@ fn english_check_detail<'a>(
             .and_then(|detail| detail.split_once(" · "))
         && reqwest::StatusCode::from_bytes(status.as_bytes()).is_ok()
     {
-        let english = match phrase {
-            ip_check::BASIC_HTTP_DETAIL => "Basic HTTP response check",
-            ip_check::REGIONAL_HTTP_DETAIL => "Service reported a regional restriction",
+        let localized = match phrase {
+            ip_check::BASIC_HTTP_DETAIL => messages::ip_basic_http(language),
+            ip_check::REGIONAL_HTTP_DETAIL => messages::ip_regional_http(language),
             _ => return Cow::Borrowed(detail),
         };
-        return Cow::Owned(format!("HTTP {status} · {english}"));
+        return Cow::Owned(messages::ip_http_evidence(language, localized, status));
     }
     if service.id == "exit-ip"
         && let Some((family, status)) = detail
@@ -109,9 +112,7 @@ fn english_check_detail<'a>(
         && matches!(family, "IPv4" | "IPv6")
         && reqwest::StatusCode::from_bytes(status.as_bytes()).is_ok_and(|code| code.is_success())
     {
-        return Cow::Owned(format!(
-            "Core egress IP observed by Cloudflare · {family} · HTTP {status}"
-        ));
+        return Cow::Owned(messages::ip_cloudflare_egress(language, family, status));
     }
     Cow::Borrowed(detail)
 }
@@ -137,20 +138,20 @@ pub fn target_exit_detail_in(
 ) -> Option<String> {
     let host = ip_check::target_host(service)?;
     let value = match result {
-        None => language.text("待检测", "Pending").to_owned(),
+        None => messages::ip_exit_pending(language).to_owned(),
         Some(Ok(result)) => result
             .target_exit
             .as_ref()
             .filter(|exit| exit.host == host)
             .map_or_else(
-                || language.text("未确认", "Unconfirmed").to_owned(),
+                || messages::ip_exit_unconfirmed(language).to_owned(),
                 |exit| match &exit.country {
                     Some(country) => {
                         let displayed = match language {
                             crate::config::Language::SimplifiedChinese => country.as_str(),
-                            crate::config::Language::English => crate::countries::country_code(
-                                crate::countries::country_text(country),
-                            )
+                            _ => crate::countries::country_code(crate::countries::country_text(
+                                country,
+                            ))
                             .and_then(crate::countries::english_name)
                             .unwrap_or(country),
                         };
@@ -159,12 +160,9 @@ pub fn target_exit_detail_in(
                     None => exit.ip.to_string(),
                 },
             ),
-        Some(Err(_)) => language.text("未确认", "Unconfirmed").to_owned(),
+        Some(Err(_)) => messages::ip_exit_unconfirmed(language).to_owned(),
     };
-    Some(format!(
-        "{}{value}",
-        language.text("同域出口：", "Same-domain exit: ")
-    ))
+    Some(messages::ip_target_exit(language, value))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -266,14 +264,14 @@ impl Status {
 
     pub fn label_in(self, language: crate::config::Language) -> &'static str {
         match self {
-            Self::Available => language.text("确认可用", "Available"),
-            Self::Partial => language.text("部分可用", "Partially available"),
-            Self::Reachable => language.text("仅网页可达", "Website reachable"),
-            Self::Identified => language.text("信息已识别", "Identified"),
-            Self::Restricted => language.text("不可用或受限", "Unavailable or restricted"),
-            Self::Unknown => language.text("结果未确认", "Unconfirmed"),
-            Self::Failed => language.text("超时或失败", "Timed out or failed"),
-            Self::Untested => language.text("未检测", "Not checked"),
+            Self::Available => messages::ip_status_available(language),
+            Self::Partial => messages::ip_status_partial(language),
+            Self::Reachable => messages::ip_status_reachable(language),
+            Self::Identified => messages::ip_status_identified(language),
+            Self::Restricted => messages::ip_status_restricted(language),
+            Self::Unknown => messages::ip_status_unknown(language),
+            Self::Failed => messages::ip_status_failed(language),
+            Self::Untested => messages::ip_status_untested(language),
         }
     }
 
@@ -283,7 +281,7 @@ impl Status {
     }
 
     pub fn summary_in(self, summary: &str, language: crate::config::Language) -> &str {
-        if language != Language::English {
+        if language == Language::SimplifiedChinese {
             return summary;
         }
         if self.summary_is_generic(summary) {
@@ -291,29 +289,41 @@ impl Status {
         }
         match (self, summary) {
             (Self::Available, "可用") => self.label_in(language),
-            (Self::Partial, "仅网页可用") => "Website only",
-            (Self::Partial, "仅自制内容") => "Originals only",
-            (Self::Reachable, "可达 · 解锁未确认") => "Reachable · Unlock unconfirmed",
-            (Self::Identified, "已识别地区") => "Region identified",
+            (Self::Partial, "仅网页可用") => messages::ip_website_only(language),
+            (Self::Partial, "仅自制内容") => messages::ip_originals_only(language),
+            (Self::Reachable, "可达 · 解锁未确认") => {
+                messages::ip_unlock_unconfirmed(language)
+            }
+            (Self::Identified, "已识别地区") => messages::ip_region_identified(language),
             (Self::Identified, "已获取地区或网络信息") => {
-                "Region or network information retrieved"
+                messages::ip_network_information_retrieved(language)
             }
-            (Self::Restricted, "地区不支持") => "Unsupported region",
-            (Self::Restricted, "出口网络受限") => "Exit network restricted",
-            (Self::Restricted, "地区受限") => "Region restricted",
-            (Self::Restricted, "访问受限") => "Access restricted",
-            (Self::Restricted, "请求限流") => "Rate limited",
+            (Self::Restricted, "地区不支持") => messages::ip_region_unsupported(language),
+            (Self::Restricted, "出口网络受限") => messages::ip_exit_restricted(language),
+            (Self::Restricted, "地区受限") => messages::ip_region_restricted(language),
+            (Self::Restricted, "访问受限") => messages::ip_access_restricted(language),
+            (Self::Restricted, "请求限流") => messages::ip_rate_limited(language),
             (Self::Unknown, "检测失败或结果未确认") => {
-                "Check failed or result unconfirmed"
+                messages::ip_check_failed_or_unconfirmed(language)
             }
-            (Self::Unknown, "请求被拦截，未确认") => "Request blocked · Unconfirmed",
-            (Self::Unknown, "已返回检测信息") => "Check information returned",
-            (Self::Unknown, "验证拦截，未确认") => "Browser verification blocked the check",
-            (Self::Unknown, "请求被拒绝，未确认") => "Request denied · Unconfirmed",
-            (Self::Unknown, "未确认可用性") => "Availability unconfirmed",
-            (Self::Failed, "检测失败") => "Check failed",
-            (Self::Failed, "请求失败，未确认") => "Request failed · Unconfirmed",
-            (Self::Failed, "检测失败，未确认") => "Check failed · Unconfirmed",
+            (Self::Unknown, "请求被拦截，未确认") => {
+                messages::ip_request_blocked(language)
+            }
+            (Self::Unknown, "已返回检测信息") => {
+                messages::ip_check_information_returned(language)
+            }
+            (Self::Unknown, "验证拦截，未确认") => {
+                messages::ip_browser_verification_blocked(language)
+            }
+            (Self::Unknown, "请求被拒绝，未确认") => messages::ip_request_denied(language),
+            (Self::Unknown, "未确认可用性") => {
+                messages::ip_availability_unconfirmed(language)
+            }
+            (Self::Failed, "检测失败") => messages::ip_check_failed(language),
+            (Self::Failed, "请求失败，未确认") => messages::ip_request_failed(language),
+            (Self::Failed, "检测失败，未确认") => {
+                messages::ip_check_failed_unconfirmed(language)
+            }
             _ => summary,
         }
     }

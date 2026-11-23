@@ -1,10 +1,11 @@
 //! Bounded Release discovery and streaming, checksum-verified installer downloads.
 mod discovery;
 mod install;
+use crate::messages;
 use anyhow::{Context, Result, bail};
-pub use clash_client_core::update::Progress;
 pub use clash_client_core::update::channel;
 pub use clash_client_core::update::schedule;
+pub use clash_client_core::update::{CheckErrorText, Progress};
 use futures_util::future::{AbortHandle, AbortRegistration};
 #[cfg(target_os = "linux")]
 pub use install::run_terminal_install;
@@ -107,19 +108,10 @@ pub fn package_manager_update_hint_in(
     manager: &str,
     language: clash_client_core::config::Language,
 ) -> String {
-    match (language, manager) {
-        (clash_client_core::config::Language::SimplifiedChinese, "pacman") => {
-            "AUR 请用助手或更新配方后运行 makepkg -si；其他包请用 pacman".into()
-        }
-        (clash_client_core::config::Language::English, "pacman") => {
-            "For AUR, use an AUR helper or update the recipe and run makepkg -si; use pacman for other packages".into()
-        }
-        (clash_client_core::config::Language::SimplifiedChinese, _) => {
-            format!("请使用 {manager} 更新此版本的客户端")
-        }
-        (clash_client_core::config::Language::English, _) => {
-            format!("Use {manager} to update this installation")
-        }
+    if manager == "pacman" {
+        crate::messages::update_pacman_hint(language).into()
+    } else {
+        crate::messages::update_package_manager_hint(language, manager)
     }
 }
 
@@ -162,6 +154,13 @@ pub fn localize_check_error(
     error: &str,
     language: clash_client_core::config::Language,
 ) -> Cow<'_, str> {
+    check_error_text(error, language).into_text()
+}
+
+pub fn check_error_text(
+    error: &str,
+    language: clash_client_core::config::Language,
+) -> CheckErrorText<'_> {
     clash_client_core::update::localize_check_error_with(
         error,
         language,
@@ -172,15 +171,12 @@ pub fn localize_check_error(
 impl State {
     pub fn status_in(&self, language: clash_client_core::config::Language) -> Cow<'_, str> {
         use clash_client_core::config::Language;
-        if language == Language::SimplifiedChinese {
-            return self.status.as_str().into();
-        }
         match self.status.as_str() {
             "更新通道已更改，请检查更新" => {
-                return "Update channel changed; check for updates".into();
+                return messages::update_channel_changed(language).into();
             }
             "Claude 保护期间暂停客户端更新" => {
-                return "Client updates paused during Claude protection".into();
+                return messages::update_paused_for_protection(language).into();
             }
             _ => {}
         }
@@ -188,13 +184,11 @@ impl State {
             return self.status.as_str().into();
         };
         let translated = if description == "未发现新版本" {
-            "No updates found".into()
+            messages::update_no_release_found(language).into()
         } else if let Some(error) = description.strip_prefix("检查失败：") {
-            let error = localize_check_error(error, language);
-            if error.starts_with("Update check ") {
-                error.into_owned()
-            } else {
-                format!("Check failed: {error}")
+            match check_error_text(error, language) {
+                CheckErrorText::RetrySummary(text) => text.into_owned(),
+                CheckErrorText::Detail(detail) => messages::update_check_failed(language, detail),
             }
         } else if let Some(update) = &self.available {
             let describe = |language| {
@@ -983,6 +977,22 @@ mod tests {
             )
         );
         assert!(state.status.contains(retry));
+        assert!(
+            state
+                .status_in(Language::SimplifiedChinese)
+                .ends_with(retry)
+        );
+        assert!(
+            !state
+                .status_in(Language::SimplifiedChinese)
+                .contains("检查失败：检查更新失败")
+        );
+        state.finish(Err("Update check provider detail".into()));
+        assert!(
+            state
+                .status_in(Language::English)
+                .ends_with("Check failed: Update check provider detail")
+        );
         assert_eq!(
             localize_check_error("检查更新超时（已尝试 1 次）", Language::English),
             "Update check timed out after 1 attempt"

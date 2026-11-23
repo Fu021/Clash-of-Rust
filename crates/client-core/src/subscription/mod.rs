@@ -6,7 +6,7 @@ use std::time::Duration;
 mod compatibility;
 mod info;
 pub mod schedule;
-pub use info::summary;
+pub use info::{SummaryPart, summary, summary_parts};
 
 const LIMIT: usize = 10 * 1024 * 1024;
 

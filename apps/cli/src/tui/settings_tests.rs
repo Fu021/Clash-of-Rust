@@ -20,7 +20,7 @@ async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
-        for index in 0..4 {
+        for index in 0..2 {
             let (mut stream, _) = listener.accept().await.unwrap();
             let length = stream.read_u32().await.unwrap() as usize;
             let mut request = vec![0; length];
@@ -28,7 +28,7 @@ async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
             let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
             assert_eq!(request["operation"]["command"], "rule-document");
             assert_eq!(request["operation"]["id"], "selected-profile");
-            let reply = if index % 2 == 0 {
+            let reply = if index == 0 {
                 serde_json::json!({
                     "result": {
                         "profile_id": "different-profile",
@@ -59,43 +59,37 @@ async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
     }))
     .unwrap();
     let remote = Remote::new(endpoint, std::time::Duration::from_secs(2));
-    for (language, changed, backend_error) in [
+    let mut poll = demo_poll();
+    poll.meta.settings.active_profile = Some("selected-profile".into());
+    poll.meta.profiles.push(Profile {
+        id: "selected-profile".into(),
+        name: "Example".into(),
+        source: "https://example.test/sub".into(),
+        updated: 0,
+        usage: None,
+        builtin: false,
+    });
+    let mut state = State::new(false);
+    state.accept(Some(poll));
+    for (chinese, english) in [
         (
-            SimplifiedChinese,
             "订阅已变化，请刷新后重试",
-            "设置已被另一客户端修改，请刷新后重试",
+            "The subscription changed; refresh and try again",
         ),
         (
-            English,
-            "The subscription changed; refresh and try again",
+            "设置已被另一客户端修改，请刷新后重试",
             "Settings changed in another client; refresh and try again",
         ),
     ] {
-        let mut poll = demo_poll();
-        poll.meta.settings.active_profile = Some("selected-profile".into());
-        poll.meta.profiles.push(Profile {
-            id: "selected-profile".into(),
-            name: "Example".into(),
-            source: "https://example.test/sub".into(),
-            updated: 0,
-            usage: None,
-            builtin: false,
-        });
-        let changed_status =
-            crate::tui::catalog::read_shortcuts(&remote, &poll, None, true, language)
+        state.set_language(SimplifiedChinese);
+        let status =
+            crate::tui::catalog::read_shortcuts(&remote, state.poll.as_ref().unwrap(), None, true)
                 .await
                 .unwrap();
-        let backend_status =
-            crate::tui::catalog::read_shortcuts(&remote, &poll, None, true, language)
-                .await
-                .unwrap();
-        let mut state = State::new(false);
-        state.language = language;
-        state.accept(Some(poll));
-        for (status, expected) in [(changed_status, changed), (backend_status, backend_error)] {
-            assert_eq!(status.error.as_deref(), Some(expected));
-            assert!(status.document.is_none());
-            state.shortcuts = Some(status);
+        assert!(status.document.is_none());
+        state.shortcuts = Some(status);
+        for (language, expected) in [(SimplifiedChinese, chinese), (English, english)] {
+            state.set_language(language);
             let lines = crate::tui::catalog::rules(&state, 120, 24)
                 .into_iter()
                 .map(|(line, _)| line)
@@ -470,7 +464,11 @@ fn exclusion_lists_accept_comma_separated_domains_and_keep_invalid_drafts() {
         serde_json::json!(["example.test", "example.org"])
     );
     form.fields[1].value = "https://invalid.test/path".into();
-    assert!(form.args(&args()).is_err());
+    let error = form.args(&args()).err().unwrap();
+    assert_eq!(
+        crate::output::localized_error(&error, English),
+        "Fake-IP exclusions may contain domains, wildcards, and . - _ + *"
+    );
     assert_eq!(form.fields[1].value, "https://invalid.test/path");
 }
 

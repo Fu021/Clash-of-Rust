@@ -1,3 +1,4 @@
+use crate::messages;
 use anyhow::{Context, ensure};
 use clash_mobile_runtime::{Session, core::config::Language};
 use serde_json::Value;
@@ -21,17 +22,13 @@ pub(crate) fn save_ipv6(
     if enabled == session.settings.ipv6 {
         return Ok(());
     }
-    session.observe_native().context(language.text(
-        "无法确认 VPN 已断开",
-        "Could not confirm the VPN is disconnected",
-    ))?;
+    session
+        .observe_native()
+        .context(messages::vpn_disconnect_unconfirmed(language))?;
     ensure!(
         ipv6_change_available(&session.platform),
         "{}",
-        language.text(
-            "请先断开 VPN，再修改 IPv6",
-            "Disconnect the VPN before changing IPv6"
-        )
+        messages::ipv6_requires_vpn_disconnect(language)
     );
     let mut settings = session.settings.clone();
     settings.ipv6 = enabled;

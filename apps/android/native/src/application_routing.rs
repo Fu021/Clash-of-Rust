@@ -1,5 +1,5 @@
 use super::{AndroidData, AndroidIntent, AndroidWindow, ApplicationItem, MobileData, MobileView};
-use crate::application_routing_mode::selection_after_mode_change;
+use crate::{application_routing_mode::selection_after_mode_change, messages};
 use anyhow::{Context, Result, bail};
 use clash_mobile_runtime::{NativeHost, core::config::Language};
 use serde::Deserialize;
@@ -154,23 +154,14 @@ pub(super) fn request(
                 | AndroidIntent::ApplicationRevert
         )
     {
-        bail!(
-            "{}",
-            language.text(
-                "请先关闭 Claude 保护，再修改应用分流",
-                "Disable Claude protection before changing application routing"
-            )
-        );
+        bail!("{}", messages::routing_protected(language));
     }
     if data.get_applications_loading() || data.get_applications_saving() {
         return Ok(());
     }
-    let mut state = editor.lock().map_err(|_| {
-        anyhow::anyhow!(
-            "{}",
-            language.text("应用列表忙碌", "Application list is busy")
-        )
-    })?;
+    let mut state = editor
+        .lock()
+        .map_err(|_| anyhow::anyhow!("{}", messages::routing_catalog_busy(language)))?;
     if intent == AndroidIntent::ApplicationPermissions {
         host.request(json!({"op":"applications-permissions"}))?;
         return Ok(());
@@ -201,10 +192,7 @@ pub(super) fn request(
                 if let Err(error) = &result {
                     report_error(
                         host.as_ref(),
-                        &format!(
-                            "{}{error:#}",
-                            language.text("读取应用列表失败：", "Failed to load apps: ")
-                        ),
+                        &messages::routing_catalog_failed(language, format!("{error:#}")),
                     );
                 }
                 let _ = slint::invoke_from_event_loop(move || {
@@ -236,13 +224,8 @@ pub(super) fn request(
                             state.loaded = true;
                         }
                         Err(error) => data.set_applications_error(
-                            format!(
-                                "{}{error:#}{}",
-                                language.text("读取应用列表失败：", "Failed to load apps: "),
-                                language
-                                    .text("。可重试或导出诊断", ". Retry or export diagnostics.")
-                            )
-                            .into(),
+                            messages::routing_catalog_failed_retry(language, format!("{error:#}"))
+                                .into(),
                         ),
                     }
                     state.present(&ui);
@@ -256,10 +239,7 @@ pub(super) fn request(
     }
     if intent == AndroidIntent::ApplicationSave {
         if state.catalog.mode == "only" && state.catalog.selected.is_empty() {
-            bail!(
-                "{}",
-                language.text("请至少选择一个应用", "Select at least one app")
-            );
+            bail!("{}", messages::routing_select_one(language));
         }
         let input = json!({
             "op":"applications-save", "mode":state.catalog.mode,
@@ -275,11 +255,19 @@ pub(super) fn request(
             .spawn(move || {
                 let result = host.request(input);
                 if let Err(error) = &result {
-                    report_error(host.as_ref(), &format!("{}{error:#}", language.text("保存应用分流失败：", "Failed to save application routing: ")));
+                    report_error(
+                        host.as_ref(),
+                        &messages::routing_save_failed(language, format!("{error:#}")),
+                    );
                 } else if let Ok(value) = &result
-                    && let Some(error) = value["reconnect_error"].as_str().filter(|value| !value.is_empty())
+                    && let Some(error) = value["reconnect_error"]
+                        .as_str()
+                        .filter(|value| !value.is_empty())
                 {
-                    report_error(host.as_ref(), &format!("{}{error}", language.text("应用分流已保存，但 VPN 重连失败：", "Application routing saved, but VPN reconnection failed: ")));
+                    report_error(
+                        host.as_ref(),
+                        &messages::routing_reconnect_failed(language, error),
+                    );
                 }
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(ui) = weak.upgrade() else {
@@ -295,18 +283,27 @@ pub(super) fn request(
                     data.set_applications_saving(false);
                     match result {
                         Ok(result) => {
-                            state.catalog.summary =
-                                result["summary"].as_str().unwrap_or(language.text("已保存", "Saved")).to_string();
+                            state.catalog.summary = result["summary"]
+                                .as_str()
+                                .unwrap_or(messages::routing_saved(language))
+                                .to_string();
                             state.saved_mode = state.catalog.mode.clone();
                             state.saved_selected = state.catalog.selected.clone();
                             state.present(&ui);
                             data.set_application_scope(
-                                result["summary"].as_str().unwrap_or(language.text("已保存", "Saved")).into(),
+                                result["summary"]
+                                    .as_str()
+                                    .unwrap_or(messages::routing_saved(language))
+                                    .into(),
                             );
                             let view = ui.global::<MobileView>();
-                            if let Some(error) = result["reconnect_error"].as_str().filter(|value| !value.is_empty()) {
+                            if let Some(error) = result["reconnect_error"]
+                                .as_str()
+                                .filter(|value| !value.is_empty())
+                            {
                                 data.set_applications_error(
-                                    format!("{}{error}{}", language.text("应用分流已保存，但 VPN 重连失败：", "Application routing saved, but VPN reconnection failed: "), language.text("。请重新连接或导出诊断", ". Reconnect or export diagnostics.")).into(),
+                                    messages::routing_reconnect_failed_retry(language, error)
+                                        .into(),
                                 );
                                 return;
                             }
@@ -315,16 +312,17 @@ pub(super) fn request(
                                 view.set_notice_critical(false);
                                 ui.invoke_notify(
                                     if result["reconnecting"].as_bool().unwrap_or(false) {
-                                        language.text("应用分流已保存，正在重新连接 VPN", "Application routing saved; reconnecting VPN")
+                                        messages::routing_saved_reconnecting(language)
                                     } else {
-                                        language.text("应用分流已保存，下次连接时生效", "Application routing saved; applies on the next connection")
+                                        messages::routing_saved_next_connection(language)
                                     }
                                     .into(),
                                 );
                             }
                         }
                         Err(error) => data.set_applications_error(
-                            format!("{}{error:#}{}", language.text("保存失败：", "Save failed: "), language.text("。可重试或导出诊断", ". Retry or export diagnostics.")).into(),
+                            messages::routing_save_failed_retry(language, format!("{error:#}"))
+                                .into(),
                         ),
                     }
                 });
@@ -352,10 +350,7 @@ pub(super) fn request(
         AndroidIntent::ApplicationFilter => {
             let filter = value.parse::<usize>()?;
             if filter > 2 {
-                bail!(
-                    "{}",
-                    language.text("无法识别应用筛选条件", "Invalid application filter")
-                );
+                bail!("{}", messages::routing_filter_invalid(language));
             }
             state.filter = filter;
             false
@@ -363,9 +358,7 @@ pub(super) fn request(
         AndroidIntent::ApplicationMode => {
             let next = *["all", "only", "exclude"]
                 .get(value.parse::<usize>()?)
-                .context(
-                    language.text("无法识别应用分流模式", "Invalid application routing mode"),
-                )?;
+                .context(messages::routing_mode_invalid(language))?;
             let current = state.catalog.mode.as_str();
             if current == next {
                 return Ok(());
@@ -375,7 +368,7 @@ pub(super) fn request(
             if needs_complete_catalog
                 && (state.catalog.visibility_limited || !state.catalog.query_permission)
             {
-                bail!("{}", language.text("应用列表不完整，无法自动反选；请检查应用信息中的权限或设备限制，再刷新列表", "The app list is incomplete. Check permissions or device restrictions in app info, then refresh."));
+                bail!("{}", messages::routing_catalog_incomplete(language));
             }
             let available = state
                 .catalog
@@ -391,13 +384,7 @@ pub(super) fn request(
         }
         AndroidIntent::ApplicationToggle => {
             if state.catalog.mode == "all" {
-                bail!(
-                    "{}",
-                    language.text(
-                        "全部应用模式无需勾选；请先选择仅选中或排除选中",
-                        "Choose Selected or Exclude before selecting apps"
-                    )
-                );
+                bail!("{}", messages::routing_choose_mode(language));
             }
             if !state
                 .catalog
@@ -405,13 +392,7 @@ pub(super) fn request(
                 .iter()
                 .any(|item| item.package == value)
             {
-                bail!(
-                    "{}",
-                    language.text(
-                        "应用不在当前列表，请刷新后重试",
-                        "App not in the current list; refresh and retry"
-                    )
-                );
+                bail!("{}", messages::routing_app_missing(language));
             }
             if !state.catalog.selected.remove(value) {
                 state.catalog.selected.insert(value.into());
@@ -420,19 +401,10 @@ pub(super) fn request(
         }
         AndroidIntent::ApplicationSelect => {
             if state.catalog.mode == "all" {
-                bail!(
-                    "{}",
-                    language.text(
-                        "全部应用模式无需勾选；请先选择仅选中或排除选中",
-                        "Choose Selected or Exclude before selecting apps"
-                    )
-                );
+                bail!("{}", messages::routing_choose_mode(language));
             }
             if !["all", "invert", "clear"].contains(&value) {
-                bail!(
-                    "{}",
-                    language.text("无法识别应用选择操作", "Invalid app selection action")
-                );
+                bail!("{}", messages::routing_selection_invalid(language));
             }
             if value == "clear" {
                 state.catalog.selected.clear();

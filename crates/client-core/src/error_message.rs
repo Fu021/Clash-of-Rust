@@ -1,8 +1,16 @@
-use crate::config::Language;
+use crate::{config::Language, messages};
 use std::borrow::Cow;
 
-fn english(message: &str) -> Option<&'static str> {
+fn legacy_message(message: &str, language: Language) -> Option<&'static str> {
     Some(match message {
+        "请输入有效的网站地址" => messages::network_tool_invalid_website(language),
+        "请输入域名或 HTTP/HTTPS 地址" => {
+            messages::network_tool_invalid_domain_or_url(language)
+        }
+        "请输入 HTTP/HTTPS 地址" => messages::network_tool_invalid_url(language),
+        "测试地址不支持嵌入用户名密码" => {
+            messages::network_tool_url_credentials(language)
+        }
         crate::protection::READ_ONLY_NOTICE => {
             "Disable Claude protection first; network changes and updates are locked while protection is active"
         }
@@ -473,32 +481,27 @@ fn english(message: &str) -> Option<&'static str> {
     })
 }
 
-fn localize_routes(message: &str) -> Option<String> {
+fn localize_routes(message: &str, language: Language) -> Option<String> {
     message
         .split('；')
         .map(|part| {
-            [
-                ("内核代理：", "Core proxy"),
-                ("系统代理：", "System proxy"),
-                ("内核直连：", "Core direct"),
-                ("系统网络：", "System network"),
-                ("直连：", "Direct"),
-            ]
-            .into_iter()
-            .find_map(|(prefix, label)| {
-                part.strip_prefix(prefix)
-                    .map(|detail| format!("{label}: {}", localize(detail, Language::English)))
-            })
+            let (label, detail) = part.split_once('：')?;
+            let route = crate::network::localized_route_label(label, language)?;
+            Some(messages::download_route_error(
+                language,
+                localize(detail, language),
+                route,
+            ))
         })
         .collect::<Option<Vec<_>>>()
-        .map(|parts| parts.join("; "))
+        .map(|parts| parts.join(messages::download_route_error_separator(language)))
 }
 
 pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
-    if language != Language::English {
+    if language == Language::SimplifiedChinese {
         return Cow::Borrowed(message);
     }
-    if let Some(translated) = english(message) {
+    if let Some(translated) = legacy_message(message, language) {
         return Cow::Borrowed(translated);
     }
     for (prefix, summary) in [
@@ -533,16 +536,16 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
         return format!("Exit IP lookup returned no valid result (HTTP {status})").into();
     }
     if let Some(body) = message.strip_suffix("（已尝试可用代理和直连）")
-        && let Some(details) = localize_routes(body)
+        && let Some(details) = localize_routes(body, language)
     {
-        return format!("{details} (tried available proxies and direct connections)").into();
+        return messages::download_route_error_tried_all(language, details).into();
     }
-    if let Some(details) = localize_routes(message) {
+    if let Some(details) = localize_routes(message, language) {
         return details.into();
     }
     for delimiter in ["：", ": "] {
         if let Some((prefix, detail)) = message.split_once(delimiter)
-            && let Some(translated) = english(prefix)
+            && let Some(translated) = legacy_message(prefix, language)
         {
             if matches!(prefix, "保护回滚失败" | "无法确认 VPN 启动状态")
                 && let Some((reason, external_detail)) = detail.split_once('\n')
@@ -585,7 +588,7 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
 }
 
 pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
-    if language != Language::English {
+    if language == Language::SimplifiedChinese {
         return Cow::Borrowed(message);
     }
     let (summary, detail) = message
@@ -615,8 +618,12 @@ pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
             "Enter a domain name for DNS lookup, for example github.com"
         }
         "未查到目标地址" => "No addresses found for the target",
-        "请输入 HTTP/HTTPS 地址" => "Enter an HTTP/HTTPS URL",
-        "测试地址不支持嵌入用户名密码" => "Test URLs cannot include credentials",
+        "请输入有效的网站地址"
+        | "请输入域名或 HTTP/HTTPS 地址"
+        | "请输入 HTTP/HTTPS 地址"
+        | "测试地址不支持嵌入用户名密码" => {
+            legacy_message(summary, language).unwrap()
+        }
         "IP 查询响应过大" => "IP lookup response is too large",
         "IP 查询响应不是有效 UTF-8 文本" => "IP lookup response is not valid UTF-8 text",
         "IP 查询响应不是有效 IP 地址或包含有效 ip 字段的 JSON" => {
@@ -644,6 +651,25 @@ pub fn localize_diagnostic(message: &str, language: Language) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn website_input_errors_use_the_same_messages_in_reports_and_direct_errors() {
+        let malformed = crate::probe::diagnostic_url("").unwrap_err();
+        let credentials =
+            crate::probe::diagnostic_url("https://fixture@example.invalid").unwrap_err();
+        for (raw, expected) in [
+            (malformed.to_string(), "Enter a valid website address"),
+            (credentials.to_string(), "Enter a domain or HTTP/HTTPS URL"),
+            (
+                credentials.root_cause().to_string(),
+                "Test URLs cannot include credentials",
+            ),
+        ] {
+            assert_eq!(localize(&raw, Language::English), expected);
+            assert_eq!(localize_diagnostic(&raw, Language::English), expected);
+            assert_eq!(localize(&raw, Language::SimplifiedChinese), raw);
+        }
+    }
 
     #[test]
     fn actual_configuration_and_rule_errors_follow_the_display_language() {
