@@ -56,14 +56,17 @@ impl Watch {
     }
 
     pub(super) fn notice(&self, settings: Option<&Settings>) -> String {
+        self.notice_in(settings, Language::SimplifiedChinese)
+    }
+
+    pub(super) fn notice_in(&self, settings: Option<&Settings>, language: Language) -> String {
         if self.transitioning {
             return String::new();
         }
-        host_network::notice(&host_network::with_settings_context(
-            self.routes.clone(),
-            self.proxy,
-            settings,
-        ))
+        host_network::notice_in(
+            &host_network::with_settings_context(self.routes.clone(), self.proxy, settings),
+            language,
+        )
         .unwrap_or_default()
     }
 }

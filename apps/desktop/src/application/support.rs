@@ -35,6 +35,8 @@ impl App {
             &[]
         };
         let claude_status = self.claude.status.display(language);
+        let settings = Some(&self.settings);
+        let network_alert = self.network_watch.notice(settings);
         let error = if self.error
             && !context.is_empty()
             && languages
@@ -52,6 +54,11 @@ impl App {
                 .any(|language| self.claude.status.display(language) == context)
         {
             claude_status.as_ref()
+        } else if !network_alert.is_empty()
+            && (context == network_alert
+                || context == self.network_watch.notice_in(settings, Language::English))
+        {
+            network_alert.as_str()
         } else {
             [
                 Some(self.fake_ip_error.as_str()),
@@ -89,7 +96,7 @@ impl App {
                 "installer_active":self.updates.installing.is_some()},
             "page":format!("{:?}",self.page),"running":self.snapshot.running,
             "proxy":format!("{:?}",self.snapshot.proxy_mode()),
-            "network_alert":self.network_watch.notice(Some(&self.settings)),"network_tests":network_tests,
+            "network_alert":network_alert,"network_tests":network_tests,
             "network_tool":network_tools::Tool::at(self.network_tool).ok().map(|tool| tool.id()),
             "network_test_codes":self.network_codes,
             "site_results":clash_client_core::support::ip_results(&self.site_results),

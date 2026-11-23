@@ -12,6 +12,8 @@ Ubuntu 24.04 x64 的 GitHub 托管 runner 和 Arch x64 的一次性来宾在终�
 
 已安装旧版明确报告 GitHub 限流时，终端的查版本、下载和安装前查版本，以及 GUI 的版本发现，各最多重试三次。旧版只向夹具返回限流提示，夹具按 60、120、240 秒退避，每次另加独立的 0～30 秒随机延迟，在原有验收总时限内错开各 runner 的请求。GUI 关闭本次限流提示后再查版本。安装记录已经产生时直接保留结果，授权失败、包锁和校验失败走各自的验收路径。
 
+GUI 夹具按 Linux 内核的 [`fcntl` 封印 ABI](https://github.com/torvalds/linux/blob/master/include/uapi/linux/fcntl.h)校验 pkexec 收到的文件。固定来宾 Python 缺少这些常量的导出，测试直接使用内核定义的命令号和四项封印位。
+
 GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户和临时授权规则使用非交互 `sudo`，由提权后的独立超时约束命令。整页 OCR 未命中旧版白字按钮时，裁取固定测试强调色内的按钮，先放大再二值化以保留笔画。仅在识别到完整就绪标签时才点击；安装失败后点击提示内的关闭按钮并检查结果确认状态。图形代理重启后仍有注册时序风险。[polkit 的公开 D-Bus 接口](https://polkit.pages.freedesktop.org/polkit/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html)没有会话代理注册查询。若实际安装未弹出授权窗口，应查看对应会话的 polkit 注册日志。
 
 2026-11-22 使用 `59b91a03`、CI `45011206632`、旧候选 CI `44943304678` 和公开预发布 `v0.7.3-dev.2.live-language`，以下八套共 21 个目标的跨版本终端报告通过：[Ubuntu](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456673)、[Debian](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456896)、[Mint](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456401)、[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456816)、[Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456535)、[Fedora](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456876)、[openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456820)及 [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013457070)。Arch 旧包来自 CI 候选；GUI 图形授权与失败恢复不在此批报告范围。

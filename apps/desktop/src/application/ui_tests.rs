@@ -4860,11 +4860,22 @@ fn external_tun_alert_survives_navigation_and_clears_after_proxy_state_changes()
     ));
     for page in [Page::Home, Page::Proxies, Page::Settings] {
         app.page = page;
+        app.presentation_language = Language::SimplifiedChinese;
         let data = clash_desktop_protocol::UiData::default();
         let mut models = clash_desktop_protocol::models::ViewModels::default();
         models.attach(&data);
         app.present(&data, &mut models);
-        assert!(data.get_network_alert().as_str().contains("root · PID 42"));
+        let chinese = data.get_network_alert();
+        assert!(chinese.as_str().contains("外部 TUN"));
+        assert!(chinese.as_str().contains("root · PID 42"));
+        app.presentation_language = Language::English;
+        app.present(&data, &mut models);
+        let english = data.get_network_alert();
+        assert!(english.as_str().contains("Traffic uses an external TUN"));
+        assert!(english.as_str().contains("root · PID 42"));
+        let context = app.diagnostic_context(english.as_str());
+        assert_eq!(context["error"], chinese.as_str());
+        assert_eq!(context["network_alert"], chinese.as_str());
     }
     app.network_watch.proxy(Some(ProxyMode::Tun));
     let data = clash_desktop_protocol::UiData::default();

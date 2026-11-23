@@ -1564,9 +1564,18 @@ with fixture_signals():
             with patch.object(linux_gui, 'APP', root):
                 with self.assertRaisesRegex(RuntimeError, 'sealed package snapshot'):
                     linux_gui.verify_gui_pkexec(package, tool, digest, proc=root)
-                fcntl.fcntl(sealed, fcntl.F_ADD_SEALS, fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW
-                            | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+                fcntl.fcntl(sealed, 1024 + 9, 0x0002)
+                with self.assertRaisesRegex(RuntimeError, 'sealed package snapshot'):
+                    linux_gui.verify_gui_pkexec(package, tool, digest, proc=root)
+                fcntl.fcntl(sealed, 1024 + 9, 0x000F)
                 self.assertEqual(linux_gui.verify_gui_pkexec(package, tool, digest, proc=root), 42)
+                arch_tool = '/usr/bin/pacman'
+                arch_args = [b'/usr/bin/pkexec', b'--disable-internal-agent', os.fsencode(arch_tool),
+                             b'-U', b'--noconfirm', b'--', b'/proc/41/fd/3', b'']
+                (pkexec/'cmdline').write_bytes(b'\0'.join(arch_args))
+                with patch.dict(sys.modules, {'fcntl': SimpleNamespace(fcntl=fcntl.fcntl)}):
+                    self.assertEqual(linux_gui.verify_gui_pkexec(package, arch_tool, digest, proc=root), 42)
+                (pkexec/'cmdline').write_bytes(b'\0'.join([*prefix, b'/proc/41/fd/3', b'']))
                 with patch.object(linux_gui, 'output', return_value='/usr/bin/pkexec') as readlink:
                     self.assertEqual(linux_gui.verify_runner_pkexec(42, os.getuid(), tool, proc=root),
                                      '/proc/41/fd/3')

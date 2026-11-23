@@ -26,7 +26,6 @@ import time
 
 from build_support import ROOT, run, sha256, write_json
 from cli_tui import Session
-from linux_update_retry import RATE_LIMIT_MESSAGES, ReleaseRateLimit, retry_release_check
 
 APP = Path('/opt/clash-of-rust')
 REPORT = ROOT/'target/linux-report'
@@ -34,6 +33,8 @@ ACTION = 'org.clashofrust.tun.authorize'
 DESKTOP_TIMEOUT = 360
 DESKTOP_UPDATE_TIMEOUT = 1050
 PRERELEASE_CONFIRMATION_SECONDS = 3
+LINUX_F_GET_SEALS = 1024 + 10
+LINUX_UPDATE_SEALS = 0x000F
 UPDATE_FIXTURE_ACCENT = ('teal', '#c6613f')
 UPDATE_LABELS = {
     'home': ('首页', 'Home'),
@@ -823,7 +824,7 @@ class UpdateNavigation:
     def diagnose_failure(self):
         try:
             yield
-        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as original:
+        except Exception as original:
             try:
                 words = redact_update_words(self.lines, self.version)
                 self.record(self.step, result='failed', window=self.window, geometry=self.geometry,
@@ -913,6 +914,8 @@ class UpdateNavigation:
         self.wait('check-for-updates', UPDATE_LABELS['check'], click=True, scroll=True)
 
     def wait_for_published_version(self):
+        from linux_update_retry import RATE_LIMIT_MESSAGES, ReleaseRateLimit, retry_release_check
+
         def probe():
             if not self.capture():
                 return False
@@ -925,6 +928,7 @@ class UpdateNavigation:
                 wait_for('Graphical rate limit notice did not close',
                          lambda: self.capture() and screen_label(self.lines, UPDATE_LABELS['close']) is None,
                          timeout=15)
+                self.step = 'published-version'
                 raise ReleaseRateLimit('Graphical Release check was rate limited by GitHub')
             return False
 
@@ -1048,10 +1052,9 @@ def verify_gui_pkexec(package, tool, digest, proc=Path('/proc')):
             or not owned_regular_file(executable) or not (helper/'exe').samefile(executable)
             or sha256(executable) != sha256(APP/'clash-of-rust')):
         raise RuntimeError('pkexec is not a child of the staged GUI installer')
-    required = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
     with (helper/'fd'/number).open('rb') as stream:
         if (os.readlink(f'/proc/self/fd/{stream.fileno()}') != '/memfd:cor-update (deleted)'
-                or fcntl.fcntl(stream, fcntl.F_GET_SEALS) & required != required):
+                or fcntl.fcntl(stream, LINUX_F_GET_SEALS) & LINUX_UPDATE_SEALS != LINUX_UPDATE_SEALS):
             raise RuntimeError('The GUI installer did not pass a sealed package snapshot')
         if hashlib.file_digest(stream, 'sha256').hexdigest() != digest:
             raise RuntimeError('The package handed to pkexec did not match the GUI download')
