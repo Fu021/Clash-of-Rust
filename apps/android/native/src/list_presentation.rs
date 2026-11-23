@@ -430,6 +430,11 @@ mod tests {
                 "Status refresh failed: timeout",
             ),
             (
+                LogMessage::StatusRefreshFailed("控制接口刷新超时".into()),
+                "状态刷新失败：控制接口刷新超时",
+                "Status refresh failed: Control interface refresh timed out",
+            ),
+            (
                 LogMessage::SubscriptionDownloadFailed(
                     "订阅格式不兼容，请选择 Mihomo/Clash Meta YAML 订阅".into(),
                 ),

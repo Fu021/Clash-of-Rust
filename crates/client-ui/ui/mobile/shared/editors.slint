@@ -135,7 +135,7 @@ export component MobileSiteResults inherits VerticalLayout {
                     Rectangle { width: 24px; height: 24px; horizontal-stretch: 0;
                         if result.flagged: Text { text: result.flag; width: parent.width; height: parent.height; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
                     }
-                    MSmall { text: result.country == "" ? result.source : @tr("地区：{}", result.country); min-width: 0px; preferred-width: 0px; }
+                    MSmall { text: result.country == "" ? IpStatusText.label(result.source) : @tr("地区：{}", result.country); min-width: 0px; preferred-width: 0px; }
                     MSmall { text: result.delay; width: 76px * Theme.text-scale; color: Theme.tone-color(result.delay-tone); horizontal-alignment: right; horizontal-stretch: 0; }
                 }
             }

@@ -6,6 +6,8 @@ use clash_mobile_runtime::core::{
     probe,
 };
 
+use crate::list_presentation::contains_query;
+
 pub(crate) fn category_row(
     category: &ip_report::Category,
     language: Language,
@@ -59,6 +61,49 @@ fn category_title(group: &str, language: Language) -> &str {
         "香港" => "Hong Kong",
         _ => group,
     }
+}
+
+pub(crate) fn matches_query(
+    service: &Service,
+    outcome: Option<&Result<CheckResult, String>>,
+    summary: &str,
+    language: Language,
+    query: &str,
+) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let (raw_summary, raw_country, raw_detail) = match outcome {
+        Some(Ok(result)) => (
+            result.summary.as_str(),
+            result.country.as_str(),
+            result.detail.as_str(),
+        ),
+        Some(Err(error)) => ("", "", error.as_str()),
+        None => ("", "", ""),
+    };
+    let status = Status::of(outcome);
+    [
+        service.name.as_str(),
+        category_title(&service.group, language),
+        service.group.as_str(),
+        summary,
+        status.label_in(language),
+        raw_summary,
+        raw_country,
+        raw_detail,
+    ]
+    .into_iter()
+    .any(|field| contains_query(field, query))
+        || contains_query(&country_label(outcome, raw_country, language), query)
+        || contains_query(
+            &format!("{} {summary} {raw_detail} {raw_country}", service.name),
+            query,
+        )
+        || contains_query(
+            &ip_report::list_detail_in(service, outcome, language),
+            query,
+        )
 }
 
 pub(crate) fn detail_rows(
@@ -176,6 +221,53 @@ mod tests {
                 format!("{detail_prefix}{evidence}"),
             )));
             assert!(rows.contains(&(language.text("地区", "Region").into(), region.into())));
+        }
+    }
+
+    #[test]
+    fn site_query_matches_rendered_region_status_and_original_evidence() {
+        let service = Service {
+            id: "fixture".into(),
+            name: "Fixture Service".into(),
+            group: "Fixture".into(),
+            url: "https://fixture.example".into(),
+        };
+        let outcome = Ok(CheckResult {
+            state: State::Restricted,
+            summary: "地区不支持".into(),
+            country: "日本".into(),
+            millis: Some(14),
+            authentication_check_skipped: false,
+            detail: "原生地区检测结果：fixture-evidence".into(),
+            target_exit: None,
+        });
+        let status = Status::of(Some(&outcome));
+        for (language, summary, country) in [
+            (Language::English, "Unsupported region", "japan"),
+            (Language::SimplifiedChinese, "地区不支持", "日本"),
+        ] {
+            for query in [
+                country,
+                &status.label_in(language).to_lowercase(),
+                "fixture-evidence",
+                "日本",
+                &format!("fixture service {summary}").to_lowercase(),
+            ] {
+                assert!(matches_query(
+                    &service,
+                    Some(&outcome),
+                    summary,
+                    language,
+                    query
+                ));
+            }
+            assert!(!matches_query(
+                &service,
+                Some(&outcome),
+                summary,
+                language,
+                "canada"
+            ));
         }
     }
 

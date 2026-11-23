@@ -1495,7 +1495,7 @@ async fn run_loop(
                         if let Some(job) = subscription_job.take() { job.abort(); let _ = job.await; }
                         state.protection_disable_confirmation = None;
                         let deadline = ProtectionDeadline::after(Duration::from_secs(120));
-                        state.protection_status=state.presentation_language.text("正在确认当前代理节点…", "Checking the current proxy node…").into();
+                        state.protection_status="正在确认当前代理节点…".into();
                         let api=state.session.api.clone();let settings=state.session.settings.clone();
                         let language=state.presentation_language;
                         let raw=state.session.raw();let send=updates.clone();
@@ -1802,7 +1802,7 @@ async fn run_loop(
                                         "{}", state.presentation_language.text("订阅已变化，请重新开启保护", "The subscription changed; enable protection again"));
                                     let request = next_vpn_authorization(&state.session.store.root)?;
                                     change.authorization = Some((request, ProtectionAuthorization::Enable(Box::new(protection))));
-                                    state.protection_status = state.presentation_language.text("正在等待 VPN 授权，当前网络设置保持不变…", "Waiting for VPN authorization; current network settings are unchanged…").into();
+                                    state.protection_status = "正在等待 VPN 授权，当前网络设置保持不变…".into();
                                     request_vpn_authorization(&state.session, state.presentation_language, request)?;
                                     Ok(())
                                 })();
@@ -2096,7 +2096,7 @@ async fn run_loop(
             {
                 let api = state.session.api.clone();
                 let send = updates.clone();
-                state.protection_status = state.presentation_language.text("正在关闭旧连接并验证保护节点与加密 DNS…", "Closing old connections and checking the protected node and encrypted DNS…").into();
+                state.protection_status = "正在关闭旧连接并验证保护节点与加密 DNS…".into();
                 change.job = Some(ProtectionJob::spawn(
                     Some(request.clone()),
                     |ticket| async move {
@@ -2135,16 +2135,13 @@ async fn run_loop(
                 let refresh_route = state.visible && state.session.proxies.proxies.is_empty();
                 let generation = refresh_generation;
                 let send = updates.clone();
-                let language = state.presentation_language;
                 refresh_job = Some(tokio::spawn(async move {
                     let result = tokio::time::timeout(
                         Duration::from_secs(3),
                         Snapshot::fetch(&api, page, refresh_route),
                     )
                     .await
-                    .context(
-                        language.text("控制接口刷新超时", "Control interface refresh timed out"),
-                    )
+                    .context("控制接口刷新超时")
                     .and_then(|result| result)
                     .map_err(|error| format!("{error:#}"));
                     let _ = send
@@ -2449,9 +2446,7 @@ fn restore_saved_protection(state: &mut State) -> bool {
         return true;
     }
     let language = state.presentation_language;
-    state.protection_status = language
-        .text("正在恢复保护 VPN…", "Restoring the protected VPN…")
-        .into();
+    state.protection_status = "正在恢复保护 VPN…".into();
     let result = (|| -> Result<()> {
         let request = next_vpn_authorization(&state.session.store.root)?;
         state.protection_disable_confirmation = None;
@@ -2547,13 +2542,7 @@ fn present_rollback(state: &mut State, progress: RollbackProgress) {
             state.protection_status.clear();
         }
         RollbackProgress::Failed(error) => {
-            let message = format!(
-                "{}{error}",
-                language.text(
-                    "恢复原网络状态失败：",
-                    "Failed to restore the previous network state: "
-                )
-            );
+            let message = format!("恢复原网络状态失败：{error}");
             if state.protection_rollback_error.as_deref() != Some(message.as_str()) {
                 state.notice = message.clone();
                 state.notice_error = true;
@@ -2563,12 +2552,7 @@ fn present_rollback(state: &mut State, progress: RollbackProgress) {
             state.protection_status = message;
         }
         RollbackProgress::Pending => {
-            state.protection_status = language
-                .text(
-                    "正在恢复原网络状态…",
-                    "Restoring the previous network state…",
-                )
-                .into();
+            state.protection_status = "正在恢复原网络状态…".into();
         }
         RollbackProgress::WaitingForVpnSettlement(detail) => {
             let waiting = language.text(
@@ -2708,13 +2692,7 @@ fn observe_protection(
         Ok(None) => {}
         Err(error) => {
             state.protection_observed = false;
-            let message = format!(
-                "{}{error:#}",
-                language.text(
-                    "暂时无法读取保护状态：",
-                    "Protection status temporarily unavailable: "
-                )
-            );
+            let message = format!("暂时无法读取保护状态：{error:#}");
             let diagnostic = if state.protection_change.is_some()
                 || state.session.settings.claude_protection.is_some()
             {
@@ -2725,7 +2703,7 @@ fn observe_protection(
             if *diagnostic != message {
                 state
                     .logs
-                    .push_back(("WARN".into(), message.clone().into()));
+                    .push_back(("WARN".into(), LogMessage::ActionFailed(message.clone())));
                 *diagnostic = message;
             }
             return Ok(false);
@@ -2770,9 +2748,7 @@ fn observe_protection(
             ) {
                 Ok(true) => return Ok(complete_protection_change(state)),
                 Ok(false) => {
-                    state.protection_status = language
-                        .text("正在确认 VPN 提交…", "Confirming the VPN commit…")
-                        .into();
+                    state.protection_status = "正在确认 VPN 提交…".into();
                 }
                 Err(error) if !transition.needs_settlement() => {
                     rollback_protection(state, &format!("{error:#}"));
@@ -3078,9 +3054,7 @@ async fn native_event(state: &mut State, value: &Value) -> Result<()> {
                     VpnBaseline::target(true),
                     change.deadline,
                 )?);
-                state.protection_status = language
-                    .text("正在连接保护 VPN…", "Connecting protected VPN…")
-                    .into();
+                state.protection_status = "正在连接保护 VPN…".into();
                 Ok(())
             })();
             if let Err(error) = applied {
@@ -3854,12 +3828,7 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 authorization: None,
                 job: None,
             });
-            state.protection_status = language
-                .text(
-                    "正在恢复原网络状态…",
-                    "Restoring the previous network state…",
-                )
-                .into();
+            state.protection_status = "正在恢复原网络状态…".into();
             let result = async {
                 session.commit_protection(None, saved.previous.mode.clone())?;
                 session
@@ -4268,6 +4237,7 @@ fn project(state: &mut State) -> Projection {
     let mut sites = vec![];
     let mut site_regions = std::collections::BTreeSet::new();
     let mut site_details = vec![];
+    let site_query = state.site_query.trim().to_lowercase();
     let mut exit = (
         "—".to_string(),
         language.text("未检测", "Not checked").to_string(),
@@ -4280,7 +4250,7 @@ fn project(state: &mut State) -> Projection {
         {
             exit = (value.summary.clone(), value.country.clone());
         }
-        let (value, detail, country, tone) = match slot {
+        let (value, country, tone) = match slot {
             Some(Ok(value)) => (
                 if value.authentication_check_skipped {
                     status.label_in(language)
@@ -4288,7 +4258,6 @@ fn project(state: &mut State) -> Projection {
                     status.summary_in(&value.summary, language)
                 }
                 .to_owned(),
-                value.detail.clone(),
                 value.country.clone(),
                 match value.state {
                     core::ip_check::State::Confirmed | core::ip_check::State::Identified => 1,
@@ -4298,15 +4267,13 @@ fn project(state: &mut State) -> Projection {
                     _ => 3,
                 },
             ),
-            Some(Err(error)) => (
+            Some(Err(_)) => (
                 language.text("检测失败", "Check failed").into(),
-                error.clone(),
                 String::new(),
                 3,
             ),
             None => (
                 language.text("尚未检测", "Not checked").into(),
-                String::new(),
                 String::new(),
                 4,
             ),
@@ -4324,10 +4291,7 @@ fn project(state: &mut State) -> Projection {
         let status_matches = state.site_status == "全部结果" || state.site_status == status;
         if !status_matches
             || (state.site_region != "全部地区" && country != state.site_region)
-            || (!state.site_query.trim().is_empty()
-                && !format!("{} {} {} {}", service.name, value, detail, country)
-                    .to_lowercase()
-                    .contains(&state.site_query.trim().to_lowercase()))
+            || !site_report::matches_query(service, slot, &value, language, &site_query)
         {
             continue;
         }

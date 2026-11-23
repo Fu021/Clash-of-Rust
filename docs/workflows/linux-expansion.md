@@ -18,6 +18,10 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 
 2026-11-22 使用 `59b91a03`、CI `45011206632`、旧候选 CI `44943304678` 和公开预发布 `v0.7.3-dev.2.live-language`，以下八套共 21 个目标的跨版本终端报告通过：[Ubuntu](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456673)、[Debian](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456896)、[Mint](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456401)、[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456816)、[Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456535)、[Fedora](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456876)、[openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456820)及 [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013457070)。Arch 旧包来自 CI 候选；GUI 图形授权与失败恢复不在此批报告范围。
 
+2026-11-23，[Ubuntu 24.04 x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45144739726/attempts/2)实际通过 GUI 授权取消、dpkg 锁失败、解锁后升级及数据保留。另用官方 Ubuntu 24.04 ARM64 云镜像和 QEMU 软件仿真，以普通用户从 TUI 中将同一旧 CI 的 DEB 更新到同一公开预发布版。实际通过 TUI 与终端确认、sudo 密码授权、DEB 安装、终端恢复和新后台与内核启动。设置和订阅保留，原来未分配的直连下载端口在首次启动内核时自动分配。
+
+同日，[Arch x64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45155581626)从旧 CI 原生包升级到同一公开预发布版。终端发现限流后分别等待 65.3、126.7 和 252.5 秒，第四次发现成功。图形路径实际通过 pkexec 密封包校验、取消、`pacman` 数据库锁冲突、释放锁后升级、设置及订阅保留、GUI 重开和内核启动。兼容回执绑定该轮测试的 Arch 候选包及同源 DEB。
+
 ## 原生包兼容矩阵
 
 | 手动入口 | 固定来宾及架构 | 原生安装路径 |

@@ -167,6 +167,20 @@ fn english(message: &str) -> Option<&'static str> {
         "暂时无法确认保护状态，正在等待重新验证" => {
             "Could not confirm protection status; waiting to retry"
         }
+        "控制接口刷新超时" => "Control interface refresh timed out",
+        "正在确认当前代理节点…" => "Checking the current proxy node…",
+        "正在等待 VPN 授权，当前网络设置保持不变…" => {
+            "Waiting for VPN authorization; current network settings are unchanged…"
+        }
+        "正在关闭旧连接并验证保护节点与加密 DNS…" => {
+            "Closing old connections and checking the protected node and encrypted DNS…"
+        }
+        "正在恢复保护 VPN…" => "Restoring the protected VPN…",
+        "恢复原网络状态失败" => "Failed to restore the previous network state",
+        "正在恢复原网络状态…" => "Restoring the previous network state…",
+        "暂时无法读取保护状态" => "Protection status temporarily unavailable",
+        "正在确认 VPN 提交…" => "Confirming the VPN commit…",
+        "正在连接保护 VPN…" => "Connecting protected VPN…",
         "控制接口暂不可用，实时拦截未确认；保护规则仍保留。" => {
             "Control interface unavailable; protection rules retained."
         }

@@ -206,6 +206,48 @@ mod tests {
     }
 
     #[test]
+    fn pending_recovery_and_its_failure_follow_the_display_language() {
+        for (source, state, english) in [
+            (
+                "正在等待 VPN 授权，当前网络设置保持不变…",
+                State::Checking,
+                "Waiting for VPN authorization; current network settings are unchanged…",
+            ),
+            (
+                "正在恢复原网络状态…",
+                State::Checking,
+                "Restoring the previous network state…",
+            ),
+            (
+                "恢复原网络状态失败：上游组件错误",
+                State::Error,
+                "Failed to restore the previous network state: 上游组件错误",
+            ),
+            (
+                "暂时无法读取保护状态：控制接口刷新超时",
+                State::Error,
+                "Protection status temporarily unavailable: Control interface refresh timed out",
+            ),
+        ] {
+            let source_health = Status {
+                message: source.into(),
+                state,
+            };
+            for (language, expected) in [
+                (Language::SimplifiedChinese, source),
+                (Language::English, english),
+                (Language::SimplifiedChinese, source),
+            ] {
+                let (message, health) = project(source, source_health.clone(), language);
+                assert_eq!(message, expected);
+                assert_eq!(health.message, expected);
+                assert_eq!(health.state, state);
+            }
+            assert_eq!(source_health.message, source);
+        }
+    }
+
+    #[test]
     fn protection_readiness_message_follows_language_without_changing_state() {
         for (health, state, english) in [
             (
