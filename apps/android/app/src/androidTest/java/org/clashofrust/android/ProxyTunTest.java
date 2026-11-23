@@ -2664,7 +2664,7 @@ public class ProxyTunTest {
     private static void verifyStartupDiagnostics(Context context) throws Exception {
         MainActivity activity = resumedActivity();
         assertNotNull(activity);
-        int revision = MainActivity.diagnostics().getInt("notice_revision");
+        int revision = liveNoticeRevision();
         java.lang.reflect.Field pending = MainActivity.class.getDeclaredField("exportContent");
         pending.setAccessible(true);
         java.lang.reflect.Field failure = MainActivity.class.getDeclaredField("documentFailure");
@@ -2698,7 +2698,7 @@ public class ProxyTunTest {
         await("Saving diagnostics did not acknowledge the export in the startup error", () -> {
             JSONObject ui = MainActivity.diagnostics();
             return ui.optBoolean("live") && ui.optBoolean("notice_modal") && ui.optBoolean("notice_error")
-                && !ui.optBoolean("working") && ui.optInt("notice_revision") > revision;
+                && !ui.optBoolean("working") && ui.getInt("notice_revision") > revision;
         });
     }
 
@@ -2750,6 +2750,17 @@ public class ProxyTunTest {
         }
     }
 
+    private static int liveNoticeRevision() throws Exception {
+        int[] revision = new int[1];
+        await("Could not read the live notice revision", () -> {
+            JSONObject ui = MainActivity.diagnostics();
+            if (!ui.optBoolean("live")) return false;
+            revision[0] = ui.getInt("notice_revision");
+            return true;
+        });
+        return revision[0];
+    }
+
     private static void awaitProtectionDenial(long request, int previousNotice) throws Exception {
         authorization(request, "denied");
         waitForAppWindow();
@@ -2757,7 +2768,7 @@ public class ProxyTunTest {
             JSONObject ui = MainActivity.diagnostics();
             return ui.optBoolean("live") && ui.optBoolean("protected")
                 && !ui.optBoolean("protection_pending") && !ui.optBoolean("working")
-                && ui.optBoolean("notice_error") && ui.optInt("notice_revision") > previousNotice;
+                && ui.optBoolean("notice_error") && ui.getInt("notice_revision") > previousNotice;
         });
     }
 
@@ -3533,7 +3544,7 @@ public class ProxyTunTest {
             previewTool(8);
             MainActivity recovering = resumedActivity();
             assertNotNull(recovering);
-            int beforeBusy = MainActivity.diagnostics().getInt("notice_revision");
+            int beforeBusy = liveNoticeRevision();
             setVpnPrompt(recovering, prompt, true);
             long busy;
             try {
@@ -3547,7 +3558,7 @@ public class ProxyTunTest {
             }
             assertArrayEquals(protectedSettings, java.nio.file.Files.readAllBytes(settings.toPath()));
 
-            int beforeRetry = MainActivity.diagnostics().getInt("notice_revision");
+            int beforeRetry = liveNoticeRevision();
             previewTarget("retry-protection");
             long retried = awaitNewAuthorization(busy, "pending");
             assertTrue("Retry reused the earlier authorization identity", retried < initial);

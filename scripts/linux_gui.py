@@ -713,10 +713,10 @@ for top, bottom in bands(mask.getprojection()[1]):
         if not 42 <= right - left <= 300:
             continue
         text = image.crop((left + 7, top + 4, right - 7, bottom - 4)).convert('L')
+        text = text.resize((text.width * 3, text.height * 3))
         text = text.point(lambda value: 0 if value >= 180 else 255)
-        text = ImageOps.expand(text, border=6, fill=255)
         filename = f'{sys.argv[1]}.{len(buttons)}.png'
-        text.resize((text.width * 3, text.height * 3)).save(filename)
+        ImageOps.expand(text, border=18, fill=255).save(filename)
         buttons.append((filename, (left, top, right - left, bottom - top)))
 print(json.dumps(buttons))
 """

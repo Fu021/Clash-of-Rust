@@ -10,7 +10,7 @@
 
 Ubuntu 24.04 x64 的 GitHub 托管 runner 和 Arch x64 的一次性来宾在终端验收通过后额外执行 GUI 更新验收：从界面发现并下载目标版本，经真实图形 polkit 授权分别验证取消、包管理器锁导致的安装失败、释放锁后重试及升级，再检查已安装包、设置、测试订阅和后台内核状态。结果另写入 `published-gui-update.json`。离线脚本回归或终端报告不能代替真实图形验收；在相应环境实测并取得通过报告前，不能声称 GUI 更新验收已通过。
 
-GUI 夹具收到中断信号后会完成清理并保留原始失败。测试账户和临时授权规则使用非交互 `sudo`，由提权后的独立超时约束命令；客户端的真实授权流程不变。识别旧版白字按钮时，整页 OCR 未命中才裁取固定测试强调色内的按钮并识别全文；找不到标签则失败，不按猜测坐标点击。图形代理重启后仍有注册时序风险。[polkit 的公开 D-Bus 接口](https://polkit.pages.freedesktop.org/polkit/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html)没有会话代理注册查询。若实际安装未弹出授权窗口，应查看对应会话的 polkit 注册日志。
+GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户和临时授权规则使用非交互 `sudo`，由提权后的独立超时约束命令。整页 OCR 未命中旧版白字按钮时，裁取固定测试强调色内的按钮，先放大再二值化以保留笔画。仅在识别到完整就绪标签时才点击。图形代理重启后仍有注册时序风险。[polkit 的公开 D-Bus 接口](https://polkit.pages.freedesktop.org/polkit/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html)没有会话代理注册查询。若实际安装未弹出授权窗口，应查看对应会话的 polkit 注册日志。
 
 2026-11-22 使用 `59b91a03`、CI `45011206632`、旧候选 CI `44943304678` 和公开预发布 `v0.7.3-dev.2.live-language`，以下八套共 21 个目标的跨版本终端报告通过：[Ubuntu](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456673)、[Debian](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456896)、[Mint](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456401)、[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456816)、[Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456535)、[Fedora](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456876)、[openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456820)及 [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013457070)。Arch 旧包来自 CI 候选；GUI 图形授权与失败恢复不在此批报告范围。
 
