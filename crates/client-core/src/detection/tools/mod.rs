@@ -9,7 +9,7 @@ mod tests;
 mod text;
 mod transport;
 
-use crate::{api::Api, config::Language, probe};
+use crate::{api::Api, config::Language, messages, probe};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use std::time::{Duration, Instant};
@@ -198,39 +198,27 @@ impl Options {
         ensure!(
             (1..=20).contains(&self.count),
             "{}",
-            language.text("检查次数应为 1～20", "Count must be between 1 and 20")
+            messages::network_tool_invalid_count(language)
         );
         ensure!(
             (100..=5000).contains(&self.interval_ms),
             "{}",
-            language.text(
-                "请求间隔应为 100～5000 毫秒",
-                "Interval must be between 100 and 5000 ms"
-            )
+            messages::network_tool_invalid_interval(language)
         );
         ensure!(
             (1..=30).contains(&self.seconds),
             "{}",
-            language.text(
-                "单次时限应为 1～30 秒",
-                "Timeout must be between 1 and 30 seconds"
-            )
+            messages::network_tool_invalid_timeout(language)
         );
         ensure!(
             (1024..=16 * 1024 * 1024).contains(&self.max_bytes),
             "{}",
-            language.text(
-                "下载上限应为 1 KiB～16 MiB",
-                "Size limit must be between 1 KiB and 16 MiB"
-            )
+            messages::network_tool_invalid_size_limit(language)
         );
         ensure!(
             (1..=16).contains(&self.max_hops),
             "{}",
-            language.text(
-                "最大跳数应为 1～16",
-                "Maximum hops must be between 1 and 16"
-            )
+            messages::network_tool_invalid_hop_limit(language)
         );
         ensure!(
             matches!(
@@ -238,15 +226,12 @@ impl Options {
                 "ADDR" | "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SOA" | "PTR" | "CAA"
             ),
             "{}",
-            language.text("DNS 记录类型无效", "Invalid DNS record type")
+            messages::network_tool_invalid_record_type(language)
         );
         ensure!(
             matches!(self.method.as_str(), "HEAD" | "GET" | "OPTIONS"),
             "{}",
-            language.text(
-                "HTTP 方法应为 HEAD、GET 或 OPTIONS",
-                "HTTP method must be HEAD, GET, or OPTIONS"
-            )
+            messages::network_tool_invalid_http_method(language)
         );
         Ok(())
     }
@@ -331,31 +316,29 @@ impl Report {
 
     pub fn lines_in(&self, language: Language) -> Vec<String> {
         [
-            format!(
-                "{} · {} · {} ms",
-                language.text("检查状态", "Status"),
+            messages::network_tool_report_status(
+                language,
+                self.elapsed_ms,
                 match self.status {
-                    "complete" => language.text("完成", "Complete"),
-                    "partial" => language.text("部分完成", "Partial"),
-                    "failed" => language.text("失败", "Failed"),
-                    "unavailable" => language.text("不可用或未确认", "Unavailable or unconfirmed"),
-                    _ => language.text("未知", "Unknown"),
+                    "complete" => messages::network_tool_status_complete(language),
+                    "partial" => messages::network_tool_status_partial(language),
+                    "failed" => messages::network_tool_status_failed(language),
+                    "unavailable" => messages::network_tool_status_unavailable(language),
+                    _ => messages::network_tool_status_unknown(language),
                 },
-                self.elapsed_ms
             ),
-            format!(
-                "{} · {}",
-                language.text("目标", "Target"),
+            messages::network_tool_report_target(
+                language,
                 if self.target == "未检查"
                     && self
                         .entries
                         .iter()
                         .any(|entry| matches!(entry.code, "invalid_options" | "invalid_target"))
                 {
-                    language.text("未检查", "Not checked")
+                    messages::network_tool_target_not_checked(language)
                 } else {
                     &self.target
-                }
+                },
             ),
         ]
         .into_iter()

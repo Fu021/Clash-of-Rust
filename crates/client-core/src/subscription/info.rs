@@ -1,5 +1,5 @@
 //! Compact subscription metadata shared by desktop and mobile cards.
-use crate::config::Language;
+use crate::{config::Language, messages};
 use chrono::{Local, TimeZone};
 
 fn amount(bytes: u64) -> (String, &'static str) {
@@ -51,68 +51,53 @@ pub fn summary(value: Option<&str>, updated: u64, language: Language) -> String 
     let quota = total.filter(|value| *value > 0);
     if let (Some(upload), Some(download)) = (upload, download) {
         let used = upload.saturating_add(download);
-        parts.push(if let Some(total) = quota {
+        let usage = if let Some(total) = quota {
             let (used_text, used_unit) = amount(used);
             let (total_text, total_unit) = amount(total);
             if used == 0 || used_unit == total_unit {
-                format!(
-                    "{} {used_text}/{total_text} {total_unit}",
-                    language.text("已用", "Used")
-                )
+                format!("{used_text}/{total_text} {total_unit}")
             } else {
-                format!(
-                    "{} {used_text} {used_unit}/{total_text} {total_unit}",
-                    language.text("已用", "Used")
-                )
+                format!("{used_text} {used_unit}/{total_text} {total_unit}")
             }
         } else {
-            format!("{} {}", language.text("已用", "Used"), traffic(used))
-        });
+            traffic(used)
+        };
+        parts.push(messages::subscription_usage_used(language, usage));
     } else {
         if let Some(upload) = upload {
-            parts.push(format!(
-                "{} {}",
-                language.text("上传", "Upload"),
-                traffic(upload)
+            parts.push(messages::subscription_usage_upload(
+                language,
+                traffic(upload),
             ));
         }
         if let Some(download) = download {
-            parts.push(format!(
-                "{} {}",
-                language.text("下载", "Download"),
-                traffic(download)
+            parts.push(messages::subscription_usage_download(
+                language,
+                traffic(download),
             ));
         }
         if let Some(total) = quota {
-            parts.push(format!(
-                "{} {}",
-                language.text("总量", "Total"),
-                traffic(total)
-            ));
+            parts.push(messages::subscription_usage_total(language, traffic(total)));
         }
     }
     if let Some(expire) = expire {
         parts.push(if expire == 0 {
-            language.text("不限期", "No expiry").into()
+            messages::subscription_no_expiry(language).into()
         } else {
-            format!(
-                "{} {}",
-                language.text("到期", "Expires"),
-                date(expire, "%Y-%m-%d").unwrap_or_else(|| language.text("未知", "Unknown").into())
+            messages::subscription_expiry(
+                language,
+                date(expire, "%Y-%m-%d")
+                    .unwrap_or_else(|| messages::subscription_unknown_date(language).into()),
             )
         });
     }
     if parts.is_empty() {
-        parts.push(
-            language
-                .text("未提供用量与到期", "Usage and expiry unavailable")
-                .into(),
-        );
+        parts.push(messages::subscription_metadata_unavailable(language).into());
     }
     if updated != 0
         && let Some(updated) = date(updated, "%m-%d %H:%M")
     {
-        parts.push(format!("{} {updated}", language.text("更新", "Updated")));
+        parts.push(messages::subscription_metadata_updated(language, updated));
     }
     parts.join(" · ")
 }
