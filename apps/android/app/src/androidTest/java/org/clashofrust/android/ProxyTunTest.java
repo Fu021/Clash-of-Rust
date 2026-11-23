@@ -959,6 +959,21 @@ public class ProxyTunTest {
             return state.optLong("request")==request && status.equals(state.optString("status"));
         });
     }
+
+    private static void grantVpnConsent(Context context, long request) throws Exception {
+        waitForAppWindow();
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        assertNotNull("VPN consent test requires an ungranted permission", VpnService.prepare(context));
+        activity.request(new JSONObject().put("op", "authorize-vpn").put("request", request).toString());
+        authorization(request, "pending");
+        consent(true);
+        authorization(request, "granted");
+        waitForAppWindow();
+        assertNull("Android did not grant VPN permission", VpnService.prepare(context));
+        assertFalse("Authorization alone started the VPN", TunnelService.connected());
+    }
+
     private static void verifyFirstVpnConsent(Context context,String original) throws Exception {
         java.util.concurrent.atomic.AtomicReference<MainActivity> owner=new java.util.concurrent.atomic.AtomicReference<>();
         InstrumentationRegistry.getInstrumentation().runOnMainSync(()-> {
@@ -1877,7 +1892,7 @@ public class ProxyTunTest {
             ApplicationCatalog.visibleWithoutComponents(bundled, false, false));
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await("Native core did not restore for application routing", CoreBridge::ready);
-        assertNull("Application routing requires the consent granted by the preceding VPN test", VpnService.prepare(context));
+        if (VpnService.prepare(context) != null) grantVpnConsent(context, 105);
         android.content.SharedPreferences preferences = context.getSharedPreferences("vpn", Context.MODE_PRIVATE);
         ApplicationRouting original = ApplicationRouting.load(preferences);
         android.content.SharedPreferences migration = context.getSharedPreferences("routing-regression", Context.MODE_PRIVATE);
@@ -2459,7 +2474,7 @@ public class ProxyTunTest {
             measureDiagnosticGroup();
             JSONObject direct = exportMeasurementReport(directory, "without-vpn");
             assertMixedMeasurement(direct, false);
-            assertNull("The preceding network test must grant real VPN consent", VpnService.prepare(context));
+            if (VpnService.prepare(context) != null) grantVpnConsent(context, 105);
             TunnelService.start(context, false);
             await("VPN did not connect for the measurement test", () -> {
                 if (!TunnelService.error().isEmpty()) throw new IOException(TunnelService.error());
@@ -3582,14 +3597,9 @@ public class ProxyTunTest {
         verifySavedProtectionCanRetry(context);
         waitForAppWindow();
         verifyVpnConsentRecreation(context);
+        grantVpnConsent(context, 103);
         MainActivity activity = resumedActivity();
         assertNotNull(activity);
-        assertNotNull("Test must start without pre-granted VPN consent", VpnService.prepare(context));
-        activity.request("{\"op\":\"authorize-vpn\",\"request\":103}");
-        authorization(103, "pending");
-        consent(true);
-        authorization(103, "granted");
-        assertNull(VpnService.prepare(context));
         verifyExpiredNonLiveRecoveryKeepsPlan(context);
         verifyCancelledColdRecoveryStopsIdleService(context);
         String secret = value(raw, "secret");
