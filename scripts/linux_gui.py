@@ -26,6 +26,7 @@ import time
 
 from build_support import ROOT, run, sha256, write_json
 from cli_tui import Session
+from linux_update_retry import RATE_LIMIT_MESSAGES, ReleaseRateLimit, retry_release_check
 
 APP = Path('/opt/clash-of-rust')
 REPORT = ROOT/'target/linux-report'
@@ -912,9 +913,32 @@ class UpdateNavigation:
         self.wait('check-for-updates', UPDATE_LABELS['check'], click=True, scroll=True)
 
     def wait_for_published_version(self):
-        self.step = 'published-version'
-        wait_for('Graphical update did not display the exact published version',
-                 lambda: self.capture() and screen_version(self.lines, self.version), timeout=240)
+        def probe():
+            if not self.capture():
+                return False
+            if screen_version(self.lines, self.version):
+                return True
+            close = screen_label(self.lines, UPDATE_LABELS['close'])
+            if close is not None and screen_label(self.lines, RATE_LIMIT_MESSAGES, contains=True):
+                self.record('published-version', result='rate-limited', window=self.window)
+                self.input('close-rate-limit-notice', close)
+                wait_for('Graphical rate limit notice did not close',
+                         lambda: self.capture() and screen_label(self.lines, UPDATE_LABELS['close']) is None,
+                         timeout=15)
+                raise ReleaseRateLimit('Graphical Release check was rate limited by GitHub')
+            return False
+
+        recheck = False
+
+        def attempt():
+            nonlocal recheck
+            if recheck:
+                self.wait('check-for-updates', UPDATE_LABELS['check'], click=True, scroll=True)
+            recheck = True
+            self.step = 'published-version'
+            wait_for('Graphical update did not display the exact published version', probe, timeout=240)
+
+        retry_release_check(attempt, 'graphical update discovery', lambda: None)
         self.record(self.step, result='visible', window=self.window)
         self.save_frame('update-discovered.png', redact_update_words(self.lines, self.version))
 
@@ -922,7 +946,7 @@ class UpdateNavigation:
         self.step = 'dismiss-failure-notice'
         if self.focus() != self.window:
             raise RuntimeError('Graphical update notice is outside the focused application window')
-        run(['xdotool', 'key', 'Escape'], timeout=10)
+        self.wait('close-failure-notice', UPDATE_LABELS['close'], click=True, timeout=15)
         if result.get('acknowledged') is False:
             def acknowledged():
                 status = read_object(status_file)
@@ -1376,7 +1400,7 @@ def stage_session(directory):
     scripts.mkdir(mode=0o755)
     scripts.chmod(0o755)
     for name in ('linux_gui.py', 'linux_native_guest.py', 'linux_compatibility_targets.py', 'linux_mint_desktop.py',
-                 'build_support.py', 'cli_tui.py'):
+                 'build_support.py', 'cli_tui.py', 'linux_update_retry.py'):
         target = scripts/name
         shutil.copyfile(Path(__file__).resolve().parent/name, target)
         target.chmod(0o644)
@@ -1688,8 +1712,26 @@ def gui_account(user, user_home, uid=None):
 
 
 def delete_gui_user(user, user_home, uid):
+    def remove():
+        if gui_account(user, user_home, uid) is None:
+            return True
+        try:
+            fixture_sudo('userdel', '--remove', user)
+        except subprocess.CalledProcessError as error:
+            if error.returncode != 8:
+                raise
+            return False
+        return True
+
+    if remove():
+        return
     if gui_account(user, user_home, uid) is not None:
-        fixture_sudo('userdel', '--remove', user)
+        try:
+            fixture_sudo('/usr/bin/pkill', '--signal', 'KILL', '--uid', str(uid))
+        except subprocess.CalledProcessError as error:
+            if error.returncode != 1:
+                raise
+    wait_for('Disposable GUI user still has running processes', remove, timeout=10)
 
 
 def installed_tests(*, update_case=None, package_lock=None, update_report=None, check_interrupted=None):

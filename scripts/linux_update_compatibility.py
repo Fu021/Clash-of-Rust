@@ -18,6 +18,7 @@ import compatibility
 from build_support import (ROOT, deb_version, download, host_arch, manifest_version,
                            sha256, validate_version, write_json)
 from linux_native_package import arch_filename, native_version, rpm_filename
+from linux_update_retry import RATE_LIMIT_MESSAGES, ReleaseRateLimit, retry_release_check
 from workflow_artifacts import fetch_package_inputs, release_module
 
 APP = Path('/opt/clash-of-rust')
@@ -260,15 +261,37 @@ def invoke(command, *, timeout=120, check=True, start_new_session=False, check_i
                 cleanup_steps(('reap update command process group', lambda: stop_process_group(child)))
             else:
                 child.reap()
-    if check and result.returncode:
-        raise RuntimeError(f'Command failed ({result.returncode}): {(result.stdout + result.stderr)[-4000:]}')
+    if check:
+        require_command_success(result)
     return result
 
 
+def require_command_success(result):
+    if result.returncode:
+        raise RuntimeError(f'Command failed ({result.returncode}): {(result.stdout + result.stderr)[-4000:]}')
+
+
 def cli(data, *arguments, timeout=120, check=True, check_interrupted=None, installation_scope=None):
-    result = invoke([APP/'cor', '--data-dir', data, '--resources', APP/'resources',
-                     '--json', *arguments], timeout=timeout, check=check,
-                    check_interrupted=check_interrupted, installation_scope=installation_scope)
+    command = [APP/'cor', '--data-dir', data, '--resources', APP/'resources', '--json', *arguments]
+    if arguments[:2] not in (('update', 'check'), ('update', 'download'), ('update', 'install')):
+        result = invoke(command, timeout=timeout, check=check, check_interrupted=check_interrupted,
+                        installation_scope=installation_scope)
+    else:
+        def attempt():
+            with ExitStack() as scope:
+                result = invoke(command, timeout=timeout, check=False, check_interrupted=check_interrupted,
+                                installation_scope=scope if installation_scope is not None else None)
+                limited = (result.returncode and any(message in result.stderr for message in RATE_LIMIT_MESSAGES)
+                           and not os.path.lexists(data/'update-install.json'))
+                if not limited:
+                    if installation_scope is not None:
+                        installation_scope.callback(scope.pop_all().close)
+                    return result
+            raise ReleaseRateLimit(result.stderr.strip())
+
+        result = retry_release_check(attempt, ' '.join(arguments[:2]), check_interrupted or (lambda: None))
+        if check:
+            require_command_success(result)
     if not check:
         return result
     return json.loads(result.stdout)['data']

@@ -29,6 +29,7 @@
 | `linux_compatibility_targets.py` | 模块 | 固定 Linux 发行版版本、架构和官方镜像摘要。矩阵与实际 VM 共享同一目标定义。 |
 | `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和 `verify` 兼容入口。兼容目标直接使用可丢弃的 Actions runner 或同架构 VM。 |
 | `linux_update_compatibility.py` | 隔离更新测试模块 | 由现有发行版兼容入口按需调用，校验旧版 CI 候选和已公开 Release，在一次性 Linux 环境检查真实版本发现、原生更新方式与用户数据保留；代表性目标额外执行 GUI 更新验收，范围和报告见 [Linux 跨版本更新](../docs/workflows/linux-expansion.md)。 |
+| `linux_update_retry.py` | 隔离更新测试模块 | CLI 和 GUI 验收在旧版报告 GitHub Release 限流时共用的随机退避策略。 |
 | `ubuntu_vm_environment.py` | 共享模块 | 冻结 Ubuntu 双架构的官方 APT 计划与签名索引，在隔离 VM 中校验及安装。 |
 | `linux_apt.py` | 模块 | 限时安装系统依赖，按签名索引校验同次运行中已下载的 DEB。 |
 | `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证；为代表性目标驱动 GUI 跨版本更新验收。 |

@@ -20,6 +20,7 @@ from unittest.mock import Mock, mock_open, patch
 import linux_ci
 import linux_gui
 import linux_update_compatibility as update
+import linux_update_retry as release_retry
 
 
 class LinuxPublishedUpdateTests(unittest.TestCase):
@@ -412,6 +413,121 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
         self.assertEqual(update.expected_version('deb', version), '0.7.3~dev.2.live-language')
         self.assertEqual(update.expected_version('rpm', version), '0.7.3~dev.2.live+language-1')
         self.assertEqual(update.expected_version('pkg', version), '0.7.3pre.dev.2.live+language-1')
+
+    def test_release_rate_limit_retries_use_exponential_delays_with_jitter(self):
+        clock = 0
+        starts = []
+        failure = release_retry.ReleaseRateLimit('GitHub 暂时限制请求')
+
+        def sleep(seconds):
+            nonlocal clock
+            clock += seconds
+
+        def attempt():
+            starts.append(clock)
+            raise failure
+
+        output = io.StringIO()
+        with patch.object(release_retry.time, 'monotonic', side_effect=lambda: clock), \
+                patch.object(release_retry.time, 'sleep', side_effect=sleep), \
+                patch.object(release_retry.random, 'uniform', side_effect=[1, 12, 23]) as jitter, \
+                redirect_stdout(output), self.assertRaises(release_retry.ReleaseRateLimit) as raised:
+            release_retry.retry_release_check(attempt, 'update check', lambda: None)
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(starts, [0, 61, 193, 456])
+        self.assertEqual([call.args for call in jitter.call_args_list], [(0, 30)] * 3)
+        self.assertIn('retry 3/3 in 263.0s', output.getvalue())
+
+    def test_release_rate_limit_backoff_checks_for_interruption(self):
+        failure = release_retry.ReleaseRateLimit('GitHub 暂时限制请求')
+        attempt = Mock(side_effect=failure)
+        checkpoint = Mock(side_effect=[None, KeyboardInterrupt])
+        with redirect_stdout(io.StringIO()), patch.object(release_retry.time, 'sleep') as sleep, \
+                self.assertRaises(KeyboardInterrupt):
+            release_retry.retry_release_check(attempt, 'update check', checkpoint)
+        attempt.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_cli_rate_limit_retries_install_only_before_creating_an_install_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            status = data/'update-install.json'
+            stopped = []
+
+            def invoke(command, *, installation_scope, **kwargs):
+                self.assertFalse(kwargs['check'])
+                count = invoke_mock.call_count
+                installation_scope.callback(stopped.append, count)
+                if count == 1:
+                    return subprocess.CompletedProcess(command, 1, '', 'cor: GitHub 暂时限制请求')
+                self.assertEqual(stopped, [1])
+                status.touch()
+                return subprocess.CompletedProcess(command, 1, '',
+                                                   'cor: GitHub is temporarily rate limiting requests')
+
+            def retry(operation, _step, _checkpoint):
+                with self.assertRaises(release_retry.ReleaseRateLimit):
+                    operation()
+                return operation()
+
+            with patch.object(update, 'invoke', side_effect=invoke) as invoke_mock, \
+                    patch.object(update, 'retry_release_check', side_effect=retry), \
+                    ExitStack() as installation:
+                with self.assertRaisesRegex(RuntimeError, r'^Command failed \(1\)'):
+                    update.cli(data, 'update', 'install', '--yes', installation_scope=installation)
+                self.assertEqual(stopped, [1])
+            self.assertEqual(stopped, [1, 2])
+            self.assertEqual(invoke_mock.call_count, 2)
+
+    def test_cli_rate_limit_retries_discovery_but_does_not_retry_unrelated_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            for error in ('GitHub 暂时限制请求，请稍后再试', 'package checksum did not match'):
+                with self.subTest(error=error):
+                    results = [subprocess.CompletedProcess([], 1, '', f'cor: {error}'),
+                               subprocess.CompletedProcess([], 0, '{"data":{"available":true}}', '')]
+                    with patch.object(update, 'invoke', side_effect=results) as invoke, \
+                            patch.object(release_retry.time, 'monotonic', side_effect=[0, 100]), \
+                            redirect_stdout(io.StringIO()):
+                        if error.startswith('GitHub'):
+                            self.assertEqual(update.cli(data, 'update', 'check'), {'available': True})
+                            self.assertEqual(invoke.call_count, 2)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, error):
+                                update.cli(data, 'update', 'download', '--output', 'package')
+                            invoke.assert_called_once()
+
+    def test_gui_rate_limit_retries_version_discovery_through_the_check_button(self):
+        navigation = linux_gui.UpdateNavigation(update.GUI_REPORT.parent, self.version)
+
+        def capture():
+            navigation.lines = frames.pop(0)
+            return True
+
+        stale_row = [[('系统网络：GitHub 暂时限制请求，请稍后再试', (100, 120, 400, 19))]]
+        frames = [stale_row,
+                  [*stale_row, [('关闭', (580, 900, 30, 19))]],
+                  stale_row,
+                  [[(self.version, (100, 120, 400, 19))]]]
+        clock = 0
+
+        def sleep(seconds):
+            nonlocal clock
+            clock += seconds
+
+        with patch.object(navigation, 'capture', side_effect=capture), \
+                patch.object(navigation, 'wait') as wait, patch.object(navigation, 'input') as click, \
+                patch.object(navigation, 'save_frame'), \
+                patch.object(navigation, 'record') as record, \
+                patch.object(release_retry.random, 'uniform', return_value=0), \
+                patch.object(release_retry.time, 'monotonic', side_effect=lambda: clock), \
+                patch.object(release_retry.time, 'sleep', side_effect=sleep), \
+                redirect_stdout(io.StringIO()):
+            navigation.wait_for_published_version()
+        wait.assert_called_once_with('check-for-updates', linux_gui.UPDATE_LABELS['check'], click=True, scroll=True)
+        click.assert_called_once_with('close-rate-limit-notice', (595, 909))
+        self.assertEqual([call.kwargs['result'] for call in record.call_args_list],
+                         ['rate-limited', 'visible'])
 
     def test_graphical_update_uses_only_a_representative_hosted_deb_and_arch_guest(self):
         for distro, version, package, arch, environment, expected in (
@@ -1014,7 +1130,7 @@ with fixture_signals():
             navigation.window = 42
             result = {'directory': 'current', 'acknowledged': False}
             with patch.object(navigation, 'focus', return_value=42), \
-                    patch.object(linux_gui, 'run') as invoke, \
+                    patch.object(navigation, 'wait') as wait, \
                     patch.object(linux_gui.time, 'sleep'), \
                     patch.object(linux_gui, 'read_object',
                                  side_effect=[{'directory': 'previous', 'acknowledged': True},
@@ -1023,7 +1139,9 @@ with fixture_signals():
                 self.assertEqual(read.call_count, 2)
                 navigation.dismiss_failure(Path('unused'), {'directory': 'legacy'})
                 self.assertEqual(read.call_count, 2)
-                self.assertEqual(invoke.call_count, 2)
+                self.assertEqual(wait.call_count, 2)
+                wait.assert_called_with('close-failure-notice', linux_gui.UPDATE_LABELS['close'],
+                                        click=True, timeout=15)
             self.assertEqual([entry['result'] for entry in navigation.events], ['dismissed']*2)
 
     def test_gui_session_releases_the_observed_lock_before_recovery_and_retries_with_a_new_owner(self):
@@ -1688,6 +1806,26 @@ with fixture_signals():
                 linux_gui.cleanup_steps(*steps)
         self.assertIn('cannot remove the rule', raised.exception.__notes__[0])
         self.assertEqual(later.call_count, 2)
+
+    def test_gui_account_cleanup_stops_only_verified_disposable_user_processes(self):
+        user = 'corgui' + '1'*24
+        home = Path('/tmp/cor-desktop-test/home')
+        busy = subprocess.CalledProcessError(8, ['userdel'])
+        killed = subprocess.CompletedProcess(['pkill'], 0)
+        removed = subprocess.CompletedProcess(['userdel'], 0)
+        with patch.object(linux_gui, 'gui_account', return_value=SimpleNamespace(pw_uid=1234)) as account, \
+                patch.object(linux_gui, 'fixture_sudo', side_effect=[busy, killed, removed]) as sudo:
+            linux_gui.delete_gui_user(user, home, 1234)
+        self.assertEqual([call.args for call in account.call_args_list], [(user, home, 1234)] * 3)
+        self.assertEqual([call.args for call in sudo.call_args_list],
+                         [('userdel', '--remove', user), ('/usr/bin/pkill', '--signal', 'KILL', '--uid', '1234'),
+                          ('userdel', '--remove', user)])
+        with patch.object(linux_gui, 'gui_account', side_effect=[
+                SimpleNamespace(pw_uid=1234), RuntimeError('Account changed')]), \
+                patch.object(linux_gui, 'fixture_sudo', side_effect=busy) as sudo, \
+                self.assertRaisesRegex(RuntimeError, 'Account changed'):
+            linux_gui.delete_gui_user(user, home, 1234)
+        sudo.assert_called_once()
 
     @unittest.skipUnless(sys.platform == 'linux', 'GUI fixture uses Linux signals')
     def test_interrupted_graphical_update_still_removes_the_account_and_saves_failure(self):
