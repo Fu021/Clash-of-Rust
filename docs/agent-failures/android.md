@@ -16,6 +16,7 @@
 - Android CI [39032112812](https://github.com/Fu021/Clash-of-Rust/actions/runs/39032112812)、[39004271043](https://github.com/Fu021/Clash-of-Rust/actions/runs/39004271043)、[39002539543](https://github.com/Fu021/Clash-of-Rust/actions/runs/39002539543)：三种 ABI 的编译或 lint 错误。
 - CI [38966108986](https://github.com/Fu021/Clash-of-Rust/actions/runs/38966108986)：Android Clippy 拒绝可合并 `if`。
 - CI [45084537617](https://github.com/Fu021/Clash-of-Rust/actions/runs/45084537617)：Android 宿主测试通过后，目标 Clippy 发现参数数量问题；64 位 ABI 另因类型布局触发枚举体积告警。
+- CI [45087169971](https://github.com/Fu021/Clash-of-Rust/actions/runs/45087169971)：目标 Clippy 通过后，AndroidTest 的 Javac 发现恢复用例把 `Context` 传给要求 `MainActivity` 的到期助手。
 - CI [44522461401](https://github.com/Fu021/Clash-of-Rust/actions/runs/44522461401) 初次尝试的 Android ARM64 在 AGP classpath 解析时报告 40 个 Maven 坐标找不到，同提交单作业复跑通过。随后抽查 Kotlin、annotations 和 Guava 的 POM 地址返回 HTTP 200，原 runner 的 HTTP 状态未知。[共享 Maven 缓存](../workflows/ci.md#android-工具与原包)先验证实际任务所需依赖，再供三个 ABI 离线构建。
 - 修复提交 `3fe26d8`、`023b126`、`4827013`、`65f3962`、`65446a7`、`7a24898` 等 Android 依赖与 native host 修复。
 

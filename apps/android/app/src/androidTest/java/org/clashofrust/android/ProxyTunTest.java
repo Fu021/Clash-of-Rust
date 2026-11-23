@@ -3099,6 +3099,10 @@ public class ProxyTunTest {
     }
 
     private static void verifyExpiredNonLiveRecoveryKeepsPlan(Context context) throws Exception {
+        MainActivity activity = resumedActivity();
+        assertNotNull(activity);
+        await("Non-live recovery test requires the previous VPN transition to settle",
+            () -> "idle".equals(expireVpnStart(activity, UUID.randomUUID().toString())));
         var serial = (ScheduledExecutorService) tunnelField("serial").get(null);
         Object requests = tunnelField("requests").get(null);
         var deadline = tunnelField("rollbackDeadline");
@@ -3119,7 +3123,7 @@ public class ProxyTunTest {
                     TunnelService.restoreNetwork(context, request, live, newPlan, recoveryDeadline());
                     synchronized (requests) {
                         deadline.setLong(null, SystemClock.elapsedRealtime());
-                        if (live != null) assertEquals("claimed", expireVpnStart(context, request));
+                        if (live != null) assertEquals("claimed", expireVpnStart(activity, request));
                     }
                 } finally {
                     release.countDown();
@@ -3130,7 +3134,7 @@ public class ProxyTunTest {
                 JSONObject rollback = state.getJSONObject("vpn_rollback");
                 assertEquals("failed", rollback.getString("status"));
                 assertEquals(AppLanguage.current(context).getString(R.string.vpn_recovery_timeout), rollback.getString("error"));
-                assertEquals("settled", expireVpnStart(context, request));
+                assertEquals("settled", expireVpnStart(activity, request));
                 assertTrue(Files.isRegularFile(record));
             }
         } finally {
