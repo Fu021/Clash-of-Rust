@@ -1282,6 +1282,15 @@ public class ProxyTunTest {
                 || bounds.optDouble(2) <= 0 || bounds.optDouble(3) <= 0) return false;
         double x = bounds.getDouble(0) + bounds.getDouble(2) / 2;
         double y = bounds.getDouble(1) + bounds.getDouble(3) / 2;
+        if (name.startsWith("option:")) {
+            int separator = name.lastIndexOf('/');
+            if (separator <= "option:".length()) return false;
+            JSONArray popup = previewBounds(ui, "popup:" + name.substring("option:".length(), separator));
+            if (popup == null || popup.length() != 4 || popup.optDouble(2) <= 0
+                    || popup.optDouble(3) <= 0) return false;
+            x += Math.max(0, Math.min(popup.getDouble(0), ui.getDouble("width") - popup.getDouble(2)));
+            y += Math.max(0, Math.min(popup.getDouble(1), ui.getDouble("height") - popup.getDouble(3)));
+        }
         if (x < 0 || y < 0 || x >= ui.getDouble("width") || y >= ui.getDouble("height")) return false;
         float scale = (float)ui.getDouble("scale");
         MainActivity activity = resumedActivity();

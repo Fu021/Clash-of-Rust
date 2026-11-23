@@ -433,6 +433,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                     | "connections-pagination:next"
                     | "connections-pagination:previous"
                     | "connections-sort"
+                    | "popup:connections-sort"
                     | "option:connections-sort/1"
                     | "rule-shortcuts-open"
                     | "notice-retry-core"
