@@ -108,9 +108,9 @@ class FixtureProcess(subprocess.Popen):
 
 
 @contextlib.contextmanager
-def process(command, log, env=None, *, reap_for_restart=False):
-    launcher, stop = ((subprocess.Popen, stop_child) if reap_for_restart
-                      else (FixtureProcess, stop_process_group))
+def process(command, log, env=None, *, stop_group=True):
+    launcher, stop = ((FixtureProcess, stop_process_group) if stop_group
+                      else (subprocess.Popen, stop_child))
     child = launcher(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT,
                      env=env, start_new_session=True)
     try:
@@ -181,7 +181,7 @@ def verify_authorization(log, password_file, locate, *, respond=None, restart_ag
             with tempfile.TemporaryFile(mode='w+t', encoding='utf-8') as request_log:
                 try:
                     with process(['pkexec', '--disable-internal-agent', helper, '--authorize-tun'],
-                                 request_log) as request:
+                                 request_log, stop_group=False) as request:
                         state, window = wait_for(
                             'Production authorization did not show a graphical dialog',
                             lambda: authorization_dialog(request, request_log, locate), timeout=remaining)
@@ -419,6 +419,29 @@ def gnome_command(help_text, major):
 def wayland_sockets(runtime):
     return {path.name for path in runtime.iterdir()
             if (path.name.startswith('wayland-') or path.name == 'cor-wayland') and path.is_socket()}
+
+
+def arm_tcg_guest():
+    return (os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
+            and platform.machine().lower() in ('aarch64', 'arm64'))
+
+
+def desktop_update_timeout():
+    return 2700 if arm_tcg_guest() else DESKTOP_UPDATE_TIMEOUT
+
+
+def timeout_evidence(error):
+    if not isinstance(error, subprocess.TimeoutExpired):
+        return None
+    command = error.cmd
+    if isinstance(command, (list, tuple)) and command:
+        name = Path(os.fsdecode(command[0])).name
+    elif isinstance(command, (str, bytes)):
+        name = Path(os.fsdecode(command)).name
+    else:
+        name = ''
+    allowed = {'python3', 'tesseract', 'scrot', 'xdotool', 'wmctrl', 'xwininfo', 'busctl', 'gdbus'}
+    return {'command': name if name in allowed else 'other', 'seconds': error.timeout}
 
 
 def cli(*arguments):
@@ -675,18 +698,26 @@ def update_window_geometry(window):
                  for field in ('Absolute upper-left X', 'Absolute upper-left Y', 'Width', 'Height'))
 
 
-def recognize_update_screen(image):
+def recognize_update_screen(image, *, region=None):
     code = (
         'from PIL import Image\n'
         'import sys\n'
         'image = Image.open(sys.argv[1]).convert("L")\n'
+        'if len(sys.argv) > 2: image = image.crop(tuple(map(int, sys.argv[2:])))\n'
         'image.resize((image.width*2, image.height*2)).save(sys.stdout.buffer, format="PNG")\n'
     )
-    enlarged = subprocess.check_output(['/usr/bin/python3', '-c', code, image], timeout=10)
+    slow = arm_tcg_guest()
+    enlarged = subprocess.check_output(
+        ['/usr/bin/python3', '-c', code, image, *map(str, region or ())], timeout=30 if slow else 10)
     result = subprocess.run(['tesseract', 'stdin', 'stdout', '--psm', '11', '-l', 'chi_sim+eng', 'tsv'],
-                            input=enlarged, capture_output=True, check=True, timeout=20,
+                            input=enlarged, capture_output=True, check=True, timeout=180 if slow else 20,
                             env=dict(os.environ, OMP_THREAD_LIMIT='1'))
-    return recognized_lines(result.stdout.decode('utf-8'), scale=2)
+    lines = recognized_lines(result.stdout.decode('utf-8'), scale=2)
+    if region:
+        left, top, _, _ = region
+        return [[(word, (x+left, y+top, width, height)) for word, (x, y, width, height) in line]
+                for line in lines]
+    return lines
 
 
 def recognize_primary_update_buttons(image, labels):
@@ -722,14 +753,15 @@ for top, bottom in bands(mask.getprojection()[1]):
         buttons.append((filename, (left, top, right - left, bottom - top)))
 print(json.dumps(buttons))
 """
+    slow = arm_tcg_guest()
     buttons = json.loads(subprocess.check_output(
-        ['/usr/bin/python3', '-c', prepare, image, UPDATE_FIXTURE_ACCENT[1]], timeout=10))
+        ['/usr/bin/python3', '-c', prepare, image, UPDATE_FIXTURE_ACCENT[1]], timeout=30 if slow else 10))
     wanted = set(map(normalize_screen_text, labels))
     matches = []
     for filename, bounds in buttons:
         text = subprocess.check_output(
             ['tesseract', filename, 'stdout', '--psm', '7', '-l', 'chi_sim+eng'],
-            text=True, timeout=10, env=dict(os.environ, OMP_THREAD_LIMIT='1')).strip()
+            text=True, timeout=60 if slow else 10, env=dict(os.environ, OMP_THREAD_LIMIT='1')).strip()
         if normalize_screen_text(text) in wanted:
             matches.append([(text, tuple(bounds))])
     return matches
@@ -802,7 +834,7 @@ class UpdateNavigation:
         self.geometry = wait_for('Graphical update window did not maximize and gain focus', ready, timeout=15)
         self.record('window', window=self.window, geometry=self.geometry)
 
-    def capture(self, *, primary_labels=()):
+    def capture(self, *, primary_labels=(), region=None):
         if self.focus() != self.window:
             return False
         self.lines = []
@@ -811,7 +843,8 @@ class UpdateNavigation:
             run(['scrot', '-a', ','.join(map(str, self.geometry)), image], timeout=15)
             if self.focus() != self.window:
                 return False
-            self.lines = recognize_update_screen(image)
+            self.lines = (recognize_update_screen(image, region=region) if region
+                          else recognize_update_screen(image))
             if primary_labels and screen_label(self.lines, primary_labels) is None:
                 self.lines.extend(recognize_primary_update_buttons(image, primary_labels))
         return True
@@ -852,7 +885,9 @@ class UpdateNavigation:
 
     def locate(self, labels, *, region=None, contains=False):
         primary = not contains and labels in (UPDATE_LABELS['download'], UPDATE_LABELS['continue'])
-        if not (self.capture(primary_labels=labels) if primary else self.capture()):
+        capture = (self.capture(primary_labels=labels) if primary else
+                   self.capture(region=region) if region and arm_tcg_guest() else self.capture())
+        if not capture:
             return None
         lines = self.lines
         if region:
@@ -865,6 +900,8 @@ class UpdateNavigation:
     def wait(self, step, labels, *, click=False, region=None, timeout=45, evidence=None, scroll=False):
         self.step = step
         scrolls = 0
+        if arm_tcg_guest():
+            timeout = max(timeout, 180)
 
         def locate():
             nonlocal scrolls
@@ -900,7 +937,8 @@ class UpdateNavigation:
         width = self.geometry[2]
         home = self.locate(UPDATE_LABELS['home'], region=(0, 104, 216, 171))
         self.input('return-home', home or (30, 124))
-        self.wait('home-page', UPDATE_LABELS['home'], region=(60, 44, width, 102))
+        header = (76, 48, 311, 92) if arm_tcg_guest() else (60, 44, width, 102)
+        self.wait('home-page', UPDATE_LABELS['home'], region=header)
 
     def check(self):
         width, height = self.geometry[2:]
@@ -1172,7 +1210,7 @@ def gui_update_session(report, case, checks, locate, restart_agent, password_fil
     status_file = data/'update-install.json'
     navigation = UpdateNavigation(report, published['version'])
     with (report/'update.log').open('w') as log, \
-            process([APP/'clash-of-rust'], log, env, reap_for_restart=True) as owner:
+            process([APP/'clash-of-rust'], log, env, stop_group=False) as owner:
         navigation.phase = 'startup'
         with navigation.diagnose_failure():
             pid, window = ready()
@@ -1372,10 +1410,9 @@ def session():
                 os.environ['WAYLAND_DISPLAY'] = next(iter(sockets))
                 return True
 
-            arm_tcg = (os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
-                       and platform.machine().lower() in ('aarch64', 'arm64'))
             try:
-                wait_for('GNOME Wayland compositor did not become ready', ready, timeout=120 if arm_tcg else 60)
+                wait_for('GNOME Wayland compositor did not become ready', ready,
+                         timeout=300 if arm_tcg_guest() else 60)
             except TimeoutError as error:
                 raise RuntimeError(f'{error}; last DBus probe: {last_probe_error or "no error"}') from error
             result['checks']['gnome_startup_complete'] = True
@@ -1393,6 +1430,8 @@ def session():
     except BaseException as error:
         result['status'] = 'failed'
         result['error'] = type(error).__name__ if case_file.is_file() else str(error)
+        if case_file.is_file() and (evidence := timeout_evidence(error)):
+            result['timeout'] = evidence
         raise
     finally:
         write_json(report/'gui.json', result)
@@ -1403,7 +1442,8 @@ def stage_session(directory):
     scripts.mkdir(mode=0o755)
     scripts.chmod(0o755)
     for name in ('linux_gui.py', 'linux_native_guest.py', 'linux_compatibility_targets.py', 'linux_mint_desktop.py',
-                 'build_support.py', 'cli_tui.py', 'linux_update_retry.py'):
+                 'build_support.py', 'cli_tui.py', 'linux_update_retry.py',
+                 'linux_guest_environment.py'):
         target = scripts/name
         shutil.copyfile(Path(__file__).resolve().parent/name, target)
         target.chmod(0o644)
@@ -1440,7 +1480,7 @@ def launch_session():
                'XDG_SESSION_CLASS', 'XDG_CONFIG_HOME', 'XDG_CURRENT_DESKTOP',
                'GNOME_SHELL_SESSION_MODE', 'LIBGL_ALWAYS_SOFTWARE', 'GSETTINGS_BACKEND',
                'COR_GUI_REPORT', 'COR_GUI_AUTH_PASSWORD_FILE', 'COR_LINUX_VM_ACCELERATION', 'PYTHONDONTWRITEBYTECODE',
-               'GITHUB_ACTIONS', 'NO_AT_BRIDGE')
+               'GITHUB_ACTIONS', 'COR_LINUX_GUEST', 'NO_AT_BRIDGE')
     env = {key: os.environ[key] for key in allowed if key in os.environ}
     home = Path(env['COR_GUI_REPORT']).parent/'home'
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(home/'.config'),
@@ -1651,7 +1691,8 @@ def run_update_desktop(command, home, package_lock, package_format, uid, *, stop
     with contextlib.ExitStack() as lock, (home/'native-lock.log').open('w+') as log:
         child = subprocess.Popen(command, cwd=home, start_new_session=True)
         try:
-            deadline = time.monotonic()+DESKTOP_UPDATE_TIMEOUT
+            timeout = desktop_update_timeout()
+            deadline = time.monotonic()+timeout
             while child.poll() is None and time.monotonic() < deadline:
                 check_interrupted()
                 message = read_observation_request(request, uid)
@@ -1677,7 +1718,7 @@ def run_update_desktop(command, home, package_lock, package_format, uid, *, stop
                     acknowledgement.chmod(0o644)
                 time.sleep(.2)
             if child.returncode is None:
-                raise subprocess.TimeoutExpired(command, DESKTOP_UPDATE_TIMEOUT)
+                raise subprocess.TimeoutExpired(command, timeout)
             if child.returncode:
                 raise subprocess.CalledProcessError(child.returncode, command)
             if expected is not None:
@@ -1719,7 +1760,7 @@ def delete_gui_user(user, user_home, uid):
         if gui_account(user, user_home, uid) is None:
             return True
         try:
-            fixture_sudo('userdel', '--remove', user)
+            fixture_sudo('userdel', '--remove', user, capture_output=True)
         except subprocess.CalledProcessError as error:
             if error.returncode != 8:
                 raise
@@ -1737,9 +1778,34 @@ def delete_gui_user(user, user_home, uid):
     wait_for('Disposable GUI user still has running processes', remove, timeout=10)
 
 
+def gui_polkit_rule(user, update_case, release):
+    if not re.fullmatch(r'corgui[0-9a-f]{24}', user):
+        raise ValueError('Invalid disposable GUI account')
+    if update_case and (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', '20.04'):
+        if update_case['format'] != 'deb':
+            raise ValueError('Ubuntu 20.04 graphical updates require a DEB package')
+        return (Path('/etc/polkit-1/localauthority/50-local.d')/f'10-{user}.pkla',
+                f'[Compatibility fixture]\nIdentity=unix-user:{user}\n'
+                'Action=org.freedesktop.policykit.exec\n'
+                'ResultAny=auth_self\nResultInactive=auth_self\nResultActive=auth_self\n')
+    action = ACTION
+    extra = ''
+    if update_case:
+        action = 'org.freedesktop.policykit.exec'
+        program = {'deb': '/usr/bin/dpkg', 'pkg': '/usr/bin/pacman'}[update_case['format']]
+        extra = f' && action.lookup("program") === "{program}"'
+    return (Path('/etc/polkit-1/rules.d')/f'10-{user}.rules',
+            'polkit.addAdminRule(function(action, subject) {'
+            f' if (action.id === "{action}" && subject.user === "{user}"{extra})'
+            f' return ["unix-user:{user}"];'
+            ' });\n')
+
+
 def installed_tests(*, update_case=None, package_lock=None, update_report=None, check_interrupted=None):
-    from linux_ci import require_actions
-    require_actions()
+    from linux_guest_environment import is_local_guest
+    if not is_local_guest():
+        from linux_ci import require_actions
+        require_actions()
     if update_case and (not package_lock or update_report is None or not (
             os.environ.get('COR_LINUX_GUEST') == 'true'
             or os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')):
@@ -1776,20 +1842,11 @@ def installed_tests(*, update_case=None, package_lock=None, update_report=None, 
                 from linux_native_guest import distribution
                 if native:
                     distribution()
-                rule = Path('/etc/polkit-1/rules.d')/f'10-{user}.rules'
-                action = ACTION
-                extra = ''
+                rule, contents = gui_polkit_rule(user, update_case, platform.freedesktop_os_release())
                 if update_case:
-                    action = 'org.freedesktop.policykit.exec'
-                    program = {'deb': '/usr/bin/dpkg', 'pkg': '/usr/bin/pacman'}[update_case['format']]
-                    extra = f' && action.lookup("program") === "{program}"'
                     case_file = home/'published-update-case.json'
                     write_json(case_file, update_case)
                     case_file.chmod(0o644)
-                contents = ('polkit.addAdminRule(function(action, subject) {'
-                            f' if (action.id === "{action}" && subject.user === "{user}"{extra})'
-                            f' return ["unix-user:{user}"];'
-                            ' });\n')
                 fixture_sudo('tee', rule, input=contents, text=True, stdout=subprocess.DEVNULL, timeout=15)
             run(['sudo', 'install', '-d', '-m', '0755', '-o', user, '-g', user, report], timeout=15)
             password_file = home/'password'
@@ -1803,12 +1860,16 @@ def installed_tests(*, update_case=None, package_lock=None, update_report=None, 
                    'LIBGL_ALWAYS_SOFTWARE': '1', 'GSETTINGS_BACKEND': 'dconf',
                    'COR_GUI_REPORT': str(report), 'COR_GUI_AUTH_PASSWORD_FILE': str(password_file),
                    'COR_LINUX_VM_ACCELERATION': os.environ.get('COR_LINUX_VM_ACCELERATION', ''),
-                   'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8',
-                   'GITHUB_ACTIONS': 'true', 'NO_AT_BRIDGE': '1'}
+                   'PYTHONDONTWRITEBYTECODE': '1', 'LANG': 'C.UTF-8', 'NO_AT_BRIDGE': '1'}
+            for key in ('GITHUB_ACTIONS', 'COR_LINUX_GUEST'):
+                if os.environ.get(key) == 'true':
+                    env[key] = 'true'
             # PAM registers a real logind session for the graphical polkit agent.
             unit = 'cor-desktop-'+fixture_id+'.service'
             description = f'Clash of Rust desktop fixture {home}'
-            timeout = DESKTOP_UPDATE_TIMEOUT if update_case else DESKTOP_TIMEOUT
+            timeout = desktop_update_timeout() if update_case else DESKTOP_TIMEOUT
+            if not update_case and arm_tcg_guest():
+                timeout = 900
             session_cleanup.callback(
                 lambda: cleanup_steps(
                     ('stop verified desktop unit', lambda: stop_fixture_unit(

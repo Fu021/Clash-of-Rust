@@ -24,7 +24,7 @@
 | `publish-release.py` | CLI / 模块 | 核验成功 CI 候选包及安装收据，公开模式改取发行签名 Android 包；不重新打包桌面，按版本生成下载与下载量徽章。 |
 | `run-ci.py` | CLI | 单个原生平台的编译、Clippy 和代理/TUN 集成程序导出；完整源码测试按 CI 策略选择，Windows 更新相关变更另执行服务与进程边界回归，macOS 代理相关变更包含 CF 转换及偏好数据回归。 |
 | `ci_test_policy.py` | CLI / 模块 | 选择基础网络、相关变更专项和手动扩展回归，并向 CI 各平台传递选择结果。 |
-| `test-cli-update.py` | 隔离安装测试 | 仅在 Actions 的已安装 Linux 环境运行，以临时普通账户验证只读查询、无桌面的 sudo 拒绝、真实 dpkg 失败恢复、成功重装后的自动启动/保留关闭状态及 systemd 服务状态/归属，保存逐项结果。 |
+| `test-cli-update.py` | 隔离安装测试 | 在一次性 Actions runner 或已配置的本地 Linux 来宾中，以临时普通账户验证只读查询、无桌面的 sudo 拒绝、真实 dpkg 失败恢复、成功重装后的自动启动与保留关闭状态，以及 systemd 服务状态与归属，保存逐项结果。 |
 | `compatibility.py` | CLI / 模块 | 生成 Android 和 Linux 兼容矩阵，解析同提交成功 CI。`resolve --suite SUITE --run-id ID` 解析候选，`record` 绑定成功 job 及输入 id/name/digest。 |
 | `linux_compatibility_targets.py` | 模块 | 固定 Linux 发行版版本、架构和官方镜像摘要。矩阵与实际 VM 共享同一目标定义。 |
 | `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和 `verify` 兼容入口。兼容目标直接使用可丢弃的 Actions runner 或同架构 VM。 |
@@ -32,6 +32,7 @@
 | `linux_update_retry.py` | 隔离更新测试模块 | CLI 和 GUI 验收在旧版报告 GitHub Release 限流时共用的随机退避策略。 |
 | `ubuntu_vm_environment.py` | 共享模块 | 冻结 Ubuntu 双架构的官方 APT 计划与签名索引，在隔离 VM 中校验及安装。 |
 | `linux_apt.py` | 模块 | 限时安装系统依赖，按签名索引校验同次运行中已下载的 DEB。 |
+| `linux_guest_environment.py` | 共享模块 | 识别经显式初始化的一次性本地 QEMU/KVM 来宾，供 Linux 兼容验收入口使用。 |
 | `linux_gui.py` | CLI / 模块 | Linux 安装后 X11/Wayland 窗口、托盘、共享后台与图形授权验证；为代表性目标驱动 GUI 跨版本更新验收。 |
 | `linux_desktop_login.py` | 兼容 VM 内 CLI | 实际 GDM、LightDM 或 COSMIC 登录、旧自启动迁移、托盘注册及窗口恢复；各发行版会话范围见工作流文档。 |
 | `linux_mint_desktop.py` | Mint 兼容 VM 内 CLI / 模块 | 在 Cinnamon X11 登录内驱动图形授权，核验取消和允许后的安装文件权限。为原生会话复用已安装 GUI、托盘和共享后台回归。 |

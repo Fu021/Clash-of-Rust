@@ -8,7 +8,7 @@ import argparse
 import base64
 import contextlib
 import errno
-from http.client import HTTPConnection, HTTPResponse
+from http.client import HTTPConnection, HTTPResponse, RemoteDisconnected
 import json
 import os
 from pathlib import Path
@@ -197,7 +197,8 @@ def isolated_uplink():
                                             Path(__file__).with_name('tun_dns_fixture.py'), directory],
                                            stdout=log, stderr=log)
                 try:
-                    for _ in range(100):
+                    deadline = time.monotonic() + 30
+                    while time.monotonic() < deadline:
                         assert process.poll() is None, 'Upstream fixture exited'
                         if (directory/'ready').exists():
                             break
@@ -475,7 +476,16 @@ def root_cli_smoke():
                     rejected.read()
                 finally:
                     connection.close()
-                assert socks_http('127.0.0.1', direct, subscription_url) == (
+                deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        body = socks_http('127.0.0.1', direct, subscription_url)
+                        break
+                    except RemoteDisconnected:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(0.5)
+                assert body == (
                     b'proxies: []\nrules: ["MATCH,DIRECT"]\n'
                 ), 'Managed DIRECT could not bypass the failed node or resolve the update domain'
 
@@ -815,13 +825,18 @@ def main():
     parser.add_argument('--uid', type=int, required=True)
     parser.add_argument('--inside-namespace', action='store_true')
     parser.add_argument('--with-user-tests', action='store_true')
+    parser.add_argument('--tcg', action='store_true')
     parser.add_argument('--proxy-benchmark', action='store_true')
     parser.add_argument('--test-case', default='basic_system_proxy_and_tun', choices=('basic_system_proxy_and_tun',))
     args = parser.parse_args()
     assert os.geteuid() == 0 and args.uid != 0
     binary = args.test_binary.resolve(strict=True)
     user = pwd.getpwuid(args.uid)
-    tun_timeout = 360 if args.proxy_benchmark else 240
+    arm_tcg = args.tcg and platform.machine() in ('aarch64', 'arm64')
+    if arm_tcg:
+        tun_timeout = 1200
+    else:
+        tun_timeout = 360 if args.proxy_benchmark else 240
 
     def ordinary_user():
         os.setgroups([])
@@ -849,6 +864,7 @@ def main():
                     env=dict(os.environ, CLASH_TUN_TEST_NAMESPACE='1', CLASH_PROXY_SMOKE='1',
                              MIHOMO_TEST_RESOURCES='/opt/clash-of-rust/resources', MIHOMO_TEST_CLI='/opt/clash-of-rust/cor',
                              GSETTINGS_BACKEND='memory', SSL_CERT_FILE=str(ca_bundle),
+                             CLASH_TUN_TEST_ARM_TCG='1' if arm_tcg else '0',
                              SSL_CERT_DIR='/etc/ssl/certs', **benchmark_environment),
                     preexec_fn=ordinary_user, timeout=tun_timeout)
         return
@@ -867,11 +883,13 @@ def main():
     original_dns_mode = os.stat(dns_helper).st_mode & 0o7777
     try:
         user_tests = ['--with-user-tests'] if args.with_user_tests else []
+        if args.tcg:
+            user_tests += ['--tcg']
         if args.proxy_benchmark:
             user_tests += ['--proxy-benchmark']
         setup_and_cli_budget = 280
         if args.with_user_tests and platform.machine() in ('aarch64', 'arm64'):
-            setup_and_cli_budget = 560
+            setup_and_cli_budget = 1800 if arm_tcg else 560
         run(['unshare', '--net', '--pid', '--mount-proc', '--kill-child', '--',
              sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid,

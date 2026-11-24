@@ -12,6 +12,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 from build_support import host_arch, run, sha256
+from linux_guest_environment import is_disposable_test_environment
 
 OPTIONS = ['apt-get', '-o', 'Acquire::http::Timeout=30', '-o',
            'Acquire::https::Timeout=30', '-o', 'Acquire::Retries=2', '-o',
@@ -68,8 +69,8 @@ def install(packages, timeout=900, no_recommends=False, *, options=OPTIONS):
     configured = os.environ.get('COR_LINUX_APT_CACHE')
     if not configured:
         return privileged([*options, *arguments], timeout)
-    if os.environ.get('GITHUB_ACTIONS') != 'true':
-        raise RuntimeError('APT cache installation requires a disposable Actions environment')
+    if not is_disposable_test_environment():
+        raise RuntimeError('APT cache installation requires a disposable Actions runner or VM')
     cache = Path(configured)
     try:
         cache.mkdir(parents=True, exist_ok=True)
@@ -144,12 +145,12 @@ def update_indexes(timeout=300, *, options=OPTIONS):
 
 def install_vm_tools(packages):
     release = platform.freedesktop_os_release()
-    codename = {'24.04': 'noble', '26.04': 'resolute'}.get(release.get('VERSION_ID'))
+    codename = {'22.04': 'jammy', '24.04': 'noble', '26.04': 'resolute'}.get(release.get('VERSION_ID'))
     if (os.environ.get('GITHUB_ACTIONS') != 'true'
             or release.get('ID') != 'ubuntu' or codename is None):
-        raise RuntimeError('VM tools require an Ubuntu 24.04 or 26.04 compatibility runner')
+        raise RuntimeError('VM tools require an Ubuntu 22.04, 24.04 or 26.04 compatibility runner')
     arm = host_arch() == 'arm64'
-    use_ports = arm and codename == 'noble'
+    use_ports = arm and codename in ('jammy', 'noble')
     architecture = 'arm64' if arm else 'amd64'
     archive = 'https://ports.ubuntu.com/ubuntu-ports' if use_ports else 'https://archive.ubuntu.com/ubuntu'
     security = archive if use_ports else 'https://security.ubuntu.com/ubuntu'

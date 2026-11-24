@@ -46,7 +46,7 @@ jobs:
     name: ${{ matrix.distribution }} ${{ matrix.release }}-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ inputs.update_from_ci != '' && 120 || matrix.timeout }}
+    timeout-minutes: ${{ inputs.update_from_ci != '' && matrix.timeout < 120 && 120 || matrix.timeout }}
     strategy:
       fail-fast: false
       max-parallel: 4

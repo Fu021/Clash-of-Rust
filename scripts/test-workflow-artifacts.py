@@ -7,7 +7,9 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import struct
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -15,7 +17,42 @@ from unittest.mock import patch
 import zipfile
 
 import build_support as build
+import linux_guest_environment as guest
 import workflow_artifacts as artifacts
+
+
+class LinuxGuestTests(unittest.TestCase):
+    def test_guest_environment_accepts_only_a_provisioned_local_vm(self):
+        with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}, clear=True), \
+                patch.object(guest.sys, 'platform', 'linux'), \
+                patch.object(guest.os, 'geteuid', return_value=1000, create=True) as uid, \
+                patch.object(guest, 'LOCAL_GUEST_MARKER') as marker, \
+                patch.object(guest.subprocess, 'run') as detect:
+            marker.lstat.side_effect = FileNotFoundError
+            self.assertFalse(guest.is_disposable_test_environment())
+            detect.assert_not_called()
+            marker.lstat.side_effect = None
+            metadata = marker.lstat.return_value
+            metadata.st_size = len(guest.LOCAL_GUEST_CONTENT)
+            marker.read_bytes.return_value = guest.LOCAL_GUEST_CONTENT
+            for mode, owner in ((stat.S_IFLNK | 0o444, 0), (stat.S_IFREG | 0o644, 0),
+                                (stat.S_IFREG | 0o444, 1000)):
+                with self.subTest(mode=mode, owner=owner):
+                    metadata.st_mode, metadata.st_uid = mode, owner
+                    self.assertFalse(guest.is_disposable_test_environment())
+            detect.assert_not_called()
+            metadata.st_mode, metadata.st_uid = stat.S_IFREG | 0o444, 0
+            detect.return_value = subprocess.CompletedProcess([], 0, 'oracle\n')
+            self.assertFalse(guest.is_disposable_test_environment())
+            detect.return_value = subprocess.CompletedProcess([], 0, 'qemu\n')
+            self.assertTrue(guest.is_disposable_test_environment())
+            uid.return_value = 0
+            self.assertFalse(guest.is_disposable_test_environment())
+            uid.return_value = 1000
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertFalse(guest.is_disposable_test_environment())
+            with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}, clear=True):
+                self.assertTrue(guest.is_disposable_test_environment())
 
 
 class ArtifactTests(unittest.TestCase):

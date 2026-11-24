@@ -15,7 +15,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import Mock, call, mock_open, patch
 
 import linux_ci
 import linux_gui
@@ -250,17 +250,30 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
                     invoke.assert_called_once_with([*query, 'clash-of-rust'], check=False)
                     self.assertEqual(remove.call_count, int(result_code == 0))
 
-    def test_deb_fixture_waits_for_competing_apt_transactions(self):
+    def test_deb_fixture_purges_present_packages_and_handles_clean_guests(self):
         import linux_apt
         package = Path('/tmp/previous.deb')
-        with patch.dict(os.environ, {'COR_LINUX_APT_CACHE': ''}), \
-                patch.object(linux_apt, 'privileged') as privileged:
-            update.install_previous('deb', package)
-        self.assertEqual(len(privileged.call_args_list), 2)
-        for request in privileged.call_args_list:
-            command = request.args[0]
-            self.assertIn('DPkg::Lock::Timeout=120', command)
-            self.assertIn(command[-3], ('purge', 'install'))
+        for code, state, operations in (
+                (0, 'installed', ['purge', 'install']),
+                (0, 'config-files', ['purge', 'install']),
+                (0, 'not-installed', ['install']), (1, '', ['install']),
+                (2, '', []), (0, 'unknown', [])):
+            with self.subTest(code=code, state=state), \
+                    patch.dict(os.environ, {'COR_LINUX_APT_CACHE': ''}), \
+                    patch.object(update, 'invoke', return_value=SimpleNamespace(returncode=code, stdout=state)) as query, \
+                    patch.object(linux_apt, 'privileged') as privileged:
+                if operations:
+                    update.install_previous('deb', package)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Could not check the previously installed DEB'):
+                        update.install_previous('deb', package)
+                query.assert_called_once_with(
+                    ['dpkg-query', '--show', '--showformat=${db:Status-Status}', 'clash-of-rust'],
+                    timeout=60, check=False)
+                commands = [request.args[0] for request in privileged.call_args_list]
+                self.assertEqual([command[-3] for command in commands], operations)
+                for command in commands:
+                    self.assertIn('DPkg::Lock::Timeout=120', command)
 
     @unittest.skipUnless(hasattr(os, 'geteuid'), 'sudo authorization is Linux-only')
     def test_terminal_authorization_is_scoped_and_always_removed(self):
@@ -529,10 +542,15 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
         self.assertEqual([call.kwargs['result'] for call in record.call_args_list],
                          ['rate-limited', 'visible'])
 
-    def test_graphical_update_uses_only_a_representative_hosted_deb_and_arch_guest(self):
+    def test_graphical_update_selects_supported_ubuntu_and_arch_environments(self):
         for distro, version, package, arch, environment, expected in (
                 ('ubuntu', '24.04', 'deb', 'x64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, True),
-                ('ubuntu', '24.04', 'deb', 'arm64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, False),
+                ('ubuntu', '20.04', 'deb', 'arm64', {'COR_LINUX_GUEST': 'true'}, True),
+                ('ubuntu', '22.04', 'deb', 'arm64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, True),
+                ('ubuntu', '24.04', 'deb', 'arm64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, True),
+                ('ubuntu', '26.04', 'deb', 'arm64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, True),
+                ('ubuntu', '18.04', 'deb', 'arm64', {'COR_LINUX_GUEST': 'true'}, False),
+                ('ubuntu', '24.04', 'deb', 'arm64', {}, False),
                 ('ubuntu', '24.04', 'deb', 'x64', {'COR_LINUX_GUEST': 'true'}, False),
                 ('ubuntu', '24.04', 'deb', 'x64', {}, False),
                 ('ubuntu', '26.04', 'deb', 'x64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, False),
@@ -541,9 +559,15 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
                 ('fedora', '44', 'rpm', 'x64', {'COR_LINUX_GUEST': 'true'}, False)):
             with self.subTest(distro=distro, version=version, arch=arch, environment=environment), \
                     patch.dict(os.environ, environment, clear=True), \
+                    patch.object(update, 'is_disposable_test_environment', return_value=True), \
                     patch.object(update.platform, 'freedesktop_os_release',
                                  return_value={'ID': distro, 'VERSION_ID': version}):
                 self.assertIs(update.gui_target(package, arch), expected)
+        with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}, clear=True), \
+                patch.object(update, 'is_disposable_test_environment', return_value=False), \
+                patch.object(update.platform, 'freedesktop_os_release',
+                             return_value={'ID': 'ubuntu', 'VERSION_ID': '20.04'}):
+            self.assertFalse(update.gui_target('deb', 'arm64'))
 
     def test_graphical_update_runs_only_after_successful_cli_on_the_hosted_target(self):
         fixture = {'schema': 1, 'format': 'deb', 'arch': 'x64', 'previous': {}, 'published': {}}
@@ -583,7 +607,7 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
             archive = root/'package.tar.gz'
             archive.touch()
             target = SimpleNamespace(family='arch', release='', arch='x64', distribution='Arch',
-                                     os_release_id='arch', os_release_version='', full_desktop=False,
+                                     os_release_id='arch', os_release_version='', full_desktop=False, hosted=False,
                                      matrix_entry=lambda: {'os': 'ubuntu-24.04'})
             guest = SimpleNamespace(target=target, kvm=True, architecture='x86_64',
                                     remote=Mock(), environment='cd ~/cor-source && COR_LINUX_GUEST=true ')
@@ -609,6 +633,26 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
                 self.assertGreater(outer_timeout, deadline + grace)
             self.assertEqual(local.args[0][-1], fixture)
             self.assertEqual(remote_argv[-1], 'target/linux-update-fixture')
+
+    def test_arm64_tcg_published_update_keeps_time_for_graphical_authorization(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root/'package.tar.gz'
+            archive.touch()
+            target = SimpleNamespace(family='ubuntu', release='20.04', arch='arm64', distribution='Ubuntu',
+                                     os_release_id='ubuntu', os_release_version='20.04',
+                                     full_desktop=False, hosted=False)
+            guest = SimpleNamespace(target=target, kvm=False, architecture='aarch64',
+                                    remote=Mock(), environment='cd ~/cor-source && COR_LINUX_GUEST=true ')
+            package_future = Mock()
+            package_future.result.return_value = archive
+            with patch.object(linux_ci, 'REPORT', root):
+                linux_ci.verify_vm_package(guest, root, 1, package_future=package_future,
+                                           fixture=root/'fixture')
+            remote = guest.remote.call_args
+            command = shlex.split(remote.args[0].removeprefix(guest.environment))
+            self.assertEqual(command[3], '3600')
+            self.assertGreater(remote.kwargs['timeout'], 3600 + linux_ci.PUBLISHED_UPDATE_CLEANUP_SECONDS)
 
     @unittest.skipUnless(sys.platform == 'linux' and Path('/usr/bin/timeout').is_file(),
                          'requires GNU timeout')
@@ -877,6 +921,38 @@ with fixture_signals():
                           [('Continue', (700, 520, 52, 14)), ('(2s)', (755, 520, 22, 14))]):
             self.assertIsNone(linux_gui.screen_label([countdown], labels['continue']))
 
+    def test_guest_ocr_crops_headers_and_restores_window_coordinates(self):
+        tsv = (
+            'level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n'
+            '5\t1\t1\t1\t1\t1\t20\t12\t32\t24\t90\tSettings\n'
+        ).encode()
+        region = (60, 44, 1200, 102)
+        with patch.object(linux_gui, 'arm_tcg_guest', return_value=True), \
+                patch.object(linux_gui.subprocess, 'check_output', return_value=b'image') as prepare, \
+                patch.object(linux_gui.subprocess, 'run', return_value=SimpleNamespace(stdout=tsv)) as ocr:
+            lines = linux_gui.recognize_update_screen('frame.png', region=region)
+        self.assertEqual(lines, [[('Settings', (70, 50, 16, 12))]])
+        self.assertEqual(prepare.call_args.args[0][-4:], ['60', '44', '1200', '102'])
+        self.assertEqual(ocr.call_args.kwargs['timeout'], 180)
+        with tempfile.TemporaryDirectory() as temporary:
+            navigation = linux_gui.UpdateNavigation(Path(temporary), self.version)
+            navigation.lines = lines
+            with patch.object(linux_gui, 'arm_tcg_guest', return_value=True), \
+                    patch.object(navigation, 'capture', return_value=True) as capture:
+                self.assertEqual(navigation.locate(('Settings',), region=region), (78, 56))
+            capture.assert_called_once_with(region=region)
+
+    def test_gui_timeout_evidence_excludes_unrecognized_command_details(self):
+        error = subprocess.TimeoutExpired(['tesseract', 'private-fixture-value'], 180)
+        self.assertEqual(linux_gui.timeout_evidence(error), {'command': 'tesseract', 'seconds': 180})
+        error = subprocess.TimeoutExpired(['/private/fixture'], 10)
+        self.assertEqual(linux_gui.timeout_evidence(error), {'command': 'other', 'seconds': 10})
+        self.assertIsNone(linux_gui.timeout_evidence(ValueError('not a timeout')))
+        with patch.object(linux_gui, 'arm_tcg_guest', return_value=True):
+            self.assertEqual(linux_gui.desktop_update_timeout(), 2700)
+        with patch.object(linux_gui, 'arm_tcg_guest', return_value=False):
+            self.assertEqual(linux_gui.desktop_update_timeout(), linux_gui.DESKTOP_UPDATE_TIMEOUT)
+
     def test_gui_primary_button_ocr_requires_exact_text_and_uses_current_bounds(self):
         bounds = [1050, 119, 88, 36]
         with patch.object(linux_gui.subprocess, 'check_output', side_effect=[
@@ -992,14 +1068,20 @@ with fixture_signals():
     def test_gui_reopen_verifies_two_page_headers_with_navigation_only(self):
         navigation = linux_gui.UpdateNavigation(Path('unused'), self.version)
         navigation.geometry = (0, 0, 1280, 900)
-        for label, home in (((65, 124), (65, 124)), (None, (30, 124))):
-            with self.subTest(home=home), patch.multiple(
-                    navigation, input=Mock(), wait=Mock(), locate=Mock(return_value=label)):
+        for label, home, slow, header in (
+                ((65, 124), (65, 124), False, (60, 44, 1280, 102)),
+                (None, (30, 124), False, (60, 44, 1280, 102)),
+                ((65, 124), (65, 124), True, (76, 48, 311, 92)),
+                (None, (30, 124), True, (76, 48, 311, 92))):
+            with self.subTest(home=home, slow=slow), \
+                    patch.object(linux_gui, 'arm_tcg_guest', return_value=slow), \
+                    patch.multiple(navigation, input=Mock(), wait=Mock(), locate=Mock(return_value=label)):
                 navigation.verify_responsive()
                 self.assertEqual([call.args for call in navigation.input.call_args_list],
                                  [('open-settings', (56, 838)), ('return-home', home)])
                 self.assertEqual([call.args[0] for call in navigation.wait.call_args_list],
                                  ['settings-page', 'home-page'])
+                self.assertEqual(navigation.wait.call_args.kwargs['region'], header)
                 self.assertTrue(all(not call.kwargs.get('click') and not call.kwargs.get('scroll')
                                     for call in navigation.wait.call_args_list))
 
@@ -1187,8 +1269,8 @@ with fixture_signals():
             owner, dialog, version = 41, None, case['previous_version']
 
             @contextmanager
-            def process(*_args, reap_for_restart):
-                self.assertTrue(reap_for_restart)
+            def process(*_args, stop_group):
+                self.assertFalse(stop_group)
                 update.write_json(data/'control.json', {'owner': 'gui', 'pid': owner})
                 yield Mock()
 
@@ -1826,9 +1908,11 @@ with fixture_signals():
                 patch.object(linux_gui, 'fixture_sudo', side_effect=[busy, killed, removed]) as sudo:
             linux_gui.delete_gui_user(user, home, 1234)
         self.assertEqual([call.args for call in account.call_args_list], [(user, home, 1234)] * 3)
-        self.assertEqual([call.args for call in sudo.call_args_list],
-                         [('userdel', '--remove', user), ('/usr/bin/pkill', '--signal', 'KILL', '--uid', '1234'),
-                          ('userdel', '--remove', user)])
+        self.assertEqual(sudo.call_args_list, [
+            call('userdel', '--remove', user, capture_output=True),
+            call('/usr/bin/pkill', '--signal', 'KILL', '--uid', '1234'),
+            call('userdel', '--remove', user, capture_output=True),
+        ])
         with patch.object(linux_gui, 'gui_account', side_effect=[
                 SimpleNamespace(pw_uid=1234), RuntimeError('Account changed')]), \
                 patch.object(linux_gui, 'fixture_sudo', side_effect=busy) as sudo, \

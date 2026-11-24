@@ -17,6 +17,7 @@ import time
 import compatibility
 from build_support import (ROOT, deb_version, download, host_arch, manifest_version,
                            sha256, validate_version, write_json)
+from linux_guest_environment import is_disposable_test_environment
 from linux_native_package import arch_filename, native_version, rpm_filename
 from linux_update_retry import RATE_LIMIT_MESSAGES, ReleaseRateLimit, retry_release_check
 from workflow_artifacts import fetch_package_inputs, release_module
@@ -330,7 +331,15 @@ def install_previous(package_format, package, *, check_interrupted=None):
             package_format, package, check_interrupted=check_interrupted)
     if package_format == 'deb':
         from linux_apt import OPTIONS, install, privileged
-        privileged([*OPTIONS, 'purge', '-y', 'clash-of-rust'], 300)
+        result = invoke(['dpkg-query', '--show', '--showformat=${db:Status-Status}', 'clash-of-rust'],
+                        timeout=60, check=False)
+        state = result.stdout.strip()
+        require(result.returncode == 1 or (result.returncode == 0 and state in (
+            'not-installed', 'config-files', 'half-installed', 'unpacked', 'half-configured',
+            'triggers-awaited', 'triggers-pending', 'installed')),
+            'Could not check the previously installed DEB')
+        if result.returncode == 0 and state != 'not-installed':
+            privileged([*OPTIONS, 'purge', '-y', 'clash-of-rust'], 300)
         install([package])
     else:
         from linux_native_guest import install_package, remove_package
@@ -384,9 +393,15 @@ def gui_target(package_format, arch):
     if package_format == 'pkg':
         return (arch == 'x64' and release.get('ID') == 'arch'
                 and os.environ.get('COR_LINUX_GUEST') == 'true')
-    return (package_format == 'deb' and arch == 'x64'
-            and (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', '24.04')
-            and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
+    if package_format != 'deb' or release.get('ID') != 'ubuntu':
+        return False
+    version = release.get('VERSION_ID')
+    hosted = os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+    if arch == 'x64':
+        return version == '24.04' and hosted
+    if arch != 'arm64' or version not in ('20.04', '22.04', '24.04', '26.04'):
+        return False
+    return hosted or (os.environ.get('COR_LINUX_GUEST') == 'true' and is_disposable_test_environment())
 
 
 @contextmanager
@@ -659,7 +674,7 @@ def terminal_authorization(*, check_interrupted=None):
 
 
 def require_disposable_update_runner():
-    if (os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'linux'
+    if (not is_disposable_test_environment() or sys.platform != 'linux'
             or os.geteuid() == 0 or (os.environ.get('COR_LINUX_GUEST') != 'true'
                                      and os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted')):
         raise RuntimeError('Published update tests require a disposable Actions runner or compatibility VM')

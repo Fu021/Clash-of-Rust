@@ -14,6 +14,7 @@ import zipfile
 
 from build_support import download, run, sha256
 from linux_compatibility_targets import TARGETS, TUMBLEWEED_REPOMD
+from linux_guest_environment import is_disposable_test_environment
 
 DISTROS = ('fedora', 'opensuse-leap', 'opensuse-tumbleweed', 'arch')
 RPM = ('fedora', 'opensuse-leap', 'opensuse-tumbleweed')
@@ -27,7 +28,7 @@ ARCH_ARCHIVE_MIRROR = 'https://umea.archive.pkgbuild.com'
 def distribution():
     distro = platform.freedesktop_os_release().get('ID')
     if (distro not in DISTROS or os.environ.get('COR_LINUX_GUEST') != 'true'
-            or os.environ.get('GITHUB_ACTIONS') != 'true' or os.geteuid() == 0):
+            or not is_disposable_test_environment() or os.geteuid() == 0):
         raise RuntimeError('Native package commands require an ordinary user in an isolated compatibility VM')
     return distro
 

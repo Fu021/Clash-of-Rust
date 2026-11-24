@@ -155,6 +155,11 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         std::env::var("CLASH_TUN_TEST_NAMESPACE").as_deref(),
         Ok("1")
     );
+    let traffic_timeout = if std::env::var("CLASH_TUN_TEST_ARM_TCG").as_deref() == Ok("1") {
+        Duration::from_secs(90)
+    } else {
+        Duration::from_secs(30)
+    };
     engine.select_proxy_mode(ProxyMode::Off).await.unwrap();
     engine
         .save_settings(Settings {
@@ -331,10 +336,10 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
             yaml_serde::from_slice(&std::fs::read(store.runtime().join("config.yaml")).unwrap())
                 .unwrap();
         assert!(payload["tun"]["route-address"].is_null());
-        let result = tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine)).await;
+        let result = tokio::time::timeout(traffic_timeout, protected_traffic(engine)).await;
         if result.is_err() {
             eprintln!(
-                "Protected DNS timeout; logs: {:?}",
+                "Protected DNS timeout for {node} with fake-IP mode={filter_mode}; logs: {:?}",
                 engine.poll(Scope::Logs).await.unwrap().logs
             );
         }
@@ -342,7 +347,7 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
         if node == "node.fixture.test" && !fixed_blocked {
             super::check_network_refresh(engine, &store).await;
             assert!(engine.settings.claude_protection.is_some());
-            tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
+            tokio::time::timeout(traffic_timeout, protected_traffic(engine))
                 .await
                 .expect("Protected DNS/HTTP must work after network refresh");
         }
@@ -387,7 +392,7 @@ pub async fn run(engine: &mut Engine, profile: &std::path::Path) {
                 .error_for_status()
                 .unwrap();
         }
-        tokio::time::timeout(Duration::from_secs(30), protected_traffic(engine))
+        tokio::time::timeout(traffic_timeout, protected_traffic(engine))
             .await
             .expect("Cold-start protected DNS/HTTP must work");
         let after_restart = metrics().await;

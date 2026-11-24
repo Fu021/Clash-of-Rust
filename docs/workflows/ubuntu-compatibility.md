@@ -2,11 +2,11 @@
 
 [工作流索引](../workflows.md) · [CI](ci.md) · [安装验收](install-validation.md) · [发布门禁](release.md#兼容性发布门禁)
 
-`Ubuntu Compatibility` 在四个 LTS 版本的运行内核上验收同提交 DEB。Ubuntu 22.04、24.04 和 26.04 直接使用 GitHub 托管 runner。Ubuntu 20.04 在 Ubuntu 24.04 的 x64 runner 上启动 Canonical 云镜像。
+`Ubuntu Compatibility` 在四个 LTS 版本的运行内核上验收同提交 DEB。Ubuntu 22.04、24.04 和 26.04 直接使用 GitHub 托管 runner。Ubuntu 20.04 在同架构的 Ubuntu 24.04 runner 上启动 Canonical 云镜像。
 
 | Ubuntu 版本 | x64 | ARM64 |
 | --- | --- | --- |
-| 20.04 LTS | focal VM，5.4 GA 内核 | — |
+| 20.04 LTS | focal VM，5.4 GA 内核 | focal VM，5.4 GA 内核 |
 | 22.04 LTS | `ubuntu-22.04` | `ubuntu-22.04-arm` |
 | 24.04 LTS | `ubuntu-24.04` | `ubuntu-24.04-arm` |
 | 26.04 LTS | `ubuntu-26.04` | `ubuntu-26.04-arm` |
@@ -21,12 +21,14 @@ Ubuntu 20.04 的 GitHub 托管镜像已于 2025 年 4 月 15 日退役。20.04 �
 
 `scripts/compatibility.py` 核对源 CI 的仓库、提交、成功终态以及 `package-linux-x64/arm64`、`linux-tun-test-x64/arm64`、`dependency-snapshot` 的唯一性、有效期和输入身份。两条执行路径均复核 DEB、测试程序及包收据摘要，核对实际发行版版本与架构，实际安装候选包并执行基础系统代理/TUN、DNS 和关闭恢复。扩展 GUI、多用户及更新专项按常规 CI 策略验证。
 
-最后 `Linux / Record compatibility` 上传 `ubuntu-compatibility-attempt-<attempt>`，保留三天，绑定源 CI、提交、全部输入的 id/name/digest、运行 attempt 和检查范围。Publish Release 在解析和最终核验时检查它及整个矩阵的成功结果。缺失、失败、跳过或过期均阻止发布。新提交或不同 CI 产物不能沿用旧回执。
+ARM64 首轮还验收 GUI/TUI/CLI、两次真实桌面登录及包升级和卸载。20.04 的完整验收在 VM 内执行。22.04、24.04 和 26.04 直接在 runner 上跑三端、流量和所选更新专项，再把已核验的同一 DEB 传给该 runner 上的同版官方镜像 VM，执行两次 GDM 登录和包生命周期。ARM64 完整作业预留 180 分钟，使用 TCG 的桌面 VM 冷启动至 SSH 最多等待 20 分钟。VM 报告单独记录实际内核和加速方式。
+
+最后 `Linux / Record compatibility` 上传 `ubuntu-compatibility-attempt-<attempt>`，保留三天，绑定源 CI、提交、全部输入的 id/name/digest、运行 attempt 和检查范围。全量验收的版本与架构单列在 `full_desktop_targets`。Publish Release 在解析和最终核验时检查回执及整个矩阵的成功结果。缺失、失败、跳过或过期均阻止发布。新提交或不同 CI 产物不能沿用旧回执。
 
 ## 镜像与软件包来源
 
 - VM 目标的云镜像与测试用 Python 均校验 SHA256。镜像下载、校验及 VM 启动与候选包下载并行。guest 就绪后再传入本架构 DEB 和测试程序。
-- VM 只接收 Python 验证脚本、必要元数据、CLI 参数契约、来源提交标记及本架构冻结 APT 索引；不再传入整个仓库、Git 历史或其他架构索引。来源标记仅在隔离 Actions guest 使用，宿主仍读取实际 Git 提交。
+- VM 只接收 Python 验证脚本、必要元数据、CLI 参数契约、来源提交标记及本架构冻结 APT 索引。来源标记用于隔离 Actions 来宾和[一次性本地来宾](linux-expansion.md#本地一次性来宾)，宿主读取实际 Git 提交。
 - 20.04 优先用 CI 冻结的 Ubuntu 官方签名 APT 索引和软件包摘要准备工具。冻结计划不可用时，记录回退并使用当前签名索引。较新版本直接使用该版本的当前签名索引。
 - 在托管 runner 上准备兼容测试依赖时，22.04 和 24.04 ARM64 仍使用 Ubuntu Ports。26.04 ARM64 使用与 x64 相同的主仓库及安全更新镜像。镜像差异见 [GitHub runner APT 配置](https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-apt.sh)。
 - VM 安装测试等待 SSH 和 cloud-init 就绪，核对实际发行版、版本、架构、内核及候选包身份，再执行网络检查。

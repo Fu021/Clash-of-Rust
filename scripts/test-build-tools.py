@@ -117,8 +117,11 @@ class TunDnsFixtureTests(unittest.TestCase):
         import pwd
         for machine, flags, timeout in (
                 ('x86_64', ['--with-user-tests'], 520),
+                ('x86_64', ['--with-user-tests', '--tcg'], 520),
                 ('aarch64', [], 520),
+                ('aarch64', ['--tcg'], 1480),
                 ('aarch64', ['--with-user-tests'], 800),
+                ('aarch64', ['--with-user-tests', '--tcg'], 3000),
                 ('aarch64', ['--proxy-benchmark'], 640),
                 ('aarch64', ['--with-user-tests', '--proxy-benchmark'], 920)):
             with self.subTest(machine=machine, flags=flags), \
@@ -361,6 +364,7 @@ class UbuntuVmTests(unittest.TestCase):
         standard = 'https://archive.ubuntu.com/ubuntu'
         ports = 'https://ports.ubuntu.com/ubuntu-ports'
         for version, codename, arch, archive in (
+                ('22.04', 'jammy', 'arm64', ports),
                 ('24.04', 'noble', 'x64', standard),
                 ('24.04', 'noble', 'arm64', ports),
                 ('26.04', 'resolute', 'arm64', standard)):
@@ -746,6 +750,60 @@ class UbuntuVmTests(unittest.TestCase):
                             for call in execute.call_args_list))
         self.assertEqual(report, {'menu_sha256': 'fixture-digest', 'boot_id': 'fixture-boot'})
 
+    def test_ubuntu_desktop_uses_its_packaged_gdm_configuration(self):
+        import linux_gnome_login
+
+        for release, backend in (('20.04', 'false'), ('22.04', 'false'),
+                                 ('24.04', 'false'), ('26.04', 'true')):
+            identity = {'ID': 'ubuntu', 'VERSION_ID': release}
+            desktop = linux_desktop_login.desktop_for_release(identity)
+            with self.subTest(release=release), \
+                    patch.object(linux_desktop_login, 'run') as execute, \
+                    patch.object(linux_desktop_login, 'install') as install, \
+                    patch.object(linux_desktop_login, 'native_gnome_session', return_value='gnome') as session, \
+                    patch.object(linux_gnome_login, 'install'), \
+                    patch.object(linux_desktop_login, 'boot_id', return_value='fixture-boot'), \
+                    patch.object(linux_desktop_login, 'sha256', return_value='fixture-digest'), \
+                    patch.object(Path, 'read_text', return_value='Exec=clash-of-rust\n'):
+                linux_desktop_login.prepare({}, desktop, identity)
+            packages = install.call_args.args[0]
+            self.assertIn('gdm3', packages)
+            appindicator = ('gnome-shell-ubuntu-extensions' if release == '26.04'
+                            else 'gnome-shell-extension-appindicator')
+            self.assertIn(appindicator, packages)
+            self.assertEqual('xserver-xorg' in packages, backend == 'false')
+            directory = 'wayland-sessions' if backend == 'true' else 'xsessions'
+            session.assert_called_once_with(Path('/usr/share')/directory, desktop)
+            config, = (call.kwargs['input'] for call in execute.call_args_list
+                       if call.args[0] == ['sudo', 'tee', '/etc/gdm3/custom.conf'])
+            self.assertIn(f'WaylandEnable={backend}\n', config)
+        self.assertIsNone(linux_desktop_login.desktop_for_release({'ID': 'ubuntu', 'VERSION_ID': '16.04'}))
+
+    def test_ubuntu_gnome_shell_startup_budget_is_limited_to_disposable_arm64_tcg_guests(self):
+        dropin = Path('/etc/systemd/user/org.gnome.Shell@x11.service.d/90-cor-compatibility-tcg.conf')
+        for arch, acceleration, guest, disposable, expected in (
+                ('aarch64', 'tcg', 'true', True, True),
+                ('aarch64', 'kvm', 'true', True, False),
+                ('aarch64', 'tcg', 'true', False, False),
+                ('aarch64', 'tcg', 'false', True, False),
+                ('x86_64', 'tcg', 'true', True, False)):
+            with self.subTest(arch=arch, acceleration=acceleration, guest=guest, disposable=disposable), \
+                    patch.dict(os.environ, {'COR_LINUX_VM_ACCELERATION': acceleration, 'COR_LINUX_GUEST': guest}), \
+                    patch.object(linux_desktop_login, 'run') as execute, \
+                    patch.object(linux_desktop_login, 'install_login_dependencies'), \
+                    patch.object(linux_desktop_login, 'native_gnome_session', return_value='gnome'), \
+                    patch.object(linux_desktop_login, 'is_disposable_test_environment',
+                                 return_value=disposable), \
+                    patch.object(linux_desktop_login.platform, 'machine', return_value=arch), \
+                    patch.object(linux_desktop_login, 'boot_id', return_value='fixture-boot'), \
+                    patch.object(linux_desktop_login, 'sha256', return_value='fixture-digest'), \
+                    patch.object(Path, 'read_text', return_value='Exec=clash-of-rust\n'):
+                linux_desktop_login.prepare({}, linux_desktop_login.UBUNTU_GNOME,
+                                            {'ID': 'ubuntu', 'VERSION_ID': '24.04'})
+                overrides = [call.kwargs['input'] for call in execute.call_args_list
+                             if call.args[0] == ['sudo', 'tee', dropin]]
+                self.assertEqual(overrides, ['[Service]\nTimeoutStartSec=360s\n'] if expected else [])
+
     def test_debian_desktop_setup_installs_screenshot_tool(self):
         for version in ('12', '13'):
             with self.subTest(version=version), \
@@ -953,10 +1011,11 @@ class UbuntuVmTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.object(linux_desktop_login, 'REPORT', Path(temporary)), \
                 patch.object(linux_desktop_login.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), \
-                patch.object(linux_desktop_login, 'active_desktop', return_value=({}, environment)), \
+                patch.object(linux_desktop_login, 'active_desktop', return_value=({}, environment)) as active, \
                 patch.object(linux_desktop_login.subprocess, 'check_output', return_value=image), \
                 patch.object(linux_desktop_login.subprocess, 'run') as execute:
-            name = linux_desktop_login.capture_gnome_failure('first-login')
+            name = linux_desktop_login.capture_gnome_failure('first-login', linux_desktop_login.UBUNTU_GNOME)
+            active.assert_called_once_with(1001, linux_desktop_login.UBUNTU_GNOME)
             self.assertEqual((Path(temporary)/name).read_bytes(), image)
             command = execute.call_args_list[0]
             self.assertIn('DISPLAY=:0', command.args[0])
@@ -1036,8 +1095,9 @@ class UbuntuVmTests(unittest.TestCase):
                 request.wait.return_value = code
 
             @contextmanager
-            def process(command, log):
+            def process(command, log, *, stop_group):
                 self.assertEqual(command[:2], ['pkexec', '--disable-internal-agent'])
+                self.assertFalse(stop_group)
                 yield requests.pop(0)
 
             keys = []
@@ -1347,6 +1407,21 @@ class UbuntuVmTests(unittest.TestCase):
                     linux_ci.verify_vm_package(guest, directory, 123)
             guest.capture_desktop_failure.assert_called_once_with('first-login')
             guest.python.assert_not_called()
+
+    def test_ubuntu_hosted_login_vm_installs_candidate_then_verifies_both_logins_and_lifecycle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory/'package.tar.gz'
+            archive.touch()
+            guest = MagicMock(target=linux_ci.target_for('ubuntu', '26.04', 'arm64'),
+                              environment='guest ', architecture='aarch64', kvm=False)
+            with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
+                linux_ci.verify_vm_package(guest, directory, 123)
+        commands = [invocation.args[0].split()[-1] for invocation in guest.remote.call_args_list]
+        self.assertEqual(commands, ['~/cor-source', '--prepare-desktop-login',
+                                    'prepare', 'first-login', 'background-login'])
+        self.assertEqual(guest.reboot.call_count, 2)
+        self.assertIn('deb_upgrade_and_uninstall', guest.python.call_args.args[0])
 
     def test_debian_desktop_failure_uses_bounded_headless_screenshot(self):
         import linux_vm_monitor
@@ -2659,7 +2734,7 @@ class BuildTests(unittest.TestCase):
                         raise PermissionError('cleanup denied')
                     return remove(path, *args, **kwargs)
 
-                with patch.object(cli_update.os, 'geteuid', return_value=1000), \
+                with patch.object(cli_update.os, 'geteuid', return_value=1000, create=True), \
                         patch.object(cli_update.os, 'kill'), \
                         patch.object(cli_update.subprocess, 'Popen') as process, \
                         patch.object(cli_update, 'endpoint',
@@ -2866,9 +2941,10 @@ class BuildTests(unittest.TestCase):
             'proxy_modes', build.ROOT/'scripts/test-proxy-modes.py')
         proxy_modes = importlib.util.module_from_spec(specification)
         specification.loader.exec_module(proxy_modes)
-        for selected in (False, True):
-            with self.subTest(selected=selected), \
+        for selected, acceleration in ((False, 'tcg'), (True, 'kvm'), (True, 'tcg')):
+            with self.subTest(selected=selected, acceleration=acceleration), \
                     patch.dict(os.environ, {'GITHUB_ACTIONS': 'true',
+                                            'COR_LINUX_VM_ACCELERATION': acceleration,
                                             'COR_CI_EXTENDED_TESTS': 'false',
                                             'COR_CI_LINUX_USER_TESTS': str(selected).lower()}), \
                     patch.object(proxy_modes, 'host_system', return_value='linux'), \
@@ -2878,6 +2954,7 @@ class BuildTests(unittest.TestCase):
                 proxy_modes.check(Path('/test/core_integration'), Path('/opt/clash-of-rust'))
             command = invoke.call_args.args[0]
             self.assertEqual('--with-user-tests' in command, selected)
+            self.assertEqual('--tcg' in command, acceleration == 'tcg')
 
     def test_proxy_benchmark_selection_survives_the_linux_build_container(self):
         for selected in ('false', 'true'):
@@ -3984,7 +4061,7 @@ class BuildTests(unittest.TestCase):
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temporary, \
                     patch.object(release_package, 'ROOT', Path(temporary)), \
                     patch.object(release_package.os, 'geteuid', return_value=1000), \
-                    patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'COR_LINUX_GUEST': 'true'}), \
                     patch.object(release_package.platform, 'freedesktop_os_release', return_value={'ID': 'debian'}), \
                     patch.object(release_package.subprocess, 'check_output', return_value=arch+'\n') as field, \
                     patch.object(release_package, 'download', side_effect=RuntimeError('download fixture')) as download:
@@ -3997,6 +4074,40 @@ class BuildTests(unittest.TestCase):
                 self.assertTrue(url.endswith('/releases/download/v0.7.2/'+name))
                 self.assertEqual(destination.name, name)
                 self.assertEqual(download.call_args.kwargs['digest'], digest)
+
+    def test_staged_upgrade_deb_requires_a_local_guest_and_the_expected_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory/'transferred.deb'
+            source.write_bytes(b'published fixture')
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            with patch.object(release_package, 'is_local_guest', return_value=False):
+                with self.assertRaisesRegex(RuntimeError, 'disposable local VM'):
+                    release_package.stage_previous_deb(directory, 'arm64', source)
+            with patch.object(release_package, 'is_local_guest', return_value=True):
+                with self.assertRaisesRegex(ValueError, 'differs from the published DEB'):
+                    release_package.stage_previous_deb(directory, 'arm64', source)
+                with patch.dict(release_package.PREVIOUS_DEB_SHA256, {'arm64': digest}):
+                    package, verified = release_package.stage_previous_deb(directory, 'arm64', source)
+                    self.assertEqual(package.read_bytes(), source.read_bytes())
+                    self.assertEqual(verified, digest)
+
+    def test_ubuntu_package_lifecycle_requires_an_ordinary_disposable_guest(self):
+        for actions, guest, uid, allowed in (
+                ('true', 'true', 1000, True), ('true', 'false', 1000, False),
+                ('false', 'true', 1000, False), ('true', 'true', 0, False)):
+            with self.subTest(actions=actions, guest=guest, uid=uid), \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': actions, 'COR_LINUX_GUEST': guest}), \
+                    patch('linux_guest_environment.is_local_guest', return_value=False), \
+                    patch.object(release_package.os, 'geteuid', return_value=uid), \
+                    patch.object(release_package.platform, 'freedesktop_os_release',
+                                 return_value={'ID': 'ubuntu'}), \
+                    patch.object(release_package.subprocess, 'check_output',
+                                 side_effect=RuntimeError('read package architecture')) as query:
+                message = 'read package architecture' if allowed else 'requires an ordinary user'
+                with self.assertRaisesRegex(RuntimeError, message):
+                    release_package.deb_upgrade_and_uninstall(Path('/unused/candidate.deb'))
+                self.assertEqual(query.called, allowed)
 
     def test_guest_debs_use_official_sources_and_verify_bytes_before_transferring(self):
         payload = b'verified-signed-deb'
@@ -4375,6 +4486,25 @@ class BuildTests(unittest.TestCase):
             self.assertEqual((saved/'x11-startup.json').read_text(), 'startup trace')
             self.assertFalse((saved/'wayland-startup.json').exists())
 
+    def test_gui_polkit_rule_limits_legacy_updates_to_the_disposable_account(self):
+        user = 'corgui' + '1' * 24
+        rule, contents = linux_gui.gui_polkit_rule(
+            user, {'format': 'deb'}, {'ID': 'ubuntu', 'VERSION_ID': '20.04'})
+        self.assertEqual(rule, Path('/etc/polkit-1/localauthority/50-local.d')/f'10-{user}.pkla')
+        self.assertEqual(contents, (
+            f'[Compatibility fixture]\nIdentity=unix-user:{user}\n'
+            'Action=org.freedesktop.policykit.exec\n'
+            'ResultAny=auth_self\nResultInactive=auth_self\nResultActive=auth_self\n'))
+        for release in ({'ID': 'ubuntu', 'VERSION_ID': '22.04'}, {'ID': 'debian', 'VERSION_ID': '12'}):
+            rule, contents = linux_gui.gui_polkit_rule(user, {'format': 'deb'}, release)
+            self.assertEqual(rule, Path('/etc/polkit-1/rules.d')/f'10-{user}.rules')
+            self.assertIn('action.lookup("program") === "/usr/bin/dpkg"', contents)
+            self.assertIn(f'subject.user === "{user}"', contents)
+        with self.assertRaises(ValueError):
+            linux_gui.gui_polkit_rule('other', {'format': 'deb'}, {'ID': 'ubuntu', 'VERSION_ID': '20.04'})
+        with self.assertRaises(ValueError):
+            linux_gui.gui_polkit_rule(user, {'format': 'pkg'}, {'ID': 'ubuntu', 'VERSION_ID': '20.04'})
+
     def test_native_gui_failure_removes_the_polkit_fixture_and_preserves_the_report(self):
         import linux_gui
         import linux_native_guest
@@ -4425,7 +4555,7 @@ class BuildTests(unittest.TestCase):
                                      stdin=subprocess.DEVNULL)
             commands.assert_any_call([*prefix, '30s', 'userdel', '--remove', user], check=True,
                                      cwd=linux_gui.ROOT, timeout=45, start_new_session=True,
-                                     stdin=subprocess.DEVNULL)
+                                     stdin=subprocess.DEVNULL, capture_output=True)
             self.assertEqual(json.loads((saved/'desktop/gui.json').read_text()), {'status': 'failed'})
             self.assertEqual((saved/'desktop-session-journal.log').read_text(),
                              'session start diagnostics\npackage version diagnostics\naudit diagnostics\n')
@@ -9700,7 +9830,8 @@ success="$1"
         receipt = {'schema': 1, 'suite': suite, 'commit': self.source_commit,
                    'ci_run_id': 123, 'run_id': 456, 'run_attempt': 2,
                    'checks': compatibility.CHECKS[suite],
-                   'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs]}
+                   'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs],
+                   **compatibility.desktop_targets(suite)}
         if suite in ('linuxmint', 'pop', 'zorin', 'fedora', 'opensuse', 'arch'):
             source_kind = 'iso' if suite in ('linuxmint', 'pop', 'zorin') else 'cloud'
             receipt[source_kind+'_targets'] = [
@@ -9852,8 +9983,8 @@ success="$1"
         workflows = build.ROOT / '.github/workflows'
         shared = (workflows / 'linux-compatibility.yml').read_text()
         for suite, pairs in (
-                ('ubuntu', {('20.04', 'x64')} | {(version, arch) for version in ('22.04', '24.04', '26.04')
-                                                for arch in ('x64', 'arm64')}),
+                ('ubuntu', {(version, arch) for version in ('20.04', '22.04', '24.04', '26.04')
+                            for arch in ('x64', 'arm64')}),
                 ('debian', {('12', 'x64'), ('13', 'x64')})):
             wrapper = (workflows / compatibility.WORKFLOWS[suite]).read_text()
             matrix = compatibility.suite_matrix(suite)['include']
@@ -9866,7 +9997,7 @@ success="$1"
                 runner_release = entry['release'] if direct else '24.04'
                 suffix = '-arm' if entry['arch'] == 'arm64' else ''
                 self.assertEqual(entry['os'], f'ubuntu-{runner_release}{suffix}')
-                self.assertEqual(bool(entry['qemu']), not direct)
+                self.assertEqual(bool(entry['qemu']), not direct or entry['arch'] == 'arm64')
             self.assertIn('workflow_dispatch:', wrapper)
             self.assertIn('name: Linux\n', wrapper)
             self.assertIn('uses: ./.github/workflows/linux-compatibility.yml', wrapper)
@@ -9883,25 +10014,45 @@ success="$1"
                                         'ImageVersion': 'fixture-image'}, clear=True), \
                 patch.object(sys, 'argv', ['linux_ci.py', 'verify', '--package-run-id', '123',
                                           '--suite', 'ubuntu', '--release', '26.04',
-                                          '--expect-arch', 'arm64']), \
+                                          '--expect-arch', 'x64']), \
                 patch.object(linux_ci, 'require_actions'), \
-                patch.object(linux_ci, 'host_arch', return_value='arm64'), \
+                patch.object(linux_ci, 'host_arch', return_value='x64'), \
                 patch.object(linux_ci, 'REPORT', Path(temporary)), \
                 patch.object(linux_ci, 'fetch_compatibility_package') as fetch, \
                 patch.object(linux_ci, 'vm_test') as guest, \
                 patch.object(linux_ci.subprocess, 'run') as execute:
             linux_ci.main()
             report = json.loads((Path(temporary)/'linux-runner.json').read_text())
-        fetch.assert_called_once_with(123, 'arm64')
+        fetch.assert_called_once_with(123, 'x64')
         guest.assert_not_called()
         execute.assert_called_once()
         self.assertEqual(execute.call_args.args[0], [sys.executable, 'scripts/test-release-package.py',
                                                     '--linux-compat', '--expect-linux', 'ubuntu', '26.04',
-                                                    '--expect-arch', 'arm64'])
+                                                    '--expect-arch', 'x64'])
         self.assertNotIn('GH_TOKEN', execute.call_args.kwargs['env'])
         self.assertEqual(report['kernel'], os.uname().release)
-        self.assertEqual(report['runner'], 'ubuntu-26.04-arm')
+        self.assertEqual(report['runner'], 'ubuntu-26.04')
         self.assertEqual(report['runner_image'], 'fixture-image')
+        self.assertTrue(report['success'])
+
+    def test_ubuntu_arm64_runs_native_checks_and_passes_the_same_candidate_to_login_vm(self):
+        target = linux_ci.target_for('ubuntu', '26.04', 'arm64')
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {'GH_TOKEN': 'fixture-token', 'GITHUB_TOKEN': 'fixture-token'},
+                           clear=True), \
+                patch.object(linux_ci, 'REPORT', Path(temporary)), \
+                patch.object(linux_ci, 'fetch_compatibility_package') as fetch, \
+                patch.object(linux_ci, 'run') as execute, \
+                patch.object(linux_ci, 'vm_test') as guest:
+            linux_ci.hosted_test(123, target, Path('/update-fixture'))
+            report = json.loads((Path(temporary)/'linux-runner.json').read_text())
+        fetch.assert_called_once_with(123, 'arm64')
+        native, update = execute.call_args_list
+        self.assertNotIn('--prepare-desktop-login', native.args[0])
+        self.assertIn(Path('/update-fixture'), update.args[0])
+        for invocation in (native, update):
+            self.assertEqual(invocation.kwargs['env'], {'COR_CI_EXTENDED_TESTS': 'true'})
+        guest.assert_called_once_with(123, target, package_staged=True)
         self.assertTrue(report['success'])
 
 

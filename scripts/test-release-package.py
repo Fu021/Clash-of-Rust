@@ -19,6 +19,7 @@ from workflow_artifacts import commit, verify_build
 from linux_apt import OPTIONS as APT_OPTIONS, install as install_packages, update_indexes
 from linux_apt import privileged as run_privileged_with_timeout
 from linux_compatibility_targets import UBUNTU_BASELINE
+from linux_guest_environment import is_disposable_test_environment, is_local_guest
 
 
 GUEST_PACKAGE_CONFIG = """\
@@ -129,11 +130,7 @@ def require_linux_polkit_tools():
             raise RuntimeError('The installed package did not provide the polkit tool: ' + tool)
 
 
-def linux_package_tests(package, tun_test, structure=True):
-    from ci_test_policy import extended_tests, update_tests
-    if structure:
-        # Build/manifest checks already verify payload identity and resources.
-        run(['dpkg-deb', '--info', package])
+def install_linux_deb(package):
     # The privileged launcher requires an entirely root-owned installed path.
     run(['sudo', 'chown', 'root:root', '/opt'])
     run(['sudo', 'chmod', '0755', '/opt'])
@@ -142,6 +139,14 @@ def linux_package_tests(package, tun_test, structure=True):
         update_indexes()
     package_argument = './'+str(package.relative_to(ROOT))
     install_packages([package_argument])
+
+
+def linux_package_tests(package, tun_test, structure=True):
+    from ci_test_policy import extended_tests, update_tests
+    if structure:
+        # Build/manifest checks already verify payload identity and resources.
+        run(['dpkg-deb', '--info', package])
+    install_linux_deb(package)
     if os.environ.get('COR_LINUX_BASELINE'):
         require_linux_polkit_tools()
     if not any(Path(path).is_file() for path in (
@@ -197,8 +202,8 @@ def compatibility_download_dependencies():
 
 
 def prepare_compatibility_environment():
-    if os.environ.get('GITHUB_ACTIONS') != 'true':
-        raise RuntimeError('Compatibility preparation requires a disposable GitHub Actions runner')
+    if not is_disposable_test_environment():
+        raise RuntimeError('Compatibility preparation requires a disposable Actions runner or VM')
     if os.environ.get('COR_UBUNTU_VM_FROZEN') == 'true':
         from build_inputs import manifest
         from ubuntu_vm_environment import (
@@ -227,6 +232,8 @@ def prepare_compatibility_environment():
     if not os.environ.get('COR_LINUX_GUEST'):
         update_indexes()
     package_timeout = 1800 if platform.machine().lower() in ('aarch64', 'arm64') else 900
+    if os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg' and is_local_guest():
+        package_timeout = 3600
     install_packages(compatibility_dependencies(), package_timeout, no_recommends=True)
 
 
@@ -254,22 +261,35 @@ def run_upgrade_cli(data, report, phase, *commands):
             return results
 
 
-def deb_upgrade_and_uninstall(package):
+def stage_previous_deb(directory, architecture, source=None):
+    digest = PREVIOUS_DEB_SHA256[architecture]
+    name = f'Clash-of-Rust-{PREVIOUS_DEB_VERSION}-linux-{architecture}.deb'
+    destination = directory/name
+    if source is None:
+        url = f'https://github.com/Fu021/Clash-of-Rust/releases/download/v{PREVIOUS_DEB_VERSION}/{name}'
+        download(url, destination, digest=digest)
+    else:
+        if not is_local_guest():
+            raise RuntimeError('A staged upgrade input requires a disposable local VM')
+        shutil.copyfile(source, destination)
+        if sha256(destination) != digest:
+            raise ValueError('Staged upgrade input differs from the published DEB')
+    return destination, digest
+
+
+def deb_upgrade_and_uninstall(package, *, previous_deb=None):
     distribution = platform.freedesktop_os_release().get('ID')
+    supported = distribution in ('ubuntu', 'debian', 'linuxmint', 'pop', 'zorin')
     if (os.geteuid() == 0 or os.environ.get('COR_LINUX_GUEST') != 'true'
-            or distribution not in ('debian', 'linuxmint', 'pop', 'zorin')):
+            or not is_disposable_test_environment() or not supported):
         raise RuntimeError('DEB installation lifecycle requires an ordinary user in a disposable compatibility VM')
     architecture = subprocess.check_output(['dpkg-deb', '--field', package, 'Architecture'], text=True).strip()
-    previous_digest = PREVIOUS_DEB_SHA256[architecture]
-    previous_name = f'Clash-of-Rust-{PREVIOUS_DEB_VERSION}-linux-{architecture}.deb'
-    previous_url = f'https://github.com/Fu021/Clash-of-Rust/releases/download/v{PREVIOUS_DEB_VERSION}/{previous_name}'
     report = ROOT/'target/linux-report'/f'{distribution}-lifecycle'
     report.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cor-deb-lifecycle-') as temporary:
         directory = Path(temporary)
         directory.chmod(0o755)
-        previous = directory/previous_name
-        download(previous_url, previous, digest=previous_digest)
+        previous, previous_digest = stage_previous_deb(directory, architecture, previous_deb)
         candidate_version = subprocess.check_output(
             ['dpkg-deb', '--field', package, 'Version'], text=True).strip()
         run(['dpkg', '--compare-versions', PREVIOUS_DEB_VERSION, 'lt', candidate_version])
@@ -336,7 +356,7 @@ def verify_package_lifecycle(package, previous, candidate_version, previous_vers
                                      'uninstall_preserved_user_data': True})
 
 
-def native_upgrade_and_uninstall(deb):
+def native_upgrade_and_uninstall(deb, *, previous_deb=None):
     from linux_native_guest import (
         RPM, distribution, install_package, package_version, remove_package, verify_upgrade_order,
     )
@@ -356,13 +376,9 @@ def native_upgrade_and_uninstall(deb):
     else:
         candidate, = (deb.parent/'linux-arch').glob('*.pkg.tar.zst')
     architecture = {'x64': 'amd64', 'arm64': 'arm64'}[arch]
-    previous_digest = PREVIOUS_DEB_SHA256[architecture]
-    previous_name = f'Clash-of-Rust-{PREVIOUS_DEB_VERSION}-linux-{architecture}.deb'
-    previous_url = f'https://github.com/Fu021/Clash-of-Rust/releases/download/v{PREVIOUS_DEB_VERSION}/{previous_name}'
     with tempfile.TemporaryDirectory(prefix='cor-native-lifecycle-') as temporary:
         directory = Path(temporary)
-        previous_source = directory/previous_name
-        download(previous_url, previous_source, digest=previous_digest)
+        previous_source, previous_digest = stage_previous_deb(directory, architecture, previous_deb)
         previous = (build_rpm(previous_source, PREVIOUS_DEB_VERSION, directory, arch) if distro in RPM
                     else build_arch(previous_source, PREVIOUS_DEB_VERSION, directory, previous_digest))
         previous_version, candidate_version = package_version(previous), package_version(candidate)
@@ -406,15 +422,17 @@ def native_package_tests(deb, receipt, binary):
         })
 
 
-def run_compatibility(distribution, version, arch):
+def run_compatibility(distribution, version, arch, *, prepare_desktop_login=False):
     from ci_test_policy import extended_tests
 
-    if os.environ.get('GITHUB_ACTIONS') != 'true':
-        raise RuntimeError('Compatibility tests require a disposable GitHub Actions runner')
+    if not is_disposable_test_environment():
+        raise RuntimeError('Compatibility tests require a disposable Actions runner or VM')
     release = platform.freedesktop_os_release()
     actual = (release.get('ID'), release.get('VERSION_ID', ''), host_arch())
     if actual != (distribution, version, arch):
         raise ValueError(f'Compatibility test expected {(distribution, version, arch)}, got {actual}')
+    if prepare_desktop_login and (distribution != 'ubuntu' or os.environ.get('COR_LINUX_GUEST') != 'true'):
+        raise RuntimeError('Desktop login preparation requires a disposable Ubuntu compatibility VM')
     packages = list((ROOT/'dist').glob('*.deb'))
     if len(packages) != 1:
         raise ValueError('Expected exactly one native Linux package')
@@ -439,11 +457,14 @@ def run_compatibility(distribution, version, arch):
     finally:
         write_json(ROOT/'target/linux-report/compatibility-environment.json',
                    {'seconds': round(time.monotonic() - started, 3), 'success': prepared})
+    if prepare_desktop_login:
+        install_linux_deb(packages[0])
+        return
     if native:
         native_package_tests(packages[0], receipt, binary)
     else:
         linux_package_tests(packages[0], binary, structure=False)
-    if distribution != 'ubuntu' and extended_tests():
+    if extended_tests():
         from cli_tui import verify
         installed = Path('/opt/clash-of-rust')
         verify(installed/'cor', installed/'resources', ROOT/'target/linux-report/tui')
@@ -453,6 +474,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--linux-compat', action='store_true',
                         help='Test a verified Linux package on a specified distribution and architecture')
+    parser.add_argument('--prepare-desktop-login', action='store_true',
+                        help='Install the verified DEB for the Ubuntu VM login probes')
     parser.add_argument('--system', choices=('windows', 'linux', 'macos'))
     parser.add_argument('--arch', choices=('x64', 'arm64'))
     parser.add_argument('--build', type=Path)
@@ -466,10 +489,10 @@ def main():
             parser.error('--linux-compat does not accept packaging arguments')
         if args.expect_linux is None or args.expect_arch is None:
             parser.error('--linux-compat requires --expect-linux and --expect-arch')
-        run_compatibility(*args.expect_linux, args.expect_arch)
+        run_compatibility(*args.expect_linux, args.expect_arch, prepare_desktop_login=args.prepare_desktop_login)
         return
-    if args.expect_linux is not None or args.expect_arch is not None:
-        parser.error('--expect-linux and --expect-arch require --linux-compat')
+    if args.expect_linux is not None or args.expect_arch is not None or args.prepare_desktop_login:
+        parser.error('Compatibility options require --linux-compat')
     if any(value is None for value in inputs):
         parser.error('--system, --arch, --build and --ci-run-id are required for packaging')
     if (args.system, args.arch) != (host_system(), host_arch()):

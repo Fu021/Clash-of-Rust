@@ -41,8 +41,9 @@ def require_stripped_linux_binaries(directory):
 
 def commit():
     if os.environ.get('COR_LINUX_GUEST') == 'true':
+        from linux_guest_environment import is_disposable_test_environment
         source = (ROOT / 'source-commit.txt').read_text().strip()
-        if os.environ.get('GITHUB_ACTIONS') != 'true' or not re.fullmatch(r'[a-f0-9]{40}', source):
+        if not is_disposable_test_environment() or not re.fullmatch(r'[a-f0-9]{40}', source):
             raise ValueError('Invalid isolated VM source identity')
         return source
     return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()

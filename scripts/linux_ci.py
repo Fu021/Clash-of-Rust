@@ -548,7 +548,8 @@ class VmGuest:
                             'BUILD_INPUTS_DIR=dependency-snapshot RUNNER_TEMP=/home/ubuntu/cor-runner-temp '
                             'COR_LINUX_APT_CACHE=/home/ubuntu/cor-apt '
                             'PATH=/opt/cor-test-python/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ')
-        self.environment += f'COR_CI_EXTENDED_TESTS={str(target.full_desktop).lower()} '
+        extended = target.full_desktop and not target.hosted
+        self.environment += f'COR_CI_EXTENDED_TESTS={str(extended).lower()} '
         try:
             ready_command = 'true'
             if target.image_format == 'iso':
@@ -601,6 +602,8 @@ class VmGuest:
             self.process = subprocess.Popen(command, stdout=self.console, stderr=subprocess.STDOUT, env=environment)
             try:
                 boot_timeout = 900 if target.image_format == 'iso' else 600
+                if target.family == 'ubuntu' and target.full_desktop and not kvm:
+                    boot_timeout = 1200
                 wait_vm_ssh(self.process, self.ssh, ready_command=ready_command, console=self.console_path,
                             timeout=boot_timeout)
                 self.wait_cloud_init()
@@ -817,9 +820,12 @@ def fetch_compatibility_package(package_run_id, arch, *, rpm=False):
     fetch_package_inputs(client, package_run_id, arch, ROOT, commit(), package_run_id, rpm=rpm)
 
 
-def compatibility_command(target, python):
-    return [python, 'scripts/test-release-package.py', '--linux-compat',
-            '--expect-linux', target.os_release_id, target.os_release_version, '--expect-arch', target.arch]
+def compatibility_command(target, python, *, prepare_desktop_login=False):
+    command = [python, 'scripts/test-release-package.py', '--linux-compat',
+               '--expect-linux', target.os_release_id, target.os_release_version, '--expect-arch', target.arch]
+    if prepare_desktop_login:
+        command.append('--prepare-desktop-login')
+    return command
 
 
 def published_update_command(python, fixture, deadline):
@@ -839,21 +845,27 @@ def hosted_test(package_run_id, target, fixture=None):
         environment = dict(os.environ)
         environment.pop('GH_TOKEN', None)
         environment.pop('GITHUB_TOKEN', None)
-        run(compatibility_command(target, sys.executable), env=environment, timeout=1500)
+        if target.full_desktop:
+            environment['COR_CI_EXTENDED_TESTS'] = 'true'
+        run(compatibility_command(target, sys.executable), env=environment,
+            timeout=3600 if target.full_desktop else 1500)
         if fixture:
             deadline = 1800
             run(published_update_command(sys.executable, fixture, deadline), env=environment,
                 timeout=deadline + PUBLISHED_UPDATE_CLEANUP_SECONDS + PUBLISHED_UPDATE_TRANSPORT_SECONDS)
+        if target.full_desktop:
+            vm_test(package_run_id, target, package_staged=True)
         result['success'] = True
     finally:
         result['seconds'] = round(time.monotonic() - started, 3)
         write_json(REPORT/'linux-runner.json', result)
 
 
-def fetch_vm_package(directory, package_run_id, timings, *, rpm=False, fixture=None):
+def fetch_vm_package(directory, package_run_id, timings, *, rpm=False, fixture=None, package_staged=False):
     started = time.monotonic()
     try:
-        fetch_compatibility_package(package_run_id, host_arch(), rpm=rpm)
+        if not package_staged:
+            fetch_compatibility_package(package_run_id, host_arch(), rpm=rpm)
         with tarfile.open(directory/'package.tar.gz', 'w:gz', compresslevel=1) as tar:
             for relative in ('dist', 'target/linux-tun-test'):
                 tar.add(ROOT/relative, arcname=relative)
@@ -899,7 +911,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
     finally:
         timings['package_transfer'] = round(time.monotonic() - started, 3)
     extra = 'COR_UBUNTU_VM_FROZEN=true ' if frozen else ''
-    command = shlex.join(compatibility_command(guest.target, '/opt/cor-test-python/bin/python3'))
+    command = shlex.join(compatibility_command(guest.target, '/opt/cor-test-python/bin/python3',
+                                               prepare_desktop_login=guest.target.hosted))
     bookworm_tcg = ((guest.target.family, guest.target.release, guest.target.arch, guest.kvm)
                     == ('debian', '12', 'arm64', False))
     slow_guest = guest.architecture == 'aarch64' or not guest.kvm
@@ -970,7 +983,8 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             print(f'{guest.target.distribution} {guest.target.release}: verifying published update', flush=True)
             phase_started = time.monotonic()
             try:
-                deadline = 2400 if slow_guest else 1800
+                deadline = (3600 if guest.architecture == 'aarch64' and not guest.kvm
+                            else 2400 if slow_guest else 1800)
                 command = published_update_command('/opt/cor-test-python/bin/python3',
                                                    'target/linux-update-fixture', deadline)
                 guest.remote(guest.environment + shlex.join(command),
@@ -984,7 +998,7 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
         timings['application_tests'] = round(time.monotonic() - started, 3)
 
 
-def vm_test(package_run_id, target, fixture=None):
+def vm_test(package_run_id, target, fixture=None, *, package_staged=False):
     overall_started = time.monotonic()
     timings = {}
     from build_inputs import manifest
@@ -1025,7 +1039,8 @@ def vm_test(package_run_id, target, fixture=None):
             try:
                 stage = 'download_inputs'
                 package_future = workers.submit(fetch_vm_package, directory, package_run_id, timings,
-                                                rpm=target.package_format == 'rpm', fixture=fixture)
+                                                rpm=target.package_format == 'rpm', fixture=fixture,
+                                                package_staged=package_staged)
                 phase_started = time.monotonic()
                 filename = (f'{target.family}-{target.release}-{architecture}.{target.image_format}'
                             if target.image_url else 'focal.img')

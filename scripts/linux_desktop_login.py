@@ -17,6 +17,7 @@ import tomllib
 
 from build_support import ROOT, run, sha256, write_json
 from linux_apt import OPTIONS, install
+from linux_guest_environment import is_disposable_test_environment
 from linux_gui import core_processes, output, owner_tray, wait_for
 
 USER = 'cor-desktop-login'
@@ -45,6 +46,7 @@ class DesktopLogin:
 
 
 GNOME = DesktopLogin('GNOME', 'gnome-shell', 'gdm.service', 'gdm-autologin', 'GNOME')
+UBUNTU_GNOME = DesktopLogin('Ubuntu GNOME', 'gnome-shell', 'gdm.service', 'gdm-autologin', 'GNOME')
 POP_GNOME = DesktopLogin('Pop GNOME', 'gnome-shell', 'gdm.service', 'gdm-autologin', 'pop:GNOME')
 ZORIN_GNOME = DesktopLogin('Zorin GNOME', 'gnome-shell', 'gdm.service', 'gdm-autologin', 'zorin:GNOME')
 CINNAMON = DesktopLogin('Cinnamon', 'cinnamon', 'lightdm.service', 'lightdm-autologin', 'X-Cinnamon')
@@ -100,13 +102,18 @@ def bookworm_desktop_needs_only_new_packages(packages):
 
 
 def login_dependencies(desktop, release):
-    if desktop == GNOME_WAYLAND:
-        return []
     distribution = release['ID']
+    if desktop == GNOME_WAYLAND and distribution != 'ubuntu':
+        return []
     packages = ['dbus-user-session', 'libgtk-3-bin', 'wmctrl']
-    if distribution == 'debian':
-        packages.extend(['gdm3', 'gnome-session', 'gnome-screenshot', 'xserver-xorg'])
-        if release['VERSION_ID'] == '13':
+    if distribution in ('ubuntu', 'debian'):
+        packages.extend(['gdm3', 'gnome-session'])
+        if desktop != GNOME_WAYLAND:
+            packages.extend(['gnome-screenshot', 'xserver-xorg'])
+        if distribution == 'ubuntu':
+            packages.append('gnome-shell-ubuntu-extensions' if release['VERSION_ID'] == '26.04'
+                            else 'gnome-shell-extension-appindicator')
+        elif release['VERSION_ID'] == '13':
             packages.append('gnome-session-xsession')
     elif desktop == COSMIC:
         packages.extend(['gcc', 'libc6-dev', 'libwayland-dev', 'libwayland-bin', 'wayland-protocols',
@@ -121,7 +128,8 @@ def install_login_dependencies(desktop, release):
     bookworm_tcg = ((release.get('ID'), release.get('VERSION_ID')) == ('debian', '12')
                     and platform.machine().lower() in ('aarch64', 'arm64')
                     and os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
-                    and os.environ.get('COR_LINUX_GUEST') == os.environ.get('GITHUB_ACTIONS') == 'true')
+                    and os.environ.get('COR_LINUX_GUEST') == 'true'
+                    and is_disposable_test_environment())
     timeout = BOOKWORM_TCG_DESKTOP_APT_BUDGET if bookworm_tcg else guest_budget(600, 1800)
     if not (bookworm_tcg and INITRAMFS_CONFIG.is_file() and bookworm_desktop_needs_only_new_packages(packages)):
         install(packages, timeout=timeout, no_recommends=True)
@@ -156,16 +164,16 @@ def prepare(report, desktop, release):
         run(['sudo', 'tee', Path('/var/lib/AccountsService/users')/USER], text=True,
             input=f'[User]\nSession={session}\nXSession={session}\n', stdout=subprocess.DEVNULL)
         config = f'[daemon]\nWaylandEnable=true\nAutomaticLoginEnable=true\nAutomaticLogin={USER}\n'
-        config_path = '/etc/gdm/custom.conf'
+        config_path = '/etc/gdm3/custom.conf' if distribution == 'ubuntu' else '/etc/gdm/custom.conf'
         run(['sudo', 'tee', config_path], text=True, input=config, stdout=subprocess.DEVNULL)
         if distribution == 'opensuse-tumbleweed':
             configure_tumbleweed_autologin()
-    elif desktop in (GNOME, POP_GNOME, ZORIN_GNOME):
+    elif desktop in (GNOME, UBUNTU_GNOME, POP_GNOME, ZORIN_GNOME):
         if desktop != GNOME:
             session = native_gnome_session(Path('/usr/share/xsessions'), desktop)
             run(['sudo', 'tee', Path('/var/lib/AccountsService/users')/USER], text=True,
                 input=f'[User]\nSession={session}\nXSession={session}\n', stdout=subprocess.DEVNULL)
-        else:
+        if desktop in (GNOME, UBUNTU_GNOME):
             run(as_user('dbus-run-session', '--', 'gsettings', 'set', 'org.gnome.shell',
                         'enabled-extensions', f"['{EXTENSION}']"))
         config = ('[daemon]\nWaylandEnable=false\nAutomaticLoginEnable=true\n'
@@ -173,6 +181,14 @@ def prepare(report, desktop, release):
         config_path = '/etc/gdm3/daemon.conf' if desktop == GNOME else '/etc/gdm3/custom.conf'
         run(['sudo', 'tee', config_path], input=config, text=True,
             stdout=subprocess.DEVNULL)
+        if (desktop == UBUNTU_GNOME and os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
+                and platform.machine().lower() in ('aarch64', 'arm64')
+                and os.environ.get('COR_LINUX_GUEST') == 'true'
+                and is_disposable_test_environment()):
+            dropin = Path('/etc/systemd/user/org.gnome.Shell@x11.service.d')
+            run(['sudo', 'install', '-d', '-m', '0755', dropin])
+            run(['sudo', 'tee', dropin/'90-cor-compatibility-tcg.conf'],
+                input='[Service]\nTimeoutStartSec=360s\n', text=True, stdout=subprocess.DEVNULL)
     elif desktop == CINNAMON:
         from linux_mint_desktop import stage_authorization
         configure_lightdm('cinnamon')
@@ -273,9 +289,9 @@ def desktop_call(environment, *arguments, **options):
                   **options)
 
 
-def capture_gnome_failure(stage):
+def capture_gnome_failure(stage, desktop=GNOME):
     uid = pwd.getpwnam(USER).pw_uid
-    session = active_desktop(uid, GNOME)
+    session = active_desktop(uid, desktop)
     if session is None:
         raise RuntimeError('No active GNOME X11 session is available for a screenshot')
     _, environment = session
@@ -604,22 +620,28 @@ def cosmic_failure_evidence():
     return evidence
 
 
+def desktop_for_release(release):
+    from linux_native_guest import DISTROS
+
+    distribution, version = release.get('ID'), release.get('VERSION_ID')
+    if distribution == 'ubuntu':
+        return {'20.04': UBUNTU_GNOME, '22.04': UBUNTU_GNOME, '24.04': UBUNTU_GNOME,
+                '26.04': GNOME_WAYLAND}.get(version)
+    if distribution in DISTROS:
+        return GNOME_WAYLAND
+    if distribution == 'pop':
+        return {'22.04': POP_GNOME, '24.04': COSMIC}.get(version)
+    return {'debian': GNOME, 'linuxmint': CINNAMON, 'zorin': ZORIN_GNOME}.get(distribution)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     native_stages = ('prepare-x11', 'x11', 'prepare-wayland', 'wayland')
     parser.add_argument('stage', choices=('prepare', 'first-login', 'background-login', *native_stages))
     stage = parser.parse_args().stage
     release = platform.freedesktop_os_release()
-    from linux_native_guest import DISTROS
-    desktop = {'debian': GNOME, 'linuxmint': CINNAMON,
-               'zorin': ZORIN_GNOME}.get(release.get('ID'))
-    if release.get('ID') in DISTROS:
-        desktop = GNOME_WAYLAND
-    if (release.get('ID'), release.get('VERSION_ID')) == ('pop', '22.04'):
-        desktop = POP_GNOME
-    if (release.get('ID'), release.get('VERSION_ID')) == ('pop', '24.04'):
-        desktop = COSMIC
-    if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('COR_LINUX_GUEST') != 'true'
+    desktop = desktop_for_release(release)
+    if (not is_disposable_test_environment() or os.environ.get('COR_LINUX_GUEST') != 'true'
             or desktop is None or os.geteuid() == 0):
         raise RuntimeError('This check requires a disposable Linux desktop compatibility VM')
     if stage in native_stages and not (desktop == CINNAMON
@@ -643,9 +665,9 @@ def main():
         report['success'] = True
     except Exception as error:
         report['error'] = str(error)
-        if desktop == GNOME and stage in ('first-login', 'background-login'):
+        if desktop in (GNOME, UBUNTU_GNOME) and stage in ('first-login', 'background-login'):
             try:
-                report['failure_screenshot'] = capture_gnome_failure(stage)
+                report['failure_screenshot'] = capture_gnome_failure(stage, desktop)
             except (KeyError, OSError, RuntimeError, subprocess.SubprocessError) as screenshot_error:
                 report['failure_screenshot_error'] = str(screenshot_error)
         try:

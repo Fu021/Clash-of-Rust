@@ -23,8 +23,9 @@ def optional_proxy_benchmark():
 
 
 def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
-    if os.environ.get('GITHUB_ACTIONS') != 'true':
-        raise RuntimeError('Proxy/TUN checks require a disposable Actions runner')
+    from linux_guest_environment import is_disposable_test_environment
+    if not is_disposable_test_environment():
+        raise RuntimeError('Proxy/TUN checks require a disposable Actions runner or VM')
     system = host_system()
     resources = bundle/'resources'
     helper = bundle/('clash-tun-launcher.exe' if system == 'windows' else 'clash-tun-launcher')
@@ -40,6 +41,8 @@ def check(binary, bundle, test_case='basic_system_proxy_and_tun'):
         from ci_test_policy import linux_user_tests, proxy_benchmark
         sudo = ['sudo']
         user_tests = ['--with-user-tests'] if linux_user_tests() else []
+        if os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg':
+            user_tests += ['--tcg']
         if proxy_benchmark():
             user_tests += ['--proxy-benchmark']
         installed = Path('/opt/clash-of-rust')

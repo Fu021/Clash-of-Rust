@@ -3,6 +3,10 @@ use serde_json::{Value, json};
 use std::{io::Read, os::unix::fs::OpenOptionsExt};
 
 const LIMIT: u64 = 16 * 1024;
+const PACKAGED_MENU: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/linux/clash-of-rust.desktop"
+));
 
 pub(super) fn entry(executable: &Path) -> String {
     let executable = launcher(executable);
@@ -193,16 +197,10 @@ fn packaged_menu_entry(text: &str, executable: &Path) -> bool {
         if !fields.insert(key) {
             return false;
         }
-        match (key, value) {
-            ("Exec", value) => command = Some(value),
-            ("Type", "Application")
-            | ("Name", "Clash of Rust")
-            | ("Comment", "Native desktop client for mihomo")
-            | ("Icon", "clash-of-rust")
-            | ("StartupWMClass", "clash-of-rust")
-            | ("Terminal", "false")
-            | ("Categories", "Network;") => {}
-            _ => return false,
+        if key == "Exec" {
+            command = Some(value);
+        } else if !PACKAGED_MENU.lines().any(|expected| expected == line) {
+            return false;
         }
     }
     fields.contains("Type")
@@ -272,9 +270,9 @@ mod tests {
         let alias = root.path().join("launcher");
         symlink(&executable, &alias).unwrap();
         let menu = root.path().join("menu.desktop");
-        let contents = format!(
-            "[Desktop Entry]\nType=Application\nName=Clash of Rust\nComment=Native desktop client for mihomo\nExec={}\nIcon=clash-of-rust\nStartupWMClass=clash-of-rust\nTerminal=false\nCategories=Network;\n",
-            alias.display()
+        let contents = PACKAGED_MENU.replace(
+            "Exec=/usr/bin/clash-of-rust",
+            &format!("Exec={}", alias.display()),
         );
         std::fs::write(&menu, &contents).unwrap();
         let path = root.path().join("autostart.desktop");
@@ -315,6 +313,10 @@ mod tests {
         std::fs::write(&executable, b"fixture").unwrap();
         let expected = entry(&executable);
         let legacy = expected.replace(" --background\n", "\n");
+        let packaged = PACKAGED_MENU.replace(
+            "Exec=/usr/bin/clash-of-rust",
+            &format!("Exec={}", executable.display()),
+        );
         let menu = root.path().join("menu.desktop");
         let path = root.path().join("autostart.desktop");
         std::os::unix::fs::symlink(&menu, &path).unwrap();
@@ -328,6 +330,8 @@ mod tests {
             legacy.replace("Terminal=false", "Terminal=true"),
             legacy.replace("Exec=\"", "Exec=\"/other"),
             format!("{legacy}[Desktop Action custom]\nExec=other\n"),
+            packaged.replace("Comment[zh_CN]=", "Comment[zh_TW]="),
+            packaged.replace("Comment[zh_CN]=", "Comment[zh_CN]=Custom "),
         ] {
             std::fs::write(&menu, &contents).unwrap();
             migrate_at(&path, &executable).unwrap();

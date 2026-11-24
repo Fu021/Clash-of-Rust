@@ -53,6 +53,12 @@ def iso_targets(suite):
     return {}
 
 
+def desktop_targets(suite):
+    targets = [{'release': target.release, 'arch': target.arch}
+               for target in TARGETS.get(suite, ()) if target.full_desktop]
+    return {'full_desktop_targets': targets} if targets else {}
+
+
 def matrix():
     versions = android_versions()
     apis = set(map(int, versions['ime_system_images']))
@@ -219,7 +225,8 @@ def record(client, suite, ci_run_id, output):
     jobs = check_jobs(client, run, suite, include_report=False)
     value = {'schema': 1, 'suite': suite, 'commit': source['commit'],
              'ci_run_id': ci_run_id, 'run_id': run_id, 'run_attempt': attempt,
-             'checks': CHECKS[suite], 'inputs': source['inputs'], **iso_targets(suite)}
+             'checks': CHECKS[suite], 'inputs': source['inputs'],
+             **iso_targets(suite), **desktop_targets(suite)}
     if suite == 'arch':
         value['arch_package'] = arch_package_artifact(run, jobs, run_artifacts(client, run_id))
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +282,8 @@ def verified_suite(client, source_ci, suite, run_id=None):
     expected = {'schema': 1, 'suite': suite, 'commit': expected_commit,
                 'ci_run_id': source_ci['id'], 'run_id': run_id,
                 'run_attempt': run.get('run_attempt', 1),
-                'checks': CHECKS[suite], 'inputs': source['inputs'], **iso_targets(suite)}
+                'checks': CHECKS[suite], 'inputs': source['inputs'],
+                **iso_targets(suite), **desktop_targets(suite)}
     if suite == 'arch':
         expected['arch_package'] = arch_package_artifact(run, jobs, artifacts)
     if (not isinstance(receipt, dict)

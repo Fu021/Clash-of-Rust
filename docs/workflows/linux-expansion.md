@@ -8,13 +8,13 @@
 
 发布后需要验证真实跨版本更新时，在各发行版入口同时填写 `update_from_ci` 和 `update_release`：前者指向旧版成功的 push CI，后者为已公开的目标 Release 标签。作业校验旧版候选包、来源提交以及目标安装包和 SHA256 附件，再在一次性 runner 或虚拟机中安装旧版。DEB 与官方 Arch 包通过 `cor` 发现、下载并安装实际 Release；RPM 检查 DNF 或 Zypper 提示，再通过对应包管理器安装 Release 的 RPM。所有路径核对已安装包、客户端和后台版本，以及已有设置、测试订阅和停止状态下的内核；结果单独写入 `published-update.json`。常规兼容回执仍只说明其列出的基础检查；该终端验收不代表 GUI 图形授权通过。旧 CI 附件或 Arch 兼容回执过期后须选择可验证的旧版来源。
 
-Ubuntu 24.04 x64 的 GitHub 托管 runner 和 Arch x64 的一次性来宾在终端验收通过后额外执行 GUI 更新验收：从界面发现并下载目标版本，经真实图形 polkit 授权分别验证取消、包管理器锁导致的安装失败、释放锁后重试及升级，再检查已安装包、设置、测试订阅和后台内核状态。结果另写入 `published-gui-update.json`。离线脚本回归或终端报告不能代替真实图形验收；在相应环境实测并取得通过报告前，不能声称 GUI 更新验收已通过。
+Ubuntu 四个 LTS 的 ARM64 目标、Ubuntu 24.04 x64 的 GitHub 托管 runner 及 Arch x64 的一次性来宾在终端验收通过后额外执行 GUI 更新验收。从界面发现并下载目标版本，经真实图形 polkit 授权分别验证取消、包管理器锁导致的安装失败、释放锁后重试及升级，再检查已安装包、设置、测试订阅和后台内核状态。结果另写入 `published-gui-update.json`，以各目标实际通过的图形回执确认覆盖。
 
 已安装旧版明确报告 GitHub 限流时，终端的查版本、下载和安装前查版本，以及 GUI 的版本发现，各最多重试三次。旧版只向夹具返回限流提示，夹具按 60、120、240 秒退避，每次另加独立的 0～30 秒随机延迟，在原有验收总时限内错开各 runner 的请求。GUI 关闭本次限流提示后再查版本。安装记录已经产生时直接保留结果，授权失败、包锁和校验失败走各自的验收路径。
 
 GUI 夹具按 Linux 内核的 [`fcntl` 封印 ABI](https://github.com/torvalds/linux/blob/master/include/uapi/linux/fcntl.h)校验 pkexec 收到的文件。固定来宾 Python 缺少这些常量的导出，测试直接使用内核定义的命令号和四项封印位。
 
-GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户和临时授权规则使用非交互 `sudo`，由提权后的独立超时约束命令。整页 OCR 未命中旧版白字按钮时，裁取固定测试强调色内的按钮，先放大再二值化以保留笔画。仅在识别到完整就绪标签时才点击；安装失败后点击提示内的关闭按钮并检查结果确认状态。图形代理重启后仍有注册时序风险。[polkit 的公开 D-Bus 接口](https://polkit.pages.freedesktop.org/polkit/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html)没有会话代理注册查询。若实际安装未弹出授权窗口，应查看对应会话的 polkit 注册日志。
+GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户和临时授权规则使用非交互 `sudo`，由提权后的独立超时约束命令。独立捕获 `userdel` 的输出，让 SSH 日志流关闭时仍可读到正确退出码并完成账户清理。Ubuntu 20.04 的旧版 polkit 使用 `.pkla` 规则，仅为本次临时账户的 `pkexec` 动作要求输入该账户密码；验收结束时删除规则和账户。旧版规则不能按程序路径缩小范围，较新 polkit 的规则会另外限定包管理器路径。ARM64 TCG 识别页面标题时只处理标题区域，并为 OCR 和整轮图形操作预留更长时间；超时回执只记录允许的工具名称与时限。整页 OCR 未命中旧版白字按钮时，裁取固定测试强调色内的按钮，先放大再二值化以保留笔画。仅在识别到完整就绪标签时才点击；安装失败后点击提示内的关闭按钮并检查结果确认状态。图形代理重启后仍有注册时序风险。[polkit 的公开 D-Bus 接口](https://polkit.pages.freedesktop.org/polkit/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html)没有会话代理注册查询。若实际安装未弹出授权窗口，应查看对应会话的 polkit 注册日志。
 
 2026-11-22 使用 `59b91a03`、CI `45011206632`、旧候选 CI `44943304678` 和公开预发布 `v0.7.3-dev.2.live-language`，以下八套共 21 个目标的跨版本终端报告通过：[Ubuntu](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456673)、[Debian](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456896)、[Mint](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456401)、[Pop!_OS](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456816)、[Zorin](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456535)、[Fedora](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456876)、[openSUSE](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013456820)及 [Arch](https://github.com/Fu021/Clash-of-Rust/actions/runs/45013457070)。Arch 旧包来自 CI 候选；GUI 图形授权与失败恢复不在此批报告范围。
 
@@ -32,7 +32,7 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 | openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.21、Tumbleweed 20261120（x64） | 可写 Cloud VM，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
-镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Linux Mint 与 Zorin OS 使用[发行版列名的镜像](https://www.linuxmint.com/edition.php?id=311)、[Zorin 官方镜像](https://zorin.com/os/mirrors/)，下载 ISO 前并行抽样排序；非最后一个地址持续低速或网络失败时尝试下一地址，最后一个地址允许慢速完成。openSUSE 镜像不可用时也会尝试列名镜像。全部来源使用相同的固定摘要，报告记录实际地址；不能取得匹配文件时复核官方索引、摘要及匹配的签名软件源。这里的 QEMU 来宾统一用 x64 `ubuntu-24.04` runner。
+镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Linux Mint 与 Zorin OS 使用[发行版列名的镜像](https://www.linuxmint.com/edition.php?id=311)、[Zorin 官方镜像](https://zorin.com/os/mirrors/)，下载 ISO 前并行抽样排序；非最后一个地址持续低速或网络失败时尝试下一地址，最后一个地址允许慢速完成。openSUSE 镜像不可用时也会尝试列名镜像。全部来源使用相同的固定摘要，报告记录实际地址；不能取得匹配文件时复核官方索引、摘要及匹配的签名软件源。QEMU 来宾使用同架构的 runner。openSUSE ARM64 恢复后的首轮作业执行完整桌面和安装生命周期验收。
 
 新增或替换目标时核对发行版的维护期限和镜像来源。上游宣布停止维护后，复查本项目是否仍需该目标作为明确的兼容基线。替换受支持目标须先验证替代版本，再同步目标矩阵、公开支持范围和发布门禁。滚动版每次更换快照都记录日期与摘要，使用配套的软件源并完整复验。Ubuntu 的最低内核基线见 [Ubuntu 兼容验证](ubuntu-compatibility.md)。
 
@@ -40,11 +40,29 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 
 `linux-vm.json` 单列官方镜像与 Python 工具的下载校验时间。ISO 来宾分别记录安装器和安装盘启动的耗时。安装器失败时记录 `iso_install` 失败阶段和已用时间。候选检查内部的依赖准备由 `compatibility-environment.json` 单列，VM 在来宾归档内保存，直接使用托管 runner 时随报告上传。
 
-隔离网络检查分别记录 root CLI、普通账户矩阵和原生代理/TUN 流量阶段。开启 ARM64 扩展账户检查时，命名空间为环境准备和账户检查留出 560 秒，再计入流量探针的独立时限。流量探针通常最多 240 秒，启用代理基准时为 360 秒。各阶段的子检查仍保留自己的超时。外层到达时限时终止整个测试 PID 命名空间，避免后台进程继续占用 SSH 通道、延迟失败截图和来宾清理。进入命名空间后恢复 `SIGTERM` 和 `SIGINT` 的处理，避免旧版 `unshare` 让 DNS 和总线夹具继承忽略信号的设置。
+隔离网络检查分别记录 root CLI、普通账户矩阵和原生代理/TUN 流量阶段。开启 ARM64 扩展账户检查时，命名空间为环境准备和账户检查留出 560 秒，再计入流量探针的独立时限。流量探针通常最多 240 秒，启用代理基准时为 360 秒。ARM64 TCG 为扩展账户阶段预留 1800 秒，为流量探针预留 1200 秒，其中每轮保护 DNS 与 HTTP 检查总时限为 90 秒，保留单条请求原有时限。外层到达时限时终止整个测试 PID 命名空间，避免后台进程继续占用 SSH 通道、延迟失败截图和来宾清理。进入命名空间后恢复 `SIGTERM` 和 `SIGINT` 的处理，避免旧版 `unshare` 让 DNS 和总线夹具继承忽略信号的设置。
 
 ## 完整验收与诊断
 
 首轮完整验收覆盖普通用户 GUI/TUI/CLI、共享后台、代理/TUN/DNS、图形授权拒绝与允许、登录自启动迁移、托盘与菜单恢复同一进程、原生包升级及卸载后的数据保留。COSMIC 保留 TUN 与应用代理，系统代理请求返回明确错误并保留原有路由。Fedora、openSUSE、Arch 在 GNOME 使用 AppIndicator 扩展验证托盘。RPM 和 Arch 的首个升级夹具使用经 SHA256 校验的公开旧 DEB 重新封装。
+
+### 本地一次性来宾
+
+从官方镜像和已核验摘要创建一次性 QEMU/KVM 来宾，基盘只读，系统改动写入独立磁盘。用同提交成功 CI 的候选 DEB、`package-receipt.json` 和 `linux-tun-test`；源码快照中的 `source-commit.txt` 必须与回执提交一致。代理、TUN、真实登录及安装操作均在来宾内执行。
+
+在一次性来宾的初始化阶段创建 `/etc/clash-of-rust-compatibility-vm`，所有者为 `root`、权限为 `0444`，内容为一行 `clash-of-rust disposable compatibility guest v1`，以换行结束。脚本同时要求 `systemd-detect-virt --vm` 返回 `qemu` 或 `kvm`、普通用户身份及 `COR_LINUX_GUEST=true`。完整验收设置 `COR_CI_EXTENDED_TESTS=true`。候选入口为 `scripts/test-release-package.py --linux-compat`，真实登录继续走 `scripts/linux_desktop_login.py`。
+
+真实桌面登录需要为 ARM64 来宾提供图形设备，例如 `virtio-gpu-pci`。Ubuntu 20.04、22.04 和 24.04 走 GDM 的 GNOME X11 登录，26.04 走 GNOME Wayland；隔离 GUI 夹具另测图形授权和窗口。运行 `prepare` 后重启来宾执行 `first-login`，再重启执行 `background-login`，两次都核对 boot ID。QEMU 应在来宾重启时复位，使用 `-no-reboot` 会使进程退出。
+
+包生命周期可以由宿主下载公开旧版 DEB，再传入来宾。`deb_upgrade_and_uninstall` 和 `native_upgrade_and_uninstall` 的 `previous_deb` 参数只接受一次性本地来宾中与固定发布摘要匹配的文件。
+
+本地逐套运行。下载前、解包后、验收中及清理后记录文件系统余量、镜像与写入盘的实际占用，记录 KVM 或 TCG 及各阶段耗时。本地 TCG 来宾设置 `COR_LINUX_VM_ACCELERATION=tcg`，为 APT 依赖准备预留一小时，为 ARM64 完整网络夹具的初始化和跨账户 CLI 验收预留 30 分钟，为隔离桌面验收预留 15 分钟，其中 GNOME 合成器启动限时 5 分钟。每套结束关机并回收脱敏报告，清理镜像、写入盘、种子盘和临时固件状态。工具和镜像的临时目录在本轮结束后清理。
+
+Ubuntu TCG 来宾可在初始化时跳过命令提示和 MOTD 更新统计索引。这两个钩子与依赖解析无关，仿真时会显著延迟 APT 返回。保留软件源的包索引、签名验证和正常 `dpkg` 配置过程。
+
+在一次性 ARM64 TCG 来宾准备 Ubuntu GNOME X11 登录时，`prepare` 为 GNOME Shell 的用户服务保留 360 秒启动时间。本地 Ubuntu 24.04 ARM64 在默认 90 秒内反复重启 GNOME Shell，延长后会话继续初始化并执行应用自启动。
+
+### 桌面与发行版诊断
 
 复查 COSMIC 登录、旧自启动入口迁移和窗口恢复时，在 Pop!_OS 24.04 目标启用 `full_desktop` 并运行 Pop!_OS Compatibility。现场日志可按[桌面启动诊断](../diagnostics.md#桌面启动与托盘)核对。
 

@@ -52,7 +52,7 @@ class Target:
         runner_release = self.release if self.hosted else self.vm_runner_release
         runner = f'ubuntu-{runner_release}' + ('-arm' if self.arch == 'arm64' else '')
         qemu = ''
-        if not self.hosted:
+        if not self.hosted or self.full_desktop:
             qemu = {'x64': 'qemu-system-x86',
                     'arm64': 'qemu-system-arm qemu-efi-aarch64 ipxe-qemu'}[self.arch]
         if self.family in ('linuxmint', 'zorin'):
@@ -61,10 +61,10 @@ class Target:
             qemu += ' ovmf libarchive-tools' if self.arch == 'x64' else ' libarchive-tools'
             if self.release == '24.04' and self.full_desktop:
                 qemu += ' qemu-system-gui libgl1-mesa-dri xvfb python3-pil xdotool tesseract-ocr tesseract-ocr-eng'
-        if self.hosted:
+        if self.full_desktop:
+            timeout = 180 if self.family == 'ubuntu' else 120
+        elif self.hosted:
             timeout = 30
-        elif self.full_desktop:
-            timeout = 120
         else:
             timeout = 75 if self.image_format == 'iso' else 45
         cache_prefix = ''
@@ -73,6 +73,12 @@ class Target:
             cache_prefix = f'linux-host-apt-v1-{runner}-{profile}-'
         return {'distribution': self.distribution, 'release': self.release, 'arch': self.arch,
                 'os': runner, 'qemu': qemu, 'timeout': timeout, 'vm_cache_prefix': cache_prefix}
+
+
+def ubuntu_arm_desktop_target(release, series, build, digest):
+    root = f'https://cloud-images.ubuntu.com/releases/{series}/release-{build}'
+    return Target('ubuntu', release, 'arm64', f'{root}/ubuntu-{release}-server-cloudimg-arm64.img',
+                  digest, hosted=True, full_desktop=True)
 
 
 def debian_target(release, series, build, arch, digest):
@@ -131,8 +137,14 @@ def tumbleweed_target(snapshot, arch, digest):
 TARGETS = {
     'ubuntu': (
         Target('ubuntu', UBUNTU_BASELINE, 'x64', kernel_series='5.4'),
-        *(Target('ubuntu', release, arch, hosted=True)
-          for release in ('22.04', '24.04', '26.04') for arch in ('x64', 'arm64')),
+        Target('ubuntu', UBUNTU_BASELINE, 'arm64', kernel_series='5.4', full_desktop=True),
+        *(Target('ubuntu', release, 'x64', hosted=True) for release in ('22.04', '24.04', '26.04')),
+        ubuntu_arm_desktop_target('22.04', 'jammy', '20261109',
+                                  'e429865ad84a083a84fdbd51bf6fd6e4174bbb1610ba0d72ca01014c656d45bc'),
+        ubuntu_arm_desktop_target('24.04', 'noble', '20261017',
+                                  '50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e'),
+        ubuntu_arm_desktop_target('26.04', 'resolute', '20261108',
+                                  'cf3b8472b84e7de37cdc2d2e9a9bf82b3edf0ab97113a1422eff048f26688e2f'),
     ),
     'debian': (
         debian_target('12', 'bookworm', '20261117-2665', 'x64',

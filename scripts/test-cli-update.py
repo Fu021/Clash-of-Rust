@@ -95,7 +95,7 @@ def require(condition, message):
 
 
 def stage_test_driver(directory):
-    for name in ('test-cli-update.py', 'build_support.py'):
+    for name in ('test-cli-update.py', 'build_support.py', 'linux_guest_environment.py'):
         target = directory/name
         shutil.copy2(Path(__file__).with_name(name), target)
         target.chmod(0o644)
@@ -110,9 +110,9 @@ def phase_environment(user, uid, home):
         'XDG_CACHE_HOME': str(home/'.cache'), 'XDG_STATE_HOME': str(home/'.local/state'),
         'XDG_RUNTIME_DIR': f'/run/user/{uid}',
         'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus',
-        'GITHUB_ACTIONS': 'true', 'PYTHONDONTWRITEBYTECODE': '1',
+        'PYTHONDONTWRITEBYTECODE': '1',
     }
-    for key in ('LD_LIBRARY_PATH', 'SYSTEMROOT'):
+    for key in ('LD_LIBRARY_PATH', 'SYSTEMROOT', 'GITHUB_ACTIONS', 'COR_LINUX_GUEST'):
         if key in os.environ:
             environment[key] = os.environ[key]
     return environment
@@ -409,14 +409,15 @@ def exercise_arch(package, version, report):
 
 
 def main():
+    from linux_guest_environment import is_disposable_test_environment
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--package', required=True, type=Path)
     parser.add_argument('--phase', choices=('denied', 'allowed', 'service'))
     parser.add_argument('--arch-version')
     parser.add_argument('--report', type=Path, default=REPORT/'terminal-update')
     args = parser.parse_args()
-    if os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'linux':
-        raise RuntimeError('Terminal installation tests require a disposable Actions Linux runner')
+    if sys.platform != 'linux' or not is_disposable_test_environment():
+        raise RuntimeError('Terminal installation tests require a disposable Actions Linux runner or VM')
     package = args.package.resolve(strict=True)
     if args.arch_version:
         exercise_arch(package, args.arch_version, args.report.resolve())
