@@ -1,9 +1,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod application;
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "The host catalog includes macOS-only messages")
+#[allow(
+    dead_code,
+    reason = "The generated host catalog includes platform-specific messages"
 )]
 mod messages {
     use clash_of_rust::config::Language;
