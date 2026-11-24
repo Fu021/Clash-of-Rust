@@ -9500,7 +9500,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
         expected = {'debian': (2, 2), 'linuxmint': (2, 0), 'pop': (2, 0), 'zorin': (2, 0),
-                    'fedora': (2, 2), 'opensuse': (3, 0), 'arch': (1, 0)}
+                    'fedora': (2, 2), 'opensuse': (3, 3), 'arch': (1, 0)}
         for suite, (x64, arm64) in expected.items():
             with self.subTest(suite=suite):
                 targets = linux_ci.TARGETS[suite]
@@ -9508,7 +9508,7 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertTrue(all(not target.hosted for target in targets))
                 inputs = compatibility.input_names(suite)
                 self.assertEqual('linux-rpm-x64' in inputs, suite in ('fedora', 'opensuse'))
-                self.assertEqual('linux-rpm-arm64' in inputs, suite == 'fedora')
+                self.assertEqual('linux-rpm-arm64' in inputs, suite in ('fedora', 'opensuse'))
                 self.assertEqual('package-linux-arm64' in inputs, arm64 > 0)
                 self.assertEqual('linux-tun-test-arm64' in inputs, arm64 > 0)
                 for target in targets:

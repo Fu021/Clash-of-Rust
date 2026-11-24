@@ -5,8 +5,8 @@ import hashlib
 UBUNTU_BASELINE = '20.04'
 OPENSUSE_MIRROR = 'https://ftp.gwdg.de/pub/opensuse'
 TUMBLEWEED_REPOMD = {
-    'x86_64': {'20261120': '882abef29539e9f7c6cf96c66d9334ae16f2fb33917767ce182cc0484d694f5d'},
-    'aarch64': {'20261117': '781d163094bd76fc89ff4fea07636bca733f4fdd51600ed1f6c0eb31baf853ad'},
+    'x86_64': {'20261121': 'd4e2a3bf9bf999e5fab5546f75388a27aac7c1f5384879d26b4f15b988f4a772'},
+    'aarch64': {'20261121': 'eb4a8dc11f34b7db4c419ce9b2f9c6130fe2b45d7b7fb91aee7757439ca86500'},
 }
 
 
@@ -181,9 +181,12 @@ TARGETS = {
                       variant='UEFI-UKI', runner_release='26.04'),
     ),
     'opensuse': (
-        leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),
-        leap_target('16.1', '3.21', 'x64', 'd30c848752e54d3e05d1c07de8438c4f0cbd23fc690e402942ae61e08d00c911'),
-        tumbleweed_target('20261120', 'x64', '4a2be0e8122445baeb2c7a81aa352aab5c60ee4d7f29fcc2547a4e2ef2574cde'),
+        leap_target('16.0', '18.96', 'x64', '05637a09744708dde5148b49f703bc3192e4fe5f81ea4b104f586b1514b5421c'),
+        leap_target('16.1', '3.22', 'x64', '89d4638c55cb045042fbdd1be57952f9919eeb034caf993389116da118bc6157'),
+        tumbleweed_target('20261121', 'x64', '7ba3b9ed4ea8e86dbf5a5f538870f834d37a2ac30d763e0268f3186dd03ddb95'),
+        leap_target('16.0', '18.96', 'arm64', 'd9094828e22bd0b1a6ff6290d338750cf694dbacf2a191744f49d2f2a0e6b389'),
+        leap_target('16.1', '3.22', 'arm64', '5927563db4344f157209ce68f1bb07f311c83cf504e7b3f66d5eed82c348c555'),
+        tumbleweed_target('20261121', 'arm64', 'bef781e7c43d1cbe184e1b72242a7809d58c7440df7380946169c391e19ae28b'),
     ),
     'arch': (
         Target('arch', '20261115.625457', 'x64',

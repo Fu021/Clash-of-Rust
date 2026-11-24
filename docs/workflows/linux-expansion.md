@@ -29,10 +29,12 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 | Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，用 APT 安装 DEB |
 | Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity 安装系统，再用 APT 安装 DEB |
 | Fedora Compatibility | Fedora Cloud Base 44-1.7、45-1.4（x64、ARM64） | 45 ARM64 用 UEFI-UKI，其余用 Generic，DNF 安装同源 RPM |
-| openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.21、Tumbleweed 20261120（x64） | 可写 Cloud VM，Zypper 安装同源 RPM |
+| openSUSE Compatibility | Leap 16.0 Build 18.96、16.1 Build 3.22、Tumbleweed 20261121（均有 x64、ARM64） | 可写 Cloud VM，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
-镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Linux Mint 与 Zorin OS 使用[发行版列名的镜像](https://www.linuxmint.com/edition.php?id=311)、[Zorin 官方镜像](https://zorin.com/os/mirrors/)，下载 ISO 前并行抽样排序；非最后一个地址持续低速或网络失败时尝试下一地址，最后一个地址允许慢速完成。openSUSE 镜像不可用时也会尝试列名镜像。全部来源使用相同的固定摘要，报告记录实际地址；不能取得匹配文件时复核官方索引、摘要及匹配的签名软件源。QEMU 来宾使用同架构的 runner。openSUSE ARM64 恢复后的首轮作业执行完整桌面和安装生命周期验收。
+Pop!_OS 22.04 的 ARM64 介质为 [Raspberry Pi 4 板级镜像](https://iso.pop-os.org/22.04/arm64/raspi/4/pop-os_22.04_arm64_raspi_4.img.xz)，矩阵覆盖该版本的 x64 镜像。Pop!_OS ARM64 验收使用 24.04 的[官方通用镜像](https://system76.com/download-pop/)。
+
+镜像 URL、完整摘要与架构由 `scripts/linux_compatibility_targets.py` 固定并校验，滚动版使用相应快照仓库。Linux Mint 与 Zorin OS 使用[发行版列名的镜像](https://www.linuxmint.com/edition.php?id=311)、[Zorin 官方镜像](https://zorin.com/os/mirrors/)，下载 ISO 前并行抽样排序；非最后一个地址持续低速或网络失败时尝试下一地址，最后一个地址允许慢速完成。openSUSE 镜像不可用时也会尝试列名镜像。全部来源使用相同的固定摘要，报告记录实际地址；不能取得匹配文件时复核官方索引、摘要及匹配的签名软件源。QEMU 来宾使用同架构的 runner。openSUSE ARM64 三个目标已完成[历史全量验收](#历史兼容证据)，当前矩阵验收原生包安装、基础系统代理和 TUN。
 
 新增或替换目标时核对发行版的维护期限和镜像来源。上游宣布停止维护后，复查本项目是否仍需该目标作为明确的兼容基线。替换受支持目标须先验证替代版本，再同步目标矩阵、公开支持范围和发布门禁。滚动版每次更换快照都记录日期与摘要，使用配套的软件源并完整复验。Ubuntu 的最低内核基线见 [Ubuntu 兼容验证](ubuntu-compatibility.md)。
 
@@ -93,6 +95,8 @@ Tumbleweed 在来宾关闭预设仓库，使用与云镜像日期一致的签名
 发布范围包含 Arch Linux x86_64 时，Release 将提供原生二进制包。首次安装时从包含该包的版本下载 `Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst` 及 `.sha256`，核对摘要后执行 `sudo pacman -U ./Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst`，其中 `<版本>` 替换为实际版本。包名是 `clash-of-rust`，配方保留 `/opt/clash-of-rust`、随包内核和固定的 polkit 助手路径，并写入 `pacman-release` 标识。
 
 Arch 工作流使用 CI 的 x64 DEB 在 Arch 来宾内重封装，检查安装后的包身份、实际终端更新助手、基础系统代理和 TUN。来宾完成后回收安装过的原包与收据。记录作业绑定实际执行验收的 attempt 与归档摘要，发布阶段用同一字节生成校验文件并加入 Release。应用内更新见[版本与更新通道](versions.md#版本与更新通道)。
+
+### 历史兼容证据
 
 提交 `0ccca669` 使用 CI `44696750124` 完整验收当前矩阵中的 Ubuntu、Debian、Linux Mint、Zorin OS、Fedora、openSUSE 和 Arch Linux。Pop!_OS 24.04 的 COSMIC 授权探针提前退出，补上认证代理就绪检查后用 `8999697d` 的 CI `44705538634` 复验。Pop!_OS 22.04 GNOME 和 24.04 COSMIC 均通过，并核对真实登录、图形授权、托盘及菜单复用、23 项 TUI PTY、原生升级和卸载保留数据。两轮合计覆盖当前 21 个目标。新发布按实际范围取得对应提交的回执。[首轮 CI](https://github.com/Fu021/Clash-of-Rust/actions/runs/44696750124) · [Pop!_OS 完整复验](https://github.com/Fu021/Clash-of-Rust/actions/runs/44709399603)
 
