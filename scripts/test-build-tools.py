@@ -4495,7 +4495,10 @@ class BuildTests(unittest.TestCase):
             f'[Compatibility fixture]\nIdentity=unix-user:{user}\n'
             'Action=org.freedesktop.policykit.exec\n'
             'ResultAny=auth_self\nResultInactive=auth_self\nResultActive=auth_self\n'))
-        for release in ({'ID': 'ubuntu', 'VERSION_ID': '22.04'}, {'ID': 'debian', 'VERSION_ID': '12'}):
+        jammy_rule, jammy_contents = linux_gui.gui_polkit_rule(
+            user, {'format': 'deb'}, {'ID': 'ubuntu', 'VERSION_ID': '22.04'})
+        self.assertEqual((jammy_rule, jammy_contents), (rule, contents))
+        for release in ({'ID': 'ubuntu', 'VERSION_ID': '24.04'}, {'ID': 'debian', 'VERSION_ID': '12'}):
             rule, contents = linux_gui.gui_polkit_rule(user, {'format': 'deb'}, release)
             self.assertEqual(rule, Path('/etc/polkit-1/rules.d')/f'10-{user}.rules')
             self.assertIn('action.lookup("program") === "/usr/bin/dpkg"', contents)
@@ -4504,6 +4507,23 @@ class BuildTests(unittest.TestCase):
             linux_gui.gui_polkit_rule('other', {'format': 'deb'}, {'ID': 'ubuntu', 'VERSION_ID': '20.04'})
         with self.assertRaises(ValueError):
             linux_gui.gui_polkit_rule(user, {'format': 'pkg'}, {'ID': 'ubuntu', 'VERSION_ID': '20.04'})
+
+    def test_gui_account_creation_retries_timeouts_after_removing_partial_account(self):
+        import linux_gui
+
+        user, home = 'cor-gui-fixture', Path('/tmp/fixture/home')
+        timeout = subprocess.CalledProcessError(124, ['useradd'])
+        with patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'github-hosted'}), \
+                patch.object(linux_gui, 'fixture_sudo', side_effect=[timeout, None]) as sudo, \
+                patch.object(linux_gui, 'gui_account', return_value=SimpleNamespace(pw_uid=2345)), \
+                patch.object(linux_gui, 'delete_gui_user') as delete, \
+                patch.object(linux_gui.time, 'sleep'):
+            linux_gui.create_gui_user(user, home, ['--groups', 'sudo'])
+        self.assertEqual(sudo.call_args_list, [
+            call('useradd', '--create-home', '--no-log-init', '--groups', 'sudo',
+                 '--home-dir', home, '--shell', '/bin/bash', user, timeout=90),
+        ] * 2)
+        delete.assert_called_once_with(user, home, 2345)
 
     def test_native_gui_failure_removes_the_polkit_fixture_and_preserves_the_report(self):
         import linux_gui

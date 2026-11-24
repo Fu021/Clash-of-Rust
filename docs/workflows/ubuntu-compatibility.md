@@ -23,6 +23,8 @@ Ubuntu 20.04 的 GitHub 托管镜像已于 2025 年 4 月 15 日退役。20.04 �
 
 ARM64 首轮还验收 GUI/TUI/CLI、两次真实桌面登录及包升级和卸载。20.04 的完整验收在 VM 内执行。22.04、24.04 和 26.04 直接在 runner 上跑三端、流量和所选更新专项，再把已核验的同一 DEB 传给该 runner 上的同版官方镜像 VM，执行两次 GDM 登录和包生命周期。ARM64 完整作业预留 180 分钟，使用 TCG 的桌面 VM 冷启动至 SSH 最多等待 20 分钟。VM 报告单独记录实际内核和加速方式。
 
+托管 runner 创建临时 GUI 账户时跳过登录历史初始化，单次最多等待 90 秒。创建超时后按用户名、目录和 UID 清理可能已创建的账户，再尝试，最多三次。Ubuntu 20.04 和 22.04 的图形更新夹具使用旧版 polkit 的 `.pkla`，仍执行真实密码认证和安装失败恢复。
+
 最后 `Linux / Record compatibility` 上传 `ubuntu-compatibility-attempt-<attempt>`，保留三天，绑定源 CI、提交、全部输入的 id/name/digest、运行 attempt 和检查范围。全量验收的版本与架构单列在 `full_desktop_targets`。Publish Release 在解析和最终核验时检查回执及整个矩阵的成功结果。缺失、失败、跳过或过期均阻止发布。新提交或不同 CI 产物不能沿用旧回执。
 
 ## 镜像与软件包来源

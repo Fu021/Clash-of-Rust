@@ -1762,6 +1762,8 @@ def delete_gui_user(user, user_home, uid):
         try:
             fixture_sudo('userdel', '--remove', user, capture_output=True)
         except subprocess.CalledProcessError as error:
+            if error.returncode == 12 and gui_account(user, user_home, uid) is None:
+                return True
             if error.returncode != 8:
                 raise
             return False
@@ -1781,9 +1783,9 @@ def delete_gui_user(user, user_home, uid):
 def gui_polkit_rule(user, update_case, release):
     if not re.fullmatch(r'corgui[0-9a-f]{24}', user):
         raise ValueError('Invalid disposable GUI account')
-    if update_case and (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', '20.04'):
+    if update_case and release.get('ID') == 'ubuntu' and release.get('VERSION_ID') in ('20.04', '22.04'):
         if update_case['format'] != 'deb':
-            raise ValueError('Ubuntu 20.04 graphical updates require a DEB package')
+            raise ValueError('Graphical updates on legacy Ubuntu require a DEB package')
         return (Path('/etc/polkit-1/localauthority/50-local.d')/f'10-{user}.pkla',
                 f'[Compatibility fixture]\nIdentity=unix-user:{user}\n'
                 'Action=org.freedesktop.policykit.exec\n'
@@ -1799,6 +1801,25 @@ def gui_polkit_rule(user, update_case, release):
             f' if (action.id === "{action}" && subject.user === "{user}"{extra})'
             f' return ["unix-user:{user}"];'
             ' });\n')
+
+
+def create_gui_user(user, user_home, groups):
+    timeout = 90 if os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted' else 30
+    for attempt in range(3):
+        try:
+            fixture_sudo('useradd', '--create-home', '--no-log-init', *groups,
+                         '--home-dir', user_home, '--shell', '/bin/bash', user, timeout=timeout)
+            return
+        except subprocess.CalledProcessError as error:
+            if error.returncode != 124:
+                raise
+            account = gui_account(user, user_home)
+            if account is not None:
+                delete_gui_user(user, user_home, account.pw_uid)
+            if attempt == 2:
+                raise
+            print('::warning::Temporary GUI account creation timed out. Retrying.', flush=True)
+            time.sleep(2 ** attempt)
 
 
 def installed_tests(*, update_case=None, package_lock=None, update_report=None, check_interrupted=None):
@@ -1830,8 +1851,7 @@ def installed_tests(*, update_case=None, package_lock=None, update_report=None, 
             native = platform.freedesktop_os_release().get('ID') in DISTROS
             groups = [] if native or update_case else ['--groups', 'sudo']
             check_interrupted()
-            fixture_sudo('useradd', '--create-home', *groups,
-                         '--home-dir', home/'home', '--shell', '/bin/bash', user)
+            create_gui_user(user, home/'home', groups)
             account = gui_account(user, home/'home')
             if account is None:
                 raise RuntimeError('The disposable GUI user was not created')
