@@ -10020,14 +10020,16 @@ success="$1"
                         compatibility.verified_suite(client, source, suite)
 
     def test_arm64_full_desktop_receipt_binds_only_the_selected_targets(self):
-        for suite, releases in (('ubuntu', ('20.04', '22.04', '24.04', '26.04')), ('fedora', ('44', '45'))):
+        for suite, releases in (('ubuntu', ('24.04', '26.04')), ('fedora', ('44', '45')),
+                                ('debian', ()), ('opensuse', ())):
             with self.subTest(suite=suite):
                 client, source, receipt = self.client(suite)
                 expected = [{'release': version, 'arch': 'arm64'} for version in releases]
-                self.assertEqual(receipt['full_desktop_targets'], expected)
+                self.assertEqual(receipt.get('full_desktop_targets', []), expected)
                 self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
+                first_release = linux_ci.TARGETS[suite][0].release
                 client, source, _ = self.client(suite, receipt_changes={
-                    'full_desktop_targets': [*expected, {'release': releases[0], 'arch': 'x64'}],
+                    'full_desktop_targets': [*expected, {'release': first_release, 'arch': 'x64'}],
                 })
                 with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
                     compatibility.verified_suite(client, source, suite)
@@ -10106,7 +10108,8 @@ success="$1"
                 runner_release = entry['release'] if direct else '24.04'
                 suffix = '-arm' if entry['arch'] == 'arm64' else ''
                 self.assertEqual(entry['os'], f'ubuntu-{runner_release}{suffix}')
-                self.assertEqual(bool(entry['qemu']), not direct or entry['arch'] == 'arm64')
+                desktop_guest = entry['arch'] == 'arm64' and entry['release'] in ('24.04', '26.04')
+                self.assertEqual(bool(entry['qemu']), not direct or desktop_guest)
             self.assertIn('workflow_dispatch:', wrapper)
             self.assertIn('name: Linux\n', wrapper)
             self.assertIn('uses: ./.github/workflows/linux-compatibility.yml', wrapper)
@@ -10163,6 +10166,15 @@ success="$1"
             self.assertEqual(invocation.kwargs['env'], {'COR_CI_EXTENDED_TESTS': 'true'})
         guest.assert_called_once_with(123, target, package_staged=True)
         self.assertTrue(report['success'])
+
+    def test_ubuntu_arm64_keeps_qemu_only_when_the_target_requires_a_guest(self):
+        for release, qemu_required in (('20.04', True), ('22.04', False)):
+            with self.subTest(release=release):
+                target = linux_ci.target_for('ubuntu', release, 'arm64')
+                matrix = target.matrix_entry()
+                self.assertFalse(target.full_desktop)
+                self.assertEqual(bool(matrix['qemu']), qemu_required)
+                self.assertEqual(bool(matrix['vm_cache_prefix']), qemu_required)
 
 
 class ReleaseTests(unittest.TestCase):

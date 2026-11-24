@@ -137,10 +137,9 @@ def tumbleweed_target(snapshot, arch, digest):
 TARGETS = {
     'ubuntu': (
         Target('ubuntu', UBUNTU_BASELINE, 'x64', kernel_series='5.4'),
-        Target('ubuntu', UBUNTU_BASELINE, 'arm64', kernel_series='5.4', full_desktop=True),
+        Target('ubuntu', UBUNTU_BASELINE, 'arm64', kernel_series='5.4'),
         *(Target('ubuntu', release, 'x64', hosted=True) for release in ('22.04', '24.04', '26.04')),
-        ubuntu_arm_desktop_target('22.04', 'jammy', '20261109',
-                                  'e429865ad84a083a84fdbd51bf6fd6e4174bbb1610ba0d72ca01014c656d45bc'),
+        Target('ubuntu', '22.04', 'arm64', hosted=True),
         ubuntu_arm_desktop_target('24.04', 'noble', '20261017',
                                   '50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e'),
         ubuntu_arm_desktop_target('26.04', 'resolute', '20261108',

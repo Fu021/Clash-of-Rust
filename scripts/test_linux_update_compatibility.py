@@ -963,6 +963,16 @@ with fixture_signals():
         self.assertIsNone(linux_gui.screen_label(lines, ('继续安装',)))
         self.assertIn('7', ocr.call_args.args[0])
 
+    def test_gui_confirmation_recognizes_text_in_the_enabled_button_crop(self):
+        labels = linux_gui.UPDATE_LABELS['continue']
+        words = [[('继续', (842, 495, 28, 14)), ('安装', (878, 495, 22, 14))]]
+        with patch.object(linux_gui.subprocess, 'check_output', side_effect=[
+                json.dumps([['button.png', [828, 485, 88, 36]]]).encode(), '']), \
+                patch.object(linux_gui, 'recognize_update_screen', return_value=words) as ocr:
+            lines = linux_gui.recognize_primary_update_buttons('frame.png', labels)
+        self.assertEqual(linux_gui.screen_label(lines, labels), (871, 502))
+        ocr.assert_called_once_with('frame.png', region=(828, 485, 916, 521))
+
     def test_gui_navigation_uses_primary_ocr_only_after_whole_frame_miss(self):
         labels = linux_gui.UPDATE_LABELS['download']
         lines = [[(labels[0], (1152, 124, 88, 36))]]

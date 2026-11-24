@@ -21,9 +21,13 @@ Ubuntu 20.04 的 GitHub 托管镜像已于 2025 年 4 月 15 日退役。20.04 �
 
 `scripts/compatibility.py` 核对源 CI 的仓库、提交、成功终态以及 `package-linux-x64/arm64`、`linux-tun-test-x64/arm64`、`dependency-snapshot` 的唯一性、有效期和输入身份。两条执行路径均复核 DEB、测试程序及包收据摘要，核对实际发行版版本与架构，实际安装候选包并执行基础系统代理/TUN、DNS 和关闭恢复。扩展 GUI、多用户及更新专项按常规 CI 策略验证。
 
-ARM64 首轮还验收 GUI/TUI/CLI、两次真实桌面登录及包升级和卸载。20.04 的完整验收在 VM 内执行。22.04、24.04 和 26.04 直接在 runner 上跑三端、流量和所选更新专项，再把已核验的同一 DEB 传给该 runner 上的同版官方镜像 VM，执行两次 GDM 登录和包生命周期。ARM64 完整作业预留 180 分钟，使用 TCG 的桌面 VM 冷启动至 SSH 最多等待 20 分钟。VM 报告单独记录实际内核和加速方式。
+Ubuntu [20.04 ARM64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45366946510/job/138351129788) 和 [22.04 ARM64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45373616570/job/138404196661) 已通过首轮全量验收，包括 GUI/TUI/CLI、两次真实 GDM 登录、包升级卸载和公开版本更新。常驻 20.04 ARM64 继续在 Canonical VM 内执行基础系统代理与 TUN，22.04 ARM64 直接在对应 runner 上执行基础检查。
+
+24.04 和 26.04 ARM64 仍启用全量验收。三端、流量和所选更新专项在 runner 上原生执行。两次真实 GDM 登录与包生命周期在同版官方镜像 VM 内执行。GitHub 托管 runner 无可用 `/dev/kvm` 时，QEMU 使用 TCG 软件仿真。ARM64 完整作业预留 180 分钟，使用 TCG 的桌面 VM 冷启动至 SSH 最多等待 20 分钟。VM 报告记录实际内核和加速方式。
 
 托管 runner 创建临时 GUI 账户时跳过登录历史初始化，单次最多等待 90 秒。创建超时后按用户名、目录和 UID 清理可能已创建的账户，再尝试，最多三次。Ubuntu 20.04 和 22.04 的图形更新夹具使用旧版 polkit 的 `.pkla`，仍执行真实密码认证和安装失败恢复。
+
+旧版预发布确认框的单行 OCR 未识别到完整标签时，在同一启用按钮的范围内复核灰度文字。倒计时按钮不具备夹具设置的启用强调色。
 
 最后 `Linux / Record compatibility` 上传 `ubuntu-compatibility-attempt-<attempt>`，保留三天，绑定源 CI、提交、全部输入的 id/name/digest、运行 attempt 和检查范围。全量验收的版本与架构单列在 `full_desktop_targets`。Publish Release 在解析和最终核验时检查回执及整个矩阵的成功结果。缺失、失败、跳过或过期均阻止发布。新提交或不同 CI 产物不能沿用旧回执。
 

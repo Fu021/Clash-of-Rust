@@ -764,6 +764,11 @@ print(json.dumps(buttons))
             text=True, timeout=60 if slow else 10, env=dict(os.environ, OMP_THREAD_LIMIT='1')).strip()
         if normalize_screen_text(text) in wanted:
             matches.append([(text, tuple(bounds))])
+        elif labels == UPDATE_LABELS['continue']:
+            left, top, width, height = bounds
+            lines = recognize_update_screen(image, region=(left, top, left+width, top+height))
+            if screen_label(lines, labels):
+                matches.extend(lines)
     return matches
 
 
