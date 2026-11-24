@@ -925,6 +925,7 @@ def container_test(package_run_id, target, image):
                 'docker', 'run', '--rm', '--name', name, '--init', '--privileged',
                 '--platform', f'linux/{architecture}', '--network', 'bridge',
                 '--mount', f'type=bind,src={directory},dst=/work',
+                '--mount', f'type=bind,src={directory / "scripts"},dst=/work/scripts,readonly',
                 '--mount', f'type=bind,src={REPORT},dst=/work/target/linux-report',
                 '--workdir', '/work', '--entrypoint', '/bin/sh',
                 '--env', 'GITHUB_ACTIONS=true', '--env', 'COR_LINUX_GUEST=true',
