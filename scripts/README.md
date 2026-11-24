@@ -26,8 +26,9 @@
 | `ci_test_policy.py` | CLI / 模块 | 选择基础网络、相关变更专项和手动扩展回归，并向 CI 各平台传递选择结果。 |
 | `test-cli-update.py` | 隔离安装测试 | 在一次性 Actions runner 或已配置的本地 Linux 来宾中，以临时普通账户验证只读查询、无桌面的 sudo 拒绝、真实 dpkg 失败恢复、成功重装后的自动启动与保留关闭状态，以及 systemd 服务状态与归属，保存逐项结果。 |
 | `compatibility.py` | CLI / 模块 | 生成 Android 和 Linux 兼容矩阵，解析同提交成功 CI。`resolve --suite SUITE --run-id ID` 解析候选，`record` 绑定成功 job 及输入 id/name/digest。 |
-| `linux_compatibility_targets.py` | 模块 | 固定 Linux 发行版版本、架构和官方镜像摘要。矩阵与实际 VM 共享同一目标定义。 |
-| `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和 `verify` 兼容入口。兼容目标直接使用可丢弃的 Actions runner 或同架构 VM。 |
+| `linux_compatibility_targets.py` | 模块 | 固定 Linux 发行版版本、架构和镜像摘要。矩阵和测试环境共享同一目标定义。 |
+| `linux_ci.py` | CLI / 模块 | Linux 基线容器、ELF 审计和 `verify` 兼容入口。按目标选择一次性 runner、同架构基础容器或 VM。 |
+| `linux-compatibility-container.sh` | 脚本 | 在一次性基础容器中准备软件源和普通测试用户，再运行已安装候选检查。 |
 | `linux_update_compatibility.py` | 隔离更新测试模块 | 由现有发行版兼容入口按需调用，校验旧版 CI 候选和已公开 Release，在一次性 Linux 环境检查真实版本发现、原生更新方式与用户数据保留；代表性目标额外执行 GUI 更新验收，范围和报告见 [Linux 跨版本更新](../docs/workflows/linux-expansion.md)。 |
 | `linux_update_retry.py` | 隔离更新测试模块 | CLI 和 GUI 验收在旧版报告 GitHub Release 限流时共用的随机退避策略。 |
 | `ubuntu_vm_environment.py` | 共享模块 | 冻结 Ubuntu 双架构的官方 APT 计划与签名索引，在隔离 VM 中校验及安装。 |

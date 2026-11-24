@@ -4,16 +4,18 @@
 
 在 Actions 手动运行 `Debian Compatibility`，选择目标提交所在分支并填写同提交成功 CI 的 `run_id`。工作流按架构复用候选 DEB 和 TUN 测试程序，并使用同一份依赖快照。
 
-| Debian 版本 | 架构 | 官方 generic 云镜像构建 |
+| Debian 版本 | 架构 | 基础验收容器 |
 | --- | --- | --- |
-| 12 Bookworm | x64、ARM64 | `20261117-2665` |
-| 13 Trixie | x64、ARM64 | `20261116-2664` |
+| 12 Bookworm | x64、ARM64 | `bookworm-20261104-slim` |
+| 13 Trixie | x64、ARM64 | `trixie-20261104-slim` |
 
-下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 使用同架构的 Ubuntu 24.04 runner，检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证安装后的系统代理、TUN、DNS 和关闭恢复。12 和 13 两版 ARM64 已有相同镜像的[完整桌面和安装生命周期回执](#首轮完整验收)。启动前通过 `/dev/kvm` [创建并关闭空虚拟机](https://docs.kernel.org/virt/kvm/api.html#kvm-create-vm)，探测失败时记录原因并使用 TCG。报告记录实际加速模式和阶段耗时。
+基础作业使用按[摘要固定](../../scripts/linux_compatibility_targets.py)的官方 Debian 容器，在同架构 Ubuntu 24.04 runner 上运行。检查容器的发行版、版本和架构，使用 Debian 签名 APT 索引安装候选，然后在独立网络命名空间验证系统代理、TUN、DNS 和退出恢复。TUN 使用 runner 的内核。
+
+显式选择[跨版本更新](linux-expansion.md#linux-跨版本更新)时，沿用 SHA512 固定的 Debian 12 `20261117-2665` 与 Debian 13 `20261116-2664` generic 云镜像。两版双架构的真实桌面与包生命周期见[首轮完整验收](#首轮完整验收)。
 
 隔离测试在模拟网络切换后和退出 TUN 后重启后台，让各组订阅直连回退检查从当前路由建立监控基线。保护状态下的后台退出只发送一次 `SIGTERM`，35 秒内未退出即记录进程状态和信号掩码。
 
-四个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、验收范围和运行尝试。每个 VM 的 `linux-package-report-debian-<版本>-<架构>` 与最终回执保留三天。
+四个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、容器摘要或跨版本更新模式、验收范围和运行尝试。各目标的 `linux-package-report-debian-<版本>-<架构>` 与最终回执保留三天。基础报告记录容器身份、runner 内核和耗时。
 
 ## 首轮完整验收
 

@@ -889,6 +889,62 @@ def hosted_test(package_run_id, target, fixture=None):
         write_json(REPORT/'linux-runner.json', result)
 
 
+def container_test(package_run_id, target, image):
+    from workflow_artifacts import commit
+
+    require_actions()
+    started = time.monotonic()
+    result = {'distribution': target.os_release_id, 'version_id': target.release, 'arch': target.arch,
+              'image': image, 'execution': 'container', 'kernel': os.uname().release,
+              'runner': target.matrix_entry()['os'], 'success': False}
+    print(f'{target.distribution} {target.release} userspace on runner kernel {result["kernel"]}: {image}',
+          flush=True)
+    try:
+        fetch_compatibility_package(package_run_id, target.arch, rpm=target.package_format == 'rpm')
+        with tempfile.TemporaryDirectory(prefix='cor-linux-container-') as temporary:
+            directory = Path(temporary)
+            with tarfile.open(vm_source_archive(directory, include_frozen_apt=False)) as source:
+                source.extractall(directory, filter='data')
+            if (directory/'source-commit.txt').read_text().strip() != commit():
+                raise ValueError('Linux container source commit mismatch')
+            shutil.copy2(ROOT/'scripts/linux-compatibility-container.sh', directory/'scripts')
+            shutil.copytree(ROOT/'dist', directory/'dist')
+            (directory/'target/linux-report').mkdir(parents=True)
+            shutil.copy2(ROOT/'target/linux-tun-test', directory/'target/linux-tun-test')
+            python = directory/'python'
+            python.mkdir()
+            archive = download(inputs()['architectures'][target.arch]['python'],
+                               tools_directory()/'python.tar.gz')
+            run(['tar', '-xzf', archive, '-C', python, '--strip-components=1'], timeout=60)
+            REPORT.mkdir(parents=True, exist_ok=True)
+            if not Path('/dev/net/tun').is_char_device():
+                run(['sudo', 'modprobe', 'tun'], timeout=30)
+            name = 'cor-linux-compat-' + uuid.uuid4().hex
+            architecture = {'x64': 'amd64', 'arm64': 'arm64'}[target.arch]
+            command = [
+                'docker', 'run', '--rm', '--name', name, '--init', '--privileged',
+                '--platform', f'linux/{architecture}', '--network', 'bridge',
+                '--mount', f'type=bind,src={directory},dst=/work',
+                '--mount', f'type=bind,src={REPORT},dst=/work/target/linux-report',
+                '--workdir', '/work', '--entrypoint', '/bin/sh',
+                '--env', 'GITHUB_ACTIONS=true', '--env', 'COR_LINUX_GUEST=true',
+                '--env', 'COR_LINUX_COMPAT_CONTAINER=true', '--env', 'PYTHONDONTWRITEBYTECODE=1',
+                '--env', 'BUILD_INPUTS_DIR=dependency-snapshot',
+                image, 'scripts/linux-compatibility-container.sh', str(os.getuid()), str(os.getgid()),
+                *compatibility_command(target, '/work/python/bin/python3'),
+            ]
+            try:
+                run(command, timeout=780)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(subprocess.SubprocessError):
+                    run(['docker', 'rm', '--force', name], timeout=15)
+                raise
+        result['success'] = True
+    finally:
+        result['seconds'] = round(time.monotonic() - started, 3)
+        write_json(REPORT/'linux-container.json', result)
+
+
 def fetch_vm_package(directory, package_run_id, timings, *, rpm=False, fixture=None, package_staged=False):
     started = time.monotonic()
     try:
@@ -1199,6 +1255,8 @@ def main():
             fixture = ROOT/'target/linux-update-fixture'
             prepare(client, int(old_run), release_tag, target.package_format, target.arch, fixture)
             verify(args.package_run_id, target, fixture=fixture)
+        elif image := target.basic_container_image():
+            container_test(args.package_run_id, target, image)
         else:
             verify(args.package_run_id, target)
     elif args.operation == 'ci':

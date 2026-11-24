@@ -4,6 +4,10 @@ import hashlib
 
 UBUNTU_BASELINE = '20.04'
 OPENSUSE_MIRROR = 'https://ftp.gwdg.de/pub/opensuse'
+BASIC_CONTAINER_IMAGES = {
+    ('debian', '12'): 'docker.io/library/debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc',
+    ('debian', '13'): 'docker.io/library/debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2',
+}
 TUMBLEWEED_REPOMD = {
     'x86_64': {'20261121': 'd4e2a3bf9bf999e5fab5546f75388a27aac7c1f5384879d26b4f15b988f4a772'},
     'aarch64': {'20261121': 'eb4a8dc11f34b7db4c419ce9b2f9c6130fe2b45d7b7fb91aee7757439ca86500'},
@@ -48,9 +52,17 @@ class Target:
             return ''
         return self.release.split('.')[0] if self.family == 'zorin' else self.release
 
-    def matrix_entry(self):
+    def basic_container_image(self, published_update=False):
+        if published_update or self.hosted or self.full_desktop:
+            return ''
+        return BASIC_CONTAINER_IMAGES.get((self.family, self.release), '')
+
+    def matrix_entry(self, published_update=False):
         runner_release = self.release if self.hosted else self.vm_runner_release
         runner = f'ubuntu-{runner_release}' + ('-arm' if self.arch == 'arm64' else '')
+        if self.basic_container_image(published_update):
+            return {'distribution': self.distribution, 'release': self.release, 'arch': self.arch,
+                    'os': runner, 'qemu': '', 'timeout': 15, 'vm_cache_prefix': ''}
         qemu = ''
         if not self.hosted or self.full_desktop:
             qemu = {'x64': 'qemu-system-x86',

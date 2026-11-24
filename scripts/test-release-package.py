@@ -190,7 +190,10 @@ def compatibility_dependencies(*, release=None, extended=None):
         release = release if release is not None else platform.freedesktop_os_release()
         if (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', UBUNTU_BASELINE):
             return list(TEST_PACKAGES)
-    return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']
+    basic = ['dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']
+    if os.environ.get('COR_LINUX_COMPAT_CONTAINER') != 'true':
+        basic.insert(0, 'git')
+    return basic
 
 
 def compatibility_download_dependencies():

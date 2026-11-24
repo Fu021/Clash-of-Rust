@@ -9515,7 +9515,7 @@ class CompatibilityTests(unittest.TestCase):
                     length = 128 if target.digest_algorithm == 'sha512' else 64
                     self.assertRegex(target.image_digest, rf'\A[0-9a-f]{{{length}}}\Z')
                     self.assertEqual(target.full_desktop, suite == 'fedora' and target.arch == 'arm64')
-                    entry = target.matrix_entry()
+                    entry = target.matrix_entry(published_update=True)
                     timeout = 75 if target.image_format == 'iso' else 45
                     self.assertEqual(entry['timeout'], 120 if target.full_desktop else timeout)
                     self.assertNotIn('qemu-system-gui', entry['qemu'].split())
@@ -9910,7 +9910,7 @@ success="$1"
             self.assertEqual(result.read_bytes(), b'arch package')
 
     def client(self, suite, run_changes=None, jobs=None, receipt_changes=None,
-               bad_digest=False, expired=False, missing_input=False):
+               bad_digest=False, expired=False, missing_input=False, published_update=False):
         source = {'id': 123, 'path': '.github/workflows/ci.yml', 'head_sha': self.source_commit,
                   'repository': {'full_name': self.repository},
                   'head_repository': {'full_name': self.repository},
@@ -9928,6 +9928,8 @@ success="$1"
                    'checks': compatibility.CHECKS[suite],
                    'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs],
                    **compatibility.desktop_targets(suite)}
+        containers = compatibility.container_targets(suite)
+        receipt.update({'published_update': True} if published_update and containers else containers)
         if suite in ('linuxmint', 'pop', 'zorin', 'fedora', 'opensuse', 'arch'):
             source_kind = 'iso' if suite in ('linuxmint', 'pop', 'zorin') else 'cloud'
             receipt[source_kind+'_targets'] = [
@@ -10019,6 +10021,23 @@ success="$1"
                     with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
                         compatibility.verified_suite(client, source, suite)
 
+    def test_debian_container_receipt_requires_every_pinned_image_or_explicit_update_mode(self):
+        suite = 'debian'
+        images = compatibility.container_targets(suite)['container_targets']
+        self.assertEqual({(item['release'], item['arch']) for item in images},
+                         {(version, arch) for version in ('12', '13') for arch in ('x64', 'arm64')})
+        for item in images:
+            self.assertRegex(item['image'], r'\Adocker\.io/library/debian@sha256:[0-9a-f]{64}\Z')
+        for entry in compatibility.suite_matrix(suite)['include']:
+            self.assertEqual((entry['timeout'], entry['qemu'], entry['vm_cache_prefix']), (15, '', ''))
+        self.assertTrue(all(entry['qemu'] for entry in
+                            compatibility.suite_matrix(suite, published_update=True)['include']))
+        client, source, _ = self.client(suite, receipt_changes={'container_targets': images[1:]})
+        with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
+            compatibility.verified_suite(client, source, suite)
+        client, source, receipt = self.client(suite, published_update=True)
+        self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
+
     def test_arm64_full_desktop_receipt_binds_only_the_selected_targets(self):
         for suite, releases in (('ubuntu', ('24.04', '26.04')), ('fedora', ('44', '45')),
                                 ('debian', ()), ('opensuse', ())):
@@ -10109,7 +10128,7 @@ success="$1"
                 suffix = '-arm' if entry['arch'] == 'arm64' else ''
                 self.assertEqual(entry['os'], f'ubuntu-{runner_release}{suffix}')
                 desktop_guest = entry['arch'] == 'arm64' and entry['release'] in ('24.04', '26.04')
-                self.assertEqual(bool(entry['qemu']), not direct or desktop_guest)
+                self.assertEqual(bool(entry['qemu']), suite == 'ubuntu' and (not direct or desktop_guest))
             self.assertIn('workflow_dispatch:', wrapper)
             self.assertIn('name: Linux\n', wrapper)
             self.assertIn('uses: ./.github/workflows/linux-compatibility.yml', wrapper)

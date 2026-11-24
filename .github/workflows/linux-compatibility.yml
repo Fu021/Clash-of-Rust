@@ -41,7 +41,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ inputs.run_id }}
           SUITE: ${{ inputs.suite }}
-        run: python3 scripts/compatibility.py resolve --suite "$SUITE" --run-id "$SOURCE_RUN"
+          UPDATE_MODE: ${{ inputs.update_from_ci != '' && '--published-update' || '' }}
+        run: python3 scripts/compatibility.py resolve --suite "$SUITE" --run-id "$SOURCE_RUN" ${UPDATE_MODE:+"$UPDATE_MODE"}
   installed:
     name: ${{ matrix.distribution }} ${{ matrix.release }}-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
@@ -153,7 +154,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ needs.resolve.outputs.ci_run_id }}
           SUITE: ${{ inputs.suite }}
-        run: python3 scripts/compatibility.py record --suite "$SUITE" --run-id "$SOURCE_RUN"
+          UPDATE_MODE: ${{ inputs.update_from_ci != '' && '--published-update' || '' }}
+        run: python3 scripts/compatibility.py record --suite "$SUITE" --run-id "$SOURCE_RUN" ${UPDATE_MODE:+"$UPDATE_MODE"}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.suite }}-compatibility-attempt-${{ github.run_attempt }}
