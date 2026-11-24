@@ -1,5 +1,12 @@
 //! Process helpers and the single-instance guard precede GUI initialization.
 use super::*;
+
+fn startup_language(root: &std::path::Path) -> Language {
+    LanguagePreference::read(root)
+        .unwrap_or_default()
+        .resolve_desktop()
+}
+
 pub(crate) fn run() -> anyhow::Result<()> {
     #[cfg(windows)]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--launch-after-install"))
@@ -12,7 +19,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
     }
     if let Some(result) = clash_of_rust::claude_check::system::helper_main() {
         if let Err(error) = result {
-            eprintln!("终端地区检测失败：{error:#}");
+            eprintln!(
+                "{}",
+                messages::startup_terminal_region_failed(
+                    LanguagePreference::System.resolve_desktop(),
+                    format_args!("{error:#}"),
+                )
+            );
             std::process::exit(1);
         }
         return Ok(());
@@ -51,7 +64,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     return Ok(());
                 }
                 Err(error) => {
-                    eprintln!("桌面初始化失败：{error:#}");
+                    eprintln!(
+                        "{}",
+                        messages::startup_desktop_failed(
+                            LanguagePreference::System.resolve_desktop(),
+                            format_args!("{error:#}"),
+                        )
+                    );
                     if !update_handoff && !background_start() {
                         platform::show_existing();
                     }
@@ -65,7 +84,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let store = match startup_store() {
             Ok(store) => store,
             Err(error) => {
-                eprintln!("桌面数据目录初始化失败：{error:#}");
+                eprintln!(
+                    "{}",
+                    messages::startup_data_directory_failed(
+                        LanguagePreference::System.resolve_desktop(),
+                        format_args!("{error:#}"),
+                    )
+                );
                 return Ok(());
             }
         };
@@ -78,7 +103,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
         {
             Ok(file) => file,
             Err(error) => {
-                eprintln!("无法打开桌面实例锁：{error}");
+                eprintln!(
+                    "{}",
+                    messages::startup_instance_lock_failed(startup_language(&store.root), error)
+                );
                 return Ok(());
             }
         };
@@ -97,13 +125,14 @@ pub(crate) fn run() -> anyhow::Result<()> {
         file
     };
     let store = startup_store()?;
-    let language = LanguagePreference::read(&store.root)
-        .unwrap_or_default()
-        .resolve_desktop();
+    let language = startup_language(&store.root);
     let _gui_session = clash_of_rust::control::GuiSession::register(store)?;
     #[cfg(windows)]
     if let Err(error) = platform::notification::prepare_process() {
-        eprintln!("通知窗口身份初始化失败：{error:#}");
+        eprintln!(
+            "{}",
+            messages::startup_notification_identity_failed(language, format_args!("{error:#}"))
+        );
     }
     #[cfg(windows)]
     // There is no winit event loop in the host anymore. Keep its native tray

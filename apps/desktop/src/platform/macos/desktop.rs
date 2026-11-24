@@ -1,4 +1,6 @@
 //! Dock reopen support. Slint/winit's existing delegate retains all lifecycle duties.
+use crate::messages;
+use clash_of_rust::config::Language;
 use objc2::{
     Encode, ffi,
     runtime::{AnyObject, Bool, Imp, Sel},
@@ -13,7 +15,44 @@ use std::sync::{
 
 static REOPEN: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
-static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
+static INSTALLED: OnceLock<Result<(), DockFailure>> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DockFailure {
+    DelegateNotReady,
+    ReopenHandlerExists,
+    QuitHandlerExists,
+    DelegateClassMissing,
+    ReopenRegistrationFailed,
+    QuitRegistrationFailed,
+}
+
+impl DockFailure {
+    pub(crate) fn message(self, language: Language) -> &'static str {
+        match self {
+            Self::DelegateNotReady => messages::dock_delegate_not_ready(language),
+            Self::ReopenHandlerExists => messages::dock_reopen_handler_exists(language),
+            Self::QuitHandlerExists => messages::dock_quit_handler_exists(language),
+            Self::DelegateClassMissing => messages::dock_delegate_class_missing(language),
+            Self::ReopenRegistrationFailed => messages::dock_reopen_registration_failed(language),
+            Self::QuitRegistrationFailed => messages::dock_quit_registration_failed(language),
+        }
+    }
+
+    pub(crate) fn translate(text: &str, language: Language) -> Option<&'static str> {
+        [
+            Self::DelegateNotReady,
+            Self::ReopenHandlerExists,
+            Self::QuitHandlerExists,
+            Self::DelegateClassMissing,
+            Self::ReopenRegistrationFailed,
+            Self::QuitRegistrationFailed,
+        ]
+        .into_iter()
+        .find(|failure| failure.message(Language::SimplifiedChinese) == text)
+        .map(|failure| failure.message(language))
+    }
+}
 
 // AppKit BOOL has different encodings on Intel and Apple Silicon. Use objc2's
 // native Bool for both arguments and the result, rather than a hard-coded i8.
@@ -46,19 +85,19 @@ unsafe extern "C-unwind" fn quit(
     NSApplicationTerminateReply::TerminateCancel
 }
 
-pub(crate) fn pump() -> Result<Events, String> {
+pub(crate) fn pump() -> Result<Events, DockFailure> {
     let mtm = MainThreadMarker::new().expect("Dock handling must run on the main thread");
     INSTALLED
         .get_or_init(|| {
             let app = NSApplication::sharedApplication(mtm);
-            let delegate = app.delegate().ok_or("macOS 应用委托尚未就绪")?;
+            let delegate = app.delegate().ok_or(DockFailure::DelegateNotReady)?;
             let selector = sel!(applicationShouldHandleReopen:hasVisibleWindows:);
             if delegate.respondsToSelector(selector) {
-                return Err("macOS 应用委托已包含其他窗口恢复处理程序".into());
+                return Err(DockFailure::ReopenHandlerExists);
             }
             let quit_selector = sel!(applicationShouldTerminate:);
             if delegate.respondsToSelector(quit_selector) {
-                return Err("macOS 应用委托已包含其他退出处理程序".into());
+                return Err(DockFailure::QuitHandlerExists);
             }
             // ProtocolObject has no AnyObject accessor in objc2 0.6.4. Its
             // Message contract guarantees the same Objective-C object layout.
@@ -66,7 +105,7 @@ pub(crate) fn pump() -> Result<Events, String> {
                 ffi::object_getClass(objc2::rc::Retained::as_ptr(&delegate).cast::<AnyObject>())
             };
             if class.is_null() {
-                return Err("无法读取 macOS 应用委托类型".into());
+                return Err(DockFailure::DelegateClassMissing);
             }
             // Add just the missing optional selector. Replacing the delegate
             // would break winit's launch, termination and event-loop callbacks.
@@ -88,7 +127,7 @@ pub(crate) fn pump() -> Result<Events, String> {
                 )
             };
             if !added.as_bool() {
-                return Err("无法注册 macOS Dock 窗口恢复事件".into());
+                return Err(DockFailure::ReopenRegistrationFailed);
             }
             let encoding =
                 std::ffi::CString::new(format!("{}@:@", NSApplicationTerminateReply::ENCODING))
@@ -110,7 +149,7 @@ pub(crate) fn pump() -> Result<Events, String> {
                 )
             };
             if !added.as_bool() {
-                return Err("无法注册 macOS 应用退出事件".into());
+                return Err(DockFailure::QuitRegistrationFailed);
             }
             // Refresh AppKit's optional-selector cache after adding the method.
             // The same retained winit delegate handles every existing callback.
@@ -119,7 +158,7 @@ pub(crate) fn pump() -> Result<Events, String> {
             Ok(())
         })
         .as_ref()
-        .map_err(Clone::clone)?;
+        .map_err(|error| *error)?;
     Ok(Events {
         reopen: REOPEN.swap(false, Ordering::AcqRel),
         quit: QUIT.swap(false, Ordering::AcqRel),

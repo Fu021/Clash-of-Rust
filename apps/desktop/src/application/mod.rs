@@ -61,7 +61,7 @@ const MIN_WINDOW_SIZE: desktop_runtime::Size = desktop_runtime::Size::new(800.0,
 pub(crate) use bootstrap::run;
 fn tray_unavailable(error: &str) -> String {
     if cfg!(target_os = "macos") {
-        format!("菜单栏图标不可用：{error}")
+        messages::startup_menu_bar_unavailable(Language::SimplifiedChinese, error)
     } else {
         format!("托盘不可用：{error}；关闭窗口将退出。")
     }
@@ -396,7 +396,7 @@ enum Message {
     Tick,
     HostRoutes(u64, serde_json::Value),
     #[cfg(target_os = "macos")]
-    MacTrayPumped(Result<mac_desktop::Events, String>),
+    MacTrayPumped(Result<mac_desktop::Events, mac_desktop::DockFailure>),
     ToggleGroup(String),
     GroupPage(String, bool),
     GroupDelay(String),
@@ -1169,9 +1169,14 @@ impl App {
                     }
                 }
                 Err(error) => {
-                    if self.notice != error {
-                        eprintln!("Dock 窗口恢复不可用：{error}");
-                        self.show_notice(error, true);
+                    let source = error.message(Language::SimplifiedChinese);
+                    if self.notice != source {
+                        let language = self.presentation_language;
+                        eprintln!(
+                            "{}",
+                            messages::dock_reopen_unavailable(language, error.message(language))
+                        );
+                        self.show_notice(source.into(), true);
                     }
                 }
             },
@@ -2851,10 +2856,17 @@ impl App {
                 }
                 let state = self.window_state.clone();
                 let engine = self.engine.clone();
+                let language = self.presentation_language;
                 return Task::perform(
                     async move {
                         if let Err(error) = state.save().await {
-                            eprintln!("无法保存窗口状态：{error:#}");
+                            eprintln!(
+                                "{}",
+                                messages::window_state_save_failed(
+                                    language,
+                                    format_args!("{error:#}")
+                                )
+                            );
                         }
                         if let Some(engine) = engine {
                             engine
@@ -3654,6 +3666,36 @@ mod async_state_tests {
         assert_eq!(test_notification_text(Language::SimplifiedChinese), "喵!");
         assert_eq!(test_notification_text(Language::English), "Meow!");
     }
+
+    #[test]
+    fn menu_bar_failure_keeps_native_detail_when_language_changes() {
+        let source =
+            messages::startup_menu_bar_unavailable(Language::SimplifiedChinese, "native detail");
+        assert_eq!(
+            notice::localize_notice(&source, true, Language::English),
+            "Menu bar icon unavailable: native detail"
+        );
+        assert_eq!(
+            notice::localize_notice(&source, true, Language::SimplifiedChinese),
+            "菜单栏图标不可用：native detail"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cached_dock_failure_can_be_projected_in_either_language() {
+        let source =
+            mac_desktop::DockFailure::QuitRegistrationFailed.message(Language::SimplifiedChinese);
+        assert_eq!(
+            notice::localize_notice(source, true, Language::English),
+            "Could not register the macOS quit handler"
+        );
+        assert_eq!(
+            notice::localize_notice(source, true, Language::SimplifiedChinese),
+            source
+        );
+    }
+
     #[test]
     fn core_initialization_preserves_a_tray_failure_as_a_recoverable_warning() {
         let mut app = app();

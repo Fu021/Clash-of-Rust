@@ -26,6 +26,8 @@
   "tray_nodes": "Nodes",
   "tray_off": "Off",
   "tray_proxy_mode": "Proxy mode",
+  "tray_recovered": "The macOS menu bar icon was registered again",
+  "tray_recovery_failed": "Could not restore the macOS menu bar icon: {error}",
   "tray_refresh_nodes": "Refresh node menu",
   "tray_rule": "Rule mode",
   "tray_show": "Show window",

@@ -12,6 +12,14 @@ fn append_notice_text(notice: &mut String, text: &str) {
 }
 
 pub(super) fn localize_notice(text: &str, error: bool, language: Language) -> Cow<'_, str> {
+    #[cfg(target_os = "macos")]
+    if let Some(translated) = mac_desktop::DockFailure::translate(text, language) {
+        return Cow::Borrowed(translated);
+    }
+    if let Some(detail) = text.strip_prefix("菜单栏图标不可用：") {
+        let detail = clash_client_core::error_message::localize(detail, language);
+        return messages::startup_menu_bar_unavailable(language, detail).into();
+    }
     if let Some(detail) = text.strip_prefix("检查更新失败：") {
         return match update::check_error_text(detail, language) {
             update::CheckErrorText::RetrySummary(text) => text,

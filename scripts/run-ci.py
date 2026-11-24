@@ -33,10 +33,12 @@ def main():
     workspace_sources(ROOT, save=True)
     compiler_cache_checkpoint(ROOT)
     if not extended and args.system == 'macos' and desktop_ui_tests():
-        run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust',
-             '--release', '--locked',
-             'application::async_state_tests::core_initialization_preserves_a_tray_failure_as_a_recoverable_warning',
-             '--', '--exact', '--test-threads=1'])
+        for case in ('core_initialization_preserves_a_tray_failure_as_a_recoverable_warning',
+                     'menu_bar_failure_keeps_native_detail_when_language_changes',
+                     'cached_dock_failure_can_be_projected_in_either_language'):
+            run(['cargo', 'test', '-p', 'clash-of-rust', '--bin', 'clash-of-rust',
+                 '--release', '--locked', 'application::async_state_tests::'+case,
+                 '--', '--exact', '--test-threads=1'])
     if not extended and args.system == 'macos' and proxy_benchmark():
         for case in ('platform::macos::service::tests::', 'platform::macos::cf::tests::',
                      'platform::macos::tests::'):

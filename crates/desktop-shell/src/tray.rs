@@ -686,11 +686,12 @@ pub fn pump() {
                         .icon
                         .set_visible(false)
                         .and_then(|()| value.icon.set_visible(true));
+                    let language = value.updates.borrow().language;
                     if let Err(error) = repair {
-                        eprintln!("macOS 菜单栏图标恢复失败：{error}");
+                        eprintln!("{}", messages::tray_recovery_failed(language, error));
                     } else {
                         configure_mac_item(&value.icon);
-                        eprintln!("macOS 菜单栏图标已重新注册");
+                        eprintln!("{}", messages::tray_recovered(language));
                     }
                 }
             }

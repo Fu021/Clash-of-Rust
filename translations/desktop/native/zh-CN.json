@@ -26,6 +26,8 @@
   "tray_nodes": "节点",
   "tray_off": "关闭",
   "tray_proxy_mode": "代理模式",
+  "tray_recovered": "macOS 菜单栏图标已重新注册",
+  "tray_recovery_failed": "macOS 菜单栏图标恢复失败：{error}",
   "tray_refresh_nodes": "刷新节点菜单",
   "tray_rule": "规则模式",
   "tray_show": "显示窗口",
