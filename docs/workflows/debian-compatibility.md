@@ -6,14 +6,14 @@
 
 | Debian 版本 | 架构 | 官方 generic 云镜像构建 |
 | --- | --- | --- |
-| 12 Bookworm | x64 | `20261117-2665` |
-| 13 Trixie | x64 | `20261116-2664` |
+| 12 Bookworm | x64、ARM64 | `20261117-2665` |
+| 13 Trixie | x64、ARM64 | `20261116-2664` |
 
-下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 在 `ubuntu-24.04` runner 上检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证实际安装后的系统代理、TUN、DNS 和关闭恢复。启动前通过 `/dev/kvm` [创建并关闭空虚拟机](https://docs.kernel.org/virt/kvm/api.html#kvm-create-vm)，探测失败时记录原因并使用 TCG。报告记录实际加速模式和阶段耗时。
+下载按[固定的 SHA512](../../scripts/linux_compatibility_targets.py)校验。VM 使用同架构的 Ubuntu 24.04 runner，检查实际发行版、版本、架构及内核，使用 Debian 签名 APT 索引安装依赖，再验证安装后的系统代理、TUN、DNS 和关闭恢复。12 和 13 两版 ARM64 已有相同镜像的[完整桌面和安装生命周期回执](#首轮完整验收)。启动前通过 `/dev/kvm` [创建并关闭空虚拟机](https://docs.kernel.org/virt/kvm/api.html#kvm-create-vm)，探测失败时记录原因并使用 TCG。报告记录实际加速模式和阶段耗时。
 
 隔离测试在模拟网络切换后和退出 TUN 后重启后台，让各组订阅直连回退检查从当前路由建立监控基线。保护状态下的后台退出只发送一次 `SIGTERM`，35 秒内未退出即记录进程状态和信号掩码。
 
-两个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、基础代理与 TUN 验收范围和运行尝试。每个 VM 的 `linux-package-report-debian-<版本>-<架构>` 与最终回执保留三天。
+四个目标都通过后上传 `debian-compatibility-attempt-<attempt>`，绑定提交、同源 CI、输入附件身份、验收范围和运行尝试。每个 VM 的 `linux-package-report-debian-<版本>-<架构>` 与最终回执保留三天。
 
 ## 首轮完整验收
 

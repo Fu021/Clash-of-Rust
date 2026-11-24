@@ -9499,7 +9499,7 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.release_suites(scope)
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
-        expected = {'debian': (2, 0), 'linuxmint': (2, 0), 'pop': (2, 0), 'zorin': (2, 0),
+        expected = {'debian': (2, 2), 'linuxmint': (2, 0), 'pop': (2, 0), 'zorin': (2, 0),
                     'fedora': (2, 2), 'opensuse': (3, 0), 'arch': (1, 0)}
         for suite, (x64, arm64) in expected.items():
             with self.subTest(suite=suite):
@@ -9514,7 +9514,7 @@ class CompatibilityTests(unittest.TestCase):
                 for target in targets:
                     length = 128 if target.digest_algorithm == 'sha512' else 64
                     self.assertRegex(target.image_digest, rf'\A[0-9a-f]{{{length}}}\Z')
-                    self.assertEqual(target.full_desktop, target.arch == 'arm64')
+                    self.assertEqual(target.full_desktop, suite == 'fedora' and target.arch == 'arm64')
                     entry = target.matrix_entry()
                     timeout = 75 if target.image_format == 'iso' else 45
                     self.assertEqual(entry['timeout'], 120 if target.full_desktop else timeout)
@@ -10096,7 +10096,7 @@ success="$1"
         for suite, pairs in (
                 ('ubuntu', {(version, arch) for version in ('20.04', '22.04', '24.04', '26.04')
                             for arch in ('x64', 'arm64')}),
-                ('debian', {('12', 'x64'), ('13', 'x64')})):
+                ('debian', {(version, arch) for version in ('12', '13') for arch in ('x64', 'arm64')})):
             wrapper = (workflows / compatibility.WORKFLOWS[suite]).read_text()
             matrix = compatibility.suite_matrix(suite)['include']
             self.assertEqual({(entry['release'], entry['arch']) for entry in matrix}, pairs)
@@ -10116,7 +10116,8 @@ success="$1"
             self.assertIn(f'suite: {suite}\n', wrapper)
             self.assertIn('name: ' + compatibility.REPORT_JOBS[suite].removeprefix('Linux / '), shared)
         self.assertEqual(compatibility.input_names('debian'),
-                         ('package-linux-x64', 'linux-tun-test-x64', 'dependency-snapshot'))
+                         ('package-linux-x64', 'package-linux-arm64',
+                          'linux-tun-test-x64', 'linux-tun-test-arm64', 'dependency-snapshot'))
         self.assertEqual(len(release.CI_JOBS), 13)
         self.assertIn('Prepare Android Maven dependencies', release.CI_JOBS)
 
